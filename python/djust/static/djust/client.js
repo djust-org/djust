@@ -361,6 +361,55 @@ function clearOptimisticPending() {
     });
 }
 
+/** Morph a server-rendered child subtree without replacing its owner wrapper. */
+function applyEmbeddedUpdate(data, transport) {
+    if (typeof data.view_id !== 'string' || !data.view_id || typeof data.html !== 'string') {
+        if (globalThis.djustDebug) console.warn('[LiveView] Invalid embedded update');
+        return false;
+    }
+    const container = document.querySelector(`[data-djust-embedded="${CSS.escape(data.view_id)}"]`);
+    if (!container) return false;
+    const incoming = document.createElement('div');
+    // codeql[js/xss] -- html is rendered by the trusted Django/Rust server template engine
+    incoming.innerHTML = data.html;
+    morphChildren(container, incoming);
+    _warnDeadScripts(container);
+    _refreshRenderParameterContracts(transport, data);
+    reinitAfterDOMUpdate();
+    return true;
+}
+
+/** Shared WS/SSE child response path; background frames cannot acknowledge an event. */
+async function handleEmbeddedResponse(data, transport) {
+    // Capture ownership before morphing: the response may remove its trigger.
+    const tracked = data.ref != null && _pendingEventOwners.get(data.ref) === transport;
+    const eventName = tracked ? _pendingEventNames.get(data.ref) : transport.lastEventName;
+    const trigger = tracked ? _pendingTriggerEls.get(data.ref) : transport.lastTriggerElement;
+    const owner = trigger && trigger.closest('[data-djust-embedded]');
+    const ownerId = owner && owner.getAttribute('data-djust-embedded');
+    const applied = applyEmbeddedUpdate(data, transport);
+    // A legitimate reply may arrive after its owner was removed. Settle its
+    // own request rather than leaking the promise, but reject malformed frames.
+    if (!applied && (!tracked || typeof data.view_id !== 'string' || !data.view_id ||
+        typeof data.html !== 'string')) return false;
+    if (data.source === 'async') {
+        completeLegacyAsyncBatches(transport, data);
+        return true;
+    }
+    // No-ref SSE replies must match the pending element's scope. A reply for
+    // another child must not consume the most recently sent event's state.
+    if (!tracked && (ownerId !== data.view_id ||
+        (data.event_name && data.event_name !== eventName))) {
+        return true;
+    }
+    const event = acknowledgeEventRequest(transport, data);
+    if (event?.eventName && !data.async_pending) globalLoadingManager.stopLoading(event.eventName, event.trigger);
+    if (!hasPendingEventRequests(transport) && _tickBuffer.length > 0) {
+        await flushServerUpdates(transport);
+    }
+    return true;
+}
+
 /**
  * Centralized server response handler for both WebSocket and HTTP fallback.
  * Eliminates code duplication and ensures consistent behavior.
@@ -368,9 +417,10 @@ function clearOptimisticPending() {
  * @param {Object} data - Server response data
  * @param {string} eventName - Name of the event that triggered this response
  * @param {HTMLElement} triggerElement - Element that triggered the event
+ * @param {Object|null} transport - Connection/local operation owning this response
  * @returns {boolean} - True if handled successfully, false otherwise
  */
-async function handleServerResponse(data, eventName, triggerElement) {
+async function handleServerResponse(data, eventName, triggerElement, transport = null) {
     try {
         // Handle cache storage (from @cache decorator)
         if (data.cache_request_id && pendingCacheRequests.has(data.cache_request_id)) {
@@ -443,6 +493,7 @@ async function handleServerResponse(data, eventName, triggerElement) {
         // Apply patches (efficient incremental updates)
         // Empty patches array = server confirmed no DOM changes needed (no-op success)
         if (data.patches && Array.isArray(data.patches) && data.patches.length === 0) {
+            _refreshRenderParameterContracts(transport, data);
             if (globalThis.djustDebug) console.log('[LiveView] No DOM changes needed (0 patches)');
         }
         else if (data.patches && Array.isArray(data.patches) && data.patches.length > 0) {
@@ -478,6 +529,7 @@ async function handleServerResponse(data, eventName, triggerElement) {
             }
 
             if (success === false) {
+                _invalidateRenderParameterContracts(transport, data);
                 // Patches failed — likely due to {% if %} blocks shifting DOM structure.
                 // Request full HTML from server for DOM morphing (on-demand, not sent
                 // with every response to avoid bandwidth regression).
@@ -511,6 +563,7 @@ async function handleServerResponse(data, eventName, triggerElement) {
             // Ensure dj-mounted is active for elements added by VDOM patches
             if (!window.djust._mountReady) window.djust._mountReady = true;
 
+            _refreshRenderParameterContracts(transport, data);
             reinitAfterDOMUpdate();
         }
         // Apply full HTML update (fallback)
@@ -539,6 +592,7 @@ async function handleServerResponse(data, eventName, triggerElement) {
             _isBroadcastUpdate = false;
             // Ensure dj-mounted is active for elements added by HTML update
             if (!window.djust._mountReady) window.djust._mountReady = true;
+            _refreshRenderParameterContracts(transport, data);
             reinitAfterDOMUpdate();
         } else {
             if (globalThis.djustDebug) console.warn('[LiveView] Response has neither patches nor html!', data);
@@ -600,6 +654,7 @@ async function handleServerResponse(data, eventName, triggerElement) {
         return true;
 
     } catch (error) {
+        _invalidateRenderParameterContracts(transport, data);
         if (globalThis.djustDebug) console.error('[LiveView] Error in handleServerResponse:', error);
         globalLoadingManager.stopLoading(eventName, triggerElement);
         return false;
@@ -914,6 +969,27 @@ function _warnDeadScripts(root) {
     }
 }
 
+function storeSignedSnapshot(data, primaryViewPath) {
+    // Only mounts and successful primary-view event acknowledgements carry
+    // navigation state. Child/background/error frames cannot replace it.
+    const eligible = data.type === 'mount' || (
+        data.source === 'event' && data.view === primaryViewPath &&
+        ['patch', 'html_update', 'noop'].includes(data.type)
+    );
+    if (!eligible || typeof data.view !== 'string' || !data.view ||
+        ['__proto__', 'constructor', 'prototype'].includes(data.view)) return;
+    const token = data.state_snapshot_signed;
+    // Cache invalidation sentinel, not a comparison of authentication secrets.
+    // eslint-disable-next-line security/detect-possible-timing-attacks
+    if (token === null) {
+        if (window.djust._clientState) delete window.djust._clientState[data.view];
+    } else if (typeof token === 'string' && token) {
+        if (!window.djust._clientState) window.djust._clientState = Object.create(null);
+        // Opaque signed plaintext: echo verbatim, never parse/re-serialize.
+        window.djust._clientState[data.view] = token;
+    }
+}
+
 class LiveViewWebSocket {
     constructor() {
         this.ws = null;
@@ -949,6 +1025,10 @@ class LiveViewWebSocket {
      * Cleanly disconnect the WebSocket for TurboNav navigation
      */
     disconnect() {
+        this._parameterContracts = new Map();
+        this._parameterContractApplied = new Map();
+        this._parameterContractFrames = new WeakMap();
+        this._parameterContractSequence = 0;
         // TurboNav may already have replaced the URL/DOM. Cancel immediately,
         // before a delayed close callback could send old-view edits to the new URL.
         cancelPendingRateLimits();
@@ -996,12 +1076,8 @@ class LiveViewWebSocket {
         this._removeReconnectBanner();
 
         // Event sequencing (#560): clear pending event state
-        _pendingEventResolvers.forEach(resolve => resolve(null));
-        _pendingEventRefs.clear();
-        _pendingEventNames.clear();
-        _pendingTriggerEls.clear();
-        _pendingEventResolvers.clear();
-        _tickBuffer.length = 0;
+        cancelEventRequests(this);
+        takeServerUpdates(this);
     }
 
     connect(url = null) {
@@ -1087,12 +1163,8 @@ class LiveViewWebSocket {
             pendingEvents.clear();
 
             // Event sequencing (#560): clear pending event state
-            _pendingEventResolvers.forEach(resolve => resolve(null));
-            _pendingEventRefs.clear();
-            _pendingEventNames.clear();
-            _pendingTriggerEls.clear();
-            _pendingEventResolvers.clear();
-            _tickBuffer.length = 0;
+            cancelEventRequests(this);
+            takeServerUpdates(this);
 
             // Remove loading indicators from DOM
             clearOptimisticPending();
@@ -1214,6 +1286,7 @@ class LiveViewWebSocket {
         // fallback call it too, so this is not the only choke point and must
         // not be described as one.
         stripClientOwnedFrameFlags(data);
+        _recordParameterContractFrame(this, data);
         const prev = this._inflight || Promise.resolve();
         const next = prev
             .then(() => this._handleMessageImpl(data))
@@ -1226,6 +1299,7 @@ class LiveViewWebSocket {
 
     async _handleMessageImpl(data) {
         if (globalThis.djustDebug) console.log('[LiveView] Received: %s %o', String(data.type), data);
+        storeSignedSnapshot(data, this.primaryViewPath);
 
         switch (data.type) {
             case 'connect':
@@ -1235,27 +1309,14 @@ class LiveViewWebSocket {
                 break;
 
             case 'mount': {
+                _installParameterContracts(this, data.parameter_contracts, data.view, true,
+                    this._parameterContractFrames.get(data));
                 const formRecoverySnapshot = window.djust._isReconnect
                     && data.view === this.primaryViewPath
                     && typeof window.djust._captureFormRecovery === 'function'
                     ? window.djust._captureFormRecovery() : null;
                 this.viewMounted = true;
                 if (globalThis.djustDebug) console.log('[LiveView] View mounted: %s', String(data.view));
-
-                // Fix #1 / Finding #4 — stash the server-emitted SIGNED
-                // state-snapshot blob so the state-snapshot capture on the
-                // next before-navigate can echo it back verbatim. The server
-                // includes ``state_snapshot_signed`` (an opaque
-                // TimestampSigner blob) only when ``enable_state_snapshot``
-                // is True on the view class; non-opt-in views never have
-                // state cached. The blob is OPAQUE — we store it as-is and
-                // never re-serialize it, so the server signature stays valid
-                // on the round-trip. Re-serializing would strip the signature
-                // and the server would (correctly) reject the snapshot.
-                if (typeof data.state_snapshot_signed === 'string' && data.state_snapshot_signed && data.view) {
-                    if (!window.djust._clientState) window.djust._clientState = {};
-                    window.djust._clientState[data.view] = data.state_snapshot_signed; // codeql[js/remote-property-injection] -- data.view is a server-sent view name, not arbitrary user input
-                }
 
                 // Remove dj-cloak from all elements (FOUC prevention)
                 document.querySelectorAll('[dj-cloak]').forEach(el => el.removeAttribute('dj-cloak'));
@@ -1590,10 +1651,10 @@ class LiveViewWebSocket {
                     data.source === 'async'
                 );
                 const isEventResponse = (
-                    data.ref != null && _pendingEventRefs.has(data.ref)
+                    !isServerInitiated && data.ref != null && _pendingEventOwners.get(data.ref) === this
                 );
 
-                if (!isEventResponse && isServerInitiated && _pendingEventRefs.size > 0) {
+                if (!isEventResponse && isServerInitiated && hasPendingEventRequests(this)) {
                     // Buffer server-initiated patch — will be applied after
                     // all pending event responses arrive. Marked so the version
                     // check treats the resulting gap as our own deferral rather
@@ -1604,11 +1665,11 @@ class LiveViewWebSocket {
                         typeof data.version === 'number' &&
                         data.version === clientVdomVersion + 1
                     );
-                    _tickBuffer.push({
+                    bufferServerUpdate(this, {
                         ...data,
                         _deferred: true,
                         _versionConsumed: contiguous,
-                    });
+                    }, data);
                     // Consume the version HERE, at receipt — but ONLY when it is
                     // CONTIGUOUS with the cursor. The frame has arrived and will
                     // be applied on flush, so a contiguous version must already
@@ -1644,48 +1705,17 @@ class LiveViewWebSocket {
                 }
 
                 // Determine event name and trigger for loading state
-                let evName = this.lastEventName;
-                let evTrigger = this.lastTriggerElement;
-
-                if (isEventResponse) {
-                    // This response matches a pending event — use tracked
-                    // event name/trigger and remove from pending set.
-                    evName = _pendingEventNames.get(data.ref) || this.lastEventName;
-                    evTrigger = _pendingTriggerEls.get(data.ref) || this.lastTriggerElement;
-                    _pendingEventRefs.delete(data.ref);
-                    _pendingEventNames.delete(data.ref);
-                    _pendingTriggerEls.delete(data.ref);
-                    // #1315: Resolve the sendEvent Promise so callers awaiting
-                    // the server response (e.g. _handleDjSubmit) can proceed.
-                    const resolver = _pendingEventResolvers.get(data.ref);
-                    if (resolver) {
-                        _pendingEventResolvers.delete(data.ref);
-                        resolver(data);
-                    }
-                } else if (isServerInitiated) {
-                    // Server-initiated patch with no pending events — apply
-                    // without consuming event loading state.
-                    evName = null;
-                    evTrigger = null;
-                }
-
-                await handleServerResponse(data, evName, evTrigger);
-
-                if (!isServerInitiated) {
-                    this.lastEventName = null;
-                    this.lastTriggerElement = null;
-                }
+                const event = acknowledgeEventRequest(this, data);
+                await handleServerResponse(data, event?.eventName, event?.trigger, this);
+                completeLegacyAsyncBatches(this, data);
 
                 // After processing the event response, flush buffered
                 // patches only when ALL pending events have resolved.
-                if (isEventResponse && _pendingEventRefs.size === 0 && _tickBuffer.length > 0) {
+                if (isEventResponse && !hasPendingEventRequests(this) && _tickBuffer.length > 0) {
                     if (globalThis.djustDebug) {
                         djLog('[LiveView] Flushing ' + _tickBuffer.length + ' buffered patches');
                     }
-                    const buffered = _tickBuffer.splice(0);
-                    for (const tickData of buffered) {
-                        await handleServerResponse(tickData, null, null);
-                    }
+                    await flushServerUpdates(this);
                 }
                 break;
             }
@@ -1709,6 +1739,7 @@ class LiveViewWebSocket {
                 // dead exactly like #1848. Loud DEBUG-mode warning.
                 _warnDeadScripts(liveviewRoot);
                 clientVdomVersion = data.version;
+                _refreshRenderParameterContracts(this, data);
                 reinitAfterDOMUpdate();
                 if (globalThis.djustDebug) {
                     // codeql[js/log-injection] -- data.version is a server-controlled integer
@@ -1756,19 +1787,27 @@ class LiveViewWebSocket {
                 }));
 
                 // Clear pending event refs (#560)
-                _pendingEventResolvers.forEach(resolve => resolve(null));
-                _pendingEventRefs.clear();
-                _pendingEventNames.clear();
-                _pendingTriggerEls.clear();
-                _pendingEventResolvers.clear();
-                _tickBuffer.length = 0;
+                if (data.source !== 'async' &&
+                    (data.ref == null || _pendingEventOwners.get(data.ref) === this)) {
+                    cancelEventRequests(this, data.ref ?? null);
+                    // A failed event does not invalidate earlier server pushes.
+                    // Retain them until the other owned requests settle, then
+                    // apply with the same version checks as a successful reply.
+                    if (!hasPendingEventRequests(this)) {
+                        await flushServerUpdates(this);
+                    }
+                }
 
                 // Phase 5: Stop loading state on error
-                if (this.lastEventName) {
+                if (data.source !== 'async' && data.ref == null && this.lastEventName) {
                     globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
                     this.lastEventName = null;
                     this.lastTriggerElement = null;
                 }
+                break;
+
+            case 'async_complete':
+                completeAsyncBatch(this, data.async_batch);
                 break;
 
             case 'pong':
@@ -1807,23 +1846,9 @@ class LiveViewWebSocket {
             case 'noop': {
                 // Server acknowledged event but no DOM changes needed (auto-detected
                 // or explicit _skip_render). Clear loading state unless async pending.
-                const noopEvName = (data.ref != null ? _pendingEventNames.get(data.ref) : null)
-                    || this.lastEventName;
-                const noopTrigger = (data.ref != null ? _pendingTriggerEls.get(data.ref) : null)
-                    || this.lastTriggerElement;
-
-                // Clear pending event ref (#560)
-                if (data.ref != null && _pendingEventRefs.has(data.ref)) {
-                    _pendingEventRefs.delete(data.ref);
-                    _pendingEventNames.delete(data.ref);
-                    _pendingTriggerEls.delete(data.ref);
-                    // #1315: Resolve the sendEvent Promise on noop too.
-                    const resolver = _pendingEventResolvers.get(data.ref);
-                    if (resolver) {
-                        _pendingEventResolvers.delete(data.ref);
-                        resolver(data);
-                    }
-                }
+                const event = acknowledgeEventRequest(this, data);
+                const noopEvName = event?.eventName;
+                const noopTrigger = event?.trigger;
 
                 if (noopEvName) {
                     if (!data.async_pending) {
@@ -1831,16 +1856,11 @@ class LiveViewWebSocket {
                     } else {
                         if (globalThis.djustDebug) console.log('[LiveView] Keeping loading state — async work pending');
                     }
-                    this.lastEventName = null;
-                    this.lastTriggerElement = null;
                 }
 
                 // Flush buffered patches only when all pending events resolved
-                if (_pendingEventRefs.size === 0 && _tickBuffer.length > 0) {
-                    const buffered = _tickBuffer.splice(0);
-                    for (const tickData of buffered) {
-                        await handleServerResponse(tickData, null, null);
-                    }
+                if (!hasPendingEventRequests(this) && _tickBuffer.length > 0) {
+                    await flushServerUpdates(this);
                 }
                 break;
             }
@@ -1859,13 +1879,7 @@ class LiveViewWebSocket {
 
             case 'embedded_update':
                 // Scoped HTML update for an embedded child LiveView
-                this.handleEmbeddedUpdate(data);
-                // Stop loading state
-                if (this.lastEventName) {
-                    globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
-                    this.lastEventName = null;
-                    this.lastTriggerElement = null;
-                }
+                await handleEmbeddedResponse(data, this);
                 break;
 
             case 'child_update':
@@ -2203,33 +2217,19 @@ class LiveViewWebSocket {
             return false;
         }
 
-        // Phase 5: Track event name and trigger element for loading state
-        this.lastEventName = eventName;
-        this.lastTriggerElement = triggerElement;
-
-        // Event sequencing (#560): assign monotonic ref so we can match
-        // the server's response to this specific event and distinguish
-        // it from server-initiated patches. Uses Set to track multiple
-        // concurrent pending events.
-        const ref = ++_eventRefCounter;
-        _pendingEventRefs.add(ref);
-        _pendingEventNames.set(ref, eventName);
-        _pendingTriggerEls.set(ref, triggerElement);
-
-        // #1315: Return a Promise so callers can await the server response
-        // before running post-response logic (e.g. _setFormPending(false)).
-        // Without this, fire-and-forget WS dispatch causes handleEvent to
-        // resolve synchronously, and form-pending toggles off before any
-        // browser repaint.
-        return new Promise((resolve) => {
-            _pendingEventResolvers.set(ref, resolve);
+        const request = registerEventRequest(this, eventName, triggerElement);
+        try {
             this.sendMessage({
                 type: 'event',
                 event: eventName,
                 params: params,
-                ref: ref
+                ref: request.ref
             });
-        });
+        } catch (error) {
+            cancelEventRequests(this, request.ref);
+            throw error;
+        }
+        return request.promise;
     }
 
     // Removed duplicate applyPatches and patch helper methods
@@ -2240,33 +2240,7 @@ class LiveViewWebSocket {
      * Replaces only the innerHTML of the embedded view's container div.
      */
     handleEmbeddedUpdate(data) {
-        const viewId = data.view_id;
-        const html = data.html;
-        if (!viewId || html === undefined) {
-            // codeql[js/log-injection] -- data is a server WebSocket message, not user input
-            console.warn('[LiveView] Invalid embedded_update message:', data);
-            return;
-        }
-
-        const container = document.querySelector(`[data-djust-embedded="${CSS.escape(viewId)}"]`);
-        if (!container) {
-            console.warn('[LiveView] Embedded view container not found: %s', String(viewId));
-            return;
-        }
-
-        const _morphTemp = document.createElement('div');
-        // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
-        _morphTemp.innerHTML = html;
-        morphChildren(container, _morphTemp);
-        // #2058: embedded-view (LiveComponent) updates morph the same way
-        // the #1610 mount path does, but never call _runInsertedScripts() —
-        // a classic <script> re-created by this morph is silently dead
-        // exactly like #1848. Loud DEBUG-mode warning.
-        _warnDeadScripts(container);
-        if (globalThis.djustDebug) console.log('[LiveView] Updated embedded view: %s', String(viewId));
-
-        // Re-bind events within the updated container
-        reinitAfterDOMUpdate();
+        return applyEmbeddedUpdate(data);
     }
 
     _showReconnectBanner(attempt, maxAttempts) {
@@ -2455,6 +2429,7 @@ class LiveViewSSE {
         this.sseBaseUrl = null;
         this.enabled = true;
         this.viewMounted = false;
+        this.primaryViewPath = null;
         this._hasConnectedBefore = false;
         this.lastEventName = null;
         this.lastTriggerElement = null;
@@ -2470,6 +2445,7 @@ class LiveViewSSE {
      */
     connect(viewPath, params = {}) {
         if (!this.enabled) return;
+        this.primaryViewPath = viewPath;
         if (globalThis.djustDebug) console.log('[SSE] Connecting, view:', viewPath);
 
         // Session ID is generated client-side; the server stores it as the
@@ -2490,7 +2466,9 @@ class LiveViewSSE {
         // (fixes #1237 bug 1).
         const urlParams = new URLSearchParams(params);
         urlParams.set('view', viewPath);
+        urlParams.set('_djust_url', window.location.pathname);
         const streamUrl = `${this.sseBaseUrl}?${urlParams.toString()}`;
+        const pageUrl = window.location.pathname + window.location.search;
 
         // withCredentials: true ensures the Django session cookie is sent
         // with the EventSource GET. Without it, authenticated views fail
@@ -2514,6 +2492,7 @@ class LiveViewSSE {
             // Track reconnections for form recovery
             if (this._hasConnectedBefore) {
                 if (window.djust) window.djust._isReconnect = true;
+                this._replacingView = true;
             }
             this._hasConnectedBefore = true;
 
@@ -2543,11 +2522,20 @@ class LiveViewSSE {
         };
 
         this.eventSource.onerror = (_err) => {
+            // EventSource retries its original URL. After SPA navigation that
+            // URL names the previous page; open a fresh owner-bound stream for
+            // the current route instead of remounting the wrong view.
+            if (this.eventSource && pageUrl !== window.location.pathname + window.location.search) {
+                this.disconnect();
+                this.connect(this.primaryViewPath, Object.fromEntries(new URLSearchParams(window.location.search)));
+                return;
+            }
             // EventSource auto-reconnects; we only disable on persistent failure.
             // onerror fires on every connection hiccup, so guard against noise.
             if (this.eventSource && this.eventSource.readyState === EventSource.CLOSED) {
                 console.warn('[SSE] EventSource closed unexpectedly.');
                 this.enabled = false;
+                cancelEventRequests(this);
                 // Connection state CSS classes
                 document.body.classList.add('dj-disconnected');
                 document.body.classList.remove('dj-connected');
@@ -2559,6 +2547,11 @@ class LiveViewSSE {
      * Cleanly close the SSE stream (e.g. during TurboNav page transitions).
      */
     disconnect() {
+        this._parameterContracts = new Map();
+        this._parameterContractApplied = new Map();
+        this._parameterContractFrames = new WeakMap();
+        this._parameterContractSequence = 0;
+        cancelEventRequests(this);
         // TurboNav may already have replaced the URL/DOM. Cancel immediately,
         // before a delayed close callback could send old-view edits to the new URL.
         cancelPendingRateLimits();
@@ -2589,6 +2582,7 @@ class LiveViewSSE {
         // wire-supplied ``_deferred`` — the flag is client-owned and only the
         // WebSocket buffering path may set it.
         stripClientOwnedFrameFlags(data);
+        _recordParameterContractFrame(this, data);
         const prev = this._inflight || Promise.resolve();
         const next = prev
             .then(() => this._handleMessageImpl(data))
@@ -2607,6 +2601,7 @@ class LiveViewSSE {
      */
     async _handleMessageImpl(data) {
         if (globalThis.djustDebug) console.log('[SSE] Received:', data.type, data);
+        storeSignedSnapshot(data, this.primaryViewPath);
 
         switch (data.type) {
 
@@ -2618,6 +2613,9 @@ class LiveViewSSE {
 
             case 'mount':
                 this.viewMounted = true;
+                if (typeof data.view === 'string') this.primaryViewPath = data.view;
+                _installParameterContracts(this, data.parameter_contracts, data.view, true,
+                    this._parameterContractFrames.get(data));
                 if (globalThis.djustDebug) console.log('[SSE] View mounted:', data.view);
 
                 // Remove dj-cloak from all elements (FOUC prevention)
@@ -2637,8 +2635,9 @@ class LiveViewSSE {
                     let container = findPageViewContainer();
                     if (!container) container = document.querySelector('[dj-root]');
                     if (container) {
+                        if (typeof data.view === 'string') container.setAttribute('dj-view', data.view);
                         const hasDataDjAttrs = data.has_ids === true;
-                        if (hasDataDjAttrs) {
+                        if (hasDataDjAttrs && !this._replacingView) {
                             _stampDjIds(data.html);
                         } else {
                             // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
@@ -2655,6 +2654,7 @@ class LiveViewSSE {
                         window.djust._mountReady = true;
                     }
                 }
+                this._replacingView = false;
                 // Trigger form recovery and dj-auto-recover after reconnect mount
                 if (window.djust._isReconnect) {
                     if (typeof window.djust._processFormRecovery === 'function') {
@@ -2667,15 +2667,15 @@ class LiveViewSSE {
                 break;
 
             case 'patch':
-                await handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
-                this.lastEventName = null;
-                this.lastTriggerElement = null;
+            case 'html_update': {
+                const event = acknowledgeEventRequest(this, data);
+                await handleServerResponse(data, event?.eventName, event?.trigger, this);
+                completeLegacyAsyncBatches(this, data);
                 break;
+            }
 
-            case 'html_update':
-                await handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
-                this.lastEventName = null;
-                this.lastTriggerElement = null;
+            case 'embedded_update':
+                await handleEmbeddedResponse(data, this);
                 break;
 
             case 'error':
@@ -2683,21 +2683,29 @@ class LiveViewSSE {
                 window.dispatchEvent(new CustomEvent('djust:error', {
                     detail: { error: data.error, traceback: data.traceback || null }
                 }));
-                if (this.lastEventName) {
+                if (data.source !== 'async') {
+                    cancelEventRequests(this, data.ref ?? null);
+                }
+                if (data.source !== 'async' && data.ref == null && this.lastEventName) {
                     globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
                     this.lastEventName = null;
                     this.lastTriggerElement = null;
                 }
+                if (data.source !== 'async') this._recoverFailedNavigation();
                 break;
 
-            case 'noop':
-                if (this.lastEventName) {
+            case 'noop': {
+                const event = acknowledgeEventRequest(this, data);
+                if (event?.eventName) {
                     if (!data.async_pending) {
-                        globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                        globalLoadingManager.stopLoading(event.eventName, event.trigger);
                     }
-                    this.lastEventName = null;
-                    this.lastTriggerElement = null;
                 }
+                break;
+            }
+
+            case 'async_complete':
+                completeAsyncBatch(this, data.async_batch);
                 break;
 
             case 'push_event':
@@ -2769,6 +2777,27 @@ class LiveViewSSE {
         }
     }
 
+    /** Mount a replacement page over the existing owner-bound stream. */
+    liveRedirectMount(outgoing) {
+        if (!this.enabled || !this.viewMounted) return false;
+        cancelPendingRateLimits();
+        // has_ids describes the incoming markup, not whether the current DOM
+        // already represents it. Navigation must replace the previous page.
+        this._replacingView = true;
+        this.primaryViewPath = outgoing.view;
+        this.viewMounted = false;
+        return this.sendMessage(outgoing);
+    }
+
+    _recoverFailedNavigation() {
+        if (!this._replacingView || this.viewMounted) return;
+        this._replacingView = false;
+        this.disconnect();
+        // History already points at the destination. Let Django resolve and
+        // authorize it normally rather than strand the old DOM at a new URL.
+        window.location.reload();
+    }
+
     /**
      * Send an event to the server via HTTP POST.
      *
@@ -2788,14 +2817,23 @@ class LiveViewSSE {
             return false;
         }
 
-        this.lastEventName = eventName;
-        this.lastTriggerElement = triggerElement;
-
-        return this.sendMessage({ type: 'event', event: eventName, params }, keepalive);
+        const request = registerEventRequest(this, eventName, triggerElement);
+        try {
+            if (!this.sendMessage({ type: 'event', event: eventName, params, ref: request.ref }, keepalive)) {
+                cancelEventRequests(this, request.ref);
+            }
+        } catch (error) {
+            cancelEventRequests(this, request.ref);
+            throw error;
+        }
+        return request.promise;
     }
 
-    sendTeardownEvent(eventName, params, triggerElement) {
-        return this.sendEvent(eventName, params, triggerElement, true);
+    sendTeardownEvent(eventName, params, _triggerElement) {
+        // The outgoing page cannot await a stream reply. Preserve the existing
+        // keepalive dispatch contract without retaining an orphaned request.
+        if (!this.enabled || !this.viewMounted) return false;
+        return this.sendMessage({ type: 'event', event: eventName, params }, true);
     }
 
     /**
@@ -2840,11 +2878,14 @@ class LiveViewSSE {
             })
             .catch(err => {
                 console.error('[SSE] Message POST failed:', err);
-                if (eventName) {
+                if (eventName && data.ref != null) {
+                    cancelEventRequests(this, data.ref);
+                } else if (eventName) {
                     globalLoadingManager.stopLoading(eventName, triggerElement);
                     this.lastEventName = null;
                     this.lastTriggerElement = null;
                 }
+                if (data.type === 'live_redirect_mount') this._recoverFailedNavigation();
             });
 
         return true;
@@ -2917,14 +2958,147 @@ let clientVdomVersion = null;
 // Event sequencing (#560): monotonic ref counter for matching event
 // responses to requests, and buffering server-initiated pushes during
 // pending events. Uses a Set to track multiple concurrent pending refs.
-// `let` (NOT const) — `++_eventRefCounter` in 03-websocket.js reassigns.
-// eslint-disable-next-line prefer-const
+// Both transports allocate from this single monotonic sequence.
 let _eventRefCounter = 0;
 const _pendingEventRefs = new Set();     // refs of events awaiting server response
 const _pendingEventNames = new Map();    // ref -> event name for pending events
 const _pendingTriggerEls = new Map();    // ref -> trigger element for loading state
 const _pendingEventResolvers = new Map(); // ref -> resolve() for Promise-based sendEvent (#1315)
+const _pendingEventOwners = new Map();   // ref -> transport instance
+const _pendingAsyncBatches = new Map();  // opaque server batch -> originating control
 const _tickBuffer = [];                  // buffered server-initiated patches during pending events
+const _tickBufferOwners = new WeakMap();
+
+function hasPendingEventRequests(transport) {
+    return [..._pendingEventOwners.values()].some(owner => owner === transport);
+}
+
+function bufferServerUpdate(transport, data, received = data) {
+    const order = transport?._parameterContractFrames?.get(received);
+    if (order !== undefined) transport._parameterContractFrames.set(data, order);
+    _tickBufferOwners.set(data, transport);
+    _tickBuffer.push(data);
+}
+
+function takeServerUpdates(transport, limit = Infinity) {
+    const owned = [];
+    for (let index = 0; index < _tickBuffer.length && owned.length < limit;) {
+        // index is a bounded local array cursor, never a wire-provided key.
+        // eslint-disable-next-line security/detect-object-injection
+        const frame = _tickBuffer[index];
+        if (_tickBufferOwners.get(frame) === transport) {
+            owned.push(frame);
+            _tickBuffer.splice(index, 1);
+            _tickBufferOwners.delete(frame);
+        } else index += 1;
+    }
+    return owned;
+}
+
+async function flushServerUpdates(transport) {
+    // Leave unprocessed frames owned by the queue across application awaits.
+    // Disconnect can discard them, and a newly started event can defer them.
+    while (!hasPendingEventRequests(transport)) {
+        const [frame] = takeServerUpdates(transport, 1);
+        if (!frame) return;
+        await handleServerResponse(frame, null, null, transport);
+        completeLegacyAsyncBatches(transport, frame);
+    }
+}
+
+/** Register before sending: even an immediate reply must find its request. */
+function registerEventRequest(transport, eventName, triggerElement) {
+    const ref = ++_eventRefCounter;
+    _pendingEventRefs.add(ref);
+    _pendingEventNames.set(ref, eventName);
+    _pendingTriggerEls.set(ref, triggerElement);
+    _pendingEventOwners.set(ref, transport);
+    transport.lastEventName = eventName;
+    transport.lastTriggerElement = triggerElement;
+    const promise = new Promise(resolve => _pendingEventResolvers.set(ref, resolve));
+    return { ref, promise };
+}
+
+function rememberAsyncBatch(transport, data, eventName, trigger) {
+    if (data.async_pending && data.async_batch == null && eventName) {
+        _pendingAsyncBatches.set(Symbol('legacy'), {transport, eventName, trigger, legacy: true});
+        return;
+    }
+    if (data.async_pending && typeof data.async_batch === 'string' &&
+        data.async_batch.length > 0 && data.async_batch.length <= 128 &&
+        !_pendingAsyncBatches.has(data.async_batch)) {
+        _pendingAsyncBatches.set(data.async_batch, { transport, eventName, trigger });
+    }
+}
+
+function completeLegacyAsyncBatches(transport, data) {
+    if (data.source !== 'async' || data.async_pending || !data.event_name) return;
+    for (const [token, batch] of _pendingAsyncBatches) {
+        if (batch.legacy && batch.transport === transport && batch.eventName === data.event_name) {
+            completeAsyncBatch(transport, token);
+        }
+    }
+}
+
+/** Completion is a separate control message, not a foreground acknowledgement. */
+function completeAsyncBatch(transport, token) {
+    const batch = _pendingAsyncBatches.get(token);
+    if (!batch || batch.transport !== transport) return;
+    _pendingAsyncBatches.delete(token);
+    if (batch.eventName) globalLoadingManager.stopLoading(batch.eventName, batch.trigger);
+}
+
+/** Consume only an owned acknowledgement; unknown refs never use last-event state. */
+function acknowledgeEventRequest(transport, data) {
+    if (['async', 'tick', 'broadcast'].includes(data.source)) return null;
+    let ref = data.ref;
+    if (ref == null) {
+        // Compatibility with old no-ref servers is unambiguous only with one
+        // outstanding request. Never guess between overlapping requests.
+        const owned = [..._pendingEventOwners].filter(([, owner]) => owner === transport);
+        if (owned.length > 1) return null;
+        if (owned.length === 1) ref = owned[0][0];
+        else {
+            const legacy = { eventName: transport.lastEventName, trigger: transport.lastTriggerElement };
+            rememberAsyncBatch(transport, data, legacy.eventName, legacy.trigger);
+            transport.lastEventName = null;
+            transport.lastTriggerElement = null;
+            return legacy;
+        }
+    }
+    if (!_pendingEventRefs.has(ref) || _pendingEventOwners.get(ref) !== transport) return null;
+    const eventName = _pendingEventNames.get(ref);
+    const trigger = _pendingTriggerEls.get(ref);
+    rememberAsyncBatch(transport, data, eventName, trigger);
+    const resolve = _pendingEventResolvers.get(ref);
+    _pendingEventRefs.delete(ref);
+    _pendingEventNames.delete(ref);
+    _pendingTriggerEls.delete(ref);
+    _pendingEventResolvers.delete(ref);
+    _pendingEventOwners.delete(ref);
+    const remaining = [..._pendingEventOwners].filter(([, owner]) => owner === transport);
+    const latest = remaining.length ? remaining[remaining.length - 1][0] : null;
+    transport.lastEventName = latest == null ? null : _pendingEventNames.get(latest);
+    transport.lastTriggerElement = latest == null ? null : _pendingTriggerEls.get(latest);
+    if (resolve) resolve(data.cancelled ? null : data);
+    return { eventName, trigger };
+}
+
+/** Cancel this transport's requests, never those of a replacement connection. */
+function cancelEventRequests(transport, ref = null) {
+    const refs = ref == null
+        ? [..._pendingEventOwners].filter(([, owner]) => owner === transport).map(([key]) => key)
+        : [ref];
+    for (const key of refs) {
+        const event = acknowledgeEventRequest(transport, { ref: key, cancelled: true });
+        if (event?.eventName) globalLoadingManager.stopLoading(event.eventName, event.trigger);
+    }
+    if (ref == null) {
+        for (const [token, batch] of _pendingAsyncBatches) {
+            if (batch.transport === transport) completeAsyncBatch(transport, token);
+        }
+    }
+}
 
 // State management for decorators
 const debounceTimers = new Map(); // Map<handlerName, {timerId, firstCallTime}>
@@ -3117,8 +3291,8 @@ window.djust._getEventSeqState = function() {
         eventRefCounter: _eventRefCounter,
     };
 };
-window.djust._pushTickBuffer = function(data) {
-    _tickBuffer.push(data);
+window.djust._pushTickBuffer = function(data, transport) {
+    bufferServerUpdate(transport || _pendingEventOwners.values().next().value || liveViewWS, data);
 };
 
 // === Handler-level rate limiting: the client half of @debounce / @throttle ===
@@ -4216,6 +4390,238 @@ function collectDjValues(element) {
     return values;
 }
 
+// A mount owns its manifest. Never merge contracts by handler name, or retain
+// a previous mount's contracts when a legacy server omits this field.
+function _installParameterContracts(transport, manifest, viewPath, resetPrimary = true, receiptOrder = 0) {
+    if (!transport._parameterContracts || (resetPrimary && viewPath === transport.primaryViewPath)) {
+        transport._parameterContracts = new Map();
+        transport._parameterContractApplied = new Map();
+    }
+    if (resetPrimary) transport._parameterContractApplied.set(viewPath, receiptOrder);
+    transport._parameterContracts.set(viewPath, null);
+    if (manifest === undefined || manifest === null) return;
+    const reject = () => { throw new Error('Invalid public parameter contracts'); };
+    // Keep invalid metadata distinguishable from an intentional legacy mount.
+    transport._parameterContracts.set(viewPath, false);
+    if (typeof viewPath !== 'string' || !viewPath) reject();
+    if (manifest.version !== 1 || !Array.isArray(manifest.owners) || manifest.owners.length > 1024 || JSON.stringify(manifest).length > 65536) reject();
+    const owners = new Map();
+    let count = 0;
+    for (const owner of manifest.owners) {
+        if (!owner || ![owner.view_id, owner.component_id].every(id => id === null || (typeof id === 'string' && id.length > 0))) reject();
+        const key = JSON.stringify([owner.view_id, owner.component_id]);
+        if (owners.has(key) || !owner.handlers || typeof owner.handlers !== 'object' || Array.isArray(owner.handlers)) reject();
+        const handlers = new Map();
+        for (const [name, contract] of Object.entries(owner.handlers)) {
+            if (++count > 10000 || !/^[a-zA-Z][a-zA-Z0-9_]*$/.test(name) || !contract) reject();
+            if (contract.policy === 'legacy') {
+                handlers.set(name, Object.freeze({policy: 'legacy'}));
+            } else if (contract.policy === 'strict') {
+                if (typeof contract.coerce_types !== 'boolean' || !Array.isArray(contract.parameters) || contract.parameters.length > 1024) reject();
+                const seen = new Set();
+                const parameters = contract.parameters.map(parameter => {
+                    if (!parameter || typeof parameter.name !== 'string' || seen.has(parameter.name) || typeof parameter.type !== 'string' ||
+                        !['positional_only', 'positional_or_keyword', 'keyword_only', 'var_positional', 'var_keyword'].includes(parameter.kind) ||
+                        typeof parameter.required !== 'boolean' || typeof parameter.reduced_checking !== 'boolean') reject();
+                    seen.add(parameter.name);
+                    return Object.freeze({name: parameter.name, type: parameter.type, kind: parameter.kind,
+                        required: parameter.required, reduced_checking: parameter.reduced_checking});
+                });
+                handlers.set(name, Object.freeze({policy: 'strict', coerce_types: contract.coerce_types, parameters: Object.freeze(parameters)}));
+            } else reject();
+        }
+        owners.set(key, handlers);
+    }
+    if (!owners.has('[null,null]')) reject();
+    transport._parameterContracts.set(viewPath, owners);
+}
+
+// Receipt order is client-owned, not a wire field or the VDOM version (child
+// replies have no parent VDOM version). Weak keys cannot retain consumed frames.
+function _recordParameterContractFrame(transport, data) {
+    if (!data || typeof data !== 'object') return;
+    transport._parameterContractFrames ??= new WeakMap();
+    transport._parameterContractSequence = (transport._parameterContractSequence || 0) + 1;
+    transport._parameterContractFrames.set(data, transport._parameterContractSequence);
+}
+
+// A failed/partial DOM application cannot keep advertising the last successful
+// strict snapshot. Invalidate only this transport's primary scope, never peers.
+function _invalidateRenderParameterContracts(transport, data) {
+    const path = transport?.primaryViewPath;
+    const mounts = transport?._parameterContracts;
+    if (mounts?.has(path) && (mounts.get(path) !== null || Object.hasOwn(data, 'parameter_contracts'))) {
+        mounts.set(path, false);
+        const order = transport._parameterContractFrames?.get(data);
+        if (order !== undefined) transport._parameterContractApplied.set(path,
+            Math.max(order, transport._parameterContractApplied.get(path) || 0));
+    }
+}
+
+// Called after DOM application (including empty patches), before dj-mounted
+// or other bindings can run. Omission is safe only for a known legacy scope.
+function _refreshRenderParameterContracts(transport, data) {
+    const supplied = Object.hasOwn(data, 'parameter_contracts');
+    if (!transport) {
+        if (supplied && globalThis.djustDebug) console.warn('[LiveView] Missing parameter contract transport');
+        return;
+    }
+    const order = transport._parameterContractFrames?.get(data);
+    const applied = transport._parameterContractApplied?.get(transport.primaryViewPath);
+    // A newer applied response already supplied a whole-tree snapshot. Replaying
+    // an older buffered delta must not replace it, even with a missing snapshot.
+    if (order !== undefined && applied !== undefined && order <= applied) return;
+    if (!supplied) {
+        _invalidateRenderParameterContracts(transport, data);
+        if (order !== undefined && applied !== undefined) {
+            transport._parameterContractApplied.set(transport.primaryViewPath, order);
+        }
+        return;
+    }
+    const path = data.parameter_contract_view;
+    const root = getLiveViewRoot();
+    if (order === undefined || typeof path !== 'string' || path !== transport.primaryViewPath ||
+        root.getAttribute('dj-view') !== path || !transport._parameterContracts?.has(path)) {
+        _invalidateRenderParameterContracts(transport, data);
+        if (globalThis.djustDebug) console.warn('[LiveView] Unknown render parameter contract mount');
+        return;
+    }
+    transport._parameterContractApplied.set(path, order);
+    try {
+        _installParameterContracts(transport, data.parameter_contracts, path, false);
+    } catch {
+        // Metadata cannot prevent the originating response from acknowledging
+        // its request. Strict lookups fail closed on the invalid scope instead.
+        _invalidateRenderParameterContracts(transport, data);
+        if (globalThis.djustDebug) console.warn('[LiveView] Invalid render parameter contracts');
+    }
+}
+
+function _lookupParameterContract(transport, viewPath, viewId, componentId, eventName) {
+    const mounts = transport._parameterContracts;
+    if (!mounts || !mounts.has(viewPath)) throw new Error('Unknown parameter contract mount');
+    const owners = mounts.get(viewPath);
+    if (owners === null) return null;
+    if (owners === false) throw new Error('Invalid public parameter contracts');
+    const handlers = owners.get(JSON.stringify([viewId, componentId]));
+    if (!handlers || !handlers.has(eventName)) throw new Error('Unknown parameter contract owner or handler');
+    return handlers.get(eventName);
+}
+
+// ADR-036 staged collector. Deliberately not called by legacy binders. The
+// owner-scoped binder must supply only documented generated application values;
+// routing context is attached afterwards, never collected from markup here.
+function _collectStrictEventParams(element, generated = {}, positional = []) {
+    const reject = () => { throw new Error('Invalid strict event arguments'); };
+    const values = Object.create(null);
+    const reserved = new Set([...UNSAFE_KEYS, '_args', 'component_id', 'view_id',
+        '_targetElement', '_optimisticUpdateId', '_skipLoading', '_djTargetSelector']);
+    let nodes = 0;
+    let textSize = 0;
+    const active = new Set();
+    const plainObject = value => {
+        const proto = Object.getPrototypeOf(value);
+        return proto === null || Object.getPrototypeOf(proto) === null;
+    };
+    const ownValue = (object, key) => {
+        const descriptor = Object.getOwnPropertyDescriptor(object, key);
+        if (!descriptor || !Object.hasOwn(descriptor, 'value')) reject();
+        return descriptor.value;
+    };
+    const visit = (value, depth = 0) => {
+        if (++nodes > 10000 || depth > 32) reject();
+        if (typeof value === 'string') {
+            textSize += value.length;
+            if (textSize > 65536) reject();
+        } else if (typeof value === 'number') {
+            if (!Number.isFinite(value)) reject();
+        } else if (value !== null && typeof value === 'object') {
+            if (active.has(value)) reject();
+            const array = Array.isArray(value);
+            if (array && value.length > 1024) reject();
+            if (!array && !plainObject(value)) reject();
+            const keys = array ? null : Object.keys(value);
+            if (keys && keys.length > 1024) reject();
+            active.add(value);
+            const snapshot = array ? [] : Object.create(null);
+            if (array) {
+                for (let i = 0; i < value.length; i++) {
+                    snapshot.push(visit(ownValue(value, String(i)), depth + 1));
+                }
+            } else {
+                for (const key of keys) {
+                    visit(key, depth + 1);
+                    // eslint-disable-next-line security/detect-object-injection
+                    snapshot[key] = visit(ownValue(value, key), depth + 1);
+                }
+            }
+            active.delete(value);
+            return snapshot;
+        } else if (value !== null && typeof value !== 'boolean') reject();
+        return value;
+    };
+    const put = (key, value) => {
+        if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key) || reserved.has(key) || Object.hasOwn(values, key)) reject();
+        // eslint-disable-next-line security/detect-object-injection
+        values[key] = value;
+    };
+    if (!generated || typeof generated !== 'object' || Array.isArray(generated) || !plainObject(generated) || !Array.isArray(positional)) reject();
+    for (const key of Object.keys(generated)) put(key, ownValue(generated, key));
+    let literalSize = 0;
+    for (const attr of element.attributes) {
+        if (!attr.name.startsWith('dj-value-')) continue;
+        literalSize += attr.value.length + attr.name.length;
+        if (literalSize > 65536) reject();
+        const parts = attr.name.slice(9).split(':');
+        if (parts.length > 2 || (parts.length === 2 && !parts[1])) reject();
+        const key = parts[0].replace(/-/g, '_');
+        const hint = parts[1];
+        let value = attr.value;
+        const text = value.replace(/^[ \t\n\r\v\f]+|[ \t\n\r\v\f]+$/g, '');
+        if (hint) {
+            switch (hint) {
+                case 'int': case 'integer':
+                    if (text.length > 1024 || !/^[+-]?[0-9]+(?![\s\S])/.test(text)) reject();
+                    value = Number(text);
+                    if (!Number.isSafeInteger(value)) reject();
+                    break;
+                case 'float': case 'number':
+                    // Bounded input and disjoint decimal/exponent delimiters.
+                    // eslint-disable-next-line security/detect-unsafe-regex
+                    if (text.length > 1024 || !/^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?(?![\s\S])/.test(text)) reject();
+                    value = Number(text);
+                    break;
+                case 'bool': case 'boolean': {
+                    const lower = text.toLowerCase();
+                    if (!['true', 'false', '1', '0', 'yes', 'no', 'on', 'off'].includes(lower)) reject();
+                    value = ['true', '1', 'yes', 'on'].includes(lower);
+                    break;
+                }
+                case 'json': case 'array': case 'list': case 'object':
+                    try { value = JSON.parse(value); } catch { reject(); }
+                    // Inspect number tokens before their integer spelling is
+                    // lost. Strings are matched as whole tokens, including
+                    // escapes, so their digits are never treated as numbers.
+                    // JSON.parse has already validated this bounded literal;
+                    // the alternatives have disjoint starting characters.
+                    // eslint-disable-next-line security/detect-unsafe-regex
+                    for (const token of attr.value.match(/"(?:\\[\s\S]|[^"\\])*"|-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/g) || []) {
+                        if (!token.startsWith('"') && !/[.eE]/.test(token) && !Number.isSafeInteger(Number(token))) reject();
+                    }
+                    if ((hint === 'array' || hint === 'list') && !Array.isArray(value)) reject();
+                    if (hint === 'object' && (value === null || typeof value !== 'object' || Array.isArray(value))) reject();
+                    break;
+                default: reject();
+            }
+        }
+        put(key, value);
+    }
+    const snapshot = visit(values);
+    const args = visit(positional);
+    if (args.length) snapshot._args = args;
+    return snapshot;
+}
+
 // Export for global access
 window.djust = window.djust || {};
 window.djust.extractTypedParams = extractTypedParams;
@@ -5019,6 +5425,15 @@ async function _handleDjClick(element, e) {
 
     const parsed = parseEventHandler(rawClickValue);
 
+    // Client-owned dropdown selection dismisses immediately. Confirmation has
+    // already succeeded; notification/server failures must not reopen the UI.
+    const nativeMenu = element.closest('[data-dj-native-dropdown]');
+    if (parsed.name === 'select' && !element.disabled && nativeMenu
+        && getComponentId(nativeMenu) === getComponentId(element)
+        && typeof nativeMenu.hidePopover === 'function' && nativeMenu.matches(':popover-open')) {
+        nativeMenu.hidePopover();
+    }
+
     // dj-disable-with: disable and show loading text
     _applyDisableWith(element);
 
@@ -5685,8 +6100,106 @@ function installDelegatedListeners(root) {
     });
 }
 
+// Native visibility belongs to the browser. The weak record owns only delivery
+// bookkeeping; never write visibility in response to an acknowledgement.
+const _nativeDropdownObservers = new WeakMap();
+let _nativeObservationGeneration = 0;
+for (const event of ['djust:before-navigate', 'turbo:before-visit', 'pagehide']) {
+    window.addEventListener(event, () => { _nativeObservationGeneration += 1; });
+}
+
+function _nativeObservationReady() {
+    if (navigator.onLine === false) return false;
+    if (!liveViewWS) return !findPageViewContainer();
+    if (!liveViewWS.enabled) {
+        return window.DJUST_USE_WEBSOCKET === false && !liveViewWS.eventSource;
+    }
+    const connection = liveViewWS.ws || liveViewWS.eventSource;
+    return !!(liveViewWS.viewMounted && connection && connection.readyState === 1);
+}
+
+function _nativeObservationIdentity(element) {
+    return [_nativeObservationGeneration, getComponentId(element), getEmbeddedViewId(element),
+        element.getAttribute('data-dj-observe-toggle'),
+        element.getAttribute('data-dj-observe-lifetime')].join('\u0000');
+}
+
+async function _flushNativeObservation(element, record) {
+    if (record.sending || !record.dirty || !_nativeObservationReady()
+        || !element.isConnected || _nativeDropdownObservers.get(element) !== record
+        || !element.hasAttribute('data-dj-native-dropdown')
+        || _nativeObservationIdentity(element) !== record.identity) return;
+    if (record.sequence >= Number.MAX_SAFE_INTEGER) return;
+    const open = record.open;
+    record.dirty = false;
+    record.sending = true;
+    const params = {open, sequence: ++record.sequence, lifetime: record.lifetime,
+        _targetElement: element, _skipLoading: true};
+    addEventContext(params, element);
+    try {
+        await handleEvent(record.handler, params);
+    } catch (error) {
+        // Transport diagnostics remain normal; no rollback or automatic retry.
+        if (globalThis.djustDebug) console.warn('[djust] Visibility observation failed', error);
+    } finally {
+        record.sending = false;
+        // Intermediate transitions may be dropped, including a return to the
+        // already-reported value. A response alone never schedules another send.
+        if (record.dirty && record.open === open) record.dirty = false;
+        if (record.dirty) void _flushNativeObservation(element, record);
+    }
+}
+
+function _bindNativeDropdownObservers(root) {
+    const selector = '[data-dj-native-dropdown]';
+    const elements = Array.from(root.querySelectorAll(selector));
+    if (root.matches && root.matches(selector)) elements.unshift(root);
+    elements.forEach(element => {
+        let record = _nativeDropdownObservers.get(element);
+        const handler = element.getAttribute('data-dj-observe-toggle');
+        const lifetime = element.getAttribute('data-dj-observe-lifetime');
+        const identity = _nativeObservationIdentity(element);
+        const changed = record && record.identity !== identity;
+        if (record && (changed || !handler || !lifetime)) {
+            element.removeEventListener('toggle', record.listener);
+            _nativeDropdownObservers.delete(element);
+            record = null;
+        }
+        if (!handler || !lifetime || !getComponentId(element)) return;
+        const sequence = Number(element.getAttribute('data-dj-observe-sequence'));
+        if (!Number.isSafeInteger(sequence) || sequence < 0) {
+            if (record) element.removeEventListener('toggle', record.listener);
+            _nativeDropdownObservers.delete(element);
+            return;
+        }
+        if (!record) {
+            record = {identity, handler, lifetime, sequence, sending: false, dirty: false};
+            const owned = record;
+            record.listener = event => {
+                if (event.target !== element || !['open', 'closed'].includes(event.newState)) return;
+                owned.open = event.newState === 'open';
+                owned.dirty = true;
+                void _flushNativeObservation(element, owned);
+            };
+            _nativeDropdownObservers.set(element, record);
+            element.addEventListener('toggle', record.listener);
+        } else {
+            record.sequence = Math.max(record.sequence, sequence);
+        }
+        if (changed || window.djust._isReconnect) {
+            record.open = element.matches(':popover-open');
+            record.dirty = true;
+        }
+        const current = record;
+        queueMicrotask(() => { void _flushNativeObservation(element, current); });
+    });
+}
+
+window.addEventListener('online', () => _bindNativeDropdownObservers(document));
+
 function bindLiveViewEvents(scope) {
     const root = scope || getLiveViewRoot() || document;
+    _bindNativeDropdownObservers(root);
 
     // Install delegated listeners on the LiveView root element.
     // Only install on actual [dj-view]/[dj-root] elements, NOT on document.body
@@ -6645,6 +7158,31 @@ const globalLoadingManager = {
     // Map of element -> { originalState, modifiers }
     registeredElements: new Map(),
     pendingEvents: new Set(),
+    // event name -> owner element (null for page scope) -> triggering elements.
+    // DOM identity intentionally prevents a replacement with the same ID from
+    // inheriting work queued on the removed component.
+    pendingScopes: new Map(),
+
+    scopeFor(element) {
+        if (!element) return null;
+        // live_render also stamps data-djust-embedded on individual controls
+        // as routing hints. Those hints disappear on a child morph; they are
+        // not ownership boundaries. Prefer the actual view/component wrapper.
+        return element.closest('[dj-view][data-djust-embedded], [data-component-id]') ||
+            element.closest('[data-djust-embedded]');
+    },
+
+    syncPending() {
+        this.pendingEvents.clear();
+        this.pendingScopes.forEach((scopes, eventName) => {
+            scopes.forEach((triggers, owner) => {
+                if (!triggers.size || (owner && !owner.isConnected)) scopes.delete(owner);
+            });
+            if (scopes.size) this.pendingEvents.add(eventName);
+            else this.pendingScopes.delete(eventName);
+        });
+        document.body.classList.toggle('djust-global-loading', this.pendingEvents.size > 0);
+    },
 
     // Register an element with dj-loading attributes
     register(element, eventName) {
@@ -6706,6 +7244,7 @@ const globalLoadingManager = {
 
     // Scan and register all elements with dj-loading attributes
     scanAndRegister() {
+        this.syncPending();
         // Clean up entries for elements no longer in the DOM (e.g. after morphdom/patches)
         this.registeredElements.forEach((_config, element) => {
             if (!element.isConnected) {
@@ -6744,13 +7283,24 @@ const globalLoadingManager = {
                 this.register(element, eventName);
             }
         });
+        this.registeredElements.forEach((config, element) => {
+            if (this.pendingScopes.get(config.eventName)?.has(this.scopeFor(element))) {
+                this.applyLoadingState(element, config);
+            }
+        });
         if (globalThis.djustDebug) {
             djLog(`[Loading] Scanned ${this.registeredElements.size} elements with dj-loading attributes`);
         }
     },
 
     startLoading(eventName, triggerElement) {
-        this.pendingEvents.add(eventName);
+        const owner = this.scopeFor(triggerElement);
+        let scopes = this.pendingScopes.get(eventName);
+        if (!scopes) this.pendingScopes.set(eventName, scopes = new Map());
+        let triggers = scopes.get(owner);
+        if (!triggers) scopes.set(owner, triggers = new Set());
+        triggers.add(triggerElement || null);
+        this.syncPending();
 
         // Apply loading state to trigger element
         if (triggerElement) {
@@ -6769,12 +7319,10 @@ const globalLoadingManager = {
 
         // Apply loading state to all registered elements watching this event
         this.registeredElements.forEach((config, element) => {
-            if (config.eventName === eventName) {
+            if (config.eventName === eventName && this.scopeFor(element) === owner) {
                 this.applyLoadingState(element, config);
             }
         });
-
-        document.body.classList.add('djust-global-loading');
 
         if (globalThis.djustDebug) {
             djLog(`[Loading] Started: ${eventName}`);
@@ -6782,7 +7330,39 @@ const globalLoadingManager = {
     },
 
     stopLoading(eventName, triggerElement) {
-        this.pendingEvents.delete(eventName);
+        for (const batch of _pendingAsyncBatches.values()) {
+            if (batch.eventName === eventName && (triggerElement
+                ? batch.trigger === triggerElement
+                : this.scopeFor(batch.trigger) === null)) return;
+        }
+        // Loading scopes coalesce DOM triggers; the request registry is the
+        // authority for overlapping sends from the same trigger.
+        for (const ref of _pendingEventRefs) {
+            const pendingTrigger = _pendingTriggerEls.get(ref);
+            if (_pendingEventNames.get(ref) === eventName && (triggerElement
+                ? pendingTrigger === triggerElement
+                : this.scopeFor(pendingTrigger) === null)) return;
+        }
+        const scopes = this.pendingScopes.get(eventName);
+        if (!scopes) return;
+        let owner;
+        if (triggerElement) {
+            // The reply can remove its trigger during morphing. Resolve from
+            // the original pending record, not the trigger's current ancestry.
+            for (const [scope, triggers] of scopes) {
+                if (triggers.delete(triggerElement)) {
+                    owner = scope;
+                    break;
+                }
+            }
+        } else if (scopes.has(null)) {
+            // Legacy page-level background completion has no trigger. It may
+            // finish page work, but never clear an embedded component's work.
+            owner = null;
+            scopes.get(null).clear();
+        }
+        if (owner === undefined) return;
+        this.syncPending();
 
         // Remove loading state from trigger element
         if (triggerElement) {
@@ -6796,12 +7376,11 @@ const globalLoadingManager = {
 
         // Remove loading state from all registered elements watching this event
         this.registeredElements.forEach((config, element) => {
-            if (config.eventName === eventName) {
-                this.removeLoadingState(element, config);
+            if (config.eventName === eventName && this.scopeFor(element) === owner) {
+                if (scopes.has(owner)) this.applyLoadingState(element, config);
+                else this.removeLoadingState(element, config);
             }
         });
-
-        document.body.classList.remove('djust-global-loading');
 
         if (globalThis.djustDebug) {
             djLog(`[Loading] Stopped: ${eventName}`);
@@ -6853,6 +7432,19 @@ function generateCacheRequestId() {
 // per session, not on every degraded event. Function-scoped within the bundle
 // IIFE (#1635).
 let _djustHttpFallbackWarned = false;
+
+// Local operations share request bookkeeping with socket transports. Their
+// completion is owned by the awaited operation, never by a server-supplied ref.
+const _localEventTransport = {};
+let _httpPageGeneration = 0;
+const _pendingHttpControllers = new Set();
+for (const event of ['djust:before-navigate', 'turbo:before-visit', 'pagehide']) {
+    window.addEventListener(event, () => {
+        _httpPageGeneration += 1;
+        for (const controller of _pendingHttpControllers) controller.abort();
+        _pendingHttpControllers.clear();
+    });
+}
 
 // Main Event Handler
 //
@@ -6993,13 +7585,16 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
         // Still show brief loading state for UX consistency
         if (!skipLoading) globalLoadingManager.startLoading(eventName, triggerElement);
 
-        // Apply cached patches
-        if (cached.patches && cached.patches.length > 0) {
-            await applyPatches(cached.patches);
-            reinitAfterDOMUpdate();
+        const cachedRequest = registerEventRequest(_localEventTransport, eventName, triggerElement);
+        try {
+            // Apply cached patches
+            if (cached.patches && cached.patches.length > 0) {
+                await applyPatches(cached.patches);
+                reinitAfterDOMUpdate();
+            }
+        } finally {
+            cancelEventRequests(_localEventTransport, cachedRequest.ref);
         }
-
-        if (!skipLoading) globalLoadingManager.stopLoading(eventName, triggerElement);
         return;
     }
 
@@ -7071,11 +7666,22 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     }
     if (globalThis.djustDebug) console.log('[LiveView] WebSocket unavailable, falling back to HTTP');
 
+    const httpRequest = teardown ? null
+        : registerEventRequest(_localEventTransport, eventName, triggerElement);
+    // Keepalive teardown sends deliberately outlive the outgoing page.
+    const httpController = teardown ? null : new AbortController();
+    if (httpController) _pendingHttpControllers.add(httpController);
+    const httpOwner = document.querySelector('[dj-root]') || document.body;
+    const httpUrl = window.location.href;
+    const httpGeneration = _httpPageGeneration;
+    const ownsHttpResponse = () => httpOwner === (document.querySelector('[dj-root]') || document.body)
+        && httpUrl === window.location.href && httpGeneration === _httpPageGeneration;
     try {
         // Input, configured-name cookie, then server meta tag (00-namespace.js).
         const csrfToken = window.djust.csrfToken();
         const response = await fetch(teardown ? teardown.url : window.location.href, {
             keepalive: !!teardown,
+            ...(httpController ? {signal: httpController.signal} : {}),
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -7090,17 +7696,23 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
         }
 
         // This response belongs to the outgoing view; never patch the new one.
-        if (teardown) return;
+        if (teardown || !ownsHttpResponse()) return;
         const data = await response.json();
+        // Parsing can yield after headers arrived; navigation during either
+        // await invalidates every response effect, including metadata/cache.
+        if (!ownsHttpResponse()) return;
         // Same client-owned-flag strip as the WebSocket and SSE transports
         // (#2829) — the HTTP fallback dispatches straight into
         // handleServerResponse, so it needs its own call.
         stripClientOwnedFrameFlags(data);
-        await handleServerResponse(data, eventName, triggerElement);
+        _recordParameterContractFrame(_localEventTransport, data);
+        await handleServerResponse(data, eventName, triggerElement, _localEventTransport);
 
     } catch (error) {
-        console.error('[LiveView] HTTP fallback failed:', error);
-        if (!teardown) globalLoadingManager.stopLoading(eventName, triggerElement);
+        if (!httpController?.signal.aborted) console.error('[LiveView] HTTP fallback failed:', error);
+    } finally {
+        if (httpController) _pendingHttpControllers.delete(httpController);
+        if (httpRequest) cancelEventRequests(_localEventTransport, httpRequest.ref);
     }
 }
 window.djust.handleEvent = handleEvent;
@@ -11814,6 +12426,11 @@ window.djust.getActiveStreams = getActiveStreams;
 
 (function () {
 
+    function isNavigationConnected() {
+        return isWSConnected() || (liveViewWS && liveViewWS.enabled && liveViewWS.viewMounted &&
+            liveViewWS.eventSource && liveViewWS.eventSource.readyState === EventSource.OPEN);
+    }
+
     /**
      * Handle navigation commands from the server.
      *
@@ -11977,7 +12594,7 @@ window.djust.getActiveStreams = getActiveStreams;
         // The server's #1647 guard (_resolve_view_path_from_url) also returns
         // None for a non-LiveView URL and keeps the stale client-supplied view,
         // so the client must make the full-nav decision here.
-        const viewPath = isWSConnected() ? resolveLiveViewPath(newUrl.pathname) : null;
+        const viewPath = isNavigationConnected() ? resolveLiveViewPath(newUrl.pathname) : null;
 
         if (!viewPath) {
             // Non-LiveView target (or no WS connection) → full-page
@@ -12179,6 +12796,12 @@ window.djust.getActiveStreams = getActiveStreams;
         // Keep the active-nav highlight in sync on back/forward (the URL is
         // already current here), regardless of WS state. (#1756)
         updateAriaCurrent();
+        // Back can race an SSE replacement before its mount reply. The URL
+        // has already changed; do not leave the pending page under that URL.
+        if (liveViewWS && liveViewWS.eventSource && !liveViewWS.viewMounted) {
+            window.location.reload();
+            return;
+        }
         // These two returns leave `_renderedPathname` on the previous value,
         // which is deliberate and safe: nothing was re-rendered, so the
         // tracker still names what is on screen. It is also self-correcting —
@@ -12188,7 +12811,7 @@ window.djust.getActiveStreams = getActiveStreams;
         // cannot happen, because every cross-path entry djust pushes also
         // carries `redirect: true` and that flag is OR'd in below.
         if (!liveViewWS || !liveViewWS.viewMounted) return;
-        if (!isWSConnected()) return;
+        if (!isNavigationConnected()) return;
 
         const url = new URL(window.location.href);
         const params = Object.fromEntries(url.searchParams);
@@ -12211,6 +12834,11 @@ window.djust.getActiveStreams = getActiveStreams;
             // (now-current) non-LiveView URL correctly.
             const viewPath = resolveLiveViewPath(url.pathname);
             if (viewPath) {
+                // Popstate has already changed location. Capture/invalidate
+                // the page we are leaving before looking up the destination.
+                window.dispatchEvent(new CustomEvent('djust:before-navigate', {
+                    detail: { fromUrl: cameFrom, toUrl: url.pathname },
+                }));
                 // Sticky LiveViews (Phase B): detach sticky subtrees
                 // into the stash BEFORE the outbound
                 // live_redirect_mount message.
@@ -12412,8 +13040,6 @@ window.djust.getActiveStreams = getActiveStreams;
                 // directive now uses the same rule.
                 if (_isModifiedClick(e) || !el.getAttribute('dj-navigate')) return;
                 e.preventDefault();
-                if (!liveViewWS || !liveViewWS.ws) return;
-
                 const path = el.getAttribute('dj-navigate');
                 handleLiveRedirect({ path: path, replace: false });
             });
@@ -12511,7 +13137,7 @@ window.djust.getActiveStreams = getActiveStreams;
         // routes. Unknown paths (admin, plain Django views, routes the user
         // can't access) fall through to a normal navigation the server gates.
         if (!resolveViewPath(url.pathname)) return;
-        if (!liveViewWS || !liveViewWS.ws) return; // no socket → normal nav
+        if (!isNavigationConnected()) return; // no transport → normal nav
 
         e.preventDefault();
         if (url.pathname === window.location.pathname) {
@@ -16182,6 +16808,11 @@ window.djust.bindModelElements = bindModelElements;
         });
     }
 
+    function forgetState(url) {
+        const ctrl = _swController();
+        if (ctrl) ctrl.postMessage({ type: 'STATE_SNAPSHOT_FORGET', url: url });
+    }
+
     function lookupState(url) {
         return new Promise(function (resolve) {
             const ctrl = _swController();
@@ -16286,6 +16917,7 @@ window.djust.bindModelElements = bindModelElements;
         cacheVdom: cacheVdom,
         lookupVdom: lookupVdom,
         captureState: captureState,
+        forgetState: forgetState,
         lookupState: lookupState,
     };
 })();
@@ -18614,9 +19246,8 @@ globalThis.djust.djTransitionGroup = {
 // cached state and stashes it on window.djust._pendingStateSnapshot so the
 // next outbound live_redirect_mount can include it.
 //
-// Per-view opt-in: the server-side LiveView must declare
-// `enable_state_snapshot = True`. The client sends the snapshot regardless
-// (belt-and-braces); the server ignores snapshots for non-opt-in views.
+// The server grants persistence: legacy enable_state_snapshot or staged explicit
+// persist="client" fields. The client echoes signed tokens, never infers grants.
 //
 // Non-invasive: this module only wires listeners and reads/writes one
 // globalThis slot. It never mutates the DOM or WebSocket directly.
@@ -18660,8 +19291,7 @@ globalThis.djust.djTransitionGroup = {
         // Finding #4 (CWE-345 → CWE-915): the canonical record on
         // `window.djust._clientState[slug]` is now the OPAQUE
         // server-signed snapshot blob (`state_snapshot_signed`), populated
-        // by the mount handler in 03-websocket.js when the server emits it
-        // (only for views with ``enable_state_snapshot = True``). We echo
+        // by WebSocket/SSE mount and authorized event responses. We echo
         // that blob back VERBATIM — never JSON.stringify it. Re-serializing
         // would discard the server's HMAC signature, and the restore path
         // would (correctly) reject the unsigned payload. The blob is a
@@ -18688,9 +19318,13 @@ globalThis.djust.djTransitionGroup = {
         const slug = _currentViewSlug(fromUrl);
         if (!slug) return;
         const json = _serializeCurrentState(slug);
-        if (!json) return;
         try {
-            bridge.captureState(fromUrl, slug, json);
+            if (json) {
+                bridge.captureState(fromUrl, slug, json);
+            } else if (typeof bridge.forgetState === 'function') {
+                // Skipping capture would leave a previously cached token alive.
+                bridge.forgetState(fromUrl);
+            }
         } catch (e) {
             if (globalThis.djustDebug) {
                 console.warn('[state-snapshot] captureState threw', e);

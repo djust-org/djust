@@ -255,3 +255,66 @@ class TestPreserveAcrossRedirectObjectPermission:
 
         assert survivors.get("doc-panel") is child
         assert child.request is new_request
+
+    def test_object_check_reads_the_new_request(self, rf):
+        """get_object() may read self.request: the check must see the new one
+        (merge review of #2944)."""
+        parent = _make_parent(rf, _ParentObject, AnonymousUser())
+        _render(parent)
+        child = parent._child_views["doc-panel"]
+        seen = []
+        original = child.has_object_permission
+
+        def spy(request, obj):
+            seen.append(child.request is request)
+            return original(request, obj)
+
+        child.has_object_permission = spy
+        new_request = rf.get("/other/")
+        new_request.user = AnonymousUser()
+        parent._preserve_sticky_children(new_request)
+        assert seen == [True]
+
+    def test_raising_predicate_denies_only_that_child(self, rf, monkeypatch):
+        """A predicate that raises fails closed for that child instead of
+        aborting preservation."""
+        parent = _make_parent(rf, _ParentObject, AnonymousUser())
+        _render(parent)
+        child = parent._child_views["doc-panel"]
+
+        def boom(request, obj):
+            raise RuntimeError("broken predicate")
+
+        monkeypatch.setattr(child, "has_object_permission", boom)
+        new_request = rf.get("/other/")
+        new_request.user = AnonymousUser()
+        survivors = parent._preserve_sticky_children(new_request)
+        assert "doc-panel" not in survivors
+        assert child.unmount_calls == 1
+
+    def test_child_refusing_the_new_request_denies_only_that_child(self, rf):
+        """A child that cannot take the new request is denied; its sticky
+        siblings survive (re-review of #2944)."""
+        parent = _make_parent(rf, _ParentObject, AnonymousUser())
+        _render(parent)
+        good = parent._child_views["doc-panel"]
+
+        class _ReadOnly(_ObjectScopedSticky):
+            sticky_id = "read-only"
+
+            def __setattr__(self, name, value):
+                if name == "request" and self.__dict__.get("_frozen"):
+                    raise AttributeError("read-only request")
+                super().__setattr__(name, value)
+
+        odd = _ReadOnly()
+        odd.request = parent.request
+        odd.mount(parent.request)
+        odd._frozen = True
+        parent._child_views["read-only"] = odd
+
+        new_request = rf.get("/other/")
+        new_request.user = AnonymousUser()
+        survivors = parent._preserve_sticky_children(new_request)
+        assert survivors.get("doc-panel") is good
+        assert "read-only" not in survivors

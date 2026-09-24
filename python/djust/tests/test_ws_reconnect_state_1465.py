@@ -183,11 +183,15 @@ def test_skip_html_logic_present_in_source():
     FLIP) the WS mount routes through ``ViewRuntime.dispatch_mount``, where the
     runtime analogue is ``skip_html_for_resume = bool(mounted_from_restore) and
     bool(has_prerendered)`` (``_mounted_from_restore`` is the runtime's ``mounted``
-    flag)."""
+    flag). ADR-038 limits this optimization to legacy exposure; the explicit
+    snapshot integration test checks that restored explicit views send HTML.
+    """
     import djust.runtime as rt_mod
 
     source = inspect.getsource(rt_mod.ViewRuntime.dispatch_mount)
-    assert "skip_html_for_resume = bool(mounted_from_restore) and bool(has_prerendered)" in source
+    assert "legacy_exposure and bool(mounted_from_restore) and bool(has_prerendered)" in " ".join(
+        source.split()
+    )
     assert "if html is not None and not skip_html_for_resume:" in source
 
 

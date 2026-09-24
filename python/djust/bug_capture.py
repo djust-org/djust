@@ -368,10 +368,28 @@ def encode_view_state(
     else:
         snapshot = history[-1]
 
+    state_before = snapshot["state_before"]
+    state_after = snapshot["state_after"]
+    from ._exposure import ExposureContract, ExposureError, uses_legacy_exposure
+
+    if not uses_legacy_exposure(view):
+        policy = getattr(view, "exposure_policy", None)
+        if type(policy) is not str or policy != "explicit":
+            raise ExposureError("Unknown exposure policy for bug capture")
+        # A legacy record has no explicit projection provenance. A current
+        # policy declaration cannot retroactively authorize exporting it.
+        if snapshot.get("restorable") is not False:
+            raise ExposureError("Cannot export historical legacy state under explicit policy")
+        contract = ExposureContract.from_view_class(type(view))
+        # Use historical values, not today's view state. Reapply the current
+        # permissions so extra keys or narrowed grants cannot leak from history.
+        state_before = contract.project(state_before, "debug")
+        state_after = contract.project(state_after, "debug")
+
     parsed_patches = _coerce_patches(patches)
     capture = BugCapture(
-        state_before=snapshot["state_before"],
-        state_after=snapshot["state_after"],
+        state_before=state_before,
+        state_after=state_after,
         vdom_patches=parsed_patches,
         event_name=snapshot.get("event_name", "") or "",
     )

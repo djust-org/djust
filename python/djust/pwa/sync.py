@@ -9,6 +9,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Callable
 from dataclasses import dataclass
 
+from .._exposure_diagnostics import log_failure
 from ..security import sanitize_for_log
 from .storage import OfflineAction
 
@@ -92,7 +93,14 @@ class ConflictResolver:
                 )
                 return resolved
             except Exception as e:
-                logger.error("Custom resolver failed for %s: %s", model_name, e, exc_info=True)
+                log_failure(
+                    logger,
+                    e,
+                    "Custom resolver failed for %s: %s",
+                    model_name,
+                    e,
+                    traceback=True,
+                )
                 # Fall back to default strategy
 
         if strategy == MergeStrategy.CLIENT_WINS:
@@ -286,7 +294,7 @@ class SyncManager:
                     errors.extend(batch_result.get("errors", []))
 
                 except Exception as e:
-                    logger.error("Batch sync failed: %s", e, exc_info=True)
+                    log_failure(logger, e, "Batch sync failed: %s", e, traceback=True)
                     failed_count += len(batch)
                     errors.append(f"Batch sync error: {str(e)}")
 
@@ -336,14 +344,18 @@ class SyncManager:
         if handler is not None:
             try:
                 handler_result: Dict[str, Any] = handler(batch)
-            except Exception:  # noqa: BLE001 — an app handler's error text stays in the log
+            except Exception as exc:  # noqa: BLE001 — an app handler's error text stays in the log
                 # The batch result goes back to the client, so the app
                 # handler's exception text (SQL, paths, constraint names) is
-                # logged, not returned.
-                logger.exception(
+                # logged, not returned — and value-free where the turn
+                # restricts diagnostics (ADR-038, #2951).
+                log_failure(
+                    logger,
+                    exc,
                     "Sync handler for %s %s failed",
                     sanitize_for_log(action_type),
                     sanitize_for_log(model_name),
+                    traceback=True,
                 )
                 return {"processed": 0, "failed": len(batch), "errors": ["Sync handler failed"]}
             return handler_result
@@ -633,5 +645,5 @@ def sync_endpoint_view(request: Any) -> Any:
     except json.JSONDecodeError:
         return JsonResponse({"success": False, "error": "Invalid JSON"}, status=400)
     except Exception as e:
-        logger.error("Sync endpoint error: %s", e, exc_info=True)
+        log_failure(logger, e, "Sync endpoint error: %s", e, traceback=True)
         return JsonResponse({"success": False, "error": "Internal server error"}, status=500)

@@ -275,7 +275,7 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
         },
     ],
     "infinite_scroll": [
-        {"load_event": "load_more"},
+        {"load_event": "load_more", "finished": True},
         {"load_event": "load_more", "loading": True},
     ],
     "terminal": [
@@ -483,7 +483,7 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
     "notification_badge": [
         {"count": 5},
         {"count": 99},
-        {"count": 0},
+        {"dot": True, "pulse": True},
     ],
     "avatar_group": [
         {
@@ -866,8 +866,37 @@ PYTHON_COMPONENT_EXAMPLES.update(
                 "active": 0,
             }
         ],
-        "chat_bubble": [{}],
-        "collab_selection": [{}],
+        "chat_bubble": [
+            {
+                "message": {
+                    "sender": "user",
+                    "name": "Ada Lovelace",
+                    "text": "The deployment is ready for review.",
+                    "time": "10:04 AM",
+                    "status": "delivered",
+                }
+            }
+        ],
+        "collab_selection": [
+            {
+                "users": [
+                    {
+                        "name": "Ada Lovelace",
+                        "color": "#3b82f6",
+                        "start": 10,
+                        "end": 25,
+                        "text": "selected text",
+                    },
+                    {
+                        "name": "Grace Hopper",
+                        "color": "#ef4444",
+                        "start": 40,
+                        "end": 55,
+                        "text": "another selection",
+                    },
+                ]
+            }
+        ],
         "color_picker": [
             {
                 "name": "accent",
@@ -916,7 +945,16 @@ PYTHON_COMPONENT_EXAMPLES.update(
             }
         ],
         "content_loader": [{"loaded": False, "placeholder": "<p>Loading…</p>"}],
-        "context_menu": [{}],
+        "context_menu": [
+            {
+                "label": "Project actions",
+                "content": (
+                    '<button class="ctx-item" role="menuitem">Rename</button>'
+                    '<button class="ctx-item" role="menuitem">Duplicate</button>'
+                    '<button class="ctx-item ctx-item-danger" role="menuitem">Delete</button>'
+                ),
+            }
+        ],
         "conversation_thread": [
             {
                 "messages": [
@@ -937,7 +975,14 @@ PYTHON_COMPONENT_EXAMPLES.update(
         ],
         "cron_input": [{}],
         "currency_input": [{}],
-        "cursors_overlay": [{}],
+        "cursors_overlay": [
+            {
+                "users": [
+                    {"name": "Ada Lovelace", "color": "#3b82f6", "x": 120, "y": 40},
+                    {"name": "Grace Hopper", "color": "#ef4444", "x": 260, "y": 120},
+                ]
+            }
+        ],
         "dashboard_grid": [
             {
                 "panels": [
@@ -1287,7 +1332,13 @@ PYTHON_COMPONENT_EXAMPLES.update(
                 ],
             }
         ],
-        "popover": [{}],
+        "popover": [
+            {
+                "trigger": "View details",
+                "title": "Project status",
+                "content": "<p>Deployment completed successfully.</p>",
+            }
+        ],
         "presence_avatars": [
             {
                 "users": [
@@ -1399,7 +1450,7 @@ PYTHON_COMPONENT_EXAMPLES.update(
         ],
         "source_citation": [{}],
         "sparkline": [{"data": [3, 5, 4, 8, 6, 9, 7], "variant": "line"}],
-        "split_pane": [{}],
+        "split_pane": [{"left": "<p>Navigation</p>", "right": "<p>Details</p>"}],
         "sticky_header": [
             {"content": "<strong>Section title</strong> — stays pinned while its section scrolls."}
         ],

@@ -61,6 +61,11 @@ def _lenient_assigns(view: Any) -> Dict[str, Any]:
     framework's definition) and falls back to a direct json.dumps probe
     for anything that doesn't expose it (e.g. test doubles).
     """
+    from djust._exposure import explicit_debug_projection
+
+    explicit = explicit_debug_projection(view)
+    if explicit is not None:
+        return explicit
     checker = getattr(view, "_is_serializable", None)
 
     def _safe_check(val: Any) -> bool:
@@ -83,6 +88,23 @@ def _lenient_assigns(view: Any) -> Dict[str, Any]:
                 "_type": type(value).__name__,
             }
     return assigns
+
+
+def _mutation_policy_gate(view: Any) -> HttpResponse | None:
+    """Legacy debug mutation is not an authorized explicit-policy dispatch.
+
+    Neither direct mount replay nor a direct handler call establishes current
+    identity, object authorization or the runtime's event lock. Redacting their
+    return values would not make the underlying mutations safe.
+    """
+    from djust._exposure import uses_legacy_exposure
+
+    if uses_legacy_exposure(view):
+        return None
+    return JsonResponse(
+        {"error": "Debug mutation is unavailable for this exposure policy. Use the live view."},
+        status=409,
+    )
 
 
 def _debug_gate() -> HttpResponse:
@@ -346,6 +368,10 @@ def reset_view_state(request: HttpRequest) -> HttpResponse:
             status=404,
         )
 
+    policy_response = _mutation_policy_gate(view)
+    if policy_response is not None:
+        return policy_response
+
     mount_request = getattr(view, "_djust_mount_request", None)
     mount_kwargs = getattr(view, "_djust_mount_kwargs", None)
     if mount_request is None or mount_kwargs is None:
@@ -447,6 +473,10 @@ def eval_handler(request: HttpRequest) -> HttpResponse:
             {"error": f"no view registered for session {session_id}"},
             status=404,
         )
+
+    policy_response = _mutation_policy_gate(view)
+    if policy_response is not None:
+        return policy_response
 
     # Parse body.
     import json as _json

@@ -28,7 +28,6 @@ import logging
 from typing import Any, Dict, Optional
 
 from asgiref.sync import sync_to_async
-from django.core.exceptions import PermissionDenied
 
 logger = logging.getLogger(__name__)
 
@@ -172,7 +171,12 @@ async def save_sticky_child_state(child: Any, save_session: Any, parent_path: st
     bounds this with ``asyncio.wait_for`` and try/except (saves never break
     event handling).
     """
+    from .._exposure import require_legacy_state_api
     from ..serialization import normalize_django_value as _normalize
+
+    # This adapter infers state from rendering context. Explicit children need
+    # a separately bound provider adapter, even if they override private hooks.
+    require_legacy_state_api(child)
 
     key = sticky_child_session_key(parent_path, child.sticky_id)
 
@@ -208,7 +212,10 @@ def save_sticky_child_state_sync(child: Any, session: Any, parent_path: str) -> 
     — Django saves the session at response time. Serializes the same
     public + private shape as the async variant.
     """
+    from .._exposure import require_legacy_state_api
     from ..serialization import normalize_django_value as _normalize
+
+    require_legacy_state_api(child)
 
     key = sticky_child_session_key(parent_path, child.sticky_id)
 
@@ -336,6 +343,12 @@ def restore_sticky_child_state(child: Any, parent: Any, session: Any, parent_pat
     wraps the call in ``try/except`` and falls through to a fresh ``mount()``
     — the tag wrapper, not this helper, is the render-safety boundary.
     """
+    from .._exposure import require_legacy_state_api
+
+    # Reject before applying PUBLIC state: a later private-hook rejection
+    # would otherwise leave a partly restored explicit subtree behind.
+    require_legacy_state_api(parent)
+    require_legacy_state_api(child)
     if session is None:
         return False
     if not sticky_child_should_persist(child, parent):
@@ -426,6 +439,10 @@ class StickyChildRegistry:
         Raises ``ValueError`` if ``view_id`` is already registered —
         template authors must use distinct ids within one parent.
         """
+        if getattr(self, "_djust_child_disposed", False) or getattr(
+            child, "_djust_child_disposed", False
+        ):
+            raise RuntimeError("Cannot register a disposed child or parent")
         if not hasattr(self, "_child_views"):
             self._init_sticky()
         if view_id in self._child_views:
@@ -452,6 +469,13 @@ class StickyChildRegistry:
             return
         child = self._child_views.pop(view_id, None)
         if child is None:
+            return
+        from .._exposure import uses_legacy_exposure
+
+        if not uses_legacy_exposure(child):
+            from .._child_lifecycle import dispose_child_subtree
+
+            dispose_child_subtree(child)
             return
         cleanup = getattr(child, "_cleanup_on_unregister", None)
         if callable(cleanup):
@@ -499,8 +523,9 @@ class StickyChildRegistry:
         (audio streams, open files, etc.) should call
         ``super()._on_sticky_unmount()`` to preserve task cleanup.
 
-        This hook is ONLY called during a live_redirect transition that
-        discards the sticky — a full WS disconnect takes the normal
+        This hook is called during a live_redirect transition that discards
+        the sticky, or when an explicit child's mount identity changes.
+        A full WS disconnect takes the normal
         :meth:`_unregister_child` -> ``_cleanup_on_unregister`` path.
         """
         cancel_all = getattr(self, "cancel_async_all", None)
@@ -508,7 +533,12 @@ class StickyChildRegistry:
             try:
                 cancel_all()
             except Exception:  # noqa: BLE001 — cleanup hook must not raise
-                logger.exception("sticky _on_sticky_unmount: cancel_async_all() failed")
+                from .._exposure import uses_legacy_exposure
+
+                if uses_legacy_exposure(self):
+                    logger.exception("sticky _on_sticky_unmount: cancel_async_all() failed")
+                else:
+                    logger.error("Explicit sticky async cleanup failed")
         return None
 
     def _preserve_sticky_children(self, new_request: Any) -> Dict[str, Any]:
@@ -531,20 +561,32 @@ class StickyChildRegistry:
         from ..auth.core import check_view_auth_lightweight, enforce_object_permission
 
         def _authorized(child: Any) -> bool:
-            if not check_view_auth_lightweight(child, new_request):
-                return False
+            # Authorize against the NEW request: get_object() and application
+            # predicates may read self.request, and the old one is stale. A
+            # child that cannot take the new request (a read-only proxy), or
+            # a predicate that raises, denies this child only (fail closed).
             try:
+                child.request = new_request
+                if not check_view_auth_lightweight(child, new_request):
+                    return False
                 enforce_object_permission(child, new_request)
-            except PermissionDenied:
+            except Exception:  # noqa: BLE001 — broken predicates must not permit reuse
                 return False
             return True
 
         survivors: Dict[str, Any] = {}
-        for _view_id, child in self._get_all_child_views().items():
+        for _view_id, child in list(self._get_all_child_views().items()):
             if getattr(child, "sticky", False) is not True:
                 continue
             sticky_id = getattr(child, "sticky_id", None) or _view_id
             if not _authorized(child):
+                from .._exposure import uses_legacy_exposure
+
+                if not uses_legacy_exposure(child):
+                    from .._child_lifecycle import dispose_child_subtree
+
+                    dispose_child_subtree(child, navigation=True)
+                    continue
                 logger.info(
                     "Sticky child %s auth denied for new request; discarding",
                     sticky_id,
@@ -556,23 +598,14 @@ class StickyChildRegistry:
                     except Exception:  # noqa: BLE001 — defensive
                         logger.exception("sticky child %s _on_sticky_unmount raised", sticky_id)
                 continue
-            # Update request back-reference so handlers see the new request.
-            # Some child types (slot descriptors, read-only proxies) can't
-            # accept a `request` attr. When this happens, downstream
-            # per-event object-permission checks for this child WILL fail
-            # closed (websocket_utils.py:234, #1380) — log at WARNING so
-            # the gap is observable at its source rather than silently at
-            # the denial site.
+            # ``_authorized`` already set ``child.request`` to the new request
+            # (a child that refuses it is denied above, #1380).
             try:
-                child.request = new_request
                 # #2998: derive the next {% csrf_token %} from the new request.
                 child._cached_csrf_token = None
             except AttributeError:
                 logger.warning(
-                    "sticky child %s does not accept request attribute "
-                    "(read-only proxy?); per-event object-permission "
-                    "checks will fail closed for this child until "
-                    "request is stamped",
+                    "sticky child %s does not accept a cached CSRF token reset",
                     sticky_id,
                 )
             survivors[sticky_id] = child

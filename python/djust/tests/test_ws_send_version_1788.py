@@ -361,7 +361,7 @@ BARE_ASSIGN = re.compile(r"\b[a-z_]+ = self\._next_version\(\)")
 
 # The pinned counts, at module level so the canaries below can assert that a
 # deleted render-send path actually breaks the pin (#2238).
-EXPECTED_ARMED_INVOCATIONS = 15
+EXPECTED_ARMED_INVOCATIONS = 16
 EXPECTED_BARE_SEND_SITES = 0
 
 
@@ -435,20 +435,21 @@ def test_every_client_checked_send_path_uses_next_version():
 
     # Render-send sites routed through the armed helper (verified at #1817;
     # event sites removed at #1907 THE FLIP — see below):
-    #   INLINE (version=self._next_version_armed(html)), 12:
-    #     _run_async_work error arms: 2 (patch + html fallback)
-    #     _settle_cancelled_async: 2 (patch + html fallback; #2963)
+    #   INLINE (version=self._next_version_armed(html)), 13:
+    #     _send_async_render: 2 (patch + html fallback) — shared by the
+    #       _run_async_work error arm and _settle_cancelled_async (#2963)
     #     deferred-activity render: 2 (patch + html fallback)
     #     handle_hot_reload (HIDDEN #1): 1
     #     handle_time_travel_jump: 1
     #     handle_time_travel_component_jump: 1
     #     handle_forward_replay: 1
-    #     db_notify: 1
-    #     _tick_once: 1 (extracted from _run_tick, #2124)
+    #     db_notify: 2 (patch + full-HTML fallback)
+    #     _tick_once: 2 (patch + full-HTML fallback)
+    #     _run_server_push_turn: 1 (full-HTML fallback)
     #   ASSIGNMENT (X = self._next_version_armed(html)), 3:
     #     _run_async_work success arms: 2
     #     _run_server_push_turn: 1 (wire_version; server_push's render, #3001)
-    # Total armed invocations = 15.
+    # Total armed invocations = 16.
     #
     # #1907 THE FLIP: the 2 ``handle_event`` ASSIGN sites (the event patch +
     # html_update fallback ``wire_version = self._next_version_armed(html)``) were
@@ -533,6 +534,10 @@ def test_every_client_checked_send_path_uses_next_version():
     # Rust version (the client sets clientVdomVersion = data.version directly on
     # html_recovery — 03-websocket.js:727).
     req_html_src = without_prose(inspect.getsource(ws_mod.LiveViewConsumer.handle_request_html))
+    assert "_handle_request_html_locked" in req_html_src
+    req_html_src = without_prose(
+        inspect.getsource(ws_mod.LiveViewConsumer._handle_request_html_locked)
+    )
     assert "_recovery_version" in req_html_src, (
         "handle_request_html must send self._recovery_version (the consumer version of "
         "the frame being replaced), not a fresh Rust version (#1788)."

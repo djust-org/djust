@@ -1,0 +1,1 @@
+- Behind the ADR-038 explicit-exposure guard, reconcile eager sticky child ownership after successful renders and prune route-scoped indexed state. Preserve page-shell scopes during root-only updates, defer nested cleanup across render errors, and keep parent/child saves on one validated post-render batch. Explicit exposure remains unavailable to applications.

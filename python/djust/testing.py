@@ -289,7 +289,7 @@ class LiveViewTestClient:
             }
 
         # Apply type coercion if available
-        from .validation import validate_handler_params
+        from .validation import validate_handler_params, validated_call_arguments
 
         validation = validate_handler_params(handler, params, event_name)
         if not validation["valid"]:
@@ -302,15 +302,13 @@ class LiveViewTestClient:
             }
 
         coerced_params = validation["coerced_params"]
+        call_args, call_kwargs = validated_call_arguments(validation)
 
         # Execute handler
         start_time = time.perf_counter()
         error = None
         try:
-            if coerced_params:
-                handler(**coerced_params)
-            else:
-                handler()
+            handler(*call_args, **call_kwargs)
         except Exception as e:
             error = str(e)
 

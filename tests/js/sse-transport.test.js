@@ -33,13 +33,14 @@ function createEnv(bodyHtml = '') {
     };
     window.EventSource = vi.fn(function () { return mockEventSource; });
     window.EventSource.CLOSED = 2;
+    window.EventSource.OPEN = 1;
 
     // Mock fetch for event POSTs
     window.fetch = vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve({}) }));
 
     try {
         window.eval(clientCode);
-    } catch (e) {
+    } catch (_e) {
         // client.js may throw on missing DOM APIs
     }
 
@@ -47,6 +48,67 @@ function createEnv(bodyHtml = '') {
 }
 
 describe('LiveViewSSE', () => {
+    it('keeps snapshot routing identity after EventSource open consumes pending mount', async () => {
+        const { window, mockEventSource } = createEnv();
+        const sse = new window.djust.LiveViewSSE();
+        sse.connect('myapp.views.HomeView');
+        mockEventSource.onopen();
+        expect(sse._pendingViewPath).toBeNull();
+        await sse.handleMessage({
+            type: 'noop', source: 'event', view: 'myapp.views.HomeView',
+            state_snapshot_signed: 'latest-signed-token',
+        });
+        expect(window.djust._clientState['myapp.views.HomeView']).toBe('latest-signed-token');
+        const streamUrl = new URL(window.EventSource.mock.calls[0][0], window.location.origin);
+        expect(streamUrl.searchParams.get('_djust_url')).toBe('/');
+    });
+
+    it('uses the real navigation handler over SSE and forwards Back snapshots', async () => {
+        const { window, mockEventSource, document } = createEnv(
+            '<div dj-view="app.First"><p>First page</p>' +
+            '<a dj-navigate="/second/" href="/second/">Second page</a></div>'
+        );
+        if (document.readyState === 'loading') {
+            await new Promise(resolve => document.addEventListener('DOMContentLoaded', resolve, {once: true}));
+        }
+        window.scrollTo = () => {};
+        window.djust._switchToSSETransport();
+        const sse = window.djust.liveViewInstance;
+        mockEventSource.onopen();
+        await sse.handleMessage({type: 'mount', view: 'app.First', version: 1});
+        expect(window.djust.liveViewInstance).toBe(sse);
+        window.djust._routeMap = {'/': 'app.First', '/second/': 'app.Second'};
+        window.fetch.mockClear();
+        document.querySelector('[dj-navigate]').click();
+        expect(JSON.parse(window.fetch.mock.calls[0][1].body)).toMatchObject({
+            type: 'live_redirect_mount', view: 'app.Second', url: '/second/',
+        });
+        // Another redirect before the mount reply must use the HTTP fallback,
+        // not push a second URL while liveRedirectMount silently refuses it.
+        const fallback = vi.spyOn(window.djust, 'safeNavigationTarget').mockReturnValue(null);
+        window.djust.navigation.handleNavigation({action: 'live_redirect', path: '/'});
+        expect(fallback).toHaveBeenCalledWith('http://localhost:8000/');
+        expect(window.location.pathname).toBe('/second/');
+        fallback.mockRestore();
+        await sse.handleMessage({
+            type: 'mount', view: 'app.Second', version: 1,
+            html: '<p dj-id="1">Second page</p>', has_ids: true,
+        });
+        expect(document.querySelector('[dj-view]').getAttribute('dj-view')).toBe('app.Second');
+        expect(document.querySelector('[dj-view]').textContent).toBe('Second page');
+        window.djust._stateSnapshot.lookupStateForUrl = async () => ({
+            view_slug: 'app.First', state_json: 'signed-back-token',
+        });
+        window.fetch.mockClear();
+        window.history.replaceState(null, '', '/');
+        window.dispatchEvent(new window.PopStateEvent('popstate', {state: null}));
+        await new Promise(resolve => setTimeout(resolve, 20));
+        expect(JSON.parse(window.fetch.mock.calls[0][1].body)).toMatchObject({
+            type: 'live_redirect_mount', view: 'app.First', url: '/',
+            state_snapshot: {view_slug: 'app.First', state_json: 'signed-back-token'},
+        });
+    });
+
     describe('constructor', () => {
         it('initializes with default state', () => {
             const { window } = createEnv();
@@ -62,6 +124,37 @@ describe('LiveViewSSE', () => {
     });
 
     describe('connect', () => {
+        it('reconciles reconnect markup even when the server includes IDs', async () => {
+            const { window, mockEventSource, document } = createEnv('<div dj-view="app.First">stale</div>');
+            const sse = new window.djust.LiveViewSSE();
+            sse.connect('app.First');
+            mockEventSource.onopen();
+            mockEventSource.onopen();
+            await sse.handleMessage({
+                type: 'mount', view: 'app.First', html: '<p dj-id="1">fresh</p>', has_ids: true,
+            });
+            expect(document.querySelector('[dj-view]').textContent).toBe('fresh');
+        });
+
+        it('reopens at the current page after navigation instead of the original stream URL', () => {
+            const { window, mockEventSource } = createEnv();
+            const sse = new window.djust.LiveViewSSE();
+            sse.connect('app.First');
+            mockEventSource.onopen();
+            const oldSession = sse.sessionId;
+            sse.primaryViewPath = 'app.Second';
+            window.history.pushState({}, '', '/second/?page=3');
+            mockEventSource.readyState = 0; // reconnecting
+            mockEventSource.onerror();
+            expect(mockEventSource.close).toHaveBeenCalledOnce();
+            expect(window.EventSource).toHaveBeenCalledTimes(2);
+            expect(sse.sessionId).not.toBe(oldSession);
+            const url = new URL(window.EventSource.mock.calls[1][0], window.location.origin);
+            expect(url.searchParams.get('view')).toBe('app.Second');
+            expect(url.searchParams.get('_djust_url')).toBe('/second/');
+            expect(url.searchParams.get('page')).toBe('3');
+        });
+
         it('creates EventSource with session URL', () => {
             const { window, mockEventSource } = createEnv();
             const sse = new window.djust.LiveViewSSE();
@@ -122,6 +215,20 @@ describe('LiveViewSSE', () => {
     });
 
     describe('disconnect', () => {
+        it.each(['error', 'post failure'])('closes the stranded stream on navigation %s', async (failure) => {
+            const { window, mockEventSource } = createEnv();
+            const sse = new window.djust.LiveViewSSE();
+            sse.connect('app.First');
+            sse.viewMounted = true;
+            if (failure === 'post failure') window.fetch.mockRejectedValueOnce(new Error('offline'));
+            sse.liveRedirectMount({type: 'live_redirect_mount', view: 'app.Second', url: '/second/'});
+            if (failure === 'error') await sse.handleMessage({type: 'error', error: 'Navigation denied'});
+            else await new Promise(resolve => setTimeout(resolve, 0));
+            expect(mockEventSource.close).toHaveBeenCalledOnce();
+            expect(sse.sessionId).toBeNull();
+            expect(sse._replacingView).toBe(false);
+        });
+
         it('closes EventSource and resets state', () => {
             const { window, mockEventSource } = createEnv();
             const sse = new window.djust.LiveViewSSE();
@@ -159,7 +266,7 @@ describe('LiveViewSSE', () => {
 
             const result = sse.sendEvent('increment', { amount: 1 });
 
-            expect(result).toBe(true);
+            expect(typeof result.then).toBe('function');
             expect(window.fetch).toHaveBeenCalledTimes(1);
             const [url, opts] = window.fetch.mock.calls[0];
             expect(url).toContain('/djust/sse/');

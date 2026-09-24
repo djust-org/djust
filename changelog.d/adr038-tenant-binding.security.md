@@ -1,0 +1,1 @@
+- Align guarded explicit-policy TenantMixin authorization, request identity and query context across HTTP and runtime mounts; restore the caller's tenant context after runtime mount, including failed mounts.

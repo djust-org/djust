@@ -495,7 +495,7 @@ class TestParametersTableReadsLikeTheSignature:
     def test_var_keyword_is_described_not_typed(self):
         rows = self._rows("sortable_list")
         assert "kwargs" not in rows
-        _name, note, default = rows["**kwargs"]
+        _name, note, default = rows["**kwargs"][:3]
         assert default == "—"
         assert note.startswith("—") and "typing" not in note
         assert "Component.__init__" in note

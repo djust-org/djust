@@ -38,6 +38,11 @@ EMBEDDABLE_PYTHON = $(shell bash scripts/embeddable-python.sh)
 
 .DEFAULT_GOAL := help
 
+PYRIGHT_COMMAND ?= pyright
+.PHONY: test-component-binding-types
+test-component-binding-types: ## Check ADR-034 prototype with mypy, Pyright and runtime assertions
+	$(PYTHON) scripts/check-component-binding-types.py --pyright-command '$(PYRIGHT_COMMAND)'
+
 ##@ Help
 
 .PHONY: help

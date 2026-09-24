@@ -3110,6 +3110,12 @@ impl SessionActorHandlePy {
                 }
 
                 dict.set_item("version", result.version)?;
+                dict.set_item("recovery_html", result.recovery_html)?;
+                let contracts = match result.parameter_contracts {
+                    Some(snapshot) => py.import("json")?.call_method1("loads", (snapshot,))?,
+                    None => py.None().into_bound(py),
+                };
+                dict.set_item("parameter_contracts", contracts)?;
                 Ok(dict.unbind().into())
             })
         })

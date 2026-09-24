@@ -368,8 +368,18 @@ class DjustTemplate:
 
         except Exception as e:
             # Graceful fallback
-            logger.warning(
-                "[JIT] Serialization failed for '%s': %s", variable_name, e, exc_info=True
+            from .._exposure_diagnostics import log_failure
+
+            # The backend has no LiveView owner: outside a view's turn ADR-038
+            # does not apply, and inside one the turn decides.
+            log_failure(
+                logger,
+                e,
+                "[JIT] Serialization failed for '%s': %s",
+                variable_name,
+                e,
+                level="warning",
+                traceback=True,
             )
             return [normalize_django_value(obj) for obj in queryset]
 
@@ -397,7 +407,16 @@ class DjustTemplate:
         try:
             return cast(dict, normalize_django_value(model_instance))
         except Exception as e:
-            logger.warning("Model serialization failed for '%s': %s", variable_name, e)
+            from .._exposure_diagnostics import log_failure
+
+            log_failure(
+                logger,
+                e,
+                "Model serialization failed for '%s': %s",
+                variable_name,
+                e,
+                level="warning",
+            )
             # Same map on the raised path: a consumer must not be able to tell
             # that serialization failed by the SHAPE it got back (#2322).
             return model_identity(model_instance)

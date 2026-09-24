@@ -224,23 +224,27 @@ class TestServerPushHandler:
         assert consumer._recovery_version == 3
 
     @pytest.mark.asyncio
-    async def test_no_patches_does_not_clobber_recovery_html(self):
-        """A no-op render (patches=None) must NOT overwrite _recovery_html.
-        A previously-good recovery HTML must survive an unchanged broadcast,
-        otherwise we'd lose recovery state on every quiet push."""
+    async def test_full_html_fallback_refreshes_recovery_html(self):
+        """None means baseline loss, not a no-op (which returns an empty list)."""
         consumer = self._make_consumer()
         consumer._recovery_html = "<div>previously-good</div>"
         consumer._recovery_version = 7
+        consumer._last_sent_version = 7
+        consumer.view_instance._strip_comments_and_whitespace.side_effect = lambda html: html
+        consumer.view_instance._extract_liveview_content.side_effect = lambda html: html
 
-        # Render returns no patches (state didn't change).
+        # The differ cannot produce patches without its previous baseline.
         consumer.view_instance.render_with_diff = MagicMock(
-            return_value=("<div>fresh-but-unused</div>", None, 8)
+            return_value=("<div>fresh</div>", None, 1)
         )
 
         await consumer.server_push({"state": {"x": 1}, "handler": None, "payload": None})
 
-        assert consumer._recovery_html == "<div>previously-good</div>"
-        assert consumer._recovery_version == 7
+        assert consumer._recovery_html == "<div>fresh</div>"
+        assert consumer._recovery_version == 8
+        consumer._send_update.assert_awaited_once_with(
+            html="<div>fresh</div>", version=8, broadcast=True, source="broadcast"
+        )
 
 
 # ---------------------------------------------------------------------------

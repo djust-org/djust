@@ -8,9 +8,8 @@
 // cached state and stashes it on window.djust._pendingStateSnapshot so the
 // next outbound live_redirect_mount can include it.
 //
-// Per-view opt-in: the server-side LiveView must declare
-// `enable_state_snapshot = True`. The client sends the snapshot regardless
-// (belt-and-braces); the server ignores snapshots for non-opt-in views.
+// The server grants persistence: legacy enable_state_snapshot or staged explicit
+// persist="client" fields. The client echoes signed tokens, never infers grants.
 //
 // Non-invasive: this module only wires listeners and reads/writes one
 // globalThis slot. It never mutates the DOM or WebSocket directly.
@@ -54,8 +53,7 @@
         // Finding #4 (CWE-345 → CWE-915): the canonical record on
         // `window.djust._clientState[slug]` is now the OPAQUE
         // server-signed snapshot blob (`state_snapshot_signed`), populated
-        // by the mount handler in 03-websocket.js when the server emits it
-        // (only for views with ``enable_state_snapshot = True``). We echo
+        // by WebSocket/SSE mount and authorized event responses. We echo
         // that blob back VERBATIM — never JSON.stringify it. Re-serializing
         // would discard the server's HMAC signature, and the restore path
         // would (correctly) reject the unsigned payload. The blob is a
@@ -82,9 +80,13 @@
         const slug = _currentViewSlug(fromUrl);
         if (!slug) return;
         const json = _serializeCurrentState(slug);
-        if (!json) return;
         try {
-            bridge.captureState(fromUrl, slug, json);
+            if (json) {
+                bridge.captureState(fromUrl, slug, json);
+            } else if (typeof bridge.forgetState === 'function') {
+                // Skipping capture would leave a previously cached token alive.
+                bridge.forgetState(fromUrl);
+            }
         } catch (e) {
             if (globalThis.djustDebug) {
                 console.warn('[state-snapshot] captureState threw', e);

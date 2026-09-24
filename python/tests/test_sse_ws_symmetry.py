@@ -40,7 +40,9 @@ if not settings.configured:
     )
     django.setup()
 
+import asyncio
 import uuid
+from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
@@ -57,6 +59,12 @@ class MockTransport:
         self._session_id = session_id or str(uuid.uuid4())
         self._client_ip: Optional[str] = None
         self.sent: List[Dict[str, Any]] = []
+        self.render_lock = asyncio.Lock()
+
+    @asynccontextmanager
+    async def event_context(self, view: Any):
+        async with self.render_lock:
+            yield
 
     @property
     def session_id(self) -> str:
@@ -74,6 +82,9 @@ class MockTransport:
 
     async def close(self, code: int = 1000) -> None:
         pass
+
+    def next_client_version(self, html, rust_version):
+        return rust_version
 
 
 class _SymmetryView:
@@ -154,6 +165,8 @@ class TestUrlChangeSymmetry:
         ws_types = [m["type"] for m in ws_transport.sent]
         sse_types = [m["type"] for m in sse_transport.sent]
         assert ws_types == sse_types, (ws_types, sse_types)
+        # Equal error frames are not successful transport parity.
+        assert ws_types == ["html_update"]
 
         # Both views received handle_params with identical arguments.
         assert ws_view.handle_params_calls == sse_view.handle_params_calls

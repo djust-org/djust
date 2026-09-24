@@ -105,9 +105,9 @@ def get_handler_coerce_setting(handler: Callable[..., Any]) -> bool:
     Returns:
         True if type coercion should be enabled (default), False if disabled
     """
-    if hasattr(handler, "_djust_decorators"):
-        return bool(handler._djust_decorators.get("event_handler", {}).get("coerce_types", True))
-    return True
+    from .validation import get_handler_coercion
+
+    return get_handler_coercion(handler)
 
 
 def _check_event_security(
@@ -119,6 +119,13 @@ def _check_event_security(
     Returns None if allowed, or an error message string if blocked.
     Only @event_handler-decorated methods are allowed.
     """
+    from ._component_subscriptions import ComponentDeclaration, is_component_subscription
+
+    if is_component_subscription(handler):
+        return "Component output subscription callbacks cannot be invoked as client events"
+    if isinstance(owner_instance, ComponentDeclaration) and not is_event_handler(handler):
+        return "Interactive components accept only declared event actions"
+
     mode = djust_config.get("event_security", "strict")
     if mode not in ("warn", "strict"):
         return None
@@ -311,12 +318,18 @@ async def _validate_event_security(
                 code="permission_denied",
             )
             return None
-        except Exception:  # noqa: BLE001 — fail-closed by design
-            logger.exception(
+        except Exception as exc:  # noqa: BLE001 — fail-closed by design
+            from ._exposure_diagnostics import log_failure_for
+
+            log_failure_for(
+                logger,
+                (owner_instance,),
+                exc,
                 "Object-permission check raised non-PermissionDenied exception "
                 "for %s on event %s; failing closed (denying)",
                 owner_instance.__class__.__name__,
                 sanitize_for_log(event_name or ""),
+                traceback=True,
             )
             await ws.send_error(
                 "Access denied for this object.",
@@ -328,7 +341,10 @@ async def _validate_event_security(
 
 
 async def _call_handler(
-    handler: Callable[..., Any], params: Optional[Dict[str, Any]] = None
+    handler: Callable[..., Any],
+    params: Optional[Dict[str, Any]] = None,
+    *,
+    positional_args: tuple[Any, ...] = (),
 ) -> Any:
     """
     Call an event handler, handling both sync and async handlers.
@@ -337,17 +353,16 @@ async def _call_handler(
         handler: The event handler method (sync or async)
         params: Optional dictionary of parameters to pass to the handler.
             Note: Empty dict {} is treated as no params (falsy check).
-            Positional args from dj-click="handler('value')" syntax are merged
-            into params by validate_handler_params() before calling this.
+        positional_args: Validated positional arguments. Strict call plans
+            preserve positional-only arguments rather than flattening them into
+            keywords. Legacy validation retains its existing keyword mapping.
 
     Returns:
         The result of calling the handler
     """
     if inspect.iscoroutinefunction(handler):
         # Handler is already async, call it directly
-        if params:
-            return await handler(**params)
-        return await handler()
+        return await handler(*positional_args, **(params or {}))
     else:
         # Sync handler — run via sync_to_async to avoid blocking the event
         # loop. Handlers commonly do ORM queries or other I/O. The worker
@@ -356,6 +371,4 @@ async def _call_handler(
         from .observability.sql import run_in_capture_scope
 
         call = run_in_capture_scope(handler)
-        if params:
-            return await sync_to_async(call)(**params)
-        return await sync_to_async(call)()
+        return await sync_to_async(call)(*positional_args, **(params or {}))

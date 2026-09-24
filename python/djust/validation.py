@@ -12,14 +12,126 @@ Provides runtime validation of event handler signatures including:
 import inspect
 import logging
 import types
+import threading
+import weakref
 from decimal import Decimal, InvalidOperation
 from collections import OrderedDict
 from typing import Any, Callable, Dict, List, Optional, Union, get_type_hints, get_origin, get_args
 from uuid import UUID
 
 from djust.security import sanitize_for_log
+from ._parameter_contract import ParameterContract
 
 logger = logging.getLogger(__name__)
+
+_STRICT_CONTRACTS: weakref.WeakKeyDictionary[Any, Dict[bool, ParameterContract]] = (
+    weakref.WeakKeyDictionary()
+)
+_STRICT_CONTRACT_LOCK = threading.RLock()
+_MISSING_POSITIONAL = object()
+_SIGNATURE_OWNER = object()
+
+
+def get_strict_handler_contract(handler: Callable) -> ParameterContract:
+    """Cache declarations, never bound methods or their live owner instances."""
+    bound = inspect.ismethod(handler)
+    function = handler.__func__ if inspect.ismethod(handler) else handler
+    if not inspect.isfunction(function):
+        return ParameterContract.compile(handler)
+    with _STRICT_CONTRACT_LOCK:
+        variants = _STRICT_CONTRACTS.setdefault(function, {})
+        if bound not in variants:
+            variants[bound] = ParameterContract.compile(handler)
+        return variants[bound]
+
+
+def get_handler_parameter_policy(handler: Callable) -> str:
+    """Resolve only server-owned policy, independently of client metadata."""
+    from .config import config
+    from ._parameter_contract import ContractError
+
+    decorators = getattr(handler, "_djust_decorators", {})
+    metadata = decorators.get("event_handler", decorators.get("server_function", {}))
+    policy = metadata.get("parameter_policy")
+    if policy is None:
+        policy = config.get("event_parameter_policy", "legacy")
+    if policy not in ("legacy", "strict"):
+        raise ContractError("event_parameter_policy must be 'legacy' or 'strict'.")
+    return str(policy)
+
+
+def get_handler_coercion(handler: Callable) -> bool:
+    """One coercion setting for events and deliberately exposed server functions."""
+    decorators = getattr(handler, "_djust_decorators", {})
+    metadata = decorators.get("event_handler", decorators.get("server_function", {}))
+    return bool(metadata.get("coerce_types", True))
+
+
+def validated_call_arguments(validation: Dict[str, Any]) -> tuple[tuple[Any, ...], Dict[str, Any]]:
+    """Consume the validated call plan, preserving legacy result dictionaries."""
+    if not validation.get("valid"):
+        raise ValueError("Cannot invoke an invalid handler call.")
+    bound = validation.get("bound_arguments")
+    if bound is not None:
+        return bound.args, bound.kwargs
+    return (), validation.get("coerced_params", {})
+
+
+def _validate_strict_handler_params(
+    handler: Callable, params: Dict[str, Any], coerce: bool, positional_args: Any
+) -> Dict[str, Any]:
+    from ._parameter_contract import ParameterError
+
+    contract = get_strict_handler_contract(handler)
+    expected = [item["name"] for item in contract.metadata()]
+    positional = () if positional_args is _MISSING_POSITIONAL else positional_args
+    try:
+        if type(params) is dict and "_args" in params:
+            if positional_args is not _MISSING_POSITIONAL:
+                raise ParameterError("Positional arguments were supplied twice.")
+            params = params.copy()
+            positional = params.pop("_args")
+        bound = contract.bind(params, positional, coerce=coerce)
+    except ParameterError as exc:
+        # Never return the original payload or arbitrary client-supplied keys in
+        # an error envelope. Declared names and fixed type labels are sufficient.
+        return {
+            "valid": False,
+            "error": str(exc),
+            "expected": expected,
+            "provided": [],
+            "type_errors": None,
+            "coerced_params": {},
+        }
+    return {
+        "valid": True,
+        "error": None,
+        "expected": expected,
+        "provided": list(bound.arguments),
+        "type_errors": None,
+        "coerced_params": dict(bound.arguments),
+        "bound_arguments": bound,
+    }
+
+
+def actor_handler_arguments(
+    handler: Callable, params: Dict[str, Any]
+) -> tuple[tuple[Any, ...], Dict[str, Any]]:
+    """Python boundary shared by Rust view/component actors.
+
+    Strict typed values never round-trip back through Rust's generic Value map.
+    Legacy actor calls retain their existing raw-keyword behavior.
+    """
+    if get_handler_parameter_policy(handler) == "legacy":
+        return (), params
+    from ._parameter_contract import ContractError, ParameterError
+
+    if inspect.iscoroutinefunction(handler):
+        raise ContractError("Async strict handlers require a non-actor transport.")
+    validation = validate_handler_params(handler, params, "actor")
+    if not validation["valid"]:
+        raise ParameterError(validation["error"])
+    return validated_call_arguments(validation)
 
 
 def coerce_parameter_types(handler: Callable, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -329,8 +441,8 @@ def validate_handler_params(
     handler: Callable,
     params: Dict[str, Any],
     event_name: str,
-    coerce: bool = True,
-    positional_args: Optional[List[Any]] = None,
+    coerce: Optional[bool] = None,
+    positional_args: Any = _MISSING_POSITIONAL,
 ) -> Dict[str, Any]:
     """
     Validate event parameters match handler signature.
@@ -346,7 +458,8 @@ def validate_handler_params(
         handler: Event handler method to validate against
         params: Parameters provided by client event
         event_name: Name of the event (for error messages)
-        coerce: Whether to coerce string values to expected types (default: True)
+        coerce: Whether to coerce values; None uses the decorator's coerce_types
+            setting (default True).
         positional_args: Optional list of positional arguments from inline handler
             syntax (e.g., ['value'] from dj-click="handler('value')")
 
@@ -375,6 +488,16 @@ def validate_handler_params(
         >>> assert result["valid"] is True
         >>> assert result["coerced_params"]["value"] == "hello"
     """
+    if coerce is None:
+        coerce = get_handler_coercion(handler)
+    if get_handler_parameter_policy(handler) == "strict":
+        return _validate_strict_handler_params(handler, params, coerce, positional_args)
+    if positional_args is _MISSING_POSITIONAL:
+        positional_args = None
+
+    # Legacy mapping below is unchanged. Strict results additionally carry a
+    # server-only BoundArguments; invokers consume validated_call_arguments(),
+    # never serialize the bound call into a response or state snapshot.
     # Map positional arguments to named parameters based on handler signature
     sig = inspect.signature(handler)
 
@@ -597,7 +720,9 @@ def _single_type_name(t: Any) -> str:
     return getattr(t, "__name__", str(t))
 
 
-def get_handler_signature_info(handler: Callable) -> Dict[str, Any]:
+def get_handler_signature_info(
+    handler: Callable, parameter_policy: Optional[str] = None, *, for_declaration: bool = False
+) -> Dict[str, Any]:
     """
     Extract comprehensive signature information from handler.
 
@@ -625,6 +750,21 @@ def get_handler_signature_info(handler: Callable) -> Dict[str, Any]:
         >>> assert info["accepts_kwargs"] is True
     """
     sig = inspect.signature(handler)
+    strict = (parameter_policy or get_handler_parameter_policy(handler)) == "strict"
+    if strict and not for_declaration:
+        # Class-level schema/check consumers see unbound methods. Bind only a
+        # sentinel, never construct a view or run its mount for introspection.
+        target = handler
+        first = next(iter(sig.parameters), None)
+        if inspect.isfunction(handler) and first in ("self", "cls"):
+            target = types.MethodType(handler, _SIGNATURE_OWNER)
+        contract = get_strict_handler_contract(target)
+        parameters = contract.metadata()
+        return {
+            "params": [p for p in parameters if p["kind"] not in ("var_keyword", "var_positional")],
+            "description": inspect.getdoc(handler) or "",
+            "accepts_kwargs": any(p["kind"] == "var_keyword" for p in parameters),
+        }
 
     try:
         type_hints = get_type_hints(handler)
@@ -649,8 +789,11 @@ def get_handler_signature_info(handler: Callable) -> Dict[str, Any]:
             "name": name,
             "type": _type_display_name(type_hints.get(name, Any)) if name in type_hints else "Any",
             "required": param.default == inspect.Parameter.empty,
-            "default": str(param.default) if param.default != inspect.Parameter.empty else None,
         }
+        if not strict:
+            param_info["default"] = (
+                str(param.default) if param.default != inspect.Parameter.empty else None
+            )
 
         params.append(param_info)
 

@@ -13,7 +13,7 @@ routing, harness lifted from ``test_ws_event_flip_parity_1896.py``), and ONE
 structural pin that derives the component list from the package (not a
 restated list — #2727), renders every framework branch, and asserts each
 self-targeting ``dj-click`` is (a) ``@event_handler``-decorated and (b) paired
-with ``data-component-id`` on the same element.
+with ``data-component-id`` on the element or its nearest component ancestor.
 
 Extended by #2776: ``TableComponent`` (``djust.components.data``) had the same
 defect and the ``ui``-only walk could not see it. The pin now derives every
@@ -31,6 +31,7 @@ import importlib
 import inspect
 import pkgutil
 import re
+from html.parser import HTMLParser
 from typing import Any, Dict, List, Tuple
 from unittest.mock import patch
 
@@ -205,6 +206,7 @@ _RENDER_KWARGS: Dict[str, Dict[str, Any]] = {
     "PaginationComponent": {"current_page": 2, "total_pages": 5},
     "TabsComponent": {"tabs": [{"id": "one", "label": "One"}, {"id": "two", "label": "Two"}]},
     "NavbarComponent": {"items": []},
+    "DropdownMenu": {"label": "Actions", "items": [{"label": "Edit", "value": "edit"}]},
     "ForeignKeySelect": {"name": "fk", "queryset": [_FakeRow(1)], "searchable": True},
     "ManyToManySelect": {
         "name": "m2m",
@@ -258,7 +260,63 @@ def _client_params(attrs: Dict[str, str]) -> Dict[str, Any]:
     for name, value in attrs.items():
         if name.startswith("data-") and name != "data-component-id":
             params[name[5:].replace("-", "_")] = value
+        elif name.startswith("dj-value-"):
+            params[name[9:].replace("-", "_")] = value
     return params
+
+
+def _mounted_component(cls):
+    """Mount descriptor families; retain legacy constructor coverage."""
+    from djust._component_subscriptions import ComponentDeclaration
+    from djust.components._interactive import DropdownMenu
+
+    kwargs = _RENDER_KWARGS.get(cls.__name__, {})
+    if issubclass(cls, ComponentDeclaration):
+        owner = type("CatalogueAuditOwner", (LiveView,), {"component": cls(**kwargs)})()
+        bound = owner.component
+        if isinstance(bound, DropdownMenu):
+            bound.open = True  # Include selection controls, not only the trigger.
+        return bound
+    return cls(component_id="cid", **kwargs)
+
+
+class _RoutedTags(HTMLParser):
+    """Mirror getComponentId's nearest-ancestor rule on rendered markup."""
+
+    def __init__(self, html):
+        super().__init__(convert_charrefs=True)
+        self.stack = []
+        self.rows = []
+        self.feed(html)
+
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        parent = self.stack[-1][1] if self.stack else ""
+        identity = attributes.get("data-component-id") or parent
+        self.rows.append((self.get_starttag_text(), identity))
+        if tag not in {
+            "area",
+            "base",
+            "br",
+            "col",
+            "embed",
+            "hr",
+            "img",
+            "input",
+            "link",
+            "meta",
+            "param",
+            "source",
+            "track",
+            "wbr",
+        }:
+            self.stack.append((tag, identity))
+
+    def handle_endtag(self, tag):
+        for index in range(len(self.stack) - 1, -1, -1):
+            if self.stack[index][0] == tag:
+                del self.stack[index:]
+                break
 
 
 def _render_under(component: LiveComponent, framework: str) -> str:
@@ -266,24 +324,26 @@ def _render_under(component: LiveComponent, framework: str) -> str:
         return str(component.render())
 
 
-def _self_targeting_controls() -> List[Tuple[type, str, str, str, str]]:
+def _self_targeting_controls() -> list:
     """``(cls, framework, attr, target, tag_html)`` for every rendered
     ``dj-click`` / ``dj-change`` / ``dj-input`` whose target is a handler name
     (bare or call-form), across every HTML-rendering component in the package."""
     rows = []
     for cls in _live_components():
         for framework in _FRAMEWORKS:
-            comp = cls(component_id="cid", **_RENDER_KWARGS.get(cls.__name__, {}))
+            comp = _mounted_component(cls)
             html = _render_under(comp, framework)
-            for m in _TAG.finditer(html):
-                attrs = dict(_ATTR.findall(m.group(0)))
+            for tag, routed_id in _RoutedTags(html).rows:
+                attrs = dict(_ATTR.findall(tag))
                 for attr in _EVENT_ATTRS:
                     target = attrs.get(attr)
                     # With no parent-handler kwargs supplied, every handler-name
                     # target is the component's own; an expression is
                     # client-side and out of scope.
                     if target is not None and _TARGET.match(target):
-                        rows.append((cls, framework, attr, target, m.group(0)))
+                        rows.append(
+                            (cls, framework, attr, target, tag, routed_id, comp.component_id)
+                        )
     return rows
 
 
@@ -305,7 +365,7 @@ def _rendered_checkboxes() -> List[Tuple[type, str, str]]:
     rows = []
     for cls in _live_components():
         for framework in _FRAMEWORKS:
-            comp = cls(component_id="cid", **_RENDER_KWARGS.get(cls.__name__, {}))
+            comp = _mounted_component(cls)
             for m in _TAG.finditer(_render_under(comp, framework)):
                 attrs = dict(_ATTR.findall(m.group(0)))
                 if attrs.get("type") == "checkbox":
@@ -339,17 +399,21 @@ class TestEveryComponentSelfTargetIsADecoratedRoutedHandler:
         controls = _self_targeting_controls()
         assert controls, "the sweep must find at least one self-targeting control"
         # Every framework branch and every attribute kind contributed a control.
-        assert {fw for _, fw, _, _, _ in controls} == set(_FRAMEWORKS)
-        assert {attr for _, _, attr, _, _ in controls} == set(_EVENT_ATTRS)
+        assert {row[1] for row in controls} == set(_FRAMEWORKS)
+        assert {row[2] for row in controls} == set(_EVENT_ATTRS)
         # Both target shapes are represented (bare ``sort_by`` and ``toggle(1)``).
-        assert {"(" in target for _, _, _, target, _ in controls} == {True, False}
+        assert {"(" in row[3] for row in controls} == {True, False}
 
     @pytest.mark.parametrize(
-        "cls,framework,attr,target,tag", _self_targeting_controls(), ids=_row_id
+        "cls,framework,attr,target,tag,routed_id,component_id",
+        _self_targeting_controls(),
+        ids=_row_id,
     )
-    def test_target_is_decorated_and_routed(self, cls, framework, attr, target, tag):
+    def test_target_is_decorated_and_routed(
+        self, cls, framework, attr, target, tag, routed_id, component_id
+    ):
         event, args = _TARGET.match(target).groups()
-        handler = getattr(cls, event, None)
+        handler = getattr(_mounted_component(cls), event, None)
         assert callable(handler), (
             f"{cls.__name__} [{framework}]: {attr}={target!r} names NO method on the "
             "component — the original #2748 shape (No handler found for event)"
@@ -358,16 +422,16 @@ class TestEveryComponentSelfTargetIsADecoratedRoutedHandler:
             f"{cls.__name__} [{framework}]: {attr}={target!r} names an UNDECORATED method; "
             "event_security defaults to strict, so the event is rejected"
         )
-        assert 'data-component-id="cid"' in tag, (
+        assert routed_id == component_id, (
             f"{cls.__name__} [{framework}]: {attr}={target!r} targets the component but the "
-            f"element carries no data-component-id, so it routes to the parent view: {tag}"
+            f"nearest component target is {routed_id!r}, expected {component_id!r}: {tag}"
         )
         # The params the control sends must be accepted by the handler's
         # signature (#2776: ``data-column`` vs ``column_key``). Call-form args
         # are positional, as the client sends them (``_args``); a bare ``value``
         # argument on dj-change/dj-input is the element's value.
         params = _client_params(dict(_ATTR.findall(tag)))
-        positional = [a.strip().strip("'\"") for a in args.split(",")] if args else None
+        positional = [a.strip().strip("'\"") for a in args.split(",")] if args else []
         result = validate_handler_params(
             handler,
             params,

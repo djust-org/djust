@@ -11,6 +11,7 @@ import re
 from html import escape as _html_escape
 from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
+from .._child_rendering import reconcile_child_render
 from ..template_libraries import library_render_scope
 from ..utils import get_template_dirs
 
@@ -897,11 +898,16 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                     # branch. Re-raising here would short-circuit that.
                     continue
                 if exc is not None:
-                    logger.exception(
+                    from .._exposure_diagnostics import log_failure_for
+
+                    log_failure_for(
+                        logger,
+                        (self,),
+                        exc,
                         "arender_chunks: lazy thunk raised for view_id=%s; "
                         "thunks should catch + emit error envelope themselves",
                         view_id,
-                        exc_info=exc,
+                        traceback=True,
                     )
                     continue
                 if chunk_bytes is None:
@@ -1179,6 +1185,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             return html[:start_pos] + stripped_div + html[result[1] :]
         return html
 
+    @reconcile_child_render(whole_page=True)
     def render_full_template(
         self,
         request: Optional["HttpRequest"] = None,
@@ -1476,13 +1483,22 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             from ..serialization import build_render_sidecar
 
             temp_rust.set_raw_py_values(build_render_sidecar(source))
-        except Exception:
-            logger.warning(
+        except Exception as exc:
+            from .._exposure_diagnostics import log_failure_for
+
+            # The sidecar is built from template-context values; a serialization
+            # error can carry them into the log (ADR-038).
+            log_failure_for(
+                logger,
+                (self,),
+                exc,
                 "page-shell sidecar unavailable; object attribute lookups on the shell "
                 "will resolve as empty",
-                exc_info=True,
+                level="warning",
+                traceback=True,
             )
 
+    @reconcile_child_render()
     def render_with_diff(
         self,
         request: Optional["HttpRequest"] = None,

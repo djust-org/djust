@@ -1,0 +1,1 @@
+- Staged explicit exposure refreshes signed client persistence after successful authorized events, invalidates unavailable snapshots, and updates WebSocket/SSE navigation caches without reflecting undeclared state. Explicit mode remains gated pending the remaining ADR-038 integration checks.

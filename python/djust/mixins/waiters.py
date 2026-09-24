@@ -150,12 +150,19 @@ class WaiterMixin:
             ... except asyncio.TimeoutError:
             ...     self.user_abandoned = True
         """
+        if getattr(self, "_djust_child_disposed", False):
+            raise asyncio.CancelledError
         waiter = _Waiter(event_name=name, predicate=predicate)
         if not hasattr(self, "_waiters") or self._waiters is None:
             self._waiters = {}
         self._waiters.setdefault(name, []).append(waiter)
 
         try:
+            # Teardown may run in a render thread between the entry check and
+            # registration. Do not leave a newly appended waiter behind.
+            if getattr(self, "_djust_child_disposed", False):
+                waiter.future.cancel()
+                raise asyncio.CancelledError
             payload: Dict[str, Any]
             if timeout is not None:
                 payload = await asyncio.wait_for(waiter.future, timeout=timeout)
@@ -186,6 +193,16 @@ class WaiterMixin:
         This method is a no-op if no waiters are registered for the
         given name — the common case on every handler call.
         """
+        from .._exposure_diagnostics import diagnostic_scope, restrict_diagnostics
+
+        with diagnostic_scope():
+            restrict_diagnostics(self)
+            self._notify_waiters_inner(event_name, kwargs)
+
+    def _notify_waiters_inner(self, event_name: str, kwargs: Dict[str, Any]) -> None:
+        """Run the notification pass inside its owner's diagnostic scope."""
+        from .._exposure_diagnostics import diagnostics_allowed, restrict_diagnostics
+
         if not getattr(self, "_waiters", None):
             return
         waiters = self._waiters.get(event_name)
@@ -205,12 +222,19 @@ class WaiterMixin:
                 try:
                     matched = bool(waiter.predicate(kwargs))
                 except Exception as exc:
-                    logger.warning(
-                        "wait_for_event predicate for %r raised %r — treating as no-match",
-                        event_name,
-                        exc,
-                    )
+                    restrict_diagnostics(self)
+                    if diagnostics_allowed():
+                        logger.warning(
+                            "wait_for_event predicate for %r raised %r — treating as no-match",
+                            event_name,
+                            exc,
+                        )
+                    else:
+                        logger.warning("Protected waiter predicate failed; treating as no-match")
                     matched = False
+                finally:
+                    restrict_diagnostics(self)
+                    diagnostics_allowed()  # Preserve an observed root restriction for later predicates.
                 if not matched:
                     remaining.append(waiter)
                     continue
@@ -254,8 +278,12 @@ class WaiterMixin:
         """
         if not getattr(self, "_waiters", None):
             return
-        for _, bucket in list(self._waiters.items()):
-            for waiter in bucket:
-                if not waiter.future.done():
-                    waiter.future.cancel()
+        from .async_work import cancel_on_owner_loop
+
+        pending = [waiter for bucket in list(self._waiters.values()) for waiter in list(bucket)]
+        # Detach before scheduling cancellation on another loop: resumed waiters
+        # remove themselves, which otherwise mutates the list we're traversing.
         self._waiters.clear()
+        for waiter in pending:
+            if not waiter.future.done():
+                cancel_on_owner_loop(waiter.future)

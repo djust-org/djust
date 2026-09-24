@@ -52,7 +52,7 @@ from django.http import HttpRequest, HttpResponseRedirect
 from django.urls import reverse
 
 from djust import LiveView
-from djust.decorators import event_handler, state
+from djust.decorators import StateProperty, event_handler, state
 
 logger = logging.getLogger(__name__)
 
@@ -195,10 +195,10 @@ class BulkActionProgressWidget(LiveView):
     current = state(default=0)
     total = state(default=0)
     message = state(default="")
-    log_lines = state(default=[])
+    log_lines: StateProperty[list[str]] = state(default_factory=list)
     done = state(default=False)
     cancelled = state(default=False)
-    error = state(default=None)
+    error: StateProperty[str | None] = state(default=None)
     action_label = state(default="")
     redirect_url = state(default="")
 

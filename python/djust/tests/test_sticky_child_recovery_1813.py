@@ -344,6 +344,8 @@ def test_handle_request_html_rerenders_parent_fresh_source():
     import djust.websocket as ws_mod
 
     source = inspect.getsource(ws_mod.LiveViewConsumer.handle_request_html)
+    assert "_handle_request_html_locked" in source
+    source = inspect.getsource(ws_mod.LiveViewConsumer._handle_request_html_locked)
     assert "render_with_diff" in source or "render_full_template" in source, (
         "handle_request_html must re-render the parent fresh at recovery time so the "
         "recovery HTML is faithful to the live sticky child's current state "

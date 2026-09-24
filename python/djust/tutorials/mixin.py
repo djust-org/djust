@@ -205,7 +205,17 @@ class TutorialMixin:
             logger.debug("Tutorial cancelled via asyncio.CancelledError")
             raise
         except Exception as exc:
-            logger.warning("Tutorial run failed at step %s: %s", self.tutorial_current_step, exc)
+            from .._exposure_diagnostics import log_failure_for
+
+            log_failure_for(
+                logger,
+                (self,),
+                exc,
+                "Tutorial run failed at step %s: %s",
+                self.tutorial_current_step,
+                exc,
+                level="warning",
+            )
         finally:
             self._cleanup_active_step()
             self.tutorial_running = False
@@ -218,7 +228,11 @@ class TutorialMixin:
                 self.push_commands(JS.dispatch("tour:hide"))
                 await self._flush_pending_push_events()
             except Exception as exc:
-                logger.debug("Tutorial hide push failed: %s", exc)
+                from .._exposure_diagnostics import log_failure_for
+
+                log_failure_for(
+                    logger, (self,), exc, "Tutorial hide push failed: %s", exc, level="debug"
+                )
 
     @event_handler
     def skip_tutorial(self, **kwargs: Any) -> None:
@@ -427,6 +441,10 @@ class TutorialMixin:
                 )
             )
         except Exception as exc:
-            logger.debug("Tutorial cleanup push failed: %s", exc)
+            from .._exposure_diagnostics import log_failure_for
+
+            log_failure_for(
+                logger, (self,), exc, "Tutorial cleanup push failed: %s", exc, level="debug"
+            )
         self._tutorial_active_target = None
         self._tutorial_active_class = None

@@ -54,10 +54,38 @@ class InMemoryStateBackend(StateBackend):
         self._default_ttl = default_ttl
         self._state_size_warning_kb = state_size_warning_kb
         self._lock = RLock()  # Reentrant lock for thread safety
+        self._observations: Dict[str, Tuple[int, float]] = {}
         logger.info(
             f"InMemoryStateBackend initialized with TTL={default_ttl}s, "
             f"state_size_warning={state_size_warning_kb}KB"
         )
+
+    def _register_observation(self, lifetime: str) -> None:
+        now = time.monotonic()
+        with self._lock:
+            # Registration is the bounded cleanup opportunity for abandoned
+            # menus; no per-observation timer/thread is created.
+            self._observations = {
+                key: value
+                for key, value in self._observations.items()
+                if value[1] == 0 or value[1] > now
+            }
+            expires = now + self._default_ttl if self._default_ttl > 0 else 0
+            self._observations.setdefault(lifetime, (0, expires))
+
+    def _claim_observation(self, lifetime: str, sequence: int) -> bool:
+        with self._lock:
+            record = self._observations.get(lifetime)
+            if record is None:
+                return False
+            previous, expires = record
+            if expires and expires <= time.monotonic():
+                self._observations.pop(lifetime, None)
+                return False
+            if sequence <= previous:
+                return False
+            self._observations[lifetime] = (sequence, expires)
+            return True
 
     def get(self, key: str) -> Optional[Tuple[RustLiveView, float]]:
         """
@@ -255,6 +283,7 @@ class InMemoryStateBackend(StateBackend):
             count = len(self._cache)
             self._cache.clear()
             self._state_sizes.clear()
+            self._observations.clear()
         if count:
             logger.info("Deleted all %s sessions from memory", count)
         return count

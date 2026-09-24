@@ -244,6 +244,72 @@ class TestSlotsReachTheTemplate:
         html = _preview("dropdown")
         assert "dropdown-item" in html
         assert len(re.findall(r'class="dropdown-item"', html)) >= 3
+        assert 'style="display:none;"' not in html
+        assert 'aria-expanded="true"' in html
+        assert re.search(
+            r'class="dropdown-menu dropdown-left"[\s\S]*role="menu"[\s\S]*data-open="true"',
+            html,
+        )
+
+    def test_checkbox_preview_has_readable_layout_hooks(self):
+        html = _preview("checkbox")
+        assert 'class="checkbox-group' in html
+        assert 'class="checkbox-label"' in html
+        assert 'class="checkbox-description"' in html
+
+    def test_live_dropdown_preview_starts_open(self):
+        from django.test import RequestFactory
+
+        from djust.theming.gallery.live_views import ComponentsDetailView
+
+        view = ComponentsDetailView()
+        view.mount(RequestFactory().get("/"), component_name="dropdown")
+        assert view.preview.state.values["is_open"] is True
+        html = "".join(example["html"] for example in view._render_examples())
+        assert 'style="display:none;"' not in html
+        assert "Edit" in html and "Archive" in html
+
+    def test_live_sheet_preview_preserves_open_example_state(self):
+        from django.test import RequestFactory
+
+        from djust.theming.gallery.live_views import ComponentsDetailView
+
+        view = ComponentsDetailView()
+        view.mount(RequestFactory().get("/"), component_name="sheet")
+        assert view.preview.state.values["is_open"] is True
+        html = "".join(example["html"] for example in view._render_examples())
+        assert 'data-open="true"' in html
+        assert "Status, owner and date range." in html
+
+
+class TestPythonExamplesHaveUsefulContent:
+    """Python previews must demonstrate the component, not only its wrapper."""
+
+    @staticmethod
+    def _render(name: str) -> str:
+        from djust.theming.gallery.component_registry import (
+            PYTHON_COMPONENT_EXAMPLES,
+            render_python_component_example,
+        )
+
+        return "".join(
+            render_python_component_example(name, example)
+            for example in PYTHON_COMPONENT_EXAMPLES[name]
+        )
+
+    def test_message_and_collaboration_previews_show_content(self):
+        assert "The deployment is ready for review." in self._render("chat_bubble")
+        assert "Ada Lovelace" in self._render("collab_selection")
+        assert "Grace Hopper" in self._render("cursors_overlay")
+
+    def test_stateful_and_overlay_previews_show_their_states(self):
+        assert "The chart could not load." in self._render("error_boundary")
+        assert "ctx-item" in self._render("context_menu")
+        assert "dj-notification-badge--dot" in self._render("notification_badge")
+        assert "Project status" in self._render("popover")
+        assert self._render("presence_avatars").count("dj-presence__item") >= 3
+        assert 'data-open="true"' in self._render("sheet")
+        assert "Section title" in self._render("sticky_header")
 
 
 # ---------------------------------------------------------------------------
@@ -355,6 +421,7 @@ class TestPreviewHostsItsInteractions:
         "loading_overlay": "toggle_loading",
         "model_selector": "toggle_model_selector",
         "dropdown": "toggle_dropdown",
+        "dropdown_menu": "toggle_menu",
     }
 
     @pytest.mark.parametrize("component,event", sorted(REPORTED.items()))
@@ -381,6 +448,31 @@ class TestPreviewHostsItsInteractions:
 
         handler = ComponentsDetailView.toggle_switch
         assert handler.__annotations__.get("value") is not str
+
+    @pytest.mark.parametrize("event", ["edit_item", "duplicate_item", "delete_item"])
+    def test_dropdown_menu_item_events_are_hosted(self, event: str):
+        from djust.theming.gallery.live_views import ComponentsDetailView
+
+        handler = getattr(ComponentsDetailView, event, None)
+        assert handler is not None
+        assert hasattr(handler, "_djust_decorators")
+
+    def test_every_rendered_preview_event_has_a_host_handler(self):
+        from djust.theming.gallery.catalogue import build_catalogue_detail_context, component_events
+        from djust.theming.gallery.component_registry import _COMPONENT_TO_CATEGORY
+        from djust.theming.gallery.live_views import ComponentsDetailView
+
+        missing = []
+        for component in sorted(_COMPONENT_TO_CATEGORY):
+            context = build_catalogue_detail_context(component)
+            examples = context.get("python_examples_html") or context.get("template_examples_html")
+            markup = "".join(example.get("html", "") for example in examples or [])
+            for event in component_events(markup):
+                handler = getattr(ComponentsDetailView, event, None)
+                if handler is None or not hasattr(handler, "_djust_decorators"):
+                    missing.append(f"{component}: {event}")
+
+        assert not missing, "unhandled catalogue preview events: " + ", ".join(missing)
 
 
 class TestComponentsAssetsAreCacheBusted:

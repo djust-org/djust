@@ -75,6 +75,35 @@ function sentTypes(ws) {
 }
 
 describe('popstate decides by pathname', () => {
+
+    it('captures the source before redirect history changes and before a Back lookup', async () => {
+        const { dom, ws, loadEntryState } = await load('/items/');
+        const calls = [];
+        dom.window.djust._clientState = {
+            'test.views.IndexView': 'index-token',
+            'test.views.DetailView': 'detail-token',
+        };
+        dom.window.djust._sw = {
+            captureState: (url, slug, token) => calls.push({ kind: 'capture', url, token }),
+            forgetState: (url) => calls.push({ kind: 'forget', url }),
+            lookupState: async (url) => {
+                calls.push({ kind: 'lookup', url });
+                return { hit: false };
+            },
+        };
+        dom.window.djust.navigation.handleNavigation({
+            type: 'navigation', action: 'live_redirect', path: '/items/detail/',
+        });
+        await new Promise(resolve => setTimeout(resolve, 30));
+        expect(calls[0]).toEqual({ kind: 'capture', url: '/items/', token: 'index-token' });
+        calls.length = 0;
+        ws.viewMounted = true;
+        await goBack(dom, '/items/', loadEntryState);
+        expect(calls[0]).toEqual({
+            kind: 'capture', url: '/items/detail/', token: 'detail-token',
+        });
+        expect(calls.some(call => call.kind === 'lookup' && call.url === '/items/')).toBe(true);
+    });
     it('leaves the load entry alone instead of forging state onto it', async () => {
         const { dom } = await load('/items/');
         expect(dom.window.history.state).toBeNull();

@@ -1,0 +1,1 @@
+- Stage an internal strict event collector with bounded JSON snapshots, complete typed-literal parsing and collision rejection. Legacy browser bindings are unchanged; owner-scoped contract delivery and strict binder activation remain pending.

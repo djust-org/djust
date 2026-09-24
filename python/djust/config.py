@@ -56,6 +56,9 @@ class LiveViewConfig:
         # "warn"   - allow unmarked methods but log deprecation warning
         # "strict" - only @event_handler decorated methods
         "event_security": "strict",
+        # ADR-036: opt-in predictable signature binding and bounded conversion.
+        # Distinct from event_security, which controls callable authorization.
+        "event_parameter_policy": "legacy",
         # LiveView transport mode
         "use_websocket": True,  # Set to False to use HTTP polling instead of WebSocket
         # WebSocket per-message compression advisory flag (v0.6.0).

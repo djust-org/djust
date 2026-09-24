@@ -136,6 +136,13 @@ class _FakeConsumer:
 
         return await LiveViewConsumer._flush_deferred(self)
 
+    def _log_view_hook_failure(self, *args, **kwargs):
+        # The flush logs failures through this policy-checked helper
+        # (ADR-038); borrow it for the same reason as the flush itself.
+        from djust.websocket import LiveViewConsumer
+
+        return LiveViewConsumer._log_view_hook_failure(self, *args, **kwargs)
+
 
 @pytest.mark.asyncio
 async def test_flush_deferred_runs_sync_callback_in_order():

@@ -371,10 +371,16 @@ def enforce_object_permission(view_instance: Any, request: Any) -> None:
     except PermissionDenied:
         raise
     except Exception as exc:  # noqa: BLE001 — fail-closed by design
-        logger.exception(
+        from .._exposure_diagnostics import log_failure_for
+
+        log_failure_for(
+            logger,
+            (view_instance,),
+            exc,
             "Object-permission check raised a non-PermissionDenied exception "
             "for %s; failing closed (denying)",
             view_instance.__class__.__name__,
+            traceback=True,
         )
         raise PermissionDenied("Access denied for this object.") from exc
 
@@ -409,7 +415,7 @@ def run_pre_mount_auth(view_instance: Any, request: Any) -> Optional[str]:
     tenant ContextVar bind); this helper pins their *orchestration* so a future
     edit cannot silently reorder them or drop a step on one path (#1646 / #1853).
 
-    Canonical sequence (matching the pre-existing per-transport copies exactly):
+    Legacy sequence (matching the pre-existing per-transport copies exactly):
 
     1. ``redirect_url = check_view_auth(view_instance, request)``. This may
        raise :class:`~django.core.exceptions.PermissionDenied` (an authenticated
@@ -429,6 +435,11 @@ def run_pre_mount_auth(view_instance: Any, request: Any) -> Optional[str]:
        :func:`_bind_current_tenant` so ``mount()`` + the initial render see the
        correct tenant in the tenant-scoped managers (fail-closed otherwise).
 
+    The staged explicit policy first resolves and binds the view's tenant, so
+    authorization queries use the same tenant as persistence and rendering.
+    Runtime mount dispatch scopes this binding and restores the caller's tenant
+    on every exit; HTTP TenantMixin dispatch uses the equivalent scoped context.
+
     Returns ``None`` when the mount may proceed, or a redirect-URL string when
     auth denies via redirect. Raises :class:`PermissionDenied` (auth) or any
     exception from ``_ensure_tenant`` (tenant resolution); callers wrap this in
@@ -438,6 +449,15 @@ def run_pre_mount_auth(view_instance: Any, request: Any) -> Optional[str]:
     async callers invoke it via ``sync_to_async(run_pre_mount_auth)`` exactly as
     they previously wrapped ``check_view_auth`` / ``_ensure_tenant`` individually.
     """
+    # Explicit policy authorizes in the same tenant context used by mount,
+    # rendering and persistence. Legacy ordering is retained for compatibility.
+    from .._exposure import uses_legacy_exposure
+
+    if not uses_legacy_exposure(view_instance):
+        if hasattr(view_instance, "_ensure_tenant"):
+            view_instance._ensure_tenant(request)
+        _bind_current_tenant(getattr(view_instance, "_tenant", None))
+
     # 1 + 2. View-level auth (login / permission / custom / Django mixins).
     redirect_url = check_view_auth(view_instance, request)
     if redirect_url:

@@ -48,6 +48,55 @@ function clearOptimisticPending() {
     });
 }
 
+/** Morph a server-rendered child subtree without replacing its owner wrapper. */
+function applyEmbeddedUpdate(data, transport) {
+    if (typeof data.view_id !== 'string' || !data.view_id || typeof data.html !== 'string') {
+        if (globalThis.djustDebug) console.warn('[LiveView] Invalid embedded update');
+        return false;
+    }
+    const container = document.querySelector(`[data-djust-embedded="${CSS.escape(data.view_id)}"]`);
+    if (!container) return false;
+    const incoming = document.createElement('div');
+    // codeql[js/xss] -- html is rendered by the trusted Django/Rust server template engine
+    incoming.innerHTML = data.html;
+    morphChildren(container, incoming);
+    _warnDeadScripts(container);
+    _refreshRenderParameterContracts(transport, data);
+    reinitAfterDOMUpdate();
+    return true;
+}
+
+/** Shared WS/SSE child response path; background frames cannot acknowledge an event. */
+async function handleEmbeddedResponse(data, transport) {
+    // Capture ownership before morphing: the response may remove its trigger.
+    const tracked = data.ref != null && _pendingEventOwners.get(data.ref) === transport;
+    const eventName = tracked ? _pendingEventNames.get(data.ref) : transport.lastEventName;
+    const trigger = tracked ? _pendingTriggerEls.get(data.ref) : transport.lastTriggerElement;
+    const owner = trigger && trigger.closest('[data-djust-embedded]');
+    const ownerId = owner && owner.getAttribute('data-djust-embedded');
+    const applied = applyEmbeddedUpdate(data, transport);
+    // A legitimate reply may arrive after its owner was removed. Settle its
+    // own request rather than leaking the promise, but reject malformed frames.
+    if (!applied && (!tracked || typeof data.view_id !== 'string' || !data.view_id ||
+        typeof data.html !== 'string')) return false;
+    if (data.source === 'async') {
+        completeLegacyAsyncBatches(transport, data);
+        return true;
+    }
+    // No-ref SSE replies must match the pending element's scope. A reply for
+    // another child must not consume the most recently sent event's state.
+    if (!tracked && (ownerId !== data.view_id ||
+        (data.event_name && data.event_name !== eventName))) {
+        return true;
+    }
+    const event = acknowledgeEventRequest(transport, data);
+    if (event?.eventName && !data.async_pending) globalLoadingManager.stopLoading(event.eventName, event.trigger);
+    if (!hasPendingEventRequests(transport) && _tickBuffer.length > 0) {
+        await flushServerUpdates(transport);
+    }
+    return true;
+}
+
 /**
  * Centralized server response handler for both WebSocket and HTTP fallback.
  * Eliminates code duplication and ensures consistent behavior.
@@ -55,9 +104,10 @@ function clearOptimisticPending() {
  * @param {Object} data - Server response data
  * @param {string} eventName - Name of the event that triggered this response
  * @param {HTMLElement} triggerElement - Element that triggered the event
+ * @param {Object|null} transport - Connection/local operation owning this response
  * @returns {boolean} - True if handled successfully, false otherwise
  */
-async function handleServerResponse(data, eventName, triggerElement) {
+async function handleServerResponse(data, eventName, triggerElement, transport = null) {
     try {
         // Handle cache storage (from @cache decorator)
         if (data.cache_request_id && pendingCacheRequests.has(data.cache_request_id)) {
@@ -130,6 +180,7 @@ async function handleServerResponse(data, eventName, triggerElement) {
         // Apply patches (efficient incremental updates)
         // Empty patches array = server confirmed no DOM changes needed (no-op success)
         if (data.patches && Array.isArray(data.patches) && data.patches.length === 0) {
+            _refreshRenderParameterContracts(transport, data);
             if (globalThis.djustDebug) console.log('[LiveView] No DOM changes needed (0 patches)');
         }
         else if (data.patches && Array.isArray(data.patches) && data.patches.length > 0) {
@@ -165,6 +216,7 @@ async function handleServerResponse(data, eventName, triggerElement) {
             }
 
             if (success === false) {
+                _invalidateRenderParameterContracts(transport, data);
                 // Patches failed — likely due to {% if %} blocks shifting DOM structure.
                 // Request full HTML from server for DOM morphing (on-demand, not sent
                 // with every response to avoid bandwidth regression).
@@ -198,6 +250,7 @@ async function handleServerResponse(data, eventName, triggerElement) {
             // Ensure dj-mounted is active for elements added by VDOM patches
             if (!window.djust._mountReady) window.djust._mountReady = true;
 
+            _refreshRenderParameterContracts(transport, data);
             reinitAfterDOMUpdate();
         }
         // Apply full HTML update (fallback)
@@ -226,6 +279,7 @@ async function handleServerResponse(data, eventName, triggerElement) {
             _isBroadcastUpdate = false;
             // Ensure dj-mounted is active for elements added by HTML update
             if (!window.djust._mountReady) window.djust._mountReady = true;
+            _refreshRenderParameterContracts(transport, data);
             reinitAfterDOMUpdate();
         } else {
             if (globalThis.djustDebug) console.warn('[LiveView] Response has neither patches nor html!', data);
@@ -287,6 +341,7 @@ async function handleServerResponse(data, eventName, triggerElement) {
         return true;
 
     } catch (error) {
+        _invalidateRenderParameterContracts(transport, data);
         if (globalThis.djustDebug) console.error('[LiveView] Error in handleServerResponse:', error);
         globalLoadingManager.stopLoading(eventName, triggerElement);
         return false;

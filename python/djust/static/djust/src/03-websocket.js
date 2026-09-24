@@ -196,6 +196,27 @@ function _warnDeadScripts(root) {
     }
 }
 
+function storeSignedSnapshot(data, primaryViewPath) {
+    // Only mounts and successful primary-view event acknowledgements carry
+    // navigation state. Child/background/error frames cannot replace it.
+    const eligible = data.type === 'mount' || (
+        data.source === 'event' && data.view === primaryViewPath &&
+        ['patch', 'html_update', 'noop'].includes(data.type)
+    );
+    if (!eligible || typeof data.view !== 'string' || !data.view ||
+        ['__proto__', 'constructor', 'prototype'].includes(data.view)) return;
+    const token = data.state_snapshot_signed;
+    // Cache invalidation sentinel, not a comparison of authentication secrets.
+    // eslint-disable-next-line security/detect-possible-timing-attacks
+    if (token === null) {
+        if (window.djust._clientState) delete window.djust._clientState[data.view];
+    } else if (typeof token === 'string' && token) {
+        if (!window.djust._clientState) window.djust._clientState = Object.create(null);
+        // Opaque signed plaintext: echo verbatim, never parse/re-serialize.
+        window.djust._clientState[data.view] = token;
+    }
+}
+
 class LiveViewWebSocket {
     constructor() {
         this.ws = null;
@@ -231,6 +252,10 @@ class LiveViewWebSocket {
      * Cleanly disconnect the WebSocket for TurboNav navigation
      */
     disconnect() {
+        this._parameterContracts = new Map();
+        this._parameterContractApplied = new Map();
+        this._parameterContractFrames = new WeakMap();
+        this._parameterContractSequence = 0;
         // TurboNav may already have replaced the URL/DOM. Cancel immediately,
         // before a delayed close callback could send old-view edits to the new URL.
         cancelPendingRateLimits();
@@ -278,12 +303,8 @@ class LiveViewWebSocket {
         this._removeReconnectBanner();
 
         // Event sequencing (#560): clear pending event state
-        _pendingEventResolvers.forEach(resolve => resolve(null));
-        _pendingEventRefs.clear();
-        _pendingEventNames.clear();
-        _pendingTriggerEls.clear();
-        _pendingEventResolvers.clear();
-        _tickBuffer.length = 0;
+        cancelEventRequests(this);
+        takeServerUpdates(this);
     }
 
     connect(url = null) {
@@ -369,12 +390,8 @@ class LiveViewWebSocket {
             pendingEvents.clear();
 
             // Event sequencing (#560): clear pending event state
-            _pendingEventResolvers.forEach(resolve => resolve(null));
-            _pendingEventRefs.clear();
-            _pendingEventNames.clear();
-            _pendingTriggerEls.clear();
-            _pendingEventResolvers.clear();
-            _tickBuffer.length = 0;
+            cancelEventRequests(this);
+            takeServerUpdates(this);
 
             // Remove loading indicators from DOM
             clearOptimisticPending();
@@ -496,6 +513,7 @@ class LiveViewWebSocket {
         // fallback call it too, so this is not the only choke point and must
         // not be described as one.
         stripClientOwnedFrameFlags(data);
+        _recordParameterContractFrame(this, data);
         const prev = this._inflight || Promise.resolve();
         const next = prev
             .then(() => this._handleMessageImpl(data))
@@ -508,6 +526,7 @@ class LiveViewWebSocket {
 
     async _handleMessageImpl(data) {
         if (globalThis.djustDebug) console.log('[LiveView] Received: %s %o', String(data.type), data);
+        storeSignedSnapshot(data, this.primaryViewPath);
 
         switch (data.type) {
             case 'connect':
@@ -517,27 +536,14 @@ class LiveViewWebSocket {
                 break;
 
             case 'mount': {
+                _installParameterContracts(this, data.parameter_contracts, data.view, true,
+                    this._parameterContractFrames.get(data));
                 const formRecoverySnapshot = window.djust._isReconnect
                     && data.view === this.primaryViewPath
                     && typeof window.djust._captureFormRecovery === 'function'
                     ? window.djust._captureFormRecovery() : null;
                 this.viewMounted = true;
                 if (globalThis.djustDebug) console.log('[LiveView] View mounted: %s', String(data.view));
-
-                // Fix #1 / Finding #4 — stash the server-emitted SIGNED
-                // state-snapshot blob so the state-snapshot capture on the
-                // next before-navigate can echo it back verbatim. The server
-                // includes ``state_snapshot_signed`` (an opaque
-                // TimestampSigner blob) only when ``enable_state_snapshot``
-                // is True on the view class; non-opt-in views never have
-                // state cached. The blob is OPAQUE — we store it as-is and
-                // never re-serialize it, so the server signature stays valid
-                // on the round-trip. Re-serializing would strip the signature
-                // and the server would (correctly) reject the snapshot.
-                if (typeof data.state_snapshot_signed === 'string' && data.state_snapshot_signed && data.view) {
-                    if (!window.djust._clientState) window.djust._clientState = {};
-                    window.djust._clientState[data.view] = data.state_snapshot_signed; // codeql[js/remote-property-injection] -- data.view is a server-sent view name, not arbitrary user input
-                }
 
                 // Remove dj-cloak from all elements (FOUC prevention)
                 document.querySelectorAll('[dj-cloak]').forEach(el => el.removeAttribute('dj-cloak'));
@@ -872,10 +878,10 @@ class LiveViewWebSocket {
                     data.source === 'async'
                 );
                 const isEventResponse = (
-                    data.ref != null && _pendingEventRefs.has(data.ref)
+                    !isServerInitiated && data.ref != null && _pendingEventOwners.get(data.ref) === this
                 );
 
-                if (!isEventResponse && isServerInitiated && _pendingEventRefs.size > 0) {
+                if (!isEventResponse && isServerInitiated && hasPendingEventRequests(this)) {
                     // Buffer server-initiated patch — will be applied after
                     // all pending event responses arrive. Marked so the version
                     // check treats the resulting gap as our own deferral rather
@@ -886,11 +892,11 @@ class LiveViewWebSocket {
                         typeof data.version === 'number' &&
                         data.version === clientVdomVersion + 1
                     );
-                    _tickBuffer.push({
+                    bufferServerUpdate(this, {
                         ...data,
                         _deferred: true,
                         _versionConsumed: contiguous,
-                    });
+                    }, data);
                     // Consume the version HERE, at receipt — but ONLY when it is
                     // CONTIGUOUS with the cursor. The frame has arrived and will
                     // be applied on flush, so a contiguous version must already
@@ -926,48 +932,17 @@ class LiveViewWebSocket {
                 }
 
                 // Determine event name and trigger for loading state
-                let evName = this.lastEventName;
-                let evTrigger = this.lastTriggerElement;
-
-                if (isEventResponse) {
-                    // This response matches a pending event — use tracked
-                    // event name/trigger and remove from pending set.
-                    evName = _pendingEventNames.get(data.ref) || this.lastEventName;
-                    evTrigger = _pendingTriggerEls.get(data.ref) || this.lastTriggerElement;
-                    _pendingEventRefs.delete(data.ref);
-                    _pendingEventNames.delete(data.ref);
-                    _pendingTriggerEls.delete(data.ref);
-                    // #1315: Resolve the sendEvent Promise so callers awaiting
-                    // the server response (e.g. _handleDjSubmit) can proceed.
-                    const resolver = _pendingEventResolvers.get(data.ref);
-                    if (resolver) {
-                        _pendingEventResolvers.delete(data.ref);
-                        resolver(data);
-                    }
-                } else if (isServerInitiated) {
-                    // Server-initiated patch with no pending events — apply
-                    // without consuming event loading state.
-                    evName = null;
-                    evTrigger = null;
-                }
-
-                await handleServerResponse(data, evName, evTrigger);
-
-                if (!isServerInitiated) {
-                    this.lastEventName = null;
-                    this.lastTriggerElement = null;
-                }
+                const event = acknowledgeEventRequest(this, data);
+                await handleServerResponse(data, event?.eventName, event?.trigger, this);
+                completeLegacyAsyncBatches(this, data);
 
                 // After processing the event response, flush buffered
                 // patches only when ALL pending events have resolved.
-                if (isEventResponse && _pendingEventRefs.size === 0 && _tickBuffer.length > 0) {
+                if (isEventResponse && !hasPendingEventRequests(this) && _tickBuffer.length > 0) {
                     if (globalThis.djustDebug) {
                         djLog('[LiveView] Flushing ' + _tickBuffer.length + ' buffered patches');
                     }
-                    const buffered = _tickBuffer.splice(0);
-                    for (const tickData of buffered) {
-                        await handleServerResponse(tickData, null, null);
-                    }
+                    await flushServerUpdates(this);
                 }
                 break;
             }
@@ -991,6 +966,7 @@ class LiveViewWebSocket {
                 // dead exactly like #1848. Loud DEBUG-mode warning.
                 _warnDeadScripts(liveviewRoot);
                 clientVdomVersion = data.version;
+                _refreshRenderParameterContracts(this, data);
                 reinitAfterDOMUpdate();
                 if (globalThis.djustDebug) {
                     // codeql[js/log-injection] -- data.version is a server-controlled integer
@@ -1038,19 +1014,27 @@ class LiveViewWebSocket {
                 }));
 
                 // Clear pending event refs (#560)
-                _pendingEventResolvers.forEach(resolve => resolve(null));
-                _pendingEventRefs.clear();
-                _pendingEventNames.clear();
-                _pendingTriggerEls.clear();
-                _pendingEventResolvers.clear();
-                _tickBuffer.length = 0;
+                if (data.source !== 'async' &&
+                    (data.ref == null || _pendingEventOwners.get(data.ref) === this)) {
+                    cancelEventRequests(this, data.ref ?? null);
+                    // A failed event does not invalidate earlier server pushes.
+                    // Retain them until the other owned requests settle, then
+                    // apply with the same version checks as a successful reply.
+                    if (!hasPendingEventRequests(this)) {
+                        await flushServerUpdates(this);
+                    }
+                }
 
                 // Phase 5: Stop loading state on error
-                if (this.lastEventName) {
+                if (data.source !== 'async' && data.ref == null && this.lastEventName) {
                     globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
                     this.lastEventName = null;
                     this.lastTriggerElement = null;
                 }
+                break;
+
+            case 'async_complete':
+                completeAsyncBatch(this, data.async_batch);
                 break;
 
             case 'pong':
@@ -1089,23 +1073,9 @@ class LiveViewWebSocket {
             case 'noop': {
                 // Server acknowledged event but no DOM changes needed (auto-detected
                 // or explicit _skip_render). Clear loading state unless async pending.
-                const noopEvName = (data.ref != null ? _pendingEventNames.get(data.ref) : null)
-                    || this.lastEventName;
-                const noopTrigger = (data.ref != null ? _pendingTriggerEls.get(data.ref) : null)
-                    || this.lastTriggerElement;
-
-                // Clear pending event ref (#560)
-                if (data.ref != null && _pendingEventRefs.has(data.ref)) {
-                    _pendingEventRefs.delete(data.ref);
-                    _pendingEventNames.delete(data.ref);
-                    _pendingTriggerEls.delete(data.ref);
-                    // #1315: Resolve the sendEvent Promise on noop too.
-                    const resolver = _pendingEventResolvers.get(data.ref);
-                    if (resolver) {
-                        _pendingEventResolvers.delete(data.ref);
-                        resolver(data);
-                    }
-                }
+                const event = acknowledgeEventRequest(this, data);
+                const noopEvName = event?.eventName;
+                const noopTrigger = event?.trigger;
 
                 if (noopEvName) {
                     if (!data.async_pending) {
@@ -1113,16 +1083,11 @@ class LiveViewWebSocket {
                     } else {
                         if (globalThis.djustDebug) console.log('[LiveView] Keeping loading state — async work pending');
                     }
-                    this.lastEventName = null;
-                    this.lastTriggerElement = null;
                 }
 
                 // Flush buffered patches only when all pending events resolved
-                if (_pendingEventRefs.size === 0 && _tickBuffer.length > 0) {
-                    const buffered = _tickBuffer.splice(0);
-                    for (const tickData of buffered) {
-                        await handleServerResponse(tickData, null, null);
-                    }
+                if (!hasPendingEventRequests(this) && _tickBuffer.length > 0) {
+                    await flushServerUpdates(this);
                 }
                 break;
             }
@@ -1141,13 +1106,7 @@ class LiveViewWebSocket {
 
             case 'embedded_update':
                 // Scoped HTML update for an embedded child LiveView
-                this.handleEmbeddedUpdate(data);
-                // Stop loading state
-                if (this.lastEventName) {
-                    globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
-                    this.lastEventName = null;
-                    this.lastTriggerElement = null;
-                }
+                await handleEmbeddedResponse(data, this);
                 break;
 
             case 'child_update':
@@ -1485,33 +1444,19 @@ class LiveViewWebSocket {
             return false;
         }
 
-        // Phase 5: Track event name and trigger element for loading state
-        this.lastEventName = eventName;
-        this.lastTriggerElement = triggerElement;
-
-        // Event sequencing (#560): assign monotonic ref so we can match
-        // the server's response to this specific event and distinguish
-        // it from server-initiated patches. Uses Set to track multiple
-        // concurrent pending events.
-        const ref = ++_eventRefCounter;
-        _pendingEventRefs.add(ref);
-        _pendingEventNames.set(ref, eventName);
-        _pendingTriggerEls.set(ref, triggerElement);
-
-        // #1315: Return a Promise so callers can await the server response
-        // before running post-response logic (e.g. _setFormPending(false)).
-        // Without this, fire-and-forget WS dispatch causes handleEvent to
-        // resolve synchronously, and form-pending toggles off before any
-        // browser repaint.
-        return new Promise((resolve) => {
-            _pendingEventResolvers.set(ref, resolve);
+        const request = registerEventRequest(this, eventName, triggerElement);
+        try {
             this.sendMessage({
                 type: 'event',
                 event: eventName,
                 params: params,
-                ref: ref
+                ref: request.ref
             });
-        });
+        } catch (error) {
+            cancelEventRequests(this, request.ref);
+            throw error;
+        }
+        return request.promise;
     }
 
     // Removed duplicate applyPatches and patch helper methods
@@ -1522,33 +1467,7 @@ class LiveViewWebSocket {
      * Replaces only the innerHTML of the embedded view's container div.
      */
     handleEmbeddedUpdate(data) {
-        const viewId = data.view_id;
-        const html = data.html;
-        if (!viewId || html === undefined) {
-            // codeql[js/log-injection] -- data is a server WebSocket message, not user input
-            console.warn('[LiveView] Invalid embedded_update message:', data);
-            return;
-        }
-
-        const container = document.querySelector(`[data-djust-embedded="${CSS.escape(viewId)}"]`);
-        if (!container) {
-            console.warn('[LiveView] Embedded view container not found: %s', String(viewId));
-            return;
-        }
-
-        const _morphTemp = document.createElement('div');
-        // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
-        _morphTemp.innerHTML = html;
-        morphChildren(container, _morphTemp);
-        // #2058: embedded-view (LiveComponent) updates morph the same way
-        // the #1610 mount path does, but never call _runInsertedScripts() —
-        // a classic <script> re-created by this morph is silently dead
-        // exactly like #1848. Loud DEBUG-mode warning.
-        _warnDeadScripts(container);
-        if (globalThis.djustDebug) console.log('[LiveView] Updated embedded view: %s', String(viewId));
-
-        // Re-bind events within the updated container
-        reinitAfterDOMUpdate();
+        return applyEmbeddedUpdate(data);
     }
 
     _showReconnectBanner(attempt, maxAttempts) {

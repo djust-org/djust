@@ -490,6 +490,238 @@ function collectDjValues(element) {
     return values;
 }
 
+// A mount owns its manifest. Never merge contracts by handler name, or retain
+// a previous mount's contracts when a legacy server omits this field.
+function _installParameterContracts(transport, manifest, viewPath, resetPrimary = true, receiptOrder = 0) {
+    if (!transport._parameterContracts || (resetPrimary && viewPath === transport.primaryViewPath)) {
+        transport._parameterContracts = new Map();
+        transport._parameterContractApplied = new Map();
+    }
+    if (resetPrimary) transport._parameterContractApplied.set(viewPath, receiptOrder);
+    transport._parameterContracts.set(viewPath, null);
+    if (manifest === undefined || manifest === null) return;
+    const reject = () => { throw new Error('Invalid public parameter contracts'); };
+    // Keep invalid metadata distinguishable from an intentional legacy mount.
+    transport._parameterContracts.set(viewPath, false);
+    if (typeof viewPath !== 'string' || !viewPath) reject();
+    if (manifest.version !== 1 || !Array.isArray(manifest.owners) || manifest.owners.length > 1024 || JSON.stringify(manifest).length > 65536) reject();
+    const owners = new Map();
+    let count = 0;
+    for (const owner of manifest.owners) {
+        if (!owner || ![owner.view_id, owner.component_id].every(id => id === null || (typeof id === 'string' && id.length > 0))) reject();
+        const key = JSON.stringify([owner.view_id, owner.component_id]);
+        if (owners.has(key) || !owner.handlers || typeof owner.handlers !== 'object' || Array.isArray(owner.handlers)) reject();
+        const handlers = new Map();
+        for (const [name, contract] of Object.entries(owner.handlers)) {
+            if (++count > 10000 || !/^[a-zA-Z][a-zA-Z0-9_]*$/.test(name) || !contract) reject();
+            if (contract.policy === 'legacy') {
+                handlers.set(name, Object.freeze({policy: 'legacy'}));
+            } else if (contract.policy === 'strict') {
+                if (typeof contract.coerce_types !== 'boolean' || !Array.isArray(contract.parameters) || contract.parameters.length > 1024) reject();
+                const seen = new Set();
+                const parameters = contract.parameters.map(parameter => {
+                    if (!parameter || typeof parameter.name !== 'string' || seen.has(parameter.name) || typeof parameter.type !== 'string' ||
+                        !['positional_only', 'positional_or_keyword', 'keyword_only', 'var_positional', 'var_keyword'].includes(parameter.kind) ||
+                        typeof parameter.required !== 'boolean' || typeof parameter.reduced_checking !== 'boolean') reject();
+                    seen.add(parameter.name);
+                    return Object.freeze({name: parameter.name, type: parameter.type, kind: parameter.kind,
+                        required: parameter.required, reduced_checking: parameter.reduced_checking});
+                });
+                handlers.set(name, Object.freeze({policy: 'strict', coerce_types: contract.coerce_types, parameters: Object.freeze(parameters)}));
+            } else reject();
+        }
+        owners.set(key, handlers);
+    }
+    if (!owners.has('[null,null]')) reject();
+    transport._parameterContracts.set(viewPath, owners);
+}
+
+// Receipt order is client-owned, not a wire field or the VDOM version (child
+// replies have no parent VDOM version). Weak keys cannot retain consumed frames.
+function _recordParameterContractFrame(transport, data) {
+    if (!data || typeof data !== 'object') return;
+    transport._parameterContractFrames ??= new WeakMap();
+    transport._parameterContractSequence = (transport._parameterContractSequence || 0) + 1;
+    transport._parameterContractFrames.set(data, transport._parameterContractSequence);
+}
+
+// A failed/partial DOM application cannot keep advertising the last successful
+// strict snapshot. Invalidate only this transport's primary scope, never peers.
+function _invalidateRenderParameterContracts(transport, data) {
+    const path = transport?.primaryViewPath;
+    const mounts = transport?._parameterContracts;
+    if (mounts?.has(path) && (mounts.get(path) !== null || Object.hasOwn(data, 'parameter_contracts'))) {
+        mounts.set(path, false);
+        const order = transport._parameterContractFrames?.get(data);
+        if (order !== undefined) transport._parameterContractApplied.set(path,
+            Math.max(order, transport._parameterContractApplied.get(path) || 0));
+    }
+}
+
+// Called after DOM application (including empty patches), before dj-mounted
+// or other bindings can run. Omission is safe only for a known legacy scope.
+function _refreshRenderParameterContracts(transport, data) {
+    const supplied = Object.hasOwn(data, 'parameter_contracts');
+    if (!transport) {
+        if (supplied && globalThis.djustDebug) console.warn('[LiveView] Missing parameter contract transport');
+        return;
+    }
+    const order = transport._parameterContractFrames?.get(data);
+    const applied = transport._parameterContractApplied?.get(transport.primaryViewPath);
+    // A newer applied response already supplied a whole-tree snapshot. Replaying
+    // an older buffered delta must not replace it, even with a missing snapshot.
+    if (order !== undefined && applied !== undefined && order <= applied) return;
+    if (!supplied) {
+        _invalidateRenderParameterContracts(transport, data);
+        if (order !== undefined && applied !== undefined) {
+            transport._parameterContractApplied.set(transport.primaryViewPath, order);
+        }
+        return;
+    }
+    const path = data.parameter_contract_view;
+    const root = getLiveViewRoot();
+    if (order === undefined || typeof path !== 'string' || path !== transport.primaryViewPath ||
+        root.getAttribute('dj-view') !== path || !transport._parameterContracts?.has(path)) {
+        _invalidateRenderParameterContracts(transport, data);
+        if (globalThis.djustDebug) console.warn('[LiveView] Unknown render parameter contract mount');
+        return;
+    }
+    transport._parameterContractApplied.set(path, order);
+    try {
+        _installParameterContracts(transport, data.parameter_contracts, path, false);
+    } catch {
+        // Metadata cannot prevent the originating response from acknowledging
+        // its request. Strict lookups fail closed on the invalid scope instead.
+        _invalidateRenderParameterContracts(transport, data);
+        if (globalThis.djustDebug) console.warn('[LiveView] Invalid render parameter contracts');
+    }
+}
+
+function _lookupParameterContract(transport, viewPath, viewId, componentId, eventName) {
+    const mounts = transport._parameterContracts;
+    if (!mounts || !mounts.has(viewPath)) throw new Error('Unknown parameter contract mount');
+    const owners = mounts.get(viewPath);
+    if (owners === null) return null;
+    if (owners === false) throw new Error('Invalid public parameter contracts');
+    const handlers = owners.get(JSON.stringify([viewId, componentId]));
+    if (!handlers || !handlers.has(eventName)) throw new Error('Unknown parameter contract owner or handler');
+    return handlers.get(eventName);
+}
+
+// ADR-036 staged collector. Deliberately not called by legacy binders. The
+// owner-scoped binder must supply only documented generated application values;
+// routing context is attached afterwards, never collected from markup here.
+function _collectStrictEventParams(element, generated = {}, positional = []) {
+    const reject = () => { throw new Error('Invalid strict event arguments'); };
+    const values = Object.create(null);
+    const reserved = new Set([...UNSAFE_KEYS, '_args', 'component_id', 'view_id',
+        '_targetElement', '_optimisticUpdateId', '_skipLoading', '_djTargetSelector']);
+    let nodes = 0;
+    let textSize = 0;
+    const active = new Set();
+    const plainObject = value => {
+        const proto = Object.getPrototypeOf(value);
+        return proto === null || Object.getPrototypeOf(proto) === null;
+    };
+    const ownValue = (object, key) => {
+        const descriptor = Object.getOwnPropertyDescriptor(object, key);
+        if (!descriptor || !Object.hasOwn(descriptor, 'value')) reject();
+        return descriptor.value;
+    };
+    const visit = (value, depth = 0) => {
+        if (++nodes > 10000 || depth > 32) reject();
+        if (typeof value === 'string') {
+            textSize += value.length;
+            if (textSize > 65536) reject();
+        } else if (typeof value === 'number') {
+            if (!Number.isFinite(value)) reject();
+        } else if (value !== null && typeof value === 'object') {
+            if (active.has(value)) reject();
+            const array = Array.isArray(value);
+            if (array && value.length > 1024) reject();
+            if (!array && !plainObject(value)) reject();
+            const keys = array ? null : Object.keys(value);
+            if (keys && keys.length > 1024) reject();
+            active.add(value);
+            const snapshot = array ? [] : Object.create(null);
+            if (array) {
+                for (let i = 0; i < value.length; i++) {
+                    snapshot.push(visit(ownValue(value, String(i)), depth + 1));
+                }
+            } else {
+                for (const key of keys) {
+                    visit(key, depth + 1);
+                    // eslint-disable-next-line security/detect-object-injection
+                    snapshot[key] = visit(ownValue(value, key), depth + 1);
+                }
+            }
+            active.delete(value);
+            return snapshot;
+        } else if (value !== null && typeof value !== 'boolean') reject();
+        return value;
+    };
+    const put = (key, value) => {
+        if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key) || reserved.has(key) || Object.hasOwn(values, key)) reject();
+        // eslint-disable-next-line security/detect-object-injection
+        values[key] = value;
+    };
+    if (!generated || typeof generated !== 'object' || Array.isArray(generated) || !plainObject(generated) || !Array.isArray(positional)) reject();
+    for (const key of Object.keys(generated)) put(key, ownValue(generated, key));
+    let literalSize = 0;
+    for (const attr of element.attributes) {
+        if (!attr.name.startsWith('dj-value-')) continue;
+        literalSize += attr.value.length + attr.name.length;
+        if (literalSize > 65536) reject();
+        const parts = attr.name.slice(9).split(':');
+        if (parts.length > 2 || (parts.length === 2 && !parts[1])) reject();
+        const key = parts[0].replace(/-/g, '_');
+        const hint = parts[1];
+        let value = attr.value;
+        const text = value.replace(/^[ \t\n\r\v\f]+|[ \t\n\r\v\f]+$/g, '');
+        if (hint) {
+            switch (hint) {
+                case 'int': case 'integer':
+                    if (text.length > 1024 || !/^[+-]?[0-9]+(?![\s\S])/.test(text)) reject();
+                    value = Number(text);
+                    if (!Number.isSafeInteger(value)) reject();
+                    break;
+                case 'float': case 'number':
+                    // Bounded input and disjoint decimal/exponent delimiters.
+                    // eslint-disable-next-line security/detect-unsafe-regex
+                    if (text.length > 1024 || !/^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?(?![\s\S])/.test(text)) reject();
+                    value = Number(text);
+                    break;
+                case 'bool': case 'boolean': {
+                    const lower = text.toLowerCase();
+                    if (!['true', 'false', '1', '0', 'yes', 'no', 'on', 'off'].includes(lower)) reject();
+                    value = ['true', '1', 'yes', 'on'].includes(lower);
+                    break;
+                }
+                case 'json': case 'array': case 'list': case 'object':
+                    try { value = JSON.parse(value); } catch { reject(); }
+                    // Inspect number tokens before their integer spelling is
+                    // lost. Strings are matched as whole tokens, including
+                    // escapes, so their digits are never treated as numbers.
+                    // JSON.parse has already validated this bounded literal;
+                    // the alternatives have disjoint starting characters.
+                    // eslint-disable-next-line security/detect-unsafe-regex
+                    for (const token of attr.value.match(/"(?:\\[\s\S]|[^"\\])*"|-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/g) || []) {
+                        if (!token.startsWith('"') && !/[.eE]/.test(token) && !Number.isSafeInteger(Number(token))) reject();
+                    }
+                    if ((hint === 'array' || hint === 'list') && !Array.isArray(value)) reject();
+                    if (hint === 'object' && (value === null || typeof value !== 'object' || Array.isArray(value))) reject();
+                    break;
+                default: reject();
+            }
+        }
+        put(key, value);
+    }
+    const snapshot = visit(values);
+    const args = visit(positional);
+    if (args.length) snapshot._args = args;
+    return snapshot;
+}
+
 // Export for global access
 window.djust = window.djust || {};
 window.djust.extractTypedParams = extractTypedParams;

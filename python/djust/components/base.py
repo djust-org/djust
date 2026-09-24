@@ -984,10 +984,17 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
         except AssignValidationError as exc:
             if _is_debug_mode():
                 raise
-            logger.warning(
+            from .._exposure_diagnostics import log_failure
+
+            # The error names the offending value ("Cannot coerce %r ..."), so
+            # inside a nonlegacy view's turn the line must be value-free.
+            log_failure(
+                logger,
+                exc,
                 "Component %s assign validation failed: %s",
                 type(self).__name__,
                 exc,
+                level="warning",
             )
             self._validated_assigns = dict(kwargs)
             return kwargs

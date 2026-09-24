@@ -315,6 +315,65 @@ class TestSSEObjectPermViaRuntime:
 class TestSSEAsyncWorkViaRuntime:
     @override_settings(ALLOWED_HOSTS=["example.com"])
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("render", [False, True])
+    @pytest.mark.parametrize("route", ["live", "deferred"])
+    async def test_named_root_work_advertises_an_owned_completion_batch(
+        self, monkeypatch, render, route
+    ):
+        """Real endpoint acknowledgement must retain loading for named tasks."""
+        release = asyncio.Event()
+        entered = asyncio.Event()
+
+        @event_handler()
+        def begin(self, **kwargs):
+            if render:
+                self.count = 2
+
+            async def work():
+                entered.set()
+                await release.wait()
+                self.count = 99
+
+            self.start_async(work, name="named-root-task")
+
+        monkeypatch.setattr(_CounterSSEView, "begin_async", begin)
+        path = _register(_CounterSSEView)
+        with _allowlist():
+            _resp, session, sid = await _mount_stream(path)
+        _drain(session)
+        try:
+            if route == "live":
+                response = await _post_event(session, sid, "begin_async", ref=114)
+                assert response.status_code == 200
+            else:
+                view = session.runtime.view_instance
+                async with session.runtime.transport.event_context(view):
+                    await session.runtime._dispatch_single_event(view, "begin_async", {}, 114)
+            frames = _drain(session)
+            ack = next(frame for frame in frames if frame.get("ref") == 114)
+            assert ack.get("async_pending") is True
+            token = ack.get("async_batch")
+            assert isinstance(token, str) and token
+            await asyncio.wait_for(entered.wait(), 1)
+            assert not any(frame.get("type") == "async_complete" for frame in _drain(session))
+            release.set()
+            followup = []
+            for _ in range(200):
+                await asyncio.sleep(0.01)
+                followup.extend(_drain(session))
+                if any(frame.get("type") == "async_complete" for frame in followup):
+                    break
+            assert {"type": "async_complete", "async_batch": token} in followup
+            assert any(frame.get("source") == "async" for frame in followup)
+        finally:
+            release.set()
+            handles = tuple(getattr(session.runtime.view_instance, "_async_task_handles", ()))
+            if handles:
+                await asyncio.wait_for(asyncio.gather(*handles, return_exceptions=True), 3)
+            session.shutdown()
+
+    @override_settings(ALLOWED_HOSTS=["example.com"])
+    @pytest.mark.asyncio
     async def test_start_async_streams_followup_frame(self):
         """An event scheduling ``start_async`` must run the background task
         off-thread and stream a follow-up render frame when it completes.
@@ -362,7 +421,9 @@ class TestSSEAsyncWorkViaRuntime:
             _resp, session, sid = await _mount_stream(path)
         _drain(session)
 
-        with patch("djust.runtime.ViewRuntime._dispatch_async_work", lambda self, ev: None):
+        with patch(
+            "djust.runtime.ViewRuntime._dispatch_async_work", lambda self, ev, batch=None: None
+        ):
             response = await _post_event(session, sid, "begin_async")
             assert response.status_code == 200
             _drain(session)

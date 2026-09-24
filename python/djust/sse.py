@@ -129,6 +129,9 @@ class SSESession:
         self.active = True
         self._rate_limiter: ConnectionRateLimiter = ConnectionRateLimiter()
         self._client_ip: Optional[str] = None
+        # Serialize POST turns separately from render/result application.
+        self._dispatch_lock = asyncio.Lock()
+        self._render_lock = asyncio.Lock()
 
         # ---- Owner binding (Finding #24, CWE-639/CWE-862) -------------------
         # The client-chosen session_id alone is NOT an authorization capability:
@@ -168,13 +171,100 @@ class SSESession:
     # Queue helpers
     # ------------------------------------------------------------------ #
 
+    async def dispatch(self, request: HttpRequest, data: dict[str, Any]) -> None:
+        """Dispatch an owner-checked POST without sharing its request mid-turn."""
+        async with self._dispatch_lock:
+            if not self.active:
+                await self.send_error("SSE session closed. Please reload the page.")
+                return
+            self._event_request = request
+            try:
+                if data.get("type") == "live_redirect_mount":
+                    if not self._rate_limiter.check("live_redirect_mount"):
+                        await self.send_error("Navigation rate limit exceeded", code="rate_limited")
+                        if self._rate_limiter.should_disconnect():
+                            self.shutdown()
+                    else:
+                        await self._replace_view(request, data)
+                else:
+                    await self.runtime.dispatch_message(data)
+            finally:
+                self._event_request = None
+
+    async def _replace_view(self, request: HttpRequest, data: dict[str, Any]) -> None:
+        """Replace the page via shared mount/auth, using this POST's identity.
+
+        Unlike WebSocket, SSE does not preserve sticky children. A new runtime
+        detaches all old background work from the new page.
+        """
+        from . import LiveView
+        from ._sse_navigation import page_request
+        from .runtime import SSESessionTransport, ViewRuntime
+        from .security.mount import validate_mount_url
+
+        url, params = data.get("url"), data.get("params", {})
+        if not isinstance(url, str) or not url or validate_mount_url(url) != url:
+            await self.send_error("Invalid navigation URL")
+            return
+        if not isinstance(params, dict):
+            await self.send_error("Invalid navigation parameters")
+            return
+        target_request = await sync_to_async(page_request)(request, url, params)
+        match = target_request.resolver_match
+        view_class = getattr(match.func, "view_class", None) if match is not None else None
+        if not isinstance(view_class, type) or not issubclass(view_class, LiveView):
+            await self.send_error("Navigation target is not a LiveView")
+            return
+
+        async with self._render_lock:
+            old_runtime, old_view = self.runtime, self.view_instance
+            old_runtime.view_instance = None
+            self.view_instance = None
+            if old_view is not None:
+                try:
+                    from ._child_lifecycle import dispose_child_subtree
+                    from ._exposure import uses_legacy_exposure
+
+                    if not uses_legacy_exposure(old_view):
+                        await sync_to_async(dispose_child_subtree)(old_view, navigation=True)
+                    else:
+                        for child_id in list(old_view._get_all_child_views()):
+                            await sync_to_async(old_view._unregister_child)(child_id)
+                        await sync_to_async(old_view._cleanup_uploads)()
+                except Exception:
+                    logger.warning("SSE old view cleanup failed during navigation")
+            self._request = target_request
+            self.runtime = ViewRuntime(SSESessionTransport(self), rate_limiter=self._rate_limiter)
+            await self.runtime.dispatch_mount(
+                {
+                    **data,
+                    "type": "mount",
+                    "view": f"{view_class.__module__}.{view_class.__qualname__}",
+                    "url": target_request.path_info,
+                    "has_prerendered": False,
+                }
+            )
+            if self.runtime.view_instance is None:
+                self.view_instance = None
+                self.shutdown()
+            else:
+                await self.runtime._flush_all_pending()
+
     def push(self, msg: Dict[str, Any]) -> None:
         """Enqueue a message to be sent to the SSE client."""
         self.queue.put_nowait(msg)
 
     def shutdown(self) -> None:
         """Signal the SSE stream generator to close the connection."""
+        from ._child_lifecycle import dispose_child_subtree
+        from ._exposure import uses_legacy_exposure
+
         self.active = False
+        view = self.view_instance
+        if view is not None and not uses_legacy_exposure(view):
+            dispose_child_subtree(view)
+            self.view_instance = None
+            self.runtime.view_instance = None
         self.queue.put_nowait(None)  # None is the sentinel value
 
     # ------------------------------------------------------------------ #
@@ -313,12 +403,18 @@ async def _flush_deferred_to_sse(view_instance: Any) -> None:
             result = callback(*args, **kwargs)
             if inspect.iscoroutine(result):
                 await result
-        except Exception:
-            logger.warning(
+        except Exception as exc:
+            from ._exposure_diagnostics import log_failure_for
+
+            log_failure_for(
+                logger,
+                (view_instance,),
+                exc,
                 "[djust SSE] Deferred callback %s on %s raised; continuing to next",
                 getattr(callback, "__qualname__", repr(callback)),
                 view_instance.__class__.__name__,
-                exc_info=True,
+                level="warning",
+                traceback=True,
             )
 
 
@@ -423,7 +519,8 @@ class DjustSSEStreamView(View):
         # against it. For anonymous clients, force a Django session key to exist
         # BEFORE reading it so the session is bound to the browser session
         # cookie (an unbound owner is unownable).
-        owner_user_pk = _request_user_pk(request)
+        # AuthenticationMiddleware's lazy user may load a database session.
+        owner_user_pk = await sync_to_async(_request_user_pk)(request)
         owner_session_key = _request_session_key(request)
         if owner_user_pk is None and owner_session_key is None:
             django_session = getattr(request, "session", None)
@@ -469,7 +566,11 @@ class DjustSSEStreamView(View):
         # runtime mount path reads it via SSESessionTransport.build_request
         # (#1887, ADR-022 Iter 1). Without this the runtime would synthesize a
         # userless RequestFactory request and deny every authenticated SSE view.
-        session._request = request
+        from ._sse_navigation import page_request
+
+        mount_params = {k: v for k, v in request.GET.items() if k not in {"view", "_djust_url"}}
+        page_url = request.GET.get("_djust_url", request.path)
+        session._request = await sync_to_async(page_request)(request, page_url, mount_params)
 
         # Mount the view through the shared ViewRuntime (#1887, ADR-022 Iter 1):
         # converges the legacy bespoke _sse_mount_view onto dispatch_mount, the
@@ -484,12 +585,11 @@ class DjustSSEStreamView(View):
         # _resolve_url_kwargs extracts pk/slug pattern kwargs; 'params' carries
         # the query-string params the legacy path merged into mount_kwargs
         # (every GET item except the 'view' selector itself).
-        mount_params = {k: v for k, v in request.GET.items() if k != "view"}
         await session.runtime.dispatch_mount(
             {
                 "type": "mount",
                 "view": view_path,
-                "url": request.path,
+                "url": session._request.path_info,
                 "params": mount_params,
             }
         )
@@ -593,7 +693,7 @@ class DjustSSEEventView(View):
         # The client-chosen session_id is not an authorization capability; a
         # leaked id must not let a third party drive the mounter's view with the
         # mounter's captured request.user.
-        if not _request_owns_session(request, session):
+        if not await sync_to_async(_request_owns_session)(request, session):
             logger.warning(
                 "SSE: rejected event POST for session %s — requester is not the owner",
                 sanitize_for_log(session_id),
@@ -640,9 +740,8 @@ class DjustSSEEventView(View):
         # Phase 2.3a) re-validates against the CURRENT POSTer's request.user — not
         # the stale mount request. Owner-binding (Finding #24) already ran above,
         # so this request is the session owner's.
-        session._event_request = request
-        await session.runtime.dispatch_event(
-            {"type": "event", "event": event_name, "params": params, "ref": ref}
+        await session.dispatch(
+            request, {"type": "event", "event": event_name, "params": params, "ref": ref}
         )
         return JsonResponse({"ok": True})
 
@@ -697,7 +796,7 @@ class DjustSSEMessageView(View):
         # Same shared check as the legacy /event/ endpoint (don't duplicate the
         # rule — #1646). A leaked session_id must not let a third party drive
         # the mounter's view with the mounter's captured request.user.
-        if not _request_owns_session(request, session):
+        if not await sync_to_async(_request_owns_session)(request, session):
             logger.warning(
                 "SSE: rejected message POST for session %s — requester is not the owner",
                 sanitize_for_log(session_id),
@@ -721,8 +820,7 @@ class DjustSSEMessageView(View):
         # current POSTer (SSESessionTransport.recheck_event_auth, #1777). Same
         # rationale as the /event/ alias; the /message/ endpoint carries the same
         # owner-bound request.
-        session._event_request = request
-        await session.runtime.dispatch_message(body)
+        await session.dispatch(request, body)
         return JsonResponse({"ok": True})
 
 

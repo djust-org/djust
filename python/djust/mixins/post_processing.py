@@ -6,7 +6,7 @@ import json
 import logging
 import re
 import sys
-from typing import TYPE_CHECKING, Any, Dict
+from typing import TYPE_CHECKING, Any, Dict, cast
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +78,7 @@ class PostProcessingMixin:
         # so the strict-island mypy run resolves it on the mixin without a
         # runtime change — this mixin is never instantiated standalone.
         def get_context_data(self, **kwargs: Any) -> Dict[str, Any]: ...
+        def _extract_handler_metadata(self) -> Dict[str, Dict[str, Any]]: ...
 
     def get_debug_info(self) -> Dict[str, Any]:
         """
@@ -86,6 +87,20 @@ class PostProcessingMixin:
         Returns:
             Dict with debug information
         """
+        from .._exposure import explicit_debug_projection
+
+        explicit = explicit_debug_projection(self)
+        if explicit is not None:
+            # Do not inspect arbitrary descriptors or handler default values.
+            # Typed public handler metadata will be supplied by ADR-036/037.
+            from ..config import config
+
+            return {
+                **self._explicit_debug_update(explicit),
+                "handlers": {},
+                "template": None,
+                "config": {"maxHistory": config.get("debug_panel_max_history", 50)},
+            }
         from ..validation import get_handler_signature_info
         from ..decorators import is_event_handler
 
@@ -114,7 +129,7 @@ class PostProcessingMixin:
                         "params": sig_info["params"],
                         "description": sig_info["description"],
                         "accepts_kwargs": sig_info["accepts_kwargs"],
-                        "decorators": getattr(attr, "_djust_decorators", {}),
+                        "decorators": self._extract_handler_metadata().get(name, {}),
                     }
 
             elif (
@@ -164,6 +179,13 @@ class PostProcessingMixin:
 
     def _debug_state_sizes(self) -> Dict[str, Dict[str, Any]]:
         """Return size breakdown of public state variables for debug toolbar."""
+        from .._exposure import explicit_debug_projection
+
+        explicit = explicit_debug_projection(self)
+        if explicit is not None:
+            return cast(
+                Dict[str, Dict[str, Any]], self._explicit_debug_update(explicit)["state_sizes"]
+            )
         # #762: Filter framework-internal attrs from the observability payload
         # so state_sizes reflects user-owned reactive state, not framework config.
         from ..live_view import _FRAMEWORK_INTERNAL_ATTRS
@@ -198,6 +220,11 @@ class PostProcessingMixin:
         this returns only the parts that change per event: variables and view class.
         Handlers are static and only sent on initial mount via get_debug_info().
         """
+        from .._exposure import explicit_debug_projection
+
+        explicit = explicit_debug_projection(self)
+        if explicit is not None:
+            return self._explicit_debug_update(explicit)
         # #762: Filter framework-internal attrs from the observability payload.
         from ..live_view import _FRAMEWORK_INTERNAL_ATTRS
 
@@ -251,6 +278,24 @@ class PostProcessingMixin:
             "variables": variables,
             "state_sizes": self._debug_state_sizes(),
         }
+
+    def _explicit_debug_update(self, projection: Dict[str, Any]) -> Dict[str, Any]:
+        """Format already-bounded debug primitives, never inspect the view again."""
+        variables = {}
+        sizes = {}
+        for name, value in projection.items():
+            encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+            size = len(encoded.encode("utf-8"))
+            redacted = value == "[redacted]"
+            variables[name] = {
+                "name": name,
+                "type": "redacted" if redacted else type(value).__name__,
+                "value": encoded[:100] + ("..." if len(encoded) > 100 else ""),
+                "size_bytes": None if redacted else size,
+            }
+            # Sizes describe the exported value only; hidden values are not read.
+            sizes[name] = {"memory": None, "serialized": None if redacted else size}
+        return {"view_class": type(self).__name__, "variables": variables, "state_sizes": sizes}
 
     def _hydrate_react_components(self, html: str) -> str:
         """

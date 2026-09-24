@@ -23,6 +23,14 @@ Rule 1 (hard — sets exit 1):
       token (it straddles both).
     ADRs with no version line are fine (the 001/009/010/011 shape).
 
+Rule 3 (hard — sets exit 1):
+    One ADR per number. Two files in the scanned directory whose names
+    share a numeric prefix (`036-a.md`, `036-b.md`) fail: the checker
+    labels both `ADR-036`, so status drift in either is reported against
+    an ambiguous id, and a reader cannot tell which is the decision.
+    Supporting notes (evidence, staged-implementation write-ups) live in
+    `docs/adr/notes/`, which this non-recursive scan does not read.
+
 Rule 2 (soft — WARNING only, does NOT set exit 1):
     Proposed-but-shipped heuristic. If Status is exactly "Proposed" but
     the ADR body contains a shipped-marker phrase (`shipped`, `closes #`,
@@ -196,14 +204,29 @@ def run(adr_paths) -> tuple[int, str]:
         all_errors.extend(errors)
         all_warnings.extend(warnings)
 
+    # Rule 3 — one ADR per number (cross-file, so it lives here, not in
+    # _check_one).
+    by_number: dict[str, list[str]] = {}
+    for path in adr_paths:
+        number = path.stem.split("-")[0]
+        if number.isdigit():
+            by_number.setdefault(number, []).append(path.name)
+    for number, names in sorted(by_number.items()):
+        if len(names) > 1:
+            all_errors.append(
+                f"ADR-{number}: number used by {len(names)} files "
+                f"({', '.join(names)}) — keep one ADR per number and move "
+                f"supporting notes to docs/adr/notes/"
+            )
+
     lines: list[str] = []
     for w in all_warnings:
         lines.append(f"WARNING: {w}")
 
     if all_errors:
         lines.append(
-            f"Found {len(all_errors)} ADR status/version-line "
-            f"inconsistencies:"
+            f"Found {len(all_errors)} ADR status/version-line or "
+            f"numbering inconsistencies:"
         )
         for e in all_errors:
             lines.append(f"  {e}")

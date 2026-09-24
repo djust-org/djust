@@ -3,6 +3,7 @@ RequestMixin - HTTP GET/POST request handling for LiveView.
 """
 
 import asyncio
+import inspect
 import json
 import logging
 import time
@@ -33,11 +34,16 @@ from django.db import models
 
 from ..serialization import decode_state_roundtrip, normalize_django_value
 from ..utils import is_model_list
-from ..validation import validate_handler_params
+from ..validation import (
+    validate_handler_params,
+    validated_call_arguments,
+    get_handler_parameter_policy,
+)
 from ..security import safe_setattr
 from ..security.event_guard import is_safe_event_name
 from ..decorators import is_event_handler
 from ..hooks import run_on_mount_hooks
+from .._exposure import uses_legacy_exposure
 
 if TYPE_CHECKING:
     from django.http import HttpRequest
@@ -267,20 +273,28 @@ class RequestMixin:
         # It is also pure bloat: the documented 500-item example persists ~45 KB
         # per GET, and streams exist precisely to keep large collections OUT of
         # state.
-        _session_state = {
-            k: v for k, v in _cached.items() if not isinstance(v, LiveComponent) and k != "streams"
-        }
-        request.session[view_key] = normalize_django_value(_session_state, state_roundtrip=True)
+        if uses_legacy_exposure(self):
+            _session_state = {
+                k: v
+                for k, v in _cached.items()
+                if not isinstance(v, LiveComponent) and k != "streams"
+            }
+            request.session[view_key] = normalize_django_value(_session_state, state_roundtrip=True)
 
-        # Persist user-defined _private attributes so they survive reconnects
-        private_state = self._get_private_state()
-        if private_state:
-            request.session[f"{view_key}__private"] = normalize_django_value(
-                private_state, state_roundtrip=True
-            )
+            # Legacy private/component persistence is separate from explicit
+            # declared server fields. Never let it run as an explicit fallback.
+            private_state = self._get_private_state()
+            if private_state:
+                request.session[f"{view_key}__private"] = normalize_django_value(
+                    private_state, state_roundtrip=True
+                )
+            t0_sc = time.perf_counter()
+            self._save_components_to_session(request, _cached)
+        else:
+            from .._exposure_sessions import save_server_state
 
-        t0_sc = time.perf_counter()
-        self._save_components_to_session(request, _cached)
+            t0_sc = time.perf_counter()
+            save_server_state(self, request)
         t_save_components = (time.perf_counter() - t0_sc) * 1000
 
         # IMPORTANT: Always call get_template() on GET requests to set _full_template
@@ -293,14 +307,21 @@ class RequestMixin:
         # _sync_state_to_rust() internally, so self._rust_view is ready
         # after this returns.
         t0 = time.perf_counter()
-        html = self.render_full_template(request, serialized_context=state_serializable)
+        from .._child_rendering import render_view_full_template, render_view_with_diff
+
+        html = render_view_full_template(self, request, serialized_context=state_serializable)
         t_render_full = (time.perf_counter() - t0) * 1000
         liveview_content = html
 
         # Establish VDOM baseline for subsequent PATCH responses.
         t0 = time.perf_counter()
-        _, _, _ = self.render_with_diff(request)
+        _, _, _ = render_view_with_diff(self, request)
         t_render_diff = (time.perf_counter() - t0) * 1000
+
+        if not uses_legacy_exposure(self):
+            from .._exposure_child_persistence import save_child_states
+
+            save_child_states(self, request)
 
         # Clear context cache so WebSocket events get fresh data
         self._cached_context = None
@@ -527,8 +548,18 @@ class RequestMixin:
         async def _produce() -> None:
             try:
                 await self.arender_chunks(full_html, emitter)
-            except Exception:  # pragma: no cover — defensive
-                logger.exception("arender_chunks raised; cancelling emitter")
+            except Exception as exc:  # pragma: no cover — defensive
+                from .._exposure_diagnostics import log_failure_for
+
+                # arender_chunks renders the view's templates with its context,
+                # so the exception can carry application values (ADR-038).
+                log_failure_for(
+                    logger,
+                    (self,),
+                    exc,
+                    "arender_chunks raised; cancelling emitter",
+                    traceback=True,
+                )
                 await emitter.cancel("producer_error")
             finally:
                 await emitter.close()
@@ -614,6 +645,16 @@ class RequestMixin:
             # _sync_state_to_rust csrf_token injection (#705).
             self.request = request
 
+            def _inject_side_channels(resp_data: Dict[str, Any]) -> None:
+                if hasattr(self, "_drain_flash"):
+                    flash_commands = self._drain_flash()
+                    if flash_commands:
+                        resp_data["_flash"] = flash_commands
+                if hasattr(self, "_drain_page_metadata"):
+                    meta_commands = self._drain_page_metadata()
+                    if meta_commands:
+                        resp_data["_page_metadata"] = meta_commands
+
             # --- Authorization layer 1 of 3: view-level ---------------------
             # login_required / permission_required / check_permissions().
             # ``get()`` enforces this, and every WS/SSE event path enforces it
@@ -670,7 +711,8 @@ class RequestMixin:
 
             # Restore state from session
             view_key = f"liveview_{request.path}"
-            saved_state = request.session.get(view_key, {})
+            legacy_exposure = uses_legacy_exposure(self)
+            saved_state = request.session.get(view_key, {}) if legacy_exposure else {}
 
             # #2252: the write side tagged every Decimal
             # (``normalize_django_value(..., state_roundtrip=True)`` above), so
@@ -683,7 +725,9 @@ class RequestMixin:
                     safe_setattr(self, key, value, allow_private=False)
 
             # Restore user-defined _private attributes
-            private_state = request.session.get(f"{view_key}__private", {})
+            private_state = (
+                request.session.get(f"{view_key}__private", {}) if legacy_exposure else {}
+            )
             if private_state:
                 self._restore_private_state(private_state)
 
@@ -694,7 +738,18 @@ class RequestMixin:
             if hook_redirect:
                 return JsonResponse({"redirect": hook_redirect}, status=403)
 
-            if not saved_state:
+            if not legacy_exposure:
+                from .._exposure_sessions import load_server_state
+
+                # Reconstruct transient server services for this HTTP request.
+                # The persisted projection is validated separately and overlays
+                # only declared server fields, never render/context attributes.
+                self.mount(request, **kwargs)
+                restored = load_server_state(self, request)
+                if restored is not None:
+                    for key, value in restored.items():
+                        safe_setattr(self, key, value, allow_private=False, raise_on_blocked=True)
+            elif not saved_state:
                 self.mount(request, **kwargs)
                 self._snapshot_user_private_attrs()
             else:
@@ -703,7 +758,9 @@ class RequestMixin:
             self._assign_component_ids()
 
             # Restore component state
-            component_state = request.session.get(f"{view_key}_components", {})
+            component_state = (
+                request.session.get(f"{view_key}_components", {}) if legacy_exposure else {}
+            )
             for key, state in component_state.items():
                 component = getattr(self, key, None)
                 if component and isinstance(component, SESSION_COMPONENT_TYPES):
@@ -729,6 +786,7 @@ class RequestMixin:
             # Call the event handler — only @event_handler-decorated methods
             # can be invoked via POST (matches WS security)
             t_handler_ms = 0.0
+            observation_before = None
             # ADR-031: an event carrying ``component_id`` targets the
             # registered component, as ``runtime._dispatch_component_event``
             # does over WebSocket (#1646 — the HTTP fallback must not differ).
@@ -786,6 +844,9 @@ class RequestMixin:
                     event_meta = handler._djust_decorators.get("event_handler", {})
                     coerce = event_meta.get("coerce_types", True)
 
+                if get_handler_parameter_policy(handler) == "strict" and "event" not in data:
+                    if "_args" in data:
+                        params["_args"] = data["_args"]
                 validation = validate_handler_params(handler, params, event_name, coerce=coerce)
                 if not validation["valid"]:
                     logger.error("Parameter validation failed: %s", validation["error"])
@@ -802,32 +863,55 @@ class RequestMixin:
                         status=400,
                     )
 
-                coerced_params = validation.get("coerced_params", params)
+                call_args, call_kwargs = validated_call_arguments(validation)
+                from ..components._interactive import DropdownMenu
+
+                if isinstance(owner, DropdownMenu) and event_name == "observe_toggle":
+                    from ..websocket import _snapshot_assigns, _compute_changed_keys
+
+                    observation_before = _snapshot_assigns(self)
                 t0_handler = time.perf_counter()
-                if coerced_params:
-                    handler(**coerced_params)
+                if inspect.iscoroutinefunction(handler):
+                    from asgiref.sync import async_to_sync
+
+                    async_to_sync(handler)(*call_args, **call_kwargs)
                 else:
-                    handler()
+                    handler(*call_args, **call_kwargs)
                 t_handler_ms = (time.perf_counter() - t0_handler) * 1000
 
             # Persist user-defined _private attributes BEFORE get_context_data()
             # because get_context_data() sets render-cycle internals that we
             # don't want to accidentally capture.
-            private_state = self._get_private_state()
-            if private_state:
-                request.session[f"{view_key}__private"] = normalize_django_value(
-                    private_state, state_roundtrip=True
-                )
+            if legacy_exposure:
+                private_state = self._get_private_state()
+                if private_state:
+                    request.session[f"{view_key}__private"] = normalize_django_value(
+                        private_state, state_roundtrip=True
+                    )
+                else:
+                    request.session.pop(f"{view_key}__private", None)
+
+                updated_context = self.get_context_data()
+                state = {
+                    k: v for k, v in updated_context.items() if not isinstance(v, LiveComponent)
+                }
+                request.session[view_key] = normalize_django_value(state, state_roundtrip=True)
+                self._save_components_to_session(request, updated_context)
             else:
-                # Clean up if no private attrs remain
-                request.session.pop(f"{view_key}__private", None)
+                from .._exposure_sessions import save_server_state
 
-            # Save updated state back to session
-            updated_context = self.get_context_data()
-            state = {k: v for k, v in updated_context.items() if not isinstance(v, LiveComponent)}
-            request.session[view_key] = normalize_django_value(state, state_roundtrip=True)
+                save_server_state(self, request)
 
-            self._save_components_to_session(request, updated_context)
+            if (
+                observation_before is not None
+                and not _compute_changed_keys(observation_before, _snapshot_assigns(self))
+                and not getattr(self, "_force_full_html", False)
+                and not getattr(self, "_async_tasks", None)
+                and not getattr(self, "_async_pending", None)
+            ):
+                noop_response = {"type": "noop", "event_name": event_name}
+                _inject_side_channels(noop_response)
+                return JsonResponse(noop_response)
 
             # A handler (view or ``component_id`` route) that set
             # ``self._skip_render = True`` asked for no render this turn. The
@@ -861,9 +945,16 @@ class RequestMixin:
             # fallback returns logged-out HTML. Fixes #705.
             # Unified via _processor_context context manager (#717).
             with self._processor_context(request):
+                from .._child_rendering import render_view_with_diff
+
                 t0_render = time.perf_counter()
-                html, patches_json, version = self.render_with_diff(request)
+                html, patches_json, version = render_view_with_diff(self, request)
                 t_render_ms = (time.perf_counter() - t0_render) * 1000
+
+            if not legacy_exposure:
+                from .._exposure_child_persistence import save_child_states
+
+                save_child_states(self, request)
 
             # ADR-018 iter 18a — HTTP sticky-child state save (Decision 4,
             # HTTP side). The POST path has no ``view_id`` routing — it
@@ -931,18 +1022,6 @@ class RequestMixin:
                     except Exception:
                         logger.debug("Failed to inject debug info", exc_info=True)
 
-            # Drain side-channel commands (flash, page metadata) so they
-            # are delivered in the HTTP response, not only via WebSocket.
-            def _inject_side_channels(resp_data: Dict[str, Any]) -> None:
-                if hasattr(self, "_drain_flash"):
-                    flash_commands = self._drain_flash()
-                    if flash_commands:
-                        resp_data["_flash"] = flash_commands
-                if hasattr(self, "_drain_page_metadata"):
-                    meta_commands = self._drain_page_metadata()
-                    if meta_commands:
-                        resp_data["_page_metadata"] = meta_commands
-
             if patches_json:
                 patches = json_module.loads(patches_json)
                 patch_count = len(patches)
@@ -974,6 +1053,22 @@ class RequestMixin:
             import traceback
             from django.conf import settings
 
+            # uses_legacy_exposure is the module-level import; a local import
+            # here would make the name local to all of post().
+            if not uses_legacy_exposure(self):
+                # ADR-038: undeclared state can occur in the exception's message,
+                # its traceback and the posted params, so a nonlegacy view gets
+                # the value-free log line and the generic response even under DEBUG.
+                from .._exposure_diagnostics import log_failure_for
+
+                log_failure_for(logger, (self,), e, "HTTP event failed")
+                return JsonResponse(
+                    {
+                        "error": "An error occurred processing your request. Please try again.",
+                        "debug_hint": "Check server logs for details",
+                    },
+                    status=500,
+                )
             error_msg = f"Error in {self.__class__.__name__}"
             if event_name:
                 error_msg += f".{event_name}()"

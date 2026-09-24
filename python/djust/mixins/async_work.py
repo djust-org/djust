@@ -32,10 +32,38 @@ from asgiref.sync import sync_to_async
 logger = logging.getLogger(__name__)
 
 
+def cancel_on_owner_loop(future: asyncio.Future[Any]) -> None:
+    """Request cancellation safely from render threads or the owning loop."""
+    if future.done():
+        return
+    loop = future.get_loop()
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        current_loop = None
+    if loop.is_running() and loop is not current_loop:
+        loop.call_soon_threadsafe(future.cancel)
+    else:
+        future.cancel()
+
+
+def track_async_task(view: Any, task: asyncio.Future[Any]) -> None:
+    """Keep framework-dispatched work owned by its view until completion."""
+    handles = getattr(view, "_async_task_handles", None)
+    if handles is None:
+        handles = view._async_task_handles = set()
+    handles.add(task)
+    task.add_done_callback(handles.discard)
+    if getattr(view, "_djust_child_disposed", False):
+        cancel_on_owner_loop(task)
+
+
 async def run_async_callback(
     callback: Callable[..., Any],
     args: Any = (),
     kwargs: Optional[Dict[str, Any]] = None,
+    *,
+    owner: Any = None,
 ) -> Any:
     """Run one ``start_async`` / ``@background`` callback across the sync/async
     divide and return its result.
@@ -62,11 +90,31 @@ async def run_async_callback(
       returned ``some_async()`` without awaiting it), the coroutine is awaited
       too — preserving the pre-v0.4.2 ``@background`` contract.
     """
-    if asyncio.iscoroutinefunction(callback):
-        return await callback(*args, **(kwargs or {}))
-    result = await sync_to_async(callback)(*args, **(kwargs or {}))
-    if inspect.iscoroutine(result):
-        result = await result
+    generation = getattr(owner, "_async_work_generation", 0)
+
+    def cancelled() -> bool:
+        return owner is not None and (
+            getattr(owner, "_djust_child_disposed", False)
+            or getattr(owner, "_async_work_generation", 0) != generation
+        )
+
+    if cancelled():
+        raise asyncio.CancelledError
+    try:
+        if asyncio.iscoroutinefunction(callback):
+            result = await callback(*args, **(kwargs or {}))
+        else:
+            result = await sync_to_async(callback)(*args, **(kwargs or {}))
+            if inspect.iscoroutine(result):
+                result = await result
+    except Exception:
+        if cancelled():
+            raise asyncio.CancelledError from None
+        raise
+    # A coroutine may swallow cancellation. Its stale result/error must still
+    # not enter application completion handlers or produce a render.
+    if cancelled():
+        raise asyncio.CancelledError
     return result
 
 
@@ -173,6 +221,8 @@ class AsyncWorkMixin:
                     self.error_message = f"Export failed: {error}"
                     self.exporting = False
         """
+        if getattr(self, "_djust_child_disposed", False):
+            raise RuntimeError("Cannot schedule work on a disposed view")
         if not hasattr(self, "_async_tasks"):
             self._async_tasks = {}
             self._async_task_counter = 0
@@ -235,28 +285,39 @@ class AsyncWorkMixin:
         Cancel every scheduled and running ``start_async`` task on this view.
 
         Tasks that have not started are dropped (including a legacy
-        ``_async_pending`` task). Tasks already running are marked cancelled,
-        so their re-render is skipped when they finish; like
-        :meth:`cancel_async`, this cannot interrupt a synchronous callback
-        mid-run.
+        ``_async_pending`` task). Dispatched callbacks are cancelled
+        cooperatively: the work generation advances, so a callback that
+        completes afterwards cannot reach its completion handler or render,
+        and each dispatched task is cancelled on its owning loop. Names that are
+        actually running are also marked cancelled, so their re-render is
+        skipped when they finish; a task started later under the same name is
+        not cancelled in advance.
 
-        Unlike calling :meth:`cancel_async` for each name, it only marks names
-        that are actually running, so a task started later under the same name
-        is not cancelled in advance.
+        Like :meth:`cancel_async`, this cannot interrupt a synchronous callback
+        mid-run, does not roll back application side effects, and does not
+        cancel tasks the application created itself.
 
         The default ``StickyMixin._on_sticky_unmount()`` calls this when a
         sticky child is discarded (#2969).
         """
+        self._async_work_generation = getattr(self, "_async_work_generation", 0) + 1
         tasks = getattr(self, "_async_tasks", None)
         if tasks:
             tasks.clear()
-        if getattr(self, "_async_pending", None) is not None:
-            self._async_pending = None
+        else:
+            self._async_tasks = {}
+        self._async_pending = None
         running = getattr(self, "_async_running", None)
         if running:
             if not hasattr(self, "_async_cancelled"):
                 self._async_cancelled = set()
             self._async_cancelled.update(running)
+        handles = getattr(self, "_async_task_handles", None)
+        if handles:
+            pending = tuple(handles)
+            handles.clear()
+            for task in pending:
+                cancel_on_owner_loop(task)
 
     def defer(self, callback: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
         """
@@ -312,6 +373,8 @@ class AsyncWorkMixin:
                 # Fires after the patch reaches the client.
                 metrics.increment(f"liveview.{action}", count=self.count)
         """
+        if getattr(self, "_djust_child_disposed", False):
+            raise RuntimeError("Cannot defer work on a disposed view")
         if not hasattr(self, "_deferred_callbacks"):
             self._deferred_callbacks = []
         self._deferred_callbacks.append((callback, args, kwargs))
@@ -412,15 +475,32 @@ class AsyncWorkMixin:
                         return
                     setattr(self, name, AsyncResult.succeeded(result))
                 except BaseException as exc:  # noqa: BLE001 — surface all failures in AsyncResult
+                    from .._exposure_diagnostics import log_failure_for
+
+                    # The loader is application code and this runs as a
+                    # background task with no turn scope, so the owner check
+                    # is explicit (ADR-038).
                     if _superseded():
-                        logger.debug(
+                        log_failure_for(
+                            logger,
+                            (self,),
+                            exc,
                             "assign_async(%s) raised but superseded — discarding: %s",
                             name,
                             exc,
+                            level="debug",
                         )
                         return
                     setattr(self, name, AsyncResult.errored(exc))
-                    logger.debug("assign_async loader for %s raised: %s", name, exc)
+                    log_failure_for(
+                        logger,
+                        (self,),
+                        exc,
+                        "assign_async loader for %s raised: %s",
+                        name,
+                        exc,
+                        level="debug",
+                    )
 
             self.start_async(_async_runner, name=f"assign_async:{name}")
         else:
@@ -433,14 +513,31 @@ class AsyncWorkMixin:
                         return
                     setattr(self, name, AsyncResult.succeeded(result))
                 except BaseException as exc:  # noqa: BLE001 — surface all failures in AsyncResult
+                    from .._exposure_diagnostics import log_failure_for
+
+                    # The loader is application code and this runs as a
+                    # background task with no turn scope, so the owner check
+                    # is explicit (ADR-038).
                     if _superseded():
-                        logger.debug(
+                        log_failure_for(
+                            logger,
+                            (self,),
+                            exc,
                             "assign_async(%s) raised but superseded — discarding: %s",
                             name,
                             exc,
+                            level="debug",
                         )
                         return
                     setattr(self, name, AsyncResult.errored(exc))
-                    logger.debug("assign_async loader for %s raised: %s", name, exc)
+                    log_failure_for(
+                        logger,
+                        (self,),
+                        exc,
+                        "assign_async loader for %s raised: %s",
+                        name,
+                        exc,
+                        level="debug",
+                    )
 
             self.start_async(_sync_runner, name=f"assign_async:{name}")

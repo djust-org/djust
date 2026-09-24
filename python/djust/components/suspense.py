@@ -90,10 +90,16 @@ def _render_fallback(fallback: str, context: dict[str, Any]) -> str:
         rendered: str = render_to_string(fallback, context)
         return rendered
     except Exception as exc:  # noqa: BLE001 — fallback gracefully on template errors
-        logger.warning(
+        from .._exposure_diagnostics import log_failure
+
+        # A template error can quote the context it was rendering.
+        log_failure(
+            logger,
+            exc,
             "dj_suspense: failed to render fallback template %s: %s",
             fallback,
             exc,
+            level="warning",
         )
         return _DEFAULT_FALLBACK_HTML
 

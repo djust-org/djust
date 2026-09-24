@@ -115,6 +115,22 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         # djust LiveView base config
         "sync_safe",
         "use_actors",
+        "exposure_policy",
+        "_explicit_child_mount_inputs",
+        "_explicit_child_mount_binding",
+        "_explicit_child_schema",
+        "_explicit_child_reuse_identity",
+        "_explicit_child_render_regions",
+        "_explicit_child_render_scope",
+        "_explicit_child_rendered_full",
+        "_explicit_child_state_tracked",
+        "_djust_child_disposed",
+        "_async_task_handles",
+        "_async_tasks",
+        "_async_pending",
+        "_async_task_counter",
+        "_async_cancelled",
+        "_async_work_generation",
         "view_is_async",
         "tick_interval",
         "login_required",
@@ -172,6 +188,7 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         "_jit_serialized_keys",
         "_context_processor_keys",
         "_cached_csrf_token",
+        "_djust_id_counter",  # Render-cycle ID allocation is not reactive state.
         "_sync_done_this_cycle",
         "_force_full_html",
         # Names of start_async tasks currently running (#2969). Written by the
@@ -327,6 +344,14 @@ def restore_components_snapshot(view: Any, components_state: Any, *, source: str
             logger.warning("%s: component %r snapshot is not a mapping", source, component_id)
             ok = False
             continue
+        # An interactive component restores through its concrete state
+        # schema, never field-by-field (ADR-038); None keeps the legacy path.
+        from .time_travel import _restore_interactive_state
+
+        restored = _restore_interactive_state(component, component_snap)
+        if restored is not None:
+            ok = restored and ok
+            continue
         for key, value in component_snap.items():
             if not isinstance(key, str) or key in _COMPONENT_INTERNAL_ATTRS:
                 continue
@@ -344,9 +369,20 @@ def restore_components_snapshot(view: Any, components_state: Any, *, source: str
                 continue
             try:
                 applied = safe_setattr(component, key, value, allow_private=False)
-            except Exception:  # noqa: BLE001 — log + degrade, never break a restore
-                logger.exception(
-                    "%s: component restore failed for id=%s key=%s", source, component_id, key
+            except Exception as exc:  # noqa: BLE001 — log + degrade, never break a restore
+                from ._exposure_diagnostics import log_failure_for
+
+                # A setter is application code; its error text can carry
+                # state, so it is value-free for a nonlegacy owner (ADR-038).
+                log_failure_for(
+                    logger,
+                    (view, component),
+                    exc,
+                    "%s: component restore failed for id=%s key=%s",
+                    source,
+                    component_id,
+                    key,
+                    traceback=True,
                 )
                 ok = False
                 continue
@@ -593,6 +629,10 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
     # patterns (``password``, ``token``, ``secret``, ``api_key``, ``pii``).
     enable_state_snapshot: bool = False
 
+    # ADR-038: reserve the policy name now, but never silently claim that
+    # explicit exposure is active before all persistence/export paths use it.
+    exposure_policy: str = "legacy"
+
     # Streaming initial render (v0.6.1 — Phase 1).
     #
     # Opt-in per-view flag that returns a ``StreamingHttpResponse`` from the
@@ -704,9 +744,50 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
     # INITIALIZATION & SETUP
     # ============================================================================
 
+    def _validate_exposure_configuration(self) -> None:
+        """Keep staged explicit runtime paths unavailable until every gate passes."""
+        from django.core.exceptions import ImproperlyConfigured
+
+        if type(self.exposure_policy) is not str or self.exposure_policy != "legacy":
+            if type(self.exposure_policy) is str and self.exposure_policy == "explicit":
+                raise ImproperlyConfigured(
+                    "exposure_policy='explicit' is not yet available. ADR-038's "
+                    "persistence and browser-export boundaries are still being implemented; "
+                    "this view cannot run with implicit legacy exposure instead."
+                )
+            raise ImproperlyConfigured(
+                "Invalid exposure_policy. Only 'legacy' is currently supported; "
+                "unknown policies cannot fall back to legacy exposure."
+            )
+        from ._state import StateProperty
+
+        # Inspect class dictionaries only: checking configuration must not
+        # evaluate properties, factories, ORM queries or component descriptors.
+        seen_state_names: set[str] = set()
+        for owner in type(self).__mro__:
+            for name, declaration in vars(owner).items():
+                if name in seen_state_names:
+                    continue
+                seen_state_names.add(name)
+                if issubclass(type(declaration), StateProperty) and (
+                    declaration.exposure.persist is not None or declaration.exposure.client
+                ):
+                    raise ImproperlyConfigured(
+                        "state() exposure grants require ADR-038's explicit policy, "
+                        "which is not yet available. Legacy views cannot honor these grants."
+                    )
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        from ._component_subscriptions import compile_subscriptions
+
+        cls._component_subscriptions = compile_subscriptions(cls)
+
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
+        self._validate_exposure_configuration()
         self._rust_view: Optional[RustLiveView] = None
+        self._rust_view_explicit: bool = False
         self._actor_handle: Optional[SessionActorHandle] = None
         self._session_id: Optional[str] = None
         self._cache_key: Optional[str] = None
@@ -714,6 +795,7 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
             None  # Cache for decorator metadata
         )
         self._components: Dict[str, Any] = {}  # Registry of child components by ID
+        self._component_bindings: Dict[str, Any] = {}  # Per-owner interactive descriptor cache
         self._temporary_assigns_initialized: bool = False  # Track if temp assigns are set up
         self._streams: Dict[str, Stream] = {}  # Stream collections
         self._stream_operations: list = []  # Pending stream operations for this render
@@ -854,8 +936,20 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
                 continue
             try:
                 value = getattr(self, name)
-            except Exception:  # noqa: BLE001 — a broken descriptor is not "dirty"
-                logger.debug("dirty tracking: could not read %s", name, exc_info=True)
+            except Exception as exc:  # noqa: BLE001 — a broken descriptor is not "dirty"
+                from ._exposure_diagnostics import log_failure_for
+
+                # A descriptor getter or component bind is application code;
+                # its error text can carry state (ADR-038).
+                log_failure_for(
+                    logger,
+                    (self,),
+                    exc,
+                    "dirty tracking: could not read %s",
+                    name,
+                    level="debug",
+                    traceback=True,
+                )
                 continue
             fp[name] = self._dirty_value_fingerprint(value)
         return fp
@@ -1018,7 +1112,11 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         persisted in subsequent save cycles.
 
         Non-serializable values (locks, file handles, etc.) are silently skipped.
+        This is a legacy-only API; explicit persistence uses a bound adapter.
         """
+        from ._exposure import require_legacy_state_api
+
+        require_legacy_state_api(self)
         result: Dict[str, Any] = {}
         user_keys: Set[str] = getattr(self, "_user_private_keys", set())
         # A session written before #2959 may have restored these into
@@ -1062,9 +1160,11 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         return result
 
     def _restore_private_state(self, private_state: Dict[str, Any]) -> None:
-        """Restore previously-saved private attributes onto this instance."""
+        """Restore legacy private attributes; explicit views require a bound adapter."""
+        from ._exposure import require_legacy_state_api
         from .security import DANGEROUS_ATTRIBUTES
 
+        require_legacy_state_api(self)
         framework: frozenset[str] = getattr(self, "_framework_attrs", frozenset())
         meta_attrs = {"_framework_attrs", "_user_private_keys"}
         for key, value in private_state.items():
@@ -1161,7 +1261,12 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
     def _capture_snapshot_state(self, *, strict: bool = False) -> Dict[str, Any]:
         """Return a JSON-serializable snapshot of public view state.
 
-        Filters out private (``_``-prefixed) attributes, framework-internal
+        Explicit policy returns only declared ``persist="client"`` values,
+        detached and bounded regardless of ``strict``. It does not infer any
+        component state. The returned dict is not a signed restore capability;
+        explicit restoration must use the bound snapshot adapter.
+
+        Legacy policy filters out private (``_``-prefixed) attributes, framework-internal
         attrs enumerated in ``_FRAMEWORK_INTERNAL_ATTRS``, callables, and any
         value that fails a ``DjangoJSONEncoder`` round-trip. Used by the
         client to post a ``STATE_SNAPSHOT`` message to the service worker
@@ -1181,9 +1286,8 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         ``self._components`` they're captured the same way as legacy-
         instantiated ones.
 
-        The server never calls this directly — it's primarily exposed for
-        testing and observability. Restoration uses
-        :meth:`_restore_snapshot`.
+        Legacy transport snapshot capture and time-travel use this raw helper.
+        Legacy restoration uses :meth:`_restore_snapshot` after transport validation.
 
         Args:
             strict: When True, reject (DEBUG: raise / prod: warn+skip) any
@@ -1195,6 +1299,11 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
                 capture (``time_travel.py``) intentionally leaves this False
                 to preserve its existing lossy-snapshot-by-design behavior.
         """
+        from ._exposure import explicit_state_projection, uses_legacy_exposure
+
+        if not uses_legacy_exposure(self):
+            return explicit_state_projection(self, "snapshot")
+
         from .components.base import Component
 
         result: Dict[str, Any] = {}
@@ -1244,6 +1353,16 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         # contributes its own public-state dict under
         # ``__components__`` keyed by ``component_id``.
         components_state = self._capture_components_snapshot()
+        if strict:
+            from ._interactive_snapshots import SNAPSHOT_KEY, capture_bindings
+            from .components._interactive import DropdownMenu
+
+            bindings = capture_bindings(self)
+            if bindings is not None:
+                result[SNAPSHOT_KEY] = bindings
+                for component_id, component in self._components.items():
+                    if isinstance(component, DropdownMenu):
+                        components_state.pop(component_id, None)
         if components_state:
             result["__components__"] = components_state
         return result
@@ -1272,12 +1391,19 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         Failures on individual components are logged and the bad
         component is skipped — degrade gracefully rather than break
         the whole snapshot.
+
+        This legacy reflective helper is unavailable under explicit policy.
+        A component descriptor does not grant permission to export its state.
         """
+        from ._exposure import require_legacy_state_api
+
+        require_legacy_state_api(self)
         registry = getattr(self, "_components", None)
         if not registry:
             return {}
         components_state: Dict[str, Dict[str, Any]] = {}
         from .components.base import BoundComponent
+        from .components._interactive import DropdownMenu
 
         for component_id, component in registry.items():
             try:
@@ -1285,7 +1411,7 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
                 # ADR-031: a bound component's public state IS its State dict.
                 items = (
                     component.state.items()
-                    if isinstance(component, BoundComponent)
+                    if isinstance(component, (BoundComponent, DropdownMenu))
                     else component.__dict__.items()
                 )
                 for key, value in items:
@@ -1323,17 +1449,28 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         as untrusted and never pass it to ``exec``/``eval`` or raw
         ``setattr``.
 
+        Explicit policy rejects this legacy raw-dict hook. Its adapter validates
+        the full signed, identity-bound schema before returning assignable values.
+
         Component state under ``__components__`` is applied to the view's
         registered and class-declared components only
         (:func:`restore_components_snapshot`, shared with time-travel).
         """
+        from ._exposure import require_legacy_state_api
         from .security import safe_setattr
 
+        require_legacy_state_api(self)
+        from ._interactive_snapshots import SNAPSHOT_KEY, restore_bindings
+
+        if SNAPSHOT_KEY in state:
+            restore_bindings(self, state[SNAPSHOT_KEY])
         # Component state rides under the reserved ``__components__`` key
         # (``_capture_snapshot_state``); the flat loop below would drop it,
         # since ``safe_setattr`` refuses dunder names (#2896).
         components_state = state.get("__components__")
         for key, value in state.items():
+            if key == SNAPSHOT_KEY:
+                continue
             if key == "__components__":
                 continue
             safe_setattr(self, key, value, allow_private=False)
@@ -1436,14 +1573,24 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
     def get_state(self) -> Dict[str, Any]:
         """Get serializable state from this LiveView instance.
 
-        Iterates over public (non-underscore) instance attributes and validates
+        Explicit policy exports only declared ``client=True`` fields using the
+        bounded JSON contract. Rendering context and server-only state are not
+        inputs. Returned values are detached; failures never use legacy fallback.
+
+        Legacy policy iterates over public (non-underscore) instance attributes and validates
         that each value can be serialized. In DEBUG mode, raises TypeError with
         a helpful message for non-serializable values. In production, logs an
         error and skips the attribute.
 
         Returns:
-            Dictionary of {attribute_name: value} for all serializable public state.
+            Client-permitted declared values under explicit policy; serializable
+            public state under legacy policy.
         """
+        from ._exposure import explicit_state_projection, uses_legacy_exposure
+
+        if not uses_legacy_exposure(self):
+            return explicit_state_projection(self, "client")
+
         from django.conf import settings
 
         state = {}

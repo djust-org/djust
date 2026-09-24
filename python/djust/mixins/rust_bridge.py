@@ -311,6 +311,29 @@ class RustBridgeMixin:
     def _initialize_rust_view(self, request: Any = None) -> None:
         """Initialize the Rust LiveView backend"""
 
+        from .._exposure import ExposureError, uses_legacy_exposure
+
+        if not uses_legacy_exposure(self):
+            try:
+                policy = getattr(self, "exposure_policy", None)
+            except Exception:
+                raise ExposureError("Invalid render exposure policy") from None
+            if type(policy) is not str or policy != "explicit":
+                raise ExposureError("Invalid render exposure policy")
+            # A Rust view contains render context and a mutable VDOM baseline,
+            # not the declared server-persistence projection. Keep it owned by
+            # this instance; reconnect rebuilds it from authorized context and
+            # the separately restored declared state. Never read legacy cache.
+            self._cache_key = None
+            if self._rust_view is None or not getattr(self, "_rust_view_explicit", False):
+                _ensure_custom_filters_bridged()
+                self._rust_view = RustLiveView(self.get_template(), get_template_dirs())
+                self._apply_loop_render_cache_flag()
+                self._apply_template_auto_call_flag()
+                self._rust_view_explicit = True
+            return
+
+        self._rust_view_explicit = False
         logger.debug("[LiveView] _initialize_rust_view() called, _rust_view=%s", self._rust_view)
 
         # Bootstrap project-defined ``@register.filter`` callables into the
@@ -512,6 +535,13 @@ class RustBridgeMixin:
             template_source = self.get_template()
             slot = f"_t{compute_template_hash(template_source)}"
         except Exception:
+            from .._exposure import uses_legacy_exposure
+            from .._exposure_diagnostics import diagnostics_allowed
+
+            if not diagnostics_allowed() or not uses_legacy_exposure(self):
+                # get_template() can change policy before failing. Do not log
+                # its payload or continue into the legacy cache after that.
+                raise
             # Defensive: if the Rust extension is unavailable for any
             # reason, fall back to the legacy un-hashed key shape rather
             # than raising. Don't memoize the empty fallback so a future

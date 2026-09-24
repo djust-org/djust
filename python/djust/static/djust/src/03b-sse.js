@@ -21,6 +21,7 @@ class LiveViewSSE {
         this.sseBaseUrl = null;
         this.enabled = true;
         this.viewMounted = false;
+        this.primaryViewPath = null;
         this._hasConnectedBefore = false;
         this.lastEventName = null;
         this.lastTriggerElement = null;
@@ -36,6 +37,7 @@ class LiveViewSSE {
      */
     connect(viewPath, params = {}) {
         if (!this.enabled) return;
+        this.primaryViewPath = viewPath;
         if (globalThis.djustDebug) console.log('[SSE] Connecting, view:', viewPath);
 
         // Session ID is generated client-side; the server stores it as the
@@ -56,7 +58,9 @@ class LiveViewSSE {
         // (fixes #1237 bug 1).
         const urlParams = new URLSearchParams(params);
         urlParams.set('view', viewPath);
+        urlParams.set('_djust_url', window.location.pathname);
         const streamUrl = `${this.sseBaseUrl}?${urlParams.toString()}`;
+        const pageUrl = window.location.pathname + window.location.search;
 
         // withCredentials: true ensures the Django session cookie is sent
         // with the EventSource GET. Without it, authenticated views fail
@@ -80,6 +84,7 @@ class LiveViewSSE {
             // Track reconnections for form recovery
             if (this._hasConnectedBefore) {
                 if (window.djust) window.djust._isReconnect = true;
+                this._replacingView = true;
             }
             this._hasConnectedBefore = true;
 
@@ -109,11 +114,20 @@ class LiveViewSSE {
         };
 
         this.eventSource.onerror = (_err) => {
+            // EventSource retries its original URL. After SPA navigation that
+            // URL names the previous page; open a fresh owner-bound stream for
+            // the current route instead of remounting the wrong view.
+            if (this.eventSource && pageUrl !== window.location.pathname + window.location.search) {
+                this.disconnect();
+                this.connect(this.primaryViewPath, Object.fromEntries(new URLSearchParams(window.location.search)));
+                return;
+            }
             // EventSource auto-reconnects; we only disable on persistent failure.
             // onerror fires on every connection hiccup, so guard against noise.
             if (this.eventSource && this.eventSource.readyState === EventSource.CLOSED) {
                 console.warn('[SSE] EventSource closed unexpectedly.');
                 this.enabled = false;
+                cancelEventRequests(this);
                 // Connection state CSS classes
                 document.body.classList.add('dj-disconnected');
                 document.body.classList.remove('dj-connected');
@@ -125,6 +139,11 @@ class LiveViewSSE {
      * Cleanly close the SSE stream (e.g. during TurboNav page transitions).
      */
     disconnect() {
+        this._parameterContracts = new Map();
+        this._parameterContractApplied = new Map();
+        this._parameterContractFrames = new WeakMap();
+        this._parameterContractSequence = 0;
+        cancelEventRequests(this);
         // TurboNav may already have replaced the URL/DOM. Cancel immediately,
         // before a delayed close callback could send old-view edits to the new URL.
         cancelPendingRateLimits();
@@ -155,6 +174,7 @@ class LiveViewSSE {
         // wire-supplied ``_deferred`` — the flag is client-owned and only the
         // WebSocket buffering path may set it.
         stripClientOwnedFrameFlags(data);
+        _recordParameterContractFrame(this, data);
         const prev = this._inflight || Promise.resolve();
         const next = prev
             .then(() => this._handleMessageImpl(data))
@@ -173,6 +193,7 @@ class LiveViewSSE {
      */
     async _handleMessageImpl(data) {
         if (globalThis.djustDebug) console.log('[SSE] Received:', data.type, data);
+        storeSignedSnapshot(data, this.primaryViewPath);
 
         switch (data.type) {
 
@@ -184,6 +205,9 @@ class LiveViewSSE {
 
             case 'mount':
                 this.viewMounted = true;
+                if (typeof data.view === 'string') this.primaryViewPath = data.view;
+                _installParameterContracts(this, data.parameter_contracts, data.view, true,
+                    this._parameterContractFrames.get(data));
                 if (globalThis.djustDebug) console.log('[SSE] View mounted:', data.view);
 
                 // Remove dj-cloak from all elements (FOUC prevention)
@@ -203,8 +227,9 @@ class LiveViewSSE {
                     let container = findPageViewContainer();
                     if (!container) container = document.querySelector('[dj-root]');
                     if (container) {
+                        if (typeof data.view === 'string') container.setAttribute('dj-view', data.view);
                         const hasDataDjAttrs = data.has_ids === true;
-                        if (hasDataDjAttrs) {
+                        if (hasDataDjAttrs && !this._replacingView) {
                             _stampDjIds(data.html);
                         } else {
                             // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
@@ -221,6 +246,7 @@ class LiveViewSSE {
                         window.djust._mountReady = true;
                     }
                 }
+                this._replacingView = false;
                 // Trigger form recovery and dj-auto-recover after reconnect mount
                 if (window.djust._isReconnect) {
                     if (typeof window.djust._processFormRecovery === 'function') {
@@ -233,15 +259,15 @@ class LiveViewSSE {
                 break;
 
             case 'patch':
-                await handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
-                this.lastEventName = null;
-                this.lastTriggerElement = null;
+            case 'html_update': {
+                const event = acknowledgeEventRequest(this, data);
+                await handleServerResponse(data, event?.eventName, event?.trigger, this);
+                completeLegacyAsyncBatches(this, data);
                 break;
+            }
 
-            case 'html_update':
-                await handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
-                this.lastEventName = null;
-                this.lastTriggerElement = null;
+            case 'embedded_update':
+                await handleEmbeddedResponse(data, this);
                 break;
 
             case 'error':
@@ -249,21 +275,29 @@ class LiveViewSSE {
                 window.dispatchEvent(new CustomEvent('djust:error', {
                     detail: { error: data.error, traceback: data.traceback || null }
                 }));
-                if (this.lastEventName) {
+                if (data.source !== 'async') {
+                    cancelEventRequests(this, data.ref ?? null);
+                }
+                if (data.source !== 'async' && data.ref == null && this.lastEventName) {
                     globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
                     this.lastEventName = null;
                     this.lastTriggerElement = null;
                 }
+                if (data.source !== 'async') this._recoverFailedNavigation();
                 break;
 
-            case 'noop':
-                if (this.lastEventName) {
+            case 'noop': {
+                const event = acknowledgeEventRequest(this, data);
+                if (event?.eventName) {
                     if (!data.async_pending) {
-                        globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                        globalLoadingManager.stopLoading(event.eventName, event.trigger);
                     }
-                    this.lastEventName = null;
-                    this.lastTriggerElement = null;
                 }
+                break;
+            }
+
+            case 'async_complete':
+                completeAsyncBatch(this, data.async_batch);
                 break;
 
             case 'push_event':
@@ -335,6 +369,27 @@ class LiveViewSSE {
         }
     }
 
+    /** Mount a replacement page over the existing owner-bound stream. */
+    liveRedirectMount(outgoing) {
+        if (!this.enabled || !this.viewMounted) return false;
+        cancelPendingRateLimits();
+        // has_ids describes the incoming markup, not whether the current DOM
+        // already represents it. Navigation must replace the previous page.
+        this._replacingView = true;
+        this.primaryViewPath = outgoing.view;
+        this.viewMounted = false;
+        return this.sendMessage(outgoing);
+    }
+
+    _recoverFailedNavigation() {
+        if (!this._replacingView || this.viewMounted) return;
+        this._replacingView = false;
+        this.disconnect();
+        // History already points at the destination. Let Django resolve and
+        // authorize it normally rather than strand the old DOM at a new URL.
+        window.location.reload();
+    }
+
     /**
      * Send an event to the server via HTTP POST.
      *
@@ -354,14 +409,23 @@ class LiveViewSSE {
             return false;
         }
 
-        this.lastEventName = eventName;
-        this.lastTriggerElement = triggerElement;
-
-        return this.sendMessage({ type: 'event', event: eventName, params }, keepalive);
+        const request = registerEventRequest(this, eventName, triggerElement);
+        try {
+            if (!this.sendMessage({ type: 'event', event: eventName, params, ref: request.ref }, keepalive)) {
+                cancelEventRequests(this, request.ref);
+            }
+        } catch (error) {
+            cancelEventRequests(this, request.ref);
+            throw error;
+        }
+        return request.promise;
     }
 
-    sendTeardownEvent(eventName, params, triggerElement) {
-        return this.sendEvent(eventName, params, triggerElement, true);
+    sendTeardownEvent(eventName, params, _triggerElement) {
+        // The outgoing page cannot await a stream reply. Preserve the existing
+        // keepalive dispatch contract without retaining an orphaned request.
+        if (!this.enabled || !this.viewMounted) return false;
+        return this.sendMessage({ type: 'event', event: eventName, params }, true);
     }
 
     /**
@@ -406,11 +470,14 @@ class LiveViewSSE {
             })
             .catch(err => {
                 console.error('[SSE] Message POST failed:', err);
-                if (eventName) {
+                if (eventName && data.ref != null) {
+                    cancelEventRequests(this, data.ref);
+                } else if (eventName) {
                     globalLoadingManager.stopLoading(eventName, triggerElement);
                     this.lastEventName = null;
                     this.lastTriggerElement = null;
                 }
+                if (data.type === 'live_redirect_mount') this._recoverFailedNavigation();
             });
 
         return true;

@@ -1,0 +1,1 @@
+- Add an internal, still-gated child-slot server-state adapter for ADR-038, binding declared state to request identity, parent ancestry, slot and mount inputs. This storage foundation does not yet enable explicit sticky-child lifecycle support.

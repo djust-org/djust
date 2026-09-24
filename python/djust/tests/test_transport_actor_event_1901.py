@@ -11,12 +11,12 @@ The fix adds two Transport hooks:
 
 * ``transport.uses_actors(view)`` — WS: ``consumer.use_actors and
   consumer.actor_handle is not None``; SSE: ``False``.
-* ``transport.dispatch_actor_event(view, event_name, params, ...)`` — WS runs the
-  bespoke actor block VERBATIM against ``consumer.actor_handle``; SSE never called
+* ``transport.dispatch_actor_event(view, event_name, params, ...)`` — WS serializes
+  actor execution against ``consumer._render_lock``; SSE never called
   (raises ``NotImplementedError`` if invoked).
 
-``_dispatch_event_inner`` routes to ``dispatch_actor_event`` (OUTSIDE
-``event_context`` — the actor block holds no render lock, matching WS) when
+``_dispatch_event_inner`` routes to ``dispatch_actor_event`` (which acquires
+``event_context`` itself) when
 ``uses_actors`` is true AND the event is NOT routed to a sticky child (the WS
 ``not is_embedded_child_target`` mutual exclusion, websocket.py:3280-3282).
 
@@ -36,6 +36,9 @@ and assert:
 """
 
 from __future__ import annotations
+
+import asyncio
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -97,6 +100,7 @@ class _FakeConsumer:
         self.session_id = "sess-1901"
         self._client_ip = None
         self._wire_version = 0
+        self._render_lock = asyncio.Lock()
         # Recorded outputs.
         self.send_update_calls: list = []
         self.send_error_calls: list = []
@@ -141,6 +145,8 @@ class _ActorView:
 def _ws_runtime(consumer) -> ViewRuntime:
     rt = ViewRuntime(WSConsumerTransport(consumer))
     rt.view_instance = _ActorView()
+    consumer.view_instance = rt.view_instance
+    consumer._runtime = rt
     return rt
 
 
@@ -240,7 +246,7 @@ async def test_actor_path_records_and_pushes_time_travel():
 
 
 @pytest.mark.asyncio
-async def test_no_actor_handle_falls_to_in_process_path():
+async def test_no_actor_handle_falls_to_in_process_path(monkeypatch):
     """WS consumer in actor mode but WITHOUT an actor_handle → uses_actors False
     → the event runs the normal (non-actor) render path, which calls the
     in-process handler. We don't assert the full render here (no real consumer
@@ -248,12 +254,10 @@ async def test_no_actor_handle_falls_to_in_process_path():
     consumer = _FakeConsumer(use_actors=False, actor_handle=None)
     rt = _ws_runtime(consumer)
 
-    # The normal path enters event_context (borrows the consumer's render-lock).
-    # Our fake consumer has no _render_lock, so the borrow raises AttributeError
-    # — which itself PROVES the actor branch was bypassed (it would have returned
-    # before reaching event_context). That is the load-bearing assertion.
-    with pytest.raises(AttributeError):
-        await rt.dispatch_event({"type": "event", "event": "bump", "params": {}, "ref": 1})
+    render = AsyncMock()
+    monkeypatch.setattr(rt, "_dispatch_event_render", render)
+    await rt.dispatch_event({"type": "event", "event": "bump", "params": {}, "ref": 1})
+    render.assert_awaited_once()
 
     # The actor was never consulted.
     assert consumer.send_update_calls == [], "no actor frame should have been sent"
@@ -265,7 +269,7 @@ async def test_no_actor_handle_falls_to_in_process_path():
 
 
 @pytest.mark.asyncio
-async def test_view_id_routed_event_skips_actor():
+async def test_view_id_routed_event_skips_actor(monkeypatch):
     """An event with a ``view_id`` for a DIFFERENT (child) view is NOT sent to
     the actor — mirrors WS ``not is_embedded_child_target`` (websocket.py:3280)."""
     actor = _FakeActorHandle()
@@ -273,17 +277,17 @@ async def test_view_id_routed_event_skips_actor():
     rt = _ws_runtime(consumer)
 
     # view_id != the top-level view's _view_id => routes to a child => actor skipped.
-    # The normal path then enters event_context → borrows the (missing) lock →
-    # AttributeError, which proves the actor branch was bypassed.
-    with pytest.raises(AttributeError):
-        await rt.dispatch_event(
-            {
-                "type": "event",
-                "event": "bump",
-                "params": {"view_id": "some-child-view"},
-                "ref": 1,
-            }
-        )
+    render = AsyncMock()
+    monkeypatch.setattr(rt, "_dispatch_event_render", render)
+    await rt.dispatch_event(
+        {
+            "type": "event",
+            "event": "bump",
+            "params": {"view_id": "some-child-view"},
+            "ref": 1,
+        }
+    )
+    render.assert_awaited_once()
     assert actor.event_calls == [], "a sticky-child (view_id) event must NOT reach the actor"
 
 
@@ -320,7 +324,7 @@ async def test_gate_off_uses_actors_false_falls_to_in_process(monkeypatch):
 
     GATE-OFF: monkeypatch the WS transport's ``uses_actors`` to always return
     False. The same frame that routed to the actor above now FALLS to the normal
-    path (event_context → missing-lock AttributeError), and the actor is never
+    path (event_context → in-process render hook), and the actor is never
     consulted — demonstrating the routing genuinely depends on ``uses_actors``."""
     actor = _FakeActorHandle()
     consumer = _FakeConsumer(use_actors=True, actor_handle=actor)
@@ -328,10 +332,10 @@ async def test_gate_off_uses_actors_false_falls_to_in_process(monkeypatch):
 
     monkeypatch.setattr(rt.transport, "uses_actors", lambda view: False)
 
-    with pytest.raises(AttributeError):
-        await rt.dispatch_event(
-            {"type": "event", "event": "bump", "params": {"amount": 1}, "ref": 7}
-        )
+    render = AsyncMock()
+    monkeypatch.setattr(rt, "_dispatch_event_render", render)
+    await rt.dispatch_event({"type": "event", "event": "bump", "params": {"amount": 1}, "ref": 7})
+    render.assert_awaited_once()
 
     assert actor.event_calls == [], (
         "GATE-OFF: with uses_actors forced False, the event must NOT reach the actor"

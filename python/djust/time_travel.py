@@ -33,6 +33,8 @@ next event snapshot for the final state.
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import logging
 import threading
 import time
@@ -60,6 +62,9 @@ class EventSnapshot:
     state_before: Dict[str, Any]
     state_after: Dict[str, Any] = field(default_factory=dict)
     error: Optional[str] = None
+    # Explicit debug projections are observational, not restoration envelopes.
+    # Keep that property on the record even if the live view's policy changes.
+    restorable: bool = True
 
     def to_dict(self) -> Dict[str, Any]:
         """JSON-safe dict view of the snapshot for wire transport.
@@ -74,7 +79,7 @@ class EventSnapshot:
         """
         from .serialization import decimal_tags_to_strings
 
-        return {
+        result = {
             "event_name": self.event_name,
             "params": self.params,
             "ref": self.ref,
@@ -83,6 +88,9 @@ class EventSnapshot:
             "state_after": decimal_tags_to_strings(self.state_after),
             "error": self.error,
         }
+        if not self.restorable:
+            result["restorable"] = False
+        return result
 
 
 class TimeTravelBuffer:
@@ -154,17 +162,24 @@ def record_event_start(
     buffer = getattr(view, "_time_travel_buffer", None)
     if buffer is None:
         return None
-    try:
-        state_before = view._capture_snapshot_state()
-    except Exception:  # noqa: BLE001 — dev-only, log + degrade
-        logger.exception("time_travel: _capture_snapshot_state failed (before)")
-        return None
+    from ._exposure import explicit_debug_projection
+
+    explicit = explicit_debug_projection(view)
+    if explicit is not None:
+        state_before = explicit
+    else:
+        try:
+            state_before = view._capture_snapshot_state()
+        except Exception:  # noqa: BLE001 — dev-only, log + degrade
+            logger.exception("time_travel: _capture_snapshot_state failed (before)")
+            return None
     return EventSnapshot(
         event_name=event_name,
-        params=dict(params) if params else {},
+        params={"_redacted": True} if explicit is not None else (dict(params) if params else {}),
         ref=ref,
         ts=time.time(),
         state_before=state_before,
+        restorable=explicit is None,
     )
 
 
@@ -193,6 +208,20 @@ def record_event_end(
     buffer = getattr(view, "_time_travel_buffer", None)
     if buffer is None:
         return
+    from ._exposure import explicit_debug_projection
+
+    explicit = explicit_debug_projection(view)
+    if explicit is not None or not snapshot.restorable:
+        # Policy changes mid-event cannot downgrade a record to legacy capture.
+        # If it started in legacy, discard the already-captured raw state too.
+        if snapshot.restorable:
+            snapshot.state_before = {}
+        snapshot.restorable = False
+        snapshot.params = {"_redacted": True}
+        snapshot.state_after = explicit if explicit is not None else {}
+        snapshot.error = "[redacted]" if error is not None else None
+        buffer.append(snapshot)
+        return
     try:
         state_after = view._capture_snapshot_state()
     except Exception:  # noqa: BLE001 — dev-only, log + degrade
@@ -213,6 +242,20 @@ def record_event_end(
 #: Lives at the top level of the state dict to keep components out of
 #: the parent's flat-attr namespace.
 _COMPONENTS_SNAPSHOT_KEY = "__components__"
+
+
+def _restore_interactive_state(component: Any, state: Any) -> Optional[bool]:
+    """Use the concrete state schema; None retains the legacy component path."""
+    from .components._interactive import DropdownMenu
+
+    if not isinstance(component, DropdownMenu):
+        return None
+    try:
+        component._restore_state(state)
+    except (TypeError, ValueError, RuntimeError):
+        logger.warning("time_travel: interactive component state rejected")
+        return False
+    return True
 
 
 def restore_snapshot(view: Any, snapshot: EventSnapshot, which: str = "before") -> bool:
@@ -240,6 +283,12 @@ def restore_snapshot(view: Any, snapshot: EventSnapshot, which: str = "before") 
     """
     if which not in ("before", "after"):
         raise ValueError("which must be 'before' or 'after', got %r" % (which,))
+    from ._exposure import uses_legacy_exposure
+
+    if not snapshot.restorable or not uses_legacy_exposure(view):
+        # Debug values are not authority to restore state, and redacted values
+        # must never replace server fields or trigger ghost-attribute deletion.
+        return False
     from djust.security import safe_setattr
     from djust.serialization import decode_state_roundtrip
 
@@ -350,6 +399,10 @@ def restore_component_snapshot(
     """
     if which not in ("before", "after"):
         raise ValueError("which must be 'before' or 'after', got %r" % (which,))
+    from ._exposure import uses_legacy_exposure
+
+    if not snapshot.restorable or not uses_legacy_exposure(view):
+        return False
     from djust.security import safe_setattr
 
     state = snapshot.state_before if which == "before" else snapshot.state_after
@@ -374,6 +427,9 @@ def restore_component_snapshot(
             component_id,
         )
         return False
+    restored = _restore_interactive_state(component, component_snap)
+    if restored is not None:
+        return restored
     ok = True
     for key, value in component_snap.items():
         try:
@@ -456,6 +512,13 @@ def replay_event(
     Restoration uses :func:`restore_snapshot` (with ``which="before"``)
     so component state from #1041 captures replays correctly.
 
+    Strict parameters are validated before restoration; invalid arguments or
+    unavailable contracts return ``None`` without changing state. A failed
+    restoration also refuses handler invocation. Async handlers are awaited
+    through Django's synchronous bridge. This API is synchronous: async callers
+    should use ``await sync_to_async(replay_event)(...)``. A direct call for an
+    async handler from a running event loop is refused before restoration.
+
     :param view: The LiveView instance to replay against.
     :param snapshot: The original :class:`EventSnapshot` providing the
         ``state_before`` baseline AND the ``event_name`` / ``params``
@@ -472,6 +535,10 @@ def replay_event(
         when the handler is missing, time-travel is disabled, OR
         ``record_replay=False`` (dry-replay path always returns None).
     """
+    from ._exposure import uses_legacy_exposure
+
+    if not snapshot.restorable or not uses_legacy_exposure(view):
+        return None
     # Defense-in-depth: reject dunder / private event names. The
     # snapshot is normally produced by the framework's own dispatcher
     # which only records ``@event_handler``-decorated public methods,
@@ -516,6 +583,45 @@ def replay_event(
         )
         return None
 
+    # Bind strict arguments BEFORE restoration can mutate any live state.
+    # Keep the bound call ephemeral; the history records the original parameters,
+    # not inspect.BoundArguments or declaration defaults. Legacy calls continue
+    # receiving the original keyword values without implicit coercion.
+    params = override_params if override_params is not None else dict(snapshot.params)
+    call_args: tuple[Any, ...] = ()
+    call_kwargs = params
+    try:
+        from .validation import (
+            get_handler_parameter_policy,
+            validate_handler_params,
+            validated_call_arguments,
+        )
+
+        if get_handler_parameter_policy(handler) == "strict":
+            validation = validate_handler_params(handler, params, snapshot.event_name)
+            if not validation["valid"]:
+                logger.warning("time_travel: replay parameters rejected")
+                return None
+            call_args, call_kwargs = validated_call_arguments(validation)
+    except Exception:  # unavailable/invalid contracts must not restore or invoke
+        logger.warning("time_travel: replay parameter contract unavailable")
+        return None
+
+    invoke = handler
+    if inspect.iscoroutinefunction(handler):
+        # replay_event is a synchronous API. The consumer already calls it via
+        # sync_to_async; async Python callers must do the same. Refuse an invalid
+        # calling context BEFORE restoration, rather than leaving partial state.
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            from asgiref.sync import async_to_sync
+
+            invoke = async_to_sync(handler)
+        else:
+            logger.warning("time_travel: call replay_event via sync_to_async for async handlers")
+            return None
+
     # Capture the handler reference and the live ``time_travel_enabled``
     # flag BEFORE ``restore_snapshot`` because the restore's
     # ghost-attr cleanup phase (Phase 1) deletes any public attrs
@@ -529,18 +635,15 @@ def replay_event(
 
     # Restore the view to state_before so the handler runs from the
     # captured baseline. Component state restores via the #1041 path.
-    restore_snapshot(view, snapshot, which="before")
-
-    # Build the params to invoke the handler with — original by
-    # default, override for branched timelines.
-    params = override_params if override_params is not None else dict(snapshot.params)
+    if not restore_snapshot(view, snapshot, which="before"):
+        return None
 
     if record_replay and live_tt_enabled:
         # Capture a fresh snapshot pair around the replay so the
         # branched timeline is scrubbable itself.
         replay_snap = record_event_start(view, snapshot.event_name, params, ref=None)
         try:
-            handler(**params) if params else handler()
+            invoke(*call_args, **call_kwargs)
         except Exception as exc:  # noqa: BLE001 — replay shouldn't break caller
             logger.exception("time_travel: replay handler %s raised", snapshot.event_name)
             record_event_end(view, replay_snap, error=str(exc))
@@ -551,7 +654,7 @@ def replay_event(
     # Dry-replay path — mutate view but don't record. Caller wants
     # to preview a branch without polluting the buffer.
     try:
-        handler(**params) if params else handler()
+        invoke(*call_args, **call_kwargs)
     except Exception:  # noqa: BLE001 — dry replay swallows for preview
         logger.exception("time_travel: dry replay handler %s raised", snapshot.event_name)
     return None

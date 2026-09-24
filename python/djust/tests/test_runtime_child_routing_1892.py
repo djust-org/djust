@@ -218,6 +218,79 @@ def _make_sticky_parent() -> tuple[_ParentView, _StickyChildView]:
 @pytest.mark.django_db
 class TestRuntimeStickyChildRouting:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("removed", [False, True])
+    @pytest.mark.parametrize("strict", [False, True])
+    async def test_background_work_belongs_to_selected_child(self, monkeypatch, removed, strict):
+        import asyncio
+
+        parent, child = _make_sticky_parent()
+        runtime, transport = _make_runtime_with_view(parent)
+        runtime._parameter_contract_view = "tests.Parent"
+        release = asyncio.Event()
+        started = asyncio.Event()
+        results = []
+        parent.start_async(lambda: results.append("parent"), name="parent")
+
+        @event_handler(parameter_policy="strict" if strict else "legacy")
+        def begin(self):
+            async def work():
+                started.set()
+                await release.wait()
+                return 9
+
+            self.start_async(work, name="child")
+
+        def handle_result(self, name, result=None, error=None):
+            results.append(name)
+            self.count = result
+
+        monkeypatch.setattr(_StickyChildView, "begin", begin, raising=False)
+        monkeypatch.setattr(_StickyChildView, "handle_async_result", handle_result, raising=False)
+        try:
+            await runtime.dispatch_event(
+                {"type": "event", "event": "begin", "params": {"view_id": "child-1"}, "ref": 12}
+            )
+            ack = next(f for f in transport.sent if f.get("ref") == 12)
+            assert ack["async_pending"] is True
+            token = ack["async_batch"]
+            await asyncio.wait_for(started.wait(), 1)
+            assert results == []
+            assert "parent" in parent._async_tasks
+            if removed:
+                monkeypatch.setattr(parent, "_get_all_child_views", lambda: {})
+            release.set()
+            for _ in range(100):
+                if any(f["type"] == "async_complete" for f in transport.sent):
+                    break
+                await asyncio.sleep(0.01)
+            assert {"type": "async_complete", "async_batch": token} in transport.sent
+            updates = [f for f in transport.sent if f.get("source") == "async"]
+            if removed:
+                assert results == []
+                assert updates == []
+            else:
+                assert results == ["child"]
+                assert len(updates) == 1
+                assert updates[0]["type"] == "embedded_update"
+                assert updates[0]["view_id"] == "child-1"
+                assert "count=9" in updates[0]["html"]
+                if strict:
+                    owner = next(
+                        owner
+                        for owner in updates[0]["parameter_contracts"]["owners"]
+                        if owner["view_id"] == "child-1"
+                    )
+                    assert owner["handlers"]["begin"]["policy"] == "strict"
+                    assert updates[0]["parameter_contract_view"] == "tests.Parent"
+                else:
+                    assert "parameter_contracts" not in updates[0]
+        finally:
+            release.set()
+            handles = tuple(getattr(child, "_async_task_handles", ()))
+            if handles:
+                await asyncio.wait_for(asyncio.gather(*handles, return_exceptions=True), 3)
+
+    @pytest.mark.asyncio
     async def test_view_id_routes_to_child_and_emits_embedded_update(self):
         """A ``view_id``-targeted event mutates the CHILD and emits a scoped
         ``embedded_update`` frame — NOT a top-level patch/html frame.

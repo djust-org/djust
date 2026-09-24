@@ -4,6 +4,7 @@
 - **Supersedes**: none
 - **Related**: #762 (filter implementation, shipped v0.5.7), #962 (this decision)
 - **Milestone**: v0.7.2 (close-without-code)
+- **Proposed follow-up**: [ADR-038](038-explicit-context-and-state-exposure.md) revisits reflection and denylists for an opt-in explicit policy; this ADR remains the legacy policy.
 
 ## Context
 

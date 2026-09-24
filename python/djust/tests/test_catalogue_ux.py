@@ -12,7 +12,11 @@ from html import unescape as html_unescape
 import pytest
 from django.test import override_settings
 
-from djust.theming.gallery.catalogue import component_description, playground_options
+from djust.theming.gallery.catalogue import (
+    component_description,
+    component_preview_note,
+    playground_options,
+)
 
 pytestmark = pytest.mark.django_db
 
@@ -73,10 +77,13 @@ class TestDescriptions:
     def test_python_component_docstring_first_line(self):
         assert component_description("accordion").startswith("Accordion")
 
-    def test_a_component_without_a_python_class_has_no_prose_yet(self):
-        """A template-only component has no docstring to read — "" is the
-        honest answer, not a generated sentence."""
+    def test_unknown_component_has_no_prose_but_template_only_entries_do(self):
+        """Known template-only entries have explicit prose; unknown names do
+        not get a made-up description."""
         assert component_description("no_such_component") == ""
+        assert component_description("checkbox")
+        assert component_description("nav_item")
+        assert component_description("server_event_toast")
         assert isinstance(component_description("button"), str)
 
     def test_index_cards_carry_it(self):
@@ -85,6 +92,13 @@ class TestDescriptions:
         by_name = {c["name"]: c for c in build_catalogue_index_context()["components"]}
         assert by_name["accordion"]["description"]
         assert "description" in by_name["button"]
+        assert all(c["description"] for c in by_name.values())
+
+    def test_components_without_standalone_previews_explain_the_gap(self):
+        assert component_preview_note("server_event_toast").startswith(
+            "This is a server-event helper"
+        )
+        assert component_preview_note("button") == ""
 
 
 class TestThumbnails:
@@ -320,6 +334,61 @@ class TestDemoEventsTakeTypedValues:
 
 
 class TestUsageWithEvents:
+    @pytest.mark.parametrize("backend", ["django", "rust"])
+    @pytest.mark.parametrize(
+        ("name", "event", "params", "state_key", "expected"),
+        [
+            ("dropdown", "toggle_dropdown", {}, "is_open", False),
+            ("modal", "toggle_modal", {}, "is_open", True),
+            ("tabs", "set_tab", {"value": 1}, "active", 1),
+        ],
+    )
+    def test_template_usage_executes_and_renders_event_state(
+        self, name, event, params, state_key, expected, backend
+    ):
+        from django.template import Context, Engine
+
+        detail = _detail(name)
+        parts = detail._base_ctx["usage_parts"]
+        namespace = {"__name__": __name__}
+        exec(compile(parts["view"], f"{name}.views.py", "exec"), namespace)
+        view = namespace["MyView"]()
+        view.mount(detail.request)
+        if state_key == "is_open":
+            assert type(view.is_open) is bool
+        if backend == "django":
+            template = Engine.get_default().from_string(parts["template"])
+
+            def render():
+                return template.render(Context(view.get_context_data()))
+
+        else:
+            from djust.template_backend import DjustTemplateBackend
+
+            template = DjustTemplateBackend(
+                {"NAME": "usage-test", "DIRS": [], "APP_DIRS": True, "OPTIONS": {}}
+            ).from_string(parts["template"])
+
+            def render():
+                return template.render(view.get_context_data(), request=detail.request)
+
+        before = render()
+        getattr(view, event)(**params)
+        assert getattr(view, state_key) == expected
+        after = render()
+        assert after != before
+        if name == "dropdown":
+            assert 'aria-expanded="true"' in before
+            assert 'aria-expanded="false"' in after
+            assert "Edit" in before and "Duplicate" in before and "Archive" in before
+        elif name == "modal":
+            assert 'dj-click="toggle_modal"' in before
+            assert "Open modal" in before
+            assert 'data-open="true"' in after
+        else:
+            assert 'aria-selected="true"' in before
+            assert 'aria-selected="true"' in after
+
     def test_a_descriptor_backed_component_shows_the_plain_form(self):
         """#2926 review 🔴1: the preview renders the plain ``Accordion``; the
         class-level descriptor of the same name is state-only and rendered
@@ -332,18 +401,32 @@ class TestUsageWithEvents:
         assert "component = Accordion()" not in snippet
         assert "{{ component }}" in snippet and "|safe" not in snippet
 
-    def test_every_python_usage_snippet_compiles(self):
+    def test_every_usage_snippet_executes_without_placeholder_handlers(self):
         """The served ``views.py`` must be Python (a removed ``def mount(``
         line once left its body behind: IndentationError)."""
-        from djust.theming.gallery.component_registry import PYTHON_COMPONENT_EXAMPLES
+        from djust.theming.gallery.component_registry import get_all_components_with_metadata
+        from django.template import Context, Engine
 
-        for name in sorted(PYTHON_COMPONENT_EXAMPLES):
-            try:
-                view = _detail(name)
-            except Exception:  # noqa: BLE001 — a registry example that does not build
-                continue
+        for component in get_all_components_with_metadata():
+            name = component["name"]
+            view = _detail(name)
             src = view._base_ctx["usage_parts"]["view"]
-            compile(src, f"{name}.views.py", "exec")
+            assert "...  # write to self.component" not in src, name
+            if name == "sheet":
+                # Its close event is a real handler, not a host-side no-op.
+                assert "self.component.is_open = False" in src
+            namespace = {"__name__": __name__}
+            exec(compile(src, f"{name}.views.py", "exec"), namespace)
+            if "MyView" not in namespace:
+                assert name == "server_event_toast"  # documents a mixin, not a view
+                continue
+            example = namespace["MyView"]()
+            example.request = view.request
+            example.mount(view.request)
+            template = Engine.get_default().from_string(view._base_ctx["usage_parts"]["template"])
+            # Closed widgets and empty validation output may legitimately be
+            # empty. This pins execution, not visual or event acceptance.
+            template.render(Context(example.get_context_data()))
 
     def test_set_option_only_accepts_offered_keys_and_values(self):
         """#2926 review 🟡3: the chip wire is client-controlled."""
@@ -432,6 +515,15 @@ class TestCodeHighlighting:
         assert '<span class="hl-nn"> djust</span>' in out, out
         assert re.sub(r"<[^>]+>", "", out) == "from djust import LiveView"  # what dj-copy copies
 
+    def test_whitespace_before_plain_shell_tokens_survives_the_pipeline(self):
+        import re
+
+        from djust.components.components.code_snippet import highlight_code
+
+        out = highlight_code("pip install djust", "bash")
+        assert re.sub(r"<[^>]+>", "", out) == "pip install djust"
+        assert "pipinstall" not in out and "installdjust" not in out
+
     @pytest.mark.parametrize(
         "code,lang",
         [
@@ -456,7 +548,13 @@ class TestCodeHighlighting:
 
     def test_parameter_types_are_names_not_reprs(self):
         rows = _detail("rating")._base_ctx and _detail("rating").get_context_data()["params_rows"]
-        assert ["value", "float", "0"] in rows
+        value_row = next(row for row in rows if row[0] == "value")
+        assert value_row[:3] == ["value", "float", "0"]
+        assert "current rating value" in value_row[3]
+
+    def test_empty_accessibility_is_explicit_for_template_components(self):
+        ctx = _detail("button").get_context_data()
+        assert "Accessibility" in {item["label"] for item in ctx["toc_items"]}
 
     def test_unknown_language_and_no_language_stay_plain(self):
         from djust.components.components.code_snippet import highlight_code

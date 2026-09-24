@@ -1,0 +1,1 @@
+- Behind the ADR-038 explicit-exposure construction guard, persist authorized child state after parent events and HTTP POST renders. Validate and bound the full child batch before writing, preserve child-driven render updates, redact storage errors, and recover with full HTML after failed saves. This does not enable explicit exposure or complete removed-slot pruning.

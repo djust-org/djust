@@ -169,6 +169,10 @@ class ContextMixin:
         Returns:
             Dictionary of context variables
         """
+        from .._exposure import uses_legacy_exposure
+
+        if not uses_legacy_exposure(self):
+            return self._get_explicit_context_data(**kwargs)
         # Return cached context if available (set during GET request to avoid
         # redundant QuerySet evaluation across sync_state_to_rust/render_with_diff)
         if hasattr(self, "_cached_context") and self._cached_context is not None:
@@ -255,6 +259,9 @@ class ContextMixin:
 
         for key, value in _all_items:
             if key.startswith("_"):
+                continue
+            if key == "exposure_policy":
+                # Policy configuration is never an inferred rendering assign.
                 continue
             if key in _static_skip:
                 continue
@@ -481,6 +488,79 @@ class ContextMixin:
 
         return context
 
+    def _get_explicit_context_data(self, **kwargs: Any) -> Dict[str, Any]:
+        """Render-only context from deliberate additions and known providers.
+
+        This branch is staged behind LiveView's construction guard. It performs
+        no public attribute walk, state projection, or JSON conversion: native
+        Django model/queryset values deliberately supplied by the application
+        remain native inputs to the renderer. This context must not be reused
+        by persistence, client metadata, or debug exporters.
+        """
+        from inspect import getattr_static
+
+        from .._exposure import ExposureError
+        from ..components.base import LiveComponent
+
+        policy = getattr(self, "exposure_policy", None)
+        if type(policy) is not str or policy != "explicit":
+            raise ExposureError("Unknown context exposure policy")
+        if "view" in kwargs or "streams" in kwargs:
+            raise ExposureError("Explicit context contains a reserved framework name")
+        cached = getattr(self, "_cached_context", None)
+        if cached is not None:
+            if type(cached) is not dict or "view" in cached:
+                raise ExposureError("Invalid or reserved explicit context cache")
+            providers: frozenset[str] = getattr(
+                self, "_explicit_context_provider_keys", frozenset()
+            )
+            if providers.intersection(kwargs):
+                raise ExposureError("Explicit context provider collision")
+            return {**cached, **kwargs}
+
+        reset_ids = getattr(self, "reset_unique_ids", None)
+        if callable(reset_ids):
+            reset_ids()
+        clear_providers = getattr(self, "clear_context_providers", None)
+        if callable(clear_providers):
+            clear_providers()
+
+        context: Dict[str, Any] = {}
+
+        def provide(name: str, value: Any) -> None:
+            if type(name) is not str or name == "view" or name in context or name in kwargs:
+                raise ExposureError("Explicit context provider collision or reserved name")
+            context[name] = value
+
+        # The descriptor registry is a framework declaration manifest, not an
+        # attribute discovery mechanism. Reject stale/shadowed entries BEFORE
+        # evaluating their descriptor (especially a property shadow).
+        descriptors = getattr(type(self), "_component_descriptors", {})
+        for name, declaration in descriptors.items():
+            if name in ("view", "streams"):
+                raise ExposureError("Component context provider uses a reserved name")
+            if (
+                not isinstance(declaration, LiveComponent)
+                or getattr_static(type(self), name) is not declaration
+            ):
+                raise ExposureError("Component context provider no longer matches its declaration")
+            provide(name, declaration.__get__(self, type(self)))
+
+        # Action/stream render namespaces are registered by their framework
+        # APIs. They grant rendering permission only, never persistence/client.
+        for name, action_state in (getattr(self, "_action_state", None) or {}).items():
+            provide(name, action_state)
+        get_streams = getattr(self, "_get_streams_context", None)
+        if callable(get_streams):
+            streams = get_streams()
+            if streams:
+                provide("streams", streams)
+
+        self._explicit_context_provider_keys = frozenset(context)
+        context.update(kwargs)
+        self._jit_serialized_keys = set()
+        return context
+
     def _deep_serialize_dict(
         self,
         d: Dict[str, Any],
@@ -574,6 +654,33 @@ class ContextMixin:
         ``SimpleLazyObject`` via the raw-value sidecar), so templates keep
         rendering ``{{ user }}`` / ``{{ perms }}`` / ``{{ messages }}``.
         """
+        from .._exposure import ExposureError, uses_legacy_exposure
+
+        if not uses_legacy_exposure(self):
+            policy = getattr(self, "exposure_policy", None)
+            if type(policy) is not str or policy != "explicit":
+                raise ExposureError("Unknown context exposure policy")
+            if "view" in context:
+                raise ExposureError("Explicit context contains a reserved framework name")
+            result = dict(context)
+            added: set[str] = set()
+            reserved = {"view", "streams"} | set(
+                getattr(self, "_explicit_context_provider_keys", ())
+            )
+            if request is not None:
+                for processor in self._get_resolved_processors(self._get_context_processors()):
+                    supplied = processor(request)
+                    if not supplied:
+                        continue
+                    if reserved.intersection(supplied):
+                        raise ExposureError("Context processor reserved provider collision")
+                    for key, value in supplied.items():
+                        if key not in result:
+                            result[key] = value
+                            added.add(key)
+            self._context_processor_keys = added
+            return result
+
         if request is None:
             return context
 

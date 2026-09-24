@@ -236,6 +236,17 @@ class ActivityMixin:
         * Exceptions raised by a single drained handler are logged and
           swallowed so one bad event can't break the remaining flush.
         """
+        from .._exposure_diagnostics import diagnostic_scope, restrict_diagnostics
+
+        with diagnostic_scope():
+            restrict_diagnostics(self)
+            restrict_diagnostics(getattr(consumer, "view_instance", self))
+            await self._flush_deferred_activity_events_inner(consumer)
+
+    async def _flush_deferred_activity_events_inner(self, consumer: Any) -> None:
+        """Drain while preserving restrictions across the complete queue pass."""
+        from .._exposure_diagnostics import diagnostics_allowed, restrict_diagnostics
+
         queues = getattr(self, "_deferred_activity_events", None)
         if not queues:
             return
@@ -274,11 +285,19 @@ class ActivityMixin:
                 try:
                     await dispatch(self, event_name, params or {})
                 except Exception:  # noqa: BLE001 — never let a drained event kill the consumer
-                    logger.exception(
-                        "dj_activity: deferred event %r on %s raised during flush",
-                        event_name,
-                        activity_name,
-                    )
+                    restrict_diagnostics(self)
+                    restrict_diagnostics(getattr(consumer, "view_instance", self))
+                    if diagnostics_allowed():
+                        logger.exception(
+                            "dj_activity: deferred event %r on %s raised during flush",
+                            event_name,
+                            activity_name,
+                        )
+                    else:
+                        logger.error("Protected deferred activity event failed")
+                finally:
+                    restrict_diagnostics(self)
+                    restrict_diagnostics(getattr(consumer, "view_instance", self))
             # Drop the now-empty queue so it doesn't linger.
             if not queue:
                 queues.pop(activity_name, None)

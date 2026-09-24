@@ -1,0 +1,1 @@
+- Stage an internal signature-derived strict event parameter contract with bounded conversion, Python argument binding and value-free metadata. Legacy dispatch is unchanged; the strict decorator/configuration policy is not yet enabled.

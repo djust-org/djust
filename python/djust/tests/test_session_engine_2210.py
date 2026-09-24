@@ -193,12 +193,68 @@ def test_no_module_imports_the_db_session_store_directly():
 
     root = pathlib.Path(djust.__file__).parent
     needle = "from django.contrib.sessions.backends.db import SessionStore"
+    # ADR-038 imports concrete backend classes solely to verify storage
+    # capabilities by exact identity. This is not a backend-selection path.
+    # The adjacent AST and no-DB round-trip tests constrain that exception.
+    capability_module = "_exposure_sessions.py"
     offenders = sorted(
         path.relative_to(root).as_posix()
         for path in root.rglob("*.py")
-        if "tests" not in path.parts and needle in path.read_text()
+        if "tests" not in path.parts
+        and needle in path.read_text()
+        and path.relative_to(root).as_posix() != capability_module
     )
     assert offenders == [], (
         "these modules bypass settings.SESSION_ENGINE by importing the DB store "
         f"directly; use djust.utils.build_session_for_request instead: {offenders}"
     )
+
+
+def test_database_backend_import_is_only_used_in_capability_allowlist():
+    import ast
+    import inspect
+    from djust import _exposure_sessions
+
+    tree = ast.parse(inspect.getsource(_exposure_sessions))
+    references = [
+        node for node in ast.walk(tree) if isinstance(node, ast.Name) and node.id == "DBSession"
+    ]
+    allowlist = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "_SERVER_SESSION_TYPES"
+            for target in node.targets
+        )
+    )
+    assert isinstance(allowlist.value, ast.Tuple)
+    assert len(references) == 1
+    assert references[0] in allowlist.value.elts
+
+
+@override_settings(
+    SESSION_ENGINE=CACHE_ENGINE,
+    CACHES={"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}},
+)
+def test_explicit_persistence_uses_request_backend_without_database_access():
+    """No django_db marker: choosing a DB store here must fail, not pass quietly."""
+    from django.contrib.auth.models import AnonymousUser
+    from django.test import RequestFactory
+    from djust import LiveView
+    from djust.decorators import state
+    from djust._exposure_sessions import load_server_state, save_server_state
+
+    class View(LiveView):
+        exposure_policy = "explicit"
+        count = state(4, persist="server")
+
+    # Exercise the guarded policy's adapter, not the unavailable constructor.
+    view = object.__new__(View)
+    request = RequestFactory().get("/cache-explicit/")
+    request.user = AnonymousUser()
+    request.tenant = None
+    request.session = build_session_for_request()
+    save_server_state(view, request)
+    request.session = build_session_for_request(request.session.session_key)
+    assert load_server_state(view, request) == {"count": 4}

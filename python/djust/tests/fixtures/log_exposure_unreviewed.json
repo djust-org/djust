@@ -1,0 +1,4 @@
+{
+  "_comment": "ADR-038 E1 ratchet: exception-carrying log calls not yet classified. Generated from test_log_exposure_pin's scanner. May only shrink: classify a module into PINNED or fix its sites, then remove it here. A new site anywhere else fails the pin.",
+  "modules": {}
+}

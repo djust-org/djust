@@ -1,0 +1,1 @@
+- Extend the guarded ADR-038 explicit-policy implementation with declaration-selected shared-runtime server persistence and validated reconnect restoration; explicit mode remains unavailable pending transport and exposure parity.

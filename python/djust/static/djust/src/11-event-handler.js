@@ -4,6 +4,19 @@
 // IIFE (#1635).
 let _djustHttpFallbackWarned = false;
 
+// Local operations share request bookkeeping with socket transports. Their
+// completion is owned by the awaited operation, never by a server-supplied ref.
+const _localEventTransport = {};
+let _httpPageGeneration = 0;
+const _pendingHttpControllers = new Set();
+for (const event of ['djust:before-navigate', 'turbo:before-visit', 'pagehide']) {
+    window.addEventListener(event, () => {
+        _httpPageGeneration += 1;
+        for (const controller of _pendingHttpControllers) controller.abort();
+        _pendingHttpControllers.clear();
+    });
+}
+
 // Main Event Handler
 //
 // `_rateBypass` (#2656) is the re-entry flag for the @debounce / @throttle
@@ -143,13 +156,16 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
         // Still show brief loading state for UX consistency
         if (!skipLoading) globalLoadingManager.startLoading(eventName, triggerElement);
 
-        // Apply cached patches
-        if (cached.patches && cached.patches.length > 0) {
-            await applyPatches(cached.patches);
-            reinitAfterDOMUpdate();
+        const cachedRequest = registerEventRequest(_localEventTransport, eventName, triggerElement);
+        try {
+            // Apply cached patches
+            if (cached.patches && cached.patches.length > 0) {
+                await applyPatches(cached.patches);
+                reinitAfterDOMUpdate();
+            }
+        } finally {
+            cancelEventRequests(_localEventTransport, cachedRequest.ref);
         }
-
-        if (!skipLoading) globalLoadingManager.stopLoading(eventName, triggerElement);
         return;
     }
 
@@ -221,11 +237,22 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     }
     if (globalThis.djustDebug) console.log('[LiveView] WebSocket unavailable, falling back to HTTP');
 
+    const httpRequest = teardown ? null
+        : registerEventRequest(_localEventTransport, eventName, triggerElement);
+    // Keepalive teardown sends deliberately outlive the outgoing page.
+    const httpController = teardown ? null : new AbortController();
+    if (httpController) _pendingHttpControllers.add(httpController);
+    const httpOwner = document.querySelector('[dj-root]') || document.body;
+    const httpUrl = window.location.href;
+    const httpGeneration = _httpPageGeneration;
+    const ownsHttpResponse = () => httpOwner === (document.querySelector('[dj-root]') || document.body)
+        && httpUrl === window.location.href && httpGeneration === _httpPageGeneration;
     try {
         // Input, configured-name cookie, then server meta tag (00-namespace.js).
         const csrfToken = window.djust.csrfToken();
         const response = await fetch(teardown ? teardown.url : window.location.href, {
             keepalive: !!teardown,
+            ...(httpController ? {signal: httpController.signal} : {}),
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -240,17 +267,23 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
         }
 
         // This response belongs to the outgoing view; never patch the new one.
-        if (teardown) return;
+        if (teardown || !ownsHttpResponse()) return;
         const data = await response.json();
+        // Parsing can yield after headers arrived; navigation during either
+        // await invalidates every response effect, including metadata/cache.
+        if (!ownsHttpResponse()) return;
         // Same client-owned-flag strip as the WebSocket and SSE transports
         // (#2829) — the HTTP fallback dispatches straight into
         // handleServerResponse, so it needs its own call.
         stripClientOwnedFrameFlags(data);
-        await handleServerResponse(data, eventName, triggerElement);
+        _recordParameterContractFrame(_localEventTransport, data);
+        await handleServerResponse(data, eventName, triggerElement, _localEventTransport);
 
     } catch (error) {
-        console.error('[LiveView] HTTP fallback failed:', error);
-        if (!teardown) globalLoadingManager.stopLoading(eventName, triggerElement);
+        if (!httpController?.signal.aborted) console.error('[LiveView] HTTP fallback failed:', error);
+    } finally {
+        if (httpController) _pendingHttpControllers.delete(httpController);
+        if (httpRequest) cancelEventRequests(_localEventTransport, httpRequest.ref);
     }
 }
 window.djust.handleEvent = handleEvent;

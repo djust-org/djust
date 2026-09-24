@@ -1,0 +1,1 @@
+- Scope loading indicators to the nearest native child-view or component wrapper instead of sharing them solely by handler name. Preserve other scopes and the global loading indicator while work remains, and avoid transferring pending state to replacement wrappers with reused IDs.

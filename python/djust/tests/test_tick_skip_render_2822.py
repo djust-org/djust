@@ -52,9 +52,8 @@ def _consumer_with_view(view_class):
 
     view = view_class()
     view.mount(None)
-    # Establish the diff baseline the real mount render establishes. Without
-    # it the first render_with_diff() returns full HTML with patches=None and
-    # a tick would legitimately send nothing.
+    # Establish the real mount's diff baseline so these tests exercise patches,
+    # rather than the full-HTML fallback used when no baseline is available.
     view.render_with_diff()
     consumer.view_instance = view
     return consumer

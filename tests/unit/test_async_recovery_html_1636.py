@@ -42,6 +42,8 @@ def _make_consumer(render_return):
     """Minimal consumer wired to drive ``_run_async_work`` deterministically."""
     consumer = LiveViewConsumer()
     consumer.view_instance = MagicMock()
+    consumer.view_instance._djust_child_disposed = False
+    consumer.view_instance._async_work_generation = 0
     consumer.view_instance._skip_render = False
     consumer.view_instance._sync_state_to_rust = MagicMock()
     # No cancellation / no handle_async_result hooks for the happy path.

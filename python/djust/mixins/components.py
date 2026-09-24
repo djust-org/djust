@@ -97,6 +97,10 @@ class ComponentMixin:
         import json as json_module
 
         from ..components.base import BoundComponent, Component
+        from ..components._interactive import DropdownMenu
+
+        if isinstance(component, DropdownMenu):
+            return component._dump_session_binding()
 
         if isinstance(component, BoundComponent):
             # ADR-031 D7: a bound component is saved as its State, nothing else.
@@ -132,8 +136,12 @@ class ComponentMixin:
         mount restore).
         """
         from ..serialization import decode_state_roundtrip
+        from ..components._interactive import DropdownMenu
 
         state = decode_state_roundtrip(state)
+        if isinstance(component, DropdownMenu):
+            component._restore_session_binding(state)
+            return
         for key, value in state.items():
             if not key.startswith("_"):
                 try:
@@ -158,6 +166,7 @@ class ComponentMixin:
         Save component state to session with stable IDs.
         """
         from ..components.base import SESSION_COMPONENT_TYPES
+        from ..components._interactive import DropdownMenu
 
         view_key = f"liveview_{request.path}"
         component_state: Dict[str, Any] = {}
@@ -166,7 +175,8 @@ class ComponentMixin:
             if isinstance(component, SESSION_COMPONENT_TYPES):
                 # component_id is declared on LiveComponent; on the plain
                 # Component branch it is set dynamically here (stable session ID).
-                component.component_id = key  # type: ignore[union-attr]
+                if not isinstance(component, DropdownMenu):
+                    component.component_id = key  # type: ignore[union-attr]
                 component_state[key] = self._extract_component_state(component)
 
         request.session[f"{view_key}_components"] = normalize_django_value(

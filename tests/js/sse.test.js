@@ -19,6 +19,14 @@ global.window.djust = global.window.djust || {};
 // Stubs for functions LiveViewSSE calls inside handleMessage
 global.clientVdomVersion = 0;
 global.installMountEventConfig = vi.fn();
+// Owner contracts are exercised with the full bundle in parameter_contract_mounts.test.js.
+global._installParameterContracts = vi.fn();
+global._recordParameterContractFrame = vi.fn((transport, data) => {
+    // The isolated transport test only needs a receipt token. Actual ordering
+    // and replay use the unmodified helper in parameter_contract_renders.test.js.
+    transport._parameterContractFrames ??= new WeakMap();
+    transport._parameterContractFrames.set(data, 0);
+});
 global.cancelPendingRateLimits = vi.fn();
 global._stampDjIds = vi.fn();
 global.bindLiveViewEvents = vi.fn();
@@ -26,6 +34,7 @@ global.handleServerResponse = vi.fn();
 // Sibling from 02-response-handler.js; modules 00-20 share one scope in the
 // built bundle, so provide it here the same way as handleServerResponse.
 global.stripClientOwnedFrameFlags = vi.fn();
+global.storeSignedSnapshot = vi.fn();
 global.globalLoadingManager = { stopLoading: vi.fn() };
 global.dispatchPushEventToHooks = vi.fn();
 
@@ -60,7 +69,12 @@ const src = readFileSync(
     resolve(__dirname, '../../python/djust/static/djust/src/03b-sse.js'),
     'utf8'
 );
-eval(src); // eslint-disable-line no-eval
+const requestSource = readFileSync(
+    resolve(__dirname, '../../python/djust/static/djust/src/04-cache.js'), 'utf8'
+);
+// Use the real shared registry rather than mocking acknowledgement semantics.
+eval(requestSource.slice(requestSource.indexOf('// Event sequencing'),
+    requestSource.indexOf('// State management')) + '\n' + src); // eslint-disable-line no-eval
 
 const { LiveViewSSE } = global.window.djust;
 
@@ -114,7 +128,7 @@ describe('LiveViewSSE', () => {
             expect(sse.sendEvent('increment', {})).toBe(false);
         });
 
-        it('returns true and posts when enabled and mounted', async () => {
+        it('returns server completion and posts when enabled and mounted', async () => {
             sse.enabled = true;
             sse.viewMounted = true;
             sse.sseBaseUrl = '/djust/sse/test-id/';
@@ -126,7 +140,9 @@ describe('LiveViewSSE', () => {
 
             const result = sse.sendEvent('increment', { count: 1 });
 
-            expect(result).toBe(true);
+            expect(typeof result.then).toBe('function');
+            const ref = JSON.parse(global.fetch.mock.calls[0][1].body).ref;
+            expect(Number.isSafeInteger(ref)).toBe(true);
             // #1237: sendEvent now delegates through sendMessage to /message/.
             expect(global.fetch).toHaveBeenCalledWith(
                 '/djust/sse/test-id/message/',
@@ -136,6 +152,7 @@ describe('LiveViewSSE', () => {
                         type: 'event',
                         event: 'increment',
                         params: { count: 1 },
+                        ref,
                     }),
                 })
             );
@@ -197,7 +214,8 @@ describe('LiveViewSSE', () => {
             expect(global.handleServerResponse).toHaveBeenCalledWith(
                 expect.objectContaining({ type: 'patch' }),
                 'increment',
-                null
+                null,
+                sse
             );
             expect(sse.lastEventName).toBeNull();
         });

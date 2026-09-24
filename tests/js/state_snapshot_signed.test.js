@@ -28,6 +28,72 @@ const SIGNED_BLOB =
     'eyJzbHVnIjoiYXBwLnZpZXdzLk9yZGVycyIsInNpZCI6InNlc3MtMSIsInN0YXRlIjoie1wicm9sZVwiOlwidXNlclwifSJ9' +
     ':1abcDEF:gH7-_kLmNoPqRsTuVwXyZ0123456789';
 
+describe.each(['websocket', 'sse'])('explicit event snapshots (%s)', (transport) => {
+    function makeHandler(window) {
+        const handler = transport === 'websocket'
+            ? new window.LiveViewWebSocket() : new window.djust.LiveViewSSE();
+        handler.primaryViewPath = 'app.views.Orders';
+        handler._pendingViewPath = 'app.views.Orders';
+        return handler;
+    }
+    for (const type of ['noop', 'patch', 'html_update']) {
+        it(type + ' refreshes the opaque token for navigation', async () => {
+            const { window } = createEnv();
+            const handler = makeHandler(window);
+            window.djust._clientState = { 'app.views.Orders': 'old-token' };
+            await handler.handleMessage({
+                type, source: 'event', view: 'app.views.Orders',
+                state_snapshot_signed: SIGNED_BLOB, patches: [], version: 1,
+            });
+            expect(window.djust._stateSnapshot._serialize('app.views.Orders')).toBe(SIGNED_BLOB);
+            window.djust._routeMap = { '/orders': 'app.views.Orders' };
+            const captures = [];
+            window.djust._sw = { captureState: (url, slug, token) => captures.push(token) };
+            window.dispatchEvent(new window.CustomEvent('djust:before-navigate', {
+                detail: { fromUrl: '/orders', toUrl: '/inbox' },
+            }));
+            expect(captures).toEqual([SIGNED_BLOB]);
+        });
+    }
+
+    it.each(['mount', 'noop', 'patch', 'html_update'])('%s null invalidates the previously cached token', async (type) => {
+        const { window } = createEnv();
+        const handler = makeHandler(window);
+        window.djust._clientState = { 'app.views.Orders': SIGNED_BLOB };
+        await handler.handleMessage({
+            type, source: 'event', view: 'app.views.Orders',
+            state_snapshot_signed: null, patches: [], version: 1,
+        });
+        expect(window.djust._stateSnapshot._serialize('app.views.Orders')).toBeNull();
+        const forgotten = [];
+        window.djust._sw = {
+            captureState: () => { throw new Error('Must not capture stale state'); },
+            forgetState: (url) => forgotten.push(url),
+        };
+        window.djust._routeMap = { '/orders': 'app.views.Orders' };
+        window.dispatchEvent(new window.CustomEvent('djust:before-navigate', {
+            detail: { fromUrl: '/orders', toUrl: '/inbox' },
+        }));
+        expect(forgotten).toEqual(['/orders']);
+    });
+
+    for (const override of [
+        { type: 'error' }, { source: 'async' }, { view: 'app.views.Other' },
+        { view: '__proto__' }, { state_snapshot_signed: {} },
+    ]) {
+        it('ignores nonmatching or invalid snapshot metadata ' + JSON.stringify(override), async () => {
+            const { window } = createEnv();
+            const handler = makeHandler(window);
+            window.djust._clientState = { 'app.views.Orders': SIGNED_BLOB };
+            await handler.handleMessage({
+                type: 'noop', source: 'event', view: 'app.views.Orders',
+                state_snapshot_signed: 'replacement', ...override,
+            });
+            expect(window.djust._stateSnapshot._serialize('app.views.Orders')).toBe(SIGNED_BLOB);
+        });
+    }
+});
+
 function createEnv() {
     const dom = new JSDOM(
         `<!DOCTYPE html><html><body>
