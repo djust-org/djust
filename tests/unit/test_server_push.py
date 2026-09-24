@@ -100,6 +100,9 @@ class TestServerPushHandler:
 
         consumer = LiveViewConsumer()
         consumer.view_instance = MagicMock()
+        # A real LiveView declares its policy; a Mock's auto-attribute would
+        # read as an invalid policy and fail closed (ADR-038).
+        consumer.view_instance.exposure_policy = "legacy"
         consumer.view_instance._skip_render = False
         consumer.view_instance._sync_state_to_rust = MagicMock()
         consumer.view_instance.render_with_diff = MagicMock(
@@ -314,6 +317,9 @@ class TestTick:
 
         consumer = LiveViewConsumer()
         consumer.view_instance = MagicMock()
+        # A real LiveView declares its policy; a Mock's auto-attribute would
+        # read as an invalid policy and fail closed (ADR-038).
+        consumer.view_instance.exposure_policy = "legacy"
         consumer.view_instance.handle_tick = MagicMock()
         consumer.view_instance._sync_state_to_rust = MagicMock()
         consumer.view_instance.render_with_diff = MagicMock(return_value=("<div/>", "[]", 1))

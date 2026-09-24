@@ -20,6 +20,15 @@
 // 4. State snapshot cache (v0.6.0) — per-URL JSON snapshots of public
 //    LiveView state, posted on before-navigate and restored on popstate.
 //    Opt-in per-view via `enable_state_snapshot = True` on the server.
+//    Entries older than the snapshot max age (the server's
+//    DJUST_STATE_SNAPSHOT_MAX_AGE, sent by the client on lookup; default
+//    3600s) are never returned and are deleted on read (ADR-038 D-n).
+//
+// ADR-038 D-b: a navigation response carrying `X-Djust-SW-Cache: no-store`
+// (explicit-exposure pages) is never written to the shell cache. The client
+// applies the same rule to the VDOM cache from the mount frame's `sw_cache`.
+// ADR-038 D-n: the client clears the state, VDOM and shell caches when the
+// server's value-free identity marker changes or disappears.
 //
 // Opt-in only: this file is NOT auto-registered. Users call
 // `djust.registerServiceWorker({ instantShell, reconnectionBridge, vdomCache, stateSnapshot })`
@@ -38,7 +47,9 @@ const STATE_LRU = new Map();
 let stateOperations = Promise.resolve();
 
 // CacheStorage operations are asynchronous; message receipt order alone does
-// not order a capture, subsequent eviction and back-navigation lookup.
+// not order a capture, subsequent eviction and back-navigation lookup. The
+// VDOM and shell operations share the queue so an identity-change clear
+// (ADR-038 D-n) always lands before the next identity's writes.
 function queueStateOperation(event, operation) {
     stateOperations = stateOperations.then(operation).catch(() => {});
     // Keep the worker alive until the queued work completes.
@@ -48,6 +59,10 @@ function queueStateOperation(event, operation) {
 let VDOM_TTL_MS = 1800 * 1000; // 30 minutes
 let VDOM_MAX_ENTRIES = 50;
 const STATE_MAX_ENTRIES = 50;
+// ADR-038 D-n: default state-entry lifetime, matching the server's
+// DEFAULT_MAX_AGE in python/djust/security/state_snapshot.py. The client
+// forwards the server's configured value on each lookup when it knows it.
+const STATE_DEFAULT_MAX_AGE_S = 3600;
 // Size cap for client-submitted state_json (defense in depth).
 const STATE_JSON_MAX_BYTES = 256 * 1024;
 
@@ -109,6 +124,12 @@ async function handleNavigate(request) {
     } catch (err) {
         // Network failure — propagate so the browser shows its own error.
         throw err;
+    }
+    // ADR-038 D-b: the server marks explicit-exposure pages ineligible for
+    // worker caches. Their HTML is served but never persisted.
+    if (response.headers && typeof response.headers.get === 'function'
+        && String(response.headers.get('X-Djust-SW-Cache') || '').toLowerCase() === 'no-store') {
+        return response;
     }
     try {
         const cloned = response.clone();
@@ -223,7 +244,11 @@ self.addEventListener('message', (event) => {
     if (msg.type === 'DJUST_CLEAR_SHELL') {
         // Allow the client to invalidate the cached shell (e.g. after a
         // deployment or explicit "refresh shell" action).
-        caches.open(SHELL_CACHE).then((c) => c.delete(SHELL_KEY)).catch(() => {});
+        // Queued so an identity-change clear orders before later writes.
+        queueStateOperation(event, async () => {
+            const c = await caches.open(SHELL_CACHE);
+            await c.delete(SHELL_KEY);
+        });
         return;
     }
 
@@ -244,17 +269,17 @@ self.addEventListener('message', (event) => {
 
     if (msg.type === 'VDOM_CACHE') {
         if (!msg.url || typeof msg.html !== 'string') return;
-        putWithLRU(VDOM_CACHE, VDOM_LRU, msg.url, {
+        queueStateOperation(event, () => putWithLRU(VDOM_CACHE, VDOM_LRU, msg.url, {
             url: msg.url,
             html: msg.html,
             version: typeof msg.version === 'number' ? msg.version : 0,
             ts: typeof msg.ts === 'number' ? msg.ts : Date.now(),
-        }, VDOM_MAX_ENTRIES).catch(() => {});
+        }, VDOM_MAX_ENTRIES));
         return;
     }
 
     if (msg.type === 'VDOM_CACHE_LOOKUP') {
-        lookupCached(VDOM_CACHE, msg.url).then((entry) => {
+        queueStateOperation(event, () => lookupCached(VDOM_CACHE, msg.url).then((entry) => {
             const now = Date.now();
             const ts = entry && typeof entry.ts === 'number' ? entry.ts : 0;
             const stale = entry ? now - ts > VDOM_TTL_MS : false;
@@ -278,7 +303,7 @@ self.addEventListener('message', (event) => {
                 version: null,
                 ts: 0,
             });
-        });
+        }));
         return;
     }
 
@@ -308,7 +333,23 @@ self.addEventListener('message', (event) => {
     }
 
     if (msg.type === 'STATE_SNAPSHOT_LOOKUP') {
-        queueStateOperation(event, () => lookupCached(STATE_CACHE, msg.url).then((entry) => {
+        const maxAgeS = typeof msg.max_age_seconds === 'number' && msg.max_age_seconds > 0
+            ? msg.max_age_seconds
+            : STATE_DEFAULT_MAX_AGE_S;
+        queueStateOperation(event, () => lookupCached(STATE_CACHE, msg.url).then(async (found) => {
+            let entry = found;
+            // ADR-038 D-n: an entry past the max age (or without a usable
+            // timestamp) is never returned and is removed from disk.
+            if (entry && (typeof entry.ts !== 'number' || Date.now() - entry.ts > maxAgeS * 1000)) {
+                entry = null;
+                STATE_LRU.delete(msg.url);
+                try {
+                    const cache = await caches.open(STATE_CACHE);
+                    await cache.delete(msg.url);
+                } catch (_e) {
+                    // Best-effort; the entry is still not returned.
+                }
+            }
             const reply = {
                 type: 'STATE_SNAPSHOT_REPLY',
                 requestId: msg.requestId,
@@ -332,8 +373,10 @@ self.addEventListener('message', (event) => {
     }
 
     if (msg.type === 'DJUST_CLEAR_VDOM_CACHE') {
-        caches.delete(VDOM_CACHE).catch(() => {});
-        VDOM_LRU.clear();
+        queueStateOperation(event, async () => {
+            await caches.delete(VDOM_CACHE);
+            VDOM_LRU.clear();
+        });
         return;
     }
 
@@ -451,6 +494,7 @@ if (typeof module !== 'undefined' && module.exports) {
             getVdomTtlMs: () => VDOM_TTL_MS,
             getVdomMaxEntries: () => VDOM_MAX_ENTRIES,
             getStateMaxEntries: () => STATE_MAX_ENTRIES,
+            STATE_DEFAULT_MAX_AGE_S: STATE_DEFAULT_MAX_AGE_S,
         },
     };
 }

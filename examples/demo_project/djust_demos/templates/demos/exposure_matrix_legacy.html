@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+
+{% comment %}
+ADR-038 E5 live matrix surface (tests/playwright/test_exposure_matrix.py).
+{% endcomment %}
+
+{% block title %}Exposure Matrix (legacy) (djust){% endblock %}
+
+{% block content %}
+<div dj-root dj-view="djust_demos.views.exposure_demo.LegacyExposureMatrixView" style="padding: 6rem 2rem 2rem; max-width: 720px; margin: 0 auto;">
+    <h1 id="matrix-heading">Exposure matrix: <span id="matrix-policy">{{ policy }}</span></h1>
+    <p>Count: <span id="matrix-count">{{ count }}</span></p>
+    <p>Page: <span id="matrix-page">{{ page }}</span></p>
+    <button id="matrix-increment" dj-click="increment">Increment</button>
+    <button id="matrix-spawn" dj-click="spawn">Background +10</button>
+    <button id="matrix-boom" dj-click="boom">Fail</button>
+    <a id="matrix-page2" dj-patch="?page=2">Page 2</a>
+    <a id="matrix-away" dj-navigate="/demos/nav-a/">Away</a>
+</div>
+{% endblock %}

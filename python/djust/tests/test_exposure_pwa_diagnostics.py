@@ -43,12 +43,14 @@ def test_offline_sync_handler_failure_is_value_free_for_explicit_views(caplog, p
         processed, failed = view._sync_create_actions([action])
     assert (processed, failed) == (0, 1)
     assert CALLS, "the sync handler never ran; the test would be vacuous"
-    # Out of this slice's scope and recorded in the ledger: the failure branch
-    # also persists str(exc) into the sync queue, for either policy.
-    assert recorded and "OFFLINE_DATA_SENTINEL" in recorded[0]
+    # The failure branch stores an error in the sync queue (E1-2): legacy keeps
+    # str(exc); nonlegacy views store only the exception class name.
+    assert len(recorded) == 1
     if policy == "legacy":
+        assert "OFFLINE_DATA_SENTINEL" in recorded[0]
         assert "OFFLINE_DATA_SENTINEL" in caplog.text
     else:
+        assert recorded == ["ValueError"]
         assert "OFFLINE_DATA_SENTINEL" not in caplog.text
         assert "PWA_SYNC_SENTINEL" not in caplog.text
         assert "Protected view operation failed" in caplog.text

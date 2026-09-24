@@ -1,4 +1,11 @@
-"""Runtime boundary diagnostics through actual WS and SSE HTTP transports."""
+"""Runtime boundary diagnostics through actual WS and SSE HTTP transports.
+
+Contract (ADR-038 D-a, revised 2026-09-22): in production (``DEBUG=False``) a
+nonlegacy owner's failure is value-free in the log, the WS error frame, the SSE
+response and the traceback ring. Under ``DEBUG=True`` every owner's failure
+reads like Django's DEBUG output — detailed WS error frame, SSE technical 500,
+logged exception and traceback-ring entry — exactly as a legacy owner's does.
+"""
 
 import json
 from collections import deque
@@ -85,14 +92,19 @@ async def test_outer_ws_event_failure(monkeypatch, caplog, debug, initial, final
             failure = await socket.receive_json_from(timeout=3)
             assert called == ["explode"]
             assert failure["type"] == "error", failure
-            legacy = initial == final == "legacy" and not transient
+            # Details are allowed for a legacy owner, and for every owner under DEBUG.
+            allowed = (initial == final == "legacy" and not transient) or debug
             observed = (
                 "OUTER_TRANSPORT_SENTINEL" in caplog.text,
                 "OUTER_TRANSPORT_SENTINEL" in json.dumps(failure),
                 "OUTER_TRANSPORT_SENTINEL" in json.dumps(tracebacks.get_recent_tracebacks(50)),
             )
-            assert observed == (legacy, legacy and debug, legacy)
-            if not legacy:
+            assert observed == (allowed, allowed and debug, allowed)
+            if debug:
+                # The DEBUG error frame, for every policy: exception and traceback.
+                assert failure["error"] == "ValueError: OUTER_TRANSPORT_SENTINEL"
+                assert failure["traceback"].startswith("Traceback (most recent call last)")
+            if not allowed:
                 assert failure["source"] == "event"
                 assert failure["ref"] == 19
             await socket.send_json_to({"type": "ping"})
@@ -164,15 +176,20 @@ async def test_outer_sse_http_failure(
                 content_type="application/json",
             )
             assert called == ["change"], (response.content[:300], drain(session))
-            legacy = initial == final == "legacy" and not transient
+            # Details are allowed for a legacy owner, and for every owner under DEBUG.
+            allowed = (initial == final == "legacy" and not transient) or debug
             frames = drain(session)
             observed = (
                 "OUTER_SSE_SENTINEL" in caplog.text,
                 "OUTER_SSE_SENTINEL" in response.content.decode(),
                 "OUTER_SSE_SENTINEL" in json.dumps(frames),
             )
-            assert observed == (legacy, legacy and debug, False)
-            if legacy:
+            assert observed == (allowed, allowed and debug, False)
+            if allowed:
+                if debug:
+                    # Django's technical 500 page, for every policy.
+                    assert response["Content-Type"].startswith("text/html")
+                    assert "Traceback" in response.content.decode()
                 assert response.status_code == 500
             else:
                 assert response.status_code == 200

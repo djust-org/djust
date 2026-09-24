@@ -9,6 +9,11 @@ from urllib.parse import parse_qs, urlencode
 
 from django.utils.datastructures import MultiValueDict
 
+from .._exposure_providers import (
+    RUST_RENDER_PROVIDER,
+    ExplicitRenderContext,
+    require_no_provider_keys,
+)
 from ..change_detection import deep_fingerprint, fingerprints_by_content, warn_fingerprint_truncated
 from ..security import sanitize_for_log
 from ..serialization import normalize_django_value
@@ -232,6 +237,9 @@ def _collect_sub_ids(
 
 class RustBridgeMixin:
     """Rust integration: _initialize_rust_view, _sync_state_to_rust."""
+
+    # ADR-038 E2-1: keys _sync_state_to_rust adds for the Rust renderer.
+    _djust_context_providers = (RUST_RENDER_PROVIDER,)
 
     if TYPE_CHECKING:
         # Cooperating attributes/methods supplied by the host class (LiveView)
@@ -607,6 +615,13 @@ class RustBridgeMixin:
                 Omit entirely (``None``) for the zero-arg force-render form above
                 — a DB/external-only change with no changed public attr.
 
+        This is also the invalidation API for ``exposure_policy = "explicit"``
+        views (ADR-038 D3), with the same behaviour: explicit context derived
+        from declared ``state()`` fields or plain attributes re-renders on its
+        own, and this call covers what no snapshot can see (an attribute write
+        on an opaque object, a DB/external change). A named key may be the
+        public field name; either form forces the full render.
+
         Note:
             Distinct from the Rust-side ``RustLiveView.set_changed_keys`` (the
             PyO3 partial-sync primitive `_sync_state_to_rust` drives internally)
@@ -713,7 +728,17 @@ class RustBridgeMixin:
             for _key, _val in list(full_context.items()):
                 _normalized = _normalize_db_values(_val)
                 if _normalized is not _val:
-                    full_context[_key] = _normalized
+                    if type(full_context) is ExplicitRenderContext:
+                        # A framework rewrite of the same value, which the
+                        # explicit context refuses for a provider key (E2-1).
+                        dict.__setitem__(full_context, _key, _normalized)
+                    else:
+                        full_context[_key] = _normalized
+
+            # ADR-038 E2-1: csrf_token / DATE_FORMAT / TIME_FORMAT below are
+            # framework-provided. An explicit view's own context may not supply
+            # them, since the "if not in" injection would silently defer to it.
+            require_no_provider_keys(self, full_context, RUST_RENDER_PROVIDER)
 
             # Apply Django context processors so context-processor vars
             # (e.g. djust theming's {{ theme_panel }} / {{ theme_head }})
@@ -861,6 +886,13 @@ class RustBridgeMixin:
                     # we need to detect derived values (e.g. `products` from
                     # `self._products_cache`, or `completed_count` computed
                     # from `self.todos`).
+                    #
+                    # ADR-038 E2-8: for explicit views this loop is the whole
+                    # bridge. Their changed keys are storage attributes
+                    # (`_state_count`, `wizard_step_index`) that never match
+                    # a context key (`doubled`, a provider's `current_step`),
+                    # so every rendered key reaches Rust through this
+                    # comparison, not through the name match above.
                     #
                     # Containers (dict, list, tuple) compare by STRUCTURAL
                     # fingerprint (#2664), not id() and not ``==`` against a

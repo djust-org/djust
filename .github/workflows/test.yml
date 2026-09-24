@@ -594,6 +594,52 @@ jobs:
             rm examples/demo_project/server.pid
           fi
 
+  # ADR-038 E5 live matrix: explicit exposure in a real browser over WebSocket
+  # and SSE, with a second server process on the same database for
+  # cross-worker restore. NON-BLOCKING while it proves stable on the runner,
+  # the same promotion path browser-smoke took (#1534); not in test-summary.
+  exposure-matrix:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    env:
+      # Route djust's logs to the server log so the matrix can check it.
+      DJUST_DEMO_LOG_CONSOLE: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Playwright server
+        uses: ./.github/actions/djust-playwright-server
+      - name: Start a second worker on :8003 (same database)
+        working-directory: examples/demo_project
+        run: |
+          nohup ../../.venv/bin/python -m uvicorn demo_project.asgi:application \
+            --port 8003 > server8003.log 2>&1 &
+          echo $! > server8003.pid
+          for i in $(seq 1 30); do
+            curl -fsS -o /dev/null http://localhost:8003/demos/exposure/ && break
+            sleep 1
+          done
+      - name: Run the ADR-038 exposure matrix
+        env:
+          E5_BASE: http://localhost:8002
+          E5_SECOND: http://localhost:8003
+          E5_SERVER_LOG: examples/demo_project/server.log
+          E5_DEMO_DIR: examples/demo_project
+        run: .venv/bin/python tests/playwright/test_exposure_matrix.py
+      - name: Upload server logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: exposure-matrix-server-logs
+          path: |
+            examples/demo_project/server.log
+            examples/demo_project/server8003.log
+      - name: Stop servers
+        if: always()
+        run: |
+          for f in examples/demo_project/server.pid examples/demo_project/server8003.pid; do
+            if [ -f "$f" ]; then kill $(cat "$f") || true; rm "$f"; fi
+          done
+
   # Security scanning job — bandit + safety + cargo-audit + npm-audit.
   # Runs on push to main, schedule, and manual dispatch; SKIPPED on PRs.
   #

@@ -10,6 +10,47 @@ import pytest
 from djust import LiveView
 
 
+def _authorized_runtime(view):
+    """A bare runtime that grants an explicit root authority for its turns.
+
+    These tests exercise task tracking and cancellation, not authorization: a
+    real explicit root authorizes each background turn against its mount
+    binding (test_exposure_root_background_turns.py covers that). An unmounted
+    runtime has no binding, so authority is granted here.
+    """
+    from djust.runtime import ViewRuntime
+    from djust.tests.test_runtime_state_save_tt_1894 import MockTransport
+
+    host = ViewRuntime(MockTransport())
+    host.view_instance = view
+    host.authorize_explicit_turn = AsyncMock()
+    host.commit_explicit_turn = AsyncMock(return_value=True)
+    # An unmounted view has no mount path to sign a snapshot for.
+    host._explicit_event_snapshot = AsyncMock(return_value={})
+    return host
+
+
+def _authorized_consumer(view):
+    """A bare consumer whose runtime grants an explicit root authority.
+
+    Same reason as :func:`_authorized_runtime`: these tests are about task
+    cancellation, and the consumer's server-originated turns authorize through
+    its runtime (test_exposure_consumer_turns.py covers that).
+    """
+    from djust.websocket import LiveViewConsumer
+
+    host = LiveViewConsumer()
+    host.view_instance = view
+    host._runtime = SimpleNamespace(
+        view_instance=view,
+        authorize_explicit_turn=AsyncMock(),
+        commit_explicit_turn=AsyncMock(return_value=True),
+        _dispatch_explicit_child_queues=lambda event_name: None,
+        _parameter_contracts_active=False,
+    )
+    return host
+
+
 class LifecycleView(LiveView):
     exposure_policy = "explicit"
 
@@ -59,9 +100,6 @@ def test_unregister_clears_nested_ownership_and_pending_work():
 @pytest.mark.parametrize("from_thread", [False, True])
 async def test_cancel_all_stops_running_coroutine_and_drops_queued_work(transport, from_thread):
     from asgiref.sync import sync_to_async
-    from djust.runtime import ViewRuntime
-    from djust.tests.test_runtime_state_save_tt_1894 import MockTransport
-    from djust.websocket import LiveViewConsumer
 
     view = LifecycleView()
     entered, stopped = asyncio.Event(), asyncio.Event()
@@ -75,12 +113,10 @@ async def test_cancel_all_stops_running_coroutine_and_drops_queued_work(transpor
 
     view.start_async(running, name="running")
     if transport == "runtime":
-        host = ViewRuntime(MockTransport())
-        host.view_instance = view
+        host = _authorized_runtime(view)
         host._dispatch_async_work("start")
     else:
-        host = LiveViewConsumer()
-        host.view_instance = view
+        host = _authorized_consumer(view)
         await host._dispatch_async_work()
     await asyncio.wait_for(entered.wait(), 1)
     handles = tuple(getattr(view, "_async_task_handles", ()))
@@ -256,12 +292,9 @@ async def test_disposed_view_cannot_register_new_waiter():
 
 @pytest.mark.asyncio
 async def test_sync_work_cannot_be_interrupted_but_completion_is_suppressed():
-    from djust.runtime import ViewRuntime
-    from djust.tests.test_runtime_state_save_tt_1894 import MockTransport
 
     view = LifecycleView()
-    runtime = ViewRuntime(MockTransport())
-    runtime.view_instance = view
+    runtime = _authorized_runtime(view)
     entered, release, finished = threading.Event(), threading.Event(), threading.Event()
     completions = []
     view.handle_async_result = lambda *args, **kwargs: completions.append(1)
@@ -328,12 +361,9 @@ async def test_websocket_disconnect_disposes_active_and_staged_subtrees_once():
 
 @pytest.mark.asyncio
 async def test_finished_tasks_release_tracking_handles():
-    from djust.runtime import ViewRuntime
-    from djust.tests.test_runtime_state_save_tt_1894 import MockTransport
 
     view = LifecycleView()
-    host = ViewRuntime(MockTransport())
-    host.view_instance = view
+    host = _authorized_runtime(view)
     host._render_async_result = AsyncMock()
 
     async def done():
@@ -350,12 +380,9 @@ async def test_finished_tasks_release_tracking_handles():
 
 @pytest.mark.asyncio
 async def test_cancel_before_dispatch_task_starts_never_enters_callback():
-    from djust.runtime import ViewRuntime
-    from djust.tests.test_runtime_state_save_tt_1894 import MockTransport
 
     view = LifecycleView()
-    host = ViewRuntime(MockTransport())
-    host.view_instance = view
+    host = _authorized_runtime(view)
     entered = []
 
     async def callback():
@@ -425,9 +452,6 @@ async def test_real_sse_navigation_disposes_old_registered_subtree(settings):
 @pytest.mark.parametrize("transport", ["runtime", "websocket"])
 @pytest.mark.parametrize("raises", [False, True])
 async def test_swallowed_cancellation_cannot_deliver_result_or_error(transport, raises, caplog):
-    from djust.runtime import ViewRuntime
-    from djust.tests.test_runtime_state_save_tt_1894 import MockTransport
-    from djust.websocket import LiveViewConsumer
 
     view = LifecycleView()
     entered = asyncio.Event()
@@ -445,12 +469,10 @@ async def test_swallowed_cancellation_cannot_deliver_result_or_error(transport, 
 
     view.start_async(stubborn)
     if transport == "runtime":
-        host = ViewRuntime(MockTransport())
-        host.view_instance = view
+        host = _authorized_runtime(view)
         host._dispatch_async_work("start")
     else:
-        host = LiveViewConsumer()
-        host.view_instance = view
+        host = _authorized_consumer(view)
         await host._dispatch_async_work()
     handles = tuple(view._async_task_handles)
     try:

@@ -10,6 +10,7 @@ from django.db import models
 from django.test.signals import setting_changed
 from django.utils.datastructures import MultiValueDict
 
+from .._exposure_providers import STREAMS_PROVIDER, actions_provider, components_provider
 from ..serialization import _crosses_as_encoded, normalize_django_value
 from ..utils import is_model_list
 
@@ -137,6 +138,9 @@ def _is_json_serializable(value: Any) -> bool:
 
 class ContextMixin:
     """Context methods: get_context_data, _get_context_processors, _apply_context_processors."""
+
+    # ADR-038 E2-0: the providers the explicit base context renders.
+    _djust_context_providers = (components_provider, actions_provider, STREAMS_PROVIDER)
 
     if TYPE_CHECKING:
         # Cooperating attributes/methods supplied by the host class (LiveView)
@@ -491,7 +495,7 @@ class ContextMixin:
     def _get_explicit_context_data(self, **kwargs: Any) -> Dict[str, Any]:
         """Render-only context from deliberate additions and known providers.
 
-        This branch is staged behind LiveView's construction guard. It performs
+        The ``exposure_policy="explicit"`` context (ADR-038). It performs
         no public attribute walk, state projection, or JSON conversion: native
         Django model/queryset values deliberately supplied by the application
         remain native inputs to the renderer. This context must not be reused
@@ -500,6 +504,13 @@ class ContextMixin:
         from inspect import getattr_static
 
         from .._exposure import ExposureError
+        from .._exposure_providers import (
+            STREAMS_PROVIDER,
+            UPLOADS_PROVIDER,
+            instance_assigned_component_error,
+            new_render_context,
+            registered_components,
+        )
         from ..components.base import LiveComponent
 
         policy = getattr(self, "exposure_policy", None)
@@ -507,6 +518,13 @@ class ContextMixin:
             raise ExposureError("Unknown context exposure policy")
         if "view" in kwargs or "streams" in kwargs:
             raise ExposureError("Explicit context contains a reserved framework name")
+        # Every provider key is declared in the class's manifest (E2-0). The
+        # render context enforces ownership so a later application write or
+        # kwarg can never silently replace a provider value, or be replaced.
+        context = new_render_context(self)
+        manifest = context._djust_manifest
+        if any(key in manifest for key in kwargs):
+            raise ExposureError("Explicit context provider collision")
         cached = getattr(self, "_cached_context", None)
         if cached is not None:
             if type(cached) is not dict or "view" in cached:
@@ -516,7 +534,15 @@ class ContextMixin:
             )
             if providers.intersection(kwargs):
                 raise ExposureError("Explicit context provider collision")
-            return {**cached, **kwargs}
+            # Cached provider values keep their owner, so the mixin that
+            # provided them may provide them again on this pass.
+            for key, value in cached.items():
+                if key in providers and key in manifest:
+                    context._provide(manifest[key], key, value)
+                else:
+                    dict.__setitem__(context, key, value)
+            context.update(kwargs)
+            return context
 
         reset_ids = getattr(self, "reset_unique_ids", None)
         if callable(reset_ids):
@@ -525,18 +551,17 @@ class ContextMixin:
         if callable(clear_providers):
             clear_providers()
 
-        context: Dict[str, Any] = {}
-
-        def provide(name: str, value: Any) -> None:
-            if type(name) is not str or name == "view" or name in context or name in kwargs:
-                raise ExposureError("Explicit context provider collision or reserved name")
-            context[name] = value
+        # D-h: a component assigned on the instance is never discovered; say
+        # so at the first explicit render instead of rendering nothing.
+        misplaced = instance_assigned_component_error(self)
+        if misplaced is not None:
+            raise misplaced
 
         # The descriptor registry is a framework declaration manifest, not an
         # attribute discovery mechanism. Reject stale/shadowed entries BEFORE
-        # evaluating their descriptor (especially a property shadow).
-        descriptors = getattr(type(self), "_component_descriptors", {})
-        for name, declaration in descriptors.items():
+        # evaluating their descriptor (especially a property shadow). Each
+        # declaration's ``__get__`` returns this view's own binding (E2-7).
+        for name, declaration in registered_components(type(self)).items():
             if name in ("view", "streams"):
                 raise ExposureError("Component context provider uses a reserved name")
             if (
@@ -544,19 +569,28 @@ class ContextMixin:
                 or getattr_static(type(self), name) is not declaration
             ):
                 raise ExposureError("Component context provider no longer matches its declaration")
-            provide(name, declaration.__get__(self, type(self)))
+            context._provide("djust.components", name, declaration.__get__(self, type(self)))
 
         # Action/stream render namespaces are registered by their framework
         # APIs. They grant rendering permission only, never persistence/client.
         for name, action_state in (getattr(self, "_action_state", None) or {}).items():
-            provide(name, action_state)
+            if type(name) is not str:
+                raise ExposureError("Undeclared explicit context provider key")
+            context._provide("djust.actions", name, action_state)
         get_streams = getattr(self, "_get_streams_context", None)
         if callable(get_streams):
             streams = get_streams()
             if streams:
-                provide("streams", streams)
+                context._provide(STREAMS_PROVIDER.name, "streams", streams)
+        # ADR-038 E2-6: UploadMixin's render projection. Resolved here rather
+        # than in a mixin get_context_data so both documented MRO orders
+        # (``UploadMixin, LiveView`` and ``LiveView, UploadMixin``) render it.
+        get_uploads = getattr(self, "_get_upload_context", None)
+        if callable(get_uploads):
+            for name, value in get_uploads().items():
+                context._provide(UPLOADS_PROVIDER.name, name, value)
 
-        self._explicit_context_provider_keys = frozenset(context)
+        self._explicit_context_provider_keys = context.provider_keys()
         context.update(kwargs)
         self._jit_serialized_keys = set()
         return context
@@ -672,8 +706,16 @@ class ContextMixin:
                     supplied = processor(request)
                     if not supplied:
                         continue
-                    if reserved.intersection(supplied):
-                        raise ExposureError("Context processor reserved provider collision")
+                    for key in reserved.intersection(supplied):
+                        # A processor may repeat what the provider supplied:
+                        # the same object, or an equal one (the stock
+                        # djust.tenants.context_processor re-resolves the
+                        # tenant next to TenantMixin). The provider's value is
+                        # kept either way; anything else is a collision.
+                        if key not in result or not _same_provider_value(
+                            supplied[key], result[key]
+                        ):
+                            raise ExposureError("Context processor reserved provider collision")
                     for key, value in supplied.items():
                         if key not in result:
                             result[key] = value
@@ -756,3 +798,13 @@ class ContextMixin:
         if all_succeeded:
             _resolved_processors_cache[cache_key] = resolved
         return resolved
+
+
+def _same_provider_value(supplied: Any, provided: Any) -> bool:
+    """Whether a context processor merely repeats a provider's own value."""
+    if supplied is provided:
+        return True
+    try:
+        return bool(supplied == provided) and type(supplied) is type(provided)
+    except Exception:  # noqa: BLE001 — an unequal-by-error value is a collision
+        return False

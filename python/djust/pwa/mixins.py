@@ -9,11 +9,18 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
+from .._exposure import ProviderContract
+from .._exposure_providers import provide_context
 from .storage import get_storage_backend, OfflineAction, OfflineStorage, SyncQueue
 from .sync import SyncManager
 from .utils import is_online, get_connection_info
 
 logger = logging.getLogger(__name__)
+
+
+#: ADR-038 E2-1: render-only PWA and offline context keys.
+PWA_PROVIDER = ProviderContract("djust.pwa", rendered=frozenset({"pwa_config"}))
+OFFLINE_PROVIDER = ProviderContract("djust.offline", rendered=frozenset({"offline_state"}))
 
 
 class PWAMixin:
@@ -47,6 +54,7 @@ class PWAMixin:
     pwa_orientation: str = "any"
     pwa_start_url: str = "/"
     pwa_scope: str = "/"
+    _djust_context_providers = (PWA_PROVIDER,)
 
     if TYPE_CHECKING:
         # Provided by LiveView at runtime when this mixin is combined with it.
@@ -141,7 +149,7 @@ class PWAMixin:
             if hasattr(super(), "get_context_data")
             else {}
         )
-        context["pwa_config"] = self.get_pwa_config()
+        provide_context(self, context, PWA_PROVIDER.name, "pwa_config", self.get_pwa_config())
         return context
 
 
@@ -179,6 +187,8 @@ class OfflineMixin:
     if TYPE_CHECKING:
         # Provided by LiveView at runtime when this mixin is combined with it.
         def push_event(self, event: str, payload: Dict[str, Any]) -> None: ...
+
+    _djust_context_providers = (OFFLINE_PROVIDER,)
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -400,7 +410,9 @@ class OfflineMixin:
             if hasattr(super(), "get_context_data")
             else {}
         )
-        context["offline_state"] = self.get_offline_state()
+        provide_context(
+            self, context, OFFLINE_PROVIDER.name, "offline_state", self.get_offline_state()
+        )
         return context
 
 
@@ -509,9 +521,27 @@ class SyncMixin:
             from .._exposure_diagnostics import log_failure_for
 
             log_failure_for(logger, (self,), e, "Sync failed: %s", e, traceback=True)
-            self.push_event("offline:sync_error", {"error": str(e)})
+            from .._exposure_diagnostics import exception_details_allowed_for
+
+            # ADR-038: the push frame reaches the client; exception text can
+            # echo queued data, so nonlegacy views get a value-free message.
+            message = str(e) if exception_details_allowed_for((self,)) else "Offline sync failed"
+            self.push_event("offline:sync_error", {"error": message})
         finally:
             self._sync_in_progress = False
+
+    def _sync_failure_reason(self, exc: BaseException) -> str:
+        """The error stored with a failed queued action.
+
+        Legacy views keep ``str(exc)``. For nonlegacy views (ADR-038) the queue
+        stores only the exception class name, since the text can echo the
+        client-queued data or view state.
+        """
+        from .._exposure_diagnostics import exception_details_allowed_for
+
+        if exception_details_allowed_for((self,)):
+            return str(exc)
+        return type(exc).__name__
 
     def _sync_create_actions(self, actions: List[OfflineAction]) -> tuple[int, int]:
         """Sync create actions."""
@@ -549,7 +579,7 @@ class SyncMixin:
                     e,
                     traceback=True,
                 )
-                self.sync_queue.mark_failed(action.id, str(e))
+                self.sync_queue.mark_failed(action.id, self._sync_failure_reason(e))
 
         return processed, failed
 
@@ -589,7 +619,7 @@ class SyncMixin:
                     e,
                     traceback=True,
                 )
-                self.sync_queue.mark_failed(action.id, str(e))
+                self.sync_queue.mark_failed(action.id, self._sync_failure_reason(e))
 
         return processed, failed
 
@@ -629,7 +659,7 @@ class SyncMixin:
                     e,
                     traceback=True,
                 )
-                self.sync_queue.mark_failed(action.id, str(e))
+                self.sync_queue.mark_failed(action.id, self._sync_failure_reason(e))
 
         return processed, failed
 

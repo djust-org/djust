@@ -1,9 +1,9 @@
-"""Internal ADR-038 projection primitives, not an enabled LiveView policy.
+"""ADR-038 projection primitives behind ``exposure_policy="explicit"``.
 
 Callers must select declarations, authenticate storage, bind identities and
 check freshness separately. A schema digest is NOT a signature. These helpers
 never discover ordinary attributes, invoke a fallback serializer, or mutate a
-view during restore. Legacy runtime exporters deliberately do not use them yet.
+view during restore. Legacy exporters do not use them.
 """
 
 import hashlib
@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Literal, cast
 
+from django.core.exceptions import ImproperlyConfigured
+
 Destination = Literal["server", "client", "snapshot", "debug"]
 Persistence = Literal["server", "client"] | None
 _DESTINATIONS = ("server", "client", "snapshot", "debug")
@@ -22,6 +24,15 @@ _RESTORABLE = ("server", "snapshot")
 _NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]*\Z", re.ASCII)
 _UNSAFE_KEYS = frozenset({"__proto__", "constructor", "prototype"})
 _CODEC_VERSION = "json-primitives-v1"
+
+
+class ExposureConfigurationError(ImproperlyConfigured):
+    """A view's exposure configuration is invalid.
+
+    Raised by the constructor guard. Its messages are framework-authored and
+    carry no view values, so the protected HTTP entry (ADR-038 D-a) lets it
+    reach the developer instead of turning it into a generic 500.
+    """
 
 
 class ExposureError(ValueError):
@@ -54,6 +65,115 @@ class FieldExposure:
         if destination in ("client", "debug"):
             return self.client
         raise ExposureError("Unknown state projection destination")
+
+
+_PROVIDER_NAME = re.compile(r"[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*\Z", re.ASCII)
+_RESERVED_CONTEXT_KEYS = frozenset({"view"})
+
+
+def _provider_keys(value: Any, label: str) -> frozenset[str]:
+    if isinstance(value, str) or not isinstance(value, (frozenset, set, tuple, list)):
+        raise ExposureError(f"Provider {label} keys must be a collection of names")
+    keys = frozenset(value)
+    for key in keys:
+        if (
+            type(key) is not str
+            or len(key) > 128
+            or not _NAME.fullmatch(key)
+            or key in _UNSAFE_KEYS
+            or key in _RESERVED_CONTEXT_KEYS
+        ):
+            raise ExposureError("Invalid or reserved provider context key")
+    return keys
+
+
+@dataclass(frozen=True)
+class ProviderContract:
+    """Declaration of one framework context provider (ADR-038 E2-0).
+
+    ``rendered`` names the context keys the provider writes; they are
+    render-only and reserved, so an application key or kwarg with the same
+    name is a collision, never a silent replacement. ``tracked`` names the
+    keys (or view fields) its change detection depends on. ``persisted`` and
+    ``client`` name the rendered keys it would persist or disclose; both are
+    empty for every v1 provider and nothing consumes them yet, but they are
+    part of the schema digest, as is ``codec``. A provider change therefore
+    invalidates stored envelopes.
+
+    Mixins declare contracts in a class-body ``_djust_context_providers``
+    tuple. An entry is a ``ProviderContract`` or a callable taking the view
+    class and returning one, for keys that depend on class declarations.
+    """
+
+    name: str
+    rendered: frozenset[str]
+    tracked: frozenset[str] = frozenset()
+    persisted: frozenset[str] = frozenset()
+    client: frozenset[str] = frozenset()
+    codec: str = _CODEC_VERSION
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.name) is not str
+            or len(self.name) > 128
+            or not _PROVIDER_NAME.fullmatch(self.name)
+        ):
+            raise ExposureError("Invalid context provider name")
+        for label in ("rendered", "tracked", "persisted", "client"):
+            object.__setattr__(self, label, _provider_keys(getattr(self, label), label))
+        if not self.persisted <= self.rendered or not self.client <= self.rendered:
+            raise ExposureError("Provider persisted/client keys must be rendered keys")
+        if type(self.codec) is not str or self.codec != _CODEC_VERSION:
+            raise ExposureError("Unsupported context provider codec")
+
+    def specification(self) -> dict[str, Any]:
+        """Order-independent schema input for this provider."""
+        return {
+            "rendered": sorted(self.rendered),
+            "tracked": sorted(self.tracked),
+            "persisted": sorted(self.persisted),
+            "client": sorted(self.client),
+            "codec": self.codec,
+        }
+
+
+def provider_contracts_for(view_class: type) -> tuple[ProviderContract, ...]:
+    """Collect the provider manifest a view class registers, most-derived first.
+
+    Reads only each class's own ``_djust_context_providers`` entry, so a mixin
+    contributes its providers once however deep it sits in the MRO. Two
+    providers may not declare the same rendered key.
+    """
+    contracts: list[ProviderContract] = []
+    names: set[str] = set()
+    keys: set[str] = set()
+    for owner in view_class.__mro__:
+        declared = vars(owner).get("_djust_context_providers")
+        if declared is None:
+            continue
+        if type(declared) is not tuple:
+            raise ExposureError("_djust_context_providers must be a tuple")
+        for entry in declared:
+            contract = entry if type(entry) is ProviderContract else None
+            if contract is None and callable(entry):
+                contract = entry(view_class)
+            if type(contract) is not ProviderContract:
+                raise ExposureError("Context providers require a ProviderContract")
+            if contract.name in names or keys.intersection(contract.rendered):
+                raise ExposureError("Explicit context provider collision")
+            names.add(contract.name)
+            keys.update(contract.rendered)
+            contracts.append(contract)
+    return tuple(contracts)
+
+
+def provider_owners(view_class: type) -> dict[str, str]:
+    """Map each registered rendered key to its provider name."""
+    return {
+        key: contract.name
+        for contract in provider_contracts_for(view_class)
+        for key in contract.rendered
+    }
 
 
 @dataclass(frozen=True)
@@ -96,6 +216,25 @@ def uses_legacy_exposure(view: Any) -> bool:
         policy = _read_exposure_policy(view)
         return type(policy) is str and policy == "legacy"
     except Exception:  # noqa: BLE001 — an unreadable policy cannot grant legacy access
+        return False
+
+
+def service_worker_cache_eligible(view: Any) -> bool:
+    """Whether a page's HTML may be written to the worker's VDOM/shell caches.
+
+    ADR-038 D-b: only a legacy view whose registered children are all legacy
+    is eligible. The rendered HTML includes every child, so one nonlegacy
+    child makes the page ineligible. Unreadable children fail closed.
+    """
+    if not uses_legacy_exposure(view):
+        return False
+    getter = getattr(view, "_get_all_child_views", None)
+    if getter is None:
+        return True
+    try:
+        children = getter()
+        return all(uses_legacy_exposure(child) for child in dict(children).values())
+    except Exception:  # noqa: BLE001 — unknown children cannot prove eligibility
         return False
 
 
@@ -215,6 +354,21 @@ def clone_json_state(value: Any, *, limits: StateLimits = _DEFAULT_LIMITS) -> An
     return walk(value, 0)
 
 
+def declared_schema_version(view_class: type) -> int:
+    """Read an application's ``exposure_schema_version`` without descriptors.
+
+    Bumping it changes the schema digest, so stored envelopes from the older
+    contract are rejected (and the view remounts) unless the view opts into an
+    explicit ``migrate_state`` translation (ADR-038 D-j).
+    """
+    from inspect import getattr_static
+
+    value = getattr_static(view_class, "exposure_schema_version", 1)
+    if type(value) is not int or not 0 < value <= 2**31 - 1:
+        raise ExposureError("exposure_schema_version must be a positive integer")
+    return value
+
+
 @dataclass(frozen=True)
 class ExposureContract:
     """Immutable, purpose-specific field selection and schema checking.
@@ -228,15 +382,17 @@ class ExposureContract:
     fields: Mapping[str, FieldExposure]
     version: int = 1
     limits: StateLimits = field(default_factory=StateLimits)
+    providers: tuple[ProviderContract, ...] = ()
     schema: str = field(init=False)
 
     @classmethod
-    def from_view_class(cls, view_class: type, *, version: int = 1) -> "ExposureContract":
+    def from_view_class(cls, view_class: type, *, version: int | None = None) -> "ExposureContract":
         """Compile descriptors without evaluating defaults, properties or annotations.
 
         Inherited exposure grants require redeclaring the field in the concrete
         class. Adding an exposed field to a base must not widen its descendants.
         Ordinary inherited reactive fields remain available with no permissions.
+        The view's registered context providers are folded into the schema.
         """
         from ._state import StateProperty
 
@@ -255,7 +411,14 @@ class ExposureContract:
                         "Inherited exposure grants require explicit field redeclaration"
                     )
                 fields[name] = policy
-        return cls(f"{view_class.__module__}.{view_class.__qualname__}", fields, version=version)
+        if version is None:
+            version = declared_schema_version(view_class)
+        return cls(
+            f"{view_class.__module__}.{view_class.__qualname__}",
+            fields,
+            version=version,
+            providers=provider_contracts_for(view_class),
+        )
 
     def __post_init__(self) -> None:
         from .live_view import _FRAMEWORK_INTERNAL_ATTRS, LiveView
@@ -285,12 +448,25 @@ class ExposureContract:
             if type(policy) is not FieldExposure:
                 raise ExposureError("State fields require explicit exposure metadata")
         object.__setattr__(self, "fields", MappingProxyType(copied))
-        specification = {
+        providers = self.providers
+        if type(providers) is not tuple or any(
+            type(provider) is not ProviderContract for provider in providers
+        ):
+            raise ExposureError("State contract providers require ProviderContract entries")
+        if len({provider.name for provider in providers}) != len(providers):
+            raise ExposureError("Explicit context provider collision")
+        specification: dict[str, Any] = {
             "owner": self.owner,
             "version": self.version,
             "codec": _CODEC_VERSION,
             "fields": {name: [policy.persist, policy.client] for name, policy in copied.items()},
         }
+        # Only a provider-bearing contract adds the key, so a contract with no
+        # providers keeps the digest it had before providers existed.
+        if providers:
+            specification["providers"] = {
+                provider.name: provider.specification() for provider in providers
+            }
         encoded = json.dumps(specification, sort_keys=True, separators=(",", ":")).encode()
         object.__setattr__(self, "schema", hashlib.sha256(encoded).hexdigest())
 

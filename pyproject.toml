@@ -990,6 +990,7 @@ warn_return_any = true
 [[tool.mypy.overrides]]
 module = [
     "djust.management.__init__",
+    "djust.management._exposure_inventory",
     "djust.management._introspect",
     "djust.management.commands.__init__",
     "djust.management.commands.cleanup_liveview_sessions",
@@ -997,6 +998,7 @@ module = [
     "djust.management.commands.djust_audit",
     "djust.management.commands.djust_check",
     "djust.management.commands.djust_doctor",
+    "djust.management.commands.djust_exposure_inventory",
     "djust.management.commands.djust_gen_live",
     "djust.management.commands.djust_mcp",
     "djust.management.commands.djust_new",

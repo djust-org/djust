@@ -14,7 +14,9 @@ construct a binding from client event parameters. No object hydration occurs her
 
 import hashlib
 import json
+import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -28,7 +30,35 @@ from django.contrib.sessions.backends.file import SessionStore as FileSession
 from ._exposure import ExposureContract, ExposureError, clone_json_state
 
 _SERVER_SESSION_TYPES = (DBSession, CachedDBSession, CacheSession, FileSession)
-_VERSION = 1
+# Envelope format 2 records the application contract version (E2-9). Format-1
+# envelopes are unindexed and are rejected, so the view remounts (D-j).
+_VERSION = 2
+_DEFAULT_MAX_AGE = 3600
+
+logger = logging.getLogger(__name__)
+
+StateMigration = Callable[[int, dict[str, Any]], Any]
+
+
+def server_state_max_age() -> int:
+    """Return ``DJUST_SERVER_STATE_MAX_AGE``; an invalid value fails closed.
+
+    System check ``djust.C020`` reports the same misconfiguration at startup.
+    """
+    from django.conf import settings
+
+    value = getattr(settings, "DJUST_SERVER_STATE_MAX_AGE", _DEFAULT_MAX_AGE)
+    if type(value) is not int or not 0 < value <= 86400:
+        raise ExposureError("DJUST_SERVER_STATE_MAX_AGE must be an integer from 1 to 86400")
+    return value
+
+
+def _migration_hook(view: Any) -> StateMigration | None:
+    """Bind an opt-in ``migrate_state`` defined on the view class, if any."""
+    if not callable(getattr(type(view), "migrate_state", None)):
+        return None
+    hook: StateMigration = view.migrate_state
+    return hook
 
 
 def _identity(value: Any) -> str:
@@ -66,7 +96,26 @@ def _request_principal(request: Any) -> tuple[str, str]:
             "TENANT_RESOLVER" in (getattr(settings, "DJUST_CONFIG", None) or {})
         )
         if configured and not hasattr(request, "tenant"):
-            raise ExposureError("Configured tenant resolution is missing from the request")
+            # Tenancy configured without TenantMiddleware (views resolving
+            # their own tenant through TenantMixin) is supported: resolve it
+            # here with the configured resolver, as the middleware would. A
+            # resolver failure stays a refusal, never a silent "no tenant".
+            try:
+                from .tenants.resolvers import get_tenant_resolver
+
+                resolved = get_tenant_resolver().resolve(request)
+            except Exception:
+                raise ExposureError("Configured tenant resolution failed") from None
+            # Required tenancy that resolves to nothing is still missing, as
+            # TenantMiddleware treats it (its 404); never "no tenant".
+            tenants = getattr(settings, "DJUST_TENANTS", None) or {}
+            config = getattr(settings, "DJUST_CONFIG", None) or {}
+            if resolved is None and (
+                tenants.get("REQUIRED", False) or config.get("TENANT_REQUIRED", False)
+            ):
+                raise ExposureError("Configured tenant resolution is missing from the request")
+            request.tenant = resolved
+            return _request_principal(request)
         tenant_id = "none"
     elif isinstance(tenant, TenantInfo):
         tenant_id = "tenant:" + _identity(tenant.id)
@@ -100,7 +149,13 @@ def server_state_adapter(
         if not create:
             return None
         session.create()
-    return ServerStateSession(session, contract, request_binding(request))
+    return ServerStateSession(
+        session,
+        contract,
+        request_binding(request),
+        max_age=server_state_max_age(),
+        migrate=_migration_hook(view),
+    )
 
 
 def save_server_state(view: Any, request: Any) -> None:
@@ -185,7 +240,8 @@ class ServerStateSession:
         contract: ExposureContract,
         binding: StateBinding,
         *,
-        max_age: int = 3600,
+        max_age: int = _DEFAULT_MAX_AGE,
+        migrate: StateMigration | None = None,
     ) -> None:
         # Exact type checks deliberately reject cookie subclasses and custom
         # implementations masquerading as a known server backend.
@@ -195,10 +251,13 @@ class ServerStateSession:
             raise ExposureError("Invalid server state contract or binding")
         if type(max_age) is not int or not 0 < max_age <= 86400:
             raise ExposureError("Invalid server state lifetime")
+        if migrate is not None and not callable(migrate):
+            raise ExposureError("Invalid server state migration hook")
         self.session = session
         self.contract = contract
         self.binding = binding
         self.max_age = max_age
+        self.migrate = migrate
         # Use owner rather than schema here: a schema change must encounter and
         # reject old data rather than leaving one unreachable entry per deploy.
         identity = json.dumps([contract.owner, binding.view], separators=(",", ":")).encode()
@@ -214,6 +273,7 @@ class ServerStateSession:
         created = int(time.time())
         envelope = {
             "version": _VERSION,
+            "schema_version": self.contract.version,
             "binding": self.binding.digest,
             "created": created,
             "expires": created + self.max_age,
@@ -229,7 +289,7 @@ class ServerStateSession:
         if raw is None:
             return None
         envelope = clone_json_state(raw, limits=self.contract.limits)
-        expected = {"version", "binding", "created", "expires", "state"}
+        expected = {"version", "schema_version", "binding", "created", "expires", "state"}
         if type(envelope) is not dict or set(envelope) != expected:
             raise ExposureError("Invalid server state envelope fields")
         if type(envelope["version"]) is not int or envelope["version"] != _VERSION:
@@ -248,7 +308,55 @@ class ServerStateSession:
             raise ExposureError("Invalid server state timestamp")
         if now >= min(expires, created + self.max_age):
             raise ExposureError("Server state has expired")
+        stored_version = envelope["schema_version"]
+        if type(stored_version) is not int or not 0 < stored_version <= 2**31 - 1:
+            raise ExposureError("Invalid server state contract version")
+        if stored_version != self.contract.version:
+            return self._migrate(stored_version, envelope["state"])
         return self.contract.prepare_restore(envelope["state"], "server")
+
+    def _migrate(self, stored_version: int, state: Any) -> dict[str, Any]:
+        """Translate an older contract's values through the view's opt-in hook.
+
+        Only an upgrade with a hook is attempted; anything else is rejected so
+        the view remounts (D-j). The hook's result is validated exactly like a
+        fresh envelope under the current schema, so undeclared or missing keys
+        and non-primitive values are still rejected. Neither the hook's
+        exception nor any value reaches the log.
+        """
+        if self.migrate is None or stored_version > self.contract.version:
+            raise ExposureError("Server state contract version is not current")
+        if (
+            type(state) is not dict
+            or set(state) != {"schema", "destination", "values"}
+            or state["destination"] != "server"
+            or type(state["values"]) is not dict
+        ):
+            raise ExposureError("Invalid server state envelope for migration")
+        values = clone_json_state(state["values"], limits=self.contract.limits)
+        try:
+            migrated = self.migrate(stored_version, values)
+        except Exception:  # noqa: BLE001 — hook exceptions may contain stored values
+            logger.warning(
+                "djust: migrate_state failed for %s (contract version %d -> %d); remounting",
+                self.contract.owner,
+                stored_version,
+                self.contract.version,
+            )
+            raise ExposureError("Server state migration failed") from None
+        try:
+            return self.contract.prepare_restore(
+                {"schema": self.contract.schema, "destination": "server", "values": migrated},
+                "server",
+            )
+        except ExposureError:
+            logger.warning(
+                "djust: migrate_state for %s returned state that does not match contract "
+                "version %d; remounting",
+                self.contract.owner,
+                self.contract.version,
+            )
+            raise
 
     def save(self, values: dict[str, Any]) -> None:
         """Write and flush to Django's server storage; never silently downgrade."""

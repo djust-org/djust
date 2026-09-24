@@ -86,7 +86,6 @@ FRAMEWORK_ONLY = {
     ("_clear_template_caches", "Could not clear template cache for %s: %s"): "cache clear",
     ("hotreload", "Template not found for hot reload: %s"): "dev-only, file-derived",
     ("hotreload", "Failed to parse patches JSON: %s"): "dev-only, file-derived",
-    ("hotreload", "Error generating patches for %s: %s"): "dev-only, file-derived",
     ("handle_live_redirect_mount", "Failed to clean up uploads for old view"): "upload cleanup",
     ("handle_live_redirect_mount", "sticky children staging failed; proceeding witho"): (
         "outer catch of the staging block; hooks inside it are legacy-gated"
@@ -1127,15 +1126,13 @@ MIXIN_TABLES = {
     "mixins/request.py": (
         {
             ("post", "<Name>"): (
-                "legacy branch only: a nonlegacy view returns the generic response first"
+                "legacy or DEBUG only (D-a revised): in production a nonlegacy view "
+                "returns the generic response first"
             ),
         },
         {
             ("_inject_debug", "Failed to inject debug info"): "debug payload assembly",
             ("_watch_disconnect", "is_disconnected() raised; halting watcher"): "ASGI probe",
-            ("get", "Failed to render wrapper_template '%s': %s"): (
-                "its only input is the already-rendered page HTML the client receives"
-            ),
         },
     ),
     # assign_async's runners and the SSE deferred flush now log through
@@ -1147,6 +1144,22 @@ MIXIN_TABLES = {
         {
             ("has_valid_token", "Observability token unavailable; refusing reques"): (
                 "token derivation from settings (e.g. an empty SECRET_KEY); no view exists"
+            ),
+        },
+    ),
+    "auth/accounts/backends/allauth.py": (
+        {},
+        {
+            ("providers", "Listing allauth social providers failed; showing"): (
+                "allauth provider configuration on the plain-Django login page; no LiveView exists"
+            ),
+        },
+    ),
+    "checks/accounts.py": (
+        {},
+        {
+            ("check_accounts", "djust.%s account check raised; skipping it"): (
+                "startup system check over settings; no view exists"
             ),
         },
     ),

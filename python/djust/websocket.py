@@ -24,6 +24,7 @@ from .change_detection import (
 from .serialization import DjangoJSONEncoder, fast_json_loads
 from .validation import validate_handler_params, validated_call_arguments
 from .profiler import profiler
+from ._exposure_diagnostics import owned_diagnostic_scope
 from .security import handle_exception, sanitize_for_log
 from .config import config as djust_config
 from .rate_limit import ConnectionRateLimiter, ip_tracker
@@ -358,6 +359,17 @@ def _snapshot_assigns(view_instance: Any) -> Dict[str, Any]:
     this snapshot (``_FRAMEWORK_INTERNAL_ATTRS``), so the pre/post skip still
     fires — the render-forcing mechanism is the ``_force_full_html`` flag that
     ``set_changed_keys()`` sets.
+
+    ADR-038 E2-8: explicit views are walked the same way, deliberately. This
+    snapshot only decides WHETHER a turn renders; it is never persisted or
+    sent, so walking undeclared attributes discloses nothing. Narrowing it to
+    declared ``state()`` fields would drop updates: ``get_context_data`` may
+    read any plain attribute (an opaque dependency), and a provider's
+    ``ProviderContract.tracked`` keys are ordinary view attributes. The keys
+    reported are storage names (``_state_count``), not context keys;
+    ``_sync_state_to_rust`` maps a change onto the rendered keys by comparing
+    every context value against the previous render, not by name.
+    ``test_exposure_invalidation.py`` pins both halves.
     """
     # #762: Filter framework-internal attrs so change detection doesn't fire
     # on attrs like ``template_name`` / ``http_method_names`` that the user
@@ -1220,9 +1232,17 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         from .mixins.async_work import track_async_task, track_running_async_task
 
-        # New format: multiple named tasks
         if event_name is _CURRENT_EVENT:
             event_name = getattr(self, "_current_event_name", None)
+
+        # Explicit child work a server-originated turn's hook queued (tick,
+        # server_push, db_notify) runs under each child's owned, authorized
+        # path, as the runtime does after its own turns (ADR-038 E3-3).
+        runtime = getattr(self, "_runtime", None)
+        if runtime is not None and runtime.view_instance is self.view_instance:
+            runtime._dispatch_explicit_child_queues(event_name)
+
+        # New format: multiple named tasks
         tasks = getattr(self.view_instance, "_async_tasks", None)
         if tasks:
             # Spawn all pending tasks. Each is recorded as running until it
@@ -1293,6 +1313,31 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 await self._settle_cancelled_async(view, event_name)
                 return
 
+        # A nonlegacy root's callback starts only under current authority.
+        # Under the render lock: the check stashes, then pops, the view's
+        # authorized request, which a lock-holding turn may be relying on.
+        from ._exposure import uses_legacy_exposure
+
+        if not uses_legacy_exposure(view):
+            async with self._render_lock:
+                if self.view_instance is not view:
+                    return
+                try:
+                    if not await self._authorize_explicit_consumer_turn(view):
+                        return
+                finally:
+                    self._end_explicit_turn(view)
+                # cancel_async() may have arrived while this waited for the
+                # lock: the callback must not start then either (#2969).
+                cancelled = getattr(view, "_async_cancelled", None)
+                cancelled_now = cancelled is not None and task_name in cancelled
+                if cancelled_now and cancelled is not None:
+                    cancelled.discard(task_name)
+            if cancelled_now:
+                logger.debug("Async task %s was cancelled, skipping execution", task_name)
+                await self._settle_cancelled_async(view, event_name)
+                return
+
         result = None
         error = None
 
@@ -1349,6 +1394,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # client never receives, whereas a delayed one still lands.
             async with self._render_lock:
                 if self.view_instance is not view:
+                    return
+                if not await self._authorize_explicit_consumer_turn(view):
                     return
                 # Call handle_async_result if defined (success path) — INSIDE
                 # the lock (#2840): a handler that mutates view state (the
@@ -1474,6 +1521,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 async with self._render_lock:
                     if self.view_instance is not view:
                         return
+                    if not await self._authorize_explicit_consumer_turn(view):
+                        return
                     if hasattr(view, "handle_async_result"):
                         await sync_to_async(view.handle_async_result)(
                             task_name, result=None, error=error
@@ -1542,6 +1591,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         try:
             async with self._render_lock:
                 if self.view_instance is not view:
+                    return
+                if not await self._authorize_explicit_consumer_turn(view):
                     return
                 await self._send_async_render(view, event_name)
                 await self._flush_all_pending()
@@ -1697,6 +1748,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         source: Optional[str] = None,
         ref: Optional[int] = None,
         parameter_contract_snapshot: Optional[Dict[str, Any]] = None,
+        snapshot_fields: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
         Send a patch or full HTML update to the client.
@@ -1752,7 +1804,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # Note: patches=[] (empty list) is valid and should be sent as "patch" type
         # Only patches=None indicates we should send html_update
         if patches is not None:
-            if self.use_binary and parameter_contract_snapshot is None:
+            if self.use_binary and parameter_contract_snapshot is None and not snapshot_fields:
                 patches_data = msgpack.packb(patches)
                 await self._send_frame(bytes_data=patches_data)
             else:
@@ -1796,6 +1848,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 if parameter_contract_snapshot is not None:
                     response.update(parameter_contract_snapshot)
                     self._capture_recovery_contracts(response)
+                if snapshot_fields:
+                    # ADR-038: an explicit root's refreshed signed snapshot.
+                    response.update(snapshot_fields)
                 await self.send_json(response)
                 await self._flush_all_pending()
         else:
@@ -1820,6 +1875,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             if parameter_contract_snapshot is not None:
                 response.update(parameter_contract_snapshot)
                 self._capture_recovery_contracts(response)
+            if snapshot_fields:
+                # ADR-038: an explicit root's refreshed signed snapshot.
+                response.update(snapshot_fields)
             await self.send_json(response)
             await self._flush_all_pending()
 
@@ -1858,6 +1916,44 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             return False
         target_view._djust_event_request = authorized
         return True
+
+    async def _authorize_explicit_consumer_turn(self, view: Any) -> bool:
+        """Fresh authority for a server-originated turn on a nonlegacy root.
+
+        Tick, server_push, db_notify and NOTIFY-drained background work carry
+        no inbound event request. Like the runtime's background turns (ADR-038
+        D-l), each is authorized against a freshly loaded session before the
+        application hook runs; :meth:`_render_background` then commits declared
+        state before the frame. A revoked turn gets the foreground denial.
+        Legacy views pass through unchanged. The caller pops the stashed
+        request with :meth:`_end_explicit_turn` when the turn ends.
+        """
+        from ._exposure import uses_legacy_exposure
+
+        if uses_legacy_exposure(view):
+            return True
+        runtime = getattr(self, "_runtime", None)
+        try:
+            if runtime is None:
+                raise PermissionError("no runtime owns this view")
+            await runtime.authorize_explicit_turn(view)
+            return True
+        except Exception:  # noqa: BLE001 — auth providers may carry credentials
+            if runtime is not None and runtime.view_instance is view:
+                runtime.view_instance = None
+            if self.view_instance is view:
+                self.view_instance = None
+            await self.send_error(
+                "Event authorization failed. Please reload the page.", code="permission_denied"
+            )
+            await self.close(code=4403)
+            return False
+
+    @staticmethod
+    def _end_explicit_turn(view: Any) -> None:
+        """Drop a turn's authorized request so no later turn can reuse it."""
+        if view is not None:
+            view.__dict__.pop("_djust_event_request", None)
 
     async def _dispatch_single_event(
         self,
@@ -1983,6 +2079,22 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             else:
                 view._changed_keys = _compute_changed_keys(pre_assigns, post_assigns)
 
+        # The released event was authorized at entry; a nonlegacy root's
+        # declared state is committed before its frame (ADR-038 E3).
+        snapshot_fields: Dict[str, Any] = {}
+        if not uses_legacy_exposure(view):
+            runtime = getattr(self, "_runtime", None)
+            try:
+                committed = skip_render or (
+                    runtime is not None and await runtime.commit_explicit_turn(view, source="event")
+                )
+                if committed and not skip_render and runtime is not None:
+                    snapshot_fields = await runtime._explicit_event_snapshot(view)
+            finally:
+                self._end_explicit_turn(view)
+            if not committed:
+                return
+
         if skip_render:
             # (_skip_render was already consumed by _resolve_skip_render —
             # it is the single owner of that reset, #2834/#2847.)
@@ -2043,6 +2155,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 source="event",
                 ref=event_ref,
                 timing={"render": _render_ms},
+                snapshot_fields=snapshot_fields,
             )
         else:
             # VDOM diff returned no patches — send full HTML like the
@@ -2076,6 +2189,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 async_pending=has_async,
                 source="event",
                 ref=event_ref,
+                snapshot_fields=snapshot_fields,
             )
         # Unconditional for the same reason as the noop arm above (#2946).
         await self._dispatch_async_work()
@@ -2352,10 +2466,18 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if runtime is not None:
             runtime.view_instance = None
 
+    @owned_diagnostic_scope
     async def receive(
         self, text_data: Optional[str] = None, bytes_data: Optional[bytes] = None
     ) -> None:
-        """Handle incoming WebSocket messages"""
+        """Handle incoming WebSocket messages.
+
+        One protected diagnostic scope per message (ADR-038 D-a): the
+        catch-all below also receives failures from the verbs that bypass
+        ``dispatch_message`` (``request_html``, ``live_redirect_mount``,
+        ``mount_batch``, uploads, presence, time travel, ...), and
+        ``handle_exception`` is value-free there for a nonlegacy owner.
+        """
         logger.debug(
             "[WebSocket] receive called: text_data=%s, bytes_data=%s",
             text_data[:100] if text_data else None,
@@ -2712,14 +2834,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # its owner is the class the batch entry names, resolved by the
             # shared allowlist-first resolver. An unresolvable class, or any
             # nonlegacy owner, keeps both the log and failed[] value-free.
-            from ._exposure import uses_legacy_exposure
             from .security.mount import resolve_view_class
 
             resolution = resolve_view_class(view_path)
+            from ._exposure_diagnostics import diagnostics_policy_allows
+
             legacy = (
                 bool(resolution)
-                and uses_legacy_exposure(resolution.view_class)
-                and uses_legacy_exposure(self.view_instance)
+                and diagnostics_policy_allows(resolution.view_class)
+                and diagnostics_policy_allows(self.view_instance)
             )
             if legacy:
                 logger.exception(
@@ -3018,6 +3141,26 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if not upload_id or not isinstance(upload_id, str):
             await self.send_error("upload_resume requires a ref")
             return
+
+        # ADR-038 decision D-g: an explicit view does not preserve uploads in
+        # flight across a reconnect. Answer exactly as for an unknown ref,
+        # without consulting the resumable state store, so the client falls
+        # back to a fresh ``upload_register``.
+        view = self.view_instance
+        if view is not None:
+            from ._exposure import uses_legacy_exposure
+
+            if not uses_legacy_exposure(view):
+                await self.send_json(
+                    {
+                        "type": "upload_resumed",
+                        "ref": upload_id,
+                        "status": "not_found",
+                        "bytes_received": 0,
+                        "chunks_received": [],
+                    }
+                )
+                return
 
         session_key = self._scope_session_key()
 
@@ -3438,8 +3581,20 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 )
 
             except Exception as e:
-                # Catch-all for unexpected errors
-                hotreload_logger.exception("Error generating patches for %s: %s", file_path, e)
+                # Catch-all for unexpected errors. The re-render runs the
+                # view's own get_context_data, so its exception can carry
+                # view values: value-free for a nonlegacy view (ADR-038).
+                from ._exposure_diagnostics import log_failure_for
+
+                log_failure_for(
+                    hotreload_logger,
+                    (self.view_instance,),
+                    e,
+                    "Error generating patches for %s: %s",
+                    file_path,
+                    e,
+                    traceback=True,
+                )
                 # Fallback to full reload on error
                 await self.send_json(
                     {
@@ -4590,13 +4745,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 scrub=scrub,
             )
         except (RuntimeError, ValueError) as exc:
-            from ._exposure import ExposureError, uses_legacy_exposure
+            from ._exposure import ExposureError
 
             view = self.view_instance
             # ADR-038: for a nonlegacy owner only framework ExposureError text
             # (value-free by construction) reaches the client; an application
             # ValueError/RuntimeError from the re-render can carry undeclared state.
-            if uses_legacy_exposure(view) or isinstance(exc, ExposureError):
+            from ._exposure_diagnostics import diagnostics_policy_allows
+
+            if diagnostics_policy_allows(view) or isinstance(exc, ExposureError):
                 await self.send_error("bug_capture_share: %s" % exc)
             else:
                 self._log_view_hook_failure(
@@ -4720,6 +4877,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             try:
                 if view is None:
                     return
+                if self.view_instance is not view:
+                    return
+                # One fresh authority for the whole push turn (ADR-038 E3-3).
+                if not await self._authorize_explicit_consumer_turn(view):
+                    return
                 render = False
                 for event in events:
                     # Every hook awaits: re-check the view before each push,
@@ -4785,6 +4947,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         **rendered.send_fields,
                     )
             finally:
+                self._end_explicit_turn(view)
                 self._render_lock.release()
                 if dispatch_work and self.view_instance is view:
                     await self._dispatch_async_work(event_name=None)
@@ -4968,6 +5131,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             try:
                 if self.view_instance is not view:
                     return
+                if not await self._authorize_explicit_consumer_turn(view):
+                    return
                 handler = getattr(self.view_instance, "handle_info", None)
                 if handler and callable(handler):
                     try:
@@ -5040,6 +5205,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             traceback=True,
                         )
             finally:
+                self._end_explicit_turn(view)
                 self._render_lock.release()
                 if dispatch_work and self.view_instance is view:
                     await self._dispatch_async_work(event_name=None)
@@ -5047,10 +5213,31 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             self._log_view_hook_failure(view, e, "Error in db_notify: %s", e, traceback=True)
 
     async def _render_background(self, view: Any) -> Optional[BackgroundRender]:
-        """Capture one background render under the caller's existing render lock."""
+        """Capture one background render under the caller's existing render lock.
+
+        A nonlegacy root's turn was authorized at its start; its declared state
+        is committed here, before the frame, and a failed save withholds the
+        render (ADR-038 E3). Time-travel callers never reach this for them.
+        """
         if self.view_instance is not view:
             return None
         runtime = getattr(self, "_runtime", None)
+        from ._exposure import uses_legacy_exposure
+
+        snapshot_fields: Dict[str, Any] = {}
+        if not uses_legacy_exposure(view):
+            try:
+                committed = runtime is not None and await runtime.commit_explicit_turn(
+                    view, source="async"
+                )
+                if committed and runtime is not None:
+                    # The turn changed declared state; refresh the client's
+                    # signed snapshot with it (ADR-038 E3, decided 2026-09-22).
+                    snapshot_fields = await runtime._explicit_event_snapshot(view)
+            finally:
+                self._end_explicit_turn(view)
+            if not committed or self.view_instance is not view:
+                return None
         with _tenant_context(getattr(view, "_tenant", None)):
             rendered = await render_background(view, runtime)
         if self.view_instance is not view:
@@ -5068,6 +5255,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             return None
         if rendered.send_fields and runtime is not None:
             runtime._parameter_contracts_active = True
+        if snapshot_fields:
+            from dataclasses import replace
+
+            rendered = replace(
+                rendered, send_fields={**rendered.send_fields, "snapshot_fields": snapshot_fields}
+            )
         return rendered
 
     async def _run_tick(self, interval_ms: int) -> None:
@@ -5179,6 +5372,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         try:
             if self.view_instance is not view:
                 return False
+            if not await self._authorize_explicit_consumer_turn(view):
+                return False
             # Snapshot state before tick to detect changes
             pre_assigns = _snapshot_assigns(self.view_instance)
 
@@ -5251,6 +5446,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             )
             return True
         finally:
+            self._end_explicit_turn(view)
             self._render_lock.release()
             if dispatch_work and self.view_instance is view:
                 await self._dispatch_async_work(event_name=None)

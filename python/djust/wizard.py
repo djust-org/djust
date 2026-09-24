@@ -67,10 +67,45 @@ import logging
 import math
 from typing import Any, ClassVar, Dict
 
+from ._exposure import ProviderContract
+from ._exposure_providers import provide_context_items
 from .decorators import event_handler
 from .forms import initial_field_value
 
 logger = logging.getLogger(__name__)
+
+#: ADR-038 E2-1: the wizard's render-only context keys. The flat
+#: ``<field>_choices`` aliases depend on each step's runtime form fields, so
+#: they cannot be declared; explicit views render ``form_choices`` only.
+WIZARD_PROVIDER = ProviderContract(
+    "djust.wizard",
+    rendered=frozenset(
+        {
+            "current_step",
+            "total_steps",
+            "progress_percent",
+            "steps",
+            "can_go_back",
+            "can_go_forward",
+            "is_first_step",
+            "is_last_step",
+            "form_data",
+            "form_choices",
+            "form_required",
+            "field_html",
+            "step_data",
+            "step_errors",
+        }
+    ),
+    tracked=frozenset(
+        {
+            "wizard_step_index",
+            "wizard_step_data",
+            "wizard_step_errors",
+            "wizard_completed_steps",
+        }
+    ),
+)
 
 
 class WizardMixin:
@@ -85,6 +120,7 @@ class WizardMixin:
     """
 
     wizard_steps: list = []  # Subclasses override with a list of step dicts
+    _djust_context_providers = (WIZARD_PROVIDER,)
 
     #: DOM event that triggers `validate_field` on **text-stream widgets**
     #: (``TextInput``, ``Textarea``, ``NumberInput``, ``EmailInput``,
@@ -326,9 +362,18 @@ class WizardMixin:
 
         # Expose choices as flat top-level vars too (e.g. borough_choices)
         # so templates can use either form_choices.borough or borough_choices.
-        flat_choices = {f"{k}_choices": v for k, v in form_choices.items()}
+        from ._exposure import uses_legacy_exposure
 
-        context.update(
+        flat_choices = (
+            {f"{k}_choices": v for k, v in form_choices.items()}
+            if uses_legacy_exposure(self)
+            else {}
+        )
+
+        provide_context_items(
+            self,
+            context,
+            WIZARD_PROVIDER.name,
             {
                 "current_step": {
                     "name": current_name,
@@ -349,7 +394,7 @@ class WizardMixin:
                 "step_data": dict(step_data),
                 "step_errors": step_errors.get(current_name, {}),
                 **flat_choices,
-            }
+            },
         )
         return context
 

@@ -70,6 +70,9 @@ def _consumer(session_key, manager):
     consumer.send_json = AsyncMock()
     consumer.send_error = AsyncMock()
     view = MagicMock()
+    # A bare MagicMock has no readable exposure policy, which ADR-038 treats
+    # as nonlegacy (no resume, D-g). These tests pin the legacy path.
+    view.exposure_policy = "legacy"
     view._upload_manager = manager
     consumer.view_instance = view
     session = MagicMock()

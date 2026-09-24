@@ -100,6 +100,11 @@ navigation:
         file: ../state-management/STATE_MANAGEMENT_EXAMPLES.md
         order: 4
         level: intermediate
+      - title: Explicit Exposure
+        slug: explicit-exposure
+        file: state/explicit-exposure.md
+        order: 5
+        level: advanced
 
   - title: Guides
     slug: guides

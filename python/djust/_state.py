@@ -109,10 +109,14 @@ def state(
     its item type when needed). Literal defaults are deep-copied on first read;
     factories run once per instance, unless a value was assigned first.
 
-    ``persist`` and ``client`` currently declare experimental ADR-038 metadata
-    only. LiveView rejects non-default grants until its explicit-policy runtime
-    is implemented; they must never imply protection under the legacy policy.
-    Existing calls without these options retain legacy context/persistence.
+    ``persist`` and ``client`` are ADR-038 exposure grants, honored only by
+    views with ``exposure_policy = "explicit"``: ``persist="server"`` saves the
+    field in the bound server session envelope, ``client=True`` permits raw
+    browser exposure, and ``persist="client"`` (which requires ``client=True``)
+    makes it restorable from the signed back-navigation snapshot. A legacy view
+    that declares a grant is refused at construction, so a grant never implies
+    protection it does not get. Calls without these options keep legacy
+    context and persistence.
     """
     return cast(
         StateProperty[T],

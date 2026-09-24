@@ -2,13 +2,16 @@
 Django settings for demo_project.
 """
 
+import os
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = "django-insecure-demo-key-change-in-production"
 
-DEBUG = True
+# DJUST_DEMO_DEBUG=0 runs the demo in production mode (the ADR-038 E5 matrix
+# checks both error contracts). Default unchanged: DEBUG on.
+DEBUG = os.environ.get("DJUST_DEMO_DEBUG", "1") != "0"
 
 ALLOWED_HOSTS = ["*"]
 
@@ -185,6 +188,16 @@ DJUST_CONFIG = {
 #     'REDIS_URL': 'redis://redis.example.com:6379/0',
 #     'SESSION_TTL': 7200,  # 2 hours for production
 # }
+
+# DJUST_DEMO_LOG_CONSOLE=1 sends djust's logs to the console at DEBUG level, so
+# the ADR-038 E5 matrix can check the server log destination in either mode.
+if os.environ.get("DJUST_DEMO_LOG_CONSOLE") == "1":
+    LOGGING = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "handlers": {"console": {"class": "logging.StreamHandler"}},
+        "loggers": {"djust": {"handlers": ["console"], "level": "DEBUG", "propagate": False}},
+    }
 
 
 # djust.auth.accounts "allauth" backend (ADR-039): wired only when the optional

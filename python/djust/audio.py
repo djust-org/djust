@@ -16,8 +16,13 @@ from uuid import uuid4
 from django.conf import settings
 from django.templatetags.static import static
 
+from ._exposure import ProviderContract
+from ._exposure_providers import provide_context
+
 __all__ = ["Sound", "SoundBank", "SoundEvent", "AudioMixin"]
 _NAME = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+#: ADR-038 E2-1: the client audio manifest key, render-only.
+AUDIO_PROVIDER = ProviderContract("djust.audio", rendered=frozenset({"djust_audio_manifest"}))
 
 
 class SoundEvent(TypedDict):
@@ -84,6 +89,7 @@ class AudioMixin:
     """
 
     audio_banks = {}
+    _djust_context_providers = (AUDIO_PROVIDER,)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -115,7 +121,7 @@ class AudioMixin:
                     for key, sound in bank.sounds.items()
                 },
             }
-        context["djust_audio_manifest"] = json.dumps(
+        manifest = json.dumps(
             {
                 "version": 1,
                 "scope": self._audio_scope,
@@ -123,6 +129,7 @@ class AudioMixin:
                 "origins": list(getattr(settings, "DJUST_AUDIO_STATIC_ORIGINS", [])),
             }
         )
+        provide_context(self, context, AUDIO_PROVIDER.name, "djust_audio_manifest", manifest)
         return context
 
     def play_sound(self, bank, sound, *, event_id=None):

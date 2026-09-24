@@ -309,6 +309,24 @@ def djust_client_config(context: Context) -> Any:
     return _client_config_html(request)
 
 
+def _nonlegacy_rendering_view() -> Any:
+    """ADR-038 E2-2: the explicit view whose template is rendering, or None.
+
+    An explicit render context never carries the raw ``view`` (it is a
+    reserved name), so tags that need the view resolve it from the thread-local
+    that every render path registers (:func:`active_parent_view`). Only a
+    nonlegacy view is returned: legacy renders keep resolving ``view`` from
+    their context exactly as before, and the view is never written back into
+    the context.
+    """
+    from .._exposure import uses_legacy_exposure
+
+    active = get_active_parent_view()
+    if active is None or uses_legacy_exposure(active):
+        return None
+    return active
+
+
 def _form_view(view: Any, attr: str) -> Any:
     """The view a form tag or filter is for (#2958).
 
@@ -424,7 +442,7 @@ def live_errors(view: Any, field_name: str | None = None) -> str:
     # message can echo what the user typed. The f-string version returned a
     # plain ``str``, so ``SimpleNode.render`` escaped the whole thing and the
     # page showed the markup as text.
-    view = _form_view(view, "get_field_errors")
+    view = _form_view(view, "get_field_errors" if field_name else "form_errors")
     if field_name:
         if hasattr(view, "get_field_errors"):
             errors = view.get_field_errors(field_name)
@@ -942,6 +960,9 @@ class ColocatedHookNode(Node):
         if cfg.get("hook_namespacing") != "strict":
             return self.name
         view = _context_view(context)
+        if view is None:
+            # ADR-038 E2-2: an explicit context has no raw view.
+            view = _nonlegacy_rendering_view()
         if view is None:
             return self.name
         try:
@@ -1673,7 +1694,7 @@ def _warn_if_sticky_kwargs_changed(child: Any, kwargs: Dict[str, Any], view_path
 def _render_sticky_child_html(
     child: Any,
     view_id: str,
-    sticky_id_value: str,
+    sticky_id_value: Optional[str],
     request: Any,
     view_path: str,
 ) -> Any:
@@ -1732,6 +1753,11 @@ def _render_sticky_child_html(
     _record_child_dj_model_allowlist(child)
     rendered_stamped = _stamp_view_id(rendered_inner, view_id)
     escaped_id = escape(view_id)
+    if sticky_id_value is None:
+        # Transient explicit child (ADR-038 D-m): the plain embedded wrapper.
+        return mark_safe(
+            '<div dj-view data-djust-embedded="' + escaped_id + '">' + rendered_stamped + "</div>"
+        )
     escaped_sticky_id = escape(sticky_id_value)
     return mark_safe(
         '<div dj-view dj-sticky-view="'
@@ -1963,6 +1989,35 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
             "exist at mount-frame time, lazy defers slot rendering. "
             "Pick one." % view_path
         )
+    from .._exposure import uses_legacy_exposure as _legacy_policy
+
+    explicit_target = not _legacy_policy(child_cls)
+    if explicit_target and lazy_kwarg:
+        # ADR-038 D-m: the lazy fill runs outside the authorized explicit
+        # mount/registration path. Refuse before any placeholder or thunk.
+        raise TemplateSyntaxError(
+            "{% live_render %} lazy= is not supported for explicit-exposure children."
+        )
+    if explicit_target and not sticky_kwarg:
+        from .._exposure import ExposureContract
+
+        # ADR-038 D-m: a non-sticky explicit child is transient. It has no
+        # stable slot to persist under, so it may not declare persisted state.
+        if any(
+            field.persist is not None
+            for field in ExposureContract.from_view_class(child_cls).fields.values()
+        ):
+            raise TemplateSyntaxError(
+                "{% live_render %} a non-sticky explicit-exposure child is transient "
+                "and cannot declare persisted state."
+            )
+        if preferred_view_id is not None:
+            if not isinstance(preferred_view_id, str):
+                raise TemplateSyntaxError(
+                    "{% live_render %} view_id must be a string for an explicit-exposure child."
+                )
+            # Template literals arrive as SafeString; the identity is exact-str.
+            preferred_view_id = str.__str__(preferred_view_id)
     sticky_id_value = None
     if sticky_kwarg:
         if getattr(child_cls, "sticky", False) is not True:
@@ -2414,6 +2469,30 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                 view_path,
             )
 
+    # ADR-038 D-m: a transient (non-sticky) explicit child with a pinned
+    # ``view_id`` keeps its in-memory instance across parent renders only
+    # while its reuse identity still matches; otherwise the old instance is
+    # disposed and the slot is mounted fresh under the same id.
+    if explicit_target and not sticky_kwarg and preferred_view_id is not None:
+        get_child = getattr(parent, "_get_child_view", None)
+        existing_child = get_child(preferred_view_id) if callable(get_child) else None
+        if existing_child is not None and _match_sticky_child(
+            existing_child, child_cls, parent, request, preferred_view_id, kwargs
+        ):
+            _authorize_reused_child(
+                existing_child,
+                request,
+                parent,
+                preferred_view_id,
+                kwargs,
+                view_path,
+                registered_view_id=preferred_view_id,
+            )
+            existing_child.request = request
+            return _render_sticky_child_html(
+                existing_child, preferred_view_id, None, request, view_path
+            )
+
     child = child_cls()
     child.request = request
 
@@ -2445,23 +2524,32 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
 
     explicit_child = not uses_legacy_exposure(child)
     explicit_adapter = None
-    if sticky_kwarg and explicit_child:
+    # The slot an explicit child's identity is bound to: its sticky id, or for
+    # a transient (non-sticky) explicit child (ADR-038 D-m) the view_id it is
+    # about to be registered under.
+    explicit_slot: Optional[str] = None
+    if explicit_child:
+        explicit_slot = (
+            sticky_id_value if sticky_kwarg else parent._assign_view_id(preferred_view_id)
+        )
+    if explicit_child:
         from .._exposure import clone_json_state
         from .._exposure_children import child_state_adapter, record_child_mount_inputs
 
-        assert sticky_id_value is not None
+        assert explicit_slot is not None
         # Compile the trusted ownership scope before mount can mutate inputs.
         # Legacy mixed-policy children remain on their existing path; an
         # explicit child cannot infer an explicit contract from legacy ancestry.
         explicit_mount_inputs = clone_json_state(kwargs)
         record_child_mount_inputs(child, explicit_mount_inputs)
-        explicit_adapter = child_state_adapter(
-            child, parent, request, sticky_id_value, explicit_mount_inputs, create=True
-        )
+        if sticky_kwarg:
+            explicit_adapter = child_state_adapter(
+                child, parent, request, explicit_slot, explicit_mount_inputs, create=True
+            )
         from .._exposure_child_identity import child_reuse_identity
 
         explicit_identity = child_reuse_identity(
-            type(child), parent, request, sticky_id_value, explicit_mount_inputs
+            type(child), parent, request, explicit_slot, explicit_mount_inputs
         )
 
     restored = False
@@ -2501,12 +2589,10 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
     if sticky_kwarg:
         _record_sticky_mount_kwargs(child, kwargs)
 
-    if sticky_kwarg and explicit_child:
-        assert sticky_id_value is not None
+    if explicit_child:
+        assert explicit_slot is not None
         if not explicit_identity.matches(
-            child_reuse_identity(
-                type(child), parent, request, sticky_id_value, explicit_mount_inputs
-            )
+            child_reuse_identity(type(child), parent, request, explicit_slot, explicit_mount_inputs)
         ):
             raise ExposureError("Child reuse identity changed during mount")
         child._explicit_child_reuse_identity = explicit_identity
@@ -2549,18 +2635,19 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
             "check failed for the requested object." % view_path
         )
 
-    if sticky_kwarg and explicit_child:
-        assert sticky_id_value is not None
+    if explicit_child:
+        assert explicit_slot is not None
         if not explicit_identity.matches(
-            child_reuse_identity(
-                type(child), parent, request, sticky_id_value, explicit_mount_inputs
-            )
+            child_reuse_identity(type(child), parent, request, explicit_slot, explicit_mount_inputs)
         ):
             raise ExposureError("Child reuse identity changed during authorization")
 
     # 5. Assign the view_id and register on the parent. _register_child
-    #    wires parent/view_id back-references on the child.
-    view_id = parent._assign_view_id(preferred_view_id)
+    #    wires parent/view_id back-references on the child. An explicit child
+    #    registers under exactly the slot its identity was compiled for.
+    view_id = (
+        explicit_slot if explicit_slot is not None else parent._assign_view_id(preferred_view_id)
+    )
     parent._register_child(view_id, child)
 
     if explicit_adapter is not None:
@@ -2586,6 +2673,11 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
         # ``str`` slot-key contract (inert at runtime).
         assert sticky_id_value is not None
         return _render_sticky_child_html(child, view_id, sticky_id_value, request, view_path)
+
+    if explicit_child:
+        # ADR-038 D-m: a transient explicit child renders through the same
+        # reconciled, no-raw-view helper as a sticky one, with a plain wrapper.
+        return _render_sticky_child_html(child, view_id, None, request, view_path)
 
     # Non-sticky branch (the Phase A contract) — unchanged. Build the child's
     # context, render its template, stamp the view_id, and wrap in a plain

@@ -1089,8 +1089,13 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
 
         state_cls = getattr(self.__class__, "State", None)
         if state_cls is None:
-            # No State inner class — legacy component, return self
-            return self
+            from .._exposure import uses_legacy_exposure
+
+            if uses_legacy_exposure(obj):
+                # No State inner class — legacy component, return self
+                return self
+            # ADR-038 E2-7: never hand a nonlegacy view the shared declaration.
+            return self._bind_stateless(obj)
 
         slot = obj.__dict__.get(self._descriptor_storage_key)
         if isinstance(slot, BoundComponent):
@@ -1104,6 +1109,49 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
         else:
             return slot
         return self._bind(obj, state)
+
+    #: Per-view wiring that a State-less binding must not inherit from its
+    #: declaration (set when a legacy view registered the declaration).
+    _STATELESS_UNSHARED = frozenset(
+        {
+            "_parent",
+            "_parent_callback",
+            "_parent_attr",
+            "_djust_context_parent",
+            "_djust_context_providers",
+        }
+    )
+
+    def _bind_stateless(self, obj: Any) -> Any:
+        """This view's own copy of a State-less class-level component.
+
+        Nonlegacy views only (ADR-038 E2-7). The declaration mounted once,
+        from the class body; each view gets an independent deep copy of that
+        mounted component, keyed by the attribute name, stored in the view's
+        ``_component_<name>`` slot and registered in ``view._components``.
+        The declaration itself is never registered or mutated.
+        """
+        from .._exposure import ExposureError
+
+        name, key = self._descriptor_attr_name, self._descriptor_storage_key
+        if name is None or key is None:
+            raise ExposureError("Explicit views require class-level component declarations")
+        slot = obj.__dict__.get(key)
+        if slot is not None and slot is not self:
+            return slot
+        import copy
+
+        bound = object.__new__(type(self))
+        state = {k: v for k, v in self.__dict__.items() if k not in self._STATELESS_UNSHARED}
+        bound.__dict__.update(copy.deepcopy(state))
+        bound.component_id = name
+        bound._parent = None
+        bound._parent_callback = None
+        obj.__dict__[key] = bound
+        register = getattr(obj, "_register_component", None)
+        if callable(register):
+            register(bound, attr_name=name)
+        return bound
 
     def _bind(self, obj: Any, state: Any) -> "BoundComponent":
         """Wrap ``state`` for ``obj``, store it in the slot and register it."""

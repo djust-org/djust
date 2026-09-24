@@ -58,6 +58,9 @@ class TestSendUpdateSourceAndRef:
 
         consumer.send_json = mock_send_json
         consumer.view_instance = MagicMock()
+        # A real LiveView declares its policy; a Mock's auto-attribute would
+        # read as an invalid policy and fail closed (ADR-038).
+        consumer.view_instance.exposure_policy = "legacy"
         consumer.view_instance._drain_push_events = MagicMock(return_value=[])
         consumer.view_instance._drain_navigation = MagicMock(return_value=[])
         consumer.view_instance._drain_accessibility = MagicMock(return_value=[])
@@ -87,6 +90,9 @@ class TestSendUpdateSourceAndRef:
 
         consumer.send_json = mock_send_json
         consumer.view_instance = MagicMock()
+        # A real LiveView declares its policy; a Mock's auto-attribute would
+        # read as an invalid policy and fail closed (ADR-038).
+        consumer.view_instance.exposure_policy = "legacy"
         consumer.view_instance._drain_push_events = MagicMock(return_value=[])
         consumer.view_instance._drain_navigation = MagicMock(return_value=[])
         consumer.view_instance._drain_accessibility = MagicMock(return_value=[])
@@ -117,6 +123,9 @@ class TestSendUpdateSourceAndRef:
 
         consumer.send_json = mock_send_json
         consumer.view_instance = MagicMock()
+        # A real LiveView declares its policy; a Mock's auto-attribute would
+        # read as an invalid policy and fail closed (ADR-038).
+        consumer.view_instance.exposure_policy = "legacy"
         consumer.view_instance._drain_push_events = MagicMock(return_value=[])
         consumer.view_instance._drain_navigation = MagicMock(return_value=[])
         consumer.view_instance._drain_accessibility = MagicMock(return_value=[])
@@ -144,6 +153,9 @@ class TestSendUpdateSourceAndRef:
 
         consumer.send_json = mock_send_json
         consumer.view_instance = MagicMock()
+        # A real LiveView declares its policy; a Mock's auto-attribute would
+        # read as an invalid policy and fail closed (ADR-038).
+        consumer.view_instance.exposure_policy = "legacy"
         consumer.view_instance._drain_push_events = MagicMock(return_value=[])
         consumer.view_instance._drain_navigation = MagicMock(return_value=[])
         consumer.view_instance._drain_accessibility = MagicMock(return_value=[])
@@ -214,6 +226,9 @@ class TestTickYieldsToEvents:
         consumer._processing_user_event = True
 
         view = MagicMock()
+        # A real LiveView declares its policy; a Mock's auto-attribute would
+        # read as an invalid policy and fail closed (ADR-038).
+        view.exposure_policy = "legacy"
         view.handle_tick = MagicMock()
         consumer.view_instance = view
 
@@ -292,6 +307,9 @@ class TestServerPushSourceBroadcast:
 
         consumer.send_json = mock_send_json
         consumer.view_instance = MagicMock()
+        # A real LiveView declares its policy; a Mock's auto-attribute would
+        # read as an invalid policy and fail closed (ADR-038).
+        consumer.view_instance.exposure_policy = "legacy"
         consumer.view_instance._drain_push_events = MagicMock(return_value=[])
         consumer.view_instance._drain_navigation = MagicMock(return_value=[])
         consumer.view_instance._drain_accessibility = MagicMock(return_value=[])
@@ -324,6 +342,9 @@ class TestServerPushSourceBroadcast:
 
         consumer.send_json = mock_send_json
         consumer.view_instance = MagicMock()
+        # A real LiveView declares its policy; a Mock's auto-attribute would
+        # read as an invalid policy and fail closed (ADR-038).
+        consumer.view_instance.exposure_policy = "legacy"
         consumer.view_instance._drain_push_events = MagicMock(return_value=[])
         consumer.view_instance._drain_navigation = MagicMock(return_value=[])
         consumer.view_instance._drain_accessibility = MagicMock(return_value=[])
@@ -357,6 +378,9 @@ class TestServerPushSourceBroadcast:
 
         consumer.send_json = mock_send_json
         consumer.view_instance = MagicMock()
+        # A real LiveView declares its policy; a Mock's auto-attribute would
+        # read as an invalid policy and fail closed (ADR-038).
+        consumer.view_instance.exposure_policy = "legacy"
         consumer.view_instance._drain_push_events = MagicMock(return_value=[])
         consumer.view_instance._drain_navigation = MagicMock(return_value=[])
         consumer.view_instance._drain_accessibility = MagicMock(return_value=[])
@@ -405,6 +429,9 @@ class TestAsyncWorkSourceAsync:
 
         consumer.send_json = mock_send_json
         consumer.view_instance = MagicMock()
+        # A real LiveView declares its policy; a Mock's auto-attribute would
+        # read as an invalid policy and fail closed (ADR-038).
+        consumer.view_instance.exposure_policy = "legacy"
         consumer.view_instance._drain_push_events = MagicMock(return_value=[])
         consumer.view_instance._drain_navigation = MagicMock(return_value=[])
         consumer.view_instance._drain_accessibility = MagicMock(return_value=[])

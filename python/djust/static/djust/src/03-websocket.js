@@ -197,9 +197,20 @@ function _warnDeadScripts(root) {
 }
 
 function storeSignedSnapshot(data, primaryViewPath) {
-    // Only mounts and successful primary-view event acknowledgements carry
-    // navigation state. Child/background/error frames cannot replace it.
-    const eligible = data.type === 'mount' || (
+    // Mounts, successful primary-view event acknowledgements and primary-view
+    // server-turn frames carry navigation state. Child frames cannot replace
+    // it, and error frames may only revoke it.
+    // A primary-view error frame may carry a null revocation (a turn whose
+    // explicit save failed withholds its success frame, ADR-038 E3). It can
+    // only remove the cached token, never store one.
+    const revocation = data.type === 'error' && data.view === primaryViewPath &&
+        data.state_snapshot_signed === null;
+    // Server-originated turns (background results, ticks, pushes, NOTIFY)
+    // commit declared state and carry the refreshed token for the primary
+    // view, like event acknowledgements (ADR-038 E3). Child frames never do.
+    const serverTurn = ['async', 'tick', 'broadcast'].includes(data.source) &&
+        data.view === primaryViewPath && ['patch', 'html_update'].includes(data.type);
+    const eligible = revocation || serverTurn || data.type === 'mount' || (
         data.source === 'event' && data.view === primaryViewPath &&
         ['patch', 'html_update', 'noop'].includes(data.type)
     );
@@ -214,6 +225,23 @@ function storeSignedSnapshot(data, primaryViewPath) {
         if (!window.djust._clientState) window.djust._clientState = Object.create(null);
         // Opaque signed plaintext: echo verbatim, never parse/re-serialize.
         window.djust._clientState[data.view] = token;
+    }
+}
+
+// ADR-038 D-n: service-worker cache metadata carried on mount frames. The
+// identity marker is compared before anything from this mount is cached, so a
+// changed or vanished identity clears the previous identity's caches first.
+function applyServiceWorkerMountMetadata(data) {
+    if (!data || data.type !== 'mount') return;
+    if (typeof data.state_snapshot_max_age === 'number' && data.state_snapshot_max_age > 0) {
+        window.djust._stateSnapshotMaxAge = data.state_snapshot_max_age;
+    }
+    try {
+        if (window.djust._sw && typeof window.djust._sw.syncIdentity === 'function') {
+            window.djust._sw.syncIdentity(data.sw_identity);
+        }
+    } catch (_e) {
+        if (globalThis.djustDebug) console.log('[LiveView] service-worker identity sync failed:', _e);
     }
 }
 
@@ -526,6 +554,7 @@ class LiveViewWebSocket {
 
     async _handleMessageImpl(data) {
         if (globalThis.djustDebug) console.log('[LiveView] Received: %s %o', String(data.type), data);
+        applyServiceWorkerMountMetadata(data);
         storeSignedSnapshot(data, this.primaryViewPath);
 
         switch (data.type) {
@@ -709,8 +738,11 @@ class LiveViewWebSocket {
                     // is present and we actually have HTML from the
                     // server (skipped when the client used pre-rendered
                     // HTTP content).
+                    // ADR-038 D-b: a page the server marks ineligible
+                    // (explicit exposure) is never written to the cache.
+                    // E3-8: keyed by pathname + query.
                     try {
-                        if (window.djust && window.djust._sw && typeof window.djust._sw.cacheVdom === 'function') {
+                        if (data.sw_cache !== 'no-store' && window.djust && window.djust._sw && typeof window.djust._sw.cacheVdom === 'function') {
                             // Pathname + query, the key popstate looks up (#2949).
                             const cacheUrl = (typeof window !== 'undefined' && window.location)
                                 ? window.location.pathname + window.location.search

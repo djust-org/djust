@@ -349,6 +349,7 @@ class TestUploadResumeMessage:
         entry = _start(old)
         old.cleanup()
         view = MagicMock()
+        view.exposure_policy = "legacy"  # a bare MagicMock reads as nonlegacy (ADR-038)
         view._upload_manager = _manager()
         payload = await self._resume(view, "sess-A", entry.ref)
         assert payload["status"] == "resumed", payload
@@ -363,6 +364,7 @@ class TestUploadResumeMessage:
             ttl=60,
         )
         view = MagicMock()
+        view.exposure_policy = "legacy"  # a bare MagicMock reads as nonlegacy (ADR-038)
         view._upload_manager = _manager()
         payload = await self._resume(view, "sess-A", "cccccccc-2222-3333-4444-555555555555")
         assert payload["status"] == "not_found"

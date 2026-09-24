@@ -123,15 +123,25 @@ class RequestMixin:
         perms, messages) is available during template rendering. Cleanup is
         guaranteed via the context manager pattern. (#717)
         """
+        from .._exposure import uses_legacy_exposure
+        from .._exposure_providers import PROCESSOR_KEYS_ATTR
+
         processor_output = self._apply_context_processors({}, request)
         injected_keys = []
         for key, value in processor_output.items():
             if not hasattr(self, key):
                 injected_keys.append(key)
                 setattr(self, key, value)
+        legacy = uses_legacy_exposure(self)
+        if not legacy:
+            # ADR-038 D-h: these attributes are framework-injected, not
+            # instance-assigned components the application must declare.
+            self.__dict__[PROCESSOR_KEYS_ATTR] = frozenset(injected_keys)
         try:
             yield processor_output
         finally:
+            if not legacy:
+                self.__dict__.pop(PROCESSOR_KEYS_ATTR, None)
             for key in injected_keys:
                 try:
                     delattr(self, key)
@@ -335,7 +345,14 @@ class RequestMixin:
                 html = wrapper.render({"liveview_content": liveview_content}, request)
                 html = html.replace("<div dj-root></div>", liveview_content)
             except Exception as e:
-                logger.error(
+                from .._exposure_diagnostics import log_failure_for
+
+                # The wrapper render runs the project's context processors,
+                # so its exception can carry application values (ADR-038).
+                log_failure_for(
+                    logger,
+                    (self,),
+                    e,
                     "Failed to render wrapper_template '%s': %s",
                     self.wrapper_template,
                     e,
@@ -378,9 +395,19 @@ class RequestMixin:
         # Inject LiveView client script
         html = self._inject_client_script(html)
 
+        response: HttpResponse
         if getattr(self, "streaming_render", False):
-            return self._make_streaming_response(html)
-        return HttpResponse(html)
+            response = self._make_streaming_response(html)
+        else:
+            response = HttpResponse(html)
+        # ADR-038 D-b: the service worker must not persist an explicit page's
+        # HTML in its shell cache. Legacy responses are unchanged.
+        from .._exposure import service_worker_cache_eligible
+        from ..security.service_worker import SW_CACHE_HEADER, SW_CACHE_NO_STORE
+
+        if not service_worker_cache_eligible(self):
+            response[SW_CACHE_HEADER] = SW_CACHE_NO_STORE
+        return response
 
     def _make_streaming_response(self, full_html: str) -> StreamingHttpResponse:
         """Return a chunked ``StreamingHttpResponse`` for the initial GET.
@@ -1055,10 +1082,13 @@ class RequestMixin:
 
             # uses_legacy_exposure is the module-level import; a local import
             # here would make the name local to all of post().
-            if not uses_legacy_exposure(self):
+            from .._exposure_diagnostics import diagnostics_policy_allows
+
+            if not diagnostics_policy_allows(self):
                 # ADR-038: undeclared state can occur in the exception's message,
-                # its traceback and the posted params, so a nonlegacy view gets
-                # the value-free log line and the generic response even under DEBUG.
+                # its traceback and the posted params, so in production a
+                # nonlegacy view gets the value-free log line and the generic
+                # response. Under DEBUG it gets Django-like detail (D-a).
                 from .._exposure_diagnostics import log_failure_for
 
                 log_failure_for(logger, (self,), e, "HTTP event failed")

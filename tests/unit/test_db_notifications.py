@@ -595,6 +595,9 @@ class TestConsumerDbNotify:
 
         consumer = LiveViewConsumer.__new__(LiveViewConsumer)
         view = MagicMock()
+        # A real LiveView declares its policy; a Mock's auto-attribute would
+        # read as an invalid policy and fail closed (ADR-038).
+        view.exposure_policy = "legacy"
         view.__class__.__name__ = "FakeView"
         view.handle_info = MagicMock()
         view._skip_render = False

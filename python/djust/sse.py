@@ -47,7 +47,7 @@ import inspect
 import json
 import logging
 import uuid
-from typing import Any, AsyncIterator, Dict, Optional
+from typing import Any, AsyncIterator, Dict, Optional, cast
 
 from asgiref.sync import sync_to_async
 from django.http import (
@@ -216,39 +216,56 @@ class SSESession:
             await self.send_error("Navigation target is not a LiveView")
             return
 
-        async with self._render_lock:
-            old_runtime, old_view = self.runtime, self.view_instance
-            old_runtime.view_instance = None
-            self.view_instance = None
-            if old_view is not None:
-                try:
-                    from ._child_lifecycle import dispose_child_subtree
-                    from ._exposure import uses_legacy_exposure
+        from ._exposure_diagnostics import (
+            diagnostic_scope,
+            restrict_diagnostics,
+            watch_diagnostic_owner,
+        )
 
-                    if not uses_legacy_exposure(old_view):
-                        await sync_to_async(dispose_child_subtree)(old_view, navigation=True)
-                    else:
-                        for child_id in list(old_view._get_all_child_views()):
-                            await sync_to_async(old_view._unregister_child)(child_id)
-                        await sync_to_async(old_view._cleanup_uploads)()
-                except Exception:
-                    logger.warning("SSE old view cleanup failed during navigation")
-            self._request = target_request
-            self.runtime = ViewRuntime(SSESessionTransport(self), rate_limiter=self._rate_limiter)
-            await self.runtime.dispatch_mount(
-                {
-                    **data,
-                    "type": "mount",
-                    "view": f"{view_class.__module__}.{view_class.__qualname__}",
-                    "url": target_request.path_info,
-                    "has_prerendered": False,
-                }
-            )
-            if self.runtime.view_instance is None:
+        # ADR-038 D-a: the replaced page and the target class (there is no
+        # target instance yet) each restrict. A failure escaping this scope
+        # for a nonlegacy owner stays restricted in the POST's scope, which
+        # answers with a value-free 500.
+        with diagnostic_scope():
+            restrict_diagnostics(view_class)
+            restrict_diagnostics(self.view_instance)
+            watch_diagnostic_owner(self, "view_instance")
+            async with self._render_lock:
+                old_runtime, old_view = self.runtime, self.view_instance
+                old_runtime.view_instance = None
                 self.view_instance = None
-                self.shutdown()
-            else:
-                await self.runtime._flush_all_pending()
+                if old_view is not None:
+                    try:
+                        from ._child_lifecycle import dispose_child_subtree
+                        from ._exposure import uses_legacy_exposure
+
+                        if not uses_legacy_exposure(old_view):
+                            await sync_to_async(dispose_child_subtree)(old_view, navigation=True)
+                        else:
+                            for child_id in list(old_view._get_all_child_views()):
+                                await sync_to_async(old_view._unregister_child)(child_id)
+                            await sync_to_async(old_view._cleanup_uploads)()
+                    except Exception:
+                        logger.warning("SSE old view cleanup failed during navigation")
+                self._request = target_request
+                self.runtime = ViewRuntime(
+                    SSESessionTransport(self), rate_limiter=self._rate_limiter
+                )
+                watch_diagnostic_owner(self.runtime, "view_instance")
+                await self.runtime.dispatch_mount(
+                    {
+                        **data,
+                        "type": "mount",
+                        "view": f"{view_class.__module__}.{view_class.__qualname__}",
+                        "url": target_request.path_info,
+                        "has_prerendered": False,
+                    }
+                )
+                if self.runtime.view_instance is None:
+                    self.view_instance = None
+                    self.shutdown()
+                else:
+                    await self.runtime._flush_all_pending()
 
     def push(self, msg: Dict[str, Any]) -> None:
         """Enqueue a message to be sent to the SSE client."""
@@ -585,14 +602,40 @@ class DjustSSEStreamView(View):
         # _resolve_url_kwargs extracts pk/slug pattern kwargs; 'params' carries
         # the query-string params the legacy path merged into mount_kwargs
         # (every GET item except the 'view' selector itself).
-        await session.runtime.dispatch_mount(
-            {
-                "type": "mount",
-                "view": view_path,
-                "url": session._request.path_info,
-                "params": mount_params,
-            }
+        from ._exposure_diagnostics import (
+            diagnostic_scope,
+            diagnostics_allowed,
+            protected_http_outcome,
+            protected_server_error,
+            watch_diagnostic_owner,
         )
+
+        # ADR-038 D-a: a failure escaping dispatch_mount for a nonlegacy view
+        # (its mount scope carries the restriction here) gets a value-free 500;
+        # a legacy failure propagates to Django exactly as before.
+        protected_failure = False
+        with diagnostic_scope():
+            watch_diagnostic_owner(session.runtime, "view_instance")
+            try:
+                await session.runtime.dispatch_mount(
+                    {
+                        "type": "mount",
+                        "view": view_path,
+                        "url": session._request.path_info,
+                        "params": mount_params,
+                    }
+                )
+            except Exception as exc:
+                outcome = protected_http_outcome(exc)
+                if diagnostics_allowed() or outcome == "raise":
+                    raise
+                protected_failure = True
+                del exc
+        if protected_failure:
+            session.shutdown()
+            return cast(
+                HttpResponse, await sync_to_async(protected_server_error)(request, logger, outcome)
+            )
         mounted = session.runtime.view_instance is not None
         if mounted:
             _sse_sessions[session_id] = session
@@ -820,7 +863,29 @@ class DjustSSEMessageView(View):
         # current POSTer (SSESessionTransport.recheck_event_auth, #1777). Same
         # rationale as the /event/ alias; the /message/ endpoint carries the same
         # owner-bound request.
-        await session.dispatch(request, body)
+        from ._exposure_diagnostics import (
+            diagnostic_scope,
+            diagnostics_allowed,
+            protected_http_outcome,
+            protected_server_error,
+        )
+
+        # ADR-038 D-a: live_redirect_mount replaces the view outside
+        # dispatch_message; its nonlegacy failures arrive here restricted.
+        protected_failure = False
+        with diagnostic_scope():
+            try:
+                await session.dispatch(request, body)
+            except Exception as exc:
+                outcome = protected_http_outcome(exc)
+                if diagnostics_allowed() or outcome == "raise":
+                    raise
+                protected_failure = True
+                del exc
+        if protected_failure:
+            return cast(
+                HttpResponse, await sync_to_async(protected_server_error)(request, logger, outcome)
+            )
         return JsonResponse({"ok": True})
 
 

@@ -1,8 +1,10 @@
 # ADR-038 exposure sink inventory
 
-Working inventory, not activation approval. The constructor guard remains
-closed. Entries identify real producers/destinations and existing evidence;
-an implemented projection is not proof that every caller uses it.
+The inventory that closed E1. `exposure_policy="explicit"` is activated on the
+completion branch (#2954); see the ledger's *ADR-038 activation review*.
+Entries identify real producers and destinations with their evidence. An
+implemented projection is not proof that every caller uses it, which is why
+each row names a destination-level test.
 
 ## Classified entry points
 
@@ -27,7 +29,7 @@ an implemented projection is not proof that every caller uses it.
 | Bug capture/export | bug_capture.py: encode_view_state; above `bug_capture_inline_limit`, `BugCapture.encode` writes to the configured SnapshotStore (bug_capture.py:180) and emits only a reference | Same debug suite covers historical provenance and reprojection; cannot reuse legacy history after policy changes. test_bug_capture_store_destination_holds_only_the_debug_projection asserts the store path was taken and reads the stored bytes; mutation-checked against a skipped store path and against unprojected bytes reaching the store. |
 | Django fragment cache (`{% cache %}` tag) | template_libraries.py: CacheTagHandler.after_body (:1489) → Django `caches[...]` | Developer-invoked, not an automatic exporter: it stores rendered output the template author asked to cache, derived from the template-context projection, so it adds no exposure beyond that row. Key and `vary_on` semantics are Django's; varying on the user where output is per-user remains the author's responsibility, as in Django. |
 | Runtime debug frames | runtime.py transport debug projection | Inspect all transport diagnostic hooks, not only the observability endpoint. Existing projection is not exhaustive error/traceback evidence. |
-| Exception logs, DEBUG responses and traceback ring | security/error_handling.py: handle_exception; observability/tracebacks.py: record_traceback | test_exposure_mount_diagnostics.py covers runtime initialization, auth, mount, handle_params, initial render and actor-render catches at frames/logs/ring destinations. The shared redacted mode does not inspect exceptions or record traceback data. Instantiation, outer transport catches, foreground events and other lifecycle hooks still require closure; this is not a global diagnostics guarantee. |
+| Exception logs, DEBUG responses and traceback ring | security/error_handling.py: handle_exception; observability/tracebacks.py: record_traceback | test_exposure_mount_diagnostics.py covers runtime initialization, auth, mount, handle_params, initial render and actor-render catches at frames/logs/ring destinations. The shared redacted mode does not inspect exceptions or record traceback data. Foreground events are closed by test_exposure_event_diagnostics.py and runtime-owned inbound messages by test_exposure_transport_diagnostics.py. Still open: entry points no protected scope covers (HTTP GET/aget, the SSE stream GET and navigation replacement, the WebSocket `receive` catch-all, view construction) — completion plan item E1-1. |
 
 ## Diagnostic finding addressed first
 
@@ -157,10 +159,10 @@ component jump and forward replay (`restore_snapshot`,
 view before any re-render); `disconnect`'s upload cleanup (runs only when
 the view was not disposed as nonlegacy).
 
-**Open — application code, not yet reproduced or fixed:** `_run_async_work`
-(`start_async` callback and `handle_async_result`), unreachable from the
-NOTIFY drain until its dropped-`start_async` defect is fixed and to be fixed
-with it. The pin's `KNOWN_OPEN` tables are the authoritative list.
+**Fixed with #2946:** `_run_async_work` (`start_async` callback and
+`handle_async_result`), once the dropped-`start_async` defect was fixed and made
+it reachable from the NOTIFY drain. No pinned site is open; the pin's
+`KNOWN_OPEN` tables are the authoritative list.
 
 The pin does not cover client error frames that interpolate an exception
 (`send_error("…%s" % exc)`); `handle_bug_capture_share` did exactly that and is
@@ -176,8 +178,12 @@ no application hook runs there), `_flush_accessibility` (two sites),
 `disconnect`'s db_notify group leave, waiter cancellation (scheduling only)
 and child unregistration (nonlegacy children disposed, legacy hooks caught
 inside `_unregister_child`),
-`handle_live_redirect_mount`'s upload cleanup, and hot reload (three sites,
-dev-only and file-derived).
+`handle_live_redirect_mount`'s upload cleanup, and hot reload's missing
+template and patch-JSON sites (dev-only and file-derived). Hot reload's
+catch-all was misclassified here: it wraps the view's re-render, which runs
+`get_context_data`, so it leaked the view's exception under DEBUG. The E6
+pre-push run caught it; it now logs through `log_failure_for` with the view
+as owner (`test_exposure_consumer_turns.py::test_hot_reload_render_failure_is_value_free_for_explicit_views`).
 
 **Separate defect found while reproducing `_run_tick`** (not an exposure
 issue, not fixed here): the tick task is created during mount
@@ -253,7 +259,9 @@ gate, not baselined:
   metadata only), two peer-closed socket paths, the observability token
   lookup and the CSRF secret bind on a rebuilt socket request (both before
   any view exists). `observability/middleware.py` and `security/csrf.py` are
-  newly pinned modules.
+  newly pinned modules. ADR-039 (#3067) added two more, both framework-only
+  and pinned: the allauth provider listing on the plain-Django login page
+  and the account system checks at startup; #3067 adds no LiveView.
 
 ## Mount diagnostic finding
 

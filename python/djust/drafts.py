@@ -6,6 +6,14 @@ Provides automatic draft saving to localStorage for forms and editors.
 
 from typing import Any, Optional
 
+from ._exposure import ProviderContract
+from ._exposure_providers import provide_context
+
+#: ADR-038 E2-1: the draft configuration keys, render-only.
+DRAFTS_PROVIDER = ProviderContract(
+    "djust.drafts", rendered=frozenset({"draft_enabled", "draft_key", "draft_clear"})
+)
+
 
 class DraftModeMixin:
     """
@@ -44,6 +52,7 @@ class DraftModeMixin:
     # Override these in your view class
     draft_enabled: bool = True
     draft_key: Optional[str] = None
+    _djust_context_providers = (DRAFTS_PROVIDER,)
 
     def get_draft_key(self) -> str:
         """
@@ -97,12 +106,12 @@ class DraftModeMixin:
         )
 
         # Add draft configuration
-        context["draft_enabled"] = self.draft_enabled
-        context["draft_key"] = self.get_draft_key()
+        provide_context(self, context, DRAFTS_PROVIDER.name, "draft_enabled", self.draft_enabled)
+        provide_context(self, context, DRAFTS_PROVIDER.name, "draft_key", self.get_draft_key())
 
         # Add clear flag if requested
         if hasattr(self, "_draft_clear_requested") and self._draft_clear_requested:
-            context["draft_clear"] = True
+            provide_context(self, context, DRAFTS_PROVIDER.name, "draft_clear", True)
             self._draft_clear_requested = False  # Reset flag
 
         return context

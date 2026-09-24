@@ -83,7 +83,7 @@
         const method = data.replace ? 'replaceState' : 'pushState';
         // eslint-disable-next-line security/detect-object-injection
         window.history[method]({ djust: true }, '', newUrl.toString());
-        _setRenderedPathname(newUrl.pathname);
+        _setRenderedPathname(newUrl.pathname, newUrl.search);
 
         if (globalThis.djustDebug) console.log(`[LiveView] live_patch: ${method} → ${newUrl.toString()}`);
     }
@@ -212,13 +212,13 @@
         // since the DOM swap will follow via the mount frame.
         // The page being left, read BEFORE pushState moves location to the
         // destination: its state snapshot is captured under this key
-        // (pathname + query, #2949). Read after pushState it named the
-        // destination, so the capture below found no snapshot to store.
+        // (pathname + query, #2949 / ADR-038 E3-8). Read after pushState it
+        // named the destination, so the capture below found no snapshot to store.
         const fromUrl = window.location.pathname + window.location.search;
         const method = data.replace ? 'replaceState' : 'pushState';
         // eslint-disable-next-line security/detect-object-injection
         window.history[method]({ djust: true, redirect: true }, '', newUrl.toString());
-        _setRenderedPathname(newUrl.pathname);
+        _setRenderedPathname(newUrl.pathname, newUrl.search);
 
         // Move the active-nav highlight immediately (the URL is now current),
         // rather than waiting for the WS mount round-trip. (#1756)
@@ -401,7 +401,10 @@
         // live_redirect still remounts, but it is no longer the only signal:
         // the entry the browser created on load has no state at all.
         const cameFrom = _renderedPathname;
-        _setRenderedPathname(url.pathname);
+        // ADR-038 E3-8: the cache key of the page being left includes its query.
+        const cameFromKey = _renderedCacheKey;
+        const destinationKey = url.pathname + url.search;
+        _setRenderedPathname(url.pathname, url.search);
         const isRedirect = (event.state && event.state.redirect) || url.pathname !== cameFrom;
 
         if (isRedirect) {
@@ -416,7 +419,7 @@
                 // Popstate has already changed location. Capture/invalidate
                 // the page we are leaving before looking up the destination.
                 window.dispatchEvent(new CustomEvent('djust:before-navigate', {
-                    detail: { fromUrl: cameFrom, toUrl: url.pathname },
+                    detail: { fromUrl: cameFromKey, toUrl: url.pathname },
                 }));
                 // Sticky LiveViews (Phase B): detach sticky subtrees
                 // into the stash BEFORE the outbound
@@ -433,8 +436,7 @@
                 // the DOM shortly after.
                 try {
                     if (window.djust && window.djust._sw && typeof window.djust._sw.lookupVdom === 'function') {
-                        // Keyed by pathname + query, as 03-websocket.js caches it (#2949).
-                        const vdomReply = await window.djust._sw.lookupVdom(url.pathname + url.search);
+                        const vdomReply = await window.djust._sw.lookupVdom(destinationKey);
                         if (vdomReply && vdomReply.hit && !vdomReply.stale && typeof vdomReply.html === 'string') {
                             let fastContainer = findPageViewContainer(); // #2632
                             if (!fastContainer) fastContainer = document.querySelector('[dj-root]');
@@ -454,7 +456,7 @@
                 let stateSnapshot = null;
                 try {
                     if (window.djust && window.djust._stateSnapshot && typeof window.djust._stateSnapshot.lookupStateForUrl === 'function') {
-                        stateSnapshot = await window.djust._stateSnapshot.lookupStateForUrl(url.pathname + url.search);
+                        stateSnapshot = await window.djust._stateSnapshot.lookupStateForUrl(destinationKey);
                     } else if (window.djust && window.djust._pendingStateSnapshot) {
                         // Back-compat fallback — if the older async-race
                         // slot happens to be populated, honor it.
@@ -526,7 +528,7 @@
         // WebSocket patch — pushState + url_change for selects, inputs, links, buttons
         if (!liveViewWS || !liveViewWS.viewMounted) return;
         window.history.pushState({ djust: true }, '', newUrl.toString());
-        _setRenderedPathname(newUrl.pathname);
+        _setRenderedPathname(newUrl.pathname, newUrl.search);
 
         const allParams = Object.fromEntries(newUrl.searchParams);
         liveViewWS.sendMessage({
@@ -738,7 +740,7 @@
                 return;
             }
             window.history.pushState({ djust: true }, '', url.pathname + url.search);
-            _setRenderedPathname(url.pathname);
+            _setRenderedPathname(url.pathname, url.search);
             liveViewWS.sendMessage({
                 type: 'url_change',
                 params: Object.fromEntries(url.searchParams),
@@ -770,9 +772,16 @@
      */
     let _renderedPathname =
         typeof window !== 'undefined' && window.location ? window.location.pathname : '';
+    // ADR-038 E3-8: pathname + query of the rendered page, the key its
+    // service-worker cache entries are stored under.
+    let _renderedCacheKey =
+        typeof window !== 'undefined' && window.location
+            ? window.location.pathname + window.location.search
+            : '';
 
-    function _setRenderedPathname(pathname) {
+    function _setRenderedPathname(pathname, search) {
         _renderedPathname = pathname;
+        _renderedCacheKey = pathname + (typeof search === 'string' ? search : '');
     }
 
     let _autoNavigateInstalled = false;

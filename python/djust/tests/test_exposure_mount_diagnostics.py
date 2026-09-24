@@ -1,4 +1,11 @@
-"""Mount failures must not export undeclared values through diagnostics."""
+"""Mount failures must not export undeclared values through diagnostics.
+
+Contract (ADR-038 D-a, revised 2026-09-22): in production (``DEBUG=False``) a
+nonlegacy owner's mount failure is value-free in the error frame, the log and
+the traceback ring. Under ``DEBUG=True`` every owner's failure reads like
+Django's DEBUG output — detailed error frame, logged exception and traceback,
+traceback-ring entry — exactly as a legacy owner's does.
+"""
 
 import asyncio
 import json
@@ -80,11 +87,13 @@ async def test_mount_diagnostics_respect_policy_at_entry_and_failure(
     assert transport.sent and transport.sent[-1]["type"] == "error"
     assert not any(frame.get("type") == "mount" for frame in transport.sent)
     legacy = initial_policy == final_policy == "legacy"
-    assert ("MOUNT_DIAGNOSTIC_SENTINEL" in json.dumps(transport.sent)) == (legacy and debug)
-    assert ("MOUNT_DIAGNOSTIC_SENTINEL" in caplog.text) == legacy
+    # Details are allowed for a legacy owner, and for every owner under DEBUG.
+    allowed = legacy or debug
+    assert ("MOUNT_DIAGNOSTIC_SENTINEL" in json.dumps(transport.sent)) == (allowed and debug)
+    assert ("MOUNT_DIAGNOSTIC_SENTINEL" in caplog.text) == allowed
     assert (
         "MOUNT_DIAGNOSTIC_SENTINEL" in json.dumps(tracebacks.get_recent_tracebacks(50))
-    ) == legacy
+    ) == allowed
 
 
 @pytest.mark.parametrize("debug", [False, True])
@@ -142,12 +151,12 @@ async def test_actor_mount_failure_rechecks_owner_policy(monkeypatch, caplog, de
         )
     assert len(entered) == 1
     assert transport.sent[-1]["type"] == "error"
-    legacy = final_policy == "legacy"
-    assert ("MOUNT_DIAGNOSTIC_SENTINEL" in json.dumps(transport.sent)) == (legacy and debug)
-    assert ("MOUNT_DIAGNOSTIC_SENTINEL" in caplog.text) == legacy
+    allowed = final_policy == "legacy" or debug
+    assert ("MOUNT_DIAGNOSTIC_SENTINEL" in json.dumps(transport.sent)) == (allowed and debug)
+    assert ("MOUNT_DIAGNOSTIC_SENTINEL" in caplog.text) == allowed
     assert (
         "MOUNT_DIAGNOSTIC_SENTINEL" in json.dumps(tracebacks.get_recent_tracebacks(50))
-    ) == legacy
+    ) == allowed
 
 
 @pytest.mark.django_db(transaction=True)
@@ -166,6 +175,23 @@ async def test_successful_policy_change_cannot_enable_nested_diagnostics(
     )
 
 
+@pytest.mark.parametrize("policy", ["explicit", None, "bogus"])
+def test_restrict_diagnostics_follows_debug_for_nonlegacy_owners(policy):
+    """The single rule: legacy owner or DEBUG. Under DEBUG a nonlegacy owner
+    no longer restricts the scope; in production it does."""
+    owner = SimpleNamespace(exposure_policy=policy)
+    with override_settings(DEBUG=True), diagnostic_scope():
+        restrict_diagnostics(owner)
+        assert diagnostics_allowed()
+    with override_settings(DEBUG=False), diagnostic_scope():
+        restrict_diagnostics(owner)
+        assert not diagnostics_allowed()
+    with override_settings(DEBUG=False), diagnostic_scope():
+        restrict_diagnostics(SimpleNamespace(exposure_policy="legacy"))
+        assert diagnostics_allowed()
+
+
+@override_settings(DEBUG=False)
 def test_diagnostic_scope_is_restrictive_and_resets_after_exception():
     assert diagnostics_allowed()
     with diagnostic_scope():
@@ -183,6 +209,7 @@ def test_diagnostic_scope_is_restrictive_and_resets_after_exception():
 
 
 @pytest.mark.asyncio
+@override_settings(DEBUG=False)
 async def test_diagnostic_scope_crosses_worker_threads_without_crossing_requests():
     started = asyncio.Event()
     release = asyncio.Event()

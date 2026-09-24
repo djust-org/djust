@@ -4,14 +4,19 @@ import pytest
 from django.template import Context, Engine
 
 from djust import LiveView
-from djust._exposure import ExposureError
-from djust.decorators import state
+from djust._exposure import ExposureConfigurationError, ExposureError
+from djust.decorators import action, state
 
 
 class ContextView(LiveView):
     exposure_policy = "explicit"
     configuration = "CONFIG_SENTINEL"
     count = state(2, persist="server")
+
+    # E2-0: an action's render key must be declared by an @action method.
+    @action
+    def save_item(self):
+        return None
 
     @property
     def unrelated(self):
@@ -66,6 +71,10 @@ def test_action_and_stream_context_are_explicit_framework_providers(view):
     }
     with pytest.raises(ExposureError, match="collision"):
         view.get_context_data(save_item="shadow")
+    # E2-0: action state for a name no @action method declares is refused.
+    view._action_state = {"undeclared": {"pending": False}}
+    with pytest.raises(ExposureError, match="Undeclared"):
+        view.get_context_data()
 
 
 def test_cached_context_is_copied_and_kwargs_do_not_mutate_cache(view):
@@ -141,7 +150,13 @@ def test_registered_components_are_bound_per_view_and_not_discovered_from_attrs(
     for instance in (first, second):
         instance._components = {}
         instance._streams = {}
-        instance.unregistered = Toggle()
+    # D-h: an instance-assigned component is never discovered; it is a
+    # configuration error at the first explicit render, naming the attribute.
+    stray = object.__new__(Page)
+    stray._components, stray._streams = {}, {}
+    stray.unregistered = Toggle()
+    with pytest.raises(ExposureConfigurationError, match="'unregistered'"):
+        stray.get_context_data()
     first_context = first.get_context_data()
     second_context = second.get_context_data()
     assert set(first_context) == {"menu"}

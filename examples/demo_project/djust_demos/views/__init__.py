@@ -5,6 +5,7 @@ Demo views for djust_demos app
 from .counter_demo import CounterView
 from .nav_demo import NavDemoPageAView, NavDemoPageBView
 from .smoke_demo import BrowserSmokeView
+from .exposure_demo import ExposureMatrixView, LegacyExposureMatrixView
 from .table_select_demo import TableSelectView
 from .demos import (
     TodoView,
@@ -48,6 +49,8 @@ __all__ = [
     "NavDemoPageAView",
     "NavDemoPageBView",
     "BrowserSmokeView",
+    "ExposureMatrixView",
+    "LegacyExposureMatrixView",
     "TableSelectView",
     "TodoView",
     "ChatView",

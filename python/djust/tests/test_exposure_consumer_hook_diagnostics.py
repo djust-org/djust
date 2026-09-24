@@ -5,6 +5,11 @@
 override (``update_presence_heartbeat``, ``handle_cursor_move``). Their catches
 log the exception. For a nonlegacy view that is the same leak ``handle_exception``
 refuses: undeclared state can occur in an exception's message.
+
+Contract (ADR-038 D-a, revised 2026-09-22): in production (``DEBUG=False``) a
+nonlegacy view's hook failure is value-free in the log and on the wire. Under
+``DEBUG=True`` it reads like Django's DEBUG output — the exception text and
+traceback — exactly as a legacy view's does. Each site runs in both modes.
 """
 
 import json
@@ -34,6 +39,7 @@ class HookFailureView(LiveView):
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
+@pytest.mark.parametrize("debug", [False, True])
 @pytest.mark.parametrize("policy", ["legacy", "explicit", None, "invalid"])
 @pytest.mark.parametrize(
     "message,sentinel",
@@ -44,11 +50,11 @@ class HookFailureView(LiveView):
     ids=["presence_heartbeat", "cursor_move"],
 )
 async def test_hook_failure_logs_are_value_free_for_nonlegacy_views(
-    monkeypatch, caplog, policy, message, sentinel
+    monkeypatch, caplog, debug, policy, message, sentinel
 ):
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
     with override_settings(
-        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True, DJUST_TENANTS=None, DJUST_CONFIG={}
+        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=debug, DJUST_TENANTS=None, DJUST_CONFIG={}
     ):
         request = await sync_to_async(make_request)()
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
@@ -70,9 +76,11 @@ async def test_hook_failure_logs_are_value_free_for_nonlegacy_views(
                 await socket.send_json_to({"type": "ping"})
                 assert (await socket.receive_json_from(timeout=3))["type"] == "pong"
 
-            if policy == "legacy":
-                # Control: the hook ran and legacy logging is unchanged.
+            if policy == "legacy" or debug:
+                # Control: the hook ran and legacy logging is unchanged; under
+                # DEBUG every nonlegacy view logs the same detail (D-a).
                 assert sentinel in caplog.text
+                assert "Protected view operation failed" not in caplog.text
             else:
                 assert sentinel not in caplog.text
                 assert "Protected view operation failed" in caplog.text
@@ -90,9 +98,10 @@ class PushFailureView(LiveView):
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
+@pytest.mark.parametrize("debug", [False, True])
 @pytest.mark.parametrize("policy", ["legacy", "explicit", None, "invalid"])
 async def test_server_push_failure_logs_are_value_free_for_nonlegacy_views(
-    monkeypatch, caplog, policy
+    monkeypatch, caplog, debug, policy
 ):
     """``server_push`` runs an application handler from the channel layer
     (Celery, management commands) and its catch logged the exception with a
@@ -103,8 +112,9 @@ async def test_server_push_failure_logs_are_value_free_for_nonlegacy_views(
     from djust.push import apush_to_view
 
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
+    monkeypatch.setattr(PushFailureView, "exposure_policy", _mount_policy(policy))
     with override_settings(
-        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True, DJUST_TENANTS=None, DJUST_CONFIG={}
+        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=debug, DJUST_TENANTS=None, DJUST_CONFIG={}
     ):
         request = await sync_to_async(make_request)()
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
@@ -122,19 +132,27 @@ async def test_server_push_failure_logs_are_value_free_for_nonlegacy_views(
             caplog.clear()
             with caplog.at_level(logging.DEBUG):
                 await apush_to_view(__name__ + ".PushFailureView", handler="handle_push")
+                if policy in (None, "invalid"):
+                    await _expect_denial(socket)
                 for _ in range(60):
                     text = caplog.text
                     if "PUSH_HOOK_SENTINEL" in text or "Protected view operation failed" in text:
                         break
+                    if policy in (None, "invalid"):
+                        break
                     await asyncio.sleep(0.05)
 
-            if policy == "legacy":
-                # Unchanged legacy output: message and traceback.
+            if policy == "legacy" or (debug and policy == "explicit"):
+                # Unchanged legacy output, and under DEBUG an explicit view's:
+                # message and traceback.
                 assert "Error in server_push: PUSH_HOOK_SENTINEL" in caplog.text
                 assert "Traceback (most recent call last)" in caplog.text
-            else:
+            elif policy == "explicit":
                 assert "PUSH_HOOK_SENTINEL" not in caplog.text
                 assert "Protected view operation failed" in caplog.text
+            else:
+                # Refused before the hook: nothing from it can reach the log.
+                assert "PUSH_HOOK_SENTINEL" not in caplog.text
         finally:
             await socket.disconnect()
 
@@ -163,6 +181,27 @@ class NotifyFailureView(LiveView):
         raise ValueError("NOTIFY_HOOK_SENTINEL")
 
 
+def _mount_policy(policy):
+    """The policy a server-originated-turn test mounts under.
+
+    Those turns are authorized fresh against the mount binding (ADR-038 D-l),
+    so an explicit view must be explicit from mount for its hook to run at all.
+    ``None`` and invalid policies cannot mount; they mount legacy and flip
+    afterwards, and the turn is then refused before the hook runs.
+    """
+    return "explicit" if policy == "explicit" else "legacy"
+
+
+async def _expect_denial(socket):
+    """A refused server-originated turn gets the foreground denial."""
+    for _ in range(20):
+        out = await socket.receive_output(timeout=3)
+        if out["type"] == "websocket.close":
+            assert out["code"] == 4403, out
+            return
+    raise AssertionError("the turn was not denied")
+
+
 async def _poll_log(caplog, *needles, attempts=80):
     import asyncio
 
@@ -174,10 +213,11 @@ async def _poll_log(caplog, *needles, attempts=80):
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
+@pytest.mark.parametrize("debug", [False, True])
 @pytest.mark.parametrize("policy", ["legacy", "explicit", None, "invalid"])
 @pytest.mark.parametrize("hook", ["tick", "db_notify"])
 async def test_timer_and_notify_hook_failures_are_value_free_for_nonlegacy_views(
-    monkeypatch, caplog, policy, hook
+    monkeypatch, caplog, debug, policy, hook
 ):
     """``handle_tick`` runs on the consumer's tick timer and ``handle_info`` on a
     Postgres NOTIFY delivered through the channel layer; both catches logged the
@@ -192,10 +232,10 @@ async def test_timer_and_notify_hook_failures_are_value_free_for_nonlegacy_views
         else "db_notify: handle_info raised on NotifyFailureView: NOTIFY_HOOK_SENTINEL"
     )
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
-    # Hold the policy at legacy through mount; flip it before the hook can run.
-    monkeypatch.setattr(view_cls, "exposure_policy", "legacy")
+    # Explicit from mount; None/invalid flip after a legacy mount.
+    monkeypatch.setattr(view_cls, "exposure_policy", _mount_policy(policy))
     with override_settings(
-        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True, DJUST_TENANTS=None, DJUST_CONFIG={}
+        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=debug, DJUST_TENANTS=None, DJUST_CONFIG={}
     ):
         request = await sync_to_async(make_request)()
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
@@ -216,14 +256,20 @@ async def test_timer_and_notify_hook_failures_are_value_free_for_nonlegacy_views
                         "djust_db_notify_exposure_hooks",
                         {"type": "db_notify", "channel": "exposure_hooks", "payload": {}},
                     )
-                await _poll_log(caplog, sentinel, "Protected view operation failed")
+                if policy in (None, "invalid"):
+                    await _expect_denial(socket)
+                else:
+                    await _poll_log(caplog, sentinel, "Protected view operation failed")
 
-            if policy == "legacy":
+            if policy == "legacy" or (debug and policy == "explicit"):
                 assert expected_legacy in caplog.text
                 assert "Traceback (most recent call last)" in caplog.text
-            else:
+            elif policy == "explicit":
                 assert sentinel not in caplog.text
                 assert "Protected view operation failed" in caplog.text
+            else:
+                # Refused before the hook: nothing from it can reach the log.
+                assert sentinel not in caplog.text
         finally:
             await socket.disconnect()
 
@@ -238,9 +284,10 @@ class UntrackFailureView(LiveView):
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
+@pytest.mark.parametrize("debug", [False, True])
 @pytest.mark.parametrize("policy", ["legacy", "explicit", None, "invalid"])
 async def test_disconnect_presence_cleanup_failure_is_value_free_for_nonlegacy_views(
-    monkeypatch, caplog, policy
+    monkeypatch, caplog, debug, policy
 ):
     """``disconnect`` calls ``untrack_presence``, which an application may
     override, and its catch logged the exception. Disconnect is the trigger, so
@@ -248,7 +295,7 @@ async def test_disconnect_presence_cleanup_failure_is_value_free_for_nonlegacy_v
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
     monkeypatch.setattr(UntrackFailureView, "exposure_policy", "legacy")
     with override_settings(
-        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True, DJUST_TENANTS=None, DJUST_CONFIG={}
+        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=debug, DJUST_TENANTS=None, DJUST_CONFIG={}
     ):
         request = await sync_to_async(make_request)()
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
@@ -265,7 +312,7 @@ async def test_disconnect_presence_cleanup_failure_is_value_free_for_nonlegacy_v
         with caplog.at_level(logging.DEBUG):
             await socket.disconnect()
 
-    if policy == "legacy":
+    if policy == "legacy" or debug:
         assert "Error cleaning up presence: UNTRACK_HOOK_SENTINEL" in caplog.text
         # The original catch logged at WARNING; the converted site keeps it.
         [record] = [r for r in caplog.records if "UNTRACK_HOOK_SENTINEL" in r.getMessage()]
@@ -282,8 +329,11 @@ class BatchFailureView(LiveView):
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
+@pytest.mark.parametrize("debug", [False, True])
 @pytest.mark.parametrize("policy", ["legacy", "explicit", None, "invalid"])
-async def test_mount_batch_escape_is_value_free_for_nonlegacy_views(monkeypatch, caplog, policy):
+async def test_mount_batch_escape_is_value_free_for_nonlegacy_views(
+    monkeypatch, caplog, debug, policy
+):
     """``_mount_one`` is the batch's last line of defense for anything that
     escapes ``handle_mount``. It logged the exception with its traceback and,
     under DEBUG, sent ``str(exc)`` to the client in ``failed[]``. The trigger is
@@ -297,7 +347,7 @@ async def test_mount_batch_escape_is_value_free_for_nonlegacy_views(monkeypatch,
 
     monkeypatch.setattr(LiveViewConsumer, "handle_mount", escape)
     with override_settings(
-        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True, DJUST_TENANTS=None, DJUST_CONFIG={}
+        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=debug, DJUST_TENANTS=None, DJUST_CONFIG={}
     ):
         request = await sync_to_async(make_request)()
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
@@ -322,10 +372,17 @@ async def test_mount_batch_escape_is_value_free_for_nonlegacy_views(monkeypatch,
                 frame = await socket.receive_json_from(timeout=3)
             assert frame["type"] == "mount_batch", frame
             [failed] = frame["failed"]
-            if policy == "legacy":
-                # Unchanged legacy behaviour: DEBUG detail to the client, traceback in the log.
+            if debug:
+                # Legacy (unchanged) and, under DEBUG, every policy: detail to
+                # the client, exception and traceback in the log.
                 assert "MOUNT_BATCH_SENTINEL" in failed["error"]
                 assert "mount_batch: _mount_one raised for view" in caplog.text
+                assert "MOUNT_BATCH_SENTINEL" in caplog.text
+                assert "Traceback (most recent call last)" in caplog.text
+            elif policy == "legacy":
+                # Unchanged legacy production behaviour: generic client error,
+                # detail in the log.
+                assert failed["error"] == "mount failed"
                 assert "MOUNT_BATCH_SENTINEL" in caplog.text
             else:
                 assert failed["error"] == "mount failed"
@@ -355,9 +412,10 @@ class PushDeferView(LiveView):
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
+@pytest.mark.parametrize("debug", [False, True])
 @pytest.mark.parametrize("policy", ["legacy", "explicit", None, "invalid"])
 async def test_consumer_deferred_callback_failure_is_value_free_for_nonlegacy_views(
-    monkeypatch, caplog, policy
+    monkeypatch, caplog, debug, policy
 ):
     """The consumer's ``_flush_deferred`` twin runs on its own flush paths
     (``server_push``, tick, ``db_notify``) and logged failures with the
@@ -365,9 +423,9 @@ async def test_consumer_deferred_callback_failure_is_value_free_for_nonlegacy_vi
     from djust.push import apush_to_view
 
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
-    monkeypatch.setattr(PushDeferView, "exposure_policy", "legacy")
+    monkeypatch.setattr(PushDeferView, "exposure_policy", _mount_policy(policy))
     with override_settings(
-        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True, DJUST_TENANTS=None, DJUST_CONFIG={}
+        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=debug, DJUST_TENANTS=None, DJUST_CONFIG={}
     ):
         request = await sync_to_async(make_request)()
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
@@ -383,11 +441,18 @@ async def test_consumer_deferred_callback_failure_is_value_free_for_nonlegacy_vi
             caplog.clear()
             with caplog.at_level(logging.DEBUG):
                 await apush_to_view(__name__ + ".PushDeferView", handler="handle_later")
-                await _poll_log(caplog, "Deferred callback", "Protected view operation failed")
+                if policy in (None, "invalid"):
+                    await _expect_denial(socket)
+                else:
+                    await _poll_log(caplog, "Deferred callback", "Protected view operation failed")
 
-            if policy == "legacy":
+            if policy == "legacy" or (debug and policy == "explicit"):
                 assert "PUSH_DEFER_EXC_SENTINEL" in caplog.text
                 assert "PUSH_DEFER_ARG_SENTINEL" in caplog.text
+            elif policy in (None, "invalid"):
+                # Refused before the handler queued anything.
+                assert "PUSH_DEFER_EXC_SENTINEL" not in caplog.text
+                assert "PUSH_DEFER_ARG_SENTINEL" not in caplog.text
             else:
                 assert "PUSH_DEFER_EXC_SENTINEL" not in caplog.text
                 assert "PUSH_DEFER_ARG_SENTINEL" not in caplog.text
@@ -409,12 +474,13 @@ class PushLayoutView(LiveView):
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
+@pytest.mark.parametrize("debug", [False, True])
 # None and invalid policies cannot reach the layout render: the context build
 # refuses an unknown policy first ("unknown context exposure policy"), so the
 # render the test patches never runs. Those cases would pass vacuously.
 @pytest.mark.parametrize("policy", ["legacy", "explicit"])
 async def test_consumer_layout_render_failure_is_value_free_for_nonlegacy_views(
-    monkeypatch, caplog, policy
+    monkeypatch, caplog, debug, policy
 ):
     """The consumer's ``_flush_pending_layout`` twin logged a ``set_layout``
     render failure with ``logger.exception`` (and re-raises under DEBUG, into
@@ -431,9 +497,9 @@ async def test_consumer_layout_render_failure_is_value_free_for_nonlegacy_views(
 
     monkeypatch.setattr(loader, "render_to_string", fail)
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
-    monkeypatch.setattr(PushLayoutView, "exposure_policy", "legacy")
+    monkeypatch.setattr(PushLayoutView, "exposure_policy", _mount_policy(policy))
     with override_settings(
-        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True, DJUST_TENANTS=None, DJUST_CONFIG={}
+        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=debug, DJUST_TENANTS=None, DJUST_CONFIG={}
     ):
         request = await sync_to_async(make_request)()
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
@@ -454,7 +520,7 @@ async def test_consumer_layout_render_failure_is_value_free_for_nonlegacy_views(
             # Every case must reach the layout render; otherwise a value-free
             # line from an earlier failure would pass the test vacuously.
             assert rendered == ["exposure_push_layout.html"], (rendered, caplog.text[-600:])
-            if policy == "legacy":
+            if policy == "legacy" or debug:
                 assert "set_layout('exposure_push_layout.html') — template rendering raised" in (
                     caplog.text
                 )
@@ -477,6 +543,7 @@ class BugShareView(LiveView):
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
+@pytest.mark.parametrize("debug", [False, True])
 @pytest.mark.parametrize("policy", ["legacy", "explicit"])
 @pytest.mark.parametrize(
     "exc_type,sentinel,channel",
@@ -486,7 +553,7 @@ class BugShareView(LiveView):
     ],
 )
 async def test_bug_capture_share_failure_is_value_free_for_nonlegacy_views(
-    monkeypatch, caplog, policy, exc_type, sentinel, channel
+    monkeypatch, caplog, debug, policy, exc_type, sentinel, channel
 ):
     """``handle_bug_capture_share`` re-renders the view. A ``ValueError`` or
     ``RuntimeError`` from that render went to the client as ``str(exc)``; any
@@ -501,7 +568,7 @@ async def test_bug_capture_share_failure_is_value_free_for_nonlegacy_views(
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
     monkeypatch.setattr(BugShareView, "exposure_policy", "legacy")
     with override_settings(
-        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True, DJUST_TENANTS=None, DJUST_CONFIG={}
+        LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=debug, DJUST_TENANTS=None, DJUST_CONFIG={}
     ):
         request = await sync_to_async(make_request)()
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
@@ -522,8 +589,9 @@ async def test_bug_capture_share_failure_is_value_free_for_nonlegacy_views(
             assert raised, "the re-render never ran; the test would be vacuous"
             assert frame["type"] == "error", frame
             text = json.dumps(frame) + caplog.text
-            if policy == "legacy":
-                # Unchanged legacy behaviour on the channel each exception used.
+            if policy == "legacy" or debug:
+                # Unchanged legacy behaviour on the channel each exception
+                # used; under DEBUG an explicit view's error reads the same.
                 if channel == "client":
                     assert sentinel in json.dumps(frame)
                 else:

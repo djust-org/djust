@@ -218,6 +218,9 @@ async def test_consumer_cancel_path_sends_the_settle_frame_only_for_an_event():
 
         consumer.send_json = send_json
         view = MagicMock()
+        # A bare MagicMock has no readable exposure policy, which ADR-038
+        # treats as nonlegacy (fail closed). This pins the legacy path.
+        view.exposure_policy = "legacy"
         view._async_cancelled = {"job"}
         view.render_with_diff = MagicMock(return_value=("<div dj-root>x</div>", "[]", 2))
         for drain in ("push_events", "navigation", "accessibility", "i18n", "flash"):

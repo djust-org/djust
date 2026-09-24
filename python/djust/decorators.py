@@ -275,6 +275,27 @@ def is_event_handler(func: Any) -> bool:
     return bool(getattr(func, "_djust_decorators", {}).get("event_handler"))
 
 
+_GENERIC_ACTION_ERROR = "Action failed"
+
+
+class ActionError(Exception):
+    """A failure whose message is meant for the user of an ``@action``.
+
+    ``@action`` records a failed handler's error for the template as
+    ``{{ <name>.error }}``. Under ``exposure_policy="explicit"`` (ADR-038) an
+    ordinary exception is recorded as the generic ``"Action failed"``, because
+    its text can carry view state or query values. Raise ``ActionError`` to
+    show a message you wrote for the user, under every policy::
+
+        @action
+        def create_todo(self, title: str = "", **kwargs):
+            if not title:
+                raise ActionError("Title is required")
+
+    Only the message you pass is recorded; nothing is added to it.
+    """
+
+
 def action(
     func: Optional[F] = None,
     *,
@@ -311,6 +332,11 @@ def action(
             "error":   "<str(exc)>",
             "result":  None,
         }
+
+    Under ``exposure_policy="explicit"`` (ADR-038) the recorded ``error`` is
+    the generic ``"Action failed"`` unless the handler raised
+    :class:`ActionError`, whose message is recorded as written. Legacy views
+    record ``str(exc)`` as above.
 
     The exception is **logged** at ERROR level (via ``logger.exception``)
     so diagnostics aren't lost, but is **not** re-raised. Re-raising
@@ -431,7 +457,10 @@ def action(
                 # ``BaseException`` subclasses (KeyboardInterrupt, SystemExit,
                 # GeneratorExit) propagate via the bare ``except Exception``
                 # — by Python convention those should never be caught.
-                from ._exposure_diagnostics import log_failure_for
+                from ._exposure_diagnostics import (
+                    exception_details_allowed_for,
+                    log_failure_for,
+                )
 
                 log_failure_for(
                     logger,
@@ -443,9 +472,15 @@ def action(
                     action_name,
                     traceback=True,
                 )
+                # ADR-038 D-f: the error is rendered to the client. Nonlegacy
+                # views show exception text only for a declared ActionError.
+                if isinstance(exc, ActionError) or exception_details_allowed_for((self,)):
+                    error = str(exc) or exc.__class__.__name__
+                else:
+                    error = _GENERIC_ACTION_ERROR
                 self._action_state[action_name] = {
                     "pending": False,
-                    "error": str(exc) or exc.__class__.__name__,
+                    "error": error,
                     "result": None,
                 }
                 return None
