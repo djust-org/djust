@@ -70,9 +70,9 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 | Priority | Task | Milestone |
 |---|---|---|
-| **P1** | #2947 — `DjustLogSanitizerFilter` never sees records from `djust.*` child loggers (attach at `ready()` — non-breaking option) | v1.2.1 |
-| **P1** | #2973 — Tenant isolation, part 1: `tenant_redis` presence falls back to memory; MRO-independent tenant key; system check for unknown `PRESENCE_BACKEND` (state-key prefix → 1.3) | v1.2.1 |
-| **P1** | #2878 — Advisory credits published unverified; documented intake channel is not the one used (runbook) | v1.2.1 |
+| ~~**P1**~~ | ~~#2947 — `DjustLogSanitizerFilter` never sees records from `djust.*` child loggers (attach at `ready()` — non-breaking option)~~ ✅ (#3047) | v1.2.1 |
+| ~~**P1**~~ | ~~#2973 — Tenant isolation, part 1: `tenant_redis` presence falls back to memory; MRO-independent tenant key; system check for unknown `PRESENCE_BACKEND` (state-key prefix → 1.3)~~ ✅ (#3047) | v1.2.1 |
+| ~~**P1**~~ | ~~#2878 — Advisory credits published unverified; documented intake channel is not the one used (runbook)~~ ✅ (#3047) | v1.2.1 |
 
 ### v1.2.1-5 — Runtime routing, mount and sticky lifecycle (drain bucket → ships in 1.2.1)
 
@@ -168,15 +168,15 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 | Priority | Task | Milestone |
 |---|---|---|
-| **P1** | #2889 — `djust new` allowlist blocks djust's own LiveViews (1.2.1: scaffold emits `"djust"` + warning check; always-allow → 1.3) | v1.2.1 |
-| **P1** | #2983 — Deploy doctor warns about sqlite3 on every `djust new` project | v1.2.1 |
-| **P1** | #2982 — `djust deploy <slug> --from-git` fails with 'No such option' | v1.2.1 |
-| **P1** | #2883 — Admin index 500s (KeyError `user`) when the djust TEMPLATES entry lacks context processors (check + docs) | v1.2.1 |
-| **P1** | #2884 — `djust init` comment cites the fixed #2872 as a blocker (rewrite the stale comment) | v1.2.1 |
-| **P1** | #2984 — Seven `LIVEVIEW_CONFIG` keys never read (1.2.1: make `jit_serialization=False` work, deprecation check for the rest; removal → 1.3) | v1.2.1 |
-| **P1** | #3006 — U001 update check flags a patched release for up to 24 h after an advisory range fix | v1.2.1 |
-| **P1** | #3013 — `fragment_text_map` rebuilt after every full parse (build lazily) | v1.2.1 |
-| **P1** | #3014 — `MoveSubtree`/`InsertSubtree` scan the whole document for their dj-if marker (one marker map per batch) | v1.2.1 |
+| ~~**P1**~~ | ~~#2889 — `djust new` allowlist blocks djust's own LiveViews (1.2.1: scaffold emits `"djust"` + warning check; always-allow → 1.3)~~ ✅ (#3047) | v1.2.1 |
+| ~~**P1**~~ | ~~#2983 — Deploy doctor warns about sqlite3 on every `djust new` project~~ ✅ (#3047) | v1.2.1 |
+| ~~**P1**~~ | ~~#2982 — `djust deploy <slug> --from-git` fails with 'No such option'~~ ✅ (#3047) | v1.2.1 |
+| ~~**P1**~~ | ~~#2883 — Admin index 500s (KeyError `user`) when the djust TEMPLATES entry lacks context processors (check + docs)~~ ✅ (#3047) | v1.2.1 |
+| ~~**P1**~~ | ~~#2884 — `djust init` comment cites the fixed #2872 as a blocker (rewrite the stale comment)~~ ✅ (#3047) | v1.2.1 |
+| ~~**P1**~~ | ~~#2984 — Seven `LIVEVIEW_CONFIG` keys never read (1.2.1: make `jit_serialization=False` work, deprecation check for the rest; removal → 1.3)~~ ✅ (#3047) | v1.2.1 |
+| ~~**P1**~~ | ~~#3006 — U001 update check flags a patched release for up to 24 h after an advisory range fix~~ ✅ (#3047) | v1.2.1 |
+| ~~**P1**~~ | ~~#3013 — `fragment_text_map` rebuilt after every full parse (build lazily)~~ ✅ (#3047) | v1.2.1 |
+| ~~**P1**~~ | ~~#3014 — `MoveSubtree`/`InsertSubtree` scan the whole document for their dj-if marker (one marker map per batch)~~ ✅ (#3047) | v1.2.1 |
 
 ### Planned for 1.3 (not in 1.2.1)
 
