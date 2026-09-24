@@ -39,7 +39,6 @@ def test_features_vocabulary():
     }
 
 
-@pytest.mark.xfail(strict=True, reason="DjangoBackend lands in Task 5")
 def test_default_backend_is_django():
     assert get_account_backend().name == "django"
 
