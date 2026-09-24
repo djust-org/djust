@@ -1,0 +1,5 @@
+- **A form field with a callable `initial` gets the value, not the function.** `FormMixin` and `WizardMixin` read `field.initial` directly, so `UUIDField(initial=uuid.uuid4)` or `initial=timezone.now` stored the function itself. Both now use Django's `form.get_initial_for_field()`, which calls it, at mount, in `reset_form()`, and in the wizard's `form_data` and `as_live_field`. In `FormMixin`, the bug was hidden until #2974: the sync after `form_valid` used to overwrite the function, but once `reset_form()` inside `form_valid` stopped being undone, the function object reached the page (`<function uuid4 at 0x…>`) and failed the next submit with "Enter a valid UUID". Found by running djust.org's test suite against 1.2.1rc1. This also matches Django in two smaller ways:
+  - A form's own `self.initial[...]` now wins over the field's `initial`.
+  - `datetime`/`time` initials drop microseconds when the widget doesn't render them.
+
+  The wizard also stops turning `initial=0` or `initial=False` into `""`.

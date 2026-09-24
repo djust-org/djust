@@ -17,6 +17,18 @@ from .decorators import event_handler
 logger = logging.getLogger(__name__)
 
 
+def initial_field_value(form: Any, name: str, field: Any) -> Any:
+    """A field's initial value as Django's bound field sees it, or ``""``.
+
+    ``get_initial_for_field`` calls a callable ``initial``
+    (``UUIDField(initial=uuid.uuid4)``, ``initial=timezone.now``) instead of
+    returning the function, and lets the form's own ``initial`` win. Only
+    ``None`` becomes ``""``: ``0`` and ``False`` are real initial values.
+    """
+    initial = form.get_initial_for_field(field, name)
+    return "" if initial is None else initial
+
+
 class FormMixin:
     """
     Mixin for LiveView classes to add Django Forms support with real-time validation.
@@ -116,13 +128,8 @@ class FormMixin:
         self.form_choices = {}
         if self.form_class:
             form = self.form_class()
-            # Initialize all fields with their initial values or empty string
+            self.form_data = self._initial_form_data(form)
             for field_name, field in form.fields.items():
-                initial = field.initial
-                if initial is None:
-                    initial = ""
-                self.form_data[field_name] = initial
-
                 # Expose serializable choices for template iteration
                 if hasattr(field, "choices"):
                     self.form_choices[field_name] = [(str(k), str(v)) for k, v in field.choices]
@@ -450,6 +457,11 @@ class FormMixin:
                 continue
             self.form_data[field_name] = val if val is not None else ""
 
+    @staticmethod
+    def _initial_form_data(form: Any) -> Dict[str, Any]:
+        """Each field's initial value, or ``""`` when it has none."""
+        return {name: initial_field_value(form, name, field) for name, field in form.fields.items()}
+
     @event_handler
     def reset_form(self, **kwargs: Any) -> None:
         """Reset the form to its initial state.
@@ -467,13 +479,7 @@ class FormMixin:
         # This ensures consistent VDOM state and prevents alternating patches/html_update
         self.form_data = {}
         if self.form_class:
-            form = self.form_class()
-            # Initialize all fields with their initial values or empty string
-            for field_name, field in form.fields.items():
-                initial = field.initial
-                if initial is None:
-                    initial = ""
-                self.form_data[field_name] = initial
+            self.form_data = self._initial_form_data(self.form_class())
 
         self.form_errors = {}
         self.field_errors = {}

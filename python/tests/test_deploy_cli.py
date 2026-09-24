@@ -1439,6 +1439,15 @@ class TestCreateTarballGitignore:
     user forgot to ignore them.
     """
 
+    @pytest.fixture(autouse=True)
+    def _no_inherited_git_env(self, monkeypatch):
+        # _create_tarball runs `git ls-files` in the temp repo; an inherited
+        # GIT_DIR (a git hook's) would aim it at the real repository (#2608).
+        from tests.git_env import GIT_EXECUTION_VARS
+
+        for var in GIT_EXECUTION_VARS:
+            monkeypatch.delenv(var, raising=False)
+
     def _git_repo(self, tmp_path, layout, gitignore=""):
         """Create a git repo (no commit needed) with files + a .gitignore.
 
@@ -1455,7 +1464,12 @@ class TestCreateTarballGitignore:
             target = src / rel
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text("x")
-        subprocess.run(["git", "init", "-q"], cwd=src, check=True)
+        # A git hook exports GIT_DIR/GIT_INDEX_FILE for the real repository;
+        # inherited, they make this `git init` re-initialise that repository
+        # instead of creating one in ``src`` (#2608).
+        from tests.git_env import isolated_git_env
+
+        subprocess.run(["git", "init", "-q"], cwd=src, check=True, env=isolated_git_env())
         return src
 
     def test_gitignored_paths_excluded(self, tmp_path):

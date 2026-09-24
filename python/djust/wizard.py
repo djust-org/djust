@@ -68,6 +68,7 @@ import math
 from typing import Any, ClassVar, Dict
 
 from .decorators import event_handler
+from .forms import initial_field_value
 
 logger = logging.getLogger(__name__)
 
@@ -249,7 +250,7 @@ class WizardMixin:
         if not field:
             return ""
 
-        value = step_data.get(field_name, field.initial or "")
+        value = step_data.get(field_name, initial_field_value(form_instance, field_name, field))
         errors = step_errors.get(field_name, [])
 
         adapter = get_adapter(kwargs.pop("framework", None))
@@ -313,7 +314,7 @@ class WizardMixin:
             # over the class-level default. None = render all (legacy behavior).
             rendered_filter = current_step.get("rendered_fields", self.wizard_rendered_fields)
             for fname, field in form_instance.fields.items():
-                val = current_step_data.get(fname, field.initial or "")
+                val = current_step_data.get(fname, initial_field_value(form_instance, fname, field))
                 form_data[fname] = val if val is not None else ""
                 form_required[fname] = bool(field.required)
                 if hasattr(field, "choices"):
