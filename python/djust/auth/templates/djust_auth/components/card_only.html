@@ -1,0 +1,12 @@
+{% load djust_auth %}{% auth_context as auth %}<div class="dj-auth-card">
+<h1 class="dj-auth-title">{{ title }}</h1>
+{% if auth_step == "login" or auth_step == "signup" %}{% auth_providers auth %}{% if auth.providers %}{% auth_divider "or with email" %}{% endif %}{% endif %}
+{{ slot_social }}
+{% auth_errors form %}
+<form method="post" class="dj-auth-form"{% if action %} action="{{ action }}"{% endif %}>{% if csrf_token %}<input type="hidden" name="csrfmiddlewaretoken" value="{{ csrf_token }}">{% endif %}
+  {% for field in form.visible_fields %}{% if field.name == "code" %}{% auth_code_input field %}{% else %}{% auth_field field %}{% endif %}{% endfor %}{% for h in form.hidden_fields %}{{ h }}{% endfor %}
+  <button class="dj-auth-submit" type="submit">{{ submit_label }}</button>
+</form>
+{% auth_links auth %}
+{{ slot_footer }}
+</div>
