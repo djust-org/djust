@@ -2002,6 +2002,9 @@ function _placeChildren(parent, ops, movedChildOf, rootEl, tally) {
                 tally(applySinglePatch(op, rootEl), op);
                 continue;
             }
+            // A created subtree can carry dj-if markers; register them so a
+            // later InsertSubtree's "already present?" probe sees them (#3014).
+            _registerDjIfMarkers(created);
             nodes = [created];
         } else if (op.type === 'InsertSubtree') {
             if (op.id && _findDjIfOpenMarker(String(op.id), rootEl)) {

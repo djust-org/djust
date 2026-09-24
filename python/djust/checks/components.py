@@ -143,11 +143,15 @@ def _check_routed_djust_views_allowlisted(errors: list, routed: "set[type]") -> 
     allowed = getattr(settings, "LIVEVIEW_ALLOWED_MODULES", None)
     if not allowed:
         return
+
+    def _is_test_module(module: str) -> bool:
+        return any(part == "tests" or part.startswith("test_") for part in module.split("."))
+
     blocked = sorted(
-        "%s.%s" % (cls.__module__, cls.__qualname__)
+        "%s.%s" % (cls.__module__, cls.__name__)
         for cls in routed
         if (getattr(cls, "__module__", "") or "").startswith("djust.")
-        and "test" not in cls.__module__
+        and not _is_test_module(cls.__module__)
         and not is_view_path_allowed("%s.%s" % (cls.__module__, cls.__name__))
     )
     if not blocked:

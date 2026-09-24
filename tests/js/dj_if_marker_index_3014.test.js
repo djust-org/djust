@@ -133,6 +133,28 @@ describe('dj-if marker map per patch batch (#3014)', () => {
         expect(texts(ul)).toEqual(['item 0', 'dup']);
     });
 
+    it('markers inside an InsertChild node count for a later InsertSubtree probe', () => {
+        const ul = list(0);
+        const result = _applyPatchBatch([
+            {
+                type: 'InsertChild', path: [], d: 'list', index: 0,
+                node: {
+                    tag: 'li', attrs: {}, children: [
+                        { tag: '#comment', text: 'dj-if id="inner"', attrs: {}, children: [] },
+                        { tag: '#text', text: 'inner', attrs: {}, children: [] },
+                        { tag: '#comment', text: '/dj-if', attrs: {}, children: [] },
+                    ],
+                },
+            },
+            {
+                type: 'InsertSubtree', id: 'inner', path: [], d: 'list', index: 1,
+                html: '<!--dj-if id="inner"--><li>dup</li><!--/dj-if-->',
+            },
+        ], null);
+        expect(result.failed).toBe(0);
+        expect(texts(ul)).toEqual(['inner']);
+    });
+
     it('a MoveSubtree for a marker nobody has is still an idempotent success', () => {
         const ul = list(2);
         const result = _applyPatchBatch([
