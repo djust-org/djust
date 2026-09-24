@@ -405,7 +405,7 @@ def mount(self, request, **kwargs):
 
 **Severity**: Info
 
-**What causes it**: A public method name matches event handler naming patterns (e.g., `handle_*`, `on_*`, `toggle_*`, `select_*`, `update_*`, `delete_*`, `create_*`, `add_*`, `remove_*`, `save_*`, `cancel_*`, `submit_*`, `close_*`, `open_*`) but is not decorated with `@event_handler`.
+**What causes it**: A public method name matches event handler naming patterns (e.g., `on_*`, `toggle_*`, `select_*`, `update_*`, `delete_*`, `create_*`, `add_*`, `remove_*`, `save_*`, `cancel_*`, `submit_*`, `close_*`, `open_*`) but is not decorated with `@event_handler`. `handle_*` methods are not flagged: an undecorated `handle_*` method is the way to write a handler that server push can call and browsers cannot.
 
 Without the decorator, the method cannot be called from templates via `dj-click` or other directives.
 

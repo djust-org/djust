@@ -78,8 +78,6 @@ def handle_info(self, message):
         self.refresh()
 ```
 
-> **Known issue: #2962.** At 1.2.0rc10, calling `self.listen()` inside `mount()` never subscribes. Declare the channels at class level with `_listen_channels` instead.
-
 ## State Management
 
 State lives on `self`. Any public attribute (`self.count`) is:

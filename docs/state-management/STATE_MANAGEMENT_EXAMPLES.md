@@ -971,7 +971,7 @@ class ContactFormView(DraftModeMixin, FormMixin, LiveView):
 
 `submit_form` is FormMixin's submit handler; it validates the posted fields and calls `form_valid` or `form_invalid`. Errors are available as `field_errors`. The fields are written by hand here because each one needs `data-draft="true"`; without drafts, `{% live_form view %}` renders the whole form.
 
-`clear_draft()` does not remove the draft immediately. The client reads `data-draft-clear` only when the page loads, so the saved draft is removed on the next full page load, not by the live update after submission.
+`clear_draft()` removes the saved draft when the client applies the update after submission (the render that carries `data-draft-clear`), so a reload does not bring the submitted draft back.
 
 ---
 

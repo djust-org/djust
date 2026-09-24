@@ -69,23 +69,21 @@ class MyView(OfflineMixin, LiveView):
 python manage.py generate_sw
 ```
 
-> **Known issue: #2967.** At rc10 `generate_sw` crashes on every invocation:
-> its own `--version` option clashes with Django's built-in `--version`
-> (`argparse.ArgumentError: argument --version: conflicting option string`).
-> Until it is fixed, serve the service worker from a view instead:
->
-> ```python
-> # urls.py
-> from djust.pwa import service_worker_view
->
-> urlpatterns = [
->     path("sw.js", service_worker_view),
->     # ...
-> ]
-> ```
->
-> `service_worker_view` reads the `DJUST_CONFIG['PWA_*']` keys described
-> below.
+You can also serve the service worker from a view instead of a generated
+file:
+
+```python
+# urls.py
+from djust.pwa import service_worker_view
+
+urlpatterns = [
+    path("sw.js", service_worker_view),
+    # ...
+]
+```
+
+`service_worker_view` reads the `DJUST_CONFIG['PWA_*']` keys described
+below.
 
 ## PWA Mixins
 
@@ -294,11 +292,6 @@ class TodoView(OfflineMixin, LiveView):
 
 ## Management Commands
 
-> **Known issue: #2967.** None of these invocations work at rc10: `generate_sw`
-> crashes while building its argument parser (see
-> "Generate the Service Worker" above). Use
-> `service_worker_view` until it is fixed.
-
 ```bash
 # Basic generation
 python manage.py generate_sw
@@ -309,8 +302,8 @@ python manage.py generate_sw --output static/custom-sw.js
 # Include static files in the cache
 python manage.py generate_sw --cache-static
 
-# Custom version
-python manage.py generate_sw --version 2.1.0
+# Custom cache version (--sw-version: Django reserves --version)
+python manage.py generate_sw --sw-version 2.1.0
 ```
 
 ## Adding PWA to an Existing App
@@ -318,7 +311,7 @@ python manage.py generate_sw --version 2.1.0
 1. Add `{% load djust_pwa %}` to your base template
 2. Include `{% djust_pwa_head %}` in your `<head>`
 3. Mix `PWAMixin` or `OfflineMixin` into your LiveViews
-4. Serve the service worker: route `djust.pwa.service_worker_view` at `/sw.js` (`python manage.py generate_sw` is broken at rc10, see #2967)
+4. Serve the service worker: run `python manage.py generate_sw`, or route `djust.pwa.service_worker_view` at `/sw.js`
 5. Deploy with HTTPS (required for service workers in production)
 
 ## Browser Support

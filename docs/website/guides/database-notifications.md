@@ -17,10 +17,9 @@ Shipped in **v0.5.0** (`djust.db.notify_on_save`, `djust.db.send_pg_notify`,
 ## The 30-second version
 
 ```python
-from asgiref.sync import async_to_sync
 from django.db import models
 from djust import LiveView
-from djust.db import PostgresNotifyListener, notify_on_save
+from djust.db import notify_on_save
 
 @notify_on_save                         # default channel: "shop_order"
 class Order(models.Model):
@@ -28,14 +27,10 @@ class Order(models.Model):
 
 class OrderDashboard(LiveView):
     template_name = "dashboard.html"
-    # Known issue #2962: declare the channel at class level so the
-    # WebSocket consumer joins its group (self.listen() in mount() doesn't).
-    _listen_channels = frozenset({"shop_order"})
 
     def mount(self, request, **kwargs):
         self.orders = list(Order.objects.filter(status="pending"))
-        # Start the process-wide Postgres LISTEN for the channel.
-        async_to_sync(PostgresNotifyListener.instance().ensure_listening)("shop_order")
+        self.listen("shop_order")
 
     def handle_info(self, message):
         if message["type"] == "db_notify":
@@ -47,19 +42,6 @@ Celery task, a management command, even a `psql` shell — and every user
 viewing `OrderDashboard` gets fresh data, usually within a few
 milliseconds. Delivery is best-effort; see
 [Dropped notifications](#dropped-notifications-under-contention).
-
-> **Known issue: #2962.** The intended API is `self.listen("shop_order")`
-> inside `mount()`. At 1.2.0rc10 that call records the channel and starts
-> the Postgres `LISTEN`, but the WebSocket consumer reads the channel set
-> *before* `mount()` runs, so on a fresh mount it never joins the Channels
-> group and `handle_info` is never called. Until the fix ships, use the
-> workaround above: a class-level `_listen_channels` (which the consumer
-> reads when it wires up the view), plus an explicit
-> `PostgresNotifyListener.instance().ensure_listening(...)` call in
-> `mount()`. Calling `self.listen()` for a channel that is already in the
-> class-level set returns early without starting the listener, which is
-> why the example calls `ensure_listening` directly. Every example on this
-> page uses this workaround.
 
 ## How it works
 
@@ -83,11 +65,10 @@ milliseconds. Delivery is best-effort; see
    `psycopg.AsyncConnection` and does `async for notify in
    conn.notifies():`. On each NOTIFY it calls
    `channel_layer.group_send("djust_db_notify_<channel>", ...)`.
-3. When the WebSocket consumer wires up the view, it joins the Channels
-   group for every channel in the view's `_listen_channels`. (This is
-   meant to be populated by `self.listen(channel)` in `mount()`, but at
-   rc10 the consumer reads it before `mount()` runs; see
-   [Known issue #2962](#the-30-second-version).)
+3. After `mount()` returns, the WebSocket consumer joins the Channels
+   group for every channel the view listens on. A `self.listen()` call in
+   a later event handler joins at the end of that event. (Before 1.2.1,
+   only channels declared at class level were joined; #2962.)
 4. The consumer's `db_notify` handler calls `handle_info(message)` and
    re-renders — VDOM patches stream down to the browser.
 
@@ -137,12 +118,6 @@ def mount(self, request, **kwargs):
     self.listen("users")       # subscribe to multiple channels
     self.listen("orders")      # duplicate subscriptions are idempotent
 ```
-
-> **Known issue: #2962.** At 1.2.0rc10, channels passed to `self.listen()`
-> inside `mount()` are **not** joined on a fresh WebSocket mount, so
-> `handle_info` never fires for them. Use the class-level
-> `_listen_channels` workaround shown in
-> [The 30-second version](#the-30-second-version).
 
 Raises `ValueError` for bad channel names.
 
@@ -220,10 +195,9 @@ class Order(models.Model):
 
 class OrderDashboard(LoginRequiredMixin, LiveView):
     template_name = "admin/orders.html"
-    _listen_channels = frozenset({"orders"})  # #2962 workaround
 
     def mount(self, request, **kwargs):
-        async_to_sync(PostgresNotifyListener.instance().ensure_listening)("orders")
+        self.listen("orders")
         self._refresh()
 
     def handle_info(self, message):
@@ -244,11 +218,9 @@ class Document(models.Model):
     body = models.TextField()
 
 class DocumentView(LiveView):
-    _listen_channels = frozenset({"document"})  # #2962 workaround
-
     def mount(self, request, doc_id, **kwargs):
         self._doc_id = doc_id
-        async_to_sync(PostgresNotifyListener.instance().ensure_listening)("document")
+        self.listen("document")
         self.doc = Document.objects.get(pk=doc_id)
 
     def handle_info(self, message):
@@ -268,11 +240,9 @@ customer's page updates instantly with no extra plumbing.
 class Order(models.Model): ...
 
 class CustomerOrderView(LiveView):
-    _listen_channels = frozenset({"orders"})  # #2962 workaround
-
     def mount(self, request, order_id, **kwargs):
         self._order_id = order_id
-        async_to_sync(PostgresNotifyListener.instance().ensure_listening)("orders")
+        self.listen("orders")
         self.order = Order.objects.get(pk=order_id)
 
     def handle_info(self, message):

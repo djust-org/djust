@@ -215,14 +215,13 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 
 ### V004 — Public method looks like event handler but missing @event_handler
 - **Severity**: Info
-- **Method**: AST (method name heuristic — `handle_*` prefix and similar)
+- **Method**: Class inspection (method name heuristic — `on_*`, `toggle_*`, `submit_*` and similar prefixes)
 - **What it detects**: Public methods whose names match the event-handler naming pattern but lack the `@event_handler` decorator
 - **Suppression** (any of):
   - `abstract = True` class attribute on an abstract base
   - `DJUST_CONFIG = {"suppress_checks": ["V004"]}` — global (fixed in #1607)
   - `SILENCED_SYSTEM_CHECKS = ["djust.V004"]`
-  - `# noqa: V004` on the method
-- **False positives**: `handle_params()`, `handle_disconnect()`, `handle_connect()`, and `handle_event()` are djust lifecycle methods, not event handlers — the `handle_*` heuristic fires on them incorrectly
+- **Not flagged**: `handle_*` methods. `server_push` may call an undecorated `handle_*` method, and leaving it undecorated is how a handler is made callable by server push but not by browsers — adding `@event_handler` or a `_` prefix would break it (#3002). The framework's own lifecycle names (`mount`, `handle_params`, `handle_info`, `handle_tick`, …) were already exempt.
 
 ### V005 — Module not in LIVEVIEW_ALLOWED_MODULES
 - **Severity**: Warning

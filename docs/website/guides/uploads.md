@@ -377,13 +377,13 @@ Re-run the webhook delivery. The log will show the key that failed to match and 
 
 Network hiccups, backgrounded mobile tabs, and brief WebSocket disconnects should not kill a long upload. Resumable uploads persist chunk-level state server-side so the transfer picks up where it left off on reconnect.
 
-> **Known issue ([#2972](https://github.com/djust-org/djust/issues/2972), 1.2.0rc10):** when a WebSocket disconnects, djust aborts every in-flight upload writer, `ResumableUploadWriter` included, and the wrapper's `abort()` deletes the upload's state entry (and aborts the inner writer, e.g. the S3 multipart upload). A resume after a dropped connection therefore gets `not_found` and the client starts over from byte 0. The protocol below describes the intended behaviour; don't rely on resume across a WebSocket drop at this version.
-
 ### How it works
 
 Add `resumable=True` to an `allow_upload()` slot whose writer is a `ResumableUploadWriter` (see [ResumableUploadWriter](#resumableuploadwriter)). When the WebSocket drops mid-transfer, the browser sends an `upload_resume` message with the upload's `ref` on reconnect. The server replies with the bytes and chunk indices it has already received, and the client continues from there — no re-sending of already-received chunks.
 
-The state survives **WS reconnects on the same server process**. A server restart wipes in-memory state (see [State stores](#state-stores) for cross-process persistence).
+When the WebSocket drops with an upload in flight, djust **suspends** a `ResumableUploadWriter` instead of aborting it: the state entry stays, and the inner writer (an open S3 multipart upload, say) is not aborted. The suspended upload waits for its client for up to 10 minutes (or the state's TTL, if shorter), at most 32 per process; past that, or when the cap is exceeded, the oldest is aborted as before. On reconnect the same session's `upload_resume` re-attaches it and the remaining chunks continue the same writer. A cancel, a writer error or a size-limit violation still aborts it and deletes the state. (Before 1.2.1 every disconnect aborted it, so resume never worked; #2972.)
+
+Resume continues the live writer, so it works for a reconnect **to the same server process**. When the reconnect lands on another process, or after a server restart, the server answers `not_found` and the client starts over from byte 0 — even with a shared state store such as Redis, which only lets `UploadStatusView` report progress across processes.
 
 ### Enable it
 
@@ -410,7 +410,7 @@ The client-side `dj-upload` directive handles the resume protocol automatically.
 
 ### State stores
 
-By default, chunk receipts are held in process memory (`InMemoryUploadState`). This works for single-process servers and the common dev-server case. For multi-process deployments (gunicorn, uvicorn workers) or production environments where worker restarts should not kill uploads, plug in a shared store.
+By default, chunk receipts are held in process memory (`InMemoryUploadState`). This works for single-process servers and the common dev-server case. For multi-process deployments (gunicorn, uvicorn workers), plug in a shared store so any worker can answer `UploadStatusView` and the owner check. A shared store does not by itself let an upload continue on another process: resuming needs the suspended writer, which lives in the process that received the earlier chunks.
 
 #### RedisUploadState
 
