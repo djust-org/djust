@@ -1414,7 +1414,7 @@ Recognized packages: `axes`, `defender`, `brutebuster`, `ratelimit`, `django_rat
 **Fix**: Do one of these:
 
 - Set `DJUST_TRUSTED_PROXY_COUNT` to the number of reverse proxies in front of Django (for example `1` behind ingress-nginx). djust passes it to allauth as `ALLAUTH_TRUSTED_PROXY_COUNT`.
-- If your proxy puts the client IP in a header of its own, set `ALLAUTH_TRUSTED_CLIENT_IP_HEADER` to that header's name (for example `"X-Real-IP"`, which ingress-nginx sets). allauth reads the IP from it. Only name a header that your proxy always sets and that clients can't set themselves.
+- If your proxy puts the client IP in a header of its own, set `ALLAUTH_TRUSTED_CLIENT_IP_HEADER` to that header's name (for example `"X-Real-IP"`, which ingress-nginx sets; allauth 65.14.2 or later). allauth reads the IP from it. Only name a header that your proxy always sets and that clients can't set themselves. The header covers allauth's rate limits only: djust's own WebSocket, SSE and API rate limits still read `DJUST_TRUSTED_PROXY_COUNT`.
 
 ### A103: Email verification off in production
 
