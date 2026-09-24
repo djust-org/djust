@@ -220,3 +220,31 @@ def test_only_the_named_live_tags_are_bridged():
     assert "live_render" in library.tags and "live_render" not in subset.tags
     # The same subset object comes back, so a repeated {% load %} is a no-op.
     assert tl._djust_subset("djust.templatetags.live_tags", library, allowed) is subset
+
+
+@pytest.mark.django_db
+def test_form_tags_and_filters_work_in_a_real_root_liveview():
+    """Code Review on #3042: a root LiveView's Rust context has no ``view``,
+    so the tags and filters fall back to the view being rendered."""
+
+    class V(FormMixin, LiveView):
+        form_class = _NameForm
+        template = (
+            "{% load live_tags %}<div dj-root>"
+            "<form>{% live_form view %}</form>"
+            '<i>{% live_field view "name" %}</i>'
+            '<b>{% live_errors view "name" %}</b>'
+            '<u>[{{ view|field_value:"name" }}]'
+            '{% if view|has_errors:"name" %}bad{% endif %}</u>'
+            "</div>"
+        )
+
+    v = V()
+    v.mount(None)
+    v.submit_form(name="far too long a name")
+    html, _patches, _version = v.render_with_diff(None)
+    assert "ERROR: View does not have" not in html
+    assert "id_name" in html
+    assert "[far too long a name]" in html
+    assert "bad</u>" in html
+    assert "at most 10 characters" in html  # live_errors rendered the error

@@ -220,18 +220,24 @@ def _descriptor_fields(cls: type) -> Dict[str, tuple]:
     cached = cls.__dict__.get("_djust_descriptor_fields_cache")
     if cached is not None:
         return cast(Dict[str, tuple], cached)
+    from .components.base import LiveComponent as _DescriptorComponent
+
     fields: Dict[str, tuple] = {}
     for klass in reversed(cls.__mro__):
         for name, value in vars(klass).items():
+            # Type checks only: a class attribute may be lazy
+            # (``SimpleLazyObject``, whose ``__class__`` is proxied, so not
+            # even ``isinstance``) and must not be evaluated here.
             if getattr(type(value), "_djust_state_field", False):
                 slot = getattr(value, "attr_name", None)
                 if slot:
                     fields[name] = ("state", slot)
                     continue
-            slot = getattr(value, "_descriptor_storage_key", None)
-            if slot and getattr(type(value), "State", None) is not None:
-                fields[name] = ("component", slot)
-                continue
+            if issubclass(type(value), _DescriptorComponent):
+                slot = value.__dict__.get("_descriptor_storage_key")
+                if slot and getattr(type(value), "State", None) is not None:
+                    fields[name] = ("component", slot)
+                    continue
             # A plain attribute further down the MRO shadows the descriptor.
             fields.pop(name, None)
     try:
@@ -240,6 +246,19 @@ def _descriptor_fields(cls: type) -> Dict[str, tuple]:
         # Uncacheable (an immutable class): recomputed on every call instead.
         logger.debug("descriptor-field map not cached on %s", cls.__name__)
     return fields
+
+
+def _holds_model(value: Any) -> bool:
+    """Does ``value`` hold a Django model instance, at any depth?"""
+    from django.db import models
+
+    if isinstance(value, models.Model):
+        return True
+    if isinstance(value, dict):
+        return any(_holds_model(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_holds_model(v) for v in value)
+    return False
 
 
 def restore_components_snapshot(view: Any, components_state: Any, *, source: str) -> bool:
@@ -923,15 +942,11 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         framework: frozenset[str] = getattr(self, "_framework_attrs", frozenset())
         # Exclude the tracking attrs themselves — they are infrastructure, not
         # user state, and must never leak into the persisted private state.
-        meta_attrs = {"_framework_attrs", "_user_private_keys"}
-        not_private = self._framework_storage_slots()
+        meta_attrs = {"_framework_attrs", "_user_private_keys", "_reactive_state"}
         self._user_private_keys = {
             k
             for k in self.__dict__
-            if k.startswith("_")
-            and k not in framework
-            and k not in meta_attrs
-            and k not in not_private
+            if k.startswith("_") and k not in framework and k not in meta_attrs
         }
 
     def _framework_storage_slots(self) -> Set[str]:
@@ -946,6 +961,10 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
           the public context, so its slot stays private.
         - ``_reactive_state``: the descriptor's own bookkeeping; any restore
           through the descriptor rebuilds it.
+
+        :meth:`_get_private_state` still saves a public ``state()`` slot whose
+        value holds a Django model: the public path flattens a model to a dict,
+        this one re-hydrates it (#1994).
         """
         static_skip = set(getattr(self, "static_assigns", []) or [])
         slots = {"_reactive_state"}
@@ -972,9 +991,14 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         # ``_user_private_keys``; they are still not re-saved.
         not_private = self._framework_storage_slots()
         for key in user_keys:
-            if key not in self.__dict__ or key in not_private:
+            if key not in self.__dict__:
                 continue
             value = self.__dict__[key]
+            if key in not_private and not (key != "_reactive_state" and _holds_model(value)):
+                # The public state carries this value — except a Django model,
+                # which the public path flattens to a dict while this one
+                # re-hydrates it (#1994), so a model-holding slot stays.
+                continue
             # Skip callables (bound methods, lambdas stored as attrs)
             if callable(value):
                 continue

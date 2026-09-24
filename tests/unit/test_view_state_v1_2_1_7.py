@@ -347,3 +347,49 @@ class TestResetForm2974:
         v.submit_form(name="Bo")
         assert v._should_reset_form is True
         assert v.form_data["name"] == "Bo"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Code Review on #3042
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestReviewFollowUps:
+    @pytest.mark.django_db
+    def test_model_valued_state_slot_stays_private(self):
+        """The public path flattens a model to a dict; the private path
+        re-hydrates it (#1994), so a model-holding state() slot is kept."""
+        from django.contrib.auth.models import User
+
+        class OwnerView(LiveView):
+            template = "<div dj-root></div>"
+            owner = state(None)
+            label = state("x")
+
+        user = User.objects.create(username="owner-2959")
+        v = OwnerView()
+        v.owner = user
+        v.label = "y"
+        v._snapshot_user_private_attrs()
+        private = v._get_private_state()
+        assert private["_state_owner"]["pk"] == user.pk
+        assert "_state_label" not in private
+        restored = OwnerView()
+        restored._restore_private_state(private)
+        assert restored.owner == user
+
+    def test_lazy_class_attribute_is_not_evaluated(self):
+        from django.utils.functional import SimpleLazyObject
+
+        def boom():
+            raise RuntimeError("evaluated")
+
+        class LazyView(LiveView):
+            template = "<div dj-root></div>"
+            settings_obj = SimpleLazyObject(boom)
+            count = state(0)
+
+        v = LazyView()
+        v._capture_dirty_baseline()
+        v.count = 1
+        assert v.changed_fields == {"count"}
