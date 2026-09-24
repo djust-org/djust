@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-09-24
+
+A bug-fix release for 1.2. The code is identical to 1.2.1rc2; see the `1.2.1rc2` and `1.2.1rc1` sections below for every change since 1.2.0. There are no API removals, and no default or wire-format changes. 1.1.5 carries the security fix for the 1.1 line.
+
+### Security
+
+- **This release and 1.1.5 include a fix for [GHSA-vq5h-rg2r-wfm5](https://github.com/djust-org/djust/security/advisories/GHSA-vq5h-rg2r-wfm5)** (React component props); see the advisory for details.
+
+### Behaviour changes to check when upgrading
+
+- Whitespace between inline siblings now renders in LiveView pages, as it already did on plain Django pages (#2999).
+- A class-level component's `State` counts towards `is_dirty` / `changed_fields`, so switching a component tab marks the view dirty (#2912).
+- `reset_form` is an `@event_handler` and can be called from the client (#2974).
+- A form field's callable `initial` is called, as Django does, and a form's own `self.initial` wins over the field's (#3062).
+- A resumable-upload request for an upload that no longer exists is answered `not_found` instead of `resumed` (#2972).
+- The `tenant_redis` presence backend now uses Redis rather than falling back to memory (#2973).
+- `djust_theming.E001` is a Warning instead of an Error; its id is unchanged (#3028).
+- `dj-offline-show` elements stay hidden on pages that include the directive CSS but never load the djust client (#3051).
+- `CodeBlock`'s Copy button now works (#3008). Apps that patched its markup should drop the workaround.
+
 ## [1.2.1rc2] - 2026-09-24
 
 ### Fixed
