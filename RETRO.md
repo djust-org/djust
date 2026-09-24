@@ -391,6 +391,8 @@ issue or be explicitly closed with a reason.
 | 349 | A skip-render `server_push` answers with a `noop` that acknowledges nothing and can stop an in-flight event's loading state | PR #3035 | #3034 | Open | 1.3 (removes a frame). Split from #3001 |
 | 350 | The handler-metadata script is still injected before every `</body>` string (same class as #2987) | PR #3017 | #3018 | Open | pattern: parallel-path-drift. One of the injection sites #3017 did not move to the masked scanner |
 | 351 | The #2663 raw-text masker is quadratic on many `<script` tags with no `>` | PR #3017 | #3019 | Open | pattern: redos |
+| 352 | The HTTP-POST fallback ignores `_skip_render` on the view and component routes | PR #3039 | #3038 | Open | pattern: parallel-path-drift. Predates #3039; #2924 fixed the runtime `component_id` route only |
+| 353 | `dj-track-static` deploy detection needs a mount-frame manifest check (a wire addition) | PR #3039 | #2966 | Open | 1.3. A page re-fetch was tried and rejected: a GET re-runs the HTTP mount and overwrites session state |
 
 ## Retro backfill — 14 un-retro'd drain buckets (v1.1.0-9 … v1.2.0-5)
 
@@ -529,6 +531,53 @@ None in this bucket.
 
 ### Open Items
 None filed: every 🟡 was fixed in the PR. The 1.3 parts stay open on #2996 (part 3), #2993 (stylesheet) and #2985 (the missing hooks).
+## v1.2.1-5 — runtime and client batch: v1.2.1-5, -6, -10 and -11 (PR #3039)
+
+**Date**: 2026-09-24
+**Scope**: Four drain buckets in one PR, one commit per bucket, squash-merged as `cca46bb90`. v1.2.1-5 (runtime routing, mount, sticky): #2962 `listen()` in `mount()` joins the NOTIFY group; #2924 `_skip_render` on the `component_id` route; #2969 `cancel_async_all()`; #2919 (1.2.1 part: warn on changed sticky kwargs); #2961 SQL capture from sync handlers. v1.2.1-6 (realtime): #2968 the ping refreshes presence; #3002 (V004 skips `handle_*`); #3003 (document the 4429 disconnect); #3007 (drop phantom schema hooks). v1.2.1-10 (client JS): #2965 page-loading bar; #2971 `clear_draft()` from a handler; #2949 (snapshot keys carry the query); #2964 stream `limit=` caps the page; #2966 moved to 1.3. v1.2.1-11: #2957 PWA sync handlers; #2972 resumable uploads survive a WebSocket drop; #2967 `generate_sw --sw-version`.
+**Tests at close**: `python/djust/tests/test_runtime_lifecycle_v121_5.py`, `test_realtime_v121_6.py`, `test_client_behaviour_v121_10.py`, `test_uploads_v121_11.py`, `tests/js/client-behaviour-v121-10.test.js`, plus V004 cases in `python/tests/test_checks.py`. Every new test failed with its fix reverted. CI green at the merge head. Retro: https://github.com/djust-org/djust/pull/3039#issuecomment-5807402405
+
+### What We Learned
+
+**1. After merging a sibling bucket, look for new helpers on the path you change.** The #2969 fix made the runtime honour `cancel_async()` for a running task, but did not port `_settle_cancelled_async`, which v1.2.1-2 (#3035) had added to the consumer twin an hour earlier. A cancelled task's event never ended its loading state (a regression against main), and the PR's own test asserted it. Code Review caught it (🔴).
+
+**2. A client request to a LiveView URL is a mount.** The first #2966 fix re-fetched the page on reconnect to read the deployed asset URLs. Self-Review showed that a GET re-runs `mount()` and overwrites the session state the HTTP fallback restores from, and after a deploy every client would do it at once (🔴). The correct design needs a mount-frame field, so #2966 moved to 1.3 with a design comment.
+
+**3. Reproducers find what triage misses.** Writing the tests first surfaced four bugs no issue listed: `live_redirect` captured no snapshot (it read the source URL after `pushState`); the runtime ignored running-task cancels; four `live_redirect` abort paths shared #2965's missing `stop()`; and upload resume could never complete, because the new view never registered the resumed ref. The #2972 fix therefore parks the live writer rather than only keeping its state.
+
+### Insights
+- A server-owned attribute that the client removes (`data-draft-clear`) makes the DOM disagree with the server VDOM, so a second identical render sends no patch. The stable shape is a push event for the live path plus a WeakSet for the patch path.
+- Security Check found a client-controlled key reaching a fallback lookup (`model="create_Task"`). Keep action and model-wide handler tables separate whenever a lookup key comes from the client.
+
+### Review Stats
+
+| Metric | #3039 |
+|---|---|
+| Issues | 17: 11 closed, 5 split (1.2.1 part landed), 1 moved to 1.3 (#2966) |
+| 🔴 Findings | 2 (#2966 GET: Self-Review; cancelled-task loading state: Code Review), both resolved pre-merge |
+| 🟡 Findings | 9 across Self-Review, Security Check and Code Review; 8 fixed, 1 filed (#3038) |
+| CI failures | 1 (a presence test raced the heartbeat against the pong; fixed) |
+| Findings by pattern class | `parallel-path-drift` ×4, `unverified-claim` ×3, security ×3 |
+
+### Process Improvements Applied
+None in this batch.
+
+### Open Items
+- [ ] HTTP-POST fallback ignores `_skip_render`. Tracked in Action Tracker #352 (GitHub #3038).
+- [ ] `dj-track-static` deploy detection (1.3). Tracked in Action Tracker #353 (GitHub #2966).
+
+## v1.2.1-6 — Realtime / multiplayer correctness and DX (PR #3039)
+
+Shipped in the runtime and client batch with v1.2.1-5, one commit per bucket. The retro, review stats and open items are in the v1.2.1-5 entry above.
+
+## v1.2.1-10 — Client JS behaviour (PR #3039)
+
+Shipped in the runtime and client batch with v1.2.1-5, one commit per bucket. The retro, review stats and open items are in the v1.2.1-5 entry above.
+
+## v1.2.1-11 — Offline sync, uploads, PWA command (PR #3039)
+
+Shipped in the runtime and client batch with v1.2.1-5, one commit per bucket. The retro, review stats and open items are in the v1.2.1-5 entry above.
+
 ## v1.2.1-2 — server-originated turns and tick lifecycle (PR #3035)
 
 **Date**: 2026-09-23
