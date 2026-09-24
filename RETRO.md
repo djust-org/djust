@@ -393,12 +393,15 @@ issue or be explicitly closed with a reason.
 | 351 | The #2663 raw-text masker is quadratic on many `<script` tags with no `>` | PR #3017 | #3019 | Open | pattern: redos |
 | 352 | The HTTP-POST fallback ignores `_skip_render` on the view and component routes | PR #3039 | #3038 | Open | pattern: parallel-path-drift. Predates #3039; #2924 fixed the runtime `component_id` route only |
 | 353 | `dj-track-static` deploy detection needs a mount-frame manifest check (a wire addition) | PR #3039 | #2966 | Open | 1.3. A page re-fetch was tried and rejected: a GET re-runs the HTTP mount and overwrites session state |
-| 354 | Flaky `presenter_reverse` crossing assertion in `test_model_backed_render_2532` (`302 < 302`) | PR #3047 | #3048 | Open | pattern: flaky-test. A stale thread-local `in_rust_render` flag is the likely cause; passed on rerun |
+| 354 | Flaky `presenter_reverse` crossing assertion in `test_model_backed_render_2532` (`302 < 302`) | PR #3047 | #3048 | Closed | pattern: flaky-test. Fixed in PR #3052: the assertion is render-scoped. The cause was process-wide phase counters, not a stale flag (it is reset in a `finally`) |
 | 355 | Dependabot #157: autobahn 24.4.2 stays in `uv.lock` for Python 3.10 (no patched release supports 3.10) | PR #3047 | Dependabot #157 | Open | Owner decision: dismiss as tolerable risk (daphne never enables permessage-deflate), or clear it when 3.10 support is dropped |
 | 356 | `{% live_form %}` / `{% live_field %}` / `{% live_errors %}` render their markup HTML-escaped on both engines (plain `str` returned to a `simple_tag`) | PR #3042 | #3043 | Open | Needs `SafeString` + `format_html` and a security pass: error messages can echo input |
 | 357 | `live_input`, `djust_skeleton`, `djust_track_static` have no Rust handler (same class as #2958) | PR #3042 | #3044 | Open | pattern: parallel-path-drift. Candidates for `_DJUST_TAGS_BRIDGED`; check `djust_skeleton`'s `render_context` dedupe first |
 | 358 | VDOM `write_html` escapes text inside raw-text elements other than script/style (`noscript`, `xmp`, …) | PR #3042 | #3045 | Open | pattern: parallel-path-drift. Share one raw-text table between the parser, the serializer and the #2898 fast paths |
-| 359 | Hardening: snapshot/private-state restore can shadow component methods; replay window now covers component state | PR #3042 | #3046 | Open | Security Check IMPROVEMENT notes; not exploitable today (inputs are signed or server-sourced) |
+| 359 | Hardening: snapshot/private-state restore can shadow component methods; replay window now covers component state | PR #3042 | #3046 | Open | Items 1–2 fixed in PR #3052 (method-shadow skip, dangerous-key screen). Item 3, the replay nonce/TTL, is 1.3 |
+| 361 | Offline indicator (`show_when="offline"`) and offline banner never show; indicator text never switches | PR #3052 | #3051 | Open | Found fixing #3041. Inline `display: none` / `dj-offline` attr nothing reads. Template output changes, so check the non-breaking policy first |
+| 362 | `theme_context` pre-renders theme chunks on every request (~23 ms in djustlive) | PR #3052 | #3028 | Open | 1.3. E001 became a Warning in 1.2.1. Make the processor lazy, or fire the check only when the variables are used |
+| 363 | Live navigation keeps the previous page's `<head>` assets and outside-root scripts; `{{ block.super }}` titles are not updated | PR #3052 | #3036 | Open | 1.3. The title from `{% block title %}` shipped in 1.2.1. Head diffing or a track-static-style full-load fallback needs a wire addition |
 | 360 | Bridged tags under an armed `block.super` run the handler 60× vs Django's 12× | PR #3042 | #2918 | Open | 1.3. Memoising diverges on side-effecting parents; the lazy `block` object across the Rust→Python boundary is the likely fix |
 
 ## Retro backfill — 14 un-retro'd drain buckets (v1.1.0-9 … v1.2.0-5)
@@ -624,6 +627,57 @@ None in this batch.
 ## v1.2.1-13 — Scaffolding, CLI, config and checks (PR #3047)
 
 Shipped in the security hygiene + scaffolding batch with v1.2.1-4, one commit per bucket. The retro, review stats and open items are in the v1.2.1-4 entry above.
+
+## v1.2.1-15 — runtime and client follow-ups (PR #3052)
+
+**Date**: 2026-09-24
+**Scope**: Seven issues filed during the v1.2.1 drain, one commit each. Squash-merged as `3d27eb32a`.
+- #3027: a view whose `mount()` (or `handle_params()`, actor mount or initial render) raises no longer keeps its tick task running.
+- #3028 (split): `djust_theming.E001` is a Warning. The lazy processor is 1.3.
+- #3036 (split): live navigation sets the tab title from the destination's `{% block title %}`, and the navigation guide says what live navigation keeps. `<head>` asset diffing is 1.3.
+- #3038: the HTTP-POST fallback honours `_skip_render` for view and component events.
+- #3041: the client sets `body.djust-online` / `djust-offline`, so the `dj-offline-*` directives work.
+- #3046 (split): component and private-state restores are screened. The replay nonce/TTL is 1.3.
+- #3048: the `presenter_reverse` crossing assertion is render-scoped.
+
+**Tests at close**:
+- `python/djust/tests/test_mount_failure_stops_tick_3027.py`
+- `python/djust/tests/test_live_redirect_title_3036.py`
+- `python/djust/tests/test_http_skip_render_3038.py`
+- `python/djust/tests/test_restore_hardening_3046.py`
+- `tests/js/offline-body-classes-3041.test.js`
+- the per-call attribution test in `tests/benchmarks/test_model_backed_table_2532.py`
+
+Pre-push ran the selected pytest set (7,792 tests on the first push) and npm test. CI was green at the merge head. Retro: https://github.com/djust-org/djust/pull/3052#issuecomment-5808602648
+
+### What We Learned
+
+**1. Check which template a render used before reading the page from it.** #3036's first version read `<title>` out of the mount render's HTML. For the VDOM, `get_template()` returns only the `dj-root` template, so that HTML never has a `<head>`. The helper's unit tests passed while the feature did nothing. Only the end-to-end redirect test showed it. The shipped version renders just the page template's `<title>` element. This is the same class as #3042's lesson 1.
+
+**2. Line-pinned structural tests belong in the targeted set.** Pre-push failed on the `_SETATTR_WHITELIST` line numbers (`live_view.py` grew 44 lines above them) and on the template-bound normaliser inventory (a new `normalize_django_value` call in `runtime.py`). Both follow from the diff's shape and were missing from the targeted runs.
+
+**3. A count assertion must measure what it is about.** `text_change < attr_change` is a property of one render call. The counters were process-wide phase totals, so a second render in the window made it `302 < 302`. The tracker's guess, a stale thread-local flag, was wrong: the flag is reset in a `finally`.
+
+### Review Stats
+
+| Metric | #3052 |
+|---|---|
+| Issues | 7: 4 closed, 3 split (#3028, #3036, #3046), 0 moved to 1.3 |
+| 🔴 Findings | 0 |
+| 🟡 Findings | 2 (Code Review): HTTP skip carried `cache_request_id` (`@cache` stored an empty turn); the title rendered even when `page_title` was queued. Both fixed pre-merge |
+| 🟢 Findings | 4. 3 fixed (task-attribute guard, plan names, bench frame-time cutoff); 1 kept on purpose (redundant `DANGEROUS_ATTRIBUTES` screen) |
+| Re-Reviews | 1, passed |
+| CI failures | 0 (one pre-push failure on two structural pins, fixed before the first push) |
+| Findings by pattern class | `parallel-path-drift` ×1 (the `@cache` skip), `unverified-claim` ×1 (the #3036 first design) |
+
+### Process Improvements Applied
+None in this batch. IDEA: have `scripts/select-tests.py` pick line-pinned structural tests (whitelists, module inventories) when their pinned module changes.
+
+### Open Items
+- [ ] Offline indicator and banner. Tracked in Action Tracker #361 (GitHub #3051).
+- [ ] Lazy `theme_context` (1.3). Tracked in Action Tracker #362 (GitHub #3028).
+- [ ] `<head>` diffing on live navigation (1.3). Tracked in Action Tracker #363 (GitHub #3036).
+- [ ] Snapshot replay nonce/TTL (1.3). Tracked in Action Tracker #359 (GitHub #3046).
 
 ## v1.2.1-7 — state and rendering batch: v1.2.1-7, -8 and -9 (PR #3042)
 
