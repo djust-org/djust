@@ -28,7 +28,6 @@ import logging
 from typing import Any, Dict, Optional
 
 from asgiref.sync import sync_to_async
-from django.core.exceptions import PermissionDenied
 
 logger = logging.getLogger(__name__)
 
@@ -562,11 +561,15 @@ class StickyChildRegistry:
         from ..auth.core import check_view_auth_lightweight, enforce_object_permission
 
         def _authorized(child: Any) -> bool:
-            if not check_view_auth_lightweight(child, new_request):
-                return False
+            # Authorize against the NEW request: get_object() and application
+            # predicates may read self.request, and the old one is stale. A
+            # predicate that raises denies this child only (fail closed).
+            child.request = new_request
             try:
+                if not check_view_auth_lightweight(child, new_request):
+                    return False
                 enforce_object_permission(child, new_request)
-            except PermissionDenied:
+            except Exception:  # noqa: BLE001 — broken predicates must not permit reuse
                 return False
             return True
 

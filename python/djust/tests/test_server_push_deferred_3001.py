@@ -215,3 +215,33 @@ async def test_disconnect_cancels_the_drain():
             assert len(consumer._deferred_pushes) == 0
         finally:
             consumer._render_lock.release()
+
+
+@pytest.mark.asyncio
+async def test_push_deferred_after_lock_wait_keeps_the_view_it_was_sent_to():
+    """A live_redirect that swaps the view during server_push's bounded lock
+    wait must not redirect the push to the new view: the queue entry names the
+    view captured before the wait (merge review of #2944)."""
+    consumer = LiveViewConsumer()
+    old_view, new_view = object(), object()
+    consumer.view_instance = old_view
+    consumer.channel_name = "me"
+    await consumer._render_lock.acquire()
+    ran = []
+
+    async def run_turn(view, *events):
+        ran.append((view, events))
+        consumer._render_lock.release()
+
+    consumer._run_server_push_turn = run_turn
+    try:
+        push = asyncio.ensure_future(consumer.server_push({"n": 1}))
+        await asyncio.sleep(0.02)  # server_push is waiting for the lock
+        consumer.view_instance = new_view  # live_redirect mounted another view
+        await push  # 0.1 s wait times out -> deferred
+        assert [owner for owner, _ in consumer._deferred_pushes] == [old_view]
+        consumer._render_lock.release()
+        await asyncio.wait_for(consumer._push_drain_task, timeout=1)
+        assert ran == []
+    finally:
+        consumer._cancel_deferred_pushes()

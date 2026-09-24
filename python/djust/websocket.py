@@ -48,6 +48,8 @@ _MAX_DEFERRED_PUSHES = 64
 # Default for ``LiveViewConsumer._dispatch_async_work``'s ``event_name``: use the
 # event currently being handled. ``None`` means "no event owns this work".
 _CURRENT_EVENT = object()
+#: ``_defer_server_push`` default: the push is for the view mounted now.
+_ACTIVE_VIEW = object()
 
 
 def _tenant_context(tenant: Any) -> ContextManager[Any]:
@@ -4679,7 +4681,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     "[djust] server_push on %s deferred — session busy",
                     self.view_instance.__class__.__name__,
                 )
-                self._defer_server_push(event)
+                self._defer_server_push(event, owner=view)
                 return
 
             # Acquire render lock with timeout to serialize with tick/event
@@ -4691,7 +4693,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     "[djust] server_push on %s deferred — render lock held",
                     self.view_instance.__class__.__name__,
                 )
-                self._defer_server_push(event)
+                self._defer_server_push(event, owner=view)
                 return
 
         except Exception as e:
@@ -4828,7 +4830,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     payload = event.get("payload") or {}
                     await sync_to_async(handler_fn)(**payload)
 
-    def _defer_server_push(self, event: Dict[str, Any]) -> None:
+    def _defer_server_push(self, event: Dict[str, Any], owner: Any = _ACTIVE_VIEW) -> None:
         """Queue a push that found the session busy, and make sure a drain runs.
 
         An identical push already waiting is superseded, not repeated: the
@@ -4845,7 +4847,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         queue = getattr(self, "_deferred_pushes", None)
         if queue is None:
             queue = self._deferred_pushes = collections.deque(maxlen=_MAX_DEFERRED_PUSHES)
-        view = self.view_instance
+        # ``owner`` is the view the push was addressed to, captured before any
+        # lock wait: a view swapped in meanwhile must not receive it.
+        view = self.view_instance if owner is _ACTIVE_VIEW else owner
         for queued in list(queue):
             if queued[0] is view and queued[1] == event:
                 queue.remove(queued)
