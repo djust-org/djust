@@ -31,10 +31,14 @@ def check_updates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     if message is None:
         return []
     cls = DjustWarning if status.advisories else DjustInfo
-    return [
-        cls(
-            message,
-            hint="Disable with DJUST_CONFIG = {'update_check': False} or DJUST_NO_UPDATE_CHECK=1.",
-            id="djust.U001",
+    hint = "Disable with DJUST_CONFIG = {'update_check': False} or DJUST_NO_UPDATE_CHECK=1."
+    if status.advisories:
+        # This check reads the cache only (#3006): name it, so a developer on a
+        # release an advisory no longer covers can see why and clear it.
+        hint = (
+            "This check reads the cached advisory list in %s and never fetches; "
+            "running the dev server or the djust CLI re-checks a matching "
+            "advisory after an hour. Delete that file to re-check now. %s"
+            % (updates.cache_path(), hint)
         )
-    ]
+    return [cls(message, hint=hint, id="djust.U001")]

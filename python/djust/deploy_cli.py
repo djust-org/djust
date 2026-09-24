@@ -1281,6 +1281,13 @@ _DB_ENV_READ_RE = re.compile(
 )
 
 
+# A DATABASES ``NAME`` entry whose value reads an environment variable, e.g.
+# ``"NAME": os.environ.get("DJUST_SQLITE_PATH") or (BASE_DIR / "db.sqlite3")``.
+_SQLITE_NAME_FROM_ENV_RE = re.compile(
+    r"""["']NAME["']\s*:[^\n]*(?:os\.environ|os\.getenv|\bgetenv\(|\benviron\[|\benviron\.get\()"""
+)
+
+
 def _deploy_doctor_warnings(settings_text: str) -> list:
     """Statically inspect a Django settings module's source text and return
     human-readable WARNINGS (never errors) for settings that violate the
@@ -1331,7 +1338,12 @@ def _deploy_doctor_warnings(settings_text: str) -> list:
             )
 
     # sqlite DB, which lands under the (read-only) project dir on the platform.
-    if re.search(r"ENGINE.*sqlite3", settings_text):
+    # Not when the sqlite NAME itself reads the environment (#2983): the
+    # `djust new` scaffold sets NAME from DJUST_SQLITE_PATH, the writable path
+    # the host injects, so its warning was a false positive on every project.
+    if re.search(r"ENGINE.*sqlite3", settings_text) and not _SQLITE_NAME_FROM_ENV_RE.search(
+        _databases_region(settings_text)
+    ):
         warnings.append(
             "DATABASES uses sqlite3; the platform app rootfs is read-only, so a sqlite "
             "NAME under the project dir 500s on first write (use the injected DATABASE_URL "

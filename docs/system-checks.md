@@ -21,7 +21,9 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C013 | Config | Warning | Stale collectstatic copy of client.min.js |
 | C014 | Config | Warning | Multi-tenant ASGI without TENANT_LIMIT_SET_CALLS |
 | C015 | Config | Error | Unknown adapter name in DJUST_CONFIG['extensions'] |
-| C016 | Config | Warning | DjangoTemplates listed before DjustTemplateBackend, or no DjangoTemplates fallback for admin |
+| C016 | Config | Warning | DjangoTemplates listed before DjustTemplateBackend, no DjangoTemplates fallback for admin, or a djust-first entry lacking the admin's context processors |
+| C018 | Config | Warning | Deprecated LIVEVIEW_CONFIG key set that djust never reads (removed in 1.3) |
+| C019 | Config | Warning | Unknown DJUST_CONFIG['PRESENCE_BACKEND'] value (presence falls back to in-process memory) |
 | V001 | LiveView | Warning | LiveView missing template_name attribute |
 | V002 | LiveView | Info | LiveView missing mount() method |
 | V003 | LiveView | Error | mount() has wrong signature |
@@ -33,6 +35,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V012 | LiveView | Warning | Sticky child template declares its own dj-view (nested duplicate binding) |
 | V013 | LiveView | Warning | HTTP-only dispatch()/get()/post() override never runs on a WebSocket mount |
 | V014 | LiveView | Warning | Time-travel-enabled view has PII-looking model/form fields not in `time_travel_excluded_fields` |
+| V015 | LiveView | Warning | LIVEVIEW_ALLOWED_MODULES rejects a djust LiveView the URLconf routes (add `"djust"`) |
 | S001 | Security | Error | mark_safe() with f-string (XSS risk) |
 | S002 | Security | Warning | @csrf_exempt without justification comment |
 | S003 | Security | Warning | Bare except: pass swallows all exceptions |

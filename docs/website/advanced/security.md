@@ -160,6 +160,24 @@ logger.info("User searched for: %s", sanitize_for_log(user_query))
 
 This strips ANSI escape sequences, newlines (prevents forged log entries), and truncates long strings.
 
+djust's own log calls get this for free: at startup `DjustConfig.ready()` attaches
+`DjustLogSanitizerFilter` to the `djust` logger and every `djust.*` logger,
+including ones created later, so string arguments in framework log records are
+sanitized before any handler sees them. Before 1.2.1 the filter sat on the
+`djust` logger alone and never saw records from its child loggers
+([#2947](https://github.com/djust-org/djust/issues/2947)). Your application's
+loggers are not covered. Call `sanitize_for_log()` there, or add the filter to
+your handlers in `LOGGING`:
+
+```python
+LOGGING = {
+    "version": 1,
+    "filters": {"djust_sanitize": {"()": "djust.security.DjustLogSanitizerFilter"}},
+    "handlers": {"console": {"class": "logging.StreamHandler", "filters": ["djust_sanitize"]}},
+    "root": {"handlers": ["console"]},
+}
+```
+
 ### Safe Error Responses
 
 Use `create_safe_error_response()` to avoid leaking stack traces in production:

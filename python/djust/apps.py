@@ -38,13 +38,16 @@ class DjustConfig(AppConfig):
         # Import checks module so @register() decorators are executed
         import djust.checks  # noqa: F401
 
-        # Install log sanitizer filter on all djust.* loggers so every log
+        # Install the log sanitizer filter on every djust.* logger so every log
         # record emitted by the framework has user-controlled string args
         # sanitized before they reach any handler — preventing log injection
-        # without per-callsite sanitization.
-        from djust.security import DjustLogSanitizerFilter
+        # without per-callsite sanitization. On EVERY framework logger, not
+        # just "djust": Python runs a logger's filters only for records logged
+        # on that logger, so a filter on the parent never saw the records that
+        # propagate up from djust.websocket and friends (#2947).
+        from djust.security.log_sanitizer import install_log_sanitizer
 
-        logging.getLogger("djust").addFilter(DjustLogSanitizerFilter())
+        install_log_sanitizer()
 
         # Install the observability log-tail handler. Always safe to
         # install (the buffer is inert until the MCP tool fetches it);

@@ -1079,7 +1079,10 @@ CONVENTIONS = {
     "jit_serialization": {
         "description": "Django model instances and QuerySets are automatically serialized "
         "to dicts/lists using JIT (just-in-time) serialization. Only fields "
-        "actually used in the template are serialized for performance.",
+        "actually used in the template are serialized for performance. "
+        "LIVEVIEW_CONFIG['jit_serialization'] = False turns it off: models are "
+        "then serialized with every concrete field (minus the sensitive-field "
+        "denylist) and no select_related/prefetch_related is added.",
     },
     "handler_naming": {
         "description": "Event handlers are called by the exact name in the dj-* attribute. "
