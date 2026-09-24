@@ -134,7 +134,17 @@ _UNBRIDGED_PREFIXES = ("djust.templatetags.",)
 #: the Rust engine) is left exactly as before.
 _DJUST_TAGS_BRIDGED: Dict[str, frozenset] = {
     "djust.templatetags.live_tags": frozenset(
-        {"dj_activity", "colocated_hook", "live_form", "live_field", "live_errors"}
+        {
+            "dj_activity",
+            "colocated_hook",
+            "live_form",
+            "live_field",
+            "live_errors",
+            # #3044 — the same class as #2958, three more tags.
+            "live_input",
+            "djust_skeleton",
+            "djust_track_static",
+        }
     ),
 }
 
@@ -232,6 +242,17 @@ _current_format_flags: contextvars.ContextVar[Tuple[Optional[bool], Optional[boo
     contextvars.ContextVar("djust_template_format_flags", default=(None, None))
 )
 
+#: #3044: the Django ``RenderContext`` every bridged node of ONE render
+#: shares. Django gives each ``Template.render`` one ``render_context``; a
+#: node that keeps per-render state there (``{% djust_skeleton %}`` emits its
+#: ``<style>`` block once per render; an ``InclusionNode`` caches its
+#: template) saw a fresh one per CALL, because the bridge builds a new
+#: ``Context`` for every call. Set by :func:`library_render_scope` around each
+#: Rust render; ``None`` (outside one) keeps the per-call behaviour.
+_render_scope: contextvars.ContextVar[Optional[Any]] = contextvars.ContextVar(
+    "djust_library_render_context", default=None
+)
+
 _lock = threading.RLock()
 
 #: ``OPTIONS['libraries']`` from every ``DjustTemplateBackend`` constructed in
@@ -326,6 +347,32 @@ def localize_temporal(value: Any, use_l10n_override: Optional[bool] = None) -> s
 
 
 @contextlib.contextmanager
+def library_render_scope() -> Iterator[None]:
+    """One Rust render: the bridged nodes it runs share one Django
+    ``RenderContext``, as the nodes of one ``Template.render`` do (#3044).
+
+    Nested scopes (a component or child view rendered during a render) get
+    their own and restore the enclosing one on exit, as Django's
+    ``RenderContext.push_state`` does per template.
+    """
+    from django.template.context import RenderContext
+
+    token = _render_scope.set(RenderContext())
+    try:
+        yield
+    finally:
+        _render_scope.reset(token)
+
+
+def _share_render_context(ctx: Any) -> None:
+    """Point a bridge-built ``Context`` at the current render's
+    ``RenderContext``, when a :func:`library_render_scope` is active."""
+    shared = _render_scope.get()
+    if shared is not None:
+        ctx.render_context = shared
+
+
+@contextlib.contextmanager
 def rendering_with_backend(
     backend: Any, *, use_l10n: Optional[bool] = None, use_tz: Optional[bool] = None
 ) -> Iterator[None]:
@@ -350,7 +397,8 @@ def rendering_with_backend(
     previous_namespace = set_registry_namespace(namespace)
     flags_token = _current_format_flags.set((use_l10n, use_tz))
     try:
-        yield
+        with library_render_scope():
+            yield
     finally:
         _current_format_flags.reset(flags_token)
         set_registry_namespace(previous_namespace)
@@ -1156,11 +1204,32 @@ class _StubEngine:
 
     def get_template(self, name: Any) -> Any:
         if hasattr(name, "render"):
-            return name
-        return _template_backend().get_template(name)
+            return _engine_level(name)
+        return _engine_level(_template_backend().get_template(name))
 
     def select_template(self, names: Any) -> Any:
-        return _template_backend().select_template(names)
+        return _engine_level(_template_backend().select_template(names))
+
+
+def _engine_level(template: Any) -> Any:
+    """A template ``InclusionNode.render`` can call with a ``Context`` (#3024).
+
+    Django's node renders what ``context.template.engine`` hands back with
+    ``t.render(context.new(...))`` — an ENGINE-level
+    ``django.template.base.Template`` takes that ``Context``. The BACKEND
+    wrapper Django's loader and the ``DjangoTemplates`` backend return
+    (``django.template.backends.django.Template``) accepts only a dict and
+    raised "context must be a dict rather than Context" for every third-party
+    inclusion tag in a LiveView template when the project has no djust
+    backend. Unwrap it to the engine template it carries, which is what
+    Django's own engine would have used. djust's ``DjustTemplate`` already
+    accepts a ``Context`` and is returned as it is.
+    """
+    from django.template.backends.django import Template as DjangoBackendTemplate
+
+    if isinstance(template, DjangoBackendTemplate):
+        return template.template
+    return template
 
 
 class _StubTemplate:
@@ -1262,6 +1331,7 @@ def _render_node(
     if "request" in context:
         ctx.request = context["request"]
     ctx.template = _stub_template_with(*_render_engine_options())
+    _share_render_context(ctx)
     output = node.render(ctx)
     after = ctx.dicts[-1]
     bindings = {
@@ -1718,6 +1788,7 @@ class LibraryRawBlockTagHandler:
             ctx = Context(dict(context), autoescape=autoescape, use_l10n=use_l10n, use_tz=use_tz)
             string_if_invalid, debug = self._string_if_invalid()
             ctx.template = _stub_template_with(string_if_invalid, debug)
+            _share_render_context(ctx)  # the same as `_render_node` (#3044, #1646)
             output = self._compile(list(args), body).render(ctx)
             after = ctx.dicts[-1]
             bindings = {

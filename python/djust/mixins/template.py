@@ -11,6 +11,7 @@ import re
 from html import escape as _html_escape
 from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
+from ..template_libraries import library_render_scope
 from ..utils import get_template_dirs
 
 if TYPE_CHECKING:  # pragma: no cover — imported only for type hints
@@ -472,7 +473,8 @@ class TemplateMixin:
         """
         self._initialize_rust_view(request)
         self._sync_state_to_rust()
-        html = self._rust_view.render()
+        with library_render_scope():
+            html = self._rust_view.render()
 
         # Record dj-model auto-allowlist from the TEMPLATE SOURCE (CWE-915
         # mass-assignment guard). Derived from the Rust template engine's parsed
@@ -1232,7 +1234,8 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             # the dj-root replacement, so it lives OUTSIDE the diffed subtree.
             self._initialize_rust_view(request)
             self._sync_state_to_rust()
-            liveview_html = self._rust_view.render()
+            with library_render_scope():
+                liveview_html = self._rust_view.render()
             # Record dj-model auto-allowlist from the TEMPLATE SOURCE (CWE-915
             # mass-assignment guard). Derived from the Rust template AST
             # (Text-node literals) — reflects exactly the developer-exposed
@@ -1327,7 +1330,8 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             # serialization floor. ``request`` is request-scoped: it rides
             # the sidecar only and never enters ``update_state``.
             self._set_shell_sidecar(temp_rust, request, serialized_context, context_for_sidecar)
-            shell_html = temp_rust.render()
+            with library_render_scope():
+                shell_html = temp_rust.render()
 
             # --- Step 3: Replace the ENTIRE dj-root div in the shell ---
             # liveview_html already includes its own <div dj-root>...</div>
@@ -1546,7 +1550,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         from ..templatetags.live_tags import active_parent_view
 
         renderer = getattr(self, "_djust_renderer", None) or HtmlRenderer(self)
-        with active_parent_view(self):
+        with active_parent_view(self), library_render_scope():
             result = renderer.render_with_diff(
                 request=None,
                 extract_liveview_root=False,
