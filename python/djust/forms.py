@@ -116,13 +116,8 @@ class FormMixin:
         self.form_choices = {}
         if self.form_class:
             form = self.form_class()
-            # Initialize all fields with their initial values or empty string
+            self.form_data = self._initial_form_data(form)
             for field_name, field in form.fields.items():
-                initial = field.initial
-                if initial is None:
-                    initial = ""
-                self.form_data[field_name] = initial
-
                 # Expose serializable choices for template iteration
                 if hasattr(field, "choices"):
                     self.form_choices[field_name] = [(str(k), str(v)) for k, v in field.choices]
@@ -450,6 +445,20 @@ class FormMixin:
                 continue
             self.form_data[field_name] = val if val is not None else ""
 
+    @staticmethod
+    def _initial_form_data(form: Any) -> Dict[str, Any]:
+        """Each field's initial value, or ``""`` when it has none.
+
+        ``get_initial_for_field`` is what Django's own bound field uses: it
+        calls a callable ``initial`` (``UUIDField(initial=uuid.uuid4)``,
+        ``initial=timezone.now``) instead of storing the function itself.
+        """
+        data = {}
+        for field_name, field in form.fields.items():
+            initial = form.get_initial_for_field(field, field_name)
+            data[field_name] = "" if initial is None else initial
+        return data
+
     @event_handler
     def reset_form(self, **kwargs: Any) -> None:
         """Reset the form to its initial state.
@@ -467,13 +476,7 @@ class FormMixin:
         # This ensures consistent VDOM state and prevents alternating patches/html_update
         self.form_data = {}
         if self.form_class:
-            form = self.form_class()
-            # Initialize all fields with their initial values or empty string
-            for field_name, field in form.fields.items():
-                initial = field.initial
-                if initial is None:
-                    initial = ""
-                self.form_data[field_name] = initial
+            self.form_data = self._initial_form_data(self.form_class())
 
         self.form_errors = {}
         self.field_errors = {}
