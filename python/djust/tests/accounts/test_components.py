@@ -107,3 +107,22 @@ def test_divider_and_links():
 def test_links_hide_signup_when_closed():
     a = type("A", (), {"links": {"signup": "/s/"}, "signup_open": False, "step": "login"})()
     assert "/s/" not in render("{% auth_links auth %}", auth=a)
+
+
+def test_checkbox_field_puts_the_box_before_its_label():
+    class R(forms.Form):
+        remember = forms.BooleanField(label="Remember me", required=False)
+
+    html = render("{% auth_field f.remember %}", f=R())
+    assert "dj-auth-field--check" in html
+    assert html.index('type="checkbox"') < html.index("Remember me")
+
+
+def test_help_text_is_a_block_so_lists_stay_valid_html():
+    class P(forms.Form):
+        pw = forms.CharField(
+            widget=forms.PasswordInput, help_text="<ul><li>At least 8 characters</li></ul>"
+        )
+
+    html = render("{% auth_field f.pw %}", f=P())
+    assert '<div class="dj-auth-help"' in html and '<p class="dj-auth-help"' not in html

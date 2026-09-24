@@ -61,3 +61,15 @@ def test_code_paste_keeps_letters():
     # A pasted allauth code ("HQPL-VMXW") must survive: strip whitespace only.
     js = (AUTH_DIR / "static/djust_auth/auth.js").read_text()
     assert "\\D" not in js and "\\s" in js
+
+
+def test_kit_uses_the_theme_font():
+    css = (AUTH_DIR / "static/djust_auth/auth.css").read_text()
+    assert "var(--font-sans" in css
+
+
+def test_kit_styles_the_theme_toggle_in_its_header():
+    # djust's {% theme_mode_toggle %} ships an unstyled <button>; the kit's own
+    # header must not show a browser-default box.
+    css = (AUTH_DIR / "static/djust_auth/auth.css").read_text()
+    assert re.search(r"\.dj-auth-mode \.theme-mode-toggle\s*\{[^}]*border-radius", css)

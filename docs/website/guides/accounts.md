@@ -46,6 +46,7 @@ MIDDLEWARE = [
     "allauth.account.middleware.AccountMiddleware",
 ]
 SITE_ID = 1
+LOGIN_REDIRECT_URL = "/"        # where people land after signing in (Django's default is /accounts/profile/)
 
 DJUST_CONFIG = {
     "ACCOUNTS": {"BACKEND": "allauth"},

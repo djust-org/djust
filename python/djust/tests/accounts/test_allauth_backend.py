@@ -122,3 +122,11 @@ def test_redirect_hosts_option_allows_listed_hosts(settings):
         "https://docs.example.org/after", settings, {"redirect_hosts": ["docs.example.org"]}
     )
     assert loc == "https://docs.example.org/after"
+
+
+def test_code_page_confirm_is_the_primary_button():
+    c = Client()
+    r = c.post(reverse("account_signup"), {"email": "p@x.io", "username": "p", "password1": PW})
+    html = c.get(r["Location"]).content.decode()
+    button = re.search(r"<button([^>]*)>\s*Confirm\s*</button>", html)
+    assert button and 'class="dj-auth-submit"' in button.group(1)

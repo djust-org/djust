@@ -75,3 +75,8 @@ def test_every_check_id_is_documented_in_both_places():
 
 def test_authentication_guide_links_to_accounts():
     assert "accounts.md" in (ROOT / "docs/website/guides/authentication.md").read_text()
+
+
+def test_quick_start_sets_where_users_land():
+    quick = GUIDE.read_text().split("## Quick start", 1)[1].split("\n## ", 1)[0]
+    assert "LOGIN_REDIRECT_URL" in quick

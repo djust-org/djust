@@ -82,7 +82,13 @@ def auth_field(field: Any) -> dict:
         described.append(f"{field.id_for_label}-error")
     if described:
         extra["aria-describedby"] = " ".join(described)
-    return {"field": field, "widget": _widget_for(field, extra), "is_password": is_password}
+    is_checkbox = getattr(widget, "input_type", "") == "checkbox"
+    return {
+        "field": field,
+        "widget": _widget_for(field, extra),
+        "is_password": is_password,
+        "is_checkbox": is_checkbox,
+    }
 
 
 @register.inclusion_tag("djust_auth/components/field.html")
