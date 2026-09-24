@@ -260,6 +260,10 @@ class TestEveryRootLocatorUsesTheMaskedSearch:
 
     def test_the_depth_walk_scans_the_masked_copy(self):
         src = self._source()
-        walker_start = src.index("def _find_closing_div_pos(")
+        # #2892: the walk is tag-generic; the div finder delegates to it.
+        walker_start = src.index("def _find_closing_tag_pos(")
         walker_end = src.index("\n    def ", walker_start + 10)
         assert "template = _mask_raw_text(template)" in src[walker_start:walker_end]
+        div_start = src.index("def _find_closing_div_pos(")
+        div_end = src.index("\n    def ", div_start + 10)
+        assert '_find_closing_tag_pos(template, inner_start, "div")' in src[div_start:div_end]

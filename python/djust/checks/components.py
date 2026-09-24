@@ -14,7 +14,6 @@ from typing import Any, Optional
 from django.core.checks import CheckMessage, register
 
 import djust.checks as _root
-from djust.mixins.template import _DJ_VIEW_RE as _TEMPLATE_DJ_VIEW_RE
 from djust.checks.utils import (
     DjustError,
     DjustInfo,
@@ -45,15 +44,16 @@ _EVENT_HANDLER_LIKE_NAMES = re.compile(
 
 _SERVICE_INSTANCE_KEYWORDS = re.compile(r"(Service|Client|Session|API|Connection)", re.IGNORECASE)
 
-# V012 (#1803) — match a REAL ``<tag ... dj-view ...>`` opening tag (a
-# standalone ``dj-view`` attribute on ANY element, #2892), not the bare
-# substring. This IS the renderer's root-detection pattern
-# (``mixins/template.py:_DJ_VIEW_RE``) rather than a copy of it, so the check
-# and the render path cannot drift on what counts as a root (#1646). Prose /
-# comment text that merely mentions ``dj-view`` (e.g. the "do not add another
-# ``dj-view`` here" note in the sticky example template) does NOT false-match —
-# only an authored attribute on a real element does.
-_DJ_VIEW_TAG_RE = _TEMPLATE_DJ_VIEW_RE
+# V012 (#1803) — the ``<tag ... dj-view ...>`` opening-tag scan (a standalone
+# ``dj-view`` attribute on ANY element, #2892) uses the renderer's own
+# root-detection pattern, ``mixins/template.py:_DJ_VIEW_RE``, rather than a copy
+# of it, so the check and the render path cannot drift on what counts as a root
+# (#1646). It is imported inside the check: importing ``djust.mixins`` at
+# module level would load the whole mixin package during ``django.setup()``
+# (#2559 import-footprint pin). Prose / comment text that merely mentions
+# ``dj-view`` (e.g. the "do not add another ``dj-view`` here" note in the
+# sticky example template) does NOT false-match — only an authored attribute on
+# a real element does.
 
 # V012 (#1803) — comment regions to strip before the ``<div ... dj-view ...>``
 # root scan. A sticky-child template commonly documents the wrapper it lives
@@ -877,7 +877,8 @@ def check_sticky_child_own_dj_view(app_configs: Any, **kwargs: Any) -> list[Chec
     - Only ``LiveView`` subclasses with a truthy ``sticky`` attribute are
       scanned. Normal page views (which legitimately declare ``dj-view``) are
       NEVER inspected, so V012 cannot false-positive on them.
-    - The scan uses an anchored ``<div ... dj-view ...>`` opening-tag regex,
+    - The scan uses an anchored ``<tag ... dj-view ...>`` opening-tag regex
+      (any element, #2892 — the renderer's own root pattern),
       not a bare substring — comment/prose text that merely mentions
       ``dj-view`` (e.g. the "do not add another dj-view here" note in the
       sticky example template) does not match.
@@ -895,6 +896,7 @@ def check_sticky_child_own_dj_view(app_configs: Any, **kwargs: Any) -> list[Chec
 
     try:
         from djust.live_view import LiveView
+        from djust.mixins.template import _DJ_VIEW_RE as _dj_view_tag_re
     except ImportError:
         return errors
 
@@ -921,7 +923,7 @@ def check_sticky_child_own_dj_view(app_configs: Any, **kwargs: Any) -> list[Chec
         # Strip comment regions first: a sticky-child template commonly
         # documents the wrapper it lives inside (which itself shows a
         # ``<div dj-view ...>`` example), and that example must not false-match.
-        if not _DJ_VIEW_TAG_RE.search(_strip_template_comments(source)):
+        if not _dj_view_tag_re.search(_strip_template_comments(source)):
             continue
 
         cls_label = "%s.%s" % (cls.__module__, cls.__qualname__)

@@ -1316,7 +1316,10 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         root that the initial-GET normalisation could not use (#2892)."""
         if not found and not _ANY_ROOT_ATTR_RE.search(_mask_raw_text(shell_html)):
             return  # No root declared: a plain fragment page, nothing to say.
-        label = "%s.%s" % (type(self).__module__, type(self).__qualname__)
+        label = "%s.%s" % (
+            getattr(type(self), "__module__", "?"),
+            getattr(type(self), "__qualname__", "?"),
+        )
         if label in _UNMATCHED_ROOT_WARNED:
             return
         _UNMATCHED_ROOT_WARNED.add(label)
