@@ -1409,9 +1409,12 @@ Recognized packages: `axes`, `defender`, `brutebuster`, `ratelimit`, `django_rat
 
 **Severity**: Warning
 
-**What causes it**: The `allauth` backend is configured, Django is set up to run behind a proxy (`USE_X_FORWARDED_HOST` or `SECURE_PROXY_SSL_HEADER`), and `DJUST_TRUSTED_PROXY_COUNT` is 0. Every visitor then shares the proxy's IP, so one client's failed logins rate-limit everyone.
+**What causes it**: The `allauth` backend is configured, Django is set up to run behind a proxy (`USE_X_FORWARDED_HOST` or `SECURE_PROXY_SSL_HEADER`), and allauth has no way to find the real client IP: `DJUST_TRUSTED_PROXY_COUNT` and `ALLAUTH_TRUSTED_PROXY_COUNT` are 0 and `ALLAUTH_TRUSTED_CLIENT_IP_HEADER` is not set. Every visitor then shares the proxy's IP, so one client's failed logins rate-limit everyone.
 
-**Fix**: Set `DJUST_TRUSTED_PROXY_COUNT` to the number of reverse proxies in front of Django (for example `1` behind ingress-nginx). djust passes it to allauth as `ALLAUTH_TRUSTED_PROXY_COUNT`.
+**Fix**: Do one of these:
+
+- Set `DJUST_TRUSTED_PROXY_COUNT` to the number of reverse proxies in front of Django (for example `1` behind ingress-nginx). djust passes it to allauth as `ALLAUTH_TRUSTED_PROXY_COUNT`.
+- If your proxy puts the client IP in a header of its own, set `ALLAUTH_TRUSTED_CLIENT_IP_HEADER` to that header's name (for example `"X-Real-IP"`, which ingress-nginx sets; allauth 65.14.2 or later). allauth reads the IP from it. Only name a header that your proxy always sets and that clients can't set themselves. The header covers allauth's rate limits only: djust's own WebSocket, SSE and API rate limits still read `DJUST_TRUSTED_PROXY_COUNT`.
 
 ### A103: Email verification off in production
 

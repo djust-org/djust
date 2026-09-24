@@ -264,7 +264,7 @@ With `"BACKEND": "allauth"`, djust applies these allauth settings at startup. **
 Two more behaviours:
 
 - **Redirects stay on your site.** allauth normally treats every host your `ALLOWED_HOSTS` accepts as a safe `?next=` target. So `ALLOWED_HOSTS = ["*"]`, or a wildcard such as `.example.app` whose subdomains users control, turns `next` into an open redirect. djust's adapter (`djust.auth.accounts.backends.allauth_integration.DjustAccountAdapter`) allows only the current host, plus any hosts you list in `OPTIONS["redirect_hosts"]`.
-- **Rate limits see the real client.** allauth's `ALLAUTH_TRUSTED_PROXY_COUNT` is set from `DJUST_TRUSTED_PROXY_COUNT`, so allauth and djust agree on the visitor's IP behind a proxy. Check A102 warns if you run behind a proxy with neither set.
+- **Rate limits see the real client.** allauth's `ALLAUTH_TRUSTED_PROXY_COUNT` is set from `DJUST_TRUSTED_PROXY_COUNT`, so allauth and djust agree on the visitor's IP behind a proxy. If your proxy puts the client IP in a header instead (ingress-nginx sets `X-Real-IP`), you can set allauth's `ALLAUTH_TRUSTED_CLIENT_IP_HEADER` (allauth 65.14.2 or later) to that header's name. Name only a header your proxy always sets and overwrites. That header only changes allauth's login and sign-up rate limits: djust's own rate limits (WebSocket, SSE, API) and `AccountBackend.client_ip()` still use `DJUST_TRUSTED_PROXY_COUNT`, so set both if you rely on those. Check A102 warns if you run behind a proxy with none of these set.
 
 Options (`DJUST_CONFIG["ACCOUNTS"]["OPTIONS"]`):
 
@@ -282,7 +282,7 @@ Account checks are silent unless `DJUST_CONFIG["ACCOUNTS"]` is set. Details and 
 |---|---|---|
 | A100 | Error | The backend can't be imported, or isn't an `AccountBackend` |
 | A101 | Error | allauth backend, but allauth isn't installed or its apps or middleware are missing |
-| A102 | Warning | Behind a proxy with no trusted proxy count: every visitor shares one rate limit |
+| A102 | Warning | Behind a proxy with no trusted proxy count or client-IP header: every visitor shares one rate limit |
 | A103 | Warning | Email verification is off in production |
 | A104 | Error | Account URLs are included twice |
 | A105 | Info | A template override extends allauth's base instead of the kit layout |

@@ -40,6 +40,19 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 **Released**: `v0.9.1` cut 2026-04-30 (tag `v0.9.1`, GitHub Release published, PyPI live). Bundles 8 drain buckets + post-cleanup. Retro: RETRO.md §v0.9.1. Tracker carryovers (#1234, #1235, #1236) and the post-release SSE bug bundle (#1237) move into `v0.9.2-1` below.
 
+## v1.3 drain — fixes on `main` after the ADR-034–039 merge
+
+> `main` carries the 1.3 work (the ADR-034–038 stack, #2944/#2954, and ADR-039 accounts, #3067), so fixes merged to `main` from here ship in 1.3. They follow the 1.2.1 non-breaking policy. A fix that also applies to the 1.2.x line is marked as a backport candidate.
+
+### v1.3.0-1 — Render context and accounts check (drain bucket → ships in 1.3)
+
+*Kind:* log noise / correctness, check false positive.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| **P1** | #3061 — Full-template render and HTTP POST fallback send context-processor values (`messages`, `perms`, `request`, `user`) through the state normalizer: a "non-serializable value" warning on every page (also on 1.2.1: backport candidate for 1.2.2) | v1.3.0 |
+| **P2** | #3068 — Accounts check A102 ignores `ALLAUTH_TRUSTED_CLIENT_IP_HEADER` (ADR-039) | v1.3.0 |
+
 ## Next: v1.2.1 — non-breaking fixes (drain)
 
 > Planned 2026-09-24 from a triage of every open issue. **Policy:** non-breaking bug fixes ship in 1.2.1; anything breaking, new features, and parser/dependency upgrades go to 1.3. Issues split into a 1.2.1 part and a 1.3 part are marked. The ADR-034–038 stack (#2944, #2954) merges after 1.2.1 is cut. Already shipped toward 1.2.1 on `main`: #3009 (inline whitespace, #2999/#3010), the CSRF resolver (#2978), SerializerCache removal (#2992), the audit gate (#2989).

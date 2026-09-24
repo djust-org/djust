@@ -136,6 +136,49 @@ def _is_json_serializable(value: Any) -> bool:
         return False
 
 
+def _request_scoped_keys(view: Any) -> set:
+    """Context keys that are request-scoped, not LiveView state (#1786, #3061).
+
+    ``request``, every key ``_apply_context_processors`` added on its last
+    call (``self._context_processor_keys``: auth ``user`` / ``perms``, the
+    messages storage, ``csrf_token``, ...), and the processor keys the HTTP
+    POST fallback injected as attributes. A key the view supplied itself is
+    in neither set, since processors only add missing keys.
+    """
+    from .._exposure_providers import PROCESSOR_KEYS_ATTR
+
+    keys = set(getattr(view, "_context_processor_keys", ()) or ())
+    # The HTTP POST fallback injects processor output as view attributes for
+    # the duration of its render (``RequestMixin._processor_context``, #717);
+    # ``_apply_context_processors`` then adds nothing, so those keys come
+    # from the marker instead.
+    keys.update(view.__dict__.get(PROCESSOR_KEYS_ATTR, ()) if hasattr(view, "__dict__") else ())
+    keys.add("request")
+    return keys
+
+
+def _drop_request_scoped_values(view: Any, context: Dict[str, Any]) -> Dict[str, Any]:
+    """Return ``context`` without its non-serializable request-scoped values.
+
+    Those values (``WSGIRequest`` / ``ASGIRequest``, ``PermWrapper``,
+    ``FallbackStorage``, a lazy ``user``) are not LiveView state: running
+    them through ``normalize_django_value`` logs a misleading
+    "non-serializable value" warning and stringifies them. Every render path
+    that feeds a context to the normalizer uses this, so the dj-root render
+    (``_sync_state_to_rust``) and the page-shell render
+    (``render_full_template``) agree (#3061, the #1646 parallel-path class).
+    The values still reach the template through the raw-value sidecar.
+    Serializable processor output (``csrf_token``, ``DEFAULT_MESSAGE_LEVELS``,
+    a theming ``SafeString``) is kept.
+    """
+    scoped = _request_scoped_keys(view)
+    return {
+        key: value
+        for key, value in context.items()
+        if key not in scoped or _is_json_serializable(value)
+    }
+
+
 class ContextMixin:
     """Context methods: get_context_data, _get_context_processors, _apply_context_processors."""
 

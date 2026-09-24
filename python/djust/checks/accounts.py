@@ -137,17 +137,24 @@ def _a102(spec: Any) -> list[CheckMessage]:
     behind_proxy = bool(getattr(settings, "USE_X_FORWARDED_HOST", False)) or bool(
         getattr(settings, "SECURE_PROXY_SSL_HEADER", None)
     )
+    # allauth reads the client IP from ALLAUTH_TRUSTED_CLIENT_IP_HEADER (e.g.
+    # "X-Real-IP", which ingress-nginx sets) before any proxy count, so a
+    # non-empty header is a complete configuration on its own (#3068).
+    client_ip_header = getattr(settings, "ALLAUTH_TRUSTED_CLIENT_IP_HEADER", None)
+    has_client_ip_header = isinstance(client_ip_header, str) and bool(client_ip_header.strip())
     if (
         behind_proxy
         and _trusted_proxy_count() == 0
         and not getattr(settings, "ALLAUTH_TRUSTED_PROXY_COUNT", 0)
+        and not has_client_ip_header
     ):
         return [
             Warning(
                 "Django is configured to run behind a proxy, but DJUST_TRUSTED_PROXY_COUNT is 0: every visitor "
                 "shares the proxy's IP, so one client's failed logins rate-limit everyone.",
                 hint="Set DJUST_TRUSTED_PROXY_COUNT to the number of reverse proxies in front of Django "
-                "(e.g. 1 behind ingress-nginx).",
+                "(e.g. 1 behind ingress-nginx), or ALLAUTH_TRUSTED_CLIENT_IP_HEADER to the header your "
+                'proxy sets with the real client IP (e.g. "X-Real-IP").',
                 id="djust.A102",
             )
         ]

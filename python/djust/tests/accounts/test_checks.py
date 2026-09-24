@@ -52,6 +52,22 @@ def test_a102_proxy_without_trusted_count(settings):
     assert "djust.A102" not in ids()
 
 
+def test_a102_trusted_client_ip_header_counts_as_configured(settings):
+    # #3068: allauth's ALLAUTH_TRUSTED_CLIENT_IP_HEADER (e.g. ingress-nginx's
+    # X-Real-IP) gives the real client IP without a proxy count.
+    pytest.importorskip("allauth")
+    settings.DJUST_CONFIG = {"ACCOUNTS": {"BACKEND": "allauth"}}
+    settings.USE_X_FORWARDED_HOST = True
+    settings.DJUST_TRUSTED_PROXY_COUNT = 0
+    settings.ALLAUTH_TRUSTED_PROXY_COUNT = 0
+    settings.ALLAUTH_TRUSTED_CLIENT_IP_HEADER = "X-Real-IP"
+    assert "djust.A102" not in ids()
+    # An empty or blank header is not a configuration.
+    for blank in ("", "   ", None):
+        settings.ALLAUTH_TRUSTED_CLIENT_IP_HEADER = blank
+        assert "djust.A102" in ids()
+
+
 def test_a103_no_verification_in_production(settings):
     pytest.importorskip("allauth")
     settings.DJUST_CONFIG = {"ACCOUNTS": {"BACKEND": "allauth"}}
