@@ -58,6 +58,22 @@ class SpinnerView(LiveView):
     def plain(self, **kwargs):
         self.status = "plain"
 
+    @event_handler()
+    def start_slow(self, **kwargs):
+        self.status = "working"
+        self.start_async(self._slow, name="job")
+
+    @event_handler()
+    def stop(self, **kwargs):
+        self.cancel_async("job")
+        self.status = "cancelled"
+
+    def _slow(self):
+        import time
+
+        time.sleep(0.3)
+        self.status = "done"
+
     def _work(self):
         self.status = "done"
 
@@ -159,3 +175,56 @@ def test_helper_reads_both_formats():
     view._async_tasks = {}
     view._async_pending = (lambda: None, (), {})
     assert has_pending_async_work(view) is True
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_cancelled_work_still_ends_the_loading_state():
+    """The documented Stop-button pattern: the start event's loading state,
+    announced with async_pending, must end even though the task is cancelled."""
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **SETTINGS):
+        socket = await _mounted()
+        try:
+            await socket.send_json_to(
+                {"type": "event", "event": "start_slow", "params": {}, "ref": 4}
+            )
+            await socket.send_json_to({"type": "event", "event": "stop", "params": {}, "ref": 5})
+            await asyncio.sleep(0.5)
+            frames = await _frames(socket)
+            assert _reply(frames, 4).get("async_pending") is True, frames
+            ends = [
+                f
+                for f in frames
+                if f.get("source") == "async" and f.get("event_name") == "start_slow"
+            ]
+            assert ends, f"nothing ends start_slow's loading state: {frames}"
+        finally:
+            await socket.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_consumer_cancel_path_sends_the_settle_frame_only_for_an_event():
+    """``_run_async_work`` (tick / push / notify / released activity events):
+    a cancelled task still sends the ``source="async"`` frame when an event
+    owns it, and nothing when no event does."""
+    from unittest.mock import MagicMock
+
+    for event_name, expected in (("go", 1), (None, 0)):
+        consumer = LiveViewConsumer()
+        sent = []
+
+        async def send_json(msg, _sent=sent):
+            _sent.append(msg)
+
+        consumer.send_json = send_json
+        view = MagicMock()
+        view._async_cancelled = {"job"}
+        view.render_with_diff = MagicMock(return_value=("<div dj-root>x</div>", "[]", 2))
+        for drain in ("push_events", "navigation", "accessibility", "i18n", "flash"):
+            setattr(view, f"_drain_{drain}", MagicMock(return_value=[]))
+        consumer.view_instance = view
+        await consumer._run_async_work("job", lambda: None, (), {}, event_name=event_name)
+        async_frames = [m for m in sent if m.get("source") == "async"]
+        assert len(async_frames) == expected, sent
+        if expected:
+            assert async_frames[0]["event_name"] == "go"

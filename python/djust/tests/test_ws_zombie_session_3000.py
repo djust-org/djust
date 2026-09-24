@@ -186,6 +186,9 @@ async def test_disconnect_dispatch_then_raise_is_not_cleaned_up_twice():
     class Boom(RecordingConsumer):
         async def disconnect(self, close_code):
             self.disconnect_calls += 1
+            # What LiveViewConsumer.disconnect() records on entry; the
+            # real cleanup would need a channel layer this bare test lacks.
+            self._disconnect_entered = True
             raise RuntimeError("cleanup failed")
 
     consumer = Boom()
@@ -231,3 +234,32 @@ async def test_close_on_a_peer_closed_socket_does_not_raise():
     consumer.base_send = base_send
     await consumer.close(code=4403)
     assert consumer._ws_close_sent is True
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_channels_handler_failing_before_disconnect_still_cleans_up():
+    """Channels' websocket_disconnect discards ``groups`` before it calls
+    disconnect(); if that raises, the backstop must still run the cleanup."""
+
+    class GroupConsumer(RecordingConsumer):
+        groups = ["zombie_3000_boom"]
+
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **SETTINGS):
+        socket = WebsocketCommunicator(GroupConsumer.as_asgi(), "/ws/")
+        socket.scope.update(session=await sync_to_async(_session)(), user=AnonymousUser())
+        assert (await socket.connect())[0]
+        await socket.receive_json_from(timeout=3)
+        consumer = CONSUMERS[-1]
+        real_discard = consumer.channel_layer.group_discard
+
+        async def group_discard(group, channel):
+            if group == "zombie_3000_boom":
+                raise ConnectionError("channel layer down")
+            await real_discard(group, channel)
+
+        consumer.channel_layer.group_discard = group_discard
+        await socket.send_input({"type": "websocket.disconnect", "code": 1001})
+        with pytest.raises(ConnectionError):
+            await socket.wait(timeout=3)
+        assert consumer.disconnect_calls == 1

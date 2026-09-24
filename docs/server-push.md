@@ -75,7 +75,7 @@ The view re-renders and sends patches to all connected clients after each tick. 
 
 Server pushes, ticks, and async completions are all treated as *background* updates. If a user event (click, submit, etc.) is in flight when a server push arrives, the push is buffered on the client and applied after the user event round-trip completes. This prevents version interleaving where a background update would silently discard the user's action.
 
-On the server side, `server_push` acquires a render lock and yields to in-progress user events. A push that arrives while the session is busy (a user event or background result in progress, or the render lock held) is queued and applied, in order, as soon as the lock frees; identical queued pushes are applied once. So the last push of a change always reaches every viewer.
+On the server side, `server_push` acquires a render lock and yields to in-progress user events. A push that arrives while the session is busy (a user event or background result in progress, or the render lock held) is queued. As soon as the lock frees, every queued push is applied in order and the view renders once. So the last push of a change always reaches every viewer.
 
 This is automatic and requires no developer action.
 

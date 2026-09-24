@@ -132,8 +132,13 @@ async def test_push_during_user_event_is_deferred_and_order_is_kept():
                 {"type": "server_push", "handler": "handle_score", "payload": {"score": 4}}
             )
             assert len(consumer._deferred_pushes) == 4
-            await _frames(socket)
+            frames = await _frames(socket)
             assert consumer.view_instance.log == [1, 2, 3, 4]
+            # The backlog is applied in one turn: one render, not four, so a
+            # push stream faster than the render cannot leave a viewer behind.
+            broadcasts = [f for f in frames if f.get("source") == "broadcast"]
+            assert len(broadcasts) == 1, frames
+            assert "4" in json.dumps(broadcasts[0]["patches"])
         finally:
             await socket.disconnect()
 
