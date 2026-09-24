@@ -399,7 +399,7 @@ issue or be explicitly closed with a reason.
 | 357 | `live_input`, `djust_skeleton`, `djust_track_static` have no Rust handler (same class as #2958) | PR #3042 | #3044 | Closed | pattern: parallel-path-drift. Fixed in PR #3053: bridged; djust's own bridged tags share one `RenderContext` per render (`library_render_scope`), third-party tags stay per call |
 | 358 | VDOM `write_html` escapes text inside raw-text elements other than script/style (`noscript`, `xmp`, …) | PR #3042 | #3045 | Closed | pattern: parallel-path-drift. Fixed in PR #3053: `djust_core::raw_text` shared by `write_html` and `text_node_value` |
 | 359 | Hardening: snapshot/private-state restore can shadow component methods; replay window now covers component state | PR #3042 | #3046 | Open | Items 1–2 fixed in PR #3052 (method-shadow skip, dangerous-key screen). Item 3, the replay nonce/TTL, is 1.3 |
-| 361 | Offline indicator (`show_when="offline"`) and offline banner never show; indicator text never switches | PR #3052 | #3051 | Open | Found fixing #3041. Inline `display: none` / `dj-offline` attr nothing reads. Template output changes, so check the non-breaking policy first |
+| 361 | Offline indicator (`show_when="offline"`) and offline banner never show; indicator text never switches | PR #3052 | #3051 | Closed | Fixed in PR #3057 (1.2.1, non-breaking: class names, data attributes and tag arguments unchanged). Visibility is `dj-offline-show` CSS on the body class; `52-offline-state.js` swaps text and status class |
 | 362 | `theme_context` pre-renders theme chunks on every request (~23 ms in djustlive) | PR #3052 | #3028 | Open | 1.3. E001 became a Warning in 1.2.1. Make the processor lazy, or fire the check only when the variables are used |
 | 363 | Live navigation keeps the previous page's `<head>` assets and outside-root scripts; `{{ block.super }}` titles are not updated | PR #3052 | #3036 | Open | 1.3. The title from `{% block title %}` shipped in 1.2.1. Head diffing or a track-static-style full-load fallback needs a wire addition |
 | 360 | Bridged tags under an armed `block.super` run the handler 60× vs Django's 12× | PR #3042 | #2918 | Open | 1.3. Memoising diverges on side-effecting parents; the lazy `block` object across the Rust→Python boundary is the likely fix |
@@ -737,10 +737,51 @@ Pre-push ran the selected pytest set (7,792 tests on the first push) and npm tes
 None in this batch. IDEA: have `scripts/select-tests.py` pick line-pinned structural tests (whitelists, module inventories) when their pinned module changes.
 
 ### Open Items
-- [ ] Offline indicator and banner. Tracked in Action Tracker #361 (GitHub #3051).
+- [x] Offline indicator and banner. Action Tracker #361 (GitHub #3051), fixed in PR #3057.
 - [ ] Lazy `theme_context` (1.3). Tracked in Action Tracker #362 (GitHub #3028).
 - [ ] `<head>` diffing on live navigation (1.3). Tracked in Action Tracker #363 (GitHub #3036).
 - [ ] Snapshot replay nonce/TTL (1.3). Tracked in Action Tracker #359 (GitHub #3046).
+
+## v1.2.1-15 follow-up — offline indicator and banner (PR #3057)
+
+**Date**: 2026-09-24
+**Scope**: #3051, found while fixing #3041 in #3052. Squash-merged as `4a0478948`.
+- `{% djust_offline_indicator show_when="offline" %}` and `djust/pwa/offline_banner.html` show while offline. The inline `display: none` is gone. The indicator's own `<style>` hides it unless `body.djust-offline`, and the banner adds `dj-offline-show`.
+- `src/52-offline-state.js` swaps each indicator's text and `djust-status-*` class at startup, on `online` / `offline`, and after every DOM update.
+- The `dj-offline-show` directive rule also matches `body:not(.djust-offline)`, so those elements no longer flash visible before the client runs.
+- Class names, data attributes and tag arguments are unchanged.
+
+**Tests at close**:
+- `tests/js/offline-indicator-3051.test.js` (7)
+- `tests/unit/test_pwa_offline_indicator_3051.py` (12)
+- Two updated assertions in `tests/unit/test_pwa.py`
+- A Playwright check in Chrome with `context.set_offline`
+
+Pre-push ran the full hook set and CI was green on both heads. Retro: https://github.com/djust-org/djust/pull/3057#issuecomment-5809096890
+
+### What We Learned
+
+**1. Check a behaviour claim against the selector.** #3052's guide text and its #3041 fragment said `dj-offline-show` elements "never appeared" before 1.2.1. They were in fact always visible, because the only rule hid them under `body.djust-online`, which nothing set. This PR repeated the claim until the Code Review caught it. It is the same `unverified-claim` class as the #3036 first design in #3052.
+
+**2. Test the CSS in a real browser as well as in jsdom.** The Chrome check rendered the real tag output with the built `client.js`, both with the client and with it blocked. It confirmed the no-flash behaviour that jsdom's partial cascade could only approximate.
+
+### Review Stats
+
+| Metric | #3057 |
+|---|---|
+| Issues | 1 closed (#3051) |
+| 🔴 Findings | 0 |
+| 🟡 Findings | 1: the pre-1.2.1 `dj-offline-show` claim in the guide and the #3041 fragment. Fixed pre-merge |
+| 🟢 Findings | 2. Fixed: the client never toggles `djust-offline-indicator` itself. Declined: the JS test copies the tag CSS, but the pytest pins the rule text |
+| Re-Reviews | 1, passed |
+| CI failures | 0 |
+| Findings by pattern class | `unverified-claim` ×1, `parallel-path-drift` ×1 (🟢) |
+
+### Process Improvements Applied
+None.
+
+### Open Items
+None. This closes Action Tracker #361, and v1.2.1-15 has no open rows.
 
 ## v1.2.1-7 — state and rendering batch: v1.2.1-7, -8 and -9 (PR #3042)
 
