@@ -39,12 +39,18 @@ If you add `dj-root` yourself, put it on the **same element** as `dj-view`:
 </div>
 ```
 
+A template with `dj-root` and no `dj-view` works too: on the initial page load djust adds `dj-view="<module>.<ClassName>"` to the `dj-root` element, whatever other attributes it has (`<div dj-root class="search">` included).
+
 Don't put `dj-root` on a separate inner element to keep a wrapper out of VDOM diffing. The client stamps `dj-root` onto every `dj-view` element, while the server diffs from the inner `dj-root`, so the two sides disagree about the root; `djust.T005` warns about this layout. To keep static chrome out of updates, move it outside the `dj-view` element, or mark it `dj-update="ignore"`.
 
 | Attribute | Required | Purpose |
 |-----------|----------|---------|
 | `dj-view` | ✅ Yes | Identifies the LiveView class for the WebSocket connection |
 | `dj-root` | ❌ Optional | Explicitly marks VDOM root (auto-inferred from `dj-view` if omitted) |
+
+### Which element?
+
+The root can be any element inside `<body>`: a `<div>`, or the semantically better `<main>`, `<section>` or `<article>`. It can't be `<html>`, `<head>` or `<body>` itself, or a table-section element such as `<tbody>` (`djust.T017`). djust logs a warning when a page declares its root on `<html>`, `<head>` or `<body>`, because the first render can't be matched to the live updates that follow.
 
 ---
 

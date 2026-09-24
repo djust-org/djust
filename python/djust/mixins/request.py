@@ -84,6 +84,9 @@ class RequestMixin:
 
         def get_template(self) -> str: ...
 
+        @staticmethod
+        def _stamp_dj_view(html: str, view_path: str) -> str: ...
+
         def handle_params(self, params: Dict[str, Any], uri: str) -> None: ...
 
         def mount(self, request: Any, **kwargs: Any) -> None: ...
@@ -345,9 +348,11 @@ class RequestMixin:
             "vdom_ms": round(t_render_diff, 2),
         }
 
-        # Inject view path into dj-root for WebSocket mounting
+        # Inject view path into dj-root for WebSocket mounting — on the root
+        # however it is written (any element, any other attributes), and only
+        # where the author did not declare dj-view themselves (#2981).
         view_path = f"{self.__class__.__module__}.{self.__class__.__name__}"
-        html = html.replace("<div dj-root>", f'<div dj-root dj-view="{view_path}">')
+        html = self._stamp_dj_view(html, view_path)
 
         # Inject LiveView client script
         html = self._inject_client_script(html)
