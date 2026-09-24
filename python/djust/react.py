@@ -6,6 +6,7 @@ within djust templates with server-side rendering and client-side hydration.
 """
 
 from typing import Dict, Any, Callable, Optional
+from html import escape as html_escape
 import json
 
 
@@ -81,7 +82,7 @@ class ReactComponentRegistry:
 
         # Wrap in container with hydration data
         module_info = self.get_module_info(name)
-        props_json = json.dumps(props).replace('"', "&quot;")
+        props_json = html_escape(json.dumps(props), quote=True)
 
         html = f'<div data-react-component="{name}" data-react-props="{props_json}"'
 
