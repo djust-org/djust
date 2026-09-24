@@ -251,9 +251,23 @@ In development, pages render without Tailwind utilities until you compile the CS
 
 **Severity**: Warning
 
-**What causes it**: Either a `DjangoTemplates` backend is listed before `DjustTemplateBackend` ("every template the Django engine can find is rendered by Django and never reaches djust"), or there is a `DjustTemplateBackend` entry but no `DjangoTemplates` entry after it ("the admin / admindocs templates cannot render").
+**What causes it**: One of three `TEMPLATES` shapes:
 
-**Fix**: Put the `DjustTemplateBackend` entry first, and add a `django.template.backends.django.DjangoTemplates` entry after it as the fallback for admin and contrib templates (the shape `djust new --with-db` emits). Suppress with `DJUST_CONFIG = {"suppress_checks": ["C016"]}`.
+- a `DjangoTemplates` backend is listed before `DjustTemplateBackend` ("every template the Django engine can find is rendered by Django and never reaches djust");
+- there is a `DjustTemplateBackend` entry but no `DjangoTemplates` entry after it ("the admin / admindocs templates cannot render");
+- the admin is installed, the `DjustTemplateBackend` entry comes first with `APP_DIRS` on, and its `OPTIONS['context_processors']` lacks `auth`, `messages` or `request` ("the admin index fails (KeyError: 'user') without the auth processor"). The djust engine renders the admin's templates in that shape, and Django's own admin checks only look at `DjangoTemplates` entries.
+
+**Fix**: Put the `DjustTemplateBackend` entry first with `django.template.context_processors.request`, `django.contrib.auth.context_processors.auth` and `django.contrib.messages.context_processors.messages` in its `context_processors`, and add a `django.template.backends.django.DjangoTemplates` entry after it as the fallback for admin and contrib templates (the shape `djust new --with-db` emits). Suppress with `DJUST_CONFIG = {"suppress_checks": ["C016"]}`.
+
+---
+
+### C018: Deprecated LIVEVIEW_CONFIG key
+
+**Severity**: Warning
+
+**What causes it**: `LIVEVIEW_CONFIG` or `DJUST_CONFIG` sets one of `jit_cache_backend`, `jit_cache_dir`, `jit_redis_url`, `debug_components`, `component_wrapper_class` or `component_loading_class`. djust has defaults for these keys but never reads them, so setting one has no effect.
+
+**Fix**: Remove the key. djust 1.3 removes them. Suppress with `DJUST_CONFIG = {"suppress_checks": ["C018"]}`.
 
 ---
 
@@ -616,6 +630,16 @@ V008 is broader than V006 and will flag any custom class instantiation, not just
 **What causes it**: A view sets `time_travel_enabled = True`, and its model or form declares fields whose names look like PII that are not listed in `time_travel_excluded_fields`. Message: "<view>: time_travel_enabled = True, and its model/form declares field(s) whose names look like PII and are not in time_travel_excluded_fields: ...". Time-travel snapshots can be exported as a shareable bug-capture blob.
 
 **Fix**: List the sensitive public-state keys in `time_travel_excluded_fields` on the view, or suppress with `DJUST_CONFIG = {"suppress_checks": ["V014"]}` if they never reach the view's public state. See [Bug Capture](bug-capture.md).
+
+---
+
+### V015: djust's own LiveViews blocked by LIVEVIEW_ALLOWED_MODULES
+
+**Severity**: Warning
+
+**What causes it**: `LIVEVIEW_ALLOWED_MODULES` is set, your URLconf routes a LiveView that djust ships (the component gallery, the theme gallery, the admin extension), and the list doesn't admit it. An explicit list replaces the default, which includes `"djust"`, so those pages render but never mount ("View not mounted. Please reload the page."). V005 doesn't cover this case because it skips classes defined in djust.
+
+**Fix**: Add `"djust"` to `LIVEVIEW_ALLOWED_MODULES`, as `djust new` does since 1.2.1. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V015"]}`.
 
 ---
 

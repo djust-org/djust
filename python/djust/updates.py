@@ -32,6 +32,11 @@ ADVISORIES_URL = (
 ADVISORIES_PAGE = "https://github.com/djust-org/djust/security/advisories"
 TIMEOUT_SECONDS = 2
 CACHE_TTL = 24 * 60 * 60
+# A cached advisory that MATCHES the installed version is re-checked after an
+# hour, not a day (#3006): that is the case where a stale cache misleads, e.g.
+# an advisory whose range was corrected to exclude the installed release kept
+# telling developers to upgrade a patched version for up to 24 h.
+ADVISORY_MATCH_TTL = 60 * 60
 FAILURE_BACKOFF = 60 * 60
 MAX_LISTED_ADVISORIES = 3
 
@@ -251,11 +256,33 @@ def _recent(stamp: Any, now: float, ttl: float) -> bool:
     return isinstance(stamp, (int, float)) and now - stamp < ttl
 
 
-def refresh(now: Optional[float] = None, environ: Optional[Mapping[str, str]] = None) -> dict:
-    """Return cached data, fetching when stale; a failure backs off for an hour."""
+def _cached_advisories_match(cached: Mapping[str, Any], installed: str) -> bool:
+    entries = cached.get("advisories")
+    advisories = []
+    for entry in entries if isinstance(entries, list) else []:
+        try:
+            advisories.append(Advisory.from_dict(entry))
+        except (KeyError, TypeError):
+            continue
+    return bool(advisories_for(installed, advisories))
+
+
+def refresh(
+    now: Optional[float] = None,
+    environ: Optional[Mapping[str, str]] = None,
+    installed: Optional[str] = None,
+) -> dict:
+    """Return cached data, fetching when stale; a failure backs off for an hour.
+
+    Stale means older than ``CACHE_TTL``, or older than ``ADVISORY_MATCH_TTL``
+    when a cached advisory covers ``installed`` (#3006).
+    """
     now = time.time() if now is None else now
     cached = load_cache(environ)
-    if _recent(cached.get("checked_at"), now, CACHE_TTL):
+    ttl = CACHE_TTL
+    if installed and _cached_advisories_match(cached, installed):
+        ttl = ADVISORY_MATCH_TTL
+    if _recent(cached.get("checked_at"), now, ttl):
         return cached
     if _recent(cached.get("failed_at"), now, FAILURE_BACKOFF):
         return cached
@@ -295,7 +322,7 @@ def _check(
     from djust import __version__
 
     installed = installed or __version__
-    data = refresh(now, environ) if fetch else load_cache(environ)
+    data = refresh(now, environ, installed) if fetch else load_cache(environ)
     if not isinstance(data.get("checked_at"), (int, float)):
         return None
     advisories = []

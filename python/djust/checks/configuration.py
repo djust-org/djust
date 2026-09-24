@@ -535,6 +535,53 @@ def _check_unknown_extensions(errors: list) -> None:
             )
 
 
+#: LIVEVIEW_CONFIG keys that have defaults but that nothing reads (#2984).
+#: Setting one has no effect; they are removed in 1.3.
+DEAD_LIVEVIEW_CONFIG_KEYS = (
+    "jit_cache_backend",
+    "jit_cache_dir",
+    "jit_redis_url",
+    "debug_components",
+    "component_wrapper_class",
+    "component_loading_class",
+)
+
+
+def _check_dead_config_keys(errors: list) -> None:
+    """C018 -- a LIVEVIEW_CONFIG key that djust never reads is set (#2984)."""
+    from django.conf import settings
+
+    if _is_check_suppressed("djust.C018"):
+        return
+    found: list[str] = []
+    for setting in ("LIVEVIEW_CONFIG", "DJUST_CONFIG"):
+        cfg = getattr(settings, setting, None)
+        if isinstance(cfg, dict):
+            found.extend(
+                "%s['%s']" % (setting, key) for key in DEAD_LIVEVIEW_CONFIG_KEYS if key in cfg
+            )
+    if not found:
+        return
+    errors.append(
+        DjustWarning(
+            "%s %s set but djust never reads %s; setting %s has no effect."
+            % (
+                ", ".join(found),
+                "is" if len(found) == 1 else "are",
+                "it" if len(found) == 1 else "them",
+                "it" if len(found) == 1 else "them",
+            ),
+            hint=(
+                "Remove the key%s from settings. These keys are deprecated and will "
+                "be removed in djust 1.3. Suppress with DJUST_CONFIG = "
+                "{'suppress_checks': ['C018']}." % ("" if len(found) == 1 else "s")
+            ),
+            id="djust.C018",
+            fix_hint="Delete %s from your Django settings file." % ", ".join(found),
+        )
+    )
+
+
 def _check_presence_backend(errors: list) -> None:
     """C019 -- unknown ``DJUST_CONFIG['PRESENCE_BACKEND']`` value (#2973).
 
@@ -664,7 +711,7 @@ def _check_templates_shape(errors: list) -> None:
                 )
             elif not django_idx:
                 installed = list(getattr(settings, "INSTALLED_APPS", []))
-                if "django.contrib.admin" in installed or "django.contrib.admindocs" in installed:
+                if _admin_installed(installed):
                     errors.append(
                         DjustWarning(
                             "TEMPLATES has a DjustTemplateBackend entry but no "
@@ -684,6 +731,81 @@ def _check_templates_shape(errors: list) -> None:
                             ),
                         )
                     )
+            missing = _missing_admin_context_processors(settings) if first_djust == 0 else []
+            if missing:
+                # #2883: the djust entry renders the admin but lacks its processors.
+                errors.append(
+                    DjustWarning(
+                        "The DjustTemplateBackend entry comes first and renders the "
+                        "admin's templates, but its OPTIONS['context_processors'] lacks "
+                        "%s; the admin index fails (KeyError: 'user') without the auth "
+                        "processor." % ", ".join(missing),
+                        hint=(
+                            "Add the missing processors to the djust entry's "
+                            "OPTIONS['context_processors'], as `djust new --with-db` does. "
+                            "Suppress with DJUST_CONFIG = {'suppress_checks': ['C016']}."
+                        ),
+                        id="djust.C016",
+                        fix_hint=(
+                            "In TEMPLATES, add %s to the DjustTemplateBackend entry's "
+                            "OPTIONS['context_processors']."
+                            % ", ".join("'%s'" % p for p in missing)
+                        ),
+                    )
+                )
+
+
+# The context processors the Django admin's templates read (``user``, ``perms``,
+# ``request``, ``messages``). Django's own admin.E402/E404/W411 look only at
+# DjangoTemplates entries, so a djust-first TEMPLATES passes them while the
+# admin (rendered by the djust engine) lacks the variables (#2883).
+_ADMIN_CONTEXT_PROCESSORS = (
+    "django.contrib.auth.context_processors.auth",
+    "django.contrib.messages.context_processors.messages",
+    "django.template.context_processors.request",
+)
+
+
+def _admin_installed(installed: list) -> bool:
+    return "django.contrib.admin" in installed or "django.contrib.admindocs" in installed
+
+
+def _missing_admin_context_processors(settings: Any) -> list:
+    """The admin context processors the first djust entry lacks (#2883), or ``[]``.
+
+    With ``DjustTemplateBackend`` first and ``APP_DIRS`` on, the djust engine
+    finds and renders the admin's templates. Without the auth processor there
+    is no ``user`` in their context and the admin index fails with
+    ``KeyError: 'user'`` in ``{% get_admin_log %}``; ``/admin/login/`` still
+    renders, so a shallow smoke test passes. Empty unless the admin is
+    installed.
+    """
+    installed = list(getattr(settings, "INSTALLED_APPS", []))
+    if not _admin_installed(installed):
+        return []
+    templates = getattr(settings, "TEMPLATES", None)
+    if not isinstance(templates, (list, tuple)):
+        return []
+    from django.utils.module_loading import import_string
+
+    from djust.template.backend import DjustTemplateBackend
+
+    entry = None
+    for tpl in templates:
+        if not isinstance(tpl, dict) or not isinstance(tpl.get("BACKEND"), str):
+            continue
+        try:
+            cls = import_string(tpl["BACKEND"])
+        except ImportError:
+            continue
+        if inspect.isclass(cls) and issubclass(cls, DjustTemplateBackend):
+            entry = tpl
+            break
+    if entry is None or not entry.get("APP_DIRS"):
+        return []
+    options = entry.get("OPTIONS") or {}
+    configured = set(options.get("context_processors") or ())
+    return [p for p in _ADMIN_CONTEXT_PROCESSORS if p not in configured]
 
 
 # ---------------------------------------------------------------------------
@@ -794,6 +916,9 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
     # C016 -- TEMPLATES backend order / DjangoTemplates fallback (#2562)
     _check_templates_shape(errors)
+
+    # C018 -- Deprecated LIVEVIEW_CONFIG keys that nothing reads (#2984)
+    _check_dead_config_keys(errors)
 
     # C019 -- Unknown DJUST_CONFIG['PRESENCE_BACKEND'] value (#2973)
     _check_presence_backend(errors)

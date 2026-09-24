@@ -175,8 +175,12 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
+# Module prefixes a client may mount LiveViews from. "djust" admits the
+# framework's own LiveViews (component and theme galleries, admin extensions):
+# an explicit list replaces the default, which would include it.
 LIVEVIEW_ALLOWED_MODULES = [
     "%(app_name)s.views",
+    "djust",
 ]
 %(theming_settings)s%(extra_settings)s"""
 
@@ -288,8 +292,11 @@ application = ProtocolTypeRouter(
 # correct for list or tuple settings, apps listed by label or AppConfig path,
 # and projects that configure their own channel layer, without parsing the
 # user's code. TEMPLATES is deliberately untouched: LiveViews read their
-# template source directly, and putting DjustTemplateBackend ahead of the
-# project's engine breaks the admin's inclusion tags (#2872).
+# template source directly, so the project's existing engines keep working
+# as they are. Rewriting a user's TEMPLATES safely (DjustTemplateBackend
+# first, carrying the context processors djust.C016 checks for) is a separate
+# feature (#2884); the admin incompatibility that used to argue against it
+# (#2872) is fixed.
 
 SETTINGS_BLOCK = """\
 # --- djust (added by djust init) ---
