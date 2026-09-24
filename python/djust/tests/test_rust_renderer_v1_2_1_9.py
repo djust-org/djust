@@ -239,12 +239,29 @@ def test_form_tags_and_filters_work_in_a_real_root_liveview():
             "</div>"
         )
 
+    import re
+
     v = V()
     v.mount(None)
     v.submit_form(name="far too long a name")
     html, _patches, _version = v.render_with_diff(None)
     assert "ERROR: View does not have" not in html
-    assert "id_name" in html
     assert "[far too long a name]" in html
     assert "bad</u>" in html
     assert "at most 10 characters" in html  # live_errors rendered the error
+
+    # What the Django engine renders for the same view, as the page shows it
+    # (entity spelling differs between the VDOM serialiser and Django's
+    # ``escape``, so compare the decoded text). The form tags' markup is
+    # ESCAPED on both engines — ``as_live()`` returns a plain str to a
+    # simple_tag — which is #3043, not this issue.
+    import html as _html
+
+    django_html = engines["django"].from_string(V.template).render({"view": v})
+
+    def section(markup: str, tag: str) -> str:
+        inner = re.search(r"<%s[^>]*>(.*?)</%s>" % (tag, tag), markup, re.S).group(1)
+        return _html.unescape(re.sub(r"<[^>]+>", "", inner))
+
+    for tag in ("form", "i", "b", "u"):
+        assert section(html, tag) == section(django_html, tag), tag
