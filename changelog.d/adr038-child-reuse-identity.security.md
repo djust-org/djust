@@ -1,1 +1,0 @@
-- Harden the gated explicit child-provider prototype: check class, schema, mount inputs, ancestry and request identity before reuse or navigation reattachment, remount changed identities in the same slot, and enforce identity for transient child events. Explicit exposure remains unavailable to applications pending the remaining ADR-038 gates.

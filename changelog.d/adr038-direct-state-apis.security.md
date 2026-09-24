@@ -1,1 +1,0 @@
-- Enforce declared client and snapshot projections in the still-gated explicit-exposure prototype's direct state APIs. Reject legacy private/component exports and raw restore helpers before reflection or assignment; prevent partial sticky-child restoration across unsupported explicit-policy boundaries. Legacy-policy behavior remains available.

@@ -1,1 +1,0 @@
-- `djust.auth.accounts`: pluggable account backends chosen by `DJUST_CONFIG["ACCOUNTS"]` (`django`, `allauth`, or your own `AccountBackend` subclass), backend-neutral `user_signed_up` / `email_verified` signals (ADR-039).

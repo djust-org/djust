@@ -1,1 +1,0 @@
-- Recheck current view and object authorization before rendering an already-registered sticky child or registering a preserved child for reattachment. Refresh the child's request first; revoked access, logout and failing predicates now deny reuse instead of bypassing the fresh-child checks.

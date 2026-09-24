@@ -1,1 +1,0 @@
-- Require fresh identity-bound authorization for guarded explicit-policy runtime events, fail closed on authorization errors, and persist through the authorized event request rather than cached mount authentication. Explicit mode remains gated pending full integration.

@@ -7,6 +7,696 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0rc1] - 2026-09-24
+
+The first release candidate for 1.3. It adds pluggable account backends (`djust.auth.accounts`, ADR-039) and makes the opt-in explicit state-exposure policy (`exposure_policy = "explicit"`, ADR-038) available; views that don't opt in keep legacy exposure. `djust.auth.social.social_auth_providers` is deprecated. See Security below for the fixes in this release.
+
+### Added
+
+- `djust.auth.accounts` `allauth` backend: django-allauth's views skinned by the djust page kit (via allauth's layout/element overrides), with secure defaults (mandatory verification by code, no verify-on-GET, reset by code, POST-only logout, remember-me, client-IP proxy count derived from `DJUST_TRUSTED_PROXY_COUNT`) and the backend's `signup_validators` / signals. Install with `pip install "djust[auth-allauth]"`.
+- System checks `djust.A100`-`djust.A107` catch account-backend misconfiguration: an unloadable backend, allauth not set up, rate limits behind a proxy with no trusted proxy count, verification off in production, account URLs included twice, template overrides that bypass the kit, missing or misordered account apps, and a project adapter or form that drops djust's protections.
+- `djust.auth.accounts`: pluggable account backends chosen by `DJUST_CONFIG["ACCOUNTS"]` (`django`, `allauth`, or your own `AccountBackend` subclass), backend-neutral `user_signed_up` / `email_verified` signals (ADR-039).
+- Add Django-style `FormMixin` construction hooks (`get_form_class`, `get_initial`, `get_prefix`, `get_form_kwargs`, `get_form`) while preserving `_create_form` overrides. Empty submitted mappings now bind correctly, and initialization/reset use Django field values.
+- Connect still-gated explicit routed-child events to fresh request authorization, mount-scope validation and bound server persistence in the shared runtime. Save failures and handler/render errors return static failures without private exception values or successful embedded updates; legacy snapshot opt-in is not required.
+- Add an internal, still-gated child-slot server-state adapter for ADR-038, binding declared state to request identity, parent ancestry, slot and mount inputs. This storage foundation does not yet enable explicit sticky-child lifecycle support.
+- Add a bounded, separately signed client-snapshot codec and guarded runtime mount/restore integration for explicitly declared client-persistence fields; explicit exposure remains disabled pending event refresh and full transport/provider coverage.
+- Wire the still-gated explicit exposure prototype's fresh eager sticky children to bound server-state restore and initial save. Reconstruct transient dependencies before restore, validate ownership and declarations again, authorize restored objects, and remove implicit raw-view context and empty-context fallback from explicit sticky rendering. Child-event and preserved-identity persistence integration remain pending.
+- Staged explicit exposure refreshes signed client persistence after successful authorized events, invalidates unavailable snapshots, and updates WebSocket/SSE navigation caches without reflecting undeclared state. Explicit mode remains gated pending the remaining ADR-038 integration checks.
+
+- **`exposure_policy = "explicit"` is available (ADR-038).** A view that opts
+  in exports only what it declares:
+  - template context comes from `get_context_data()` and registered framework
+    providers;
+  - server persistence comes from `state(..., persist="server")`;
+  - raw browser data comes from `state(..., client=True)`;
+  - the back-navigation snapshot comes from `state(..., persist="client",
+    client=True)`;
+  - debug tooling gets a redacted projection.
+
+  Ordinary attributes stay in server memory. Every turn, including background
+  results, ticks, pushes, NOTIFY and `url_change`, is re-authorized against the
+  current session, and a failed state save is reported instead of hidden.
+  `legacy` remains the default, and nothing changes for views that don't opt
+  in. Actors (`use_actors = True`) and `lazy=True` children are not supported
+  under the explicit policy. See the "Explicit exposure" guide.
+
+- **ADR-038 E2-3: `FormMixin` under the explicit policy.** A registered,
+  render-only `djust.forms` provider (`FORM_PROVIDER` in `python/djust/forms.py`)
+  gives explicit templates `form_data`, `form_choices`, `form_errors`,
+  `field_errors`, `is_valid`, `success_message` and `error_message`, so explicit
+  `validate_field`/`submit_form` render their errors over WebSocket and HTTP POST
+  instead of rendering empty. Per decision D-e nothing of a form is persisted by
+  default; `form_input = persisted_form_input("name", ...)` opts named
+  non-sensitive fields into server persistence, restoring their input across
+  reconnect and HTTP POST while every other field, all errors and `is_valid`
+  reset. `model_pk`/`model_label` are neither rendered nor persisted for explicit
+  views. Tests in `python/djust/tests/test_exposure_forms.py`.
+- **ADR-038 E2-0: a context provider manifest for explicit views.** A framework
+  provider now declares an immutable `ProviderContract` (the context keys it
+  renders, the keys it tracks, its persisted and client keys, and a codec)
+  next to `FieldExposure` in `python/djust/_exposure.py`, registered through a
+  class-body `_djust_context_providers` tuple. `ExposureContract.from_view_class`
+  folds the view's providers into the schema digest, so a provider change
+  invalidates stored envelopes and the view remounts. The existing providers
+  (component descriptors, `@action` state, streams, and the Rust bridge's
+  `csrf_token`/`DATE_FORMAT`/`TIME_FORMAT`) are registered through it, and two
+  providers may not declare the same key. A contract with no providers keeps its
+  previous digest. Tests in `python/djust/tests/test_exposure_providers.py`.
+- Extend the guarded ADR-038 explicit-policy implementation with declaration-selected shared-runtime server persistence and validated reconnect restoration; explicit mode remains unavailable pending transport and exposure parity.
+- **ADR-038 explicit state: contract versions, migration hook and server-state lifetime (E2-9).** An explicit view can set `exposure_schema_version = N`; bumping it rejects older stored envelopes and remounts (D-j). An opt-in `migrate_state(self, old_schema, values)` hook translates an older server envelope before `prepare_restore`; its result is validated like a fresh envelope, and a raising hook remounts with a log that contains no values. New setting `DJUST_SERVER_STATE_MAX_AGE` (1 to 86400 seconds, default 3600) sets the explicit server-state restore lifetime, and system check `djust.C020` reports an invalid value. The server envelope format is now 2, so format-1 envelopes remount. Tests in `python/djust/tests/test_exposure_schema_versions.py`.
+- **ADR-038 E2-6: explicit views render upload progress through a registered
+  `uploads` provider.** Under `exposure_policy="explicit"`, `UploadMixin`
+  registers a render-only `djust.uploads` provider (in either MRO order), a
+  projection of `get_upload_state()` that drops each entry's `writer_result`
+  and raw client-supplied `client_name`; templates get the sanitized
+  `safe_client_name` instead. An application `uploads` kwarg is a provider
+  collision. The mount frame's `upload_configs` stays configuration only.
+  Following decision D-g, entries in flight are not persisted and do not
+  survive a reconnect: the remount starts with an empty upload manager, and
+  `upload_resume` answers `not_found` for an explicit view without reading the
+  resumable state store, so the client re-registers. Legacy views keep no
+  `uploads` context and store-backed resume. 9 regression tests (17 parametrized cases) in
+  `python/djust/tests/test_exposure_uploads.py`.
+- **Background parameter contracts** — Capture public handler contracts with
+  tick, push, database-notification and async-result renders. Preserve matching
+  recovery snapshots, reject stale owners, and withhold invalid snapshots without
+  re-running application result callbacks. Cancelled render workers retain the
+  render lock until they settle and discard their unsent diff baseline.
+- Stage ADR-034's private class-time component subscription validation and prevent
+  subscription callbacks from also becoming event/API/RPC handlers or being
+  directly invoked under permissive event-security policies. The interactive
+  component API is not yet exported; concrete binding and dispatch remain pending.
+- Stage private concrete per-view dropdown bindings with typed output callbacks,
+  native registry dispatch, validated selection, async callback delivery and
+  identity-preserving session restore. Track binding state in change detection
+  and persist opt-in component events across reconnects. The interactive family
+  remains private pending typing, lifecycle, browser and documentation acceptance.
+- **`manage.py djust_exposure_inventory`: a values-redacted migration inventory
+  for ADR-038.** For each LiveView it lists the names legacy exposure infers
+  (class attributes, `state()` fields, and `self.<name>` assignments found by
+  parsing method source), the destinations each reaches under legacy (template
+  context, render cache, `liveview_<path>` session, `get_state`, snapshots,
+  private session), and a suggested explicit declaration. It prints text or
+  `--json`. It never instantiates views, never evaluates properties or state
+  factories, and never prints values. See `docs/adr/notes/038-migration-inventory.md`.
+- **Internal foundations for explicit state exposure (ADR-038).** Add typed
+  declaration permissions, bounded purpose-specific projections, schema-checked
+  restore preparation, and a server-session adapter with identity and expiry
+  validation. Explicit LiveView exposure remains unavailable until all runtime
+  exporters enforce these contracts; unsupported opt-ins fail instead of silently
+  using legacy reflection. Existing legacy behavior remains the default.
+- **Wire staged explicit HTTP persistence to declared server state.** GET/POST
+  no longer persist render context or legacy private/component snapshots in
+  explicit mode. Bind stored state to middleware user/tenant, session and route;
+  validate schema before restoration and retain fresh state on rejected envelopes.
+  Explicit construction remains gated pending the other runtime exporters.
+- **Stage an explicit render-only context path (ADR-038).** Build base context
+  from deliberate additions and component/action/stream providers instead of
+  reflected attributes. Preserve native rendering inputs and diagnose reserved
+  provider collisions. Explicit mode remains gated until persistence and browser
+  exporters no longer reuse rendering context; legacy behavior is unchanged.
+- **Staged visibility observation contract** — private interactive dropdowns
+  validate client-mode reports against subscriptions, instance lifetimes and
+  monotonic sequences without assigning authoritative visibility. Unchanged
+  observers use native HTTP/WS no-op responses; reactive observers still render.
+  Browser observation wiring and HTTP failure/concurrency acceptance remain open.
+- Add staged owner-addressed public parameter contracts to WebSocket and SSE mount frames, keeping same-named root, component and embedded-view handlers separate without exposing defaults or instance state. Native strict event binding and post-mount contract refresh remain pending.
+- **Render-bound client parameter contracts.** WebSocket and SSE clients refresh
+  staged parameter metadata after applying the matching DOM response and before
+  binding initialization. Buffered frames retain their transport and receipt
+  order; older replay cannot replace a newer snapshot. Invalid metadata fails
+  closed without preventing child-request acknowledgement. Native strict event
+  binding remains disabled pending complete delivery and owner-lifetime checks.
+- **Render-bound parameter contracts.** Stage fresh owner-scoped parameter
+  contracts on shared-runtime render responses. Removed strict owners produce
+  explicit contract clears; legacy-only sessions retain their response shape.
+  Contract discovery failures suppress the DOM response with a redacted error.
+  Client installation and complete transport coverage remain prerequisites for
+  activating strict browser bindings.
+  URL changes now share the transport render lock and recheck their mounted
+  owner after waiting, keeping them serialized with events and background results.
+- Stage an internal signature-derived strict event parameter contract with bounded conversion, Python argument binding and value-free metadata. Legacy dispatch is unchanged; the strict decorator/configuration policy is not yet enabled.
+- Add staged opt-in server parameter policies with shared Python argument binding across runtime, HTTP/API, test-client and Rust actor invocation. Strict rejection cannot enter actor state fallback, and strict handler metadata omits server defaults. Legacy remains the default; browser collection and full ADR-036 acceptance remain pending.
+
+### Changed
+
+- `BackendRegistry` accepts `warn_on_default=False` for backends whose default is not an in-memory fallback.
+- **Explicit views show Django-like error detail under `DEBUG`.** With
+  `DEBUG = True`, an explicit view's failures read like Django's own
+  development output: the technical 500 page, detailed WebSocket and SSE error
+  frames and dev overlay, full log lines with tracebacks, and traceback-ring
+  entries. With `DEBUG = False` they stay value-free. Debug tooling projections
+  (debug panel, time travel, bug capture) and SQL parameter capture keep their
+  redaction in both modes.
+- **Non-sticky explicit-exposure children are transient; `lazy=` is refused
+  (ADR-038 D-m).** A `{% live_render %}` of an explicit child without
+  `sticky=True` now mounts under the child reuse-identity check, renders without
+  the raw `view` context, handles events, and is never persisted (it may not
+  declare persisted fields; a pinned `view_id` keeps the instance across parent
+  renders while its identity matches). Previously such a child failed the
+  parent's mount with a state error. `lazy=` on an explicit child raises a
+  static `TemplateSyntaxError` before any placeholder is emitted.
+- **An explicit view with a component assigned on the instance now fails at its
+  first render (ADR-038 D-h).** `self.nav = Tabs()` in `mount()` or a handler
+  was silently absent from an explicit view's context. The first explicit render
+  now raises `ExposureConfigurationError` naming the attribute and saying to
+  declare the component at class level; the message carries no values. There is
+  no automatic discovery. Context-processor attributes the HTTP POST path
+  injects are not flagged. Legacy views are unchanged.
+- Stage an internal strict event collector with bounded JSON snapshots, complete typed-literal parsing and collision rejection. Legacy browser bindings are unchanged; owner-scoped contract delivery and strict binder activation remain pending.
+
+### Fixed
+
+- `djust.auth.urls` login and signup pages raised `TemplateDoesNotExist` because their `djust_auth` templates never shipped; they now render the account page kit (`python/djust/auth/templates/djust_auth/login.html`).
+- `DJUST_TRUSTED_PROXY_COUNT = "inf"` (or any infinity) raised `OverflowError` instead of failing safe to 0.
+- `{% theme_login_page %}`, `{% theme_register_page %}`, `{% theme_password_reset_page %}` and `{% theme_password_confirm_page %}` accept `form=`: pass a real Django form and the tag renders the account kit card with that form's field names. Without it they render the themed mock-up as before, whose hard-coded `email` input never matched Django's login form.
+- **Actor render parameter contracts.** Capture public handler metadata with the
+  Rust render and preserve matching recovery HTML. Serialize actor delivery with
+  other render producers, suppress cancelled/replaced-owner results, and send
+  full HTML after a withheld strict render. Failed actor mounts release their
+  unregistered views; legacy-only client frames keep their existing shape.
+- **Disconnect during buffered updates:** Draining leaves later updates in
+  their owned queue, allowing disconnect to discard them instead of delivering
+  stale effects from a detached batch.
+- Track staged explicit-child background work as owned batches so loading waits
+  for all tasks and background failures do not cancel newer foreground requests.
+  Use actual child view wrappers, rather than per-control routing hints, when
+  restoring loading state after DOM updates. Explicit exposure remains gated.
+- **Component background loading:** Component-event noop, subtree patch and
+  full-page responses now retain loading until their captured background batch
+  completes. Async queue bookkeeping no longer forces unnecessary page renders,
+  and empty batches no longer create an uninitialized task queue.
+- **Updates after event errors:** Failed requests no longer discard valid
+  buffered server updates. Updates wait for the remaining owned requests and
+  are applied when the last one settles, including an error reply.
+- **Overlapping HTTP events:** Completing or failing one HTTP fallback event no
+  longer clears loading for another request on the same control. Cache-hit
+  operations use the same ownership tracking and release their state in finally.
+- **HTTP navigation cleanup:** Navigation and page exit abort ordinary HTTP
+  fallback requests and release their loading state. Intentional aborts do not
+  log request failures; keepalive teardown sends remain independent.
+- **Stale HTTP responses:** HTTP fallback ignores outgoing-page responses when
+  the root, URL or navigation generation changes while awaiting headers or
+  parsing the response body, preventing stale metadata and render effects.
+- **Legacy async completion:** Tokenless async_pending acknowledgements now
+  retain their originating control scope until the matching async event result
+  arrives, without releasing modern tokenized batches or newer requests.
+- **Embedded background work:** Legacy child events now run and render their
+  own background tasks instead of draining the parent's queue. Removed child
+  instances cannot deliver stale results, and batch completion releases the
+  originating loading state.
+- **Buffered socket updates:** Connections now drain and discard only their own
+  buffered server updates. Old connection errors/disconnects and unrelated
+  pending requests cannot erase or strand replacement-connection work, and
+  unknown error references do not discard updates.
+- Correlate foreground WebSocket and SSE requests individually so overlapping
+  requests from the same control keep loading active until their replies arrive.
+  SSE event sends now await the server response, while teardown sends remain
+  fire-and-forget. Duplicate acknowledgements, targeted failures and disconnects
+  no longer consume another transport's outstanding request.
+- **Background loading completion:** Root and deferred events now advertise owned background-work batches so loading
+does not end at the first intermediate task update. WebSocket and SSE clients
+release the originating loading state on the batch's explicit completion.
+- Give reactive `state()` fields typed instance access and independent mutable defaults; add lazy `default_factory` support. Explicit exposure and persistence policies remain proposed, not enabled by this change.
+- Scope loading indicators to the nearest native child-view or component wrapper instead of sharing them solely by handler name. Preserve other scopes and the global loading indicator while work remains, and avoid transferring pending state to replacement wrappers with reused IDs.
+- **Explicit views work with tenancy configured but no `TenantMiddleware`.**
+  A project that sets `TENANT_RESOLVER` and resolves tenants per view through
+  `TenantMixin`, instead of installing the middleware, got a refusal on every
+  explicit request, because binding found no `request.tenant`. Binding now
+  resolves the tenant on demand with the configured resolver. A resolver
+  failure is still a refusal.
+- Behind the explicit-exposure guard, dispatch routed-child background callbacks on their owning child and reauthorize scoped completion against current server-session state. Track cancellation on the child, persist before emitting its scoped update, and redact callback errors. Explicit exposure remains disabled; client transport/loading parity and other background entry points remain pending.
+- Share embedded child updates between WebSocket and SSE clients. Apply scoped background updates without acknowledging an unrelated event, and resolve referenced child-event promises without clearing a newer event's trigger. The existing WebSocket morph entry point remains available.
+- Dispose owned explicit child subtrees during replacement and teardown, clearing nested registrations, pending work and waiters. Implement view-owned `cancel_async_all()` with shared-runtime/WebSocket task tracking and stale-completion suppression; already-running synchronous side effects cannot be rolled back. The explicit-exposure prototype remains gated.
+- Behind the ADR-038 explicit-exposure guard, reconcile eager sticky child ownership after successful renders and prune route-scoped indexed state. Preserve page-shell scopes during root-only updates, defer nested cleanup across render errors, and keep parent/child saves on one validated post-render batch. Explicit exposure remains unavailable to applications.
+- **Components under explicit exposure are bound per view and complete (ADR-038
+  E2-7).** Behind the explicit-exposure guard, ADR-034 interactive declarations
+  (for example `DropdownMenu`) are now registered component providers, so they
+  render and dispatch instead of silently missing from the context. A State-less
+  class-level `LiveComponent` gives each nonlegacy view its own copy instead of
+  the shared class-level object, so two views of one class no longer share
+  component state. Components are transient under explicit exposure: their
+  state is not persisted and a reconnect remounts them from their declarations,
+  while declared `state(persist="server")` fields still restore. Legacy views
+  are unchanged. 10 regression tests in
+  `python/djust/tests/test_exposure_components.py`.
+- **Explicit-exposure child work queued at mount or by a parent turn now runs
+  (ADR-038 E3-3).** `start_async` called in an explicit child's `mount()`, or
+  queued on a child by a parent handler, used to wait for that child's next
+  routed event (and ran under that event's batch), or never ran. The runtime now
+  dispatches it after the mount frame or the parent acknowledgement, on the
+  child's own batch and re-authorized completion path. Legacy children are
+  unchanged.
+- **Events can target nested explicit-exposure children (ADR-038 E3-4).** A
+  `view_id` event under an explicit root now resolves a grandchild through the
+  server-owned registry when exactly one owned explicit descendant carries that
+  id; direct children resolve as before, and an ambiguous or unknown id is not
+  routed. Legacy roots are unchanged.
+- **Explicit page-shell children are reconstructed on WebSocket mount and
+  reconnect (ADR-038 E3-6).** Children rendered outside `dj-root` by a
+  `template_name` page were never registered on a live connection, so their
+  events returned "Embedded view not found". An explicit root now renders its
+  full page once at mount, as the HTTP GET does, restoring those children's
+  stored state and routing their events. Legacy views are unchanged.
+- **Exposure configuration errors stay visible behind the protected HTTP
+  entry.** The ADR-038 constructor guard now raises `ExposureConfigurationError`,
+  a subclass of `ImproperlyConfigured`. The protected HTTP entry for nonlegacy
+  views turns application failures into a generic 500, but lets this error
+  through, because its messages are framework-authored and carry no view
+  values. Under DEBUG, a view with an invalid `exposure_policy` still says why.
+- Prevent stale navigation snapshots by evicting unavailable state per URL and ordering service-worker state-cache operations. Capture the source route before redirect history changes and before Back-navigation lookup.
+- Behind the ADR-038 explicit-exposure construction guard, persist authorized child state after parent events and HTTP POST renders. Validate and bound the full child batch before writing, preserve child-driven render updates, redact storage errors, and recover with full HTML after failed saves. This does not enable explicit exposure or complete removed-slot pruning.
+- **Explicit views: background, tick, push and NOTIFY turns refresh the
+  back-navigation snapshot.** When one of these turns changed a
+  `persist="client"` field, back-navigation still offered the token from the
+  last user event. The result frame now carries the refreshed signed token for
+  the primary view, and the client accepts it from primary-view `async`,
+  `tick` and `broadcast` frames as it does from event acknowledgements. Child
+  frames still can't replace it.
+- **Explicit views: background work a child queues on another child runs.**
+  After a routed child event, only that child's own `start_async` queue was
+  drained. Work its handler queued on a sibling or descendant waited for that
+  child's next event. The whole owned explicit tree is now swept after child
+  events, as it already is after parent turns.
+- **WebSocket mounts resolve the configured tenant.** The request djust builds
+  for a WebSocket mount never carried `request.tenant`, which HTTP requests get
+  from `TenantMiddleware`. Explicit request binding refuses a configured
+  tenancy that is missing, so every explicit WebSocket mount failed in a
+  project with a `TENANT_RESOLVER`. The socket request now resolves its tenant
+  the way the middleware does. Header-based resolvers read the handshake's
+  headers, and the request's own `META` is unchanged.
+- Fix SSE page navigation and Back/Forward mounts: resolve destinations through Django URLconf using the current owner's request, serialize replacement with events, discard late old-view results, replace stale HTML, and reconnect to the current route. Resolve lazy Django session authentication off the async event loop. Add signed Back-state restoration coverage for the still-gated explicit-exposure prototype.
+- **Service-worker state and VDOM cache entries are keyed by pathname plus
+  query string (ADR-038 E3-8).** `/orders?page=1` and `/orders?page=2` used to
+  share one entry, so Back could restore the wrong page's snapshot or HTML.
+  Capture and lookup both normalize through `djust._sw.cacheKey`.
+- **ADR-038: an explicit `TenantMixin` view accepts a context processor that
+  repeats its own tenant object.** A context processor that supplies a
+  provider key is no longer a collision when its value is the identical object
+  (`is`) the provider already supplied, e.g. a processor returning
+  `request.tenant`, which an explicit tenant view binds to its own tenant. Any
+  other value, including an equal but distinct `TenantInfo`, still raises.
+  `djust.tenants.context_processor` re-resolves the tenant and so still
+  collides with a resolved `TenantMixin` tenant under the explicit policy.
+  Legacy views are unchanged.
+- **ADR-038 E2-2: `{% dj_activity %}`, `{% colocated_hook %}` and the form tags
+  work in explicit views.** An explicit context never carries the raw `view`,
+  so `{% dj_activity %}` silently registered nothing (the server never knew the
+  activity was hidden), strict hook namespacing silently fell back to the bare
+  name, and `live_form`/`live_field`/`live_errors`/`field_value`/`has_errors`
+  rendered their "no FormMixin" error. They now resolve an explicit view from
+  the render's active-view thread-local, without putting the view in context;
+  legacy resolution is unchanged. The Rust engine has no handler for these tags,
+  so they run where djust renders with Django's engine: embedded and sticky
+  children. Tests in `python/djust/tests/test_exposure_provider_tags.py`.
+- **Background HTML fallback** — Deliver full HTML from ticks, server pushes and
+  database notifications when the diff baseline is unavailable, preserving
+  consumer-owned versions and recovery.
+- **Executable template-component examples.** Dropdown, modal and tabs usage
+  now includes working handlers that update the values read by their template
+  tags. Generated examples preserve slot content and the modal's opening
+  control. Regression tests execute the displayed Python and verify the
+  before/after rendered state; catalogue compilation failures are no longer
+  silently skipped.
+  Accordion, collapsible, carousel and sheet examples also import the exact
+  renderer used by their previews, instead of unmounted descriptor namesakes.
+- **Child background parameter contracts.** Scoped background updates now include
+  the same owner-addressed parameter metadata as foreground renders. Invalid
+  metadata withholds the HTML without exposing exception details or losing
+  background-batch completion; legacy-only responses remain unchanged.
+- **Debug render ownership** — Serialize time-travel restoration and forward
+  replay with normal renders, capture public parameter contracts with their DOM
+  updates, and retain the render lock until cancelled workers finish. Reject
+  replaced owners and label debug updates/errors so they cannot acknowledge
+  unrelated foreground requests.
+- Await declared async event handlers in the synchronous HTTP fallback before
+  saving state or rendering, including component actions with async callbacks.
+- **Interactive debug state** — staged dropdowns now capture and restore their
+  declared state through both time-travel scrubbers without emitting callbacks or
+  changing binding IDs. Invalid component records and stale owners are rejected
+  before component mutation.
+- **Private component observation retries:** consume visibility report sequences
+  atomically in the state backend before callbacks, without saving failed
+  application session mutations. Memory supports one process; Redis shares
+  claims across workers. Missing or expired cursors fail closed until rebinding.
+  Browser observation wiring and recovery remain staged ADR-034 work.
+- **Real-view component typing** — follow Django source declarations in the
+  isolated typing proof and declare LiveView's actual constructor in its stub.
+  Both supported checkers now reject all twenty negative component/output cases
+  on real framework classes, without a new dependency or a substitute owner.
+- **Interactive signed restoration** — staged fixed dropdowns now include a
+  versioned binding record in signed navigation snapshots. Restore validates
+  declarations, record shapes and identity collisions before mutation, uses
+  current server configuration/callbacks, and rolls back partial registration on
+  failure. Interactive resumes include fresh HTML to reconcile current controls.
+- **Render-bound recovery contracts.** Keep WebSocket recovery HTML paired with
+  its render's parameter contracts. Reject missing strict snapshots and replaced
+  owners, and retain the render lock until a cancelled recovery worker finishes.
+- **Replay argument contracts** — Validate strict replay arguments before state
+  restoration and use the canonical positional/keyword call plan. Await async
+  replay handlers through Django's sync bridge, preserve legacy raw arguments,
+  and refuse handler invocation after a failed restoration.
+- **`start_async` work queued from a tick, `server_push` or `db_notify` turn now
+  runs.** `handle_tick`, `server_push` handlers and `handle_info` run on the
+  WebSocket consumer's own turns, and none of those turns dispatched queued
+  background work. A `start_async` call there sat unrun until some later event
+  happened to drain it, or never ran. Each turn now dispatches its queued work
+  once its hook succeeds, and explicit child work queued there runs under the
+  child's own authorized path. This affects legacy views too.
+
+### Security
+
+- **Explicit background diagnostics:** Root background failures and stale-task
+  diagnostics no longer log callback values, task names or tracebacks for
+  explicit or invalid exposure policies. Late policy transitions cannot opt
+  those failures into detailed legacy logging.
+- **`@action` errors no longer render exception text for explicit views
+  (ADR-038 D-f).** `@action` recorded `str(exc)` as `{{ <name>.error }}`, so
+  exception text reached the rendered HTML and patch frames. For nonlegacy views
+  the recorded error is now the generic `"Action failed"`, unless the handler
+  raised the new `djust.decorators.ActionError`, whose message is meant for the
+  user and is recorded as written under every policy. Legacy views are
+  unchanged. 1 regression test (4 cases) in
+  `python/djust/tests/test_exposure_action_errors.py`.
+- Harden the gated explicit child-provider prototype: check class, schema, mount inputs, ancestry and request identity before reuse or navigation reattachment, remount changed identities in the same slot, and enforce identity for transient child events. Explicit exposure remains unavailable to applications pending the remaining ADR-038 gates.
+- Refuse direct debug reset/eval for guarded explicit-policy views and reapply explicit debug permissions when exporting historical bug captures; legacy history is not exported under the explicit policy.
+- Enforce declared client and snapshot projections in the still-gated explicit-exposure prototype's direct state APIs. Reject legacy private/component exports and raw restore helpers before reflection or assignment; prevent partial sticky-child restoration across unsupported explicit-policy boundaries. Legacy-policy behavior remains available.
+- **Explicit-view errors on the HTTP, SSE and WebSocket entry points (ADR-038
+  D-a):** For a view whose `exposure_policy` is not `"legacy"`, an exception
+  from its constructor, `on_mount` hooks, `mount()`, `get_context_data()` or a
+  recovery render no longer reaches the client, the log or the traceback ring
+  with its message in production (`DEBUG = False`). The HTTP GET (including
+  `streaming_render`), the SSE stream GET and SSE navigation answer with the
+  project's generic 500 page and log a static line. Under `DEBUG` these errors
+  show Django-like detail, the technical 500 page included.
+  `got_request_exception` still fires, with a value-free `ExposureError`. The
+  WebSocket `receive` catch-all (`request_html`, `live_redirect_mount`,
+  `mount_batch`, uploads, presence, time travel) and constructor failures on
+  every transport send the generic error frame. Legacy views are unchanged.
+- Require fresh identity-bound authorization for guarded explicit-policy runtime events, fail closed on authorization errors, and persist through the authorized event request rather than cached mount authentication. Explicit mode remains gated pending full integration.
+- **ADR-038 D-e: password-type form input never leaves the server under the
+  explicit policy.** A field with a `PasswordInput` widget, or a name in the
+  serialization floor or `DJUST_SENSITIVE_FIELDS`, renders as empty in explicit
+  templates, and an error message that echoes its value is replaced by a generic
+  one, so the value is absent from frames, HTTP POST responses, the server
+  session, the signed snapshot and debug output even when an invalid form
+  re-renders. Opting such a field into `persisted_form_input()` raises
+  `ExposureConfigurationError` when the class is defined (or, for a dynamic
+  `get_form_class()`, at mount). An explicit view also no longer re-resolves a
+  raw `model_pk` with an unscoped `objects.get`; `mount()`, which runs on every
+  restore, must establish the model instance through the view's own lookup.
+  Tests in `python/djust/tests/test_exposure_forms.py`.
+- **Explicit views: hot-reload render failures are value-free.** In
+  development, hot reload re-renders the mounted view, which runs its
+  `get_context_data`. Its catch-all logged the exception, with the traceback,
+  for any policy. An explicit view's failure now logs the value-free line.
+  Legacy logging is unchanged.
+- **Presence metadata is application output; explicit views no longer get the
+  username injected (ADR-038 D-c).** `track_presence` filled in the
+  authenticated user's `name` (username) and `user_id`, which peers read through
+  `list_presences()` and which `LiveCursorMixin` rebroadcasts on every cursor
+  move. For nonlegacy views only the meta the application passes is tracked;
+  legacy views are unchanged. The `track_presence` and `update_cursor_position`
+  docstrings now say that meta is shown to peers. 1 regression test (2 cases) in
+  `python/djust/tests/test_exposure_presence_meta.py`.
+- **ADR-038 E2-1: framework mixins no longer write explicit context silently.**
+  `TenantMixin`, `WizardMixin`, `DraftModeMixin`, `AudioMixin`, `PWAMixin`,
+  `OfflineMixin` and `_sync_state_to_rust` register their keys as providers.
+  Under `exposure_policy="explicit"` an application kwarg, a `context[...]`
+  write, `update`, `setdefault`, `pop` or `del` after `super().get_context_data()`,
+  or a context processor that collides with a provider key raises the existing
+  "Explicit context provider collision" error instead of silently replacing the
+  provider value or being replaced by it; an explicit view that supplies
+  `csrf_token`, `DATE_FORMAT` or `TIME_FORMAT` itself is refused rather than
+  used. An `_action_state` entry for a name no `@action` method declares is
+  refused. Explicit wizards render `form_choices` only, without the flat
+  `<field>_choices` aliases, which depend on runtime form fields and cannot be
+  declared. Provider values stay render-only: they reach no server storage,
+  frame, client snapshot or debug output. `_explicit_context_provider_keys` is
+  now in `_FRAMEWORK_INTERNAL_ATTRS`. Legacy views are unchanged.
+- **The PWA sync endpoint's per-action errors carry no exception text.** The
+  create, update and delete batch helpers put `str(e)` into the errors that
+  `sync_endpoint_view` returns as JSON. They now report the exception class,
+  as `_perform_sync` already does (#2950). This is a plain Django endpoint,
+  so it applies to every caller.
+- **PWA offline-sync errors no longer carry exception text for explicit views
+  (ADR-038).** `SyncMixin` sent `str(exc)` to the client in the
+  `offline:sync_error` push event and stored it in the sync queue through
+  `mark_failed`. For nonlegacy views the push event now carries
+  `"Offline sync failed"` and the queue stores the exception class name; legacy
+  views are unchanged. Separately, the ownerless `sync_endpoint_view` now returns
+  `Batch sync error: <ExceptionClass>` instead of the exception text **for every
+  caller**, including legacy apps: it is a plain Django endpoint with no view to
+  read a policy from. `IndexedDBStorage`'s docstring now says what it is:
+  in-process server memory, not browser IndexedDB. 3 regression tests (7 cases) in
+  `python/djust/tests/test_exposure_pwa_sync_sinks.py`.
+- **Observability SQL capture redacts query parameters for explicit views
+  (ADR-038 D-d).** The DEBUG-only `/_djust/observability/sql_queries/` endpoint
+  served each captured query's raw parameters, which are often derived from view
+  state. `capture_for_event` now takes the owning view (`owner=`, passed by the
+  WebSocket event turn), and parameters are recorded as `"[redacted]"`
+  placeholders when that owner is nonlegacy or the active diagnostic scope is
+  restricted. SQL text, tags and timing are kept; legacy views are unchanged.
+  3 regression tests (6 cases) in
+  `python/djust/tests/test_exposure_sql_capture.py`.
+- **The opt-in service worker no longer writes explicit-exposure pages to its
+  VDOM or shell cache (ADR-038 D-b).** An `exposure_policy="explicit"` page (or
+  a legacy page with an explicit child) is marked ineligible: its HTTP response
+  carries `X-Djust-SW-Cache: no-store`, which the worker checks before writing
+  `SHELL_CACHE`, and its mount frame carries `"sw_cache": "no-store"`, which the
+  client checks before `cacheVdom`. Legacy pages cache exactly as before.
+  Tests: `tests/js/exposure_sw_caches.test.js` and
+  `python/djust/tests/test_exposure_sw_caches.py`.
+- **Service-worker caches now expire and are cleared on identity change or
+  logout (ADR-038 D-n).** The worker's state-snapshot lookup enforces the
+  snapshot max age (`DJUST_STATE_SNAPSHOT_MAX_AGE`, sent on the mount frame as
+  `state_snapshot_max_age`; default 3600s) and deletes expired entries on read.
+  Every mount frame now carries `sw_identity`, an HMAC digest of the session
+  key and user id keyed on `SECRET_KEY` (`djust.security.service_worker.identity_marker`;
+  never the raw values). When it differs from the one the client stored, or
+  disappears, the client clears the state, VDOM and shell caches before caching
+  anything from the new mount.
+- Align guarded explicit-policy TenantMixin authorization, request identity and query context across HTTP and runtime mounts; restore the caller's tenant context after runtime mount, including failed mounts.
+- **Explicit views no longer write upload resume records.** Uploads in flight
+  aren't resumed for explicit views (decision D-g), but a resumable writer
+  still recorded each upload's client filename and progress in the resume
+  store. For explicit views the writer now runs as a plain writer, and nothing
+  is recorded. Legacy views resume as before.
+- **Explicit views: `wrapper_template` render failures follow the DEBUG
+  contract.** The wrapper render runs the project's context processors,
+  which are application code, and its failure was logged with the exception
+  text. It is now value-free for an explicit view in production and detailed
+  under `DEBUG`. Legacy logging is unchanged.
+- **Freshly authorize NOTIFY-released activity events for staged explicit
+  exposure.** An event queued on a hidden activity is validated when it is
+  dispatched. A `db_notify` that made the activity visible dispatched the queued
+  event through the WebSocket consumer without the fresh authorization explicit
+  views require, so it ran even after the session was deleted. The consumer now
+  applies the runtime's check and fail-closed outcome (static error, close
+  4403). Legacy views are unchanged. When such an
+  event's handler or re-render fails, the consumer no longer logs its exception
+  or traceback for a nonlegacy owner.
+- **Refuse staged nonlegacy actor mounts before lifecycle work.** The explicit
+  actor-event refusal did not cover initial mounts. Runtime now rejects these
+  mounts before lifecycle hooks and transport registration, while preserving
+  sibling mounts on shared WebSocket batches. This is a safety gate while
+  ADR-038 actor support remains unimplemented; the production exposure guard
+  remains closed.
+- **Redact `assign_async` loader failures for staged explicit exposure.** A
+  failing loader's exception text was logged for any policy. The runner now
+  logs the value-free line for a nonlegacy view; legacy logging is unchanged.
+- **Redact consumer background-work failures for staged explicit exposure.**
+  When a `start_async` callback or `handle_async_result` failed on the
+  WebSocket consumer's background runner (the NOTIFY-released activity path,
+  reachable since #2946), the exception and traceback were logged for any
+  policy. A nonlegacy view now gets the value-free line; legacy logging is
+  unchanged.
+- **Explicit views: background results are authorized and persisted, and a
+  failed save withholds the success frame.** For a staged `exposure_policy="explicit"`
+  root, `start_async` work ran its callback and `handle_async_result` and sent
+  the re-render with the mount-time principal. A revoked session still received
+  its result, and declared `persist="server"` state changed in the background was
+  never saved, so a reconnect restored the old value. Background turns now
+  re-authorize against a fresh session before the callback and again before
+  handling the result. A revoked turn is dropped with the foreground denial
+  (static error, close 4403), and declared state is committed before the
+  result frame. On both foreground and background turns, a failed or timed-out
+  explicit save now sends a static `state_error`, and no success frame, instead
+  of being logged and ignored. That error carries a null snapshot revocation,
+  which the client applies to the primary view's cached token. Legacy views are
+  unchanged.
+- **Keep `bug_capture_share` failures value-free for staged explicit exposure.**
+  When the share's re-render raised a `ValueError` or `RuntimeError`, the
+  consumer sent `str(exc)` to the client; other exceptions were logged with
+  their traceback. For a nonlegacy owner, only framework `ExposureError` text now
+  reaches the client, and everything else gets the generic error and the
+  value-free log line. Legacy behaviour is unchanged.
+- **Protect callback exception diagnostics for staged explicit exposure.**
+  Runtime waiter, time-travel and deferred-drain catches respect both initial
+  and current owners. Native waiter predicates and activity queues also redact
+  protected errors internally while retaining pending waiters and continuing
+  queued events. Legacy logging and callback arguments remain unchanged;
+  explicit exposure is still gated by the remaining ADR-038 acceptance work.
+- **Explicit children no longer fall back to an empty context.** When an
+  explicit child's `get_context_data` failed, a non-sticky or lazy
+  `{% live_render %}` logged the exception with its traceback and rendered the
+  child with an empty context. Like the sticky path, it now raises a value-free
+  `ExposureError`. Lazy render failures no longer log exception text for an
+  explicit child. Legacy children are unchanged.
+- **Redact consumer hook failures for staged explicit exposure.** The
+  WebSocket consumer logged exceptions raised by application hooks without a
+  policy check: `update_presence_heartbeat`, `handle_cursor_move`, a
+  `server_push` handler, `handle_tick`, a `db_notify` `handle_info`,
+  `untrack_presence` on disconnect, and `handle_presence_join`/`handle_presence_leave`, three of them with their traceback. A
+  nonlegacy owner now gets the value-free line `handle_exception` uses, checked
+  against both the hook's view and the current owner. Legacy log output is
+  unchanged at every converted site; explicit exposure is still gated by the
+  remaining ADR-038 acceptance work.
+- **Explicit views: tick, push, NOTIFY and released-event turns are
+  authorized and persisted.** A staged explicit root's server-originated turns
+  ran with the mount-time principal and never saved declared state:
+  `handle_tick`, `server_push` handlers, `db_notify` → `handle_info`,
+  NOTIFY-released activity events and the `start_async` work they start. A
+  revoked session kept receiving renders, and a reconnect restored stale state.
+  Each turn is now authorized against a freshly loaded session before its
+  application hook runs (a revoked turn gets the foreground denial), and
+  declared server state is committed before its frame. Presence heartbeats and
+  cursor moves never render or persist, so they are unchanged. Legacy views are
+  unchanged.
+- **Route staged explicit-policy debug output through bounded projections.**
+  Observability assigns, debug-panel variables, runtime context diagnostics and
+  time-travel recording no longer reflect arbitrary view values for this policy.
+  Redacted records cannot restore state or replay handlers. Explicit LiveView
+  construction remains disabled pending the remaining ADR-038 runtime boundaries;
+  legacy behavior is unchanged.
+- **Redact deferred-callback failures for staged explicit exposure.** When a
+  `self.defer(...)` callback raised, the runtime, the WebSocket consumer and the
+  SSE transport logged the exception and traceback, and, for a callable without
+  a qualified name such as `functools.partial`, its `repr` including bound
+  arguments. A nonlegacy owner now gets the value-free line. Legacy logging,
+  level and traceback are unchanged.
+- **Redact staged explicit-view runtime event diagnostics.** Handler and render
+  failures no longer expose exceptions through the covered diagnostic logs,
+  error frames, and traceback ring, including policy transitions during rendering.
+  Preserve legacy diagnostics and deferred-handler response behavior. Explicit
+  exposure remains gated pending the remaining ADR-038 acceptance work.
+- **Limit HTTP API `assigns` to declared client fields for staged explicit
+  exposure.** The ADR-008 HTTP API returned every public attribute a handler
+  changed, with no policy check, so an explicit view's undeclared attributes
+  reached the client. For a nonlegacy view the `assigns` diff now carries only
+  declared `client=True` fields, the projection `get_state` uses. Handler,
+  `server_function` and view-initialization failures no longer log their
+  exception text for a nonlegacy view. Legacy responses and logs are unchanged.
+- **Keep HTTP event failures value-free for staged explicit exposure.** When an
+  event handler raised on the HTTP-POST path, the view logged the exception with
+  its traceback and, under `DEBUG`, returned the exception text, the traceback
+  and the posted parameters to the client in a 500 response, for any policy. A
+  nonlegacy view now gets the value-free log line and the generic response even
+  under `DEBUG`. Streamed-render failures are redacted the same way. Legacy
+  behaviour is unchanged.
+- **Contain protected failures at the shared inbound-message boundary.**
+  Staged explicit-view failures no longer escape runtime-owned messages into
+  WebSocket diagnostics or Django's SSE HTTP error pages. Generic event errors
+  retain numeric request correlation; failed delivery attempts a value-free
+  transport close. Restrictions survive nested exceptional unwinding and reset
+  at turn exit. Legacy behavior and cancellation remain unchanged. Explicit
+  exposure still requires the remaining ADR-038 activation gates.
+- **Redact `set_layout` render failures for staged explicit exposure.** When the
+  layout requested with `set_layout` failed to render, the runtime and the
+  WebSocket consumer logged the exception and its traceback for any policy. A
+  nonlegacy owner now gets the value-free line `handle_exception` uses, through
+  a shared `log_failure` gate that keeps the original message, level and
+  traceback wherever diagnostics are allowed. Legacy logging, and the `DEBUG`
+  re-raise, are unchanged.
+- **Keep `mount_batch` failures value-free for staged explicit exposure.**
+  When a view in a `mount_batch` raised past `handle_mount`, the consumer logged
+  the exception with its traceback and, under `DEBUG`, returned `str(exc)` to
+  the client in the batch's `failed[]` entry, for any policy. The owner is now
+  the class the entry names, resolved by the shared allowlist-first resolver; an
+  unresolvable class or a nonlegacy owner gets the value-free log line and the
+  generic `"mount failed"`. Legacy behaviour, including the `DEBUG` detail, is
+  unchanged.
+- **Turn-gate the template backend and PWA sync log lines for staged explicit
+  exposure.** `DjustTemplate`'s JIT serialization fallbacks and the PWA sync
+  endpoint, batch sync and custom conflict-resolver catches logged exception
+  text that can quote model data. Inside a nonlegacy view's turn they now log
+  the value-free line; outside a LiveView turn, and for legacy views, logging
+  is unchanged.
+- **Redact object-permission and action failures for staged explicit
+  exposure.** A non-`PermissionDenied` error from a view's `get_object` or
+  `has_object_permission` is still treated as denial, but its text is no longer
+  logged for a nonlegacy view; the same applies to `@action` handlers, tutorial
+  steps and `SimpleLiveView` template rendering. Legacy logging is unchanged.
+- **Redact `get_presence_key` failures at mount for staged explicit exposure.**
+  Joining the presence group at mount logged the exception raised by an
+  overridden `get_presence_key` for any policy. A nonlegacy owner now gets the
+  value-free line; legacy logging and its WARNING level are unchanged.
+- **Redact offline-sync handler failures for staged explicit exposure.** When a
+  view's `sync_create/update/delete_<model>` handler (or the default sync)
+  failed, `SyncMixin` logged the exception text, which can echo the
+  client-queued data. A nonlegacy view now gets the value-free log line; legacy
+  logging is unchanged.
+- **Isolate staged explicit renderers from legacy state caches.** Explicit-exposure
+  views no longer read or write the shared legacy Rust render cache. Render
+  context and VDOM are not declared persistence state; policy transitions also
+  discard a legacy renderer before explicit rendering. The production explicit
+  exposure guard remains closed pending ADR-038 acceptance.
+- **Redact scoped component render failures for staged explicit exposure.**
+  When an ADR-032 scoped component render failed before falling back to the
+  full render, the runtime logged the exception with its traceback at DEBUG for
+  any policy. A nonlegacy owner now gets the value-free line; legacy logging is
+  unchanged.
+- **Redact `full_html_update` receiver failures for staged explicit exposure.**
+  The signal is sent with `send`, so an application receiver's exception reached
+  the runtime's catch, which logged it with its traceback for any policy. A
+  nonlegacy owner now gets the value-free line; legacy logging is unchanged.
+- **Redact post-event state-save failures for staged explicit exposure.** An
+  explicit view's save projects its declared `persist="server"` values, and
+  storage exceptions propagate, so a failed save could log server-only data in
+  the exception and traceback. The runtime now logs the value-free line for a
+  nonlegacy owner, for the view and for sticky children. Legacy logging is
+  unchanged.
+- **Redact time-travel push failures for staged explicit exposure.** The
+  DEBUG-only time-travel event push logged a failure with its traceback for any
+  policy. A nonlegacy owner now gets the value-free line; legacy logging is
+  unchanged.
+- **Explicit views: `url_change` is authorized fresh and persisted.** A
+  staged explicit root's route change ran `handle_params` and re-rendered with
+  the mount-time principal, re-checked object permission against the mount-time
+  request, and never saved the declared state that `handle_params` changed. It
+  now authorizes against a fresh session first, which drops a revoked turn with
+  the foreground denial. The object-permission check uses that request, and
+  declared server state is committed before the render frame. Legacy views are
+  unchanged.
+- **Redact value-quoting framework log lines for staged explicit exposure.**
+  Three fail-soft catches logged application values: `LiveComponent` assign
+  validation (`Cannot coerce <value>`), the `dj_suspense` fallback's template
+  error, and a stream `dom_id=` factory failure on delete (the row's repr, with
+  a traceback). Inside a nonlegacy view's turn each now logs the value-free
+  line; legacy logging is unchanged.
+- **Redact staged nonlegacy mount diagnostics at every covered destination.**
+  Runtime initialization, authorization, mount, URL-parameter and initial-render
+  failures now use a shared value-free error mode: no exception inspection,
+  traceback-ring capture, detailed log or DEBUG response. Policy transitions
+  cannot grant detailed diagnostics during a failed mount. Legacy diagnostics
+  remain unchanged; ADR-038's production activation guard remains closed.
+- Recheck current view and object authorization before rendering an already-registered sticky child or registering a preserved child for reattachment. Refresh the child's request first; revoked access, logout and failing predicates now deny reuse instead of bypassing the fresh-child checks.
+
+### Documentation
+
+- New guide: [Accounts](docs/website/guides/accounts.md), covering sign-in, sign-up, verification and password-reset pages with a swappable backend (quick start, backends, the `auth` context, components, overriding templates, writing a backend, hooks and signals, security defaults, checks, migration). ADR-039 accepted.
+- **`set_changed_keys()` is documented as the invalidation API for explicit-exposure views (ADR-038 E2-8).**
+  Explicit context derived from declared `state()` fields, from plain attributes
+  read in `get_context_data`, and from a provider's tracked keys already
+  re-renders under the explicit policy exactly as under legacy; no-op turns stay
+  a single `noop` frame. The per-turn change detector keeps walking the whole
+  instance for explicit views on purpose, so no opaque dependency is dropped.
+  New pins in `python/djust/tests/test_exposure_invalidation.py`.
+
+### Deprecated
+
+- `djust.auth.social.social_auth_providers` is deprecated in favour of `{% auth_providers auth %}` from `{% load djust_auth %}` (ADR-039); it still works and now emits a `DeprecationWarning`.
+
 ## [1.2.1] - 2026-09-24
 
 A bug-fix release for 1.2. The code is identical to 1.2.1rc2; see the `1.2.1rc2` and `1.2.1rc1` sections below for every change since 1.2.0. There are no API removals, and no default or wire-format changes. 1.1.5 carries the security fix for the 1.1 line.

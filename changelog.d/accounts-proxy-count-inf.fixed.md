@@ -1,1 +1,0 @@
-- `DJUST_TRUSTED_PROXY_COUNT = "inf"` (or any infinity) raised `OverflowError` instead of failing safe to 0.
