@@ -180,6 +180,14 @@ Visual offline status banner:
 | `dj-offline-disable` | Disable form element when offline |
 | `dj-offline-queued` | **Not implemented** — no client code reads this attribute; listed here only so it is not mistaken for a working directive |
 
+The client keeps `djust-online` or `djust-offline` on `<body>`, set at page
+load from `navigator.onLine` and updated on the browser's `online` /
+`offline` events; the directives are CSS rules on those classes, emitted by
+`{% djust_pwa_head %}` or `{% djust_offline_styles %}`, so include one of
+them. This is browser network state: a WebSocket reconnect does not count as
+offline. (Before 1.2.1 nothing set the classes, so `dj-offline-hide` elements
+were always hidden and `dj-offline-show` elements never appeared.)
+
 ```html
 <div dj-offline-hide>
     <button dj-click="save_to_server">Save</button>
