@@ -6,9 +6,10 @@ enabling real-time validation, error display, and reactive form handling.
 """
 
 import logging
-from typing import Dict, Any, Optional, Type, List, cast
+from typing import Dict, Any, Optional, Type, List
 from django import forms
 from django.core.exceptions import ValidationError
+from django.utils.safestring import SafeString
 
 from ._deprecation import warn_deprecated
 from .decorators import event_handler
@@ -533,7 +534,10 @@ class FormMixin:
 
         fi = self.form_instance
         if not fi:
-            return "<!-- ERROR: form_instance not initialized. Did you call super().mount()? -->"
+            missing: str = SafeString(
+                "<!-- ERROR: form_instance not initialized. Did you call super().mount()? -->"
+            )
+            return missing
 
         framework = kwargs.pop("framework", None)
         adapter = get_adapter(framework)
@@ -542,7 +546,9 @@ class FormMixin:
         for field_name in fi.fields.keys():
             html += self.as_live_field(field_name, adapter=adapter, **kwargs)
 
-        return html
+        # #3043: markup built by the adapters, every value in it escaped.
+        form_html: str = SafeString(html)
+        return form_html
 
     def as_live_field(self, field_name: str, adapter: Any = None, **kwargs: Any) -> str:
         """
@@ -581,8 +587,14 @@ class FormMixin:
         value = self.get_field_value(field_name, default="")
         errors = self.get_field_errors(field_name)
 
-        # Render using adapter
-        return cast(str, adapter.render_field(field, field_name, value, errors, **kwargs))
+        # Render using adapter. #3043: the result is markup whose values the
+        # adapter escaped (the ``FrameworkAdapter`` contract), returned as a
+        # ``SafeString`` so ``{% live_field %}`` / ``{{ form_html }}`` render it
+        # instead of escaping it into visible text.
+        field_html: str = SafeString(
+            adapter.render_field(field, field_name, value, errors, **kwargs)
+        )
+        return field_html
 
 
 class LiveViewForm(forms.Form):
