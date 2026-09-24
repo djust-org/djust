@@ -331,13 +331,14 @@ class JITMixin:
             return result
 
         except Exception as e:
-            import traceback
-
+            # exc_info, not a formatted traceback argument: the log sanitizer
+            # (#2947) flattens and truncates string arguments, and the
+            # traceback belongs in the record's exception text anyway.
             logger.error(
-                "[JIT ERROR] Serialization failed for '%s': %s\nTraceback:\n%s",
+                "[JIT ERROR] Serialization failed for '%s': %s",
                 variable_name,
                 e,
-                traceback.format_exc(),
+                exc_info=True,
             )
             return [normalize_django_value(obj) for obj in queryset]
 

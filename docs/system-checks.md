@@ -22,6 +22,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C014 | Config | Warning | Multi-tenant ASGI without TENANT_LIMIT_SET_CALLS |
 | C015 | Config | Error | Unknown adapter name in DJUST_CONFIG['extensions'] |
 | C016 | Config | Warning | DjangoTemplates listed before DjustTemplateBackend, or no DjangoTemplates fallback for admin |
+| C019 | Config | Warning | Unknown DJUST_CONFIG['PRESENCE_BACKEND'] value (presence falls back to in-process memory) |
 | V001 | LiveView | Warning | LiveView missing template_name attribute |
 | V002 | LiveView | Info | LiveView missing mount() method |
 | V003 | LiveView | Error | mount() has wrong signature |

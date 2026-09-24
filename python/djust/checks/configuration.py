@@ -535,6 +535,38 @@ def _check_unknown_extensions(errors: list) -> None:
             )
 
 
+def _check_presence_backend(errors: list) -> None:
+    """C019 -- unknown ``DJUST_CONFIG['PRESENCE_BACKEND']`` value (#2973).
+
+    The presence registry falls back to the per-process memory backend for any
+    value it does not know, so a typo (or the pre-#2973 ``tenant_redis``,
+    which the registry did not accept) silently loses cross-process presence.
+    """
+    from ..backends.registry import KNOWN_PRESENCE_BACKENDS
+    from ..config import get_djust_config
+
+    if _is_check_suppressed("djust.C019"):
+        return
+    value = get_djust_config().get("PRESENCE_BACKEND")
+    if value is None or value in KNOWN_PRESENCE_BACKENDS:
+        return
+    errors.append(
+        DjustWarning(
+            "DJUST_CONFIG['PRESENCE_BACKEND'] is %r, which djust does not know; "
+            "presence falls back to the in-memory backend (one process only)." % (value,),
+            hint=(
+                "Use one of: %s. Suppress with DJUST_CONFIG = "
+                "{'suppress_checks': ['C019']}." % ", ".join(KNOWN_PRESENCE_BACKENDS)
+            ),
+            id="djust.C019",
+            fix_hint=(
+                "Set DJUST_CONFIG['PRESENCE_BACKEND'] to 'redis' or 'tenant_redis' for "
+                "multi-process presence, or 'memory' for a single process."
+            ),
+        )
+    )
+
+
 def _classify_templates_entries() -> list[tuple[bool, bool]]:
     """Return ``(is_djust, is_django)`` for each usable ``TEMPLATES`` entry.
 
@@ -762,6 +794,9 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
     # C016 -- TEMPLATES backend order / DjangoTemplates fallback (#2562)
     _check_templates_shape(errors)
+
+    # C019 -- Unknown DJUST_CONFIG['PRESENCE_BACKEND'] value (#2973)
+    _check_presence_backend(errors)
 
     # S006 -- DJUST_TENANTS['STRICT_MODE']=False disables fail-closed tenancy
     _check_tenant_strict_mode_disabled(errors)

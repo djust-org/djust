@@ -257,6 +257,16 @@ In development, pages render without Tailwind utilities until you compile the CS
 
 ---
 
+### C019: Unknown PRESENCE_BACKEND
+
+**Severity**: Warning
+
+**What causes it**: `DJUST_CONFIG['PRESENCE_BACKEND']` is set to a value djust doesn't know ("DJUST_CONFIG['PRESENCE_BACKEND'] is '...', which djust does not know; presence falls back to the in-memory backend (one process only)."). A dotted class path counts as unknown: the setting takes a short name.
+
+**Fix**: Use `'redis'` or `'tenant_redis'` for presence shared between processes, or `'memory'` / `'tenant_memory'` for a single process. Suppress with `DJUST_CONFIG = {"suppress_checks": ["C019"]}`.
+
+---
+
 ### C301: Invalid VDOM cache TTL
 
 **Severity**: Error
