@@ -7,6 +7,8 @@ order, and the session-backed "Recently viewed" group.
 
 from __future__ import annotations
 
+from html import unescape as html_unescape
+
 import pytest
 from django.test import override_settings
 
@@ -429,6 +431,28 @@ class TestCodeHighlighting:
         assert not re.search(r">[ \t]+<", out), out  # no lone space, bare or spanned
         assert '<span class="hl-nn"> djust</span>' in out, out
         assert re.sub(r"<[^>]+>", "", out) == "from djust import LiveView"  # what dj-copy copies
+
+    @pytest.mark.parametrize(
+        "code,lang",
+        [
+            ("pip install djust", "bash"),
+            ("$ pip install  djust\n", "console"),
+            ("uv run manage.py runserver 8000", "shell"),
+        ],
+    )
+    def test_whitespace_before_bare_text_survives_the_pipeline_3026(self, code, lang):
+        """Lexers such as bash emit words as bare text, so the `hl-w` span sat
+        between two text runs and was never folded: `pip install djust`
+        rendered as `pipinstalldjust` (#3026). The span is unwrapped into the
+        following text."""
+        import re
+
+        from djust.components.components.code_snippet import highlight_code
+
+        out = highlight_code(code, lang)
+        assert not re.search(r">[ \t]+<", out), out  # no lone space, bare or spanned
+        # what dj-copy copies (a trailing newline is trimmed, as before)
+        assert html_unescape(re.sub(r"<[^>]+>", "", out)) == code.rstrip("\n")
 
     def test_parameter_types_are_names_not_reprs(self):
         rows = _detail("rating")._base_ctx and _detail("rating").get_context_data()["params_rows"]

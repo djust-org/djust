@@ -518,6 +518,15 @@ def progress(
 def badge(label: Any = "", status: Any = "default", pulse: Any = False) -> "dict[str, Any]":
     """Render a status badge.
 
+    **Styling is yours** (#3025). No stylesheet djust ships has a rule for the
+    status, dot and label classes this renders — ``dj-badge--<status>``,
+    ``dj-badge__dot``, ``dj-badge__dot--pulse``, ``dj-badge__label`` — and the
+    one rule for the base ``dj-badge`` lives in ``components-classes.css``,
+    which ``{% theme_head %}`` does not link. So it renders as plain text until
+    you style them. For a badge styled by the
+    active theme, use ``{% theme_badge %}`` (``{% load theme_components %}``).
+    See "``{% badge %}`` ships no CSS" in the components guide.
+
     Args:
         label: display text
         status: online, offline, warning, error, default
