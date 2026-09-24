@@ -124,9 +124,14 @@ async def test_push_during_user_event_is_deferred_and_order_is_kept():
             finally:
                 consumer._processing_user_event = False
                 consumer._render_lock.release()
-            # A push arriving while earlier ones are still queued joins the
-            # queue behind them instead of overtaking.
-            await _push(4)
+            # The lock is free but the drain has not run yet (no await since
+            # the release): a push arriving now joins the queue behind the
+            # earlier ones instead of overtaking them.
+            assert len(consumer._deferred_pushes) == 3
+            await consumer.server_push(
+                {"type": "server_push", "handler": "handle_score", "payload": {"score": 4}}
+            )
+            assert len(consumer._deferred_pushes) == 4
             await _frames(socket)
             assert consumer.view_instance.log == [1, 2, 3, 4]
         finally:
@@ -145,6 +150,24 @@ async def test_queue_is_bounded_and_keeps_the_newest():
         kept = [event["n"] for _, event in consumer._deferred_pushes]
         assert len(kept) == cap
         assert kept[-1] == cap + 4, "the latest push must survive"
+    finally:
+        consumer._cancel_deferred_pushes()
+        consumer._render_lock.release()
+
+
+@pytest.mark.asyncio
+async def test_identical_pushes_coalesce_and_distinct_ones_keep_order():
+    """A clock pushing faster than the render must not build a backlog."""
+    consumer = LiveViewConsumer()
+    consumer.view_instance = object()
+    await consumer._render_lock.acquire()
+    try:
+        refresh = {"type": "server_push", "handler": "handle_refresh", "payload": {"room": "a"}}
+        other = {"type": "server_push", "handler": "handle_refresh", "payload": {"room": "b"}}
+        for event in (refresh, other, dict(refresh), dict(refresh)):
+            consumer._defer_server_push(event)
+        queued = [event["payload"]["room"] for _, event in consumer._deferred_pushes]
+        assert queued == ["b", "a"], "one entry per distinct push, at its latest position"
     finally:
         consumer._cancel_deferred_pushes()
         consumer._render_lock.release()

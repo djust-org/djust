@@ -218,3 +218,16 @@ async def test_tick_loop_stops_once_the_socket_is_gone():
     consumer._ws_close_sent = True
     await asyncio.wait_for(consumer._run_tick(5), timeout=1)
     assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_close_on_a_peer_closed_socket_does_not_raise():
+    """``close()`` (e.g. a re-auth 4403) after the peer left must not escape."""
+
+    async def base_send(message):
+        raise ClientDisconnected()
+
+    consumer = LiveViewConsumer()
+    consumer.base_send = base_send
+    await consumer.close(code=4403)
+    assert consumer._ws_close_sent is True

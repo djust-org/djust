@@ -3341,12 +3341,12 @@ class ViewRuntime:
             await self.transport.send(noop_msg)
             # Dispatch background work UNCONDITIONALLY after the turn (matches WS
             # handle_event websocket.py:4235, NOT the legacy SSE which gated this
-            # on has_async). ``has_async`` reflects only the legacy ``_async_pending``
-            # single-task format (never set in current code) and drives the loading
-            # UX flag — the actual dispatch must also cover the ``_async_tasks``
-            # named-task format that ``start_async`` populates, so converging onto
-            # the correct WS behavior here FIXES the legacy SSE drop of
-            # ``start_async`` work (#1887 / #1646). No-op when no tasks are queued.
+            # on has_async). ``has_async`` (``has_pending_async_work``, both task
+            # formats since #2963) only drives the loading UX flag; this call is
+            # what starts the ``_async_tasks`` work ``start_async`` queued, so
+            # converging onto the correct WS behavior here FIXES the legacy SSE
+            # drop of ``start_async`` work (#1887 / #1646). No-op when no tasks
+            # are queued.
             self._dispatch_async_work(event_name)
             # dj_activity flush (Phase 2.3a, #1903): a skip-render handler can
             # still flip an activity visible via set_activity_visible(); drain its

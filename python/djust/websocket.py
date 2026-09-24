@@ -1811,10 +1811,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             has_async = has_pending_async_work(view)
             await self._flush_all_pending()
             await self._send_noop(async_pending=has_async, ref=event_ref)
-            # Unconditional, like the runtime twin (#1887): ``has_async`` reads
-            # only the legacy ``_async_pending`` and drives the loading flag,
-            # while ``start_async`` queues ``_async_tasks`` (#2946). No-op when
-            # nothing is queued.
+            # Unconditional, like the runtime twin (#1887): ``has_async`` only
+            # drives the loading flag; this is what actually starts the work
+            # ``start_async`` queued (#2946). No-op when nothing is queued.
             await self._dispatch_async_work()
             return
 
@@ -2021,6 +2020,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # The socket is gone — any frame a handler still tries to send from
         # here on would be rejected by the ASGI server (_send_frame drops it).
         self._ws_close_sent = True
+        # Pushes deferred while the session was busy have nobody to reach
+        # (#3001). First, so a later cleanup step that raises can't leave the
+        # drain running.
+        self._cancel_deferred_pushes()
 
         # Clear the tenant ContextVar bound at mount (Finding #6) so the
         # consumer task doesn't carry a stale tenant if the executor/context is
@@ -2080,9 +2083,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             except asyncio.CancelledError:
                 pass  # Expected when cancelling a running tick task during disconnect
             self._tick_task = None
-
-        # Pushes deferred while the session was busy have nobody to reach (#3001).
-        self._cancel_deferred_pushes()
 
         # Clean up actor if using actors
         if self.use_actors and self.actor_handle:
@@ -2885,11 +2885,16 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         transport, which uvicorn would reject with a RuntimeError.
         """
         self._ws_close_sent = True
-        if reason is None:
-            # channels<4.1 close() has no reason parameter.
-            await super().close(code)
-        else:
-            await super().close(code, reason)
+        try:
+            if reason is None:
+                # channels<4.1 close() has no reason parameter.
+                await super().close(code)
+            else:
+                await super().close(code, reason)
+        except OSError as exc:
+            # The peer closed first (ASGI 2.4 OSError shape; see _send_frame).
+            # There is nothing left to close (#3000).
+            logger.debug("WebSocket close skipped: peer already closed (%r)", exc)
 
     async def _send_frame(
         self,
@@ -2899,9 +2904,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         """Single outbound chokepoint: drop frames once the socket is closed.
 
         Short-circuits when the connection is known-closed and downgrades the
-        ASGI server's send-after-close rejection (see
-        :func:`_is_send_after_close_error`) to a debug log — the client is
-        gone, there is nobody to answer. Everything else propagates.
+        ASGI server's send-after-close rejections to a debug log — the client
+        is gone, there is nobody to answer. Two shapes: the ``RuntimeError``
+        after the close handshake (see :func:`_is_send_after_close_error`),
+        and the ``OSError`` a send raises once the peer has closed (ASGI 2.4;
+        uvicorn's ``ClientDisconnected``, #3000). Any other ``RuntimeError``
+        propagates.
         """
         if getattr(self, "_ws_close_sent", False):
             logger.debug("Dropping outbound frame: WebSocket already closed")
@@ -4346,17 +4354,27 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
     def _defer_server_push(self, event: Dict[str, Any]) -> None:
         """Queue a push that found the session busy, and make sure a drain runs.
 
-        The queue is bounded; past the bound the OLDEST push is dropped, so
-        the most recent state still arrives (#3001). Each entry remembers
-        the view it was addressed to: a push queued before a live_redirect or
-        disconnect is dropped rather than applied to a different view.
+        An identical push already waiting is superseded, not repeated: the
+        queue keeps one entry per distinct push, at the position of its
+        latest arrival. Without this a push stream faster than the render
+        (a 100 ms room clock) would keep the queue full and the viewer
+        seconds behind for good; repeated identical pushes coalesce the way
+        ticks do. The queue is also bounded; past the bound the OLDEST push
+        is dropped, so the most recent state still arrives (#3001). Each
+        entry remembers the view it was addressed to: a push queued before a
+        live_redirect or disconnect is dropped rather than applied to a
+        different view.
         """
         queue = getattr(self, "_deferred_pushes", None)
         if queue is None:
             queue = self._deferred_pushes = collections.deque(maxlen=_MAX_DEFERRED_PUSHES)
+        view = self.view_instance
+        for queued in list(queue):
+            if queued[0] is view and queued[1] == event:
+                queue.remove(queued)
         if len(queue) == queue.maxlen:
             logger.debug("[djust] deferred server_push queue full — dropping the oldest")
-        queue.append((self.view_instance, event))
+        queue.append((view, event))
         task = getattr(self, "_push_drain_task", None)
         if task is None or task.done():
             self._push_drain_task = asyncio.ensure_future(self._drain_deferred_pushes())
@@ -4545,6 +4563,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         is a wall-clock race (#2124, the class canonized by #1795 / #1830).
         """
         interval_s = interval_ms / 1000.0
+        # The view this loop ticks for. The runtime starts the task inside its
+        # mount, after assigning the view to itself but before the consumer
+        # reads it back (#2945).
+        runtime = getattr(self, "_runtime", None)
+        own_view = getattr(runtime, "view_instance", None) or self.view_instance
         try:
             while True:
                 await asyncio.sleep(interval_s)
@@ -4553,14 +4576,18 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 # (and heartbeat presence) forever (#3000).
                 if getattr(self, "_ws_close_sent", False):
                     break
-                if not self.view_instance:
-                    # The tick starts inside the runtime's mount, before the
-                    # consumer reads the view back. While the runtime still
-                    # holds the mounting view, wait for the next beat instead
-                    # of stopping for good (#2945). A failed mount nulls the
-                    # runtime's view, so the loop still stops then.
-                    runtime = getattr(self, "_runtime", None)
-                    if runtime is not None and runtime.view_instance is not None:
+                view = self.view_instance
+                if own_view is not None and view is not None and view is not own_view:
+                    # Another view was mounted on this socket; it has its own
+                    # tick task.
+                    break
+                if not view:
+                    # Not read back yet: wait for the next beat while the
+                    # runtime still holds our mounting view, instead of
+                    # stopping for good (#2945). A refused mount, a teardown
+                    # or a disconnect clears or replaces the runtime's view,
+                    # so the loop still stops then.
+                    if own_view is not None and getattr(runtime, "view_instance", None) is own_view:
                         continue
                     break
                 try:

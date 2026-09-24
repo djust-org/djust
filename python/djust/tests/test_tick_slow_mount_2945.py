@@ -7,6 +7,7 @@ if its first beat landed during mount, so a fast tick on a slow mount never
 ticked, with no error.
 """
 
+import asyncio
 import time
 
 import pytest
@@ -97,3 +98,57 @@ async def test_tick_does_not_run_before_mount_finishes():
             assert seen_during_mount == [0]
         finally:
             await socket.disconnect()
+
+
+class _Runtime:
+    def __init__(self, view):
+        self.view_instance = view
+
+
+async def _loop_exits(consumer, timeout=1):
+    try:
+        await asyncio.wait_for(consumer._run_tick(5), timeout=timeout)
+        return True
+    except asyncio.TimeoutError:
+        return False
+
+
+@pytest.mark.asyncio
+async def test_loop_waits_only_for_its_own_mounting_view():
+    """The wait lasts while the runtime holds the view this loop was started
+    for; once the runtime moves on (refused mount, re-mount), the loop ends."""
+    consumer = LiveViewConsumer()
+    mounting = object()
+    consumer._runtime = _Runtime(mounting)
+    consumer._tick_once = _no_tick
+    task = asyncio.ensure_future(consumer._run_tick(5))
+    await asyncio.sleep(0.05)
+    assert not task.done(), "must wait while its view is still mounting"
+    consumer._runtime.view_instance = object()  # a different mount took over
+    await asyncio.wait_for(task, timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_loop_stops_when_another_view_is_mounted_on_the_socket():
+    """A second mount on the same socket starts its own tick; the old loop
+    must not keep ticking the new view (it did on main: double ticks)."""
+    consumer = LiveViewConsumer()
+    first = object()
+    consumer._runtime = _Runtime(first)
+    consumer.view_instance = first
+    beats = []
+
+    async def tick_once():
+        beats.append(consumer.view_instance)
+        return False
+
+    consumer._tick_once = tick_once
+    task = asyncio.ensure_future(consumer._run_tick(5))
+    await asyncio.sleep(0.05)
+    assert beats and all(v is first for v in beats)
+    consumer.view_instance = consumer._runtime.view_instance = object()
+    await asyncio.wait_for(task, timeout=1)
+
+
+async def _no_tick():
+    return False

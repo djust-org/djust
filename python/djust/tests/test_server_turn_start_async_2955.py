@@ -70,6 +70,27 @@ class TickWorkView(WorkView):
             self.start_async(self._work)
 
 
+class FailingWorkPushView(LiveView):
+    """No ``handle_async_result``: the failed work must still produce the
+    ``source="async"`` frame (consumer twin of the #2963 runtime change)."""
+
+    template = "<div dj-root><span>{{ count }}</span></div>"
+
+    def mount(self, request, **kwargs):
+        self.count = 0
+
+    def get_context_data(self, **kwargs):
+        return {"count": self.count}
+
+    def handle_go(self, **kwargs):
+        RAN.append("hook")
+        self.start_async(self._boom)
+
+    def _boom(self):
+        RAN.append("work")
+        raise RuntimeError("background work failed")
+
+
 class FailingPushView(WorkView):
     def handle_go(self, **kwargs):
         RAN.append("hook")
@@ -160,5 +181,23 @@ async def test_a_failed_hook_dispatches_nothing():
             await _push(FailingPushView)
             await _frames(socket)
             assert RAN == ["hook"], "work queued by a raising hook must not run"
+        finally:
+            await socket.disconnect()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_failed_server_turn_work_without_handler_still_sends_its_frame():
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **SETTINGS):
+        socket = await _mounted(FailingWorkPushView)
+        try:
+            await _push(FailingWorkPushView)
+            for _ in range(60):
+                if "work" in RAN:
+                    break
+                await asyncio.sleep(0.05)
+            frames = await _frames(socket)
+            assert RAN == ["hook", "work"], RAN
+            assert [f for f in frames if f.get("source") == "async"], frames
         finally:
             await socket.disconnect()
