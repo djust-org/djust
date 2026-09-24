@@ -78,6 +78,15 @@ from tests.livefixtures.inline_whitespace_view import (  # noqa: E402
     state_view,
 )
 from tests.livefixtures.kanban_tabs_view import KanbanTabsView  # noqa: E402
+from tests.livefixtures.vdom_correctness_views import (  # noqa: E402
+    ALL_ITEMS,
+    ESCAPED_TEXT_TEMPLATE,
+    KEYED_FILTER_TEMPLATES,
+    PRESERVE_SHAPES,
+    RESORTED,
+    SUBSET,
+    keyed_filter_view,
+)
 
 FIXTURE_DIR = REPO / "tests" / "js" / "fixtures"
 
@@ -359,7 +368,17 @@ def gen_normalizer_corpus_2999():
         if depth > 2 or r < 0.2:
             return text()
         if r < 0.28:
-            return rng.choice(['<br>', '<img src="s">', "<input>", '<img alt="a>b">', '<img alt="<3">', "<svg/>", "<wbr>"])
+            return rng.choice(
+                [
+                    "<br>",
+                    '<img src="s">',
+                    "<input>",
+                    '<img alt="a>b">',
+                    '<img alt="<3">',
+                    "<svg/>",
+                    "<wbr>",
+                ]
+            )
         if r < 0.34:
             return rng.choice(["<!-- c -->", "<!--dj-if-->"])
         if r < 0.38 and depth == 0 and not inline_only:
@@ -405,9 +424,136 @@ def gen_normalizer_corpus_2999():
         vdom_html, _, _ = view.render_with_diff()
         raw = f"<div dj-root>{body}</div>"
         cases.append(
-            {"body": body, "vdom_html": vdom_html, "norm_raw": strip(raw), "norm_vdom": strip(vdom_html)}
+            {
+                "body": body,
+                "vdom_html": vdom_html,
+                "norm_raw": strip(raw),
+                "norm_vdom": strip(vdom_html),
+            }
         )
     return {"scenario": "normalizer_corpus_2999", "cases": cases}
+
+
+def gen_keyed_filter_restore_2997():
+    """#2997: a 69-item keyed list filtered to a 6-item subset and restored,
+    re-sorted and restored, and filtered straight into the re-sort — the
+    djust.org /themes/ flow that left survivors out of place."""
+    flows = [
+        ("all -> subset", SUBSET),
+        ("subset -> all", ALL_ITEMS),
+        ("all -> resorted", RESORTED),
+        ("resorted -> all", ALL_ITEMS),
+        ("all -> subset (again)", SUBSET),
+        ("subset -> resorted", RESORTED),
+        ("resorted -> all (again)", ALL_ITEMS),
+    ]
+    shapes = {}
+    for shape in KEYED_FILTER_TEMPLATES:
+        c = LiveViewTestClient(keyed_filter_view(shape))
+        c.mount()
+        egress = c.view_instance._strip_comments_and_whitespace
+        initial_html, _, _ = c.render_with_patches()
+        steps = []
+        for label, items in flows:
+            c.send_event("set_items", items=items)
+            html, patches, _ = c.render_with_patches()
+            steps.append({"label": label, "patches": patches, "expected_html": egress(html)})
+        shapes[shape] = {"initial_html": egress(initial_html), "steps": steps}
+    return {
+        "scenario": "keyed_filter_restore_2997",
+        "description": "69 keyed items: filter to 6 and restore, re-sort and restore.",
+        "root_selector": ".ws-root",
+        "shapes": shapes,
+    }
+
+
+def gen_escaped_text_2898():
+    """#2898: text that HTML-escapes (``&``, ``<``, ``>``, quotes), plain and
+    ``|safe``, changing between values with and without entities — through the
+    fragment and text-region fast paths, whose patches must carry DECODED
+    text (the client sets ``textContent``)."""
+    values = [
+        "overview",
+        "a & b",
+        "<script>x</script>",
+        "plain again",
+        "say \"hi\" & 'bye'",
+        "a &amp; b",
+        "x < y > z",
+        "done",
+    ]
+    safe_values = [
+        "<p>overview</p>",
+        "<p>a &amp; b</p>",
+        "<p>&lt;script&gt;</p>",
+        "<p>caf&#233; &#x2014; ok</p>",
+        "<p>nbsp&nbsp;here</p>",
+        "<p>plain</p>",
+    ]
+    state = {"plain": values[0], "safe": safe_values[0], "rows": ["r1", "r2"]}
+    c = LiveViewTestClient(state_view(ESCAPED_TEXT_TEMPLATE, state))
+    c.mount()
+    egress = c.view_instance._strip_comments_and_whitespace
+    initial_html, _, _ = c.render_with_patches()
+    steps = []
+    for n in range(1, max(len(values), len(safe_values)) * 2):
+        new = {
+            "plain": values[n % len(values)],
+            "safe": safe_values[n % len(safe_values)],
+            "rows": ["r1", values[n % len(values)]],
+        }
+        # Change one field at a time as well, so each fast path fires alone.
+        for key in ("plain", "safe", "rows"):
+            c.send_event("set_state", **{key: new[key]})
+            html, patches, _ = c.render_with_patches()
+            steps.append(
+                {"label": f"step {n} {key}", "patches": patches, "expected_html": egress(html)}
+            )
+    return {
+        "scenario": "escaped_text_2898",
+        "description": "Escaped text through the text fast paths (plain, |safe, in a loop).",
+        "root_selector": ".ws-root",
+        "shapes": {"escaped": {"initial_html": egress(initial_html), "steps": steps}},
+    }
+
+
+def gen_preserve_whitespace_3012():
+    """#3012: text patches whose path runs through whitespace-only text inside
+    ``<pre>``/``<code>``/``<textarea>``. The server keeps every text node there,
+    so the client must count them when it walks a patch path."""
+    import random
+
+    rng = random.Random(3012)
+    # No leading/trailing whitespace runs: the egress normalizer collapses them
+    # in ``expected_html`` outside pre/code, where the page renders them alike
+    # anyway. The whitespace-only runs under test are in the templates.
+    words = ["x", "alpha", "b c", "", "tail"]
+    shapes = {}
+    for shape, template in PRESERVE_SHAPES.items():
+        state = {"a": "one", "b": "two", "c": "three", "lines": ["l1", "l2"]}
+        c = LiveViewTestClient(state_view(template, state))
+        c.mount()
+        egress = c.view_instance._strip_comments_and_whitespace
+        initial_html, _, _ = c.render_with_patches()
+        steps = []
+        for n in range(1, 21):
+            key = rng.choice(["a", "b", "c", "lines"])
+            if key == "lines":
+                value = [rng.choice(["l1", "l2", "l3", "l4"]) for _ in range(rng.randrange(0, 4))]
+            else:
+                value = rng.choice(words) + str(n)
+            c.send_event("set_state", **{key: value})
+            html, patches, _ = c.render_with_patches()
+            steps.append(
+                {"label": f"step {n} {key}", "patches": patches, "expected_html": egress(html)}
+            )
+        shapes[shape] = {"initial_html": egress(initial_html), "steps": steps}
+    return {
+        "scenario": "preserve_whitespace_3012",
+        "description": "Text patches through whitespace-only text in pre/code/textarea.",
+        "root_selector": ".ws-root",
+        "shapes": shapes,
+    }
 
 
 SCENARIOS = {
@@ -416,6 +562,9 @@ SCENARIOS = {
     "vdom_diff_keyed_list_fuzz_2999.json": gen_keyed_list_fuzz_2999,
     "vdom_diff_if_for_fuzz_2999.json": gen_if_for_fuzz_2999,
     "vdom_normalizer_corpus_2999.json": gen_normalizer_corpus_2999,
+    "vdom_diff_keyed_filter_restore_2997.json": gen_keyed_filter_restore_2997,
+    "vdom_diff_escaped_text_2898.json": gen_escaped_text_2898,
+    "vdom_diff_preserve_whitespace_3012.json": gen_preserve_whitespace_3012,
 }
 
 

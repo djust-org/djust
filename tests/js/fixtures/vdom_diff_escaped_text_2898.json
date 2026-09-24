@@ -1,0 +1,792 @@
+{
+  "scenario": "escaped_text_2898",
+  "description": "Escaped text through the text fast paths (plain, |safe, in a loop).",
+  "root_selector": ".ws-root",
+  "shapes": {
+    "escaped": {
+      "initial_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">overview</p><p class=\"around\" dj-id=\"2\">Value: overview (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">overview</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">r2</li></ul></div>",
+      "steps": [
+        {
+          "label": "step 1 plain",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0
+              ],
+              "text": "a & b"
+            },
+            {
+              "type": "SetText",
+              "path": [
+                1,
+                0
+              ],
+              "text": "Value: a & b (end)"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">a &amp; b</p><p class=\"around\" dj-id=\"2\">Value: a &amp; b (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">overview</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">r2</li></ul></div>"
+        },
+        {
+          "label": "step 1 safe",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                2,
+                0,
+                0
+              ],
+              "text": "a & b"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">a &amp; b</p><p class=\"around\" dj-id=\"2\">Value: a &amp; b (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">a &amp; b</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">r2</li></ul></div>"
+        },
+        {
+          "label": "step 1 rows",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                3,
+                1,
+                0
+              ],
+              "text": "a & b"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">a &amp; b</p><p class=\"around\" dj-id=\"2\">Value: a &amp; b (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">a &amp; b</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">a &amp; b</li></ul></div>"
+        },
+        {
+          "label": "step 2 plain",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0
+              ],
+              "text": "<script>x</script>"
+            },
+            {
+              "type": "SetText",
+              "path": [
+                1,
+                0
+              ],
+              "text": "Value: <script>x</script> (end)"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">&lt;script&gt;x&lt;/script&gt;</p><p class=\"around\" dj-id=\"2\">Value: &lt;script&gt;x&lt;/script&gt; (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">a &amp; b</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">a &amp; b</li></ul></div>"
+        },
+        {
+          "label": "step 2 safe",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                2,
+                0,
+                0
+              ],
+              "text": "<script>"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">&lt;script&gt;x&lt;/script&gt;</p><p class=\"around\" dj-id=\"2\">Value: &lt;script&gt;x&lt;/script&gt; (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">&lt;script&gt;</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">a &amp; b</li></ul></div>"
+        },
+        {
+          "label": "step 2 rows",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                3,
+                1,
+                0
+              ],
+              "text": "<script>x</script>"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">&lt;script&gt;x&lt;/script&gt;</p><p class=\"around\" dj-id=\"2\">Value: &lt;script&gt;x&lt;/script&gt; (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">&lt;script&gt;</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">&lt;script&gt;x&lt;/script&gt;</li></ul></div>"
+        },
+        {
+          "label": "step 3 plain",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0
+              ],
+              "text": "plain again"
+            },
+            {
+              "type": "SetText",
+              "path": [
+                1,
+                0
+              ],
+              "text": "Value: plain again (end)"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">plain again</p><p class=\"around\" dj-id=\"2\">Value: plain again (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">&lt;script&gt;</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">&lt;script&gt;x&lt;/script&gt;</li></ul></div>"
+        },
+        {
+          "label": "step 3 safe",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                2,
+                0,
+                0
+              ],
+              "text": "caf\u00e9 \u2014 ok"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">plain again</p><p class=\"around\" dj-id=\"2\">Value: plain again (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">caf\u00e9 \u2014 ok</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">&lt;script&gt;x&lt;/script&gt;</li></ul></div>"
+        },
+        {
+          "label": "step 3 rows",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                3,
+                1,
+                0
+              ],
+              "text": "plain again"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">plain again</p><p class=\"around\" dj-id=\"2\">Value: plain again (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">caf\u00e9 \u2014 ok</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">plain again</li></ul></div>"
+        },
+        {
+          "label": "step 4 plain",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0
+              ],
+              "text": "say \"hi\" & 'bye'"
+            },
+            {
+              "type": "SetText",
+              "path": [
+                1,
+                0
+              ],
+              "text": "Value: say \"hi\" & 'bye' (end)"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">say \"hi\" &amp; 'bye'</p><p class=\"around\" dj-id=\"2\">Value: say \"hi\" &amp; 'bye' (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">caf\u00e9 \u2014 ok</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">plain again</li></ul></div>"
+        },
+        {
+          "label": "step 4 safe",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                2,
+                0,
+                0
+              ],
+              "text": "nbsp\u00a0here"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">say \"hi\" &amp; 'bye'</p><p class=\"around\" dj-id=\"2\">Value: say \"hi\" &amp; 'bye' (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">nbsp&nbsp;here</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">plain again</li></ul></div>"
+        },
+        {
+          "label": "step 4 rows",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                3,
+                1,
+                0
+              ],
+              "text": "say \"hi\" & 'bye'"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">say \"hi\" &amp; 'bye'</p><p class=\"around\" dj-id=\"2\">Value: say \"hi\" &amp; 'bye' (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">nbsp&nbsp;here</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">say \"hi\" &amp; 'bye'</li></ul></div>"
+        },
+        {
+          "label": "step 5 plain",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0
+              ],
+              "text": "a &amp; b"
+            },
+            {
+              "type": "SetText",
+              "path": [
+                1,
+                0
+              ],
+              "text": "Value: a &amp; b (end)"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">a &amp;amp; b</p><p class=\"around\" dj-id=\"2\">Value: a &amp;amp; b (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">nbsp&nbsp;here</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">say \"hi\" &amp; 'bye'</li></ul></div>"
+        },
+        {
+          "label": "step 5 safe",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                2,
+                0,
+                0
+              ],
+              "text": "plain"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">a &amp;amp; b</p><p class=\"around\" dj-id=\"2\">Value: a &amp;amp; b (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">plain</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">say \"hi\" &amp; 'bye'</li></ul></div>"
+        },
+        {
+          "label": "step 5 rows",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                3,
+                1,
+                0
+              ],
+              "text": "a &amp; b"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">a &amp;amp; b</p><p class=\"around\" dj-id=\"2\">Value: a &amp;amp; b (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">plain</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">a &amp;amp; b</li></ul></div>"
+        },
+        {
+          "label": "step 6 plain",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0
+              ],
+              "text": "x < y > z"
+            },
+            {
+              "type": "SetText",
+              "path": [
+                1,
+                0
+              ],
+              "text": "Value: x < y > z (end)"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">x &lt; y &gt; z</p><p class=\"around\" dj-id=\"2\">Value: x &lt; y &gt; z (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">plain</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">a &amp;amp; b</li></ul></div>"
+        },
+        {
+          "label": "step 6 safe",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                2,
+                0,
+                0
+              ],
+              "text": "overview"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">x &lt; y &gt; z</p><p class=\"around\" dj-id=\"2\">Value: x &lt; y &gt; z (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">overview</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">a &amp;amp; b</li></ul></div>"
+        },
+        {
+          "label": "step 6 rows",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                3,
+                1,
+                0
+              ],
+              "text": "x < y > z"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">x &lt; y &gt; z</p><p class=\"around\" dj-id=\"2\">Value: x &lt; y &gt; z (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">overview</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">x &lt; y &gt; z</li></ul></div>"
+        },
+        {
+          "label": "step 7 plain",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0
+              ],
+              "text": "done"
+            },
+            {
+              "type": "SetText",
+              "path": [
+                1,
+                0
+              ],
+              "text": "Value: done (end)"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">done</p><p class=\"around\" dj-id=\"2\">Value: done (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">overview</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">x &lt; y &gt; z</li></ul></div>"
+        },
+        {
+          "label": "step 7 safe",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                2,
+                0,
+                0
+              ],
+              "text": "a & b"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">done</p><p class=\"around\" dj-id=\"2\">Value: done (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">a &amp; b</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">x &lt; y &gt; z</li></ul></div>"
+        },
+        {
+          "label": "step 7 rows",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                3,
+                1,
+                0
+              ],
+              "text": "done"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">done</p><p class=\"around\" dj-id=\"2\">Value: done (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">a &amp; b</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">done</li></ul></div>"
+        },
+        {
+          "label": "step 8 plain",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0
+              ],
+              "text": "overview"
+            },
+            {
+              "type": "SetText",
+              "path": [
+                1,
+                0
+              ],
+              "text": "Value: overview (end)"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">overview</p><p class=\"around\" dj-id=\"2\">Value: overview (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">a &amp; b</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">done</li></ul></div>"
+        },
+        {
+          "label": "step 8 safe",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                2,
+                0,
+                0
+              ],
+              "text": "<script>"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">overview</p><p class=\"around\" dj-id=\"2\">Value: overview (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">&lt;script&gt;</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">done</li></ul></div>"
+        },
+        {
+          "label": "step 8 rows",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                3,
+                1,
+                0
+              ],
+              "text": "overview"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">overview</p><p class=\"around\" dj-id=\"2\">Value: overview (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">&lt;script&gt;</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">overview</li></ul></div>"
+        },
+        {
+          "label": "step 9 plain",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0
+              ],
+              "text": "a & b"
+            },
+            {
+              "type": "SetText",
+              "path": [
+                1,
+                0
+              ],
+              "text": "Value: a & b (end)"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">a &amp; b</p><p class=\"around\" dj-id=\"2\">Value: a &amp; b (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">&lt;script&gt;</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">overview</li></ul></div>"
+        },
+        {
+          "label": "step 9 safe",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                2,
+                0,
+                0
+              ],
+              "text": "caf\u00e9 \u2014 ok"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">a &amp; b</p><p class=\"around\" dj-id=\"2\">Value: a &amp; b (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">caf\u00e9 \u2014 ok</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">overview</li></ul></div>"
+        },
+        {
+          "label": "step 9 rows",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                3,
+                1,
+                0
+              ],
+              "text": "a & b"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">a &amp; b</p><p class=\"around\" dj-id=\"2\">Value: a &amp; b (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">caf\u00e9 \u2014 ok</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">a &amp; b</li></ul></div>"
+        },
+        {
+          "label": "step 10 plain",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0
+              ],
+              "text": "<script>x</script>"
+            },
+            {
+              "type": "SetText",
+              "path": [
+                1,
+                0
+              ],
+              "text": "Value: <script>x</script> (end)"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">&lt;script&gt;x&lt;/script&gt;</p><p class=\"around\" dj-id=\"2\">Value: &lt;script&gt;x&lt;/script&gt; (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">caf\u00e9 \u2014 ok</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">a &amp; b</li></ul></div>"
+        },
+        {
+          "label": "step 10 safe",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                2,
+                0,
+                0
+              ],
+              "text": "nbsp\u00a0here"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">&lt;script&gt;x&lt;/script&gt;</p><p class=\"around\" dj-id=\"2\">Value: &lt;script&gt;x&lt;/script&gt; (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">nbsp&nbsp;here</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">a &amp; b</li></ul></div>"
+        },
+        {
+          "label": "step 10 rows",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                3,
+                1,
+                0
+              ],
+              "text": "<script>x</script>"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">&lt;script&gt;x&lt;/script&gt;</p><p class=\"around\" dj-id=\"2\">Value: &lt;script&gt;x&lt;/script&gt; (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">nbsp&nbsp;here</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">&lt;script&gt;x&lt;/script&gt;</li></ul></div>"
+        },
+        {
+          "label": "step 11 plain",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0
+              ],
+              "text": "plain again"
+            },
+            {
+              "type": "SetText",
+              "path": [
+                1,
+                0
+              ],
+              "text": "Value: plain again (end)"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">plain again</p><p class=\"around\" dj-id=\"2\">Value: plain again (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">nbsp&nbsp;here</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">&lt;script&gt;x&lt;/script&gt;</li></ul></div>"
+        },
+        {
+          "label": "step 11 safe",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                2,
+                0,
+                0
+              ],
+              "text": "plain"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">plain again</p><p class=\"around\" dj-id=\"2\">Value: plain again (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">plain</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">&lt;script&gt;x&lt;/script&gt;</li></ul></div>"
+        },
+        {
+          "label": "step 11 rows",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                3,
+                1,
+                0
+              ],
+              "text": "plain again"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">plain again</p><p class=\"around\" dj-id=\"2\">Value: plain again (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">plain</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">plain again</li></ul></div>"
+        },
+        {
+          "label": "step 12 plain",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0
+              ],
+              "text": "say \"hi\" & 'bye'"
+            },
+            {
+              "type": "SetText",
+              "path": [
+                1,
+                0
+              ],
+              "text": "Value: say \"hi\" & 'bye' (end)"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">say \"hi\" &amp; 'bye'</p><p class=\"around\" dj-id=\"2\">Value: say \"hi\" &amp; 'bye' (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">plain</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">plain again</li></ul></div>"
+        },
+        {
+          "label": "step 12 safe",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                2,
+                0,
+                0
+              ],
+              "text": "overview"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">say \"hi\" &amp; 'bye'</p><p class=\"around\" dj-id=\"2\">Value: say \"hi\" &amp; 'bye' (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">overview</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">plain again</li></ul></div>"
+        },
+        {
+          "label": "step 12 rows",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                3,
+                1,
+                0
+              ],
+              "text": "say \"hi\" & 'bye'"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">say \"hi\" &amp; 'bye'</p><p class=\"around\" dj-id=\"2\">Value: say \"hi\" &amp; 'bye' (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">overview</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">say \"hi\" &amp; 'bye'</li></ul></div>"
+        },
+        {
+          "label": "step 13 plain",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0
+              ],
+              "text": "a &amp; b"
+            },
+            {
+              "type": "SetText",
+              "path": [
+                1,
+                0
+              ],
+              "text": "Value: a &amp; b (end)"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">a &amp;amp; b</p><p class=\"around\" dj-id=\"2\">Value: a &amp;amp; b (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">overview</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">say \"hi\" &amp; 'bye'</li></ul></div>"
+        },
+        {
+          "label": "step 13 safe",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                2,
+                0,
+                0
+              ],
+              "text": "a & b"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">a &amp;amp; b</p><p class=\"around\" dj-id=\"2\">Value: a &amp;amp; b (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">a &amp; b</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">say \"hi\" &amp; 'bye'</li></ul></div>"
+        },
+        {
+          "label": "step 13 rows",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                3,
+                1,
+                0
+              ],
+              "text": "a &amp; b"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">a &amp;amp; b</p><p class=\"around\" dj-id=\"2\">Value: a &amp;amp; b (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">a &amp; b</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">a &amp;amp; b</li></ul></div>"
+        },
+        {
+          "label": "step 14 plain",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0
+              ],
+              "text": "x < y > z"
+            },
+            {
+              "type": "SetText",
+              "path": [
+                1,
+                0
+              ],
+              "text": "Value: x < y > z (end)"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">x &lt; y &gt; z</p><p class=\"around\" dj-id=\"2\">Value: x &lt; y &gt; z (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">a &amp; b</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">a &amp;amp; b</li></ul></div>"
+        },
+        {
+          "label": "step 14 safe",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                2,
+                0,
+                0
+              ],
+              "text": "<script>"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">x &lt; y &gt; z</p><p class=\"around\" dj-id=\"2\">Value: x &lt; y &gt; z (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">&lt;script&gt;</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">a &amp;amp; b</li></ul></div>"
+        },
+        {
+          "label": "step 14 rows",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                3,
+                1,
+                0
+              ],
+              "text": "x < y > z"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">x &lt; y &gt; z</p><p class=\"around\" dj-id=\"2\">Value: x &lt; y &gt; z (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">&lt;script&gt;</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">x &lt; y &gt; z</li></ul></div>"
+        },
+        {
+          "label": "step 15 plain",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0
+              ],
+              "text": "done"
+            },
+            {
+              "type": "SetText",
+              "path": [
+                1,
+                0
+              ],
+              "text": "Value: done (end)"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">done</p><p class=\"around\" dj-id=\"2\">Value: done (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">&lt;script&gt;</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">x &lt; y &gt; z</li></ul></div>"
+        },
+        {
+          "label": "step 15 safe",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                2,
+                0,
+                0
+              ],
+              "text": "caf\u00e9 \u2014 ok"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">done</p><p class=\"around\" dj-id=\"2\">Value: done (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">caf\u00e9 \u2014 ok</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">x &lt; y &gt; z</li></ul></div>"
+        },
+        {
+          "label": "step 15 rows",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                3,
+                1,
+                0
+              ],
+              "text": "done"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">done</p><p class=\"around\" dj-id=\"2\">Value: done (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">caf\u00e9 \u2014 ok</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">done</li></ul></div>"
+        }
+      ]
+    }
+  }
+}
