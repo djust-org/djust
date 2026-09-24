@@ -157,7 +157,7 @@ console.log("debug info"); // noqa: Q003
 - **Severity**: Error
 - **Method**: Settings inspection
 - **What it detects**: `DJUST_SERVER_STATE_MAX_AGE` is set but is not an `int` from 1 to 86400. The setting is the restore lifetime, in seconds, of ADR-038 explicit server-state envelopes (default 3600). With an invalid value, explicit views fail closed: they cannot load or save server state.
-- **Suppression**: `SILENCED_SYSTEM_CHECKS = ["djust.C020"]` (the runtime still fails closed)
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C020"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C020"]` (the runtime still fails closed)
 - **False positives**: None
 
 ---

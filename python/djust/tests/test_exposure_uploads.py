@@ -428,3 +428,44 @@ def test_explicit_uploads_never_write_resume_state(staged, monkeypatch, policy):
         assert stored is not None  # control: the resume record is written
     else:
         assert stored is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", ["legacy", "explicit"])
+async def test_upload_resume_with_a_parked_writer(staged, monkeypatch, policy):
+    """Legacy control that can actually resume: since #2972 a resume needs
+    the upload's live writer parked in this process. Legacy re-attaches it;
+    an explicit view answers not_found without touching the store (D-g)."""
+    from djust.uploads import resumable
+    from djust.uploads.storage import (
+        InMemoryUploadState,
+        _reset_default_store_for_tests,
+        set_default_store,
+    )
+
+    from .test_uploads_v121_11 import _manager, _start
+
+    _reset_default_store_for_tests()
+    resumable._reset_suspended_uploads()
+    set_default_store(InMemoryUploadState())
+    try:
+        old = _manager()
+        entry = _start(old, key="ws-session")
+        old.cleanup()  # the socket dropped: the writer is parked
+
+        monkeypatch.setattr(UploadPage, "exposure_policy", policy)
+        view = UploadPage()
+        view._upload_manager = _manager()
+        consumer = _consumer(view)
+        await consumer._handle_upload_resume({"type": "upload_resume", "ref": entry.ref})
+        reply = consumer.send_json.await_args.args[0]
+        if policy == "legacy":
+            assert reply["status"] == "resumed", reply
+            assert reply["chunks_received"] == [0, 1]
+            assert entry.ref in view._upload_manager._entries
+        else:
+            assert reply["status"] == "not_found"
+            assert entry.ref not in view._upload_manager._entries
+    finally:
+        resumable._reset_suspended_uploads()
+        _reset_default_store_for_tests()

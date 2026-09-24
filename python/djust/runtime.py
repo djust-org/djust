@@ -6744,8 +6744,10 @@ class ViewRuntime:
         from .mixins.async_work import run_async_callback
 
         # cancel_async() / cancel_async_all() before the task started (#2969).
-        # The batch's ``async_complete`` token ends the client's loading state,
-        # so no settle frame is needed on this path.
+        # No settle frame on this path: an event turn's batch ends the client's
+        # loading state with its ``async_complete`` token, and unbatched
+        # (server-originated) work carries ``event_name=None``, so no loading
+        # state was announced.
         if _consume_async_cancel(view, task_name):
             return
 

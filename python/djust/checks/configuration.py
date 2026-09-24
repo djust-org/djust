@@ -500,6 +500,8 @@ def _check_server_state_max_age(errors: list[CheckMessage]) -> None:
     """
     from django.conf import settings
 
+    if _is_check_suppressed("djust.C020"):
+        return
     if not hasattr(settings, "DJUST_SERVER_STATE_MAX_AGE"):
         return
     value = settings.DJUST_SERVER_STATE_MAX_AGE

@@ -200,6 +200,18 @@ def test_max_age_system_check(value, flagged):
     assert [e.id for e in errors] == (["djust.C020"] if flagged else [])
 
 
+def test_max_age_system_check_honours_suppress_checks():
+    """Like C013-C019, DJUST_CONFIG['suppress_checks'] silences C020."""
+    from djust.checks.configuration import _check_server_state_max_age
+
+    errors = []
+    with override_settings(
+        DJUST_SERVER_STATE_MAX_AGE=0, DJUST_CONFIG={"suppress_checks": ["C020"]}
+    ):
+        _check_server_state_max_age(errors)
+    assert errors == []
+
+
 def test_max_age_system_check_silent_when_unset():
     from django.conf import settings
 

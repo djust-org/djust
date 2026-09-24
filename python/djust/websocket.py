@@ -1314,9 +1314,19 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 return
 
         # A nonlegacy root's callback starts only under current authority.
-        if not await self._authorize_explicit_consumer_turn(view):
-            return
-        self._end_explicit_turn(view)
+        # Under the render lock: the check stashes, then pops, the view's
+        # authorized request, which a lock-holding turn may be relying on.
+        from ._exposure import uses_legacy_exposure
+
+        if not uses_legacy_exposure(view):
+            async with self._render_lock:
+                if self.view_instance is not view:
+                    return
+                try:
+                    if not await self._authorize_explicit_consumer_turn(view):
+                        return
+                finally:
+                    self._end_explicit_turn(view)
 
         result = None
         error = None

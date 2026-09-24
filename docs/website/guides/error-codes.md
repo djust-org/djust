@@ -281,6 +281,16 @@ In development, pages render without Tailwind utilities until you compile the CS
 
 ---
 
+### C020: Invalid DJUST_SERVER_STATE_MAX_AGE
+
+**Severity**: Error
+
+**What causes it**: `DJUST_SERVER_STATE_MAX_AGE` is set but is not an integer number of seconds from 1 to 86400. It is the restore lifetime of ADR-038 explicit server-state envelopes (default 3600). With an invalid value, explicit views cannot load or save server state; the runtime fails closed.
+
+**Fix**: Set `DJUST_SERVER_STATE_MAX_AGE = 3600` or remove the setting. Suppress with `DJUST_CONFIG = {"suppress_checks": ["C020"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C020"]` (the runtime still fails closed).
+
+---
+
 ### C301: Invalid VDOM cache TTL
 
 **Severity**: Error
