@@ -412,12 +412,22 @@ class TestRootOpenRegex:
         take over a minute (quadratic); it must now be near-instant."""
         import time
 
-        soup = "<div " * 40_000
-        t0 = time.perf_counter()
-        for pattern in (template_mod._DJ_ROOT_RE, template_mod._ANY_ROOT_ATTR_RE):
-            assert pattern.search(soup) is None
-        TemplateMixin._stamp_dj_view(soup, "a.B")
-        assert time.perf_counter() - t0 < 2.0
+        for soup in (
+            "<div " * 40_000,
+            # An unclosed tag with many attribute names (review of #3023):
+            # quadratic before the closes-first lookahead.
+            "<a" + " dj-root" * 20_000,
+            "<a" + " dj-view" * 20_000,
+        ):
+            t0 = time.perf_counter()
+            for pattern in (
+                template_mod._DJ_ROOT_RE,
+                template_mod._DJ_VIEW_RE,
+                template_mod._ANY_ROOT_ATTR_RE,
+            ):
+                assert pattern.search(soup) is None
+            TemplateMixin._stamp_dj_view(soup, "a.B")
+            assert time.perf_counter() - t0 < 2.0, soup[:20]
 
     def test_dj_view_regex_rejects_view_prefixed_attributes(self):
         for html in ("<body dj-view-transitions>", "<div dj-viewport-top='x'>"):
