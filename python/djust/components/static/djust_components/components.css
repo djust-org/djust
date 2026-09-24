@@ -655,10 +655,13 @@
 .rating-star { font-size: 1.25rem; line-height: 1; background: none; border: none; padding: 0; cursor: default; transition: transform var(--duration-fast) var(--ease-in-out, ease), color var(--duration-fast) var(--ease-in-out, ease); }
 .rating-star-full { color: hsl(45 93% 47%); }
 .rating-star-half { color: hsl(45 93% 47%); opacity: 0.55; }
-.rating-star-empty { color: hsl(var(--muted-foreground) / 0.3); }
+/* Full muted-foreground: an empty star is a non-text indicator and needs 3:1
+   (WCAG 1.4.11). At / 0.3 it measured ~2:1; the muted-foreground/background
+   pair is already gated at 4.5:1 per preset, so full opacity inherits >= 3:1 (#2996). */
+.rating-star-empty { color: hsl(var(--muted-foreground)); }
 button.rating-star { cursor: pointer; }
 button.rating-star:hover { transform: scale(1.2); }
-button.rating-star:hover ~ .rating-star { color: hsl(var(--muted-foreground) / 0.3); }
+button.rating-star:hover ~ .rating-star { color: hsl(var(--muted-foreground)); }
 .rating-sm .rating-star { font-size: 1rem; }
 .rating-lg .rating-star { font-size: 1.75rem; }
 

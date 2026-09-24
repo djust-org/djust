@@ -1531,6 +1531,26 @@ PREVIEW_NOTES: dict[str, str] = {
 }
 
 
+#: Contracted components whose same-named Python class renders markup djust
+#: ships NO CSS for (#2993). The catalogue previews the styled
+#: ``{% theme_<name> %}`` tag, so without a note a reader who reaches for the
+#: class gets bare markup. ``test_components_css_2996_2993_3008`` fails when a
+#: shipped stylesheet gains a rule for one of these, so the entry is removed
+#: when the class stops being unstyled.
+#: Maps the component name to ``(class name, root CSS class)``.
+UNSTYLED_PYTHON_CLASSES: dict[str, tuple[str, str]] = {
+    "alert": ("Alert", "dj-alert"),
+    "avatar": ("Avatar", "dj-avatar"),
+    "progress": ("Progress", "dj-progress"),
+}
+
+
+def unstyled_python_class(component_name: str) -> tuple[str, str]:
+    """``(class name, root CSS class)`` of this component's unstyled Python
+    class, or ``("", "")`` when it has none."""
+    return UNSTYLED_PYTHON_CLASSES.get(component_name, ("", ""))
+
+
 def preview_note(component_name: str) -> str:
     """The sentence shown under a preview that is empty by design."""
     return PREVIEW_NOTES.get(component_name, "")
