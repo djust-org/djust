@@ -1,6 +1,6 @@
 # ADR-039: Account flows go through a swappable backend; the pages are shared
 
-**Status**: Proposed
+**Status**: Accepted (feat/accounts-backends; plan-time amendments in the spec)
 **Date**: 2026-09-24
 **Deciders**: Project maintainers
 **Spec**: [docs/superpowers/specs/2026-09-24-accounts-backends-design.md](../superpowers/specs/2026-09-24-accounts-backends-design.md)

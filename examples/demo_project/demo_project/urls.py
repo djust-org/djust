@@ -16,6 +16,8 @@ from demo_project.djust_admin import djust_admin_site
 
 urlpatterns = [
     path("admin/", admin.site.urls),
+    # Account pages (ADR-039): the backend comes from DJUST_CONFIG["ACCOUNTS"] ("django" by default).
+    path("accounts/", include("djust.auth.accounts.urls")),
     # djust admin demo — exercises change_form_widgets / change_list_widgets
     # / BulkActionProgressWidget end-to-end.
     path("djust-admin-demo/", djust_admin_site.urls),

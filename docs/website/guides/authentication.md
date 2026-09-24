@@ -11,6 +11,8 @@ description: "Requiring login, checking permissions, and auditing what each view
 
 djust provides opinionated, framework-enforced authentication and authorization for LiveViews. Auth checks run server-side before `mount()` and before individual event handlers — no client-side bypass is possible.
 
+> **Sign-in pages:** this guide covers requiring login and checking permissions. For the sign-in, sign-up, verification and password-reset pages themselves, see [Accounts](accounts.md).
+
 ## Quick Start
 
 ```python

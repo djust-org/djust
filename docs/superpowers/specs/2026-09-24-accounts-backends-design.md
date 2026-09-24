@@ -242,3 +242,30 @@ It must pass djust-docs' `make docs-verify`: every documented name exists.
 - **Template override precedence.** Pointing allauth's lookup at the kit must
   not break projects that already override `account/*.html`; check 6 plus
   documented precedence.
+
+## Amendments (planning and implementation, 2026-09-24)
+
+1. **allauth rendering.** The `allauth` backend keeps allauth's own pages and
+   skins them through allauth's supported override points
+   (`allauth/layouts/*.html`, `allauth/elements/*.html`) with the kit's layout
+   and components. The `djust_auth/pages/*` templates serve the `django` and
+   custom backends. Reason: allauth's pages carry logic (code flows,
+   reauthentication, conditional fields) that copies would drift from.
+2. **`auth` comes from a tag.** `{% auth_context as auth %}` builds it, so no
+   context processor is needed; `auth.form` is the view's `form`.
+3. **`BackendRegistry(warn_on_default=False)`**, because its production
+   "in-memory fallback" warning is wrong for accounts.
+4. **Check `djust.A106`**: `djust.auth` and `djust.theming` must be
+   installed, with `djust.auth` before `allauth`.
+5. **Codes contain letters.** allauth's verification and reset codes look
+   like `HQPL-VMXW`, so the code input accepts letters (no numeric keypad) and
+   a paste keeps them.
+6. **Strict redirects.** allauth's default `is_safe_url` trusts every
+   `ALLOWED_HOSTS` match, so `ALLOWED_HOSTS = ["*"]` made `?next=` an open
+   redirect. The djust adapter allows only the current host plus
+   `OPTIONS["redirect_hosts"]`.
+7. **No `social_login` alias for allauth.** Each provider has its own login
+   URL, carried on `auth.providers[*].login_url`.
+8. **`{% theme_*_page %}` gain `form=`** rather than becoming unconditional
+   wrappers. With a form they render the kit card; without one, the themed
+   mock-up is unchanged (the theme gallery and existing tests depend on it).
