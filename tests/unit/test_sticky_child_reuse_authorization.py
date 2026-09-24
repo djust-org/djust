@@ -291,3 +291,30 @@ class TestPreserveAcrossRedirectObjectPermission:
         survivors = parent._preserve_sticky_children(new_request)
         assert "doc-panel" not in survivors
         assert child.unmount_calls == 1
+
+    def test_child_refusing_the_new_request_denies_only_that_child(self, rf):
+        """A child that cannot take the new request is denied; its sticky
+        siblings survive (re-review of #2944)."""
+        parent = _make_parent(rf, _ParentObject, AnonymousUser())
+        _render(parent)
+        good = parent._child_views["doc-panel"]
+
+        class _ReadOnly(_ObjectScopedSticky):
+            sticky_id = "read-only"
+
+            def __setattr__(self, name, value):
+                if name == "request" and self.__dict__.get("_frozen"):
+                    raise AttributeError("read-only request")
+                super().__setattr__(name, value)
+
+        odd = _ReadOnly()
+        odd.request = parent.request
+        odd.mount(parent.request)
+        odd._frozen = True
+        parent._child_views["read-only"] = odd
+
+        new_request = rf.get("/other/")
+        new_request.user = AnonymousUser()
+        survivors = parent._preserve_sticky_children(new_request)
+        assert survivors.get("doc-panel") is good
+        assert "read-only" not in survivors
