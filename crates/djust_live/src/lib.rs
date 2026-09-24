@@ -4286,18 +4286,36 @@ fn queryset_value_to_json(value: &Bound<'_, PyAny>) -> PyResult<serde_json::Valu
 }
 
 /// The text a text node at `path` holds for the raw HTML `raw` (#2898):
-/// decoded, except inside `<script>`/`<style>`, whose body the parser keeps
-/// verbatim. `None` when it can't be decoded exactly (see
-/// [`decode_text_entities`]).
+/// decoded, except inside the elements html5ever keeps as RAW text — `script`,
+/// `style`, `xmp`, `iframe`, `noembed`, `noframes`, `plaintext`, and
+/// `noscript` (the parser runs with scripting enabled) — whose body is kept
+/// verbatim. Under an `svg`/`math` ancestor those same tag names are foreign
+/// elements whose text IS decoded (and `foreignObject` switches back), so the
+/// fast path does not guess there: `None`, full parse. `None` too when the
+/// text can't be decoded exactly (see [`decode_text_entities`]).
 fn text_node_value(vdom: &VNode, path: &[usize], raw: &str) -> Option<String> {
-    let parent_is_raw_text = path
-        .split_last()
-        .and_then(|(_, parent)| get_vdom_node(vdom, parent))
-        .is_some_and(|p| {
-            p.tag.eq_ignore_ascii_case("script") || p.tag.eq_ignore_ascii_case("style")
+    const RAW_TEXT_TAGS: [&str; 8] = [
+        "script",
+        "style",
+        "xmp",
+        "iframe",
+        "noembed",
+        "noframes",
+        "plaintext",
+        "noscript",
+    ];
+    let (_, parent_path) = path.split_last()?;
+    let parent = get_vdom_node(vdom, parent_path)?;
+    let raw_parent = RAW_TEXT_TAGS
+        .iter()
+        .any(|t| parent.tag.eq_ignore_ascii_case(t));
+    if raw_parent {
+        let foreign = (0..=parent_path.len()).any(|n| {
+            get_vdom_node(vdom, &parent_path[..n]).is_some_and(|a| {
+                a.tag.eq_ignore_ascii_case("svg") || a.tag.eq_ignore_ascii_case("math")
+            })
         });
-    if parent_is_raw_text {
-        return Some(raw.to_string());
+        return if foreign { None } else { Some(raw.to_string()) };
     }
     decode_text_entities(raw).map(std::borrow::Cow::into_owned)
 }
@@ -4500,7 +4518,10 @@ fn try_text_region_fast_path(
     // the raw `new_mid` into decoded text turned `a &amp; b` into a SetText
     // of the literal entity. The old raw text must decode to exactly what the
     // VDOM holds, or the index is not describing this node — bail.
-    if old_html_end > old_len || !old_html.is_char_boundary(entry.html_start) {
+    if old_html_end > old_len
+        || !old_html.is_char_boundary(entry.html_start)
+        || !old_html.is_char_boundary(old_html_end)
+    {
         return None;
     }
     let old_raw = &old_html[entry.html_start..old_html_end];
@@ -5862,6 +5883,34 @@ mod fast_path_flag_tests {
             patches.contains(r#"var s = \"a &amp; b\";"#),
             "patches: {patches}"
         );
+    }
+
+    #[test]
+    fn raw_text_elements_are_not_decoded_and_foreign_ones_fall_back() {
+        // html5ever keeps these bodies verbatim (noscript: scripting is on).
+        for tag in ["noscript", "xmp", "iframe", "noembed", "noframes"] {
+            let tpl = format!(r#"<div dj-id="0"><{tag}>{{{{ x|safe }}}}</{tag}></div>"#);
+            let mut view = one_var_view(&tpl, "Enable JS");
+            let patches = set_x(&mut view, "Tom &amp; Jerry");
+            assert!(
+                patches.contains(r#""text":"Tom &amp; Jerry""#),
+                "{tag}: {patches}"
+            );
+        }
+        // Inside svg/math, style/script are foreign elements whose text IS
+        // decoded — the fast path must not guess: full parse.
+        for tpl in [
+            r#"<div dj-id="0"><svg><style>{{ x|safe }}</style></svg></div>"#,
+            r#"<div dj-id="0"><svg><script>{{ x|safe }}</script></svg></div>"#,
+        ] {
+            let mut view = one_var_view(tpl, "Enable JS");
+            let patches = set_x(&mut view, "Tom &amp; Jerry");
+            assert_eq!(timing(&view, "fast_path"), FAST_PATH_NONE, "{tpl}");
+            assert!(
+                patches.contains(r#""text":"Tom & Jerry""#),
+                "{tpl}: {patches}"
+            );
+        }
     }
 
     #[test]

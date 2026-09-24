@@ -405,12 +405,10 @@ class FormMixin:
             if hasattr(self, "form_valid"):
                 self.form_valid(form)
 
-            if self._should_reset_form:
-                # form_valid reset the form: syncing the submitted values
-                # back into form_data would undo the reset (#2974).
-                pass
-            else:
-                # Sync form_data from saved instance so VDOM reflects new values
+            # Sync form_data from the saved instance so the VDOM reflects the
+            # new values — unless form_valid reset the form: syncing the
+            # submitted values back would undo the reset (#2974).
+            if not self._should_reset_form:
                 self._sync_form_data(form)
             self._should_reset_form = self._should_reset_form or reset_pending
         else:

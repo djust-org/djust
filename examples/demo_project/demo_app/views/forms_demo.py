@@ -14,8 +14,8 @@ class FormsIndexView(BaseTemplateView):
     Note: This inherits from BaseTemplateView (not LiveView) because it's
     a static page, but it gets the navbar component automatically.
     """
+    template_name = 'forms/index.html'
 
-    template_name = "forms/index.html"
 
 
 class RegistrationFormView(FormMixin, LiveView):
@@ -108,9 +108,8 @@ class SimpleContactFormView(FormMixin, LiveView):
 
     This demonstrates Django Forms integration with real-time validation.
     """
-
     form_class = SimpleContactForm
-    template_name = "forms/simple.html"
+    template_name = 'forms/simple.html'
 
     def form_valid(self, form):
         """Handle successful form submission"""
@@ -135,17 +134,15 @@ class AutoContactFormView(FormMixin, LiveView):
     Demonstrates automatic form rendering by calling as_live() in Python
     and passing the HTML to the template context.
     """
-
     form_class = SimpleContactForm
-    template_name = "forms/auto.html"
+    template_name = 'forms/auto.html'
 
     def get_context_data(self, **kwargs):
         """Add pre-rendered form HTML to context"""
         context = super().get_context_data(**kwargs)
         # Render the form using as_live() and add to context
         from django.utils.safestring import mark_safe
-
-        context["auto_form_html"] = mark_safe(self.as_live())  # Default: Bootstrap 5
+        context['auto_form_html'] = mark_safe(self.as_live())  # Default: Bootstrap 5
         return context
 
     def form_valid(self, form):
@@ -168,16 +165,14 @@ class AutoContactFormTailwindView(FormMixin, LiveView):
     """
     Auto-rendered contact form using Tailwind CSS framework.
     """
-
     form_class = SimpleContactForm
-    template_name = "forms/auto_tailwind.html"
+    template_name = 'forms/auto_tailwind.html'
 
     def get_context_data(self, **kwargs):
         """Add pre-rendered form HTML to context using Tailwind adapter"""
         context = super().get_context_data(**kwargs)
         from django.utils.safestring import mark_safe
-
-        context["auto_form_html"] = mark_safe(self.as_live(framework="tailwind"))
+        context['auto_form_html'] = mark_safe(self.as_live(framework='tailwind'))
         return context
 
     def form_valid(self, form):
@@ -200,16 +195,14 @@ class AutoContactFormPlainView(FormMixin, LiveView):
     """
     Auto-rendered contact form using plain HTML (minimal styling).
     """
-
     form_class = SimpleContactForm
-    template_name = "forms/auto_plain.html"
+    template_name = 'forms/auto_plain.html'
 
     def get_context_data(self, **kwargs):
         """Add pre-rendered form HTML to context using Plain adapter"""
         context = super().get_context_data(**kwargs)
         from django.utils.safestring import mark_safe
-
-        context["auto_form_html"] = mark_safe(self.as_live(framework="plain"))
+        context['auto_form_html'] = mark_safe(self.as_live(framework='plain'))
         return context
 
     def form_valid(self, form):
@@ -232,5 +225,4 @@ class AutoFormComparisonView(LiveView):
     """
     Framework comparison page showing all three CSS framework adapters.
     """
-
-    template_name = "forms/auto_comparison.html"
+    template_name = 'forms/auto_comparison.html'

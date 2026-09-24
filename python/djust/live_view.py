@@ -237,7 +237,8 @@ def _descriptor_fields(cls: type) -> Dict[str, tuple]:
     try:
         setattr(cls, "_djust_descriptor_fields_cache", fields)
     except (AttributeError, TypeError):  # pragma: no cover — immutable class
-        pass
+        # Uncacheable (an immutable class): recomputed on every call instead.
+        logger.debug("descriptor-field map not cached on %s", cls.__name__)
     return fields
 
 

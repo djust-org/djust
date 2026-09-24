@@ -265,12 +265,12 @@ _SETATTR_WHITELIST = {
     # +8 (1417/1419 → 1425/1427) by #2969/#2919: ``_async_running`` and the
     # sticky-kwargs bookkeeping names added to ``_FRAMEWORK_INTERNAL_ATTRS``.
     # Still the same two DynamicLiveView developer-dict sites.
-    # +155 (1425/1427 → 1580/1582) by v1.2.1-7 (#2956/#2912/#2896/#2959): the
+    # +156 (1425/1427 → 1581/1583) by v1.2.1-7 (#2956/#2912/#2896/#2959): the
     # ``_descriptor_fields`` / ``restore_components_snapshot`` helpers and the
     # descriptor arms in the dirty fingerprint and private-state save. Still
     # the same two sites.
-    ("live_view.py", 1580),
-    ("live_view.py", 1582),
+    ("live_view.py", 1581),
+    ("live_view.py", 1583),
 }
 
 
