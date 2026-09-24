@@ -89,6 +89,18 @@ describe('component scripts answer their dj-hook (#2985)', () => {
                 expect(el[c.initFlag]).toBe(true);
             });
 
+            it("keeps an app's own window.DjustHooks entry of the same name", () => {
+                // djust.hooks overrides DjustHooks in _getHookDefs(), so an entry
+                // registered there would shadow the app's (review 🔴).
+                const mine = { mounted() {} };
+                const { window } = createEnv(c.markup, {
+                    preRegister: (w) => { w.DjustHooks = { [c.hook]: mine }; },
+                });
+                window.eval(source);
+                expect(window.djust.hooks[c.hook]).toBeUndefined();
+                expect(window.DjustHooks[c.hook]).toBe(mine);
+            });
+
             it("keeps an app's own hook of the same name", () => {
                 const mine = { mounted() {} };
                 const { window } = createEnv(c.markup, {

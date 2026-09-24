@@ -77,10 +77,15 @@
   // initialises itself (below), so without an entry here the dj-hook runtime
   // logged a false "No hook registered" for a component that works (#2985).
   // mounted() runs the same guarded init, so it is a no-op when the
-  // self-initialisation got there first. An app's own hook of this name wins.
+  // self-initialisation got there first. An app's own hook of this name wins,
+  // in either registry (djust.hooks overrides DjustHooks, so an entry here
+  // would shadow an app's window.DjustHooks.ScrollSpy).
   window.djust = window.djust || {};
   window.djust.hooks = window.djust.hooks || {};
-  if (!window.djust.hooks.ScrollSpy) {
+  if (
+    !window.djust.hooks.ScrollSpy &&
+    !(window.DjustHooks && window.DjustHooks.ScrollSpy)
+  ) {
     window.djust.hooks.ScrollSpy = {
       mounted: function () {
         initScrollSpy(this.el);

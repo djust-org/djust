@@ -2334,10 +2334,10 @@ button.rating-star:hover ~ .rating-star { color: hsl(var(--muted-foreground)); }
 /* --- Ribbon --- */
 .dj-ribbon { position: absolute; overflow: hidden; width: var(--dj-ribbon-size, 8rem); height: var(--dj-ribbon-size, 8rem); pointer-events: none; z-index: 1; }
 .dj-ribbon__text { display: block; position: absolute; width: 150%; text-align: center; padding: 0.375rem 0; font-size: var(--dj-ribbon-font-size, 0.75rem); font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--dj-ribbon-fg, #fff); }
-.dj-ribbon--primary .dj-ribbon__text { background: var(--dj-ribbon-bg, hsl(var(--primary, 222 47% 51%))); }
-.dj-ribbon--success .dj-ribbon__text { background: hsl(var(--success, 142 71% 45%)); }
+.dj-ribbon--primary .dj-ribbon__text { background: var(--dj-ribbon-bg, hsl(var(--primary, 222 47% 51%))); color: var(--dj-ribbon-fg, hsl(var(--primary-foreground, 0 0% 100%))); }
+.dj-ribbon--success .dj-ribbon__text { background: hsl(var(--success, 142 71% 45%)); color: var(--dj-ribbon-fg, hsl(var(--success-foreground, 0 0% 100%))); }
 .dj-ribbon--warning .dj-ribbon__text { background: hsl(var(--warning, 48 96% 53%)); color: hsl(var(--foreground, 222 47% 11%)); }
-.dj-ribbon--danger .dj-ribbon__text { background: hsl(var(--destructive, 0 84% 60%)); }
+.dj-ribbon--danger .dj-ribbon__text { background: hsl(var(--destructive, 0 84% 60%)); color: var(--dj-ribbon-fg, hsl(var(--destructive-foreground, 0 0% 100%))); }
 .dj-ribbon--top-right { top: 0; right: 0; }
 .dj-ribbon--top-right .dj-ribbon__text { top: 1.5rem; right: -2.5rem; transform: rotate(45deg); }
 .dj-ribbon--top-left { top: 0; left: 0; }

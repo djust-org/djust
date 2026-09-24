@@ -56,10 +56,19 @@ class TestCodeBlockCopy3008:
         block = CodeBlock(code="x", language="python")
         assert block.render() == block.render()
 
-    def test_an_explicit_id_is_used_and_escaped(self):
-        html = CodeBlock(code="x", id='snip"1').render()
-        assert 'dj-copy="#snip&quot;1"' in html
-        assert 'id="snip&quot;1"' in html
+    def test_an_explicit_plain_id_is_used(self):
+        html = CodeBlock(code="x", id="install-snippet").render()
+        assert 'dj-copy="#install-snippet"' in html
+        assert 'id="install-snippet"' in html
+
+    @pytest.mark.parametrize("bad", ['snip"1', "1abc", "a.b", "a b", "#x"])
+    def test_an_id_that_is_not_a_css_identifier_falls_back(self, bad):
+        """`#1abc` / `#a.b` are invalid or different selectors: querySelector
+        would throw and dj-copy would copy the selector text (review 🟡)."""
+        html = CodeBlock(code="x", id=bad).render()
+        target = re.search(r'dj-copy="#([^"]+)"', html).group(1)
+        assert re.fullmatch(r"dj-code-block-[0-9a-f]{8}", target)
+        assert f'id="{target}"' in html
 
     def test_classes_are_unchanged(self):
         """Apps style against these; the fix adds attributes only."""
@@ -89,6 +98,33 @@ class TestButtonLabelFollowsTheTheme2996:
         # The app's override still wins; without one the label is the preset's
         # own paired foreground; with no theme loaded it is still white.
         assert color == f"var({override}, hsl(var({token}, 0 0% 100%)))"
+
+    @pytest.mark.parametrize(
+        "variant,token",
+        [
+            ("primary", "--primary-foreground"),
+            ("success", "--success-foreground"),
+            ("danger", "--destructive-foreground"),
+        ],
+    )
+    def test_ribbon_label_follows_its_fill(self, variant, token):
+        block = _rule(COMPONENTS_CSS, f".dj-ribbon--{variant} .dj-ribbon__text")
+        assert f"color: var(--dj-ribbon-fg, hsl(var({token}, 0 0% 100%)))" in block
+
+    @pytest.mark.parametrize(
+        "selector,token",
+        [
+            (".btn-success", "--success-foreground"),
+            (".btn-danger", "--destructive-foreground"),
+            (".card-header-success", "--success-foreground"),
+            (".badge-primary", "--primary-foreground"),
+        ],
+    )
+    def test_scaffold_labels_follow_their_fill(self, selector, token):
+        css = (DJUST_ROOT / "theming/static/djust_theming/css/scaffold.css").read_text()
+        block = _rule(css, selector)
+        assert f"color: hsl(var({token}));" in block
+        assert "white" not in block
 
     def test_popover_badge_uses_the_destructive_pair(self):
         block = _rule(CLASSES_CSS, ".dj-notif-popover__badge")

@@ -1,11 +1,15 @@
 """CodeBlock component."""
 
 import html
+import re
 import uuid
 
 from .code_snippet import highlight_code
 from djust import Component
 from typing import Any
+
+# A CSS identifier that needs no escaping in an ``#id`` selector.
+_CSS_IDENT = re.compile(r"-?[A-Za-z_][A-Za-z0-9_-]*")
 
 
 class CodeBlock(Component):
@@ -47,11 +51,14 @@ class CodeBlock(Component):
         self.theme = theme
         self.custom_class = custom_class
         # The ``<code>`` element's id, which the Copy button's ``dj-copy``
-        # names. An explicit ``id=`` is used as given; otherwise a per-instance
+        # names as ``#<id>``. An explicit ``id=`` is used when it is a plain CSS
+        # identifier (anything else would make the selector invalid, and
+        # ``dj-copy`` would copy the selector text); otherwise a per-instance
         # id, the same shape ``CodeSnippet`` uses, so two blocks on one page
         # never copy each other's code. Private: not template context.
-        self._copy_target_id = html.escape(
-            self._explicit_id or f"dj-code-block-{uuid.uuid4().hex[:8]}"
+        explicit = self._explicit_id or ""
+        self._copy_target_id = (
+            explicit if _CSS_IDENT.fullmatch(explicit) else f"dj-code-block-{uuid.uuid4().hex[:8]}"
         )
 
     def _render_custom(self) -> str:
