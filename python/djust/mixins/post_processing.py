@@ -17,14 +17,16 @@ logger = logging.getLogger(__name__)
 # found in the masked copy index the original string. An unterminated region
 # runs to the end of the document, as it does in the HTML tokenizer.
 _RCDATA_RE = re.compile(
-    r"<(title|textarea)(?=[\s/>])[^>]*>.*?(?:</\1[^>]*>|\Z)",
+    r"<(title|textarea)(?=[\s/>])[^<>]*>.*?(?:</\1[^<>]*>|\Z)",
     re.DOTALL | re.IGNORECASE,
 )
 # A tag name ends at whitespace, "/" or ">": ``<body-shell>`` is not ``<body>``.
 # End tags may carry junk before ">" (``</head foo>``), as browsers accept.
-_HEAD_CLOSE_RE = re.compile(r"</head(?=[\s/>])[^>]*>", re.IGNORECASE)
+# ``[^<>]*`` (not ``[^>]*``) keeps a tag from spanning into the next one, and
+# keeps the scan linear when many tags have no ">" (PR #3017 review).
+_HEAD_CLOSE_RE = re.compile(r"</head(?=[\s/>])[^<>]*>", re.IGNORECASE)
 _BODY_OPEN_RE = re.compile(r"<body(?=[\s/>])", re.IGNORECASE)
-_BODY_CLOSE_TAG_RE = re.compile(r"</body(?=[\s/>])[^>]*>", re.IGNORECASE)
+_BODY_CLOSE_TAG_RE = re.compile(r"</body(?=[\s/>])[^<>]*>", re.IGNORECASE)
 
 
 def _mask_document_text(html: str) -> str:
