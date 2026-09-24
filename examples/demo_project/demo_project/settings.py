@@ -43,6 +43,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "channels",
     "djust",
+    "djust.auth",  # account backends + page kit (ADR-039)
     "djust.theming",  # Optional extra — needed for theming tests
     "djust.admin_ext",  # Optional extra — needed for admin tests
     # Optional extra — the component gallery's LiveView routes render templates
