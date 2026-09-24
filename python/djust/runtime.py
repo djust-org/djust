@@ -5285,6 +5285,7 @@ class ViewRuntime:
         # copy, which serves WS events since the ADR-022 flip, did not (#2969).
         if _consume_async_cancel(view, task_name):
             logger.debug("Runtime: async task %s was cancelled, skipping execution", task_name)
+            await self._settle_cancelled_async(view, event_name)
             return
 
         try:
@@ -5317,6 +5318,7 @@ class ViewRuntime:
             # as the WS twin does (#2969).
             if _consume_async_cancel(view, task_name):
                 logger.debug("Runtime: async task %s was cancelled, skipping re-render", task_name)
+                await self._settle_cancelled_async(view, event_name)
                 return
 
             # Serialise handler + render on the consumer's render lock via
@@ -5368,6 +5370,29 @@ class ViewRuntime:
                     await self._render_async_result(event_name)
             except Exception:
                 logger.exception("Runtime: error in handle_async_result for task '%s'", task_name)
+
+    async def _settle_cancelled_async(self, view: Any, event_name: Optional[str]) -> None:
+        """End the loading state a cancelled task's event announced.
+
+        The runtime twin of ``LiveViewConsumer._settle_cancelled_async``
+        (#2963): the event's reply carried ``async_pending``, so the client
+        keeps the event's loading state until a ``source="async"`` frame
+        naming the event arrives. A cancelled task skips its result handler,
+        so render the view's current state as that frame instead (#2969).
+        Work no event owns (``event_name`` None) announced nothing.
+        """
+        if event_name is None:
+            return
+        try:
+            async with self.transport.event_context(view):
+                if self.view_instance is not view:
+                    return
+                await self._render_async_result(event_name)
+        except Exception:  # noqa: BLE001 — a settle frame must never raise out of a task
+            logger.exception(
+                "Runtime: error settling cancelled async task for %s",
+                sanitize_for_log(event_name),
+            )
 
     async def _render_async_result(self, event_name: Optional[str]) -> None:
         """Re-sync + re-render after background work and emit the result frame.

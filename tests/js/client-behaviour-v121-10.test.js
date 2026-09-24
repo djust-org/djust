@@ -108,6 +108,24 @@ describe('#2971 clear_draft from an event', () => {
         expect(form.hasAttribute('data-draft-clear')).toBe(true);
     });
 
+    it('a later unrelated DOM update does not wipe a draft started after the clear', () => {
+        const { window, document } = draftEnv();
+        const form = document.getElementById('f');
+        form.setAttribute('data-draft-clear', '');
+        window.djust.reinitAfterDOMUpdate();
+        // The user starts a new draft; an unrelated update arrives while the
+        // flag is still on the page.
+        window.localStorage.setItem('djust_draft_post_1', '{"data":{"title":"new"}}');
+        window.djust.reinitAfterDOMUpdate();
+        expect(window.localStorage.getItem('djust_draft_post_1')).not.toBeNull();
+        // The server's next render drops the flag; a later one sets it again.
+        form.removeAttribute('data-draft-clear');
+        window.djust.reinitAfterDOMUpdate();
+        form.setAttribute('data-draft-clear', '');
+        window.djust.reinitAfterDOMUpdate();
+        expect(window.localStorage.getItem('djust_draft_post_1')).toBeNull();
+    });
+
     it('the djust:draft-clear push event clears the named draft', () => {
         const { window } = draftEnv();
         window.dispatchEvent(new window.CustomEvent('djust:push_event', {

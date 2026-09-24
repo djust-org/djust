@@ -211,12 +211,21 @@ class SyncManager:
         """
         Register sync handler for a specific model.
 
+        ``model_name`` is either a model name (the handler serves every action
+        on that model) or a full ``<action>_<model>`` key such as
+        ``"create_Task"`` (the handler serves that action only), the key
+        ``@register_sync_handler`` uses.
+
         Args:
-            model_name: Model name
+            model_name: Model name, or an ``<action>_<model>`` key
             handler_func: Function that handles sync for this model type
         """
-        self._model_sync_handlers[model_name] = handler_func
-        logger.info("Registered sync handler for model: %s", model_name)
+        action, sep, _rest = model_name.partition("_")
+        if sep and action in ("create", "update", "delete"):
+            self._sync_handlers[model_name] = handler_func
+        else:
+            self._model_sync_handlers[model_name] = handler_func
+        logger.info("Registered sync handler for model: %s", sanitize_for_log(model_name))
 
     def sync_actions(self, actions: List[OfflineAction]) -> SyncResult:
         """
@@ -320,8 +329,8 @@ class SyncManager:
         """Sync a batch of actions."""
         # Check for custom sync handler: one for this action + model
         # (``@register_sync_handler``'s key), else one for the whole model
-        # (``SyncManager.register_sync_handler(model_name, fn)``, which never
-        # matched before #2957).
+        # (``SyncManager.register_sync_handler(model_name, fn)`` with a bare
+        # model name, which never matched before #2957).
         handler_key = f"{action_type}_{model_name}"
         handler = self._sync_handlers.get(handler_key) or self._model_sync_handlers.get(model_name)
         if handler is not None:

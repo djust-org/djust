@@ -168,8 +168,19 @@ function initDraftMode() {
  * here would keep a later render that carries it again from patching it back.
  * The server drops it on its next render.
  */
+// Roots whose current data-draft-clear flag was already applied: an unrelated
+// DOM update (a stream chunk, a child-view patch) while the flag is still on
+// the page must not wipe a draft the user started after the submit.
+const _draftClearApplied = new WeakSet();
+
 function applyDraftClearFlag() {
-    document.querySelectorAll('[data-draft-enabled][data-draft-clear]').forEach(function (root) {
+    document.querySelectorAll('[data-draft-enabled]').forEach(function (root) {
+        if (!root.hasAttribute('data-draft-clear')) {
+            _draftClearApplied.delete(root);
+            return;
+        }
+        if (_draftClearApplied.has(root)) return;
+        _draftClearApplied.add(root);
         const key = root.getAttribute('data-draft-key');
         if (key) globalDraftManager.clearDraft(key);
     });

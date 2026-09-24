@@ -114,6 +114,25 @@ class TestRegisteredSyncHandlersRun:
         assert body["failed_count"] == 1
         assert "secret_idx" not in json.dumps(body)
 
+    def test_instance_api_with_a_full_key_still_serves_that_action(self):
+        """``register_sync_handler("create_Task", fn)`` matched on main; it
+        must keep working, and must not become a model-wide fallback."""
+        manager = pwa_sync.SyncManager()
+        seen = []
+        manager.register_sync_handler(
+            "create_Task",
+            lambda b: (
+                seen.extend((a.type, a.model) for a in b) or {"processed": len(b), "failed": 0}
+            ),
+        )
+        manager.sync_actions(
+            [pwa_sync.OfflineAction(**{**_action("create", "Task", 7), "status": "pending"})]
+        )
+        manager.sync_actions(
+            [pwa_sync.OfflineAction(**{**_action("delete", "create_Task", 8), "status": "pending"})]
+        )
+        assert seen == [("create", "Task")]
+
     def test_action_specific_handler_wins_over_model_wide(self):
         manager = pwa_sync.SyncManager()
         manager.register_sync_handler("Task", lambda b: {"processed": 0, "failed": len(b)})

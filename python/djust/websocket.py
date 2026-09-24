@@ -2374,13 +2374,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             elif msg_type == "mount_batch":
                 await self.handle_mount_batch(data)
             elif msg_type == "ping":
-                await self.send_json({"type": "pong"})
                 # The client pings every 30 s and never sends
                 # ``presence_heartbeat``, so the ping is the heartbeat: without
                 # it a tracked user expired after PRESENCE_TIMEOUT (60 s) on an
-                # open page (#2968).
+                # open page (#2968). Refreshed before the pong, so the pong
+                # means the heartbeat landed.
                 if getattr(self.view_instance, "_presence_tracked", False):
                     await self.handle_presence_heartbeat(data)
+                await self.send_json({"type": "pong"})
             elif msg_type == "live_redirect_mount":
                 await self.handle_live_redirect_mount(data)
             elif msg_type == "upload_register":

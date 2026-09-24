@@ -384,7 +384,10 @@ class SlowView(LiveView):
 @pytest.mark.django_db
 class TestRuntimeHonoursCancel:
     @pytest.mark.asyncio
-    async def test_cancelled_running_task_does_not_re_render(self):
+    async def test_cancelled_running_task_skips_its_result_but_settles_loading(self):
+        """The result is dropped, but the event announced background work
+        (``async_pending``), so one ``source="async"`` frame naming the event
+        still ends its loading state — the WS twin's #2963 settle."""
         view, runtime, transport = _mounted(SlowView)
         view._gate = asyncio.Event()
         await runtime.dispatch_event({"type": "event", "event": "go", "params": {}, "ref": 1})
@@ -395,7 +398,9 @@ class TestRuntimeHonoursCancel:
         for _ in range(5):
             await asyncio.sleep(0.01)
         async_frames = [f for f in transport.sent if f.get("source") == "async"]
-        assert async_frames == [], async_frames
+        assert len(async_frames) == 1, async_frames
+        assert async_frames[0].get("event_name") == "go"
+        assert view.result == "done"  # the callback itself cannot be interrupted
         assert "export" not in view._async_running
         assert "export" not in view._async_cancelled
 
