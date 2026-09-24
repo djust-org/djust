@@ -45,6 +45,10 @@ MIDDLEWARE = [
     # ...
     "allauth.account.middleware.AccountMiddleware",
 ]
+AUTHENTICATION_BACKENDS = [
+    "django.contrib.auth.backends.ModelBackend",
+    "allauth.account.auth_backends.AuthenticationBackend",  # sign in by email
+]
 SITE_ID = 1
 LOGIN_REDIRECT_URL = "/"        # where people land after signing in (Django's default is /accounts/profile/)
 
@@ -80,7 +84,7 @@ To use plain Django instead, set `"BACKEND": "django"` and leave out the allauth
 | "Remember me" | no | yes |
 | Extra dependency | none | `django-allauth` |
 
-The backend is chosen once, when the URLconf loads. Changing `BACKEND` needs a restart, but hooks and options are read on every request.
+The backend is built once, when the URLconf loads, and reads its `OPTIONS` then. Changing `BACKEND` or `verification` needs a restart (routes and allauth settings are fixed at startup). The hooks it calls, such as `signup_validators` and `is_open_for_signup()`, run on every request.
 
 ## The `auth` context
 
@@ -124,7 +128,7 @@ Load them with `{% load djust_auth %}`. Each renders plain, escaped HTML that wo
 The kit's templates live in `djust.auth`:
 
 - **`djust_auth/layouts/auth.html`**: the layout, with blocks `title`, `head`, `brand`, `messages`, `card`, `aside` and `footer`.
-- **`djust_auth/pages/*.html`**: one page per step (`login`, `signup`, `verify_email`, `verify_sent`, `verify_done`, `password_reset`, `password_reset_sent`, `password_reset_confirm`, `password_reset_done`, `social_signup`, `social_error`, `logout`, `inactive`), used by the `django` backend and custom backends.
+- **`djust_auth/pages/*.html`**: one page per step (`login`, `signup`, `verify_email`, `verify_sent`, `verify_done`, `password_reset`, `password_reset_sent`, `password_reset_confirm`, `password_reset_done`, `social_signup`, `social_error`, `logout`, `inactive`, `signup_closed`), used by the `django` backend and custom backends.
 - **`allauth/layouts/*.html` and `allauth/elements/*.html`**: the allauth skin. allauth keeps its own pages, which carry real logic such as code flows and reauthentication. djust restyles them through allauth's supported override points, so every allauth page, including ones this guide never mentions, gets the kit's look.
 
 Templates are found in this order: your `TEMPLATES["DIRS"]`, then `djust.auth`, then `allauth`. To add your logo, override one block:
@@ -190,7 +194,7 @@ To change a built-in backend a little, subclass it instead: `djust.auth.accounts
 
 ## Hooks and signals
 
-**`signup_validators`** runs before any account is created, with any backend. Raise `ValidationError` to refuse a signup; the message appears at the top of the form.
+**`signup_validators`** runs before any account is created, with any backend: on the sign-up form, and with allauth also on social sign-up (the "finish signing up" form, and before an automatic social sign-up). Raise `ValidationError` to refuse; the message appears at the top of the form. `data["source"]` is `"form"` or `"social"`, so a check that only makes sense on your own form, such as a captcha, can skip social sign-ups.
 
 ```python
 from django.core.exceptions import ValidationError
@@ -202,6 +206,8 @@ def block_disposable(request, data):
 
 
 def require_turnstile(request, data):
+    if data["source"] == "social":
+        return  # the provider already verified a real person
     if not verify_turnstile(request.POST.get("cf-turnstile-response", ""), request):
         raise ValidationError("Please complete the challenge.")
 
@@ -249,11 +255,15 @@ With `"BACKEND": "allauth"`, djust applies these allauth settings at startup. **
 | `ACCOUNT_LOGIN_METHODS` | `{"email", "username"}` | Sign in with either |
 | `ACCOUNT_SIGNUP_FIELDS` | email, username, password | One password field; the Show button replaces "confirm password" |
 | `ACCOUNT_ADAPTER` | djust's adapter | Sign-up gate from the backend; strict redirects (below) |
-| `ACCOUNT_FORMS` | djust's sign-up form | Runs your `signup_validators` |
+| `ACCOUNT_FORMS` | djust's sign-up form (merged into yours) | Runs your `signup_validators` |
+| `SOCIALACCOUNT_ADAPTER` | djust's social adapter | Runs `signup_validators` before an automatic social sign-up |
+| `SOCIALACCOUNT_FORMS` | djust's social sign-up form (merged into yours) | Runs `signup_validators` on the "finish signing up" form |
+
+`ACCOUNT_LOGIN_METHODS` and `ACCOUNT_SIGNUP_FIELDS` are left alone when you still use allauth's older settings (`ACCOUNT_AUTHENTICATION_METHOD`, `ACCOUNT_USERNAME_REQUIRED`, `ACCOUNT_EMAIL_REQUIRED`, …). With a user model that has no username (`ACCOUNT_USER_MODEL_USERNAME_FIELD = None`), the defaults become email-only. If you bring your own adapter or forms, subclass djust's: check A107 warns otherwise.
 
 Two more behaviours:
 
-- **Redirects stay on your site.** allauth normally treats every host your `ALLOWED_HOSTS` accepts as a safe `?next=` target. So `ALLOWED_HOSTS = ["*"]`, or a wildcard such as `.example.app` whose subdomains users control, turns `next` into an open redirect. djust's adapter (`djust.auth.accounts.backends.allauth.DjustAccountAdapter`) allows only the current host, plus any hosts you list in `OPTIONS["redirect_hosts"]`.
+- **Redirects stay on your site.** allauth normally treats every host your `ALLOWED_HOSTS` accepts as a safe `?next=` target. So `ALLOWED_HOSTS = ["*"]`, or a wildcard such as `.example.app` whose subdomains users control, turns `next` into an open redirect. djust's adapter (`djust.auth.accounts.backends.allauth_integration.DjustAccountAdapter`) allows only the current host, plus any hosts you list in `OPTIONS["redirect_hosts"]`.
 - **Rate limits see the real client.** allauth's `ALLAUTH_TRUSTED_PROXY_COUNT` is set from `DJUST_TRUSTED_PROXY_COUNT`, so allauth and djust agree on the visitor's IP behind a proxy. Check A102 warns if you run behind a proxy with neither set.
 
 Options (`DJUST_CONFIG["ACCOUNTS"]["OPTIONS"]`):
@@ -277,6 +287,7 @@ Account checks are silent unless `DJUST_CONFIG["ACCOUNTS"]` is set. Details and 
 | A104 | Error | Account URLs are included twice |
 | A105 | Info | A template override extends allauth's base instead of the kit layout |
 | A106 | Error | `djust.auth` or `djust.theming` is missing, or `djust.auth` comes after `allauth` |
+| A107 | Warning | Your own allauth adapter or sign-up form doesn't subclass djust's, so its protections are off |
 
 ## Migrating
 
@@ -290,5 +301,12 @@ Account checks are silent unless `DJUST_CONFIG["ACCOUNTS"]` is set. Details and 
 ```
 
 Without `form=`, they render the old themed mock-up, whose `email` input doesn't match Django's login form.
+
+**From an existing allauth setup.** Add `"djust.auth"` before `"allauth"`, set `"BACKEND": "allauth"`, and replace your `include("allauth.urls")` with the accounts include. Know two behaviour changes before you deploy:
+
+- If you didn't set `ACCOUNT_EMAIL_VERIFICATION`, it becomes `"mandatory"`. Users with unverified addresses are asked for a code at their next sign-in.
+- If you use the new-style settings and didn't set `ACCOUNT_SIGNUP_FIELDS`, the sign-up form asks for the password once.
+
+Set either setting yourself to keep today's behaviour.
 
 **From `djust.auth.social.social_auth_providers`.** This context processor still works but is deprecated. Use `{% auth_providers auth %}`, whose `auth.providers` holds the same information.

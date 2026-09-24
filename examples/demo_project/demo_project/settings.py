@@ -204,4 +204,8 @@ if ALLAUTH_AVAILABLE:
         "allauth.socialaccount",
     ]
     MIDDLEWARE += ["allauth.account.middleware.AccountMiddleware"]
+    AUTHENTICATION_BACKENDS = [
+        "django.contrib.auth.backends.ModelBackend",
+        "allauth.account.auth_backends.AuthenticationBackend",
+    ]
     SITE_ID = 1

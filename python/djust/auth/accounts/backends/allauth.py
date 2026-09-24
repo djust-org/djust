@@ -2,14 +2,15 @@
 
 allauth keeps its own views and page templates (they carry real logic:
 code flows, reauthentication, conditional fields). djust restyles every one
-of them through allauth's supported override API, ``allauth/layouts/*.html``
-and ``allauth/elements/*.html``, shipped in ``djust.auth``'s templates, so
-``djust.auth`` must come before ``allauth`` in ``INSTALLED_APPS``.
+of them through allauth's supported override points,
+``allauth/layouts/*.html`` and ``allauth/elements/*.html``, shipped in
+``djust.auth``'s templates, so ``djust.auth`` must come before ``allauth`` in
+``INSTALLED_APPS``.
 
-Secure defaults (applied only where the project hasn't set the allauth
-setting itself): mandatory verification by code, no verification on GET,
-reset by code, logout by POST only, remember-me honoured, and allauth's
-client-IP proxy count derived from ``DJUST_TRUSTED_PROXY_COUNT``.
+This module never imports allauth at load time: the adapter and forms djust
+plugs into allauth live in ``allauth_integration``, referenced only by
+allauth's settings strings. A project on another backend can have allauth
+installed without configuring it.
 """
 
 from __future__ import annotations
@@ -17,7 +18,6 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from django.core.exceptions import ValidationError
 from django.http import HttpRequest
 from django.urls import include, path
 
@@ -25,9 +25,10 @@ from djust._client_ip import _trusted_proxy_count
 
 from ..base import AccountBackend, Provider
 from ..providers import label_for
-from ..registry import get_account_backend
 
 logger = logging.getLogger(__name__)
+
+_INTEGRATION = "djust.auth.accounts.backends.allauth_integration"
 
 #: allauth settings djust sets when the project hasn't (docs: "Security defaults").
 SECURE_DEFAULTS: dict[str, Any] = {
@@ -39,16 +40,34 @@ SECURE_DEFAULTS: dict[str, Any] = {
     "ACCOUNT_SESSION_REMEMBER": None,
     "ACCOUNT_LOGIN_METHODS": {"email", "username"},
     "ACCOUNT_SIGNUP_FIELDS": ["email*", "username*", "password1*"],
-    "ACCOUNT_ADAPTER": "djust.auth.accounts.backends.allauth.DjustAccountAdapter",
-    "ACCOUNT_FORMS": {"signup": "djust.auth.accounts.backends.allauth.DjustSignupForm"},
+    "ACCOUNT_ADAPTER": f"{_INTEGRATION}.DjustAccountAdapter",
+    "ACCOUNT_FORMS": {"signup": f"{_INTEGRATION}.DjustSignupForm"},
+    "SOCIALACCOUNT_ADAPTER": f"{_INTEGRATION}.DjustSocialAccountAdapter",
+    "SOCIALACCOUNT_FORMS": {"signup": f"{_INTEGRATION}.DjustSocialSignupForm"},
 }
+
+#: allauth's older spellings of login/sign-up configuration. When a project
+#: uses any of them, djust leaves ACCOUNT_LOGIN_METHODS / ACCOUNT_SIGNUP_FIELDS
+#: alone, because allauth prefers the new names and would silently override them.
+LEGACY_LOGIN_SETTINGS = (
+    "ACCOUNT_AUTHENTICATION_METHOD",
+    "ACCOUNT_USERNAME_REQUIRED",
+    "ACCOUNT_EMAIL_REQUIRED",
+    "ACCOUNT_SIGNUP_PASSWORD_ENTER_TWICE",
+    "ACCOUNT_SIGNUP_EMAIL_ENTER_TWICE",
+)
+_LOGIN_SHAPE = ("ACCOUNT_LOGIN_METHODS", "ACCOUNT_SIGNUP_FIELDS")
+_MERGED_DICTS = ("ACCOUNT_FORMS", "SOCIALACCOUNT_FORMS")
 
 
 def apply_allauth_defaults(settings: Any, options: dict | None = None) -> list[str]:
     """Set each secure default the project hasn't set itself; return the names applied.
 
-    ``options["verification"] == "link"`` keeps email verification by link
-    instead of by code.
+    - ``options["verification"] == "link"`` keeps verification by link.
+    - Projects on allauth's legacy login settings keep them.
+    - A user model without a username field signs in and up by email only.
+    - ``ACCOUNT_FORMS`` / ``SOCIALACCOUNT_FORMS`` are merged: a project's own
+      entries win, and djust fills in only a missing ``signup`` form.
     """
     if options is None:
         from djust.config import get_djust_config
@@ -58,8 +77,21 @@ def apply_allauth_defaults(settings: Any, options: dict | None = None) -> list[s
     defaults = dict(SECURE_DEFAULTS)
     if options.get("verification") == "link":
         defaults["ACCOUNT_EMAIL_VERIFICATION_BY_CODE_ENABLED"] = False
+    if getattr(settings, "ACCOUNT_USER_MODEL_USERNAME_FIELD", "username") is None:
+        defaults["ACCOUNT_LOGIN_METHODS"] = {"email"}
+        defaults["ACCOUNT_SIGNUP_FIELDS"] = ["email*", "password1*"]
+    legacy = any(hasattr(settings, name) for name in LEGACY_LOGIN_SETTINGS)
     applied = []
     for name, value in defaults.items():
+        if legacy and name in _LOGIN_SHAPE:
+            continue
+        if name in _MERGED_DICTS and hasattr(settings, name):
+            current = dict(getattr(settings, name) or {})
+            if "signup" not in current:
+                current["signup"] = value["signup"]
+                setattr(settings, name, current)
+                applied.append(f"{name}[signup]")
+            continue
         if not hasattr(settings, name):
             setattr(settings, name, value)
             applied.append(name)
@@ -70,6 +102,16 @@ def apply_allauth_defaults(settings: Any, options: dict | None = None) -> list[s
     return applied
 
 
+def _allauth_modes() -> tuple[bool, bool]:
+    """(socialaccount_only, headless_only) as allauth itself reads them."""
+    from allauth import app_settings as allauth_settings
+
+    return (
+        bool(getattr(allauth_settings, "SOCIALACCOUNT_ONLY", False)),
+        bool(getattr(allauth_settings, "HEADLESS_ONLY", False)),
+    )
+
+
 class AllauthBackend(AccountBackend):
     name = "allauth"
     features = frozenset(
@@ -78,20 +120,36 @@ class AllauthBackend(AccountBackend):
 
     def __init__(self, options: dict | None = None) -> None:
         super().__init__(options)
+        social_only, headless_only = _allauth_modes()
+        if headless_only:
+            # allauth serves no HTML views; neither does djust.
+            self.features = frozenset()
+        elif social_only:
+            # allauth removes local sign-up, email and password routes; so do we.
+            self.features = self.features - {"signup", "verify_email", "password_reset"}
         connect_signal_bridge()
 
     def urlpatterns(self) -> list:
         from allauth.account import views as account_views
 
         # Stable djust_auth names on the same paths as allauth's own routes
-        # (same views; the first match wins, so behaviour is identical).
-        patterns = [
-            path("login/", account_views.login, name="login"),
-            path("logout/", account_views.logout, name="logout"),
-            path("signup/", account_views.signup, name="signup"),
-            path("confirm-email/", account_views.email_verification_sent, name="verify"),
-            path("password/reset/", account_views.password_reset, name="password_reset"),
-        ]
+        # (same views; the first match wins, so behaviour is identical). Only
+        # for routes allauth itself serves in its current mode.
+        patterns = []
+        if self.supports("login"):
+            patterns.append(path("login/", account_views.login, name="login"))
+        if self.supports("logout"):
+            patterns.append(path("logout/", account_views.logout, name="logout"))
+        if self.supports("signup"):
+            patterns.append(path("signup/", account_views.signup, name="signup"))
+        if self.supports("verify_email"):
+            patterns.append(
+                path("confirm-email/", account_views.email_verification_sent, name="verify")
+            )
+        if self.supports("password_reset"):
+            patterns.append(
+                path("password/reset/", account_views.password_reset, name="password_reset")
+            )
         # No ``social_login`` alias: each provider's login URL differs and is
         # carried on ``auth.providers[*].login_url`` (Provider.login_url).
         return patterns
@@ -118,60 +176,6 @@ class AllauthBackend(AccountBackend):
             logger.exception("Listing allauth social providers failed; showing none")
             return []
         return out
-
-
-def _allauth_request() -> HttpRequest | None:
-    from allauth.core import context
-
-    return context.request
-
-
-try:
-    from allauth.account.adapter import DefaultAccountAdapter
-    from allauth.account.forms import SignupForm as _AllauthSignupForm
-except ImportError:  # pragma: no cover - allauth is an optional dependency
-    DefaultAccountAdapter = object  # type: ignore[assignment,misc]
-    _AllauthSignupForm = None  # type: ignore[assignment,misc]
-
-
-class DjustAccountAdapter(DefaultAccountAdapter):  # type: ignore[misc,valid-type]
-    """allauth adapter: signup gate from the djust backend, and strict redirects."""
-
-    def is_open_for_signup(self, request: HttpRequest) -> bool:
-        return bool(get_account_backend().is_open_for_signup(request))
-
-    def is_safe_url(self, url: str) -> bool:
-        """Only same-host redirects, plus hosts listed in ``OPTIONS["redirect_hosts"]``.
-
-        allauth's default also trusts every host ``ALLOWED_HOSTS`` matches, so
-        ``ALLOWED_HOSTS = ["*"]`` (or a wildcard like ``.example.app`` whose
-        subdomains users control) turns ``?next=`` into an open redirect.
-        """
-        from django.utils.http import url_has_allowed_host_and_scheme
-
-        request = _allauth_request()
-        allowed = set(get_account_backend().options.get("redirect_hosts", []))
-        if request is not None:
-            allowed.add(request.get_host())
-            secure = request.is_secure()
-        else:
-            secure = False
-        return url_has_allowed_host_and_scheme(url, allowed_hosts=allowed, require_https=secure)
-
-
-if _AllauthSignupForm is not None:
-
-    class DjustSignupForm(_AllauthSignupForm):  # type: ignore[misc,valid-type]
-        """allauth's signup form, plus the djust backend's ``signup_validators``."""
-
-        def clean(self) -> dict:
-            cleaned: dict = super().clean()
-            request = _allauth_request()
-            try:
-                get_account_backend().run_signup_validators(request, cleaned)  # type: ignore[arg-type]
-            except ValidationError as exc:
-                self.add_error(None, exc)
-            return cleaned
 
 
 def connect_signal_bridge() -> None:

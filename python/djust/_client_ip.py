@@ -40,7 +40,7 @@ def _trusted_proxy_count() -> int:
         return 0
     try:
         coerced = max(0, int(float(raw)))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # OverflowError: inf / -inf
         coerced = 0
     # Log the offending value's TYPE, not the value itself: the setting is read
     # from ``settings`` (which CodeQL py/clear-text-logging-sensitive-data treats

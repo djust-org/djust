@@ -62,14 +62,17 @@ def test_every_setting_in_the_security_table_is_a_real_default():
     from djust.auth.accounts.backends.allauth import SECURE_DEFAULTS
 
     text = GUIDE.read_text().split("## Security defaults", 1)[1].split("\n## ", 1)[0]
-    for name in re.findall(r"`(ACCOUNT_[A-Z_]+)`", text):
+    rows = re.findall(r"^\| `((?:SOCIAL)?ACCOUNT_[A-Z_]+)` \|", text, re.M)
+    assert rows, "the security defaults table should list settings"
+    for name in rows:
         assert name in SECURE_DEFAULTS, name
+    assert set(SECURE_DEFAULTS) <= set(rows), set(SECURE_DEFAULTS) - set(rows)
 
 
 def test_every_check_id_is_documented_in_both_places():
     codes = (ROOT / "docs/website/guides/error-codes.md").read_text()
     guide = GUIDE.read_text()
-    for n in range(100, 107):
+    for n in range(100, 108):
         assert f"A{n}" in codes and f"A{n}" in guide
 
 

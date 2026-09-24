@@ -1391,7 +1391,7 @@ Recognized packages: `axes`, `defender`, `brutebuster`, `ratelimit`, `django_rat
 
 **Severity**: Error
 
-**What causes it**: The `allauth` account backend is configured, but django-allauth isn't installed, `allauth` / `allauth.account` are missing from `INSTALLED_APPS`, or `allauth.account.middleware.AccountMiddleware` is missing from `MIDDLEWARE`.
+**What causes it**: The `allauth` account backend is configured, but django-allauth isn't installed, `allauth` / `allauth.account` are missing from `INSTALLED_APPS`, `allauth.account.middleware.AccountMiddleware` is missing from `MIDDLEWARE`, or `allauth.account.auth_backends.AuthenticationBackend` is missing from `AUTHENTICATION_BACKENDS` (without it, sign-in by email fails).
 
 **Fix**: `pip install "djust[auth-allauth]"` and add the apps and middleware from the [Accounts](accounts.md) quick start.
 
@@ -1434,6 +1434,14 @@ Recognized packages: `axes`, `defender`, `brutebuster`, `ratelimit`, `django_rat
 **What causes it**: Account pages are configured but `djust.auth` or `djust.theming` isn't in `INSTALLED_APPS`, or `djust.auth` comes after `allauth` (so allauth's own templates would win over the djust skin).
 
 **Fix**: Add `"djust.theming"` and `"djust.auth"` to `INSTALLED_APPS`, with `"djust.auth"` before `"allauth"`.
+
+### A107: A custom allauth adapter or form turns off djust's protections
+
+**Severity**: Warning
+
+**What causes it**: With the `allauth` backend, your `ACCOUNT_ADAPTER`, `ACCOUNT_FORMS["signup"]`, `SOCIALACCOUNT_ADAPTER` or `SOCIALACCOUNT_FORMS["signup"]` is a class that doesn't subclass djust's. The strict `?next=` redirects, the sign-up gate or `signup_validators` then don't apply.
+
+**Fix**: Base your class on the djust one in `djust.auth.accounts.backends.allauth_integration` (`DjustAccountAdapter`, `DjustSignupForm`, `DjustSocialAccountAdapter`, `DjustSocialSignupForm`) and add your changes there.
 
 ---
 

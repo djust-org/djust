@@ -1,4 +1,4 @@
-"""djust account-backend checks, ``djust.A100``-``A106`` (ADR-039).
+"""djust account-backend checks, ``djust.A100``-``A107`` (ADR-039).
 
 All are silent unless ``DJUST_CONFIG["ACCOUNTS"]`` is set: accounts are opt-in.
 Each check is isolated so a bug in one never hides the others or crashes
@@ -21,6 +21,25 @@ logger = logging.getLogger(__name__)
 
 _ALLAUTH_APPS = ("allauth", "allauth.account")
 _ALLAUTH_MIDDLEWARE = "allauth.account.middleware.AccountMiddleware"
+_ALLAUTH_AUTH_BACKEND = "allauth.account.auth_backends.AuthenticationBackend"
+_INTEGRATION = "djust.auth.accounts.backends.allauth_integration"
+#: allauth setting -> (key inside a dict setting or None, djust class it must subclass)
+_PROTECTIONS = (
+    ("ACCOUNT_ADAPTER", None, "DjustAccountAdapter", "strict ?next= redirects and the signup gate"),
+    ("ACCOUNT_FORMS", "signup", "DjustSignupForm", "signup_validators on sign-up"),
+    (
+        "SOCIALACCOUNT_ADAPTER",
+        None,
+        "DjustSocialAccountAdapter",
+        "signup_validators on social auto-signup",
+    ),
+    (
+        "SOCIALACCOUNT_FORMS",
+        "signup",
+        "DjustSocialSignupForm",
+        "signup_validators on social sign-up",
+    ),
+)
 _STALE_EXTENDS = re.compile(
     r"""\{%\s*extends\s+["'](account/base_entrance\.html|allauth/layouts/base\.html)["']"""
 )
@@ -93,6 +112,10 @@ def _a101(spec: Any) -> list[CheckMessage]:
         problems.append(f"INSTALLED_APPS is missing {', '.join(missing)}")
     if _ALLAUTH_MIDDLEWARE not in getattr(settings, "MIDDLEWARE", []):
         problems.append(f"MIDDLEWARE is missing {_ALLAUTH_MIDDLEWARE}")
+    if _ALLAUTH_AUTH_BACKEND not in getattr(settings, "AUTHENTICATION_BACKENDS", []):
+        problems.append(
+            f"AUTHENTICATION_BACKENDS is missing {_ALLAUTH_AUTH_BACKEND} (needed to sign in by email)"
+        )
     if not problems:
         return []
     return [
@@ -227,6 +250,35 @@ def _a106(spec: Any) -> list[CheckMessage]:
     ]
 
 
+def _a107(spec: Any) -> list[CheckMessage]:
+    if not _is_allauth(spec):
+        return []
+    from django.utils.module_loading import import_string
+
+    messages: list[CheckMessage] = []
+    for setting, key, djust_class, protects in _PROTECTIONS:
+        value = getattr(settings, setting, None)
+        if key is not None:
+            value = (value or {}).get(key) if isinstance(value, dict) else None
+        if not value:
+            continue
+        try:
+            configured = import_string(value) if isinstance(value, str) else value
+            required = import_string(f"{_INTEGRATION}.{djust_class}")
+        except ImportError:
+            continue
+        if not (isinstance(configured, type) and issubclass(configured, required)):
+            where = f"{setting}[{key!r}]" if key else setting
+            messages.append(
+                Warning(
+                    f"{where} is not a subclass of {djust_class}, so djust's {protects} are off.",
+                    hint=f"Subclass {_INTEGRATION}.{djust_class} in your own class.",
+                    id="djust.A107",
+                )
+            )
+    return messages
+
+
 _CHECKS: list[tuple[str, Callable[[Any], list[CheckMessage]]]] = [
     ("A100", _a100),
     ("A101", _a101),
@@ -235,12 +287,13 @@ _CHECKS: list[tuple[str, Callable[[Any], list[CheckMessage]]]] = [
     ("A104", _a104),
     ("A105", _a105),
     ("A106", _a106),
+    ("A107", _a107),
 ]
 
 
 @register("djust")
 def check_accounts(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
-    """``djust.A100``-``A106``: account backend configuration (silent when accounts aren't configured)."""
+    """``djust.A100``-``A107``: account backend configuration (silent when accounts aren't configured)."""
     spec = _spec()
     if not spec:
         return []
