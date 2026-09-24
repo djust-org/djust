@@ -259,7 +259,9 @@ gate, not baselined:
   metadata only), two peer-closed socket paths, the observability token
   lookup and the CSRF secret bind on a rebuilt socket request (both before
   any view exists). `observability/middleware.py` and `security/csrf.py` are
-  newly pinned modules.
+  newly pinned modules. ADR-039 (#3067) added two more, both framework-only
+  and pinned: the allauth provider listing on the plain-Django login page
+  and the account system checks at startup; #3067 adds no LiveView.
 
 ## Mount diagnostic finding
 

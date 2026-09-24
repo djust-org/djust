@@ -46,6 +46,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "channels",
     "djust",
+    "djust.auth",  # account backends + page kit (ADR-039)
     "djust.theming",  # Optional extra — needed for theming tests
     "djust.admin_ext",  # Optional extra — needed for admin tests
     # Optional extra — the component gallery's LiveView routes render templates
@@ -197,3 +198,27 @@ if os.environ.get("DJUST_DEMO_LOG_CONSOLE") == "1":
         "handlers": {"console": {"class": "logging.StreamHandler"}},
         "loggers": {"djust": {"handlers": ["console"], "level": "DEBUG", "propagate": False}},
     }
+
+
+# djust.auth.accounts "allauth" backend (ADR-039): wired only when the optional
+# django-allauth dependency is installed (it is in the dev extras).
+try:
+    import allauth  # noqa: F401
+
+    ALLAUTH_AVAILABLE = True
+except ImportError:
+    ALLAUTH_AVAILABLE = False
+
+if ALLAUTH_AVAILABLE:
+    INSTALLED_APPS += [
+        "django.contrib.sites",
+        "allauth",
+        "allauth.account",
+        "allauth.socialaccount",
+    ]
+    MIDDLEWARE += ["allauth.account.middleware.AccountMiddleware"]
+    AUTHENTICATION_BACKENDS = [
+        "django.contrib.auth.backends.ModelBackend",
+        "allauth.account.auth_backends.AuthenticationBackend",
+    ]
+    SITE_ID = 1

@@ -2,10 +2,11 @@ from typing import Any
 
 from django.conf import settings
 from django.contrib.auth import login, logout
+from django.core.exceptions import ValidationError
 from django.contrib.auth import views as auth_views
-from django.http import HttpRequest, HttpResponse, HttpResponseNotAllowed
+from django.http import Http404, HttpRequest, HttpResponse, HttpResponseNotAllowed
 from django.http.response import HttpResponseBase
-from django.shortcuts import redirect
+from django.shortcuts import redirect, render
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.generic import CreateView
 
@@ -15,15 +16,38 @@ from .forms import SignupForm
 class SignupView(CreateView):
     form_class = SignupForm
     template_name = "djust_auth/signup.html"
+    extra_context = {"auth_step": "signup"}
 
     def dispatch(self, request: HttpRequest, *args: Any, **kwargs: Any) -> HttpResponseBase:
+        from .accounts import get_account_backend
+
         if request.user.is_authenticated:
             return redirect(getattr(settings, "LOGIN_REDIRECT_URL", "/"))
+        backend = get_account_backend()
+        if not backend.supports("signup"):
+            raise Http404("Sign-up is not offered.")
+        if not backend.is_open_for_signup(request):
+            return render(
+                request,
+                "djust_auth/pages/signup_closed.html",
+                {"auth_step": "signup_closed"},
+                status=403,
+            )
         return super().dispatch(request, *args, **kwargs)
 
     def form_valid(self, form: Any) -> HttpResponse:
+        from .accounts import get_account_backend
+        from .signals import user_signed_up
+
+        backend = get_account_backend()
+        try:
+            backend.run_signup_validators(self.request, {**form.cleaned_data, "source": "form"})
+        except ValidationError as exc:
+            form.add_error(None, exc)
+            return self.form_invalid(form)
         user = form.save()
         login(self.request, user, backend="django.contrib.auth.backends.ModelBackend")
+        user_signed_up.send(sender=type(backend), request=self.request, user=user)
         return redirect(self.get_success_url())
 
     def get_success_url(self) -> str:
@@ -43,6 +67,7 @@ class SignupView(CreateView):
 class DjustLoginView(auth_views.LoginView):
     template_name = "djust_auth/login.html"
     redirect_authenticated_user = True
+    extra_context = {"auth_step": "login"}
 
 
 def logout_view(request: HttpRequest) -> HttpResponse:

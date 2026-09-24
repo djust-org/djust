@@ -1,0 +1,1 @@
+- `{% theme_login_page %}`, `{% theme_register_page %}`, `{% theme_password_reset_page %}` and `{% theme_password_confirm_page %}` accept `form=`: pass a real Django form and the tag renders the account kit card with that form's field names. Without it they render the themed mock-up as before, whose hard-coded `email` input never matched Django's login form.

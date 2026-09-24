@@ -1,0 +1,1 @@
+{% load allauth %}<section class="dj-auth-panel"><h2 class="dj-auth-subtitle">{% slot title %}{% endslot %}</h2>{% slot body %}{% endslot %}{% if slots.actions %}<div class="dj-auth-buttons">{% for action in slots.actions %}{{ action }}{% endfor %}</div>{% endif %}</section>

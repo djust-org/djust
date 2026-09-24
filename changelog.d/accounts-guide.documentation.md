@@ -1,0 +1,1 @@
+- New guide: [Accounts](docs/website/guides/accounts.md), covering sign-in, sign-up, verification and password-reset pages with a swappable backend (quick start, backends, the `auth` context, components, overriding templates, writing a backend, hooks and signals, security defaults, checks, migration). ADR-039 accepted.

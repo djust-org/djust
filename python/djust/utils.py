@@ -136,6 +136,10 @@ class BackendRegistry:
             primary ``config_key`` (``redis://``, ``rediss://``) are
             translated to ``backend_type="redis"`` and the URL is also
             stored under the ``REDIS_URL`` config key.
+        warn_on_default: Log the "falling back to in-memory" warning when
+            production (``DEBUG=False``) uses the default type. ``False``
+            for backends whose default is not an in-memory fallback
+            (e.g. the ``django`` account backend, ADR-039).
     """
 
     def __init__(
@@ -145,12 +149,14 @@ class BackendRegistry:
         factory: Callable[[str, dict], Any],
         name: str = "backend",
         top_level_aliases: Optional[dict] = None,
+        warn_on_default: bool = True,
     ):
         self._config_key = config_key
         self._default_type = default_type
         self._factory = factory
         self._name = name
         self._top_level_aliases = top_level_aliases or {}
+        self._warn_on_default = warn_on_default
         self._backend: Optional[Any] = None
 
     # URL schemes that should auto-resolve to ``backend_type="redis"``
@@ -237,7 +243,7 @@ class BackendRegistry:
             _debug = getattr(_dj_settings, "DEBUG", True)
         except Exception:
             _debug = True
-        if not _debug and backend_type == self._default_type:
+        if self._warn_on_default and not _debug and backend_type == self._default_type:
             logger.warning(
                 "Falling back to in-memory %s backend in production "
                 "(DEBUG=False) — multi-process deployments will lose %s "

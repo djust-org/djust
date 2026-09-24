@@ -1147,6 +1147,22 @@ MIXIN_TABLES = {
             ),
         },
     ),
+    "auth/accounts/backends/allauth.py": (
+        {},
+        {
+            ("providers", "Listing allauth social providers failed; showing"): (
+                "allauth provider configuration on the plain-Django login page; no LiveView exists"
+            ),
+        },
+    ),
+    "checks/accounts.py": (
+        {},
+        {
+            ("check_accounts", "djust.%s account check raised; skipping it"): (
+                "startup system check over settings; no view exists"
+            ),
+        },
+    ),
     "security/csrf.py": (
         {},
         {

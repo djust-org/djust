@@ -1,0 +1,1 @@
+- `djust.auth.social.social_auth_providers` is deprecated in favour of `{% auth_providers auth %}` from `{% load djust_auth %}` (ADR-039); it still works and now emits a `DeprecationWarning`.

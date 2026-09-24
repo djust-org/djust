@@ -1,0 +1,7 @@
+{% extends "djust_auth/layouts/auth.html" %}{% load djust_auth %}
+{% block title %}Sign-up is closed{% endblock %}
+{% block card %}{% auth_context as auth %}
+<h1 class="dj-auth-title">Sign-up is closed</h1>
+<p class="dj-auth-text">New accounts can't be created right now.</p>
+{% auth_links auth %}
+{% endblock %}

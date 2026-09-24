@@ -1,0 +1,1 @@
+{% load djust_auth %}{% for field in attrs.form %}{% if field.is_hidden %}{{ field }}{% elif field.name == "code" %}{% auth_code_input field %}{% else %}{% auth_field field %}{% endif %}{% endfor %}
