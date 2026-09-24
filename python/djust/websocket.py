@@ -3299,6 +3299,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                     logger.exception("sticky child _on_sticky_unmount raised")
                     sticky_preserved = {}
                 else:
+                    # #2998: sticky children are re-stamped with this request;
+                    # bind the browser's CSRF cookie, as _build_request does.
+                    from .security.csrf import abind_csrf_cookie
+
+                    await abind_csrf_cookie(new_request, getattr(self, "scope", None))
                     sticky_preserved = await sync_to_async(old_view._preserve_sticky_children)(
                         new_request
                     )

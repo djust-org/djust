@@ -565,6 +565,8 @@ class StickyChildRegistry:
             # the denial site.
             try:
                 child.request = new_request
+                # #2998: derive the next {% csrf_token %} from the new request.
+                child._cached_csrf_token = None
             except AttributeError:
                 logger.warning(
                     "sticky child %s does not accept request attribute "

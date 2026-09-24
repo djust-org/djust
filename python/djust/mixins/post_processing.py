@@ -10,6 +10,54 @@ from typing import TYPE_CHECKING, Any, Dict
 
 logger = logging.getLogger(__name__)
 
+# Tokens that matter when looking for the document's real ``</head>``. Comments
+# and raw-text elements (script, style, textarea, title) are matched whole so a
+# ``</head>`` written inside them is skipped; ``<body`` ends the search.
+_HEAD_SCAN_RE = re.compile(
+    r"<!--.*?-->"
+    r"|<(script|style|textarea|title)\b[^>]*>.*?</\1\s*>"
+    r"|(</head\s*>)"
+    r"|(<body\b)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _find_head_close(html: str) -> int:
+    """Index of the document's real closing ``</head>`` tag, or ``-1`` (#2987).
+
+    A plain ``str.replace("</head>", ...)`` hits the first (or every)
+    ``</head>`` *string*, including one inside an inline script or a comment.
+    This scans tags in order, skipping comments and raw-text elements, and
+    returns the first ``</head>`` outside them that comes before ``<body``.
+    """
+    for match in _HEAD_SCAN_RE.finditer(html):
+        if match.group(2):
+            return match.start()
+        if match.group(3):
+            return -1
+    return -1
+
+
+_BODY_SCAN_RE = re.compile(
+    r"<!--.*?-->"
+    r"|<(script|style|textarea|title)\b[^>]*>.*?</\1\s*>"
+    r"|(</body\s*>)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _find_body_close(html: str) -> int:
+    """Index of the document's real closing ``</body>`` tag, or ``-1``.
+
+    The same problem as :func:`_find_head_close`, for the client scripts: the
+    last ``</body>`` outside comments and raw-text elements.
+    """
+    found = -1
+    for match in _BODY_SCAN_RE.finditer(html):
+        if match.group(2):
+            found = match.start()
+    return found
+
 
 class PostProcessingMixin:
     """Post-processing: get_debug_info, _hydrate_react_components, _inject_client_script."""
@@ -357,17 +405,22 @@ class PostProcessingMixin:
                 f'<meta name="djust-csrf-cookie" content="{escape(settings.CSRF_COOKIE_NAME)}">'
                 f'<meta name="djust-csrf-token" content="{escape(get_token(request))}">'
             )
+        # Both go into the document's real <head>, once (#2987).
+        head_close = _find_head_close(html)
+        head_inject = ""
         if csrf_meta:
-            if "</head>" in html:
-                html = html.replace("</head>", f"{csrf_meta}</head>", 1)
+            if head_close >= 0:
+                head_inject += csrf_meta
             else:
                 full_script = csrf_meta + full_script
+        if debug_css_link and head_close >= 0:
+            head_inject += debug_css_link
+        if head_inject:
+            html = html[:head_close] + head_inject + html[head_close:]
 
-        if debug_css_link and "</head>" in html:
-            html = html.replace("</head>", f"{debug_css_link}</head>")
-
-        if "</body>" in html:
-            html = html.replace("</body>", f"{full_script}</body>")
+        body_close = _find_body_close(html)
+        if body_close >= 0:
+            html = html[:body_close] + full_script + html[body_close:]
         else:
             html += full_script
 
