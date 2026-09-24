@@ -1,6 +1,6 @@
 # djust Roadmap
 
-> Current version: **1.1.2** (released 2026-08-30); **1.2.0rc1** cut 2026-09-01 — Last roadmap refresh: 2026-09-01
+> Current version: **1.2.0** (released 2026-09-23); next: **1.2.1** (non-breaking fixes) — Last roadmap refresh: 2026-09-24
 > (v1.2.0 template-engine conformance arc opened).
 >
 > **v1.1.0 status**: all fourteen `v1.1.0-N` drain buckets are complete. Two items were
@@ -30,7 +30,169 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 **Released**: `v0.9.1` cut 2026-04-30 (tag `v0.9.1`, GitHub Release published, PyPI live). Bundles 8 drain buckets + post-cleanup. Retro: RETRO.md §v0.9.1. Tracker carryovers (#1234, #1235, #1236) and the post-release SSE bug bundle (#1237) move into `v0.9.2-1` below.
 
-## Next: v1.2.0 — Template engine: Django conformance, measured by Django (HEADLINE)
+## Next: v1.2.1 — non-breaking fixes (drain)
+
+> Planned 2026-09-24 from a triage of every open issue. **Policy:** non-breaking bug fixes ship in 1.2.1; anything breaking, new features, and parser/dependency upgrades go to 1.3. Issues split into a 1.2.1 part and a 1.3 part are marked. The ADR-034–038 stack (#2944, #2954) merges after 1.2.1 is cut. Already shipped toward 1.2.1 on `main`: #3009 (inline whitespace, #2999/#3010), the CSRF resolver (#2978), SerializerCache removal (#2992), the audit gate (#2989).
+
+### v1.2.1-1 — CSRF on socket-rendered pages (drain bucket → ships in 1.2.1)
+
+*Kind:* security, broken core.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| **P1** | #2998 — `{% csrf_token %}` in a WebSocket-rendered view posts a token the browser can't satisfy (403 after dj-navigate) | v1.2.1 |
+| **P1** | #2987 — CSRF meta / debug-CSS injection target the first/every `</head>` string | v1.2.1 |
+
+### v1.2.1-2 — Server-originated turns and tick lifecycle (drain bucket → ships in 1.2.1)
+
+*Kind:* broken core, lost updates; high risk — consumer concurrency.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| **P1** | #3000 — WS closed right after an event reply never reaches `disconnect()`: zombie session (root-cause spike first; tick backstop regardless) | v1.2.1 |
+| **P1** | #2945 — A view whose `tick_interval` is shorter than its mount time never ticks | v1.2.1 |
+| **P1** | #3001 — `server_push` drops a push when the session is busy, with no retry | v1.2.1 |
+| **P1** | #2955 — `start_async` queued in `handle_tick` / `server_push` / `handle_info` never runs (port 56c36d726 from #2954 without its ADR-038 part) | v1.2.1 |
+| **P1** | #2963 — `async_pending` is never sent for `start_async` work, so loading states end early | v1.2.1 |
+
+### v1.2.1-3 — dj-root / dj-view detection (drain bucket → ships in 1.2.1)
+
+*Kind:* silently broken mounting and patching.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| **P1** | #2981 — A `dj-root` with any other attribute never mounts its WebSocket | v1.2.1 |
+| **P1** | #2892 — `dj-view` / `dj-root` on a non-`<div>` silently skips normalisation | v1.2.1 |
+
+### v1.2.1-4 — Security hygiene: logging, tenant isolation, advisory process (drain bucket → ships in 1.2.1)
+
+*Kind:* security.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| **P1** | #2947 — `DjustLogSanitizerFilter` never sees records from `djust.*` child loggers (attach at `ready()` — non-breaking option) | v1.2.1 |
+| **P1** | #2973 — Tenant isolation, part 1: `tenant_redis` presence falls back to memory; MRO-independent tenant key; system check for unknown `PRESENCE_BACKEND` (state-key prefix → 1.3) | v1.2.1 |
+| **P1** | #2878 — Advisory credits published unverified; documented intake channel is not the one used (runbook) | v1.2.1 |
+
+### v1.2.1-5 — Runtime routing, mount and sticky lifecycle (drain bucket → ships in 1.2.1)
+
+*Kind:* correctness.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| **P1** | #2962 — `self.listen()` in `mount()` never subscribes the view to NOTIFY | v1.2.1 |
+| **P1** | #2924 — `_skip_render` is never consumed on the component_id route and leaks into the next view event | v1.2.1 |
+| **P1** | #2969 — Sticky unmount calls `cancel_async_all()`, which does not exist | v1.2.1 |
+| **P1** | #2919 — `live_render` sticky reuse drops later kwargs (1.2.1: document mount-time-only kwargs and warn when they change; re-applying them → 1.3) | v1.2.1 |
+| **P1** | #2961 — Observability SQL capture misses queries from sync event handlers | v1.2.1 |
+
+### v1.2.1-6 — Realtime / multiplayer correctness and DX (drain bucket → ships in 1.2.1)
+
+*Kind:* correctness, DX.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| **P1** | #2968 — Presence users drop out after ~60 s: the client never sends `presence_heartbeat` | v1.2.1 |
+| **P1** | #3002 — V004 flags push-only `handle_*` handlers (1.2.1: stop flagging / fix the hint) | v1.2.1 |
+| **P1** | #3003 — `@rate_limit` rejections count toward the 4429 disconnect (1.2.1: document; semantics change → 1.3) | v1.2.1 |
+| **P1** | #3007 — Schema advertises `connected()`/`disconnected()` hooks the server never calls (1.2.1: correct the schema and docs; implementing the hooks → 1.3) | v1.2.1 |
+
+### v1.2.1-7 — LiveView state: dirty tracking, snapshots, forms (drain bucket → ships in 1.2.1)
+
+*Kind:* correctness.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| **P1** | #2956 — `is_dirty` / `changed_fields` never see `state()` fields | v1.2.1 |
+| **P1** | #2912 — Dirty baseline never sees a class-level component's state | v1.2.1 |
+| **P1** | #2896 — Signed back-navigation snapshot captures `__components__` but `_restore_snapshot` never applies it | v1.2.1 |
+| **P1** | #2959 — Legacy views save `state()` backing slots and framework state in the private session | v1.2.1 |
+| **P1** | #2974 — `FormMixin.reset_form` is not an `@event_handler` and is undone by `_sync_form_data` | v1.2.1 |
+
+### v1.2.1-8 — VDOM diff correctness (after #3009) (drain bucket → ships in 1.2.1)
+
+*Kind:* correctness.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| **P1** | #2997 — Keyed list (`dj-key`) out of order after filter-to-subset then restore (verify against #3009; regression test) | v1.2.1 |
+| **P1** | #2898 — VDOM diff double-escapes a SafeString value whose first render carried no HTML entity | v1.2.1 |
+| **P1** | #3012 — Text patches whose path crosses whitespace inside `<code>`/`<pre>` fail with 'node not found' | v1.2.1 |
+
+### v1.2.1-9 — Rust template renderer gaps (drain bucket → ships in 1.2.1)
+
+*Kind:* correctness; Rust.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| **P1** | #2890 — `{% verbatim %}` inside a `{% block %}` breaks the LiveView render path | v1.2.1 |
+| **P1** | #2958 — Rust renderer has no handler for `dj_activity`, `colocated_hook`, `live_form`/`live_field`/`live_errors` | v1.2.1 |
+| **P1** | #2918 — Bridged tags under an armed `block.super` run the handler 60× vs Django's 12× (may slip to 1.3 if invasive) | v1.2.1 |
+
+### v1.2.1-10 — Client JS behaviour (drain bucket → ships in 1.2.1)
+
+*Kind:* correctness; rebuilds client.js.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| **P1** | #2965 — `push(page_loading=True)` starts the page-loading bar and never stops it | v1.2.1 |
+| **P1** | #2971 — `clear_draft()` from a handler does not clear the open page's draft (+ `drafts.py` re-arm bug) | v1.2.1 |
+| **P1** | #2949 — State snapshots keyed by pathname only, so query strings collide (client key = pathname + search) | v1.2.1 |
+| **P1** | #2964 — Stream `limit=` / `stream_prune` operations never reach the browser | v1.2.1 |
+| **P1** | #2966 — `dj-track-static` cannot detect a new deploy | v1.2.1 |
+
+### v1.2.1-11 — Offline sync, uploads, PWA command (drain bucket → ships in 1.2.1)
+
+*Kind:* correctness.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| **P1** | #2957 — Globally registered PWA sync handlers are never called by `sync_endpoint_view` | v1.2.1 |
+| **P1** | #2972 — Resumable uploads cannot resume after a WebSocket drop: disconnect cleanup deletes resume state | v1.2.1 |
+| **P1** | #2967 — `manage.py generate_sw` crashes: its `--version` option clashes with Django's (rename to `--sw-version`) | v1.2.1 |
+
+### v1.2.1-12 — Components and theming CSS (drain bucket → ships in 1.2.1)
+
+*Kind:* correctness, a11y.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| **P1** | #3008 — `CodeBlock` Copy button has no behaviour (add `dj-copy`) | v1.2.1 |
+| **P1** | #2996 — `.dj-btn` label fallback → `--primary-foreground`; empty rating stars ≥ 3:1 (brand preset change → 1.3) | v1.2.1 |
+| **P1** | #2993 — Alert/Progress/Avatar render unstyled: document as unstyled and list the `--dj-*` properties (shipping CSS → 1.3) | v1.2.1 |
+| **P1** | #2985 — Silence the false 'No hook registered' for components that ship a hook (implementing the missing hooks → 1.3) | v1.2.1 |
+
+### v1.2.1-13 — Scaffolding, CLI, config and checks (drain bucket → ships in 1.2.1)
+
+*Kind:* DX.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| **P1** | #2889 — `djust new` allowlist blocks djust's own LiveViews (1.2.1: scaffold emits `"djust"` + warning check; always-allow → 1.3) | v1.2.1 |
+| **P1** | #2983 — Deploy doctor warns about sqlite3 on every `djust new` project | v1.2.1 |
+| **P1** | #2982 — `djust deploy <slug> --from-git` fails with 'No such option' | v1.2.1 |
+| **P1** | #2883 — Admin index 500s (KeyError `user`) when the djust TEMPLATES entry lacks context processors (check + docs) | v1.2.1 |
+| **P1** | #2884 — `djust init` comment cites the fixed #2872 as a blocker (rewrite the stale comment) | v1.2.1 |
+| **P1** | #2984 — Seven `LIVEVIEW_CONFIG` keys never read (1.2.1: make `jit_serialization=False` work, deprecation check for the rest; removal → 1.3) | v1.2.1 |
+| **P1** | #3006 — U001 update check flags a patched release for up to 24 h after an advisory range fix | v1.2.1 |
+| **P1** | #3013 — `fragment_text_map` rebuilt after every full parse (build lazily) | v1.2.1 |
+| **P1** | #3014 — `MoveSubtree`/`InsertSubtree` scan the whole document for their dj-if marker (one marker map per batch) | v1.2.1 |
+
+### Planned for 1.3 (not in 1.2.1)
+
+| Task | Why 1.3 |
+|---|---|
+| #3011 | Upgrade html5ever / markup5ever / markup5ever_rcdom to 0.40 together (parser upgrade) |
+| #3005 | Room/group clock: one tick per room instead of per session (new API) |
+| #3004 | Room-scoped server push (new API) |
+| #2951 | ADR-038 follow-up: owner-less log sites (fixed on #2954; closes when it merges) |
+| #2950 | PWA sync failures persist `str(exc)` (fixed on #2954; closes when it merges) |
+| #2948 | Service-worker state cache: no at-rest TTL and no clearing on logout (fixed on #2954; closes when it merges) |
+| #2960 | Legacy template context includes LiveView configuration attributes (breaking for templates that read them) |
+| #2894 | `theme_card` cannot take a body of template tags (tag signature change) |
+| #2885 | Branded-palette contrast remediation: 350 AA failures across 63 legacy presets (visual change) |
+
+## v1.2.0 — Template engine: Django conformance, measured by Django (HEADLINE)
 
 > **Opened 2026-09-01** from a packaging question — should the Rust template
 > engine become its own package and a plugin `TEMPLATES` backend for Django?
