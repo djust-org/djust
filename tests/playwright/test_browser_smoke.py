@@ -81,15 +81,17 @@ async def test_browser_smoke():
         # live instance on window.djust; a refused mount never sets it up.
         print("⏳ Waiting for LiveView WS mount...")
         try:
-            # window.djust.liveViewInstance is the live WS connection object
-            # (set in 01-dom-helpers-turbo.js once the consumer connects); a
-            # refused mount never gets here. _mountReady flips true after the
-            # first mount response is applied. Accept either signal.
+            # window.djust.liveViewInstance is assigned BEFORE the socket even
+            # connects, so it is no mount signal: a click sent before the mount
+            # frame is applied falls back to an HTTP POST, and the mount that
+            # lands afterwards renders a fresh count of 0 over it (seen on CI
+            # runners). viewMounted flips only once the mount frame is applied;
+            # a refused mount never sets it.
             await page.wait_for_function(
                 """
                 () => {
                     const dj = window.djust;
-                    return !!(dj && (dj.liveViewInstance || dj._mountReady));
+                    return !!(dj && dj.liveViewInstance && dj.liveViewInstance.viewMounted);
                 }
                 """,
                 timeout=8000,
