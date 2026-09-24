@@ -6,7 +6,7 @@ ran on it, so ``get_token()`` invented a new secret the browser never received.
 Any form rendered over the socket (a ``dj-navigate`` target, a re-mount) then
 posted a token that failed with "CSRF verification failed" (403).
 
-The regression test follows djust.org#79: a CSRF-enforcing browser loads the
+The regression test mirrors the downstream report: a CSRF-enforcing browser loads the
 page over HTTP, the same view is mounted over a real ``WebsocketCommunicator``
 carrying that browser's cookies, and the token from the mounted HTML is POSTed
 back. It must succeed (302), not 403.
@@ -208,6 +208,17 @@ class TestBindCsrfCookie:
         request = RequestFactory().get("/")
         header = f"other=1; {settings.CSRF_COOKIE_NAME}={_SECRET}".encode()
         bind_csrf_cookie(request, {"headers": [(b"cookie", header)]})
+        assert request.META["CSRF_COOKIE"] == _SECRET
+
+    def test_cookie_split_across_headers(self):
+        from djust.security.csrf import bind_csrf_cookie
+
+        request = RequestFactory().get("/")
+        headers = [
+            (b"cookie", b"a=1"),
+            (b"cookie", f"{settings.CSRF_COOKIE_NAME}={_SECRET}".encode()),
+        ]
+        bind_csrf_cookie(request, {"headers": headers})
         assert request.META["CSRF_COOKIE"] == _SECRET
 
     def test_legacy_masked_cookie_unmasks(self):

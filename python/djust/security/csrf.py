@@ -33,14 +33,17 @@ def _cookie_from_scope(scope: Optional[Mapping[str, Any]], name: str) -> Optiona
     # A bare consumer (no cookie middleware) still has the raw header.
     from django.http.cookie import parse_cookie
 
-    for key, value in scope.get("headers") or ():
-        if key == b"cookie":
-            try:
-                parsed = parse_cookie(value.decode("latin1"))
-            except Exception:  # noqa: BLE001 — a malformed header binds nothing
-                return None
-            return parsed.get(name) or None
-    return None
+    # HTTP/2 may split cookies across several headers; RFC 9113 §8.2.3 says to
+    # join them with "; " before parsing.
+    raw = "; ".join(
+        value.decode("latin1") for key, value in scope.get("headers") or () if key == b"cookie"
+    )
+    if not raw:
+        return None
+    try:
+        return parse_cookie(raw).get(name) or None
+    except Exception:  # noqa: BLE001 — a malformed header binds nothing
+        return None
 
 
 def bind_csrf_cookie(request: Any, scope: Optional[Mapping[str, Any]] = None) -> None:

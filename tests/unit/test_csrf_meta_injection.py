@@ -146,3 +146,29 @@ def test_client_scripts_go_before_the_real_body_close_once():
     assert html.count("client.min.js") + html.count("djust/client.js") == 1
     assert html.rindex("djust/client") > html.index("document.write('</head>')")
     assert html.endswith("</body></html>")
+
+
+def test_script_end_tag_with_trailing_junk_is_still_a_close():
+    # Browsers close a script at "</script foo>" too; the "</head>" inside it is text.
+    page = '<html><head><script>x = "</head>"</script\tfoo></head><body></body></html>'
+    html = _inject(page, RequestFactory().get("/"))
+    assert 'x = "</head>"' in html
+    assert html.index('name="djust-csrf-token"') > html.index("</script\tfoo>")
+
+
+def test_custom_element_named_body_something_is_not_body():
+    page = "<html><head><body-shell></body-shell></head><body></body></html>"
+    html = _inject(page, RequestFactory().get("/"))
+    assert html.index('name="djust-csrf-token"') < html.index("</head>")
+    assert html.index('name="djust-csrf-token"') > html.index("</body-shell>")
+
+
+def test_unterminated_regions_scan_in_linear_time():
+    import time
+
+    for opener in ("<!--", "<script>", "<title>", "<script"):
+        page = "<html><head></head><body>" + opener * 8000 + "</body></html>"
+        start = time.perf_counter()
+        _inject(page, RequestFactory().get("/"))
+        # Quadratic scanning took 5-12 s on these inputs; linear is milliseconds.
+        assert time.perf_counter() - start < 1.0, opener

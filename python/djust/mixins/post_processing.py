@@ -10,52 +10,50 @@ from typing import TYPE_CHECKING, Any, Dict
 
 logger = logging.getLogger(__name__)
 
-# Tokens that matter when looking for the document's real ``</head>``. Comments
-# and raw-text elements (script, style, textarea, title) are matched whole so a
-# ``</head>`` written inside them is skipped; ``<body`` ends the search.
-_HEAD_SCAN_RE = re.compile(
-    r"<!--.*?-->"
-    r"|<(script|style|textarea|title)\b[^>]*>.*?</\1\s*>"
-    r"|(</head\s*>)"
-    r"|(<body\b)",
-    re.IGNORECASE | re.DOTALL,
+# #2987: find the document's real <head>/<body> boundaries. Anything tag-shaped
+# inside a raw-text region is text, not markup, so the lookups run on a masked
+# copy: ``_mask_raw_text`` (script/style bodies and comments, #2663) plus the
+# RCDATA elements title/textarea. The masks are length-preserving, so positions
+# found in the masked copy index the original string. An unterminated region
+# runs to the end of the document, as it does in the HTML tokenizer.
+_RCDATA_RE = re.compile(
+    r"<(title|textarea)(?=[\s/>])[^>]*>.*?(?:</\1[^>]*>|\Z)",
+    re.DOTALL | re.IGNORECASE,
 )
+# A tag name ends at whitespace, "/" or ">": ``<body-shell>`` is not ``<body>``.
+# End tags may carry junk before ">" (``</head foo>``), as browsers accept.
+_HEAD_CLOSE_RE = re.compile(r"</head(?=[\s/>])[^>]*>", re.IGNORECASE)
+_BODY_OPEN_RE = re.compile(r"<body(?=[\s/>])", re.IGNORECASE)
+_BODY_CLOSE_TAG_RE = re.compile(r"</body(?=[\s/>])[^>]*>", re.IGNORECASE)
 
 
-def _find_head_close(html: str) -> int:
+def _mask_document_text(html: str) -> str:
+    from .template import _mask_raw_text
+
+    masked = _mask_raw_text(html)
+    return _RCDATA_RE.sub(lambda m: "\x00" * len(m.group(0)), masked)
+
+
+def _find_head_close(masked: str) -> int:
     """Index of the document's real closing ``</head>`` tag, or ``-1`` (#2987).
 
-    A plain ``str.replace("</head>", ...)`` hits the first (or every)
-    ``</head>`` *string*, including one inside an inline script or a comment.
-    This scans tags in order, skipping comments and raw-text elements, and
-    returns the first ``</head>`` outside them that comes before ``<body``.
+    ``masked`` is the page after :func:`_mask_document_text`. A plain
+    ``str.replace("</head>", ...)`` hit the first (or every) ``</head>``
+    *string*, including one inside an inline script or a comment. This returns
+    the first real ``</head>``, provided it comes before ``<body``.
     """
-    for match in _HEAD_SCAN_RE.finditer(html):
-        if match.group(2):
-            return match.start()
-        if match.group(3):
-            return -1
-    return -1
+    head_close = _HEAD_CLOSE_RE.search(masked)
+    if head_close is None:
+        return -1
+    body_open = _BODY_OPEN_RE.search(masked, 0, head_close.start())
+    return -1 if body_open else head_close.start()
 
 
-_BODY_SCAN_RE = re.compile(
-    r"<!--.*?-->"
-    r"|<(script|style|textarea|title)\b[^>]*>.*?</\1\s*>"
-    r"|(</body\s*>)",
-    re.IGNORECASE | re.DOTALL,
-)
-
-
-def _find_body_close(html: str) -> int:
-    """Index of the document's real closing ``</body>`` tag, or ``-1``.
-
-    The same problem as :func:`_find_head_close`, for the client scripts: the
-    last ``</body>`` outside comments and raw-text elements.
-    """
+def _find_body_close(masked: str) -> int:
+    """Index of the document's last real closing ``</body>`` tag, or ``-1``."""
     found = -1
-    for match in _BODY_SCAN_RE.finditer(html):
-        if match.group(2):
-            found = match.start()
+    for match in _BODY_CLOSE_TAG_RE.finditer(masked):
+        found = match.start()
     return found
 
 
@@ -406,7 +404,8 @@ class PostProcessingMixin:
                 f'<meta name="djust-csrf-token" content="{escape(get_token(request))}">'
             )
         # Both go into the document's real <head>, once (#2987).
-        head_close = _find_head_close(html)
+        masked = _mask_document_text(html)
+        head_close = _find_head_close(masked)
         head_inject = ""
         if csrf_meta:
             if head_close >= 0:
@@ -418,7 +417,10 @@ class PostProcessingMixin:
         if head_inject:
             html = html[:head_close] + head_inject + html[head_close:]
 
-        body_close = _find_body_close(html)
+        # Found before the head insertion, so shift it past the inserted text.
+        body_close = _find_body_close(masked)
+        if body_close >= 0 and head_inject and body_close >= head_close:
+            body_close += len(head_inject)
         if body_close >= 0:
             html = html[:body_close] + full_script + html[body_close:]
         else:
