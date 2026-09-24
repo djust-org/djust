@@ -460,10 +460,20 @@ def _patch_kinds(frame: Dict[str, Any]) -> Dict[str, int]:
 
 
 def _phase_row(
-    variant: str, phase: str, frame: Dict[str, Any], total_s: float, view: Any
+    variant: str,
+    phase: str,
+    frame: Dict[str, Any],
+    total_s: float,
+    view: Any,
+    received_at: Optional[float] = None,
 ) -> PhaseRow:
     timing = view._rust_view.get_render_timing() or {}
     is_mount = phase == "mount"
+    # The view's renders during this phase that returned before the frame
+    # arrived, in completion order. The frame goes out after its render
+    # returns, so the last of these produced it; a render still running when
+    # the frame arrived cannot be the frame's (#3048).
+    own_renders = CROSSINGS.renders_of(view, before=received_at)
     return PhaseRow(
         variant=variant,
         phase=phase,
@@ -479,6 +489,8 @@ def _phase_row(
         xing_ms=CROSSINGS.rust_secs * 1000.0,
         py_xings=CROSSINGS.python_calls,
         xing_kinds=dict(CROSSINGS.kinds),
+        render_xings=own_renders[-1].rust_calls if own_renders else 0,
+        renders=len(own_renders),
         queries=len(QUERY_LOG),
         sql_ms=sum(QUERY_LOG) * 1000.0,
         list_ms=(getattr(view, "_orm_list_s", 0.0) * 1000.0) if is_mount else 0.0,
@@ -513,9 +525,10 @@ async def _drive(variant: str) -> List[PhaseRow]:
         t0 = time.perf_counter()
         await comm.send_json_to({"type": "mount", "view": f"{MOD}.{cls_name}", "url": MOUNT_URL})
         mount = await _recv_until(comm, "mount")
-        total_s = time.perf_counter() - t0
+        received_at = time.perf_counter()
+        total_s = received_at - t0
         view = LAST_VIEW[0]
-        mount_row = _phase_row(variant, "mount", mount, total_s, view)
+        mount_row = _phase_row(variant, "mount", mount, total_s, view, received_at)
         rows.append(mount_row)
 
         # (d) the variant column rendered. Computed on the worker thread — the
@@ -534,8 +547,9 @@ async def _drive(variant: str) -> List[PhaseRow]:
             t0 = time.perf_counter()
             await comm.send_json_to({"type": "event", "event": event, "params": {}, "ref": ref})
             frame = await _recv_until(comm, "patch", ref=ref)
-            total_s = time.perf_counter() - t0
-            rows.append(_phase_row(variant, event, frame, total_s, view))
+            received_at = time.perf_counter()
+            total_s = received_at - t0
+            rows.append(_phase_row(variant, event, frame, total_s, view, received_at))
     finally:
         try:
             await comm.disconnect()
@@ -586,11 +600,12 @@ def _bench_env(monkeypatch: pytest.MonkeyPatch, transactional_db: Any):
     def render_with_diff(self: Any, *args: Any, **kwargs: Any) -> Any:
         # Everything Python that runs between here and the return is a
         # callback Rust made into Python: that is the definition of bucket 2.
-        CROSSINGS.in_rust_render = True
+        # begin/end also attribute the crossings to THIS call and view (#3048).
+        CROSSINGS.begin_render()
         try:
             return orig_render(self, *args, **kwargs)
         finally:
-            CROSSINGS.in_rust_render = False
+            CROSSINGS.end_render(self.view)
 
     monkeypatch.setattr(HtmlRenderer, "render_with_diff", render_with_diff)
 
@@ -665,14 +680,30 @@ def _assert_crossings(variant: str, rows: List[PhaseRow]) -> None:
                 f"a list[Model] is JIT-serialised in Python and never reaches the sidecar"
             )
     elif variant == "presenter_reverse":
+        # Render-scoped (#3048): each phase is judged by the crossings of its
+        # OWN render call, not the phase-wide total. The total is process-wide
+        # and once (CI, xdist) held a second full render's 302 crossings on
+        # ``text_change`` next to a fragment-fast-path render that made none,
+        # failing ``302 < 302``. What this assertion is about — a fast-path
+        # render crosses less than a full one — is a property of the render
+        # call, and is deterministic measured there.
+        for phase in ("mount", "text_change", "attr_change"):
+            assert phases[phase].renders >= 1, (
+                f"{variant}/{phase}: no render of the session's view was recorded"
+            )
         for phase in ("mount", "attr_change"):
             row = phases[phase]
-            assert row.xings > 0, (
-                f"{variant}/{phase}: 0 Rust-origin crossings — the presenter walk is the one "
-                f"path that MUST cross the boundary (py-side={row.py_xings})"
+            assert row.render_xings > 0, (
+                f"{variant}/{phase}: 0 Rust-origin crossings in its render — the presenter "
+                f"walk is the one path that MUST cross the boundary (py-side={row.py_xings})"
             )
         # The text fast path re-renders nothing, so it crosses (almost) nothing.
-        assert phases["text_change"].xings < phases["attr_change"].xings
+        assert phases["text_change"].render_xings < phases["attr_change"].render_xings, (
+            f"{variant}: text_change render crossed {phases['text_change'].render_xings}, "
+            f"attr_change render {phases['attr_change'].render_xings} "
+            f"(phase totals {phases['text_change'].xings} / {phases['attr_change'].xings}, "
+            f"renders {phases['text_change'].renders} / {phases['attr_change'].renders})"
+        )
 
 
 def _measured_sessions(benchmark: Any, variant: str) -> List[List[PhaseRow]]:

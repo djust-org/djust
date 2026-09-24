@@ -113,6 +113,50 @@ class TestCrossingClassifier:
         c.reset()
         assert (c.rust_calls, c.proxy_calls, c.python_calls, c.kinds) == (0, 0, 0, {})
 
+    def test_render_calls_count_only_their_own_crossings(self):
+        """#3048: a render call's count is its own. Crossings another thread
+        makes while it runs, or that land in the same phase from a second
+        render, go to the phase total but not to this call."""
+        import threading
+
+        c = Crossings()
+        view_a, view_b = object(), object()
+        c.record("Post", 0.0, "/x/djust/mixins/rust_bridge.py")  # python-side
+
+        c.begin_render()
+        c.record("Page", 0.0, "/x/djust/renderers/html.py")
+        c.record("normalize:Post", 0.0, "/x/djust/serialization.py")
+
+        def other_thread():
+            c.begin_render()
+            for _ in range(5):
+                c.record("Post", 0.0, "/x/djust/renderers/html.py")
+            c.end_render(view_b)
+
+        t = threading.Thread(target=other_thread)
+        t.start()
+        t.join()
+        call_a = c.end_render(view_a)
+
+        assert (call_a.rust_calls, call_a.proxy_calls) == (1, 1)
+        assert c.rust_calls == 6  # the phase total still sees both renders
+        assert [r.rust_calls for r in c.renders_of(view_a)] == [1]
+        assert [r.rust_calls for r in c.renders_of(view_b)] == [5]
+        assert c.in_rust_render is False
+
+        # A later, crossing-free render of the same view is its own entry.
+        c.begin_render()
+        c.end_render(view_a)
+        assert [r.rust_calls for r in c.renders_of(view_a)] == [1, 0]
+
+        # ``before`` keeps only the renders that had returned by then.
+        first, second = c.renders_of(view_a)
+        assert c.renders_of(view_a, before=first.ended_at) == [first]
+        assert c.renders_of(view_a, before=second.ended_at) == [first, second]
+
+        c.reset()
+        assert c.renders_of(view_a) == []
+
     def test_install_patches_the_names_rust_resolves_and_restores_them(self):
         import djust.serialization as ser
 

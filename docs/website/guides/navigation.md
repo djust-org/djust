@@ -211,13 +211,33 @@ document:
 <a href="/components/">Components</a>
 ```
 
-Two symptoms name this mistake when you hit it: the destination renders with
-no styling, and `document.title` still shows the page you came from. The
-title is the same cause — `<title>` lives in `<head>`, so a `dj-root`-only
-swap cannot touch it. A LiveView that wants the tab title to follow SPA
-navigation sets it from Python with
-[`self.page_title`](document-metadata.md); a page whose title is a
-`{% block title %}` in its template only gets it on a full load.
+The symptom that names this mistake: the destination renders with no styling,
+and nothing errors.
+
+#### What live navigation updates, and what it keeps
+
+| Part of the destination page | On `dj-navigate` / `live_redirect` |
+|---|---|
+| Everything inside `[dj-root]` | Replaced |
+| `<title>` | Updated (since 1.2.1, see below) |
+| `<head>` stylesheets, scripts, `<meta>` | **Kept from the previous page** |
+| Scripts outside `[dj-root]` (an `{% block extra_scripts %}`) | **Kept from the previous page**; the destination's never run |
+| Inline `<script>` inside `[dj-root]` | Inserted, never executed |
+
+The title follows the destination in this order:
+
+1. [`self.page_title`](document-metadata.md), when the view sets it (in
+   `mount()` or later). It always wins.
+2. Otherwise the `<title>` of the view's page template, `{% block title %}`
+   included, rendered with the view's values. djust leaves the title unchanged
+   when that `<title>` uses `{{ block.super }}` or reads a variable the view
+   does not hold (a context-processor value such as `site_name`); set
+   `page_title` in those cases.
+
+Anything else that differs per page outside `[dj-root]` (a page-specific
+stylesheet, an `extra_scripts` block) needs a full load: link to that page
+with a plain `href`. Diffing `<head>` assets on live navigation is planned for
+1.3 (#3036).
 
 > **Chart.js / map blank after `dj-navigate`?** Scripts in SPA-patched content
 > don't execute, so an inline `<script>` that inits a library renders on a hard
