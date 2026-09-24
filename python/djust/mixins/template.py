@@ -3,6 +3,7 @@ TemplateMixin - Template loading, rendering, and HTML extraction for LiveView.
 """
 
 import asyncio
+import functools
 import json
 import logging
 import os
@@ -25,29 +26,44 @@ logger = logging.getLogger(__name__)
 # PR review: avoid re.compile() on every request).
 # ---------------------------------------------------------------------------
 
-# Match a real root OPEN tag carrying ``dj-root`` as a standalone attribute
-# name, on ANY element (#2892 — ``<main>``/``<section>``/``<article>`` are the
-# semantically right choice for a page's content region, and the div-only
-# pattern silently skipped the initial-GET normalisation for them).
+# Match a real root OPEN tag carrying ``dj-root`` as an ATTRIBUTE NAME, on ANY
+# element (#2892 — ``<main>``/``<section>``/``<article>`` are the semantically
+# right choice for a page's content region, and the div-only pattern silently
+# skipped the initial-GET normalisation for them).
 #
 # * Group 1 is the element name; ``_find_closing_tag_pos`` balances that name.
 # * ``html`` / ``head`` / ``body`` are excluded: the Rust VDOM's ``find_root``
 #   (``crates/djust_vdom/src/parser.rs``) searches INSIDE ``<body>``, so a root
 #   on those elements can never agree with the WS frame. The render path warns
 #   about such a root instead (``_warn_unmatched_root``).
-# * The (?=[\s=>/]) lookahead ensures the character immediately AFTER
-#   ``dj-root`` is whitespace, ``=``, ``>``, or ``/`` — so ``dj-root-other``,
-#   ``dj-rooted``, ``data-dj-root``, etc. do NOT match. \b alone is unreliable
-#   because ``-`` is a non-word character and ``dj-root-foo`` has a \b between
-#   ``t`` and ``-``.
+# * QUOTE-AWARE: the tag body is consumed as whole quoted strings or single
+#   unquoted characters (``_TAG_BODY_UNIT``), so ``dj-root`` INSIDE an
+#   attribute value can never match. A user-supplied
+#   ``value="x dj-root onfocus=…"`` is text, not a root — matching it would
+#   let the dj-view stamp land inside the value and break out of it (XSS,
+#   found in review of #2981).
+# * The name must be preceded by whitespace and followed by whitespace, ``=``,
+#   ``>`` or ``/`` — so ``dj-root-other``, ``dj-rooted``, ``data-dj-root`` etc.
+#   do NOT match.
+# * Unquoted units exclude ``<``, so a scan that started at a stray ``<`` stops
+#   at the next one instead of running to the next ``>`` (linear, not
+#   quadratic, on tag soup with no ``>``).
 #
 # The Rust twin that must agree on what a root is:
 # ``crates/djust_live/src/lib.rs::find_dj_root_content_range`` (#1646).
+_QUOTED = r""""[^"]*"|'[^']*'"""
+_TAG_BODY_UNIT = r"""(?:%s|[^'"<>])""" % _QUOTED
 _ROOT_TAG_NAME = r"<(?!(?:html|head|body)(?=[\s/>]))([A-Za-z][A-Za-z0-9-]*)(?=[\s/>])"
-_DJ_ROOT_RE = re.compile(
-    _ROOT_TAG_NAME + r"[^>]*?(?<![A-Za-z0-9_-])dj-root(?=[\s=>/])[^>]*>",
-    re.IGNORECASE,
-)
+
+
+def _root_open_re(tag_name: str, attr: str) -> "re.Pattern[str]":
+    return re.compile(
+        tag_name + _TAG_BODY_UNIT + r"*?(?<=\s)" + attr + r"(?=[\s=>/])" + _TAG_BODY_UNIT + r"*>",
+        re.IGNORECASE,
+    )
+
+
+_DJ_ROOT_RE = _root_open_re(_ROOT_TAG_NAME, "dj-root")
 
 # Same as ``_DJ_ROOT_RE`` for ``dj-view``. Used as a FALLBACK to
 # ``_DJ_ROOT_RE``: when a template declares only ``dj-view`` (the
@@ -61,31 +77,19 @@ _DJ_ROOT_RE = re.compile(
 # VDOM itself was built from the wrong subtree — the per-event patch failures
 # of #2892. The attribute-name boundary also keeps ``<body
 # dj-view-transitions>`` and ``dj-viewport-*`` from matching.
-_DJ_VIEW_RE = re.compile(
-    _ROOT_TAG_NAME + r"[^>]*?(?<![A-Za-z0-9_-])dj-view(?=[\s=>/])[^>]*>",
-    re.IGNORECASE,
-)
+_DJ_VIEW_RE = _root_open_re(_ROOT_TAG_NAME, "dj-view")
 
 # Any tag carrying a dj-root / dj-view attribute, INCLUDING the elements the
 # two patterns above exclude. Only used to decide whether a page that yielded
 # no usable root was trying to declare one (``_warn_unmatched_root``).
-_ANY_ROOT_ATTR_RE = re.compile(
-    r"<[A-Za-z][^>]*?(?<![A-Za-z0-9_-])dj-(?:root|view)(?=[\s=>/])",
-    re.IGNORECASE,
-)
+_ANY_ROOT_ATTR_RE = _root_open_re(r"<[A-Za-z][A-Za-z0-9-]*(?=[\s/>])", "dj-(?:root|view)")
 
-# Within a root open tag: the ``dj-root`` attribute including any value (the
-# ``dj-view`` stamp goes right after it), and a ``dj-view`` attribute.
-_DJ_ROOT_ATTR_RE = re.compile(
-    r"""(?<![A-Za-z0-9_-])dj-root(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?""",
-    re.IGNORECASE,
-)
-_DJ_VIEW_ATTR_RE = re.compile(r"(?<![A-Za-z0-9_-])dj-view(?=[\s=>/])", re.IGNORECASE)
-
-# An EMPTY root element used as a placeholder in a ``wrapper_template``
-# (``<div dj-root></div>``, or the same on any element / with other attributes).
-_EMPTY_ROOT_PLACEHOLDER_RE = re.compile(
-    _ROOT_TAG_NAME + r"[^>]*?(?<![A-Za-z0-9_-])dj-root(?=[\s=>/])[^>]*>\s*</\1\s*>",
+# Within an open tag already matched above: quoted strings (skipped) or a
+# ``dj-root`` / ``dj-view`` attribute name with its value, if any. Tokenising
+# this way means a ``dj-root``/``dj-view`` inside an attribute value is never
+# mistaken for the attribute (#2981 stamp placement).
+_ROOT_ATTR_TOKEN_RE = re.compile(
+    _QUOTED + r"""|(?<=\s)dj-(root|view)(?=[\s=>/])(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'>]+))?""",
     re.IGNORECASE,
 )
 
@@ -146,6 +150,17 @@ def _search_dj_root_open(html: str, *patterns: "re.Pattern[str]") -> "Optional[r
         if m:
             return m
     return None
+
+
+@functools.lru_cache(maxsize=64)
+def _open_close_res(tag: str) -> "tuple[re.Pattern[str], re.Pattern[str]]":
+    """Compiled open/close patterns for ``_find_closing_tag_pos`` (cached:
+    the scanner runs on every GET and almost always for the same few tags)."""
+    name = re.escape(tag)
+    return (
+        re.compile(r"<%s(?=[\s/>{])" % name, re.IGNORECASE),
+        re.compile(r"</%s\s*>" % name, re.IGNORECASE),
+    )
 
 
 def _root_tag_name(html: str, match: "re.Match[str]") -> str:
@@ -999,10 +1014,9 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
         # The name must end at a tag boundary: ``<section-x>`` (a custom
         # element) is not a ``<section>``. ``<div\b`` alone matched
-        # ``<div-foo>``.
-        name = re.escape(tag)
-        open_re = re.compile(r"<%s(?=[\s/>])" % name, re.IGNORECASE)
-        close_re = re.compile(r"</%s\s*>" % name, re.IGNORECASE)
+        # ``<div-foo>``. ``{`` is a boundary too, so ``<div{{ attrs }}>`` /
+        # ``<div{% if x %} ...>`` in template SOURCE still count as opens.
+        open_re, close_re = _open_close_res(tag)
 
         branch_stack: list[int] = []
         depth = 1
@@ -1286,16 +1300,23 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         """
         attr = ' dj-view="%s"' % _html_escape(view_path, quote=True)
         masked = _mask_raw_text(html)
-        parts = []
+        parts: list[str] = []
         last = 0
         for m in _DJ_ROOT_RE.finditer(masked):
             tag = html[m.start() : m.end()]
-            if _DJ_VIEW_ATTR_RE.search(tag):
+            root_attr_end: Optional[int] = None
+            has_view = False
+            for tok in _ROOT_ATTR_TOKEN_RE.finditer(tag):
+                kind = tok.group(1)
+                if kind is None:
+                    continue  # a quoted attribute value — text, skip it
+                if kind.lower() == "view":
+                    has_view = True
+                elif root_attr_end is None:
+                    root_attr_end = tok.end()
+            if has_view or root_attr_end is None:
                 continue
-            root_attr = _DJ_ROOT_ATTR_RE.search(tag)
-            if root_attr is None:  # pragma: no cover — _DJ_ROOT_RE guarantees it
-                continue
-            insert_at = m.start() + root_attr.end()
+            insert_at = m.start() + root_attr_end
             parts.append(html[last:insert_at])
             parts.append(attr)
             last = insert_at
@@ -1303,13 +1324,6 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             return html
         parts.append(html[last:])
         return "".join(parts)
-
-    @staticmethod
-    def _replace_root_placeholder(html: str, content: str) -> str:
-        """Replace every empty root placeholder element in a rendered
-        ``wrapper_template`` with ``content`` (any element name, any other
-        attributes — the old literal only knew ``<div dj-root></div>``)."""
-        return _EMPTY_ROOT_PLACEHOLDER_RE.sub(lambda _m: content, html)
 
     def _warn_unmatched_root(self, shell_html: str, found: bool) -> None:
         """Log once per view class when the page declares a dj-root/dj-view

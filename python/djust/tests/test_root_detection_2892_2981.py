@@ -128,6 +128,39 @@ class TestDjViewStamping2981:
             out == '<div dj-root dj-view="a.B"><script>// see <div dj-root> in base</script>x</div>'
         )
 
+    # --- stamp placement: attribute NAMES only (review of #2981) -----------
+
+    def test_dj_root_inside_an_attribute_value_is_never_stamped(self):
+        """Stored-XSS regression: autoescape leaves spaces, ``=`` and ``(``
+        alone, so a user value containing `` dj-root `` must not receive the
+        stamp — its quotes would close the value and turn the rest of the
+        user's text into live attributes."""
+        cls = _view("XssProbe", '<input value="{{ q }}"><div dj-root>n={{ n }}</div>')
+        cls.mount = lambda self, request, **kw: (
+            setattr(self, "n", 1),
+            setattr(self, "q", "x dj-root autofocus onfocus=alert(1) y"),
+        )
+        html = _get(cls)
+        assert '<input value="x dj-root autofocus onfocus=alert(1) y">' in html, html
+        assert html.count("dj-view=") == 1, html
+        assert f'<div dj-root dj-view="{_path(cls)}">' in html, html
+
+    def test_class_value_mentioning_dj_root_does_not_move_the_stamp(self):
+        out = TemplateMixin._stamp_dj_view('<div class="dj-root-shell" dj-root>x</div>', "a.B")
+        assert out == '<div class="dj-root-shell" dj-root dj-view="a.B">x</div>'
+
+    def test_lookalike_name_before_the_real_attribute(self):
+        out = TemplateMixin._stamp_dj_view("<div dj-rooted dj-root>x</div>", "a.B")
+        assert out == '<div dj-rooted dj-root dj-view="a.B">x</div>'
+
+    def test_dj_view_inside_a_value_does_not_suppress_the_stamp(self):
+        out = TemplateMixin._stamp_dj_view('<div dj-root title="the dj-view attr">x</div>', "a.B")
+        assert out == '<div dj-root dj-view="a.B" title="the dj-view attr">x</div>'
+
+    def test_single_quoted_and_unquoted_values(self):
+        out = TemplateMixin._stamp_dj_view("<div title='a dj-root b' dj-root=yes>x</div>", "a.B")
+        assert out == "<div title='a dj-root b' dj-root=yes dj-view=\"a.B\">x</div>"
+
     def test_view_path_is_escaped(self):
         out = TemplateMixin._stamp_dj_view("<div dj-root>x</div>", 'a."B')
         assert out == '<div dj-root dj-view="a.&quot;B">x</div>'
@@ -352,6 +385,40 @@ class TestRootOpenRegex:
     def test_rejects_non_roots(self, html):
         assert template_mod._search_dj_root_open(html, template_mod._DJ_ROOT_RE) is None
 
+    @pytest.mark.parametrize(
+        "html",
+        [
+            '<input value="x dj-root y">',
+            "<p title='a dj-view b'>",
+            '<div class="dj-root">',
+        ],
+    )
+    def test_marker_inside_a_quoted_value_is_not_a_root(self, html):
+        for pattern in (template_mod._DJ_ROOT_RE, template_mod._DJ_VIEW_RE):
+            assert template_mod._search_dj_root_open(html, pattern) is None
+
+    def test_value_hijack_does_not_move_the_root(self):
+        html = '<input value="x dj-root y"><main dj-root><p>r</p></main>'
+        m = template_mod._search_dj_root_open(html, template_mod._DJ_ROOT_RE)
+        assert html[m.start() : m.end()] == "<main dj-root>"
+
+    def test_gt_inside_a_quoted_value_stays_inside_the_tag(self):
+        html = '<div title="a>b" dj-root><p>r</p></div>'
+        m = template_mod._search_dj_root_open(html, template_mod._DJ_ROOT_RE)
+        assert m and html[m.end() :] == "<p>r</p></div>"
+
+    def test_tag_soup_without_gt_is_linear(self):
+        """The unquoted units exclude ``<``: 200 KB of ``<div <div ...`` used to
+        take over a minute (quadratic); it must now be near-instant."""
+        import time
+
+        soup = "<div " * 40_000
+        t0 = time.perf_counter()
+        for pattern in (template_mod._DJ_ROOT_RE, template_mod._ANY_ROOT_ATTR_RE):
+            assert pattern.search(soup) is None
+        TemplateMixin._stamp_dj_view(soup, "a.B")
+        assert time.perf_counter() - t0 < 2.0
+
     def test_dj_view_regex_rejects_view_prefixed_attributes(self):
         for html in ("<body dj-view-transitions>", "<div dj-viewport-top='x'>"):
             assert template_mod._search_dj_root_open(html, template_mod._DJ_VIEW_RE) is None
@@ -380,6 +447,12 @@ class TestFindClosingTagPos:
 
     def test_div_wrapper_still_works(self):
         html = "<div dj-root><div>x</div></div>tail"
+        _s, end = TemplateMixin._find_closing_div_pos(html, html.index(">") + 1)
+        assert html[end:] == "tail"
+
+    def test_template_tag_right_after_the_name_counts_as_an_open(self):
+        """``<div{{ attrs }}>`` in template source is still a ``<div>`` open."""
+        html = "<div dj-root><div{{ attrs }}>x</div></div>tail"
         _s, end = TemplateMixin._find_closing_div_pos(html, html.index(">") + 1)
         assert html[end:] == "tail"
 
@@ -412,3 +485,32 @@ def test_v012_flags_sticky_child_with_dj_view_on_section():
         if e.id == "djust.V012" and e.msg.startswith(label + ":")
     ]
     assert len(hits) == 1
+
+
+# ---------------------------------------------------------------------------
+# The other root-detecting sites use attribute-name boundaries too
+# ---------------------------------------------------------------------------
+
+
+def test_t005_ignores_view_prefixed_attributes():
+    from djust.checks.templates import _check_view_root_same_element
+
+    errors: list = []
+    _check_view_root_same_element(
+        "<body dj-view-transitions><div dj-root>x</div></body>", "t.html", "/t.html", errors
+    )
+    assert errors == []
+
+
+def test_s011_root_range_ignores_view_prefixed_attributes():
+    from djust.checks.security import _DJ_ROOT_OPEN_TAG_RE
+
+    assert _DJ_ROOT_OPEN_TAG_RE.search("<body dj-view-transitions>") is None
+    assert _DJ_ROOT_OPEN_TAG_RE.search("<main dj-view>") is not None
+
+
+def test_testing_helper_finds_a_non_div_dj_view_root():
+    from djust.testing import LiveViewTestClient
+
+    html = '<nav dj-id="n"></nav><main dj-view="a.B" dj-id="0"><p dj-id="1">x</p></main>'
+    assert LiveViewTestClient._djroot_djids(html) == ["0", "1"]

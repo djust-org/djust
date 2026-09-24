@@ -4528,28 +4528,65 @@ fn skip_raw_text_region(bytes: &[u8], i: usize) -> Option<usize> {
 }
 
 /// True when an open tag's body (the bytes between `<` and `>`) carries a
-/// `dj-root` or `dj-view` ATTRIBUTE: the name must be preceded by ASCII
-/// whitespace and followed by whitespace, `=`, `/` or the end of the tag.
-/// A bare prefix match also accepted `dj-view-transitions` (a `<body>`
-/// attribute) and `dj-viewport-top`, and missed a tab or newline before the
-/// name — disagreeing with the Python twin's `(?<![A-Za-z0-9_-])dj-root
-/// (?=[\s=>/])` and with `find_liveview_root`'s exact attribute-name
-/// comparison (#2892, #1646).
+/// `dj-root` or `dj-view` ATTRIBUTE NAME: preceded by ASCII whitespace,
+/// followed by whitespace, `=`, `/` or the end of the tag, and NOT inside a
+/// quoted attribute value (`value="x dj-root y"` is text). A bare prefix match
+/// also accepted `dj-view-transitions` (a `<body>` attribute) and
+/// `dj-viewport-top`, and missed a tab or newline before the name. This is the
+/// twin of the Python `mixins/template.py::_DJ_ROOT_RE` / `_DJ_VIEW_RE`
+/// (#2892, #2981, #1646).
 fn tag_has_root_marker(tag_body: &[u8]) -> bool {
     const MARKERS: [&[u8]; 2] = [b"dj-root", b"dj-view"];
-    let n = 7; // both markers are 7 bytes
-    if tag_body.len() < n + 1 {
-        return false;
-    }
-    (1..=tag_body.len() - n).any(|p| {
-        tag_body[p - 1].is_ascii_whitespace()
+    const N: usize = 7; // both markers are 7 bytes
+    let mut p = 0;
+    while p < tag_body.len() {
+        let c = tag_body[p];
+        if c == b'"' || c == b'\'' {
+            // Skip the whole quoted value (to EOF if unterminated).
+            p = tag_body[p + 1..]
+                .iter()
+                .position(|&q| q == c)
+                .map_or(tag_body.len(), |q| p + 1 + q + 1);
+            continue;
+        }
+        if p > 0
+            && tag_body[p - 1].is_ascii_whitespace()
+            && p + N <= tag_body.len()
             && MARKERS
                 .iter()
-                .any(|m| tag_body[p..p + n].eq_ignore_ascii_case(m))
+                .any(|m| tag_body[p..p + N].eq_ignore_ascii_case(m))
             && tag_body
-                .get(p + n)
+                .get(p + N)
                 .is_none_or(|&c| c.is_ascii_whitespace() || c == b'=' || c == b'/')
-    })
+        {
+            return true;
+        }
+        p += 1;
+    }
+    false
+}
+
+/// The index of the `>` that ends the open tag starting at `bytes[i]` (a
+/// `<`), skipping quoted attribute values so a `>` inside one does not end
+/// the tag. `Err(k)` when an unquoted `<` at `k` comes first (not a tag —
+/// resume there, as the Python pattern's unquoted units exclude `<`);
+/// `Err(len)` at EOF.
+fn find_open_tag_end(bytes: &[u8], i: usize) -> Result<usize, usize> {
+    let mut j = i + 1;
+    while j < bytes.len() {
+        match bytes[j] {
+            b'>' => return Ok(j),
+            b'<' => return Err(j),
+            q @ (b'"' | b'\'') => {
+                j = bytes[j + 1..]
+                    .iter()
+                    .position(|&c| c == q)
+                    .map_or(bytes.len(), |k| j + 1 + k + 1);
+            }
+            _ => j += 1,
+        }
+    }
+    Err(bytes.len())
 }
 
 /// Locate the byte offset in `html` immediately after the opening tag
@@ -4583,13 +4620,14 @@ fn find_dj_root_content_range(html: &str) -> Option<(usize, usize)> {
             i = next;
             continue;
         }
-        let mut j = i + 1;
-        while j < bytes.len() && bytes[j] != b'>' {
-            j += 1;
-        }
-        if j >= bytes.len() {
-            return None;
-        }
+        let j = match find_open_tag_end(bytes, i) {
+            Ok(j) => j,
+            Err(k) if k < bytes.len() => {
+                i = k;
+                continue;
+            }
+            Err(_) => return None,
+        };
         let tag_body = &bytes[i + 1..j];
         if tag_body.is_empty() || tag_body[0] == b'/' || tag_body[0] == b'!' {
             i = j + 1;
@@ -4644,7 +4682,7 @@ fn find_dj_root_content_range(html: &str) -> Option<(usize, usize)> {
         let name_start = if is_close { 1 } else { 0 };
         let name_end = tag_body[name_start..]
             .iter()
-            .position(|&c| c == b' ' || c == b'\t' || c == b'\n' || c == b'/' || c == b'>')
+            .position(|&c| c.is_ascii_whitespace() || c == b'/' || c == b'>')
             .map(|n| name_start + n)
             .unwrap_or(tag_body.len());
         let this_name = tag_body[name_start..name_end].to_ascii_lowercase();
@@ -5457,6 +5495,21 @@ mod dj_root_content_range_2663 {
             inner("<div\ndj-view=\"a.B\"><p>a</p></div>"),
             Some("<p>a</p>")
         );
+    }
+
+    #[test]
+    fn marker_inside_a_quoted_value_is_text() {
+        // A user value containing ` dj-root ` must not become the root (#2981
+        // review: the Python twin stamped dj-view inside such a value).
+        let html = "<input value=\"x dj-root onfocus=y\"><div title='a dj-view b'>\
+                    </div><main dj-root><p>r</p></main>";
+        assert_eq!(inner(html), Some("<p>r</p>"));
+    }
+
+    #[test]
+    fn gt_inside_a_quoted_value_does_not_end_the_tag() {
+        let html = "<div title=\"a>b\" dj-root><p>r</p></div>";
+        assert_eq!(inner(html), Some("<p>r</p>"));
     }
 
     #[test]

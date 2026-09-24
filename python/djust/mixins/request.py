@@ -87,9 +87,6 @@ class RequestMixin:
         @staticmethod
         def _stamp_dj_view(html: str, view_path: str) -> str: ...
 
-        @staticmethod
-        def _replace_root_placeholder(html: str, content: str) -> str: ...
-
         def handle_params(self, params: Dict[str, Any], uri: str) -> None: ...
 
         def mount(self, request: Any, **kwargs: Any) -> None: ...
@@ -315,7 +312,7 @@ class RequestMixin:
             try:
                 wrapper = loader.get_template(self.wrapper_template)
                 html = wrapper.render({"liveview_content": liveview_content}, request)
-                html = self._replace_root_placeholder(html, liveview_content)
+                html = html.replace("<div dj-root></div>", liveview_content)
             except Exception as e:
                 logger.error(
                     "Failed to render wrapper_template '%s': %s",
