@@ -406,6 +406,7 @@ issue or be explicitly closed with a reason.
 | 364 | `{% badge %}` BEM classes (`dj-badge--*`, `dj-badge__*`) have no CSS; other BEM component templates may share the drift | PR #3053 | #3025 | Open | 1.3. Documented as unstyled in 1.2.1; shipping CSS changes how pages look (#2993 precedent) |
 | 365 | dj-root vs dj-view root precedence differs between Python (dj-root first) and the Rust VDOM (first of either) | PR #3053 | #3031 | Open | pattern: parallel-path-drift. 1.3. Aligning to Python moved a dj-view-only parent's VDOM root into an embedded dj-root child (reverted in review); needs a rule that skips embedded/sticky child roots |
 | 366 | Root locators diverge from the HTML tokenizer on malformed markup (unquoted value with a quote, bogus comments, unterminated tags, quoted `</tag>` in the close walk) | PR #3053 | #3054 | Open | pattern: parallel-path-drift. Pre-existing; needs markup rendered with the `safe` filter or `mark_safe` to reach |
+| 367 | The `v1.3.0rc1` tag is not reachable from main (squash-merged release), so two changelog-pin tests fail in any local checkout with the tag, and the pin cannot see a deleted `[1.3.0rc1]` section | PR #3070 | #3072 | Open | Release process or gate rule: tag the main squash commit / merge the release branch back, or count a tag whose section exists on the branch. CI skips the tests (no tags) |
 
 ## Retro backfill — 14 un-retro'd drain buckets (v1.1.0-9 … v1.2.0-5)
 
@@ -782,6 +783,50 @@ None.
 
 ### Open Items
 None. This closes Action Tracker #361, and v1.2.1-15 has no open rows.
+
+## v1.3.0-1 — Render context and accounts check (PR #3070)
+
+**Date**: 2026-09-24
+**Scope**: The first bucket on `main` after the ADR-034–039 merge, shipping in 1.3.
+- #3061: the page-shell render (`render_full_template`) and the HTTP POST fallback sent context-processor values (`messages`/`FallbackStorage`, `perms`, `request`, `user`) through `normalize_django_value`. That logged a "non-serializable value" warning on every page and stringified the values for the shell.
+- #3068: accounts check A102 (ADR-039) ignored `ALLAUTH_TRUSTED_CLIENT_IP_HEADER`.
+
+One PR, #3070, squash-merged as `609aa382f`.
+**Tests at close**:
+- 7 cases in `python/tests/test_full_template_context_processors_3061.py`, and 1 A102 case in `python/djust/tests/accounts/test_checks.py`. With the fix reverted, 3 of the 7 and the A102 case fail.
+- Targeted modules: 2,012 passed. The pre-push selected suite passed. PR CI: 21 checks passed, 0 failed.
+
+Retro: https://github.com/djust-org/djust/pull/3070#issuecomment-5822802011
+
+### What We Learned
+
+**1. Enumerate the normalizer feeds from the code, not from the issue.** The issue's trace named the shell render. Walking every caller that feeds a processor-applied context into `normalize_django_value` found the HTTP POST fallback as well. There, `_processor_context` injects processor output as attributes, so `_apply_context_processors` adds nothing and the #1786 key set was empty. The cure is one pair of helpers, `_request_scoped_keys` and `_drop_request_scoped_values`, used by the shell render, `_sync_state_to_rust` and `runtime._context_changed_besides`, which held a third copy of the key set.
+
+**2. A docs sentence about which setting a component reads needs a grep of the readers.** The first A102 docs change treated `ALLAUTH_TRUSTED_CLIENT_IP_HEADER` as equivalent to the proxy count. djust's own WebSocket, SSE and API limiters and `AccountBackend.client_ip()` still read `DJUST_TRUSTED_PROXY_COUNT`. Code Review caught it (`unverified-claim`).
+
+**3. A release landing mid-PR can turn the local hook red on main's own tree.** The 1.3.0rc1 tag sits on the release branch, not on main's history. After merging it, two changelog-pin tests failed locally on this branch and on main. The final head was pushed without that merge, relying on a clean `merge-tree` and merge-ref CI; this was disclosed on the PR and checked by the Re-Review. The root cause is filed as #3072.
+
+### Insights
+- #3061 also exists on 1.2.1 (`template.py:1092`) and is a 1.2.2 backport candidate.
+- The byte-identical render comparison on main versus the branch, done by the reviewer, is a cheap way to check a "template output unchanged" non-breaking claim.
+
+### Review Stats
+
+| Metric | #3070 |
+|---|---|
+| Tests added | 7 + 1 Python |
+| 🔴 Findings | 0 |
+| 🟡 Findings | 1 (A102 docs overstated the header's reach), fixed before merge |
+| 🟢 Findings | 2 (a third skip-set copy in `runtime.py`; the allauth version for the header), both fixed before merge |
+| CI failures | 0 on the PR. The local pre-push failed on #3072 after the rc1 merge |
+| Findings by pattern class | `unverified-claim` ×1, `parallel-path-drift` ×1 (the nit, plus the POST-fallback path found during implementation) |
+
+### Process Improvements Applied
+None in this bucket.
+
+### Open Items
+- [ ] The `v1.3.0rc1` tag is not reachable from main. Tracked in Action Tracker #367 (GitHub #3072).
+- [ ] Backport #3061 to 1.2.2.
 
 ## v1.2.1-7 — state and rendering batch: v1.2.1-7, -8 and -9 (PR #3042)
 
