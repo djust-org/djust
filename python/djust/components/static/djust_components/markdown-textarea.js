@@ -158,6 +158,26 @@
     previewEl.innerHTML = markdownToHtml(raw);
   }
 
+  // Also answer dj-hook="MarkdownTextarea" as a registered hook. This script
+  // initialises itself (below), so without an entry here the dj-hook runtime
+  // logged a false "No hook registered" for a component that works (#2985).
+  // mounted() runs the same guarded init, so it is a no-op when the
+  // self-initialisation got there first. An app's own hook of this name wins,
+  // in either registry (djust.hooks overrides DjustHooks, so an entry here
+  // would shadow an app's window.DjustHooks.MarkdownTextarea).
+  window.djust = window.djust || {};
+  window.djust.hooks = window.djust.hooks || {};
+  if (
+    !window.djust.hooks.MarkdownTextarea &&
+    !(window.DjustHooks && window.DjustHooks.MarkdownTextarea)
+  ) {
+    window.djust.hooks.MarkdownTextarea = {
+      mounted: function () {
+        initMarkdownTextarea(this.el);
+      },
+    };
+  }
+
   function initAll() {
     document
       .querySelectorAll('[dj-hook="MarkdownTextarea"]')
