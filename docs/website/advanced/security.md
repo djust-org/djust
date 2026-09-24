@@ -183,6 +183,8 @@ Cross-site WebSocket hijacking is blocked by an `Origin` check: before accepting
 
 For any HTTP endpoints in your djust application, standard Django CSRF protection applies. Never use `@csrf_exempt` without documented justification.
 
+A `{% csrf_token %}` form in a LiveView template works whether the page was rendered over HTTP or over the socket (for example after `dj-navigate`). When djust mounts a view over the WebSocket, it binds the browser's CSRF cookie to the rebuilt request the way `CsrfViewMiddleware` would, so the rendered token matches the cookie the browser will POST with. `CSRF_COOKIE_NAME` and `CSRF_USE_SESSIONS` are honoured. Because a socket-rendered page now carries a valid token, the WebSocket `Origin` check above is what keeps it from other sites; keep `ALLOWED_HOSTS` specific.
+
 ## Authentication Enforcement
 
 Protect LiveViews that require authentication:
