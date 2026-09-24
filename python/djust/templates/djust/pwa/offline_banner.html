@@ -1,3 +1,10 @@
-<div class="djust-offline-banner" dj-offline="show" style="display: none;">
+{% comment %}
+Offline banner. Shown only while <body> has djust-offline, which the client
+sets from the browser's network state (#3041). The hiding is the
+dj-offline-show CSS from {% djust_pwa_head %} or {% djust_offline_styles %},
+so include one of them. dj-offline="show" is kept for apps that style
+against it; the client does not read it (#3051).
+{% endcomment %}
+<div class="djust-offline-banner" dj-offline-show dj-offline="show">
     <p>{{ message }}</p>
 </div>
