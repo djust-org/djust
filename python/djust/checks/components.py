@@ -315,6 +315,14 @@ def check_liveviews(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                 continue
             if is_event_handler(method):
                 continue
+            # ``handle_*`` is also the server-push namespace: ``server_push``
+            # calls an undecorated ``handle_*`` method by design, and leaving it
+            # undecorated is the only way to make a handler push can call but a
+            # browser cannot. Both of V004's fixes (add ``@event_handler``, or
+            # prefix ``_``) break that pattern, so ``handle_*`` is not flagged
+            # (#3002).
+            if name.startswith("handle_"):
+                continue
             if _EVENT_HANDLER_LIKE_NAMES.match(name) and not _is_check_suppressed("djust.V004"):
                 method_file = ""
                 method_line = None

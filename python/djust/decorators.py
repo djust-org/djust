@@ -1020,7 +1020,22 @@ def rate_limit(rate: float = 10, burst: int = 5) -> Callable[[F], F]:
     Rate-limit a WebSocket event handler (server-side).
 
     Uses a per-handler token bucket. When the limit is exceeded, the event
-    is dropped and the client is warned.
+    is dropped and the client is warned ("Rate limit exceeded, event
+    dropped").
+
+    **Rejections count toward the abuse disconnect.** Each rejected event
+    adds one warning to the connection's rate-limit counter, which never
+    goes down. When it reaches ``DJUST_CONFIG["rate_limit"]["max_warnings"]``
+    (default 3) djust closes the WebSocket with code 4429 and puts the client
+    IP on a reconnect cooldown (``reconnect_cooldown``, default 5 s). The
+    bucket is shared per caller (user, anonymous session or IP), not per tab,
+    so several tabs — or users behind one NAT without a session — share it.
+
+    This is deliberate: ``@rate_limit`` is an abuse control. Don't use it to
+    throttle a button an honest user may tap quickly (an emote, a "like");
+    an honest burst can disconnect them. Debounce or throttle on the client
+    instead (``@debounce`` / ``@throttle``, or ``dj-debounce`` /
+    ``dj-throttle``). A drop-only mode is planned for 1.3 (#3003).
 
     Args:
         rate: Tokens per second (sustained rate).
