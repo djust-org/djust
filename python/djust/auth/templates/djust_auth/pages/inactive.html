@@ -1,0 +1,7 @@
+{% extends "djust_auth/layouts/auth.html" %}{% load djust_auth %}
+{% block title %}This account is inactive{% endblock %}
+{% block card %}{% auth_context as auth %}
+<h1 class="dj-auth-title">This account is inactive</h1>
+<p class="dj-auth-text">This account can’t sign in. Contact support if you think that’s a mistake.</p>
+{% auth_links auth %}
+{% endblock %}

@@ -1,0 +1,7 @@
+{% extends "djust_auth/layouts/auth.html" %}{% load djust_auth %}
+{% block title %}Check your email{% endblock %}
+{% block card %}{% auth_context as auth %}
+<h1 class="dj-auth-title">Check your email</h1>
+<p class="dj-auth-text">{% if email %}We sent a message to <strong>{{ email }}</strong>.{% else %}We sent you a message.{% endif %} Follow it to continue.</p>
+{% auth_links auth %}
+{% endblock %}

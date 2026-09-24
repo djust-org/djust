@@ -1,0 +1,8 @@
+{% extends "djust_auth/layouts/auth.html" %}{% load djust_auth %}
+{% block title %}Email verified{% endblock %}
+{% block card %}{% auth_context as auth %}
+<h1 class="dj-auth-title">Email verified</h1>
+<p class="dj-auth-text">Thanks, your email address is confirmed.</p>
+{% if auth.links.login %}<a class="dj-auth-submit" href="{{ auth.links.login }}">Continue</a>{% endif %}
+{% auth_links auth %}
+{% endblock %}
