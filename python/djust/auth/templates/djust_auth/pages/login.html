@@ -1,0 +1,13 @@
+{% extends "djust_auth/layouts/auth.html" %}{% load djust_auth %}
+{% block title %}Sign in{% endblock %}
+{% block card %}{% auth_context as auth %}
+<h1 class="dj-auth-title">Sign in</h1>
+{% auth_providers auth %}{% if auth.providers %}{% auth_divider "or with email" %}{% endif %}
+{% auth_errors form %}
+<form method="post" class="dj-auth-form" novalidate>{% csrf_token %}
+  {% for field in form.visible_fields %}{% if field.name == "code" %}{% auth_code_input field %}{% else %}{% auth_field field %}{% endif %}{% endfor %}{% for h in form.hidden_fields %}{{ h }}{% endfor %}
+  {% if auth.next %}<input type="hidden" name="next" value="{{ auth.next }}">{% endif %}
+  <button class="dj-auth-submit" type="submit">Sign in</button>
+</form>
+{% auth_links auth %}
+{% endblock %}

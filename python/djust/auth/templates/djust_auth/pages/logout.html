@@ -1,0 +1,10 @@
+{% extends "djust_auth/layouts/auth.html" %}{% load djust_auth %}
+{% block title %}Sign out{% endblock %}
+{% block card %}{% auth_context as auth %}
+<h1 class="dj-auth-title">Sign out</h1>
+<p class="dj-auth-text">Are you sure you want to sign out?</p>
+<form method="post" class="dj-auth-form"{% if auth.links.logout %} action="{{ auth.links.logout }}"{% endif %}>{% csrf_token %}
+  {% if auth.next %}<input type="hidden" name="next" value="{{ auth.next }}">{% endif %}
+  <button class="dj-auth-submit" type="submit">Sign out</button>
+</form>
+{% endblock %}

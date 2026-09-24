@@ -1,0 +1,1 @@
+- `djust.auth.urls` login and signup pages raised `TemplateDoesNotExist` because their `djust_auth` templates never shipped; they now render the account page kit (`python/djust/auth/templates/djust_auth/login.html`).

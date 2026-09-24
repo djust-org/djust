@@ -1,0 +1,8 @@
+{% if is_checkbox %}<div class="dj-auth-field dj-auth-field--check{% if field.errors %} dj-auth-field--error{% endif %}">
+  <div class="dj-auth-control">{{ widget }}<label class="dj-auth-label" for="{{ field.id_for_label }}">{{ field.label }}</label></div>
+{% else %}<div class="dj-auth-field{% if field.errors %} dj-auth-field--error{% endif %}">
+  <label class="dj-auth-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+  <div class="dj-auth-control">{{ widget }}{% if is_password %}<button type="button" class="dj-auth-toggle" data-dj-auth-toggle aria-controls="{{ field.id_for_label }}" aria-label="Show password" hidden>Show</button>{% endif %}</div>
+{% endif %}  {% if field.help_text %}<div class="dj-auth-help" id="{{ field.id_for_label }}-help">{{ field.help_text|safe }}</div>{% endif %}
+  {% if field.errors %}<p class="dj-auth-error" id="{{ field.id_for_label }}-error">{{ field.errors|join:" " }}</p>{% endif %}
+</div>

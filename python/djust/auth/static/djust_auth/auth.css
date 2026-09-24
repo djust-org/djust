@@ -1,0 +1,55 @@
+/* djust account page kit (ADR-039).
+   Theme tokens are bare HSL components: always wrap them, hsl(var(--primary)).
+   Restyle freely by overriding the layout's blocks or these classes. */
+.dj-auth-body { margin: 0; min-height: 100vh; display: flex; flex-direction: column; background: hsl(var(--background)); color: hsl(var(--foreground)); font-family: var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif); }
+.dj-auth-top { display: flex; align-items: center; justify-content: space-between; padding: 16px 24px; }
+.dj-auth-brand { font-weight: 700; color: inherit; text-decoration: none; }
+.dj-auth-mode .theme-mode-toggle { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; padding: 0; cursor: pointer; background: transparent; color: hsl(var(--muted-foreground)); border: 1px solid hsl(var(--border)); border-radius: var(--radius, 0.5rem); }
+.dj-auth-mode .theme-mode-toggle:hover { color: hsl(var(--foreground)); background: hsl(var(--muted)); }
+.dj-auth-mode .theme-mode-toggle:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
+.dj-auth-mode .theme-mode-toggle svg { width: 18px; height: 18px; }
+.dj-auth-main { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px 16px 48px; gap: 16px; }
+.dj-auth-card { width: 100%; max-width: 420px; box-sizing: border-box; background: hsl(var(--card)); border: 1px solid hsl(var(--border)); border-radius: calc(var(--radius, 0.5rem) * 1.5); padding: 32px; box-shadow: 0 16px 40px -20px hsl(var(--foreground) / .25); }
+.dj-auth-title { font-size: 1.5rem; line-height: 1.2; margin: 0 0 8px; letter-spacing: -.01em; }
+.dj-auth-text { color: hsl(var(--muted-foreground)); margin: 0 0 20px; line-height: 1.55; }
+.dj-auth-form { display: flex; flex-direction: column; gap: 16px; margin-top: 16px; }
+.dj-auth-field { display: flex; flex-direction: column; gap: 6px; }
+.dj-auth-label { font-size: .875rem; font-weight: 600; }
+.dj-auth-control { position: relative; display: flex; align-items: center; }
+.dj-auth-control input:not([type=checkbox]):not([type=radio]), .dj-auth-control select { width: 100%; box-sizing: border-box; min-height: 44px; padding: 10px 12px; border-radius: var(--radius, 0.5rem); border: 1px solid hsl(var(--input)); background: hsl(var(--background)); color: hsl(var(--foreground)); font: inherit; }
+.dj-auth-control input:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 1px; border-color: hsl(var(--ring)); }
+.dj-auth-control input[data-dj-auth-has-toggle] { padding-right: 64px; }
+.dj-auth-field--error input { border-color: hsl(var(--destructive)); }
+.dj-auth-field--check .dj-auth-control { gap: 8px; }
+.dj-auth-field--check .dj-auth-label { font-weight: 500; }
+.dj-auth-control input[type=checkbox] { width: 18px; height: 18px; margin: 0; accent-color: hsl(var(--primary)); }
+.dj-auth-toggle { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); border: 0; background: transparent; color: hsl(var(--muted-foreground)); font: inherit; font-size: .8rem; padding: 6px 8px; cursor: pointer; border-radius: calc(var(--radius, 0.5rem) * .75); }
+.dj-auth-toggle:hover { color: hsl(var(--foreground)); }
+.dj-auth-toggle:focus-visible { outline: 2px solid hsl(var(--ring)); }
+.dj-auth-code { text-transform: uppercase; font-size: 1.5rem; letter-spacing: .35em; text-align: center; font-variant-numeric: tabular-nums; }
+.dj-auth-help { font-size: .8rem; color: hsl(var(--muted-foreground)); margin: 0; }
+.dj-auth-help ul { margin: 4px 0 0; padding-left: 18px; }
+.dj-auth-error { font-size: .8rem; color: hsl(var(--destructive)); margin: 0; }
+.dj-auth-alert { border: 1px solid hsl(var(--destructive) / .4); background: hsl(var(--destructive) / .08); color: hsl(var(--destructive)); border-radius: var(--radius, 0.5rem); padding: 10px 12px; font-size: .9rem; }
+.dj-auth-alert p { margin: 0; }
+.dj-auth-flash { width: 100%; max-width: 420px; box-sizing: border-box; border: 1px solid hsl(var(--border)); background: hsl(var(--card)); border-radius: var(--radius, 0.5rem); padding: 10px 14px; font-size: .9rem; }
+.dj-auth-flash p { margin: 0; }
+.dj-auth-submit, .dj-auth-secondary { display: inline-flex; align-items: center; justify-content: center; width: 100%; box-sizing: border-box; min-height: 44px; padding: 10px 16px; border-radius: var(--radius, 0.5rem); font: inherit; font-weight: 600; cursor: pointer; text-decoration: none; }
+.dj-auth-submit { border: 0; background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); }
+.dj-auth-submit:hover { filter: brightness(1.06); }
+.dj-auth-submit:focus-visible, .dj-auth-secondary:focus-visible, .dj-auth-provider:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
+.dj-auth-secondary { border: 1px solid hsl(var(--border)); background: transparent; color: hsl(var(--foreground)); }
+.dj-auth-providers { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
+.dj-auth-provider { display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 44px; border: 1px solid hsl(var(--border)); border-radius: var(--radius, 0.5rem); color: hsl(var(--foreground)); text-decoration: none; font-weight: 500; background: hsl(var(--background)); }
+.dj-auth-provider:hover { background: hsl(var(--muted)); }
+.dj-auth-provider-icon { display: inline-flex; }
+.dj-auth-divider { display: flex; align-items: center; gap: 12px; margin: 20px 0 4px; color: hsl(var(--muted-foreground)); font-size: .8rem; }
+.dj-auth-divider::before, .dj-auth-divider::after { content: ""; flex: 1; height: 1px; background: hsl(var(--border)); }
+.dj-auth-links { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 20px; font-size: .875rem; }
+.dj-auth-links a { color: hsl(var(--primary)); text-decoration: none; }
+.dj-auth-links a:hover { text-decoration: underline; }
+.dj-auth-footer { padding: 16px 24px; font-size: .8rem; color: hsl(var(--muted-foreground)); text-align: center; }
+@media (max-width: 480px) {
+  .dj-auth-card { border-radius: 0; border-left: 0; border-right: 0; padding: 24px 20px; }
+  .dj-auth-main { padding: 8px 0 32px; }
+}

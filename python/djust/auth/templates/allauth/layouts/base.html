@@ -1,0 +1,5 @@
+{% extends "djust_auth/layouts/auth.html" %}
+{# djust skin for django-allauth (ADR-039): every allauth page renders in the kit layout. #}
+{% block title %}{% block head_title %}{% endblock head_title %}{% endblock %}
+{% block head %}{% block extra_head %}{% endblock extra_head %}{% endblock %}
+{% block card %}{% block content %}{% endblock content %}{% endblock %}

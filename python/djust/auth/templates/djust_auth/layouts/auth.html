@@ -1,0 +1,24 @@
+{% load static theme_tags %}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Sign in{% endblock %}</title>
+  {% theme_head %}
+  <link rel="stylesheet" href="{% static 'djust_auth/auth.css' %}">
+  <script src="{% static 'djust_auth/auth.js' %}" defer></script>
+  {% block head %}{% endblock %}
+</head>
+<body class="dj-auth-body">
+  <header class="dj-auth-top">
+    {% block brand %}<a class="dj-auth-brand" href="/">{{ request.get_host }}</a>{% endblock %}
+    <span class="dj-auth-mode">{% theme_mode_toggle %}</span>
+  </header>
+  <main class="dj-auth-main">
+    {% block messages %}{% if messages %}<div class="dj-auth-flash" role="status">{% for m in messages %}<p>{{ m }}</p>{% endfor %}</div>{% endif %}{% endblock %}
+    <div class="dj-auth-card">{% block card %}{% endblock %}</div>
+    {% block aside %}{% endblock %}
+  </main>
+  <footer class="dj-auth-footer">{% block footer %}{% endblock %}</footer>
+</body>
+</html>

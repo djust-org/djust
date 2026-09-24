@@ -1,0 +1,1 @@
+- `BackendRegistry` accepts `warn_on_default=False` for backends whose default is not an in-memory fallback.
