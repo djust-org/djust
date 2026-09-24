@@ -395,7 +395,7 @@ save_and_close = (
 
 Set `page_loading=True` to show the top-of-page loading bar (`#djust-page-loading-bar`) and add `djust-navigating` to `[dj-root]` while the event is in flight. This bridges per-event scoped loading and the page-level progress indicator.
 
-> **Known issue: #2965.** At 1.2.0rc10 the bar starts but never finishes when the event completes. It stays at about 90% (and `djust-navigating` stays set) until a later navigation or mount finishes it.
+The bar finishes when the pushed event completes. (Before 1.2.1 it stuck at about 90%; #2965.)
 
 ```python
 JS.push("generate_report", page_loading=True)

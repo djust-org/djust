@@ -771,28 +771,14 @@ LIFECYCLE_METHODS: List[Dict[str, Any]] = [
         "phase": "lifecycle",
         "required": False,
     },
-    {
-        "name": "unmount",
-        "signature": "def unmount(self):",
-        "description": "Called when WebSocket disconnects. Clean up resources here.",
-        "phase": "teardown",
-        "required": False,
-    },
-    {
-        "name": "connected",
-        "signature": "def connected(self):",
-        "description": "Called when WebSocket connection is established after initial HTTP load.",
-        "phase": "lifecycle",
-        "required": False,
-    },
-    {
-        "name": "disconnected",
-        "signature": "def disconnected(self):",
-        "description": "Called when WebSocket connection is lost (before unmount).",
-        "phase": "lifecycle",
-        "required": False,
-    },
 ]
+# No ``unmount`` / ``connected`` / ``disconnected`` entries: djust 1.2 never
+# calls a LiveView method by those names (the ``connected()`` /
+# ``disconnected()`` callbacks that do exist are client-side ``dj-hook``
+# callbacks). Listing them told tools and AI assistants to implement hooks
+# that never fire (#3007). Detect the WebSocket mount with
+# ``getattr(self, "_websocket_session_id", None)``; real server-side hooks are
+# planned for 1.3.
 
 #: Class-level configuration attributes
 CLASS_ATTRIBUTES: List[Dict[str, Any]] = [
@@ -1098,8 +1084,9 @@ CONVENTIONS = {
     "handler_naming": {
         "description": "Event handlers are called by the exact name in the dj-* attribute. "
         "Use @event_handler decorator for validation and metadata. Methods named "
-        "handle_*, on_*, toggle_*, update_*, etc. without @event_handler trigger "
-        "a system check warning (djust.V004).",
+        "on_*, toggle_*, update_*, etc. without @event_handler trigger "
+        "a system check warning (djust.V004). Undecorated handle_* methods are "
+        "not flagged: server push may call them, browsers cannot.",
     },
 }
 

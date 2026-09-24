@@ -40,8 +40,8 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 | Priority | Task | Milestone |
 |---|---|---|
-| **P1** | #2998 — `{% csrf_token %}` in a WebSocket-rendered view posts a token the browser can't satisfy (403 after dj-navigate) | v1.2.1 |
-| **P1** | #2987 — CSRF meta / debug-CSS injection target the first/every `</head>` string | v1.2.1 |
+| ~~**P1**~~ | ~~#2998 — `{% csrf_token %}` in a WebSocket-rendered view posts a token the browser can't satisfy (403 after dj-navigate)~~ ✅ (#3017) | v1.2.1 |
+| ~~**P1**~~ | ~~#2987 — CSRF meta / debug-CSS injection target the first/every `</head>` string~~ ✅ (#3017) | v1.2.1 |
 
 ### v1.2.1-2 — Server-originated turns and tick lifecycle (drain bucket → ships in 1.2.1)
 
@@ -157,10 +157,10 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 | Priority | Task | Milestone |
 |---|---|---|
-| **P1** | #3008 — `CodeBlock` Copy button has no behaviour (add `dj-copy`) | v1.2.1 |
-| **P1** | #2996 — `.dj-btn` label fallback → `--primary-foreground`; empty rating stars ≥ 3:1 (brand preset change → 1.3) | v1.2.1 |
-| **P1** | #2993 — Alert/Progress/Avatar render unstyled: document as unstyled and list the `--dj-*` properties (shipping CSS → 1.3) | v1.2.1 |
-| **P1** | #2985 — Silence the false 'No hook registered' for components that ship a hook (implementing the missing hooks → 1.3) | v1.2.1 |
+| ~~**P1**~~ | ~~#3008 — `CodeBlock` Copy button has no behaviour (add `dj-copy`)~~ ✅ (#3016) | v1.2.1 |
+| ~~**P1**~~ | ~~#2996 — `.dj-btn` label fallback → `--primary-foreground`; empty rating stars ≥ 3:1 (brand preset change → 1.3)~~ ✅ (#3016) | v1.2.1 |
+| ~~**P1**~~ | ~~#2993 — Alert/Progress/Avatar render unstyled: document as unstyled and list the `--dj-*` properties (shipping CSS → 1.3)~~ ✅ (#3016) | v1.2.1 |
+| ~~**P1**~~ | ~~#2985 — Silence the false 'No hook registered' for components that ship a hook (implementing the missing hooks → 1.3)~~ ✅ (#3016) | v1.2.1 |
 
 ### v1.2.1-13 — Scaffolding, CLI, config and checks (drain bucket → ships in 1.2.1)
 

@@ -167,9 +167,7 @@ Dict items are matched by subset; other types by equality.
 
 Synthetically deliver a `handle_info` message (the hook `pg_notify` uses).
 Tests pubsub / database-notification handlers without real backend wiring.
-The test client doesn't need a real subscription, so the example below passes,
-but in production a `self.listen()` call in `mount()` never subscribes
-(Known issue: #2962; the workaround is a class-level `_listen_channels`).
+The test client doesn't need a real subscription.
 
 ```python
 class OrdersView(LiveView):

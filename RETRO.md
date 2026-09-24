@@ -389,6 +389,8 @@ issue or be explicitly closed with a reason.
 | 347 | dj-root vs dj-view root precedence: Python searches dj-root first, the Rust VDOM takes the first element | PR #3023 | #3031 | Open | pattern: parallel-path-drift. Predates #3023; T005 warns about the split layout |
 | 348 | A view whose `mount()` raises keeps its tick task running (runtime keeps the half-mounted view on that branch) | PR #3035 | #3027 | Open | pattern: fix-reproduces-own-bug. Predates #3035; the #2945 fix exposes short-tick views to it too |
 | 349 | A skip-render `server_push` answers with a `noop` that acknowledges nothing and can stop an in-flight event's loading state | PR #3035 | #3034 | Open | 1.3 (removes a frame). Split from #3001 |
+| 350 | The handler-metadata script is still injected before every `</body>` string (same class as #2987) | PR #3017 | #3018 | Open | pattern: parallel-path-drift. One of the injection sites #3017 did not move to the masked scanner |
+| 351 | The #2663 raw-text masker is quadratic on many `<script` tags with no `>` | PR #3017 | #3019 | Open | pattern: redos |
 
 ## Retro backfill — 14 un-retro'd drain buckets (v1.1.0-9 … v1.2.0-5)
 
@@ -459,6 +461,74 @@ Five instances across three of these buckets, each caught by a human or reviewer
 - [ ] A mechanical gate tying a completed ROADMAP bucket to a `RETRO.md` entry — tracked in Action Tracker #341 (GitHub #2848)
 - [ ] Mechanical checks for false/stale claims in changelog fragments and PR bodies — tracked in Action Tracker #342 (GitHub #2849)
 
+## v1.2.1-1 — CSRF on socket-rendered pages (PR #3017)
+
+**Date**: 2026-09-24
+**Scope**: Two issues about CSRF on pages the socket renders. #2998: the socket mount rebuilt the view's request with `RequestFactory`, which carried no cookies and never ran `CsrfViewMiddleware`, so `{% csrf_token %}` minted a secret the browser never received and every form posted after `dj-navigate` got a 403. #2987: the CSRF meta tags went before the first `</head>` string and the debug CSS before every one, including a `</head>` inside a `<script>` string or comment. One PR, #3017, squash-merged as `f614e800d`.
+**Tests at close**: 18 cases in `python/djust/tests/test_csrf_socket_render_2998.py`, 8 new cases in `tests/unit/test_csrf_meta_injection.py`, a sticky-survivor case in `tests/unit/test_sticky_preserve.py`. Full Python suite: 30,924 passed / 947 skipped. With the fix reverted, 14 of the new tests fail. Retro: https://github.com/djust-org/djust/pull/3017#issuecomment-5805775601
+
+### What We Learned
+
+**1. Reuse the existing masker before writing a new HTML-position regex.** The first scanner was a bespoke regex; Security Check found it quadratic on unterminated regions. The fix reused #2663's `_mask_raw_text`, and Code Review then found `[^>]*>` still quadratic on tags that never close. The first perf test appended `</body></html>`, which gave the old regex a `>` to stop at and hid the bug. A perf test for a tag scanner needs input with no closing `>` after the run.
+
+**2. A never-raise helper needs a positive-outcome test in every mode.** The first `CSRF_USE_SESSIONS` attempt raised `SynchronousOnlyOperation` on the event loop, and `bind_csrf_cookie`, which never raises by design, swallowed it. Only the session-mode socket test's 403 showed the failure. `abind_csrf_cookie` now hops to a thread only in that mode.
+
+**3. Three independent wiring sweeps agreed.** Self-Review, Code Review and Re-Review each grepped every request-rebuild site on their own and reached the same list (runtime `_build_request` for WS and SSE, the live_redirect sticky staging, `live_render` children inheriting the parent's request). For a "one missed site is a partial fix" issue that is the right bar.
+
+### Insights
+- v1.2.1-3 (#3023) depends on the same raw-text masker; #3019 (the masker is quadratic on many `<script` tags with no `>`) belongs with that work.
+- Merging `origin/main` early and again before merge kept the concurrent v1.2.1-12 merge conflict-free.
+
+### Review Stats
+
+| Metric | #3017 |
+|---|---|
+| Tests added | 18 + 8 Python, 1 sticky case |
+| 🔴 Findings | 0 |
+| 🟡 Findings | 2 (quadratic regexes: Security Check, then Code Review), both fixed pre-merge |
+| CI failures | 0 (the pre-push EINVAL flake cost two local retries) |
+| Findings by pattern class | `redos` ×2, `unverified-claim` ×1 |
+
+### Process Improvements Applied
+None in this bucket.
+
+### Open Items
+- [ ] The handler-metadata script is still injected before every `</body>` string (same class as #2987). Tracked in Action Tracker #350 (GitHub #3018).
+- [ ] The #2663 raw-text masker is quadratic on many `<script` tags with no `>`. Tracked in Action Tracker #351 (GitHub #3019).
+
+## v1.2.1-12 — Components and theming CSS (PR #3016)
+
+**Date**: 2026-09-24
+**Scope**: Four component issues, each shipping its non-breaking part. #3008: the `CodeBlock` Copy button had no behaviour; it now carries `dj-copy` pointing at its own `<code>`. #2996 parts 1–2: `.dj-btn` and badge label fallbacks use the paired `--*-foreground` token instead of literal white, and empty rating stars use full `--muted-foreground` (≥ 3:1 on every preset). #2993 docs part: Alert, Progress and Avatar are documented as unstyled. #2985 1.2.1 part: four component scripts register their hook, silencing the false "No hook registered" warning. One PR, #3016, squash-merged as `1ca268c90`.
+**Tests at close**: 34 cases in `python/djust/components/tests/test_components_css_2996_2993_3008.py`, 20 in `tests/js/component_script_hooks_2985.test.js`. Full local runs: 31,021 Python passed / 947 skipped, 1,971 JS. With the fix reverted, 18 of the original 22 Python and 8 of the original 16 JS tests fail. Retro: https://github.com/djust-org/djust/pull/3016#issuecomment-5805649220
+
+### What We Learned
+
+**1. Guard every reader of the state, not just the registry you write.** Self-Review missed that `_getHookDefs()` merges `window.DjustHooks` under `window.djust.hooks`, so an app's `DjustHooks.Countdown` would have been shadowed. Code Review caught it (🔴). This is `parallel-path-drift`: the fix enumerated its own call sites, not every place the state lives.
+
+**2. Measure the contrast instead of adopting the issue's number.** The suggested `/ 0.55` passes on djust.org's palette only; measured over 136 presets × 2 modes, 187 of 214 non-exempt pairs still failed. Full `--muted-foreground` inherits a 3:1 guarantee from the existing 4.5:1 `CONTRAST_PAIRS` gate, and the test recomputes it for every preset.
+
+**3. An audit's scope is every shipped file of that kind.** The literal-white audit covered `components-classes.css` but not `components.css` (`.dj-ribbon`) or `scaffold.css`; the fix pass grepped every shipped `*.css`.
+
+### Insights
+- A test that pins an escaped value must check the value still works for its consumer: `dj-copy="#snip&quot;1"` rendered, but it is an invalid selector.
+- A browser check found what unit tests couldn't: the default preset's `--destructive-foreground` is dark, so literal white had been wrong even on the default theme.
+
+### Review Stats
+
+| Metric | #3016 |
+|---|---|
+| Tests added | 34 Python + 20 JS |
+| 🔴 Findings | 1 (`DjustHooks` precedence, Code Review), fixed pre-merge |
+| 🟡 Findings | 2 (explicit `id` selector, remaining literal-white labels), both fixed pre-merge |
+| CI failures | 0 |
+| Findings by pattern class | `parallel-path-drift` ×2, `test-gap` ×1 |
+
+### Process Improvements Applied
+None in this bucket.
+
+### Open Items
+None filed: every 🟡 was fixed in the PR. The 1.3 parts stay open on #2996 (part 3), #2993 (stylesheet) and #2985 (the missing hooks).
 ## v1.2.1-2 — server-originated turns and tick lifecycle (PR #3035)
 
 **Date**: 2026-09-23

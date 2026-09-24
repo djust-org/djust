@@ -113,6 +113,17 @@ def _tenant_context(tenant: Any) -> ContextManager[Any]:
 # per-event / url-change re-bind still uses the _tenant_context manager above.
 
 
+def _consume_async_cancel(view: Any, task_name: str) -> bool:
+    """True (and forget the mark) when ``task_name`` was cancelled via
+    ``cancel_async`` / ``cancel_async_all``. Same consume-once semantics as
+    the WS consumer's ``_run_async_work`` checks."""
+    cancelled = getattr(view, "_async_cancelled", None)
+    if cancelled and task_name in cancelled:
+        cancelled.discard(task_name)
+        return True
+    return False
+
+
 def maybe_start_tick_task(consumer: Any, view_class: Any) -> bool:
     """Start the periodic tick task for ``view_class`` if it opted in.
 
@@ -731,10 +742,10 @@ class WSConsumerTransport:
             websocket.py:2172-2174);
           * presence group join when the view supports presence
             (websocket.py:2177-2184);
-          * db_notify group joins for every channel the view subscribed to
-            (websocket.py:2190-2200) — reads ``_listen_channels`` PRE-mount() (the
-            bespoke ordering: only non-empty on a session-restore that repopulated
-            it; preserved EXACTLY, not "fixed");
+          * db_notify group joins for the class-level ``_listen_channels``
+            (websocket.py:2190-2200). This runs PRE-mount(), so channels
+            ``listen()`` adds in mount() are joined later, by
+            ``on_mount_render_ready`` (#2962);
           * periodic tick task start when the subclass overrides ``handle_tick``
             (websocket.py:2202-2208);
           * the ``use_actors`` flag off the view class (websocket.py:2211) so
@@ -801,20 +812,13 @@ class WSConsumerTransport:
         # Join db_notify groups for every channel the view subscribed to via
         # NotificationMixin.listen() (websocket.py:2186-2200). Addressed
         # per-channel (djust_db_notify_<channel>) so a NOTIFY on one channel never
-        # fans out to views listening on another. Reads ``_listen_channels``
-        # PRE-mount() — preserve the bespoke ordering EXACTLY (only non-empty on a
-        # session-restore branch that repopulated it).
+        # fans out to views listening on another. This runs BEFORE mount(), so it
+        # only sees class-level ``_listen_channels``; channels ``listen()`` adds in
+        # mount(), on a session restore, or in a later handler are joined by
+        # ``_join_listen_channels`` from ``on_mount_render_ready`` and at the end
+        # of every event turn (#2962).
         consumer._db_notify_channels = set()
-        listen_channels = getattr(view_instance, "_listen_channels", None)
-        if listen_channels:
-            for ch in listen_channels:
-                try:
-                    await consumer.channel_layer.group_add(
-                        f"djust_db_notify_{ch}", consumer.channel_name
-                    )
-                    consumer._db_notify_channels.add(ch)
-                except Exception as e:  # noqa: BLE001
-                    logger.warning("Error joining db_notify group for %s: %s", ch, e)
+        await self._join_listen_channels(view_instance)
 
         # Start periodic tick if the subclass overrides handle_tick
         # (websocket.py:2202-2208).
@@ -825,6 +829,33 @@ class WSConsumerTransport:
         # disconnect's actor cleanup guard reflects reality. The actor HANDLE is
         # created later by dispatch_actor_mount (#1915, Finding D), not here.
         consumer.use_actors = getattr(view_class, "use_actors", False)
+
+    async def _join_listen_channels(self, view: Any) -> None:
+        """Join the ``djust_db_notify_<channel>`` group for every channel the
+        view listens on that this consumer has not joined yet (#2962).
+
+        ``NotificationMixin.listen()`` only records the channel and starts the
+        process listener; the group join is transport work. It is idempotent
+        (already-joined channels are skipped), so it is safe to call after
+        mount() and after every event turn. A join failure is logged and the
+        channel is retried on the next call.
+        """
+        consumer = self._consumer
+        listen_channels = getattr(view, "_listen_channels", None)
+        if not listen_channels:
+            return
+        joined = getattr(consumer, "_db_notify_channels", None)
+        if not isinstance(joined, set):
+            joined = set()
+            consumer._db_notify_channels = joined
+        for ch in sorted(set(listen_channels) - joined):
+            try:
+                await consumer.channel_layer.group_add(
+                    f"djust_db_notify_{ch}", consumer.channel_name
+                )
+                joined.add(ch)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Error joining db_notify group for %s: %s", ch, e)
 
     async def on_event_recorded(self, view: Any, snapshot: Any) -> None:
         """Emit the DEBUG-gated ``time_travel_event`` frame for WS.
@@ -1097,6 +1128,9 @@ class WSConsumerTransport:
         sql_scope.__enter__()
         try:
             yield
+            # A handler that called ``listen()`` joins its NOTIFY group now,
+            # while the turn still holds the render lock (#2962).
+            await self._join_listen_channels(view)
         finally:
             sql_scope.__exit__(None, None, None)
             PerformanceTracker.set_current(None)
@@ -1442,6 +1476,10 @@ class WSConsumerTransport:
         mount at websocket.py:2082) records survivors the template tag already
         re-registered, so we don't double-register them.
 
+        It first joins the NOTIFY groups for channels ``listen()`` added in
+        mount() or a session restore (#2962): this is the first transport hook
+        after mount() on every admitted mount.
+
         Returns ``html`` unchanged: sticky preservation adjusts child
         registration + emits a frame, it does not rewrite the mount HTML. No-op
         (returns ``html``) when no stickys were staged.
@@ -1449,6 +1487,9 @@ class WSConsumerTransport:
         from .websocket import _find_sticky_slot_ids
 
         consumer = self._consumer
+        # mount() (or a session restore) has run and the view is admitted:
+        # join the NOTIFY groups for channels ``listen()`` added (#2962).
+        await self._join_listen_channels(view)
         sticky_preserved = getattr(consumer, "_sticky_preserved", None)
         if not sticky_preserved:
             return html
@@ -4043,6 +4084,17 @@ class ViewRuntime:
                     exc,
                 )
 
+        # A handler that set ``self._view._skip_render`` asked for no render
+        # this turn. ``_resolve_skip_render`` is the single owner of that flag
+        # on every route (#2834): it consumes it, and ``_force_full_html`` still
+        # wins. Without it here the flag rendered anyway and then leaked into
+        # the next view event, which answered ``noop`` (#2924).
+        from .websocket import _resolve_skip_render
+
+        if _resolve_skip_render(view):
+            await self._send_component_noop(event_name, event_ref)
+            return True
+
         # ADR-032 D5: the scoped path first. Same helper as the runtime event
         # path; the frame is the ``patch`` frame that path emits.
         if pre_assigns is not None and not getattr(view, "_force_full_html", False):
@@ -4053,17 +4105,7 @@ class ViewRuntime:
             # ``html_update`` (#2922). ``_flush_all_pending`` below drains any
             # push events before the noop goes out, as on the view route.
             if not changed:
-                await self._flush_all_pending()
-                noop_msg: Dict[str, Any] = {
-                    "type": "noop",
-                    "source": "event",
-                    "event_name": event_name,
-                }
-                if event_ref is not None:
-                    noop_msg["ref"] = event_ref
-                await self.transport.send(noop_msg)
-                self._dispatch_async_work(event_name)
-                await self._flush_deferred_activity_events()
+                await self._send_component_noop(event_name, event_ref)
                 return True
             if _scoped_component_for(view, changed) is component:
                 _scoped_start = time.perf_counter()
@@ -4113,6 +4155,22 @@ class ViewRuntime:
         # Dispatch any background work the component handler scheduled (WS parity).
         self._dispatch_async_work(event_name)
         return True
+
+    async def _send_component_noop(self, event_name: str, event_ref: Optional[int]) -> None:
+        """End a ``component_id`` turn that renders nothing: drain the queued
+        side effects, answer ``noop`` and start any background work — the
+        view route's skip shape (#2922, #2924)."""
+        await self._flush_all_pending()
+        noop_msg: Dict[str, Any] = {
+            "type": "noop",
+            "source": "event",
+            "event_name": event_name,
+        }
+        if event_ref is not None:
+            noop_msg["ref"] = event_ref
+        await self.transport.send(noop_msg)
+        self._dispatch_async_work(event_name)
+        await self._flush_deferred_activity_events()
 
     # ------------------------------------------------------------------ #
     # URL-change dispatch (shared between WS and SSE in this PR)
@@ -5170,11 +5228,17 @@ class ViewRuntime:
         if not view:
             return
 
+        from .mixins.async_work import track_running_async_task
+
         tasks = getattr(view, "_async_tasks", None)
         if tasks:
             for task_name, (callback, args, kwargs) in list(tasks.items()):
-                asyncio.ensure_future(
-                    self._execute_async_task(task_name, callback, args, kwargs, event_name)
+                track_running_async_task(
+                    view,
+                    task_name,
+                    asyncio.ensure_future(
+                        self._execute_async_task(task_name, callback, args, kwargs, event_name)
+                    ),
                 )
             view._async_tasks = {}
 
@@ -5182,8 +5246,12 @@ class ViewRuntime:
         if pending:
             view._async_pending = None
             callback, args, kwargs = pending
-            asyncio.ensure_future(
-                self._execute_async_task("_default", callback, args, kwargs, event_name)
+            track_running_async_task(
+                view,
+                "_default",
+                asyncio.ensure_future(
+                    self._execute_async_task("_default", callback, args, kwargs, event_name)
+                ),
             )
 
     async def _execute_async_task(
@@ -5212,6 +5280,14 @@ class ViewRuntime:
         if not view:
             return
 
+        # cancel_async() / cancel_async_all() before the task started: skip it.
+        # The WS twin ``_run_async_work`` has always checked this; the runtime
+        # copy, which serves WS events since the ADR-022 flip, did not (#2969).
+        if _consume_async_cancel(view, task_name):
+            logger.debug("Runtime: async task %s was cancelled, skipping execution", task_name)
+            await self._settle_cancelled_async(view, event_name)
+            return
+
         try:
             # Dispatch through the ONE shared helper so the sync/async handling
             # can never drift from the consumer twin (#2020, #2016 / #1646).
@@ -5236,6 +5312,13 @@ class ViewRuntime:
                     "dropping stale re-render",
                     task_name,
                 )
+                return
+
+            # Cancelled while running: skip the result handler and re-render,
+            # as the WS twin does (#2969).
+            if _consume_async_cancel(view, task_name):
+                logger.debug("Runtime: async task %s was cancelled, skipping re-render", task_name)
+                await self._settle_cancelled_async(view, event_name)
                 return
 
             # Serialise handler + render on the consumer's render lock via
@@ -5287,6 +5370,29 @@ class ViewRuntime:
                     await self._render_async_result(event_name)
             except Exception:
                 logger.exception("Runtime: error in handle_async_result for task '%s'", task_name)
+
+    async def _settle_cancelled_async(self, view: Any, event_name: Optional[str]) -> None:
+        """End the loading state a cancelled task's event announced.
+
+        The runtime twin of ``LiveViewConsumer._settle_cancelled_async``
+        (#2963): the event's reply carried ``async_pending``, so the client
+        keeps the event's loading state until a ``source="async"`` frame
+        naming the event arrives. A cancelled task skips its result handler,
+        so render the view's current state as that frame instead (#2969).
+        Work no event owns (``event_name`` None) announced nothing.
+        """
+        if event_name is None:
+            return
+        try:
+            async with self.transport.event_context(view):
+                if self.view_instance is not view:
+                    return
+                await self._render_async_result(event_name)
+        except Exception:  # noqa: BLE001 — a settle frame must never raise out of a task
+            logger.exception(
+                "Runtime: error settling cancelled async task for %s",
+                sanitize_for_log(event_name),
+            )
 
     async def _render_async_result(self, event_name: Optional[str]) -> None:
         """Re-sync + re-render after background work and emit the result frame.

@@ -70,6 +70,35 @@ async def run_async_callback(
     return result
 
 
+def track_running_async_task(view: Any, task_name: str, future: "asyncio.Future[Any]") -> None:
+    """Record ``task_name`` as running on ``view`` until ``future`` finishes.
+
+    ``cancel_async_all()`` reads ``_async_running`` to know which names to
+    mark cancelled (#2969). Both background-work dispatchers (the runtime's
+    and the WS consumer's) call this for every task they spawn.
+    """
+    running = getattr(view, "_async_running", None)
+    if running is None:
+        running = set()
+        try:
+            view._async_running = running
+        except AttributeError:  # pragma: no cover — slotted test doubles
+            return
+    running.add(task_name)
+
+    def _done(_fut: "asyncio.Future[Any]") -> None:
+        running.discard(task_name)
+        # A cancel the task never consumed (it arrived while the task waited
+        # for the render lock, or the callback raised) must not outlive it:
+        # left in place it would silently skip the next task started under
+        # the same name.
+        cancelled = getattr(view, "_async_cancelled", None)
+        if cancelled:
+            cancelled.discard(task_name)
+
+    future.add_done_callback(_done)
+
+
 def has_pending_async_work(view: Any) -> bool:
     """True when ``view`` has background work queued for after this turn.
 
@@ -200,6 +229,34 @@ class AsyncWorkMixin:
         if not hasattr(self, "_async_cancelled"):
             self._async_cancelled = set()
         self._async_cancelled.add(name)
+
+    def cancel_async_all(self) -> None:
+        """
+        Cancel every scheduled and running ``start_async`` task on this view.
+
+        Tasks that have not started are dropped (including a legacy
+        ``_async_pending`` task). Tasks already running are marked cancelled,
+        so their re-render is skipped when they finish; like
+        :meth:`cancel_async`, this cannot interrupt a synchronous callback
+        mid-run.
+
+        Unlike calling :meth:`cancel_async` for each name, it only marks names
+        that are actually running, so a task started later under the same name
+        is not cancelled in advance.
+
+        The default ``StickyMixin._on_sticky_unmount()`` calls this when a
+        sticky child is discarded (#2969).
+        """
+        tasks = getattr(self, "_async_tasks", None)
+        if tasks:
+            tasks.clear()
+        if getattr(self, "_async_pending", None) is not None:
+            self._async_pending = None
+        running = getattr(self, "_async_running", None)
+        if running:
+            if not hasattr(self, "_async_cancelled"):
+                self._async_cancelled = set()
+            self._async_cancelled.update(running)
 
     def defer(self, callback: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
         """

@@ -2139,6 +2139,8 @@ function reinitAfterDOMUpdate(scope) {
     initReactCounters();
     initTodoItems();
     bindLiveViewEvents(scope);
+    // A clear_draft() from an event handler arrives in a patch (#2971).
+    applyDraftClearFlag();
     // Extract any new colocated hook definitions (<script type="djust/hook">)
     // from the freshly-patched DOM BEFORE we mount/update hooks so definitions
     // are visible to mountHooks().

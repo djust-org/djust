@@ -585,10 +585,12 @@ class UploadConfig:
     accepted_extensions: Set[str] = field(default_factory=set)
     accepted_mimes: Set[str] = field(default_factory=set)
     writer: Optional[Type[UploadWriter]] = None  # If set, bypass disk buffering
-    # v0.5.7 (#821) — opt-in resumable upload protocol. When True, the
-    # UploadManager wraps the configured writer (or uses a default
-    # tempfile-backed resumable writer if none is set) so chunks are
-    # persisted into an external state store, surviving WS disconnects.
+    # v0.5.7 (#821) — opt-in resumable upload protocol flag, reported to
+    # the client in the upload config. It does NOT wrap anything: chunk
+    # state is persisted (and survives a WS disconnect) only when
+    # ``writer`` is a ResumableUploadWriter built with ``with_inner()``.
+    # With resumable=True and any other writer, a resume request gets
+    # ``not_found`` and the client restarts from byte 0 (#2972).
     # See docs/adr/010-resumable-uploads.md.
     resumable: bool = False
     # Finding #20 — opt-in to accept browser-executable "active content"
@@ -1161,6 +1163,48 @@ class UploadManager:
             logger.warning("Upload validation failed for %s: %s", ref, entry.error)
             return None
 
+    def resume_entry(self, ref: str, session_key: Optional[str]) -> Optional[UploadEntry]:
+        """Re-attach an upload suspended when its session closed (#2972).
+
+        Called for an ``upload_resume`` whose state check succeeded. Takes the
+        parked entry (and its live writer) for ``session_key`` and registers
+        it here, so the client's remaining chunks continue the same writer.
+        Returns None — and the caller answers ``not_found``, so the client
+        starts over — when nothing is parked for this session in this
+        process, or this view has no matching upload slot.
+        """
+        from .resumable import (
+            ResumableUploadWriter,
+            claim_suspended_upload,
+            park_suspended_upload,
+        )
+
+        if ref in self._entries:
+            return None
+        entry = claim_suspended_upload(ref, session_key)
+        if entry is None:
+            return None
+        config = self._configs.get(entry.upload_name)
+        writer_cls = config.writer if config is not None else None
+        # ``with_inner()`` builds a new class per call, and views commonly call
+        # it in mount(), so compare the wrapped inner writer class rather than
+        # the wrapper's identity.
+        same_writer = (
+            isinstance(writer_cls, type)
+            and issubclass(writer_cls, ResumableUploadWriter)
+            and isinstance(entry.writer_instance, ResumableUploadWriter)
+            and writer_cls._inner_writer_cls is type(entry.writer_instance)._inner_writer_cls
+        )
+        current_refs = self._name_to_refs.get(entry.upload_name, [])
+        active = [r for r in current_refs if r in self._entries and not self._entries[r].complete]
+        if config is None or not same_writer or len(active) >= config.max_entries:
+            # Another view may own the slot: leave it parked for that one.
+            park_suspended_upload(entry)
+            return None
+        self._entries[ref] = entry
+        self._name_to_refs.setdefault(entry.upload_name, []).append(ref)
+        return entry
+
     def cancel_upload(self, ref: str) -> None:
         """Cancel and clean up an upload.
 
@@ -1250,9 +1294,39 @@ class UploadManager:
         return state
 
     def cleanup(self) -> None:
-        """Clean up all uploads and temp directory."""
+        """Clean up all uploads and temp directory.
+
+        Called when the session closes (WebSocket disconnect, or the view is
+        replaced). An incomplete upload is aborted, EXCEPT one written by a
+        :class:`~djust.uploads.resumable.ResumableUploadWriter`: that one is
+        suspended, keeping its resume state until the TTL so the client can
+        resume it after reconnecting (#2972).
+        """
         for entry in self._entries.values():
             if entry.writer_instance is not None and not entry._complete:
+                # Imported here, and only for a live writer: the module is also
+                # loaded standalone (without its package) by some tests.
+                from .resumable import (
+                    ResumableUploadWriter,
+                    park_suspended_upload,
+                    sweep_suspended_uploads,
+                )
+
+                sweep_suspended_uploads()
+
+                writer = entry.writer_instance
+                if (
+                    isinstance(writer, ResumableUploadWriter)
+                    and not entry._writer_aborted
+                    and entry._error is None
+                    and entry._session_key is not None
+                ):
+                    try:
+                        writer.suspend()
+                        park_suspended_upload(entry)
+                        continue
+                    except Exception:  # noqa: BLE001 — fall back to the abort below
+                        logger.exception("suspending resumable upload %s failed", entry.ref)
                 self._safe_abort_writer(entry, ConnectionAbortedError("session closed"))
             entry.cleanup()
         self._entries.clear()
