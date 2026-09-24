@@ -266,6 +266,22 @@ class TestStickyStateSurvivesRedirect:
         assert survivors["audio-player"] is audio
         assert survivors["audio-player"].current_track == "A"
 
+    def test_survivor_derives_its_next_csrf_token_from_the_new_request(self, rf):
+        """#2998: the survivor is re-stamped with the live_redirect request, so
+        its cached ``{% csrf_token %}`` is dropped and re-derived from it."""
+        parent = _make_parent(rf, _ParentWithSticky)
+        _render(parent)
+        audio = next(iter(parent._child_views.values()))
+        audio._cached_csrf_token = "stale"
+
+        new_request = rf.get("/settings/")
+        from django.contrib.auth.models import AnonymousUser
+
+        new_request.user = AnonymousUser()
+        survivors = parent._preserve_sticky_children(new_request)
+        assert survivors["audio-player"].request is new_request
+        assert survivors["audio-player"]._cached_csrf_token is None
+
 
 # ---------------------------------------------------------------------------
 # 3. Non-sticky child unmounted on redirect
