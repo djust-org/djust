@@ -4319,6 +4319,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     return
                 render = False
                 for event in events:
+                    # Every hook awaits: re-check the view before each push,
+                    # whether or not the previous hook raised.
+                    if self.view_instance is not view:
+                        return
                     try:
                         await self._apply_server_push(view, event)
                     except Exception as e:  # noqa: BLE001
@@ -4336,9 +4340,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     # either way, per push.
                     if not _resolve_skip_render(view):
                         render = True
-                    if self.view_instance is not view:
-                        return
-                if not dispatch_work:
+                if self.view_instance is not view or not dispatch_work:
                     return
                 if not render:
                     await self._flush_all_pending()
