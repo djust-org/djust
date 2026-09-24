@@ -389,20 +389,23 @@ issue or be explicitly closed with a reason.
 | 347 | dj-root vs dj-view root precedence: Python searches dj-root first, the Rust VDOM takes the first element | PR #3023 | #3031 | Open | pattern: parallel-path-drift. Predates #3023; T005 warns about the split layout |
 | 348 | A view whose `mount()` raises keeps its tick task running (runtime keeps the half-mounted view on that branch) | PR #3035 | #3027 | Open | pattern: fix-reproduces-own-bug. Predates #3035; the #2945 fix exposes short-tick views to it too |
 | 349 | A skip-render `server_push` answers with a `noop` that acknowledges nothing and can stop an in-flight event's loading state | PR #3035 | #3034 | Open | 1.3 (removes a frame). Split from #3001 |
-| 350 | The handler-metadata script is still injected before every `</body>` string (same class as #2987) | PR #3017 | #3018 | Open | pattern: parallel-path-drift. One of the injection sites #3017 did not move to the masked scanner |
-| 351 | The #2663 raw-text masker is quadratic on many `<script` tags with no `>` | PR #3017 | #3019 | Open | pattern: redos |
+| 350 | The handler-metadata script is still injected before every `</body>` string (same class as #2987) | PR #3017 | #3018 | Closed | pattern: parallel-path-drift. Fixed in PR #3053: the script goes before the masked real `</body>` (else `</html>`) |
+| 351 | The #2663 raw-text masker is quadratic on many `<script` tags with no `>` | PR #3017 | #3019 | Closed | pattern: redos. Fixed in PR #3053 (`[^<>]*` tags); `_split_for_streaming`'s own mask (22 s) now uses the shared masker |
 | 352 | The HTTP-POST fallback ignores `_skip_render` on the view and component routes | PR #3039 | #3038 | Open | pattern: parallel-path-drift. Predates #3039; #2924 fixed the runtime `component_id` route only |
 | 353 | `dj-track-static` deploy detection needs a mount-frame manifest check (a wire addition) | PR #3039 | #2966 | Open | 1.3. A page re-fetch was tried and rejected: a GET re-runs the HTTP mount and overwrites session state |
 | 354 | Flaky `presenter_reverse` crossing assertion in `test_model_backed_render_2532` (`302 < 302`) | PR #3047 | #3048 | Closed | pattern: flaky-test. Fixed in PR #3052: the assertion is render-scoped. The cause was process-wide phase counters, not a stale flag (it is reset in a `finally`) |
 | 355 | Dependabot #157: autobahn 24.4.2 stays in `uv.lock` for Python 3.10 (no patched release supports 3.10) | PR #3047 | Dependabot #157 | Open | Owner decision: dismiss as tolerable risk (daphne never enables permessage-deflate), or clear it when 3.10 support is dropped |
-| 356 | `{% live_form %}` / `{% live_field %}` / `{% live_errors %}` render their markup HTML-escaped on both engines (plain `str` returned to a `simple_tag`) | PR #3042 | #3043 | Open | Needs `SafeString` + `format_html` and a security pass: error messages can echo input |
-| 357 | `live_input`, `djust_skeleton`, `djust_track_static` have no Rust handler (same class as #2958) | PR #3042 | #3044 | Open | pattern: parallel-path-drift. Candidates for `_DJUST_TAGS_BRIDGED`; check `djust_skeleton`'s `render_context` dedupe first |
-| 358 | VDOM `write_html` escapes text inside raw-text elements other than script/style (`noscript`, `xmp`, …) | PR #3042 | #3045 | Open | pattern: parallel-path-drift. Share one raw-text table between the parser, the serializer and the #2898 fast paths |
+| 356 | `{% live_form %}` / `{% live_field %}` / `{% live_errors %}` render their markup HTML-escaped on both engines (plain `str` returned to a `simple_tag`) | PR #3042 | #3043 | Closed | Fixed in PR #3053: `SafeString` from `as_live*`, `format_html_join` in `live_errors`, adapters escape `for=`/class; hostile values tested |
+| 357 | `live_input`, `djust_skeleton`, `djust_track_static` have no Rust handler (same class as #2958) | PR #3042 | #3044 | Closed | pattern: parallel-path-drift. Fixed in PR #3053: bridged; djust's own bridged tags share one `RenderContext` per render (`library_render_scope`), third-party tags stay per call |
+| 358 | VDOM `write_html` escapes text inside raw-text elements other than script/style (`noscript`, `xmp`, …) | PR #3042 | #3045 | Closed | pattern: parallel-path-drift. Fixed in PR #3053: `djust_core::raw_text` shared by `write_html` and `text_node_value` |
 | 359 | Hardening: snapshot/private-state restore can shadow component methods; replay window now covers component state | PR #3042 | #3046 | Open | Items 1–2 fixed in PR #3052 (method-shadow skip, dangerous-key screen). Item 3, the replay nonce/TTL, is 1.3 |
 | 361 | Offline indicator (`show_when="offline"`) and offline banner never show; indicator text never switches | PR #3052 | #3051 | Open | Found fixing #3041. Inline `display: none` / `dj-offline` attr nothing reads. Template output changes, so check the non-breaking policy first |
 | 362 | `theme_context` pre-renders theme chunks on every request (~23 ms in djustlive) | PR #3052 | #3028 | Open | 1.3. E001 became a Warning in 1.2.1. Make the processor lazy, or fire the check only when the variables are used |
 | 363 | Live navigation keeps the previous page's `<head>` assets and outside-root scripts; `{{ block.super }}` titles are not updated | PR #3052 | #3036 | Open | 1.3. The title from `{% block title %}` shipped in 1.2.1. Head diffing or a track-static-style full-load fallback needs a wire addition |
 | 360 | Bridged tags under an armed `block.super` run the handler 60× vs Django's 12× | PR #3042 | #2918 | Open | 1.3. Memoising diverges on side-effecting parents; the lazy `block` object across the Rust→Python boundary is the likely fix |
+| 364 | `{% badge %}` BEM classes (`dj-badge--*`, `dj-badge__*`) have no CSS; other BEM component templates may share the drift | PR #3053 | #3025 | Open | 1.3. Documented as unstyled in 1.2.1; shipping CSS changes how pages look (#2993 precedent) |
+| 365 | dj-root vs dj-view root precedence differs between Python (dj-root first) and the Rust VDOM (first of either) | PR #3053 | #3031 | Open | pattern: parallel-path-drift. 1.3. Aligning to Python moved a dj-view-only parent's VDOM root into an embedded dj-root child (reverted in review); needs a rule that skips embedded/sticky child roots |
+| 366 | Root locators diverge from the HTML tokenizer on malformed markup (unquoted value with a quote, bogus comments, unterminated tags, quoted `</tag>` in the close walk) | PR #3053 | #3054 | Open | pattern: parallel-path-drift. Pre-existing; needs markup rendered with the `safe` filter or `mark_safe` to reach |
 
 ## Retro backfill — 14 un-retro'd drain buckets (v1.1.0-9 … v1.2.0-5)
 
@@ -627,6 +630,66 @@ None in this batch.
 ## v1.2.1-13 — Scaffolding, CLI, config and checks (PR #3047)
 
 Shipped in the security hygiene + scaffolding batch with v1.2.1-4, one commit per bucket. The retro, review stats and open items are in the v1.2.1-4 entry above.
+
+## v1.2.1-14 — template and rendering follow-ups (PR #3053)
+
+**Date**: 2026-09-24
+**Scope**: 11 issues filed during the v1.2.1 drain or by users since, one commit per group. Squash-merged as `4547866c7`.
+- #3018: the handler-metadata script is injected once, before the page's real `</body>` (else `</html>`).
+- #3019: the raw-text masker is linear. `_split_for_streaming`'s own mask (22 s on 32 000 unclosed `<script>`) now uses it.
+- #3020: T018 skips string/number literals and filter names in `if`/`elif`/`while`.
+- #3024: third-party inclusion tags render in LiveView templates without the djust backend.
+- #3025 (split): `{% badge %}` is documented as shipping no CSS. The CSS and the BEM class audit are 1.3.
+- #3026: `highlight_code` keeps spaces between bare words.
+- #3030: the Python root search walks tags like the Rust locator. Both walkers, and the Rust close walk, treat `<` as a tag start only before a letter, `/` or `!`.
+- #3031 moved to 1.3 (reverted in review).
+- #3043: `live_form` / `live_field` / `live_errors` render markup; user values stay escaped.
+- #3044: `live_input`, `djust_skeleton`, `djust_track_static` bridge in root templates. djust's own bridged tags share one `RenderContext` per render.
+- #3045: one raw-text element list (`djust_core::raw_text`) for the VDOM serializer and the text fast path.
+
+**Tests at close**:
+- `python/djust/tests/test_body_close_and_masker_3018_3019.py`
+- `python/djust/tests/test_root_locator_parity_3030.py`, with Rust cases in `dj_root_content_range_2663`
+- `python/tests/test_checks_t018_literals_3020.py`
+- `python/tests/test_inclusion_tag_django_backend_3024.py` (Django parity)
+- `python/djust/components/tests/test_badge_unstyled_3025.py`
+- `python/djust/tests/test_live_form_tags_safe_3043.py` (Django parity, hostile values)
+- `python/djust/tests/test_live_tags_bridged_3044.py` (Django parity) and `python/tests/test_bridge_render_context_scope_3044.py`
+- the raw-text serializer cases in `crates/djust_vdom/src/lib.rs`
+
+The pre-push hook ran the full pytest and cargo suites on each push. Re-Review: 291 targeted pytest + 18 Rust. CI green at the merge head. Retro: https://github.com/djust-org/djust/pull/3053#issuecomment-5808771912
+
+### What We Learned
+
+**1. Before sharing per-render state across bridged calls, check what the node cache keys on.** The first `library_render_scope` gave every bridged node one `RenderContext`. The bridge caches one node per argument tuple, so a stateful third-party tag merged its state across sites and loop iterations (`A1 B2 L3L4L5` instead of 1.2.0's `A1 B1 L1L1L1`). Only djust's own bridged tags share it now, and a test pins the third-party behaviour.
+
+**2. "Make the two sides agree" is non-breaking only if the side you change was wrong for every layout.** #3031 moved the VDOM to Python's precedence. A `dj-view`-only parent embedding a `{% live_render %}` child with its own `dj-root` then rooted the VDOM in the child, and parent updates stopped patching. The Rust side had been right for that layout. This is the same class as #3042's and #3052's lesson 1: test a change through the layouts its consumers use.
+
+**3. Measure a filed perf bug before scoping it.** #3019 named one masker. Measuring found a second, worse one (`_split_for_streaming`, 22 s) with the same `[^>]*` shape.
+
+### Insights
+- The Python walker had to copy the Rust walker's tag-start rule to agree with it. The HTML tokenizer's own rule (`<` + letter, `/`, `!`) was the one both could adopt. It also fixed a Rust close-walk miss (`a < b` inside the root).
+- `mark_safe` / `SafeString` are `Any` to mypy in this repo's strict islands, so typed locals are needed to return them from `-> str` functions.
+
+### Review Stats
+
+| Metric | #3053 |
+|---|---|
+| Issues | 11: 9 closed, 1 split (#3025), 1 moved to 1.3 (#3031) |
+| 🔴 Findings | 0 |
+| 🟡 Findings | 1 (Code Review: shared render context for third-party tags), fixed pre-merge |
+| 🟢 Findings | 4: 3 fixed (close walk, nested-scope test, `hl-w` before a newline), 1 filed (#3054) |
+| Re-Reviews | 1, passed |
+| CI failures | 0 |
+| Findings by pattern class | `parallel-path-drift` ×3, `behaviour-change` ×1 |
+
+### Process Improvements Applied
+None in this batch.
+
+### Open Items
+- [ ] `{% badge %}` CSS and the BEM class audit (1.3). Tracked in Action Tracker #364 (GitHub #3025).
+- [ ] dj-root vs dj-view precedence (1.3). Tracked in Action Tracker #365 (GitHub #3031).
+- [ ] Root locators on malformed markup. Tracked in Action Tracker #366 (GitHub #3054).
 
 ## v1.2.1-15 — runtime and client follow-ups (PR #3052)
 

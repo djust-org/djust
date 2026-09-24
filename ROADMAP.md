@@ -184,17 +184,17 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 | Priority | Task | Milestone |
 |---|---|---|
-| **P1** | #3018 — Handler-metadata script is injected before every `</body>` string (use the #3017 masked `</body>` lookup) | v1.2.1 |
-| **P1** | #3019 — Raw-text masker is quadratic on many `<script` without `>` | v1.2.1 |
-| **P1** | #3020 — T018 reports quoted literals and filter names in `{% if %}` comparisons as undefined | v1.2.1 |
-| **P1** | #3024 — Third-party inclusion tags crash in LiveView templates ("context must be a dict") | v1.2.1 |
-| **P1** | #3025 — `{% badge %}` output is unstyled (1.2.1: document as unstyled; shipping CSS and the BEM class audit → 1.3) | v1.2.1 |
-| **P1** | #3026 — `highlight_code` drops spaces between bare words (bash) | v1.2.1 |
-| **P1** | #3030 — Python and Rust root locators disagree on a quoted value containing `<… dj-root>` | v1.2.1 |
+| ~~**P1**~~ | ~~#3018 — Handler-metadata script is injected before every `</body>` string (use the #3017 masked `</body>` lookup)~~ ✅ (#3053) | v1.2.1 |
+| ~~**P1**~~ | ~~#3019 — Raw-text masker is quadratic on many `<script` without `>`~~ ✅ (#3053) | v1.2.1 |
+| ~~**P1**~~ | ~~#3020 — T018 reports quoted literals and filter names in `{% if %}` comparisons as undefined~~ ✅ (#3053) | v1.2.1 |
+| ~~**P1**~~ | ~~#3024 — Third-party inclusion tags crash in LiveView templates ("context must be a dict")~~ ✅ (#3053) | v1.2.1 |
+| ~~**P1**~~ | ~~#3025 — `{% badge %}` output is unstyled (1.2.1: document as unstyled; shipping CSS and the BEM class audit → 1.3)~~ ✅ docs (#3053); CSS → 1.3 | v1.2.1 |
+| ~~**P1**~~ | ~~#3026 — `highlight_code` drops spaces between bare words (bash)~~ ✅ (#3053) | v1.2.1 |
+| ~~**P1**~~ | ~~#3030 — Python and Rust root locators disagree on a quoted value containing `<… dj-root>`~~ ✅ (#3053) | v1.2.1 |
 | ~~**P1**~~ | ~~#3031 — dj-root vs dj-view precedence differs between Python and the Rust VDOM~~ → 1.3 (either rule moves the root of some existing pages: a dj-view-only parent embedding a `{% live_render %}` child with its own dj-root; design on #3031) | v1.2.1 |
-| **P1** | #3043 — `live_form` / `live_field` / `live_errors` render escaped HTML (tag markup safe, user values escaped) | v1.2.1 |
-| **P1** | #3044 — `live_input`, `djust_skeleton`, `djust_track_static` have no Rust handler | v1.2.1 |
-| **P1** | #3045 — VDOM `write_html` escapes text inside noscript, xmp and other raw-text elements | v1.2.1 |
+| ~~**P1**~~ | ~~#3043 — `live_form` / `live_field` / `live_errors` render escaped HTML (tag markup safe, user values escaped)~~ ✅ (#3053) | v1.2.1 |
+| ~~**P1**~~ | ~~#3044 — `live_input`, `djust_skeleton`, `djust_track_static` have no Rust handler~~ ✅ (#3053) | v1.2.1 |
+| ~~**P1**~~ | ~~#3045 — VDOM `write_html` escapes text inside noscript, xmp and other raw-text elements~~ ✅ (#3053) | v1.2.1 |
 
 ### v1.2.1-15 — Runtime and client follow-ups (drain bucket → ships in 1.2.1)
 
@@ -223,6 +223,7 @@ Two name shapes appear in this roadmap, with distinct meanings:
 | #2960 | Legacy template context includes LiveView configuration attributes (breaking for templates that read them) |
 | #2894 | `theme_card` cannot take a body of template tags (tag signature change) |
 | #2885 | Branded-palette contrast remediation: 350 AA failures across 63 legacy presets (visual change) |
+| #3031 | dj-root vs dj-view root precedence: one rule for Python and the Rust VDOM that skips embedded/sticky child roots (either current rule moves some pages' root) |
 
 ## v1.2.0 — Template engine: Django conformance, measured by Django (HEADLINE)
 
