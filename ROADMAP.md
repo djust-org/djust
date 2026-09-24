@@ -80,11 +80,11 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 | Priority | Task | Milestone |
 |---|---|---|
-| **P1** | #2962 — `self.listen()` in `mount()` never subscribes the view to NOTIFY | v1.2.1 |
-| **P1** | #2924 — `_skip_render` is never consumed on the component_id route and leaks into the next view event | v1.2.1 |
-| **P1** | #2969 — Sticky unmount calls `cancel_async_all()`, which does not exist | v1.2.1 |
-| **P1** | #2919 — `live_render` sticky reuse drops later kwargs (1.2.1: document mount-time-only kwargs and warn when they change; re-applying them → 1.3) | v1.2.1 |
-| **P1** | #2961 — Observability SQL capture misses queries from sync event handlers | v1.2.1 |
+| ~~**P1**~~ | ~~#2962 — `self.listen()` in `mount()` never subscribes the view to NOTIFY~~ ✅ (#3039) | v1.2.1 |
+| ~~**P1**~~ | ~~#2924 — `_skip_render` is never consumed on the component_id route and leaks into the next view event~~ ✅ (#3039) | v1.2.1 |
+| ~~**P1**~~ | ~~#2969 — Sticky unmount calls `cancel_async_all()`, which does not exist~~ ✅ (#3039) | v1.2.1 |
+| ~~**P1**~~ | ~~#2919 — `live_render` sticky reuse drops later kwargs (1.2.1: document mount-time-only kwargs and warn when they change; re-applying them → 1.3)~~ ✅ (#3039) | v1.2.1 |
+| ~~**P1**~~ | ~~#2961 — Observability SQL capture misses queries from sync event handlers~~ ✅ (#3039) | v1.2.1 |
 
 ### v1.2.1-6 — Realtime / multiplayer correctness and DX (drain bucket → ships in 1.2.1)
 
@@ -92,10 +92,10 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 | Priority | Task | Milestone |
 |---|---|---|
-| **P1** | #2968 — Presence users drop out after ~60 s: the client never sends `presence_heartbeat` | v1.2.1 |
-| **P1** | #3002 — V004 flags push-only `handle_*` handlers (1.2.1: stop flagging / fix the hint) | v1.2.1 |
-| **P1** | #3003 — `@rate_limit` rejections count toward the 4429 disconnect (1.2.1: document; semantics change → 1.3) | v1.2.1 |
-| **P1** | #3007 — Schema advertises `connected()`/`disconnected()` hooks the server never calls (1.2.1: correct the schema and docs; implementing the hooks → 1.3) | v1.2.1 |
+| ~~**P1**~~ | ~~#2968 — Presence users drop out after ~60 s: the client never sends `presence_heartbeat`~~ ✅ (#3039) | v1.2.1 |
+| ~~**P1**~~ | ~~#3002 — V004 flags push-only `handle_*` handlers (1.2.1: stop flagging / fix the hint)~~ ✅ (#3039) | v1.2.1 |
+| ~~**P1**~~ | ~~#3003 — `@rate_limit` rejections count toward the 4429 disconnect (1.2.1: document; semantics change → 1.3)~~ ✅ (#3039) | v1.2.1 |
+| ~~**P1**~~ | ~~#3007 — Schema advertises `connected()`/`disconnected()` hooks the server never calls (1.2.1: correct the schema and docs; implementing the hooks → 1.3)~~ ✅ (#3039) | v1.2.1 |
 
 ### v1.2.1-7 — LiveView state: dirty tracking, snapshots, forms (drain bucket → ships in 1.2.1)
 
@@ -135,11 +135,11 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 | Priority | Task | Milestone |
 |---|---|---|
-| **P1** | #2965 — `push(page_loading=True)` starts the page-loading bar and never stops it | v1.2.1 |
-| **P1** | #2971 — `clear_draft()` from a handler does not clear the open page's draft (+ `drafts.py` re-arm bug) | v1.2.1 |
-| **P1** | #2949 — State snapshots keyed by pathname only, so query strings collide (client key = pathname + search) | v1.2.1 |
-| **P1** | #2964 — Stream `limit=` / `stream_prune` operations never reach the browser | v1.2.1 |
-| **P1** | #2966 — `dj-track-static` cannot detect a new deploy | v1.2.1 |
+| ~~**P1**~~ | ~~#2965 — `push(page_loading=True)` starts the page-loading bar and never stops it~~ ✅ (#3039) | v1.2.1 |
+| ~~**P1**~~ | ~~#2971 — `clear_draft()` from a handler does not clear the open page's draft (+ `drafts.py` re-arm bug)~~ ✅ (#3039) | v1.2.1 |
+| ~~**P1**~~ | ~~#2949 — State snapshots keyed by pathname only, so query strings collide (client key = pathname + search)~~ ✅ (#3039) | v1.2.1 |
+| ~~**P1**~~ | ~~#2964 — Stream `limit=` / `stream_prune` operations never reach the browser~~ ✅ (#3039) | v1.2.1 |
+| ~~**P1**~~ | ~~#2966 — `dj-track-static` cannot detect a new deploy~~ → 1.3 (needs a mount-frame manifest check; design on #2966) | v1.2.1 |
 
 ### v1.2.1-11 — Offline sync, uploads, PWA command (drain bucket → ships in 1.2.1)
 
@@ -147,9 +147,9 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 | Priority | Task | Milestone |
 |---|---|---|
-| **P1** | #2957 — Globally registered PWA sync handlers are never called by `sync_endpoint_view` | v1.2.1 |
-| **P1** | #2972 — Resumable uploads cannot resume after a WebSocket drop: disconnect cleanup deletes resume state | v1.2.1 |
-| **P1** | #2967 — `manage.py generate_sw` crashes: its `--version` option clashes with Django's (rename to `--sw-version`) | v1.2.1 |
+| ~~**P1**~~ | ~~#2957 — Globally registered PWA sync handlers are never called by `sync_endpoint_view`~~ ✅ (#3039) | v1.2.1 |
+| ~~**P1**~~ | ~~#2972 — Resumable uploads cannot resume after a WebSocket drop: disconnect cleanup deletes resume state~~ ✅ (#3039) | v1.2.1 |
+| ~~**P1**~~ | ~~#2967 — `manage.py generate_sw` crashes: its `--version` option clashes with Django's (rename to `--sw-version`)~~ ✅ (#3039) | v1.2.1 |
 
 ### v1.2.1-12 — Components and theming CSS (drain bucket → ships in 1.2.1)
 
