@@ -120,7 +120,7 @@ def handle_info(self, message):
 
 #### Disconnect cleanup
 
-LiveView has no user-level connect or disconnect hook in 1.2: a `connected()`, `disconnected()`, `disconnect()` or `unmount()` method you define on the view is never called. (The `connected()` / `disconnected()` callbacks that do exist belong to client-side `dj-hook` objects.) The framework itself cleans up on disconnect: `start_async` tasks are cancelled, presence is untracked, and uploads and child views are released. Release any other resources you open in `mount()` by other means (for example, a timeout or a periodic sweep). Server-side hooks are planned for 1.3 (#3007).
+LiveView has no user-level connect or disconnect hook in 1.2: a `connected()`, `disconnected()`, `disconnect()` or `unmount()` method you define on the view is never called. (The `connected()` / `disconnected()` callbacks that do exist belong to client-side `dj-hook` objects.) The framework itself cleans up on disconnect: `start_async` tasks are cancelled, presence is untracked, child views are released, and uploads are aborted (an incomplete `ResumableUploadWriter` upload is suspended so the client can resume it after reconnecting). Release any other resources you open in `mount()` by other means (for example, a timeout or a periodic sweep). Server-side hooks are planned for 1.3 (#3007).
 
 **Telling the live mount from the HTTP render.** `mount()` runs twice for a page: once for the HTTP response and again when the WebSocket (or SSE) connection mounts the view. On the live mount the framework sets `self._websocket_session_id` before `mount()` runs; on the HTTP render it is absent. This is the check djust's own presence tracking uses:
 
