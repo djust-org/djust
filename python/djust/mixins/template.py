@@ -57,10 +57,15 @@ _ROOT_TAG_NAME = r"<(?!(?:html|head|body)(?=[\s/>]))([A-Za-z][A-Za-z0-9-]*)(?=[\
 
 
 def _root_open_re(tag_name: str, attr: str) -> "re.Pattern[str]":
-    return re.compile(
-        tag_name + _TAG_BODY_UNIT + r"*?(?<=\s)" + attr + r"(?=[\s=>/])" + _TAG_BODY_UNIT + r"*>",
-        re.IGNORECASE,
-    )
+    # The leading lookahead asserts the tag CLOSES before any attribute is
+    # tried. Without it, an unclosed tag carrying many ``dj-root`` names
+    # (``<a dj-root dj-root …`` with no ``>``) retried the tail scan once per
+    # name — quadratic (17 s at 80 KB in review of #3023). With it, an unclosed
+    # tag fails in one linear pass, and in a closed tag the first matching
+    # name always succeeds.
+    closes = r"(?=" + _TAG_BODY_UNIT + r"*>)"
+    body = _TAG_BODY_UNIT + r"*?(?<=\s)" + attr + r"(?=[\s=>/])" + _TAG_BODY_UNIT + r"*>"
+    return re.compile(tag_name + closes + body, re.IGNORECASE)
 
 
 _DJ_ROOT_RE = _root_open_re(_ROOT_TAG_NAME, "dj-root")
