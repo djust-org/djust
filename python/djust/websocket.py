@@ -3,11 +3,12 @@ WebSocket consumer for LiveView real-time updates
 """
 
 import asyncio
+import collections
 import inspect
 import json
 import logging
 import msgpack
-from typing import Any, Awaitable, Callable, ContextManager, Dict, List, Optional
+from typing import Any, Awaitable, Callable, ContextManager, Deque, Dict, List, Optional, Tuple
 from asgiref.sync import sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 from .change_detection import (
@@ -31,9 +32,18 @@ from .websocket_utils import (
     get_handler_coerce_setting,
 )
 from .signals import full_html_update, liveview_server_error
+from .mixins.async_work import has_pending_async_work
 
 logger = logging.getLogger(__name__)
 hotreload_logger = logging.getLogger("djust.hotreload")
+
+# Upper bound on server_push turns queued while the session is busy (#3001).
+# When exceeded the OLDEST is dropped, so the latest state always arrives.
+_MAX_DEFERRED_PUSHES = 64
+
+# Default for ``LiveViewConsumer._dispatch_async_work``'s ``event_name``: use the
+# event currently being handled. ``None`` means "no event owns this work".
+_CURRENT_EVENT = object()
 
 
 def _tenant_context(tenant: Any) -> ContextManager[Any]:
@@ -684,6 +694,53 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # Track whether a user event is currently being processed so ticks
         # can yield priority to user interactions.
         self._processing_user_event = False
+        # Set once Channels dispatches ``websocket.disconnect`` to us. The
+        # ``__call__`` backstop (#3000) runs ``disconnect()`` itself only when
+        # the dispatch loop died before that happened.
+        self._disconnect_dispatched = False
+        # server_push turns that found the session busy, replayed in order once
+        # the render lock frees (#3001). See ``_defer_server_push``.
+        self._deferred_pushes: Deque[Tuple[Any, Dict[str, Any]]] = collections.deque(
+            maxlen=_MAX_DEFERRED_PUSHES
+        )
+        self._push_drain_task: Optional["asyncio.Task[None]"] = None
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        """Run the consumer; guarantee ``disconnect()`` cleanup (#3000).
+
+        Channels dispatches messages one at a time from a single loop. If a
+        handler raises, the exception leaves that loop, so a queued
+        ``websocket.disconnect`` is never dispatched and ``disconnect()``
+        never runs: presence, channel groups and the tick task all outlive
+        the socket. uvicorn swallows its own ``ClientDisconnected`` here
+        without logging, which is how such sessions went unnoticed. When the
+        loop dies before the disconnect was dispatched, run the cleanup now,
+        then re-raise so the server still sees the failure. Cancellation
+        (server shutdown) is not intercepted.
+        """
+        try:
+            await super().__call__(scope, receive, send)
+        except Exception:
+            if not getattr(self, "_disconnect_dispatched", False):
+                self._disconnect_dispatched = True
+                try:
+                    await self.disconnect(1011)
+                except Exception:  # noqa: BLE001 — cleanup must not mask the cause
+                    logger.exception("disconnect() cleanup after a failed dispatch loop raised")
+            raise
+
+    async def websocket_disconnect(self, message: Dict[str, Any]) -> None:
+        """Record that the disconnect reached us, then run Channels' handler."""
+        self._disconnect_dispatched = True
+        try:
+            await super().websocket_disconnect(message)
+        except Exception:
+            # Channels' handler can fail before it calls disconnect() (a
+            # group_discard error). Let the __call__ backstop run the cleanup
+            # then; never run a disconnect() that already started twice.
+            if not getattr(self, "_disconnect_entered", False):
+                self._disconnect_dispatched = False
+            raise
 
     async def _flush_push_events(self) -> None:
         """
@@ -1103,9 +1160,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         await self.send_json(response)
         _emit_liveview_server_error(getattr(self, "view_instance", None), error, context)
 
-    async def _dispatch_async_work(self) -> None:
+    async def _dispatch_async_work(self, event_name: Any = _CURRENT_EVENT) -> None:
         """
         Check if the handler scheduled background work via start_async().
+
+        ``event_name`` labels the result frames so the client clears the
+        right loading state. It defaults to the current user event; the
+        server-originated turns (tick, server_push, db_notify) pass ``None``,
+        since no client loading state belongs to them (#2955).
 
         If _async_tasks is set, spawn each callback as an asyncio task
         so they run after the current response is sent to the client.
@@ -1121,9 +1183,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         from .mixins.async_work import track_running_async_task
 
         # New format: multiple named tasks
+        if event_name is _CURRENT_EVENT:
+            event_name = getattr(self, "_current_event_name", None)
         tasks = getattr(self.view_instance, "_async_tasks", None)
         if tasks:
-            event_name = getattr(self, "_current_event_name", None)
             # Spawn all pending tasks. Each is recorded as running until it
             # finishes, so cancel_async_all() can mark it cancelled (#2969).
             for task_name, (callback, args, kwargs) in list(tasks.items()):
@@ -1145,7 +1208,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if pending:
             self.view_instance._async_pending = None
             callback, args, kwargs = pending
-            event_name = getattr(self, "_current_event_name", None)
             track_running_async_task(
                 self.view_instance,
                 "_default",
@@ -1196,6 +1258,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             if task_name in view._async_cancelled:
                 view._async_cancelled.discard(task_name)
                 logger.debug("Async task %s was cancelled, skipping execution", task_name)
+                await self._settle_cancelled_async(view, event_name)
                 return
 
         result = None
@@ -1241,6 +1304,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 if task_name in view._async_cancelled:
                     view._async_cancelled.discard(task_name)
                     logger.debug("Async task %s was cancelled, skipping re-render", task_name)
+                    await self._settle_cancelled_async(view, event_name)
                     return
 
             # Serialise on the SAME lock server_push / db_notify / _tick_once
@@ -1346,82 +1410,127 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 )
                 return
 
-            # Call handle_async_result if defined (error path)
-            if hasattr(view, "handle_async_result"):
-                try:
-                    # Re-render to show error state
-                    # Same lock as the success arm, the event path and the tick
-                    # path (#2830). This arm does the SAME render +
-                    # version-allocate + send, so leaving it lock-free kept a
-                    # server-initiated ``source="async"`` frame — the #2829
-                    # enabler — racing an event-path render. Reachable whenever a
-                    # callback raises AND the view defines ``handle_async_result``,
-                    # which is the documented error-state pattern.
-                    #
-                    # #2840: the handler await sits INSIDE the lock too (both
-                    # arms) — its error-state mutation must not interleave with
-                    # a concurrent lock-holding render. Ordering is preserved
-                    # (handler → identity re-check → re-render): the re-check
-                    # deliberately runs AFTER the handler so a view torn down
-                    # mid-handler still gets its user error callback — only the
-                    # stale re-render is dropped.
-                    #
-                    # Cost, recorded because it is a deliberate trade: this WAITS
-                    # unboundedly, so a slow render holds the lock while the tick
-                    # and broadcast paths — bounded 0.1s wait, SKIP on timeout —
-                    # drop their renders for that window (a stateful tick handler
-                    # loses the work, not just latency). That matches the
-                    # documented contention philosophy (db_notify's note), but it
-                    # is why an async render must not be slow.
-                    async with self._render_lock:
+            # Error path: let handle_async_result (if defined) record the error,
+            # then re-render. The frame is sent even without a handler: the turn
+            # announced ``async_pending`` (#2963), and this frame is what ends
+            # the client's loading state.
+            try:
+                # Re-render to show error state
+                # Same lock as the success arm, the event path and the tick
+                # path (#2830). This arm does the SAME render +
+                # version-allocate + send, so leaving it lock-free kept a
+                # server-initiated ``source="async"`` frame — the #2829
+                # enabler — racing an event-path render. Reachable whenever a
+                # callback raises.
+                #
+                # #2840: the handler await sits INSIDE the lock too (both
+                # arms) — its error-state mutation must not interleave with
+                # a concurrent lock-holding render. Ordering is preserved
+                # (handler → identity re-check → re-render): the re-check
+                # deliberately runs AFTER the handler so a view torn down
+                # mid-handler still gets its user error callback — only the
+                # stale re-render is dropped.
+                #
+                # Cost, recorded because it is a deliberate trade: this WAITS
+                # unboundedly, so a slow render holds the lock while the tick
+                # and broadcast paths — bounded 0.1s wait, SKIP on timeout —
+                # drop their renders for that window (a stateful tick handler
+                # loses the work, not just latency). That matches the
+                # documented contention philosophy (db_notify's note), but it
+                # is why an async render must not be slow.
+                async with self._render_lock:
+                    if hasattr(view, "handle_async_result"):
                         await sync_to_async(view.handle_async_result)(
                             task_name, result=None, error=error
                         )
 
-                        # Identity re-check INSIDE the lock: the guard above ran
-                        # before an UNBOUNDED wait (now handler + render), during
-                        # which the view can be torn down or replaced (#1940).
-                        # Rendering the stale view would bump the
-                        # connection-wide version and overwrite _recovery_html
-                        # with old-view HTML.
-                        if self.view_instance is not view:
-                            return
-                        if hasattr(view, "_sync_state_to_rust"):
-                            await sync_to_async(view._sync_state_to_rust)()
+                    # Identity re-check INSIDE the lock: the guard above ran
+                    # before an UNBOUNDED wait (now handler + render), during
+                    # which the view can be torn down or replaced (#1940).
+                    # Rendering the stale view would bump the
+                    # connection-wide version and overwrite _recovery_html
+                    # with old-view HTML.
+                    if self.view_instance is not view:
+                        return
+                    if hasattr(view, "_sync_state_to_rust"):
+                        await sync_to_async(view._sync_state_to_rust)()
 
-                        html, patches, version = await sync_to_async(view.render_with_diff)()
+                    html, patches, version = await sync_to_async(view.render_with_diff)()
 
-                        if patches is not None:
-                            patch_list = fast_json_loads(patches) if patches else []
-                            # Render-send: arm recovery so _recovery_version tracks
-                            # this error re-render's version (#1817). ``html`` is the
-                            # pre-strip render from render_with_diff() above.
-                            await self._send_update(
-                                patches=patch_list,
-                                version=self._next_version_armed(html),
-                                event_name=event_name,
-                                source="async",
+                    if patches is not None:
+                        patch_list = fast_json_loads(patches) if patches else []
+                        # Render-send: arm recovery so _recovery_version tracks
+                        # this error re-render's version (#1817). ``html`` is the
+                        # pre-strip render from render_with_diff() above.
+                        await self._send_update(
+                            patches=patch_list,
+                            version=self._next_version_armed(html),
+                            event_name=event_name,
+                            source="async",
+                        )
+                    else:
+                        html_stripped, html_content = await sync_to_async(
+                            lambda h: (
+                                view._strip_comments_and_whitespace(h),
+                                view._extract_liveview_content(
+                                    view._strip_comments_and_whitespace(h)
+                                ),
                             )
-                        else:
-                            html_stripped, html_content = await sync_to_async(
-                                lambda h: (
-                                    view._strip_comments_and_whitespace(h),
-                                    view._extract_liveview_content(
-                                        view._strip_comments_and_whitespace(h)
-                                    ),
-                                )
-                            )(html)
-                            await self._send_update(
-                                html=html_content,
-                                version=self._next_version_armed(html),
-                                event_name=event_name,
-                                source="async",
-                            )
+                        )(html)
+                        await self._send_update(
+                            html=html_content,
+                            version=self._next_version_armed(html),
+                            event_name=event_name,
+                            source="async",
+                        )
 
-                except Exception:
-                    logger.exception(
-                        "[djust] Error in handle_async_result for task '%s'", task_name
+            except Exception:
+                logger.exception(
+                    "[djust] Error in the error re-render for async task '%s'", task_name
+                )
+
+    async def _settle_cancelled_async(self, view: Any, event_name: Optional[str]) -> None:
+        """End the loading state a cancelled task's event announced (#2963).
+
+        The event's reply carried ``async_pending: true``, so the client keeps
+        the event's loading state until a ``source="async"`` frame naming the
+        event arrives. A cancelled task skips its result, so send that frame
+        here with the view's current state. Work no event owns
+        (``event_name`` None: tick / push / notify turns) announced nothing
+        and sends nothing.
+        """
+        if event_name is None:
+            return
+        try:
+            async with self._render_lock:
+                if self.view_instance is not view:
+                    return
+                if hasattr(view, "_sync_state_to_rust"):
+                    await sync_to_async(view._sync_state_to_rust)()
+                html, patches, version = await sync_to_async(view.render_with_diff)()
+                if patches is not None:
+                    patch_list = fast_json_loads(patches) if patches else []
+                    await self._send_update(
+                        patches=patch_list,
+                        version=self._next_version_armed(html),
+                        event_name=event_name,
+                        source="async",
                     )
+                else:
+                    html_content = await sync_to_async(
+                        lambda h: view._extract_liveview_content(
+                            view._strip_comments_and_whitespace(h)
+                        )
+                    )(html)
+                    await self._send_update(
+                        html=html_content,
+                        version=self._next_version_armed(html),
+                        event_name=event_name,
+                        source="async",
+                    )
+                await self._flush_all_pending()
+        except Exception:  # noqa: BLE001 — a settle frame must never raise out of a task
+            logger.exception("[djust] Error settling cancelled async task for %s", event_name)
 
     def _next_version(self) -> int:
         """Single source of truth for the outbound VDOM wire version (#1788).
@@ -1767,13 +1876,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if skip_render:
             # (_skip_render was already consumed by _resolve_skip_render —
             # it is the single owner of that reset, #2834/#2847.)
-            has_async = getattr(view, "_async_pending", None) is not None
+            has_async = has_pending_async_work(view)
             await self._flush_all_pending()
             await self._send_noop(async_pending=has_async, ref=event_ref)
-            # Unconditional, like the runtime twin (#1887): ``has_async`` reads
-            # only the legacy ``_async_pending`` and drives the loading flag,
-            # while ``start_async`` queues ``_async_tasks`` (#2946). No-op when
-            # nothing is queued.
+            # Unconditional, like the runtime twin (#1887): ``has_async`` only
+            # drives the loading flag; this is what actually starts the work
+            # ``start_async`` queued (#2946). No-op when nothing is queued.
             await self._dispatch_async_work()
             return
 
@@ -1811,7 +1919,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if patches is not None:
             patch_list = fast_json_loads(patches) if patches else []
 
-        has_async = getattr(view, "_async_pending", None) is not None
+        has_async = has_pending_async_work(view)
         if patch_list is not None:
             # Render-send: arm recovery so _recovery_version tracks this deferred
             # render's version (#1817). ``html`` is the pre-strip render.
@@ -1977,9 +2085,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
     async def disconnect(self, close_code: int) -> None:
         """Handle WebSocket disconnection"""
+        self._disconnect_entered = True
         # The socket is gone — any frame a handler still tries to send from
         # here on would be rejected by the ASGI server (_send_frame drops it).
         self._ws_close_sent = True
+        # Pushes deferred while the session was busy have nobody to reach
+        # (#3001). First, so a later cleanup step that raises can't leave the
+        # drain running.
+        self._cancel_deferred_pushes()
 
         # Clear the tenant ContextVar bound at mount (Finding #6) so the
         # consumer task doesn't carry a stale tenant if the executor/context is
@@ -2873,11 +2986,16 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         transport, which uvicorn would reject with a RuntimeError.
         """
         self._ws_close_sent = True
-        if reason is None:
-            # channels<4.1 close() has no reason parameter.
-            await super().close(code)
-        else:
-            await super().close(code, reason)
+        try:
+            if reason is None:
+                # channels<4.1 close() has no reason parameter.
+                await super().close(code)
+            else:
+                await super().close(code, reason)
+        except OSError as exc:
+            # The peer closed first (ASGI 2.4 OSError shape; see _send_frame).
+            # There is nothing left to close (#3000).
+            logger.debug("WebSocket close skipped: peer already closed (%r)", exc)
 
     async def _send_frame(
         self,
@@ -2887,9 +3005,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         """Single outbound chokepoint: drop frames once the socket is closed.
 
         Short-circuits when the connection is known-closed and downgrades the
-        ASGI server's send-after-close rejection (see
-        :func:`_is_send_after_close_error`) to a debug log — the client is
-        gone, there is nobody to answer. Everything else propagates.
+        ASGI server's send-after-close rejections to a debug log — the client
+        is gone, there is nobody to answer. Two shapes: the ``RuntimeError``
+        after the close handshake (see :func:`_is_send_after_close_error`),
+        and the ``OSError`` a send raises once the peer has closed (ASGI 2.4;
+        uvicorn's ``ClientDisconnected``, #3000). Any other ``RuntimeError``
+        propagates.
         """
         if getattr(self, "_ws_close_sent", False):
             logger.debug("Dropping outbound frame: WebSocket already closed")
@@ -2901,6 +3022,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 raise
             self._ws_close_sent = True
             logger.debug("Dropping outbound frame: WebSocket closed during send (%s)", exc)
+        except OSError as exc:
+            # ASGI 2.4: a send on a connection the peer has closed raises a
+            # server-specific OSError subclass (uvicorn: ClientDisconnected).
+            # It arrives before the app has read ``websocket.disconnect``, so
+            # the dispatch loop is still alive; letting it propagate killed
+            # that loop and the disconnect was never dispatched (#3000).
+            self._ws_close_sent = True
+            logger.debug("Dropping outbound frame: peer closed the WebSocket (%r)", exc)
 
     async def send_json(self, data: Dict[str, Any]) -> None:
         """Send JSON message to client with Django type support"""
@@ -3371,6 +3500,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             except asyncio.CancelledError:
                 pass  # Expected when cancelling a running tick task
             self._tick_task = None
+
+        # Pushes deferred for the old view must not reach the new one (#3001).
+        self._cancel_deferred_pushes()
 
         # Clean up old view
         if old_view:
@@ -4154,8 +4286,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         sends an update via push_to_view().
 
         Event sequencing: acquires _render_lock to serialize with tick and
-        event handlers. Yields to user events — if a user event is being
-        processed, the broadcast is skipped to avoid version interleaving.
+        event handlers. Yields to user events: a push that finds the session
+        busy (a user event or background result in progress, or the lock held
+        past 0.1 s) is deferred, not dropped, and replayed in order once the
+        lock frees (#3001). Before #3001 it was dropped, so the last push of a
+        change could leave a viewer on stale state indefinitely.
         Tags updates with source="broadcast" so the client can buffer them.
 
         Args:
@@ -4181,13 +4316,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 )
                 return
 
-            # Yield to user events: if a user event is being processed,
-            # skip this broadcast to avoid version interleaving (#560).
-            if self._processing_user_event:
+            # Yield to user events (#560) without losing the push (#3001):
+            # while a user event is being processed, or while earlier pushes
+            # are still queued (order), queue this one.
+            if self._processing_user_event or getattr(self, "_deferred_pushes", None):
                 logger.debug(
-                    "[djust] server_push on %s skipped — user event in progress",
+                    "[djust] server_push on %s deferred — session busy",
                     self.view_instance.__class__.__name__,
                 )
+                self._defer_server_push(event)
                 return
 
             # Acquire render lock with timeout to serialize with tick/event
@@ -4196,74 +4333,78 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 await asyncio.wait_for(self._render_lock.acquire(), timeout=0.1)
             except asyncio.TimeoutError:
                 logger.debug(
-                    "[djust] server_push on %s skipped — render lock held",
+                    "[djust] server_push on %s deferred — render lock held",
                     self.view_instance.__class__.__name__,
                 )
+                self._defer_server_push(event)
                 return
 
+        except Exception as e:
+            logger.exception("Error in server_push: %s", e)
+            return
+
+        await self._run_server_push_turn(event)
+
+    async def _run_server_push_turn(self, *events: Dict[str, Any]) -> None:
+        """Apply pushes to the view, render once and send. Caller holds the lock.
+
+        Always releases ``_render_lock``. The direct path passes one push;
+        the deferred-push drain (#3001) passes every push queued while the
+        session was busy, so a backlog costs one render, not one per push.
+        Each push's hook runs in arrival order with the same guards; a hook
+        that raises is logged and skipped. The turn renders unless every
+        applied hook asked to skip (``_skip_render``), and sends nothing if
+        every hook raised.
+        """
+        try:
+            view = self.view_instance
+            dispatch_work = False
             try:
-                # Apply state updates before handler call so the handler can read
-                # the new values. _sync_state_to_rust runs after both to push the
-                # final Python state to Rust for rendering.
-                state = event.get("state")
-                if state and isinstance(state, dict):
-                    # Apply via safe_setattr — the same guard every other
-                    # state-restore sink uses (snapshot restore at ~:2311,
-                    # time_travel.py:276, mixins/request.py). A channel-layer
-                    # attacker (the framework's own stated threat model, see the
-                    # restricted handler path just below) must NOT be able to
-                    # overwrite dunders (__class__/__init__), framework internals
-                    # (_framework_attrs/_components/_rust_view), or private `_`
-                    # state via mass assignment (#F21, CWE-915/CWE-913).
-                    from .security import safe_setattr
-
-                    for key, value in state.items():
-                        safe_setattr(self.view_instance, key, value, allow_private=False)
-
-                # Call handler if specified — restricted to handle_* prefixed or
-                # @event_handler-decorated methods to prevent arbitrary method calls
-                # if an attacker gains access to the channel layer backend.
-                handler_name = event.get("handler")
-                if handler_name:
-                    handler_fn = getattr(self.view_instance, handler_name, None)
-                    if handler_fn and callable(handler_fn):
-                        from .decorators import is_event_handler
-
-                        if not (handler_name.startswith("handle_") or is_event_handler(handler_fn)):
-                            logger.warning(
-                                "server_push: blocked handler %r"
-                                " — must be handle_* or @event_handler",
-                                handler_name,
-                            )
-                        else:
-                            payload = event.get("payload") or {}
-                            await sync_to_async(handler_fn)(**payload)
-
-                # Views can set _skip_render = True in a handler to
-                # suppress the re-render cycle (e.g. sender ignoring its own
-                # broadcast). _resolve_skip_render owns the decision (#2834):
-                # _force_full_html (#1981, set_changed_keys()) wins — the
-                # explicitly requested forced render must not be silently
-                # dropped (#1646 class), and the skip flag is consumed here
-                # either way.
-                if _resolve_skip_render(self.view_instance):
+                if view is None:
+                    return
+                render = False
+                for event in events:
+                    # Every hook awaits: re-check the view before each push,
+                    # whether or not the previous hook raised.
+                    if self.view_instance is not view:
+                        return
+                    try:
+                        await self._apply_server_push(view, event)
+                    except Exception as e:  # noqa: BLE001
+                        logger.exception("Error in server_push: %s", e)
+                        continue
+                    # The hook succeeded: start_async work it queued runs once
+                    # the lock is released (#2955). A raising hook queues nothing.
+                    dispatch_work = True
+                    # Views can set _skip_render = True in a handler to
+                    # suppress the re-render cycle (e.g. sender ignoring its own
+                    # broadcast). _resolve_skip_render owns the decision (#2834):
+                    # _force_full_html (#1981, set_changed_keys()) wins — the
+                    # explicitly requested forced render must not be silently
+                    # dropped (#1646 class), and the skip flag is consumed here
+                    # either way, per push.
+                    if not _resolve_skip_render(view):
+                        render = True
+                if self.view_instance is not view or not dispatch_work:
+                    return
+                if not render:
                     await self._flush_all_pending()
                     await self._send_noop()
                     return
 
                 # Sync state and re-render
                 # TODO: add patch compression (PATCH_COUNT_THRESHOLD) matching handle_event
-                if hasattr(self.view_instance, "_sync_state_to_rust"):
-                    await sync_to_async(self.view_instance._sync_state_to_rust)()
+                if hasattr(view, "_sync_state_to_rust"):
+                    await sync_to_async(view._sync_state_to_rust)()
 
-                html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
+                html, patches, version = await sync_to_async(view.render_with_diff)()
 
                 # Consume the force flag (one render per
                 # set_changed_keys()/_force_full_html, #1981) — mirrors
                 # _tick_once; without this a collision-served forced render
                 # leaks into a later unrelated turn.
-                if getattr(self.view_instance, "_force_full_html", False):
-                    self.view_instance._force_full_html = False
+                if getattr(view, "_force_full_html", False):
+                    view._force_full_html = False
 
                 if patches is not None:
                     if isinstance(patches, str):
@@ -4286,9 +4427,108 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     await self._flush_all_pending()
             finally:
                 self._render_lock.release()
+                if dispatch_work and self.view_instance is view:
+                    await self._dispatch_async_work(event_name=None)
 
         except Exception as e:
             logger.exception("Error in server_push: %s", e)
+
+    async def _apply_server_push(self, view: Any, event: Dict[str, Any]) -> None:
+        """Apply one push's ``state`` and call its handler (the push's hook)."""
+        # Apply state updates before handler call so the handler can read
+        # the new values. _sync_state_to_rust runs after both to push the
+        # final Python state to Rust for rendering.
+        state = event.get("state")
+        if state and isinstance(state, dict):
+            # Apply via safe_setattr — the same guard every other
+            # state-restore sink uses (snapshot restore at ~:2311,
+            # time_travel.py:276, mixins/request.py). A channel-layer
+            # attacker (the framework's own stated threat model, see the
+            # restricted handler path just below) must NOT be able to
+            # overwrite dunders (__class__/__init__), framework internals
+            # (_framework_attrs/_components/_rust_view), or private `_`
+            # state via mass assignment (#F21, CWE-915/CWE-913).
+            from .security import safe_setattr
+
+            for key, value in state.items():
+                safe_setattr(view, key, value, allow_private=False)
+
+        # Call handler if specified — restricted to handle_* prefixed or
+        # @event_handler-decorated methods to prevent arbitrary method calls
+        # if an attacker gains access to the channel layer backend.
+        handler_name = event.get("handler")
+        if handler_name:
+            handler_fn = getattr(view, handler_name, None)
+            if handler_fn and callable(handler_fn):
+                from .decorators import is_event_handler
+
+                if not (handler_name.startswith("handle_") or is_event_handler(handler_fn)):
+                    logger.warning(
+                        "server_push: blocked handler %r — must be handle_* or @event_handler",
+                        handler_name,
+                    )
+                else:
+                    payload = event.get("payload") or {}
+                    await sync_to_async(handler_fn)(**payload)
+
+    def _defer_server_push(self, event: Dict[str, Any]) -> None:
+        """Queue a push that found the session busy, and make sure a drain runs.
+
+        An identical push already waiting is superseded, not repeated: the
+        queue keeps one entry per distinct push, at the position of its
+        latest arrival. Without this a push stream faster than the render
+        (a 100 ms room clock) would keep the queue full and the viewer
+        seconds behind for good; repeated identical pushes coalesce the way
+        ticks do. The queue is also bounded; past the bound the OLDEST push
+        is dropped, so the most recent state still arrives (#3001). Each
+        entry remembers the view it was addressed to: a push queued before a
+        live_redirect or disconnect is dropped rather than applied to a
+        different view.
+        """
+        queue = getattr(self, "_deferred_pushes", None)
+        if queue is None:
+            queue = self._deferred_pushes = collections.deque(maxlen=_MAX_DEFERRED_PUSHES)
+        view = self.view_instance
+        for queued in list(queue):
+            if queued[0] is view and queued[1] == event:
+                queue.remove(queued)
+        if len(queue) == queue.maxlen:
+            logger.debug("[djust] deferred server_push queue full — dropping the oldest")
+        queue.append((view, event))
+        task = getattr(self, "_push_drain_task", None)
+        if task is None or task.done():
+            self._push_drain_task = asyncio.ensure_future(self._drain_deferred_pushes())
+
+    async def _drain_deferred_pushes(self) -> None:
+        """Replay deferred pushes in order, each as soon as the lock frees."""
+        queue = self._deferred_pushes
+        while queue:
+            # Unbounded wait is right here: this runs in its own task, not in
+            # the dispatch loop, so it blocks nothing; whoever holds the lock
+            # (a user event, a background result, a tick) releases it.
+            await self._render_lock.acquire()
+            # Take everything queued so far: one turn, one render (#3001).
+            # Entries for a view that has since been replaced are dropped.
+            events = []
+            while queue:
+                view, event = queue.popleft()
+                if view is not None and view is self.view_instance:
+                    events.append(event)
+            if not events:
+                self._render_lock.release()
+                continue
+            await self._run_server_push_turn(*events)
+
+    def _cancel_deferred_pushes(self) -> None:
+        """Drop queued pushes and stop the drain (disconnect / view teardown)."""
+        # getattr: test doubles and subclasses may skip __init__.
+        queue = getattr(self, "_deferred_pushes", None)
+        if queue is not None:
+            queue.clear()
+        task = getattr(self, "_push_drain_task", None)
+        self._push_drain_task = None
+        if task is not None and not task.done():
+            task.cancel()
 
     async def client_push_event(self, event: Dict[str, Any]) -> None:
         """
@@ -4360,11 +4600,16 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 )
                 return
 
+            view = self.view_instance
+            dispatch_work = False
             try:
                 handler = getattr(self.view_instance, "handle_info", None)
                 if handler and callable(handler):
                     try:
                         await sync_to_async(handler)(message)
+                        # start_async work handle_info queued runs once the
+                        # lock is released (#2955).
+                        dispatch_work = True
                     except Exception as exc:  # noqa: BLE001
                         logger.exception(
                             "db_notify: handle_info raised on %s: %s",
@@ -4423,6 +4668,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         )
             finally:
                 self._render_lock.release()
+                if dispatch_work and self.view_instance is view:
+                    await self._dispatch_async_work(event_name=None)
         except Exception as e:  # noqa: BLE001
             logger.exception("Error in db_notify: %s", e)
 
@@ -4439,10 +4686,34 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         is a wall-clock race (#2124, the class canonized by #1795 / #1830).
         """
         interval_s = interval_ms / 1000.0
+        # The view this loop ticks for. The runtime starts the task inside its
+        # mount, after assigning the view to itself but before the consumer
+        # reads it back (#2945).
+        runtime = getattr(self, "_runtime", None)
+        own_view = getattr(runtime, "view_instance", None)
+        if own_view is None:
+            own_view = self.view_instance
         try:
             while True:
                 await asyncio.sleep(interval_s)
-                if not self.view_instance:
+                # The socket is gone: stop, whatever view_instance says. A
+                # consumer whose disconnect() never ran would otherwise tick
+                # (and heartbeat presence) forever (#3000).
+                if getattr(self, "_ws_close_sent", False):
+                    break
+                view = self.view_instance
+                if own_view is not None and view is not None and view is not own_view:
+                    # Another view was mounted on this socket; it has its own
+                    # tick task.
+                    break
+                if not view:
+                    # Not read back yet: wait for the next beat while the
+                    # runtime still holds our mounting view, instead of
+                    # stopping for good (#2945). A refused mount, a teardown
+                    # or a disconnect clears or replaces the runtime's view,
+                    # so the loop still stops then.
+                    if own_view is not None and getattr(runtime, "view_instance", None) is own_view:
+                        continue
                     break
                 try:
                     await self._tick_once()
@@ -4502,11 +4773,16 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             )
             return False
 
+        view = self.view_instance
+        dispatch_work = False
         try:
             # Snapshot state before tick to detect changes
             pre_assigns = _snapshot_assigns(self.view_instance)
 
             await sync_to_async(self.view_instance.handle_tick)()
+            # start_async work handle_tick queued runs once the lock is
+            # released (#2955).
+            dispatch_work = True
 
             # Views can set _skip_render = True inside handle_tick to
             # suppress the re-render cycle entirely (e.g. an early return
@@ -4570,6 +4846,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             return False
         finally:
             self._render_lock.release()
+            if dispatch_work and self.view_instance is view:
+                await self._dispatch_async_work(event_name=None)
 
     @classmethod
     async def broadcast_reload(cls, file_path: str) -> None:

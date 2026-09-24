@@ -387,8 +387,10 @@ issue or be explicitly closed with a reason.
 | 345 | **Rule row** — a Code Review stage is not complete until the review is POSTED to the PR, and a bucket until `RETRO.md` has its entry (v1.2.0-6 retro arc, rule 3) | Retro v1.2.0-6 | #2848 | Open | pattern: retro-dropout  fired: —  re-violated: — (rule created at v1.2.0-6; #2837/#2838 merged with no review artifact and 14 buckets drifted before it. Mechanical half now exists: `scripts/check-retro-coverage.py`) |
 | 346 | Python and Rust root locators disagree when a quoted attribute value contains `<… dj-root>` | PR #3023 | #3030 | Open | pattern: parallel-path-drift. Needs author markup or `\|safe`, so not reachable from autoescaped content |
 | 347 | dj-root vs dj-view root precedence: Python searches dj-root first, the Rust VDOM takes the first element | PR #3023 | #3031 | Open | pattern: parallel-path-drift. Predates #3023; T005 warns about the split layout |
-| 348 | The handler-metadata script is still injected before every `</body>` string (same class as #2987) | PR #3017 | #3018 | Open | pattern: parallel-path-drift. One of the injection sites #3017 did not move to the masked scanner |
-| 349 | The #2663 raw-text masker is quadratic on many `<script` tags with no `>` | PR #3017 | #3019 | Open | pattern: redos |
+| 348 | A view whose `mount()` raises keeps its tick task running (runtime keeps the half-mounted view on that branch) | PR #3035 | #3027 | Open | pattern: fix-reproduces-own-bug. Predates #3035; the #2945 fix exposes short-tick views to it too |
+| 349 | A skip-render `server_push` answers with a `noop` that acknowledges nothing and can stop an in-flight event's loading state | PR #3035 | #3034 | Open | 1.3 (removes a frame). Split from #3001 |
+| 350 | The handler-metadata script is still injected before every `</body>` string (same class as #2987) | PR #3017 | #3018 | Open | pattern: parallel-path-drift. One of the injection sites #3017 did not move to the masked scanner |
+| 351 | The #2663 raw-text masker is quadratic on many `<script` tags with no `>` | PR #3017 | #3019 | Open | pattern: redos |
 
 ## Retro backfill — 14 un-retro'd drain buckets (v1.1.0-9 … v1.2.0-5)
 
@@ -491,8 +493,8 @@ Five instances across three of these buckets, each caught by a human or reviewer
 None in this bucket.
 
 ### Open Items
-- [ ] The handler-metadata script is still injected before every `</body>` string (same class as #2987). Tracked in Action Tracker #348 (GitHub #3018).
-- [ ] The #2663 raw-text masker is quadratic on many `<script` tags with no `>`. Tracked in Action Tracker #349 (GitHub #3019).
+- [ ] The handler-metadata script is still injected before every `</body>` string (same class as #2987). Tracked in Action Tracker #350 (GitHub #3018).
+- [ ] The #2663 raw-text masker is quadratic on many `<script` tags with no `>`. Tracked in Action Tracker #351 (GitHub #3019).
 
 ## v1.2.1-12 — Components and theming CSS (PR #3016)
 
@@ -527,6 +529,53 @@ None in this bucket.
 
 ### Open Items
 None filed: every 🟡 was fixed in the PR. The 1.3 parts stay open on #2996 (part 3), #2993 (stylesheet) and #2985 (the missing hooks).
+## v1.2.1-2 — server-originated turns and tick lifecycle (PR #3035)
+
+**Date**: 2026-09-23
+**Scope**: Five issues in the WebSocket consumer's server-originated turns.
+- #3000: a socket closed while an event was in flight never reached `disconnect()`, leaving a zombie session.
+- #2945: a `tick_interval` shorter than the mount time never ticked.
+- #3001: a `server_push` that found the session busy was dropped.
+- #2955: `start_async` queued in a tick, push or notify turn never ran.
+- #2963: `async_pending` was never set for `start_async` work.
+
+One PR, #3035, squash-merged as `5c950166`. The #2955 fix is a port of `56c36d726` (PR #2954) without its ADR-038 child sweep.
+**Tests at close**: 29 Python cases in 5 new files, plus 3 JS cases in `tests/js/async_pending_ws_lifecycle_2963.test.js`. 4 existing tests were updated: the `server_push` yield test and the #1643, #1645 and #1817 source pins. Before the targeted-tests policy, the full suites (at `b0ba1ef3d`) gave 30,960 Python passed / 947 skipped and 1,978 JS. CI was green at the merge head.
+
+### What We Learned
+
+**1. Reproduce the lifecycle bug on the real server before designing.** Triage couldn't confirm #3000 statically. A copy of snake-arena under uvicorn, with a spy on the consumer, reproduced it 5/5 in minutes and showed this chain:
+- The event's reply was sent to a closed socket. uvicorn raised `ClientDisconnected`, an `OSError` as ASGI 2.4 specifies. `_send_frame` only handled the `RuntimeError` form.
+- `receive()`'s catch-all then sent an error frame to the same socket, which failed again.
+- That second failure ended Channels' dispatch loop, so the queued disconnect was never handled.
+- uvicorn caught the error silently, so nothing was logged.
+
+A tick-only backstop, the triage's fallback, would have left presence and groups leaking.
+
+**2. A fix that turns a signal on has to be checked against every path that turns it off.** #2963 made `async_pending` real, so the client now waits for a `source="async"` frame. The error arm (without `handle_async_result`) and both `cancel_async` returns never sent one. Self-Review caught the first. Code Review caught the second (🔴), which would have left `dj-loading.disable` buttons disabled for good on the consumer path.
+
+**3. A queue needs a throughput argument.** The first #3001 design replayed one push per render. A push stream faster than the render kept a viewer permanently up to 64 renders behind; on `main` a dropped push at least let the viewer catch up. Coalescing identical pushes (from Self-Review) wasn't enough. The final design applies the whole backlog in one turn and renders once.
+
+### Insights
+- The issues named 4 `has_async` sites. The change reached 2 more (the error arms and the cancel returns). This is the same "enumerate from the code" lesson as v1.2.1-3.
+- The tick loop's "no view means gone" check was one condition doing two jobs: "not mounted yet" (#2945) and "socket gone" (#3000). Separating them also fixed a double tick on re-mount that `main` had.
+
+### Review Stats
+
+| Metric | #3035 |
+|---|---|
+| Tests added | 29 Python + 3 JS |
+| 🔴 Findings | 1 (`cancel_async` leaves loading on), fixed |
+| 🟡 Findings | 7 across Self-Review, Security, Code Review and Re-Review; all fixed |
+| CI failures | 0 |
+| Findings by pattern class | `parallel-path-drift` ×3, `new` (queue throughput) ×2, `fix-reproduces-own-bug` ×1 |
+
+### Process Improvements Applied
+None in this bucket. The pre-push EINVAL blocker hit this bucket once and was fixed separately (#3029).
+
+### Open Items
+- [ ] A view whose `mount()` raises keeps ticking. Tracked in Action Tracker #348 (GitHub #3027).
+- [ ] The skip-render push noop (1.3). Tracked in Action Tracker #349 (GitHub #3034).
 
 ## v1.2.1-3 — dj-root / dj-view detection (PR #3023)
 

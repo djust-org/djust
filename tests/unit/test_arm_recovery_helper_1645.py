@@ -70,7 +70,8 @@ def test_render_send_paths_route_through_arm_recovery():
     runtime path it now owns (keeping the #1645 invariant covered, not deleted).
     """
     # WS-only render-send paths still on the consumer (tick / broadcast / async).
-    for name in ("server_push", "_run_async_work"):
+    # server_push renders in _run_server_push_turn, shared with the #3001 drain.
+    for name in ("_run_server_push_turn", "_run_async_work"):
         method_src = inspect.getsource(getattr(LiveViewConsumer, name))
         arms = "_arm_recovery(" in method_src or "_next_version_armed(" in method_src
         assert arms, (
