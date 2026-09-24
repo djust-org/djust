@@ -84,6 +84,7 @@ __all__ = [
     "FAST_PATH_LABELS",
     "PROFILE_ROWS",
     "PhaseRow",
+    "RenderCall",
     "fast_path_label",
     "format_table",
     "install_crossing_counters",
@@ -106,6 +107,20 @@ def fast_path_label(value: Optional[float]) -> str:
 # ---------------------------------------------------------------------------
 # Bucket 2 — caller-classified boundary-crossing counter
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RenderCall:
+    """The crossings ONE ``render_with_diff`` call made, on its own thread.
+
+    ``view_id`` is ``id()`` of the view the renderer belongs to, so a phase
+    row can pick its own view's renders out of everything the process
+    rendered while the phase ran (#3048).
+    """
+
+    view_id: int
+    rust_calls: int
+    proxy_calls: int
 
 
 class Crossings:
@@ -136,6 +151,7 @@ class Crossings:
 
     def __init__(self) -> None:
         self._local = threading.local()
+        self._calls_lock = threading.Lock()
         self.reset()
 
     # -- thread-local "Rust is running" flag ---------------------------------
@@ -156,6 +172,40 @@ class Crossings:
         self.python_calls = 0
         self.python_secs = 0.0
         self.kinds: Dict[str, int] = {}
+        #: One entry per completed ``render_with_diff`` call (#3048).
+        with self._calls_lock:
+            self.render_calls: List[RenderCall] = []
+
+    # -- per-render-call attribution (#3048) ----------------------------------
+    def begin_render(self) -> None:
+        """Enter a ``render_with_diff`` call on this thread.
+
+        Sets :attr:`in_rust_render` and zeroes this thread's per-call counts.
+        The phase totals above are process-wide: any render that runs while a
+        phase is being measured lands in them, whichever view or thread it
+        belongs to. The per-call counts are what an assertion about ONE
+        render can rely on.
+        """
+        self._local.call_rust = 0
+        self._local.call_proxy = 0
+        self.in_rust_render = True
+
+    def end_render(self, view: Any) -> RenderCall:
+        """Leave the call begun by :meth:`begin_render`; record and return it."""
+        self.in_rust_render = False
+        call = RenderCall(
+            view_id=id(view),
+            rust_calls=getattr(self._local, "call_rust", 0),
+            proxy_calls=getattr(self._local, "call_proxy", 0),
+        )
+        with self._calls_lock:
+            self.render_calls.append(call)
+        return call
+
+    def renders_of(self, view: Any) -> List[RenderCall]:
+        """The completed render calls of ``view`` since the last :meth:`reset`."""
+        with self._calls_lock:
+            return [c for c in self.render_calls if c.view_id == id(view)]
 
     @classmethod
     def classify(cls, *, in_rust_render: bool, caller_file: str) -> str:
@@ -172,9 +222,11 @@ class Crossings:
             self.rust_calls += 1
             self.rust_secs += secs
             self.kinds[kind] = self.kinds.get(kind, 0) + 1
+            self._local.call_rust = getattr(self._local, "call_rust", 0) + 1
         elif origin == "proxy":
             self.proxy_calls += 1
             self.proxy_secs += secs
+            self._local.call_proxy = getattr(self._local, "call_proxy", 0) + 1
         else:
             self.python_calls += 1
             self.python_secs += secs
@@ -241,6 +293,13 @@ class PhaseRow:
     py_xings: int
     proxy_xings: int = 0
     xing_kinds: Dict[str, int] = field(default_factory=dict)
+    #: Crossings made inside the phase's OWN render — the last
+    #: ``render_with_diff`` call of this session's view in the phase, which is
+    #: the render whose frame the phase received (#3048). ``xings`` is the
+    #: process-wide phase total and can include other renders.
+    render_xings: int = 0
+    #: ``render_with_diff`` calls of this session's view during the phase.
+    renders: int = 0
     # bucket 3
     queries: int = 0
     sql_ms: float = 0.0
@@ -329,7 +388,15 @@ _NUMERIC = {
     "render_ms",
     "sync_ms",
 }
-_COUNTS = {"xings", "proxy_xings", "py_xings", "queries", "persist_calls"}
+_COUNTS = {
+    "xings",
+    "proxy_xings",
+    "py_xings",
+    "queries",
+    "persist_calls",
+    "render_xings",
+    "renders",
+}
 
 
 def summarize(rows: Iterable[PhaseRow]) -> List[Dict[str, Any]]:
