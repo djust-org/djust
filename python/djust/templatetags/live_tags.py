@@ -849,6 +849,18 @@ def live_input(field_type: str = "text", **kwargs: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 
+def _context_view(context: Context) -> Any:
+    """The view a tag is rendering for: ``context["view"]`` on the Django
+    engine and the WS path; on a Rust render whose JSON-serialised context
+    cannot carry the view, the thread-local ``render_full_template`` /
+    ``render_with_diff`` register (#1784) — the same fallback
+    ``{% live_render %}`` uses (#2958)."""
+    view = context.get("view")
+    if view is None:
+        view = get_active_parent_view()
+    return view
+
+
 class ColocatedHookNode(Node):
     """
     Emit a ``<script type="djust/hook" data-hook="NAME">...</script>`` tag
@@ -888,7 +900,7 @@ class ColocatedHookNode(Node):
         cfg = getattr(settings, "DJUST_CONFIG", {}) or {}
         if cfg.get("hook_namespacing") != "strict":
             return self.name
-        view = context.get("view")
+        view = _context_view(context)
         if view is None:
             return self.name
         try:
@@ -1214,7 +1226,7 @@ class DjActivityNode(Node):
         # mixin can authoritatively gate events. ``ActivityMixin`` defines
         # ``_register_activity``; guarded for non-LiveView contexts (e.g.
         # unit tests that render the tag against a plain Context).
-        view = context.get("view")
+        view = _context_view(context)
         if view is not None and hasattr(view, "_register_activity"):
             try:
                 view._register_activity(name, visible=visible, eager=eager)
