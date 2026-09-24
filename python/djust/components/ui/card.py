@@ -6,6 +6,8 @@ Provides card/panel layout with optional title, body, footer, and image.
 
 from typing import Dict, Any
 from ..base import LiveComponent
+from ..utils import url_attr
+from django.utils.html import conditional_escape
 from django.utils.safestring import SafeString, mark_safe
 
 
@@ -66,65 +68,65 @@ class CardComponent(LiveComponent):
 
     def _render_bootstrap(self) -> str:
         """Render Bootstrap 5 card"""
-        html = f'<div class="card" id="{self.component_id}">'
+        html = f'<div class="card" id="{conditional_escape(self.component_id)}">'
 
         if self.image:
-            html += f'<img src="{self.image}" class="card-img-top" alt="{self.title}">'
+            html += f'<img src="{url_attr(self.image, image=True)}" class="card-img-top" alt="{conditional_escape(self.title)}">'
 
         html += '<div class="card-body">'
 
         if self.title:
-            html += f'<h5 class="card-title">{self.title}</h5>'
+            html += f'<h5 class="card-title">{conditional_escape(self.title)}</h5>'
 
         if self.body:
-            html += f'<p class="card-text">{self.body}</p>'
+            html += f'<p class="card-text">{conditional_escape(self.body)}</p>'
 
         html += "</div>"
 
         if self.footer:
-            html += f'<div class="card-footer text-muted">{self.footer}</div>'
+            html += f'<div class="card-footer text-muted">{conditional_escape(self.footer)}</div>'
 
         html += "</div>"
         return html
 
     def _render_tailwind(self) -> str:
         """Render Tailwind CSS card"""
-        html = f'<div class="overflow-hidden rounded-lg bg-white shadow" id="{self.component_id}">'
+        html = f'<div class="overflow-hidden rounded-lg bg-white shadow" id="{conditional_escape(self.component_id)}">'
 
         if self.image:
-            html += f'<img src="{self.image}" class="w-full" alt="{self.title}">'
+            html += f'<img src="{url_attr(self.image, image=True)}" class="w-full" alt="{conditional_escape(self.title)}">'
 
         html += '<div class="px-4 py-5 sm:p-6">'
 
         if self.title:
-            html += f'<h3 class="text-lg font-medium leading-6 text-gray-900">{self.title}</h3>'
+            html += f'<h3 class="text-lg font-medium leading-6 text-gray-900">{conditional_escape(self.title)}</h3>'
 
         if self.body:
-            html += f'<div class="mt-2 text-sm text-gray-500">{self.body}</div>'
+            html += f'<div class="mt-2 text-sm text-gray-500">{conditional_escape(self.body)}</div>'
 
         html += "</div>"
 
         if self.footer:
-            html += f'<div class="bg-gray-50 px-4 py-4 text-sm text-gray-500 sm:px-6">{self.footer}</div>'
+            html += f'<div class="bg-gray-50 px-4 py-4 text-sm text-gray-500 sm:px-6">{conditional_escape(self.footer)}</div>'
 
         html += "</div>"
         return html
 
     def _render_plain(self) -> str:
         """Render plain HTML card"""
-        html = f'<div class="card" id="{self.component_id}">'
+        html = f'<div class="card" id="{conditional_escape(self.component_id)}">'
 
         if self.image:
-            html += f'<img src="{self.image}" alt="{self.title}">'
+            html += f'<img src="{url_attr(self.image, image=True)}" alt="{conditional_escape(self.title)}">'
 
         if self.title:
-            html += f"<h3>{self.title}</h3>"
+            html += f"<h3>{conditional_escape(self.title)}</h3>"
 
         if self.body:
-            html += f"<div>{self.body}</div>"
+            html += f"<div>{conditional_escape(self.body)}</div>"
 
         if self.footer:
-            html += f"<footer>{self.footer}</footer>"
+            html += f"<footer>{conditional_escape(self.footer)}</footer>"
 
         html += "</div>"
         return html

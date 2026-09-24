@@ -339,18 +339,19 @@ from djust.tenants.backends import (
 gives the two backend classes their key prefixing, so use one of those rather
 than mixing it in yourself.
 
-**`PresenceMixin` views: `TenantMixin` already scopes them.** `TenantMixin`
-overrides `get_presence_key()` to return `tenant:<id>:<key>`, so two tenants'
-users land in different presence groups. List `TenantMixin` (or
-`TenantScopedMixin`) **before** `PresenceMixin` in the bases, otherwise
-`PresenceMixin.get_presence_key()` wins and the prefix is lost:
+**`PresenceMixin` views: `TenantMixin` already scopes them.** A view that has
+both mixins stores its presence under `tenant:<id>:<key>`, so two tenants'
+users land in different presence groups. Since 1.2.1 the base order doesn't
+matter: `PresenceMixin.get_presence_key()` applies the same prefix when it comes
+first ([#2973](https://github.com/djust-org/djust/issues/2973)). Before 1.2.1,
+listing `PresenceMixin` first dropped the prefix.
 
 ```python
 from djust import LiveView
 from djust.presence import PresenceMixin
 from djust.tenants import TenantMixin
 
-class CollaborationView(TenantMixin, PresenceMixin, LiveView):  # TenantMixin first
+class CollaborationView(TenantMixin, PresenceMixin, LiveView):
     presence_key = "lobby"   # stored as tenant:<id>:lobby
 ```
 
@@ -381,12 +382,16 @@ DJUST_CONFIG = {
 }
 ```
 
-Any other value **silently falls back to in-process memory**, which isn't
-shared between workers. That includes a dotted path such as
-`'djust.tenants.backends.TenantAwareRedisBackend'`, and `'tenant_redis'`, which
-`get_tenant_presence_backend()` accepts but the global registry used by
-`PresenceMixin` does not
+`'tenant_redis'` and `'tenant_memory'`, the values `djust.tenants` documents,
+are accepted too and select the same storage as `'redis'` and `'memory'`: the
+tenant scope is in the presence key (above). Before 1.2.1 the global registry
+turned `'tenant_redis'` into in-process memory
 ([#2973](https://github.com/djust-org/djust/issues/2973)).
+
+Any other value, including a dotted path such as
+`'djust.tenants.backends.TenantAwareRedisBackend'`, falls back to in-process
+memory, which isn't shared between workers. The registry logs a warning and
+the `djust.C019` system check flags it at startup.
 
 ## Template Context
 

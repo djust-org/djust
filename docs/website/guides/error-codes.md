@@ -251,9 +251,33 @@ In development, pages render without Tailwind utilities until you compile the CS
 
 **Severity**: Warning
 
-**What causes it**: Either a `DjangoTemplates` backend is listed before `DjustTemplateBackend` ("every template the Django engine can find is rendered by Django and never reaches djust"), or there is a `DjustTemplateBackend` entry but no `DjangoTemplates` entry after it ("the admin / admindocs templates cannot render").
+**What causes it**: One of three `TEMPLATES` shapes:
 
-**Fix**: Put the `DjustTemplateBackend` entry first, and add a `django.template.backends.django.DjangoTemplates` entry after it as the fallback for admin and contrib templates (the shape `djust new --with-db` emits). Suppress with `DJUST_CONFIG = {"suppress_checks": ["C016"]}`.
+- a `DjangoTemplates` backend is listed before `DjustTemplateBackend` ("every template the Django engine can find is rendered by Django and never reaches djust");
+- there is a `DjustTemplateBackend` entry but no `DjangoTemplates` entry after it ("the admin / admindocs templates cannot render");
+- the admin is installed, the `DjustTemplateBackend` entry comes first with `APP_DIRS` on, and its `OPTIONS['context_processors']` lacks `auth`, `messages` or `request` ("the admin index fails (KeyError: 'user') without the auth processor"). The djust engine renders the admin's templates in that shape, and Django's own admin checks only look at `DjangoTemplates` entries.
+
+**Fix**: Put the `DjustTemplateBackend` entry first with `django.template.context_processors.request`, `django.contrib.auth.context_processors.auth` and `django.contrib.messages.context_processors.messages` in its `context_processors`, and add a `django.template.backends.django.DjangoTemplates` entry after it as the fallback for admin and contrib templates (the shape `djust new --with-db` emits). Suppress with `DJUST_CONFIG = {"suppress_checks": ["C016"]}`.
+
+---
+
+### C018: Deprecated LIVEVIEW_CONFIG key
+
+**Severity**: Warning
+
+**What causes it**: `LIVEVIEW_CONFIG` or `DJUST_CONFIG` sets one of `jit_cache_backend`, `jit_cache_dir`, `jit_redis_url`, `debug_components`, `component_wrapper_class` or `component_loading_class`. djust has defaults for these keys but never reads them, so setting one has no effect.
+
+**Fix**: Remove the key. djust 1.3 removes them. Suppress with `DJUST_CONFIG = {"suppress_checks": ["C018"]}`.
+
+---
+
+### C019: Unknown PRESENCE_BACKEND
+
+**Severity**: Warning
+
+**What causes it**: `DJUST_CONFIG['PRESENCE_BACKEND']` is set to a value djust doesn't know ("DJUST_CONFIG['PRESENCE_BACKEND'] is '...', which djust does not know; presence falls back to the in-memory backend (one process only)."). A dotted class path counts as unknown: the setting takes a short name.
+
+**Fix**: Use `'redis'` or `'tenant_redis'` for presence shared between processes, or `'memory'` / `'tenant_memory'` for a single process. Suppress with `DJUST_CONFIG = {"suppress_checks": ["C019"]}`.
 
 ---
 
@@ -405,7 +429,7 @@ def mount(self, request, **kwargs):
 
 **Severity**: Info
 
-**What causes it**: A public method name matches event handler naming patterns (e.g., `handle_*`, `on_*`, `toggle_*`, `select_*`, `update_*`, `delete_*`, `create_*`, `add_*`, `remove_*`, `save_*`, `cancel_*`, `submit_*`, `close_*`, `open_*`) but is not decorated with `@event_handler`.
+**What causes it**: A public method name matches event handler naming patterns (e.g., `on_*`, `toggle_*`, `select_*`, `update_*`, `delete_*`, `create_*`, `add_*`, `remove_*`, `save_*`, `cancel_*`, `submit_*`, `close_*`, `open_*`) but is not decorated with `@event_handler`. `handle_*` methods are not flagged: an undecorated `handle_*` method is the way to write a handler that server push can call and browsers cannot.
 
 Without the decorator, the method cannot be called from templates via `dj-click` or other directives.
 
@@ -606,6 +630,16 @@ V008 is broader than V006 and will flag any custom class instantiation, not just
 **What causes it**: A view sets `time_travel_enabled = True`, and its model or form declares fields whose names look like PII that are not listed in `time_travel_excluded_fields`. Message: "<view>: time_travel_enabled = True, and its model/form declares field(s) whose names look like PII and are not in time_travel_excluded_fields: ...". Time-travel snapshots can be exported as a shareable bug-capture blob.
 
 **Fix**: List the sensitive public-state keys in `time_travel_excluded_fields` on the view, or suppress with `DJUST_CONFIG = {"suppress_checks": ["V014"]}` if they never reach the view's public state. See [Bug Capture](bug-capture.md).
+
+---
+
+### V015: djust's own LiveViews blocked by LIVEVIEW_ALLOWED_MODULES
+
+**Severity**: Warning
+
+**What causes it**: `LIVEVIEW_ALLOWED_MODULES` is set, your URLconf routes a LiveView that djust ships (the component gallery, the theme gallery, the admin extension), and the list doesn't admit it. An explicit list replaces the default, which includes `"djust"`, so those pages render but never mount ("View not mounted. Please reload the page."). V005 doesn't cover this case because it skips classes defined in djust.
+
+**Fix**: Add `"djust"` to `LIVEVIEW_ALLOWED_MODULES`, as `djust new` does since 1.2.1. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V015"]}`.
 
 ---
 
@@ -1444,11 +1478,13 @@ These are registered by the `djust.theming` app under Django's `compatibility` t
 
 ### djust_theming.E001: theme_context processor missing
 
-**Severity**: Error
+**Severity**: Warning (an Error before 1.2.1; the id keeps its `E` prefix so existing `SILENCED_SYSTEM_CHECKS` entries still match)
 
-**What causes it**: "djust.theming.context_processors.theme_context is not in any TEMPLATES backend's context_processors list. Theme template variables (theme_head, theme_switcher, etc.) will not be available."
+The processor is optional. `{% theme_head %}`, `{% theme_switcher %}` and `{% theme_panel %}` work without it; it only supplies the `{{ theme_head }}`-style variables, and it pre-renders the theme chunks on every request that uses a `RequestContext`. If your templates use only the tags, silence the check instead of adding the processor.
 
-**Fix**: Add `"djust.theming.context_processors.theme_context"` to `TEMPLATES[0]['OPTIONS']['context_processors']`.
+**What causes it**: "djust.theming.context_processors.theme_context is not in any TEMPLATES backend's context_processors list. Theme template variables (theme_head, theme_switcher, etc.) will not be available; the {% theme_head %} / {% theme_switcher %} tags still work."
+
+**Fix**: Add `"djust.theming.context_processors.theme_context"` to `TEMPLATES[0]['OPTIONS']['context_processors']` if templates use the `{{ theme_head }}` variables, or add `"djust_theming.E001"` to `SILENCED_SYSTEM_CHECKS` if they use only the tags.
 
 ---
 

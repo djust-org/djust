@@ -348,7 +348,7 @@ a:hover {
 .btn-success {
   background: hsl(var(--success));
   border-color: hsl(var(--success));
-  color: white;
+  color: hsl(var(--success-foreground));
 }
 
 .btn-success:hover {
@@ -359,7 +359,7 @@ a:hover {
 .btn-danger {
   background: hsl(var(--destructive));
   border-color: hsl(var(--destructive));
-  color: white;
+  color: hsl(var(--destructive-foreground));
 }
 
 .btn-danger:hover {
@@ -399,7 +399,7 @@ a:hover {
 
 .card-header-success {
   background: hsl(var(--success));
-  color: white;
+  color: hsl(var(--success-foreground));
 }
 
 .card-body {
@@ -579,7 +579,7 @@ a:hover {
 
 .badge-primary {
   background: hsl(var(--primary));
-  color: white;
+  color: hsl(var(--primary-foreground));
 }
 
 .badge-secondary {
@@ -1872,7 +1872,7 @@ body::after {
 
 .sidebar-nav .nav-link:hover {
   background: hsl(var(--accent));
-  color: hsl(var(--foreground));
+  color: hsl(var(--accent-foreground));
   text-decoration: none;
 }
 

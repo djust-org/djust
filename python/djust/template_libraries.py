@@ -125,6 +125,43 @@ logger = logging.getLogger(__name__)
 #: (measured: 15 suite failures).
 _UNBRIDGED_PREFIXES = ("djust.templatetags.",)
 
+#: The exceptions to :data:`_UNBRIDGED_PREFIXES` (#2958): tags of djust's own
+#: libraries that have NO native Rust handler, and so failed in every root
+#: LiveView template with "Invalid block tag". They bridge through the generic
+#: machinery below like any project library's tags — Django's own node renders
+#: them, so the output is the Django engine's by construction. Only the named
+#: tags bridge; the rest of the library (and its filters, which already reach
+#: the Rust engine) is left exactly as before.
+_DJUST_TAGS_BRIDGED: Dict[str, frozenset] = {
+    "djust.templatetags.live_tags": frozenset(
+        {
+            "dj_activity",
+            "colocated_hook",
+            "live_form",
+            "live_field",
+            "live_errors",
+            # #3044 — the same class as #2958, three more tags.
+            "live_input",
+            "djust_skeleton",
+            "djust_track_static",
+        }
+    ),
+}
+
+#: Probe arguments for djust's own bridged wrapper tags (#2958). The ADR-030
+#: probe compiles a body-consuming tag once with NO arguments, and these two
+#: require a name, so the probe could not tell they are plain wrappers. Keyed
+#: by (module, tag): only djust's own tags get a probe argument.
+_PROBE_ARGS: Dict[Tuple[str, str], List[str]] = {
+    ("djust.templatetags.live_tags", "dj_activity"): ['"probe"'],
+    ("djust.templatetags.live_tags", "colocated_hook"): ['"Probe"'],
+}
+
+#: module → (library, the subset of it that bridges). Cached so the SAME
+#: subset object is handed back on every ``{% load %}`` and the
+#: already-bridged short-cut in :func:`_bridge_library` holds (#2668).
+_djust_subsets: Dict[str, Tuple[Any, Any]] = {}
+
 #: Django's own libraries this row bridges (#2558, extended for ``static``
 #: and ``cache`` in #2517). ``cache`` reaches a bespoke handler rather than the
 #: generic tag bridge — see :data:`_BESPOKE_BLOCK_TAGS`.
@@ -203,6 +240,23 @@ _RAISED_BY_LIBRARY = "_djust_raised_by_library"
 
 _current_format_flags: contextvars.ContextVar[Tuple[Optional[bool], Optional[bool]]] = (
     contextvars.ContextVar("djust_template_format_flags", default=(None, None))
+)
+
+#: #3044: the Django ``RenderContext`` djust's OWN bridged tags
+#: (:data:`_DJUST_TAGS_BRIDGED`) share across one render. Django gives each
+#: ``Template.render`` one ``render_context``; ``{% djust_skeleton %}`` keeps
+#: "style block already emitted" there, and saw a fresh one per CALL because
+#: the bridge builds a new ``Context`` for every call. Set by
+#: :func:`library_render_scope` around each Rust render; ``None`` (outside
+#: one) keeps the per-call behaviour.
+#:
+#: Third-party bridged tags keep a fresh ``Context`` per call, as before
+#: (#3053 review): the bridge caches ONE node per argument tuple, so a shared
+#: ``render_context[node]`` would merge the state of two sites with the same
+#: arguments, and of every loop iteration, which neither Django nor 1.2.0
+#: does. Widening it needs per-site nodes first.
+_render_scope: contextvars.ContextVar[Optional[Any]] = contextvars.ContextVar(
+    "djust_library_render_context", default=None
 )
 
 _lock = threading.RLock()
@@ -299,6 +353,35 @@ def localize_temporal(value: Any, use_l10n_override: Optional[bool] = None) -> s
 
 
 @contextlib.contextmanager
+def library_render_scope() -> Iterator[None]:
+    """One Rust render: the bridged nodes it runs share one Django
+    ``RenderContext``, as the nodes of one ``Template.render`` do (#3044).
+
+    Nested scopes (a component or child view rendered during a render) get
+    their own and restore the enclosing one on exit, as Django's
+    ``RenderContext.push_state`` does per template.
+    """
+    from django.template.context import RenderContext
+
+    token = _render_scope.set(RenderContext())
+    try:
+        yield
+    finally:
+        _render_scope.reset(token)
+
+
+def _share_render_context(ctx: Any, shares: bool) -> None:
+    """Point a bridge-built ``Context`` at the current render's
+    ``RenderContext``, when ``shares`` (a djust-owned bridged tag) and a
+    :func:`library_render_scope` is active."""
+    if not shares:
+        return
+    shared = _render_scope.get()
+    if shared is not None:
+        ctx.render_context = shared
+
+
+@contextlib.contextmanager
 def rendering_with_backend(
     backend: Any, *, use_l10n: Optional[bool] = None, use_tz: Optional[bool] = None
 ) -> Iterator[None]:
@@ -323,7 +406,8 @@ def rendering_with_backend(
     previous_namespace = set_registry_namespace(namespace)
     flags_token = _current_format_flags.set((use_l10n, use_tz))
     try:
-        yield
+        with library_render_scope():
+            yield
     finally:
         _current_format_flags.reset(flags_token)
         set_registry_namespace(previous_namespace)
@@ -654,7 +738,10 @@ def _bridge_library(label: str, library: Any) -> None:
     """Register every filter and tag of ``library`` with the Rust engine."""
     module = _library_module(library)
     if module.startswith(_UNBRIDGED_PREFIXES):
-        return
+        allowed = _DJUST_TAGS_BRIDGED.get(module)
+        if not allowed:
+            return
+        library = _djust_subset(module, library, allowed)
     if module.startswith("django.templatetags.") and module not in _DJANGO_LIBRARIES_BRIDGED:
         # ``{% load static %}`` resolves and parses as it did before this
         # module existed; Django's other libraries are still separate rows.
@@ -686,11 +773,32 @@ def _bridge_library(label: str, library: Any) -> None:
         else:
             _bridge_tag(label, name, compile_func)
         _engine_state("_tag_owner", _tag_owner)[name] = label
+    if module in _DJUST_TAGS_BRIDGED:
+        # djust's own bridged tags share one RenderContext per render (#3044).
+        owned = _engine_state("_owned_tags", _owned_tags)
+        for name in library.tags:
+            entry = owned.get(name)
+            if entry is not None and entry[0] == label:
+                entry[1].shares_render_context = True
     refused = refused_filters(module)
     for name in library.filters:
         if name not in refused:
             _engine_state("_filter_owner", _filter_owner)[name] = label
     _engine_state("_loaded", _loaded)[label] = library
+
+
+def _djust_subset(module: str, library: Any, allowed: frozenset) -> Any:
+    """The part of a djust library that bridges (#2958): its ``allowed`` tags,
+    no filters. One subset object per library object."""
+    cached = _djust_subsets.get(module)
+    if cached is not None and cached[0] is library:
+        return cached[1]
+    from django.template.library import Library
+
+    subset = Library()
+    subset.tags = {name: fn for name, fn in library.tags.items() if name in allowed}
+    _djust_subsets[module] = (library, subset)
+    return subset
 
 
 def refused_filters(module: str) -> frozenset:
@@ -802,7 +910,8 @@ def _bridge_tag(label: str, name: str, compile_func: Callable[..., Any]) -> None
         # library bridges normally — and the message names the reason. The
         # Rust parser reads `REFUSE_AT_PARSE` and raises Django's
         # `TemplateSyntaxError`.
-        reason = _wrapper_refusal(name, compile_func)
+        probe_args = _PROBE_ARGS.get((getattr(compile_func, "__module__", ""), name), [])
+        reason = _wrapper_refusal(name, compile_func, probe_args)
         if reason is None:
             if not isinstance(handler, LibraryBlockTagHandler) or handler.name != name:
                 handler = LibraryBlockTagHandler(label, name, compile_func)
@@ -963,7 +1072,9 @@ def _segments_reason(calls: List[Tuple[str, ...]], end_name: str) -> str:
     )
 
 
-def _wrapper_refusal(name: str, compile_func: Callable[..., Any]) -> Optional[str]:
+def _wrapper_refusal(
+    name: str, compile_func: Callable[..., Any], probe_args: Optional[List[str]] = None
+) -> Optional[str]:
     """Why a body-consuming raw tag cannot take the rendered-body route, or
     ``None`` when it can (ADR-030 D1).
 
@@ -984,7 +1095,9 @@ def _wrapper_refusal(name: str, compile_func: Callable[..., Any]) -> Optional[st
     Two limits, documented in ``docs/TEMPLATE_BACKEND.md``: the probe runs
     the tag's compile and render once at ``{% load %}`` time, so a render
     with side effects fires once with a probe context; and a compile function
-    that raises without arguments cannot be probed and stays refused.
+    that raises without arguments cannot be probed and stays refused —
+    unless it is one of djust's own tags, which pass ``probe_args``
+    (:data:`_PROBE_ARGS`, #2958).
     """
     from django.http import HttpRequest
     from django.template import Context
@@ -1001,7 +1114,7 @@ def _wrapper_refusal(name: str, compile_func: Callable[..., Any]) -> Optional[st
 
     parser.parse = counting_parse  # type: ignore[method-assign]
     try:
-        node = compile_func(parser, _token(name, []))
+        node = compile_func(parser, _token(name, list(probe_args or [])))
     except Exception as exc:  # noqa: BLE001 — the reason is reported, never raised here
         if not calls:
             return "it could not be compiled for probing without arguments (%s: %s)" % (
@@ -1107,11 +1220,32 @@ class _StubEngine:
 
     def get_template(self, name: Any) -> Any:
         if hasattr(name, "render"):
-            return name
-        return _template_backend().get_template(name)
+            return _engine_level(name)
+        return _engine_level(_template_backend().get_template(name))
 
     def select_template(self, names: Any) -> Any:
-        return _template_backend().select_template(names)
+        return _engine_level(_template_backend().select_template(names))
+
+
+def _engine_level(template: Any) -> Any:
+    """A template ``InclusionNode.render`` can call with a ``Context`` (#3024).
+
+    Django's node renders what ``context.template.engine`` hands back with
+    ``t.render(context.new(...))`` — an ENGINE-level
+    ``django.template.base.Template`` takes that ``Context``. The BACKEND
+    wrapper Django's loader and the ``DjangoTemplates`` backend return
+    (``django.template.backends.django.Template``) accepts only a dict and
+    raised "context must be a dict rather than Context" for every third-party
+    inclusion tag in a LiveView template when the project has no djust
+    backend. Unwrap it to the engine template it carries, which is what
+    Django's own engine would have used. djust's ``DjustTemplate`` already
+    accepts a ``Context`` and is returned as it is.
+    """
+    from django.template.backends.django import Template as DjangoBackendTemplate
+
+    if isinstance(template, DjangoBackendTemplate):
+        return template.template
+    return template
 
 
 class _StubTemplate:
@@ -1189,7 +1323,10 @@ def _materialize_lazy(value: Any) -> Any:
 
 
 def _render_node(
-    node: Any, context: Dict[str, Any], autoescape: bool = True
+    node: Any,
+    context: Dict[str, Any],
+    autoescape: bool = True,
+    shares_render_context: bool = False,
 ) -> Tuple[Any, Dict[str, Any]]:
     """``node.render`` on a Django ``Context`` over ``context``; the output
     ``mark_safe``'d (see the module docstring) and the context writes the
@@ -1213,6 +1350,7 @@ def _render_node(
     if "request" in context:
         ctx.request = context["request"]
     ctx.template = _stub_template_with(*_render_engine_options())
+    _share_render_context(ctx, shares_render_context)
     output = node.render(ctx)
     after = ctx.dicts[-1]
     bindings = {
@@ -1233,6 +1371,10 @@ def _render_node(
 class LibraryTagHandler:
     """The generic inline handler: a ``simple_tag``, an ``inclusion_tag``, or
     a raw ``@register.tag`` that builds its node from its own token."""
+
+    #: Share the render's ``RenderContext`` (#3044). True only for djust's own
+    #: tags in :data:`_DJUST_TAGS_BRIDGED`; see :data:`_render_scope`.
+    shares_render_context = False
 
     RESOLVE_ARG_POSITIONS: frozenset = frozenset()
     RETURNS_BINDINGS = True
@@ -1276,7 +1418,9 @@ class LibraryTagHandler:
         self, args: List[str], context: Dict[str, Any], autoescape: bool = True
     ) -> Tuple[Any, Dict[str, Any]]:
         try:
-            return _render_node(self._compile(args), context, autoescape)
+            return _render_node(
+                self._compile(args), context, autoescape, self.shares_render_context
+            )
         except BaseException as exc:
             _stamp(exc)
             raise
@@ -1370,7 +1514,7 @@ class LibraryBlockTagHandler(LibraryTagHandler):
         try:
             tokens = [Token(TokenType.TEXT, content), Token(TokenType.BLOCK, self.end_name)]
             node = self.compile_func(_parser(tokens), _token(self.name, args))
-            return _render_node(node, context, autoescape)
+            return _render_node(node, context, autoescape, self.shares_render_context)
         except BaseException as exc:
             _stamp(exc)
             raise
@@ -1622,6 +1766,10 @@ class LibraryRawBlockTagHandler:
     point, a LiveView page 500s exactly as Django's does.
     """
 
+    #: Share the render's ``RenderContext`` (#3044). True only for djust's own
+    #: tags in :data:`_DJUST_TAGS_BRIDGED`; see :data:`_render_scope`.
+    shares_render_context = False
+
     RETURNS_BINDINGS = True
 
     def __init__(self, label: str, name: str, compile_func: Callable[..., Any]) -> None:
@@ -1669,6 +1817,8 @@ class LibraryRawBlockTagHandler:
             ctx = Context(dict(context), autoescape=autoescape, use_l10n=use_l10n, use_tz=use_tz)
             string_if_invalid, debug = self._string_if_invalid()
             ctx.template = _stub_template_with(string_if_invalid, debug)
+            # The same as `_render_node` (#3044, #1646).
+            _share_render_context(ctx, self.shares_render_context)
             output = self._compile(list(args), body).render(ctx)
             after = ctx.dicts[-1]
             bindings = {

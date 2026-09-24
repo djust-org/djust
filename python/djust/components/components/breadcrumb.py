@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from djust.components.utils import url_attr
 from typing import Any, Optional
 
 
@@ -38,7 +39,7 @@ class Breadcrumb(Component):
         for i, item in enumerate(items):
             if isinstance(item, dict):
                 lbl = html.escape(str(item.get("label", "")))
-                url = html.escape(str(item.get("url", "")))
+                url = url_attr(item.get("url", ""))
                 active = item.get("active", False)
             else:
                 lbl = html.escape(str(item))

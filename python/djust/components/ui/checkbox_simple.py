@@ -7,6 +7,8 @@ Simple stateless checkbox with automatic Rust optimization.
 from typing import Any, Optional
 from ..base import Component
 
+from django.utils.html import conditional_escape
+
 try:
     from djust._rust import RustCheckbox  # type: ignore[attr-defined]
 
@@ -133,9 +135,9 @@ class Checkbox(Component):
         attrs = [
             'class="form-check-input"',
             'type="checkbox"',
-            f'id="{self.checkbox_id}"',
-            f'name="{self.name}"',
-            f'value="{self.value}"',
+            f'id="{conditional_escape(self.checkbox_id)}"',
+            f'name="{conditional_escape(self.name)}"',
+            f'value="{conditional_escape(self.value)}"',
         ]
         if self.checked:
             attrs.append("checked")
@@ -143,14 +145,16 @@ class Checkbox(Component):
             attrs.append("disabled")
 
         parts.append(f"        <input {' '.join(attrs)}>")
-        parts.append(f'        <label class="form-check-label" for="{self.checkbox_id}">')
-        parts.append(f"            {self.label}")
+        parts.append(
+            f'        <label class="form-check-label" for="{conditional_escape(self.checkbox_id)}">'
+        )
+        parts.append(f"            {conditional_escape(self.label)}")
         parts.append("        </label>")
         parts.append("    </div>")
 
         # Help text
         if self.help_text:
-            parts.append(f'    <div class="form-text">{self.help_text}</div>')
+            parts.append(f'    <div class="form-text">{conditional_escape(self.help_text)}</div>')
 
         parts.append("</div>")
 

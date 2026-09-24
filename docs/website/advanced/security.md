@@ -160,6 +160,24 @@ logger.info("User searched for: %s", sanitize_for_log(user_query))
 
 This strips ANSI escape sequences, newlines (prevents forged log entries), and truncates long strings.
 
+djust's own log calls get this for free: at startup `DjustConfig.ready()` attaches
+`DjustLogSanitizerFilter` to the `djust` logger and every `djust.*` logger,
+including ones created later, so string arguments in framework log records are
+sanitized before any handler sees them. Before 1.2.1 the filter sat on the
+`djust` logger alone and never saw records from its child loggers
+([#2947](https://github.com/djust-org/djust/issues/2947)). Your application's
+loggers are not covered. Call `sanitize_for_log()` there, or add the filter to
+your handlers in `LOGGING`:
+
+```python
+LOGGING = {
+    "version": 1,
+    "filters": {"djust_sanitize": {"()": "djust.security.DjustLogSanitizerFilter"}},
+    "handlers": {"console": {"class": "logging.StreamHandler", "filters": ["djust_sanitize"]}},
+    "root": {"handlers": ["console"]},
+}
+```
+
 ### Safe Error Responses
 
 Use `create_safe_error_response()` to avoid leaking stack traces in production:
@@ -182,6 +200,8 @@ Stack traces are included only when `DEBUG = True`. User parameters are never in
 Cross-site WebSocket hijacking is blocked by an `Origin` check: before accepting the handshake, the WebSocket consumer verifies that the `Origin` header matches `ALLOWED_HOSTS`, and closes the connection with code 4403 otherwise. The connection carries the Django session cookie, and view-level authentication (`LoginRequiredMixin`, `login_required`, auth mixins) is enforced when the view mounts.
 
 For any HTTP endpoints in your djust application, standard Django CSRF protection applies. Never use `@csrf_exempt` without documented justification.
+
+A `{% csrf_token %}` form in a LiveView template works whether the page was rendered over HTTP or over the socket (for example after `dj-navigate`). When djust mounts a view over the WebSocket, it binds the browser's CSRF cookie to the rebuilt request the way `CsrfViewMiddleware` would, so the rendered token matches the cookie the browser will POST with. `CSRF_COOKIE_NAME` and `CSRF_USE_SESSIONS` are honoured. Because a socket-rendered page now carries a valid token, the WebSocket `Origin` check above is what keeps it from other sites; keep `ALLOWED_HOSTS` specific.
 
 ## Authentication Enforcement
 

@@ -7,7 +7,9 @@ from __future__ import annotations
 import json
 
 import pytest
-from django.test import RequestFactory, override_settings
+from django.test import override_settings
+
+from .conftest import observability_request_factory
 
 from djust.observability.registry import _clear_registry, register_view
 from djust.observability.views import view_assigns
@@ -67,7 +69,7 @@ def test_view_assigns_returns_state_for_registered_session():
     view = _FakeView(count=7, label="counter")
     register_view("session-1", view)
 
-    rf = RequestFactory()
+    rf = observability_request_factory()
     resp = view_assigns(rf.get("/?session_id=session-1"))
     assert resp.status_code == 200
 
@@ -82,7 +84,7 @@ def test_view_assigns_excludes_private_and_callable_attrs():
     view = _FakeView()
     register_view("s", view)
 
-    rf = RequestFactory()
+    rf = observability_request_factory()
     resp = view_assigns(rf.get("/?session_id=s"))
     data = json.loads(resp.content)
     assert "_private" not in data["assigns"]
@@ -91,14 +93,14 @@ def test_view_assigns_excludes_private_and_callable_attrs():
 
 @override_settings(DEBUG=True)
 def test_view_assigns_400_when_session_id_missing():
-    rf = RequestFactory()
+    rf = observability_request_factory()
     resp = view_assigns(rf.get("/"))
     assert resp.status_code == 400
 
 
 @override_settings(DEBUG=True)
 def test_view_assigns_404_when_session_unknown():
-    rf = RequestFactory()
+    rf = observability_request_factory()
     resp = view_assigns(rf.get("/?session_id=never-registered"))
     assert resp.status_code == 404
 
@@ -107,7 +109,7 @@ def test_view_assigns_404_when_session_unknown():
 def test_view_assigns_404_when_debug_off():
     view = _FakeView()
     register_view("s", view)
-    rf = RequestFactory()
+    rf = observability_request_factory()
     resp = view_assigns(rf.get("/?session_id=s"))
     assert resp.status_code == 404
 
@@ -121,7 +123,7 @@ def test_view_assigns_per_attr_fallback_keeps_serializable_native():
     """
     view = _FakeViewWithNonSerializable()
     register_view("s", view)
-    rf = RequestFactory()
+    rf = observability_request_factory()
     resp = view_assigns(rf.get("/?session_id=s"))
     assert resp.status_code == 200
     data = json.loads(resp.content)

@@ -25,6 +25,12 @@ Usage::
             ctx = super().get_template_context()
             ctx.update(self.get_table_context())
             return ctx
+
+Sort, filter, group and expression events act only on the keys declared in
+``table_columns`` (plus ``table_computed_columns`` for group and expression).
+A column is sortable unless it sets ``"sortable": False`` and filterable only
+when it sets ``"filterable": True``; ``table_default_sort`` is always accepted.
+Any other column name is ignored.
 """
 
 import csv
@@ -32,7 +38,7 @@ import io
 import json
 import math
 import re
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
 
 from djust.components.utils import format_cell, interpolate_color_gradient
 from djust.decorators import event_handler
@@ -489,6 +495,8 @@ class DataTableMixin:
     def on_table_sort(self, value: Any, **kwargs: Any) -> None:
         """Handle sort event: toggle direction or switch column, then refresh rows."""
         column = str(value)
+        if not self._is_sortable_column(column):
+            return
         if self.table_sort_by == column:
             self.table_sort_desc = not self.table_sort_desc
         else:
@@ -509,6 +517,8 @@ class DataTableMixin:
         if column is None:
             column = kwargs.get("data-column", kwargs.get("data_column", ""))
         column = str(column)
+        if column not in self._table_column_keys("filterable", default=False):
+            return
         value = str(value)
         if value:
             self.table_filters[column] = value
@@ -693,8 +703,12 @@ class DataTableMixin:
 
     @event_handler()
     def on_table_group(self, value: Any, **kwargs: Any) -> None:
-        """Handle grouping by column."""
-        self.table_current_group_by = str(value)
+        """Handle grouping by column. An empty value clears grouping; only
+        declared column keys (or ``table_group_by``) are accepted."""
+        column = str(value)
+        if column and column != self.table_group_by and column not in self._table_known_keys():
+            return
+        self.table_current_group_by = column
 
     @event_handler()
     def on_table_group_toggle(self, value: Any, **kwargs: Any) -> None:
@@ -855,7 +869,7 @@ class DataTableMixin:
             return
         column = str(data.get("column", ""))
         expression = str(data.get("expression", ""))
-        if column:
+        if column and column in self._table_known_keys():
             if expression:
                 self.table_active_expressions[column] = expression
             else:
@@ -992,10 +1006,12 @@ class DataTableMixin:
         """Filter rows using active column expressions."""
         if not self.table_active_expressions:
             return rows
+        known = self._table_known_keys()
+        active = {k: e for k, e in self.table_active_expressions.items() if k in known}
         result = []
         for row in rows:
             passes = True
-            for col_key, expr in self.table_active_expressions.items():
+            for col_key, expr in active.items():
                 val = row.get(col_key, "")
                 if not self.evaluate_expression_filter(val, expr):
                     passes = False
@@ -1322,6 +1338,45 @@ class DataTableMixin:
             "row_url": self.table_row_url,
         }
 
+    # ── Declared Columns ──
+
+    def _table_column_keys(self, flag: Optional[str] = None, default: bool = True) -> Set[str]:
+        """Return the keys of the declared ``table_columns``.
+
+        With ``flag`` (``"sortable"`` or ``"filterable"``), only columns whose
+        flag is true are returned; ``default`` is the value assumed when a dict
+        column omits the flag, and the value used for bare string columns. The
+        defaults match how ``{% data_table %}`` renders the header: columns are
+        sortable unless they say otherwise, and filterable only when they say so.
+        """
+        keys: Set[str] = set()
+        for col in self.table_columns or []:
+            if isinstance(col, dict):
+                key = col.get("key")
+                enabled = bool(col.get(flag, default)) if flag else True
+            else:
+                key = col
+                enabled = default if flag else True
+            if key and enabled:
+                keys.add(str(key))
+        return keys
+
+    def _table_known_keys(self) -> Set[str]:
+        """Keys of the declared columns plus the declared computed columns."""
+        keys = self._table_column_keys()
+        for cc in self.table_computed_columns or []:
+            if isinstance(cc, dict) and cc.get("key"):
+                keys.add(str(cc["key"]))
+        return keys
+
+    def _is_sortable_column(self, column: str) -> bool:
+        """True when ``column`` is a declared sortable column or ``table_default_sort``."""
+        if not column:
+            return False
+        if self.table_default_sort and column == self.table_default_sort:
+            return True
+        return column in self._table_column_keys("sortable", default=True)
+
     # ── Queryset Pipeline ──
 
     def get_table_queryset(self) -> Any:
@@ -1344,15 +1399,18 @@ class DataTableMixin:
         return qs.filter(q)
 
     def _apply_table_filters(self, qs: Any) -> Any:
-        """Apply per-column filters."""
+        """Apply per-column filters. Only declared ``filterable`` columns are
+        applied; any other key in ``table_filters`` is ignored."""
+        filterable = self._table_column_keys("filterable", default=False)
         for col_key, value in self.table_filters.items():
-            if value:
+            if value and col_key in filterable:
                 qs = qs.filter(**{f"{col_key}__icontains": value})
         return qs
 
     def _apply_table_sort(self, qs: Any) -> Any:
-        """Apply sort ordering."""
-        if not self.table_sort_by:
+        """Apply sort ordering. Only a declared ``sortable`` column (or
+        ``table_default_sort``) is applied; any other value is ignored."""
+        if not self.table_sort_by or not self._is_sortable_column(self.table_sort_by):
             return qs
         order = f"-{self.table_sort_by}" if self.table_sort_desc else self.table_sort_by
         return qs.order_by(order)

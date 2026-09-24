@@ -303,8 +303,7 @@ What this gives you:
   this view's state (`view.nav.state` is the `State` itself), and it is
   registered in `view._components` on first access, so it is routed, captured
   in time-travel snapshots and saved/restored with the session like any other
-  component (the signed back-navigation snapshot captures but does not yet
-  restore component state -- [#2896](https://github.com/djust-org/djust/issues/2896)).
+  component, including the signed back-navigation snapshot.
 - **Handlers are ordinary `@event_handler` methods** on the component; inside
   one, `self.state` is the state of the view that received the event. Clicks
   inside the rendered markup carry the `component_id` automatically because
@@ -847,6 +846,33 @@ INSTALLED_APPS = [
 | `{% pagination %}`                         | Page navigation                      |
 | `{% avatar %}`                             | User avatar with initials fallback   |
 
+#### `{% badge %}` ships no CSS
+
+`{% badge %}` renders BEM class names that **no stylesheet djust ships has a
+rule for** (#3025), so its output appears as plain text until you style it.
+(Only the base `dj-badge` class has a rule, in
+`djust_components/components-classes.css`, which `{% theme_head %}` does not
+link; the status, dot and label classes have none anywhere.)
+
+```html
+<span class="dj-badge dj-badge--error">
+  <span class="dj-badge__dot dj-badge__dot--pulse" aria-hidden="true"></span>
+  <span class="sr-only">Status: error</span>
+  <span class="dj-badge__label">Failed</span>
+</span>
+```
+
+Style `dj-badge`, `dj-badge--<status>` (`online`, `offline`, `warning`,
+`error`, `default`), `dj-badge__dot`, `dj-badge__dot--pulse` and
+`dj-badge__label` in your own stylesheet, for example on the theme tokens
+(`hsl(var(--success))` and so on). The similarly named rules in
+`djust_components/components.css` (`.badge-online`, `.badge-pulse`, …) and
+`components-classes.css` (`.dj-badge-danger`, single dash, …) belong to other
+badge markup and do not match these classes. For a badge styled by the active
+theme, use `{% theme_badge "Failed" variant="destructive" %}`
+(`{% load theme_components %}`). Shipping styles for `{% badge %}` is planned
+for 1.3.
+
 ### `{% data_table %}` row-level navigation (#1111)
 
 Two ways to make whole rows clickable for navigation. Both render
@@ -955,6 +981,23 @@ All components use CSS custom properties. Override them to match any theme:
 ```
 
 This is what makes them style-agnostic: change the variables, and every component adapts. Works standalone or with `djust.theming` for full design system support.
+
+#### Unstyled Python components
+
+Three `djust.components` classes render markup that **no stylesheet djust
+ships has a rule for**, so they appear as bare markup until you style them.
+Each has a styled template-tag twin that follows the active theme:
+
+| Class (`from djust.components import …`) | Classes it renders | Custom properties its docstring suggests | Styled equivalent |
+| --- | --- | --- | --- |
+| `Alert` | `dj-alert`, `dj-alert-<variant>`, `dj-alert-dismissible`, `dj-alert-icon`, `dj-alert-message`, `dj-alert-dismiss` | `--dj-alert-{bg,fg,border,radius,padding}`, `--dj-alert-<variant>-{bg,fg,border}` | `{% theme_alert %}` |
+| `Progress` | `dj-progress`, `dj-progress-<variant>`, `dj-progress-<size>`, `dj-progress-label`, `dj-progress-track`, `dj-progress-bar`, `dj-progress-value` | `--dj-progress-{bg,bar-bg,radius,height}`, `--dj-progress-<variant>-bg` | `{% theme_progress %}` |
+| `Avatar` | `dj-avatar`, `dj-avatar-<size>`, `dj-avatar-img`, `dj-avatar-initials`, `dj-avatar-status`, `dj-avatar-status-<status>` | none | `{% theme_avatar %}` |
+
+The custom properties are naming suggestions for your own stylesheet. Nothing
+djust ships reads them. To get the styled version, use the tag instead
+(`{% load theme_components %}`). Their catalogue pages
+(`/theme/components/alert/` and so on) preview the tag and say the same.
 
 ## djust-theming
 

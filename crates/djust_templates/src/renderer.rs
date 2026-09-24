@@ -3448,8 +3448,11 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                                 // `render_with_diff` parses + caches). Either way the
                                 // manifest records the item so `render_with_diff` can
                                 // reconstruct the full HTML and validate the splice.
+                                // Foster-safe AND block-level first root (#2999).
                                 let foster_safe =
-                                    crate::loop_cache::item_html_is_foster_safe(&item_html);
+                                    crate::loop_cache::item_html_is_parse_cache_eligible(
+                                        &item_html,
+                                    );
                                 let parse_hit = foster_safe
                                     && crate::loop_cache::with_active_cache(|cache| {
                                         cache.has_parsed(hash)
@@ -3824,10 +3827,22 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                         } else {
                             v.clone()
                         };
-                        format!("\"{}\":\"{}\"", k, resolved_value.replace('"', "\\\""))
+                        // serde_json escapes backslashes and control
+                        // characters, not just `"`.
+                        format!(
+                            "{}:{}",
+                            serde_json::Value::String(k.clone()),
+                            serde_json::Value::String(resolved_value)
+                        )
                     })
                     .collect();
-                output.push_str(&format!("{{{}}}", props_json.join(",")));
+                // The attribute is single-quoted: escape `'` along with the
+                // rest, or a prop value can close it. Readers see the JSON
+                // again after entity decoding (`dataset`, `html.unescape`).
+                output.push_str(&filters::html_escape_attr(&format!(
+                    "{{{}}}",
+                    props_json.join(",")
+                )));
                 output.push('\'');
             }
 
@@ -6903,6 +6918,25 @@ mod tests {
         context.set("name".to_string(), Value::String("World".to_string()));
         let result = render_nodes(&nodes, &context).unwrap();
         assert_eq!(result, "World");
+    }
+
+    /// React props are JSON inside a single-quoted attribute: the JSON is
+    /// built by an encoder and the whole value is entity-escaped.
+    #[test]
+    fn react_component_props_are_encoded_json_in_an_escaped_attribute() {
+        let tokens = tokenize(r#"<Greeting who="{{ name }}" />"#).unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set(
+            "name".to_string(),
+            Value::String("it's \"q\" <b> a\\b\n".to_string()),
+        );
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert_eq!(
+            result,
+            "<div data-react-component=\"Greeting\" data-react-props='{&quot;who&quot;:\
+             &quot;it&#x27;s \\&quot;q\\&quot; &lt;b&gt; a\\\\b\\n&quot;}'></div>"
+        );
     }
 
     #[test]

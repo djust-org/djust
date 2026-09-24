@@ -360,39 +360,15 @@ def restore_snapshot(view: Any, snapshot: EventSnapshot, which: str = "before") 
     # here. Time-travel restores literal captured state at each layer;
     # if the user wants live-recomputed invariants they should derive
     # them at render time, not at restore time.
+    #
+    # The dispatch is shared with the signed back-navigation restore
+    # (``LiveView._restore_snapshot``, #2896): one helper, so the two paths
+    # agree on which component ids are valid targets.
     if components_state:
-        registry = getattr(view, "_components", None) or {}
-        for component_id, component_snap in components_state.items():
-            component = registry.get(component_id)
-            if component is None:
-                logger.warning(
-                    "time_travel: component %r in snapshot but not in registry",
-                    component_id,
-                )
-                ok = False
-                continue
-            restored = _restore_interactive_state(component, component_snap)
-            if restored is not None:
-                ok = restored and ok
-                continue
-            for key, value in component_snap.items():
-                try:
-                    applied = safe_setattr(component, key, value, allow_private=False)
-                except Exception:  # noqa: BLE001 — dev-only, log + degrade
-                    logger.exception(
-                        "time_travel: component restore failed for id=%s key=%s",
-                        component_id,
-                        key,
-                    )
-                    ok = False
-                    continue
-                if not applied:
-                    logger.warning(
-                        "time_travel: component restore blocked for id=%s key=%s",
-                        component_id,
-                        key,
-                    )
-                    ok = False
+        from djust.live_view import restore_components_snapshot
+
+        if not restore_components_snapshot(view, components_state, source="time_travel"):
+            ok = False
     return ok
 
 

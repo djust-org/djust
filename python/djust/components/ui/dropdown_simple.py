@@ -9,6 +9,10 @@ For interactive dropdowns with event handlers, use them in LiveView event handle
 from typing import Any, Dict, List, Optional, Union
 from ..base import Component
 
+from django.utils.html import conditional_escape
+
+from djust.components.utils import url_attr
+
 
 # Try to import Rust implementation (will be added later)
 try:
@@ -174,13 +178,15 @@ class Dropdown(Component):
         }
         direction_class = direction_map.get(self.direction, "dropdown")
 
-        parts = [f'<div class="btn-group {direction_class}" id="{self.id}">']
+        parts = [f'<div class="btn-group {direction_class}" id="{conditional_escape(self.id)}">']
 
-        button_class = f"btn btn-{self.variant}{size_class}"
+        button_class = f"btn btn-{conditional_escape(self.variant)}{size_class}"
 
         if self.split:
             # Split button dropdown
-            parts.append(f'    <button type="button" class="{button_class}">{self.label}</button>')
+            parts.append(
+                f'    <button type="button" class="{button_class}">{conditional_escape(self.label)}</button>'
+            )
             parts.append(
                 f'    <button type="button" class="{button_class} dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-expanded="false">'
             )
@@ -191,7 +197,7 @@ class Dropdown(Component):
             parts.append(
                 f'    <button type="button" class="{button_class} dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">'
             )
-            parts.append(f"        {self.label}")
+            parts.append(f"        {conditional_escape(self.label)}")
             parts.append("    </button>")
 
         parts.append('    <ul class="dropdown-menu">')
@@ -201,7 +207,7 @@ class Dropdown(Component):
             if item.get("divider"):
                 parts.append('        <li><hr class="dropdown-divider"></li>')
             else:
-                label = item.get("label", "")
+                label = conditional_escape(item.get("label", ""))
                 url = item.get("url", "#")
                 disabled = item.get("disabled", False)
 
@@ -209,7 +215,7 @@ class Dropdown(Component):
                 disabled_attr = ' aria-disabled="true"' if disabled else ""
 
                 parts.append(
-                    f'        <li><a class="dropdown-item{disabled_class}" href="{url}"{disabled_attr}>{label}</a></li>'
+                    f'        <li><a class="dropdown-item{disabled_class}" href="{url_attr(url)}"{disabled_attr}>{label}</a></li>'
                 )
 
         parts.append("    </ul>")
@@ -239,7 +245,7 @@ class Dropdown(Component):
         size_class = size_map.get(self.size, size_map["md"])
 
         parts = [
-            f'<div class="relative inline-block text-left" id="{self.id}" x-data="{{open: false}}">'
+            f'<div class="relative inline-block text-left" id="{conditional_escape(self.id)}" x-data="{{open: false}}">'
         ]
 
         # Button
@@ -249,7 +255,7 @@ class Dropdown(Component):
             # Split button
             parts.append('    <div class="inline-flex rounded-md shadow-sm">')
             parts.append(
-                f'        <button type="button" class="{button_class} rounded-l-md">{self.label}</button>'
+                f'        <button type="button" class="{button_class} rounded-l-md">{conditional_escape(self.label)}</button>'
             )
             parts.append(
                 f'        <button type="button" class="{button_class} rounded-r-md border-l border-white border-opacity-25" @click="open = !open">'
@@ -266,7 +272,7 @@ class Dropdown(Component):
         else:
             # Regular button
             parts.append(f'    <button type="button" class="{button_class}" @click="open = !open">')
-            parts.append(f"        {self.label}")
+            parts.append(f"        {conditional_escape(self.label)}")
             parts.append(
                 '        <svg class="-mr-1 ml-2 h-5 w-5 inline" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">'
             )
@@ -286,7 +292,7 @@ class Dropdown(Component):
             if item.get("divider"):
                 parts.append('            <div class="border-t border-gray-100"></div>')
             else:
-                label = item.get("label", "")
+                label = conditional_escape(item.get("label", ""))
                 url = item.get("url", "#")
                 disabled = item.get("disabled", False)
 
@@ -296,7 +302,7 @@ class Dropdown(Component):
                 click_attr = ' @click="open = false"' if not disabled else ""
 
                 parts.append(
-                    f'            <a href="{url}" class="block px-4 py-2 text-sm text-gray-700{disabled_class}"{click_attr}>{label}</a>'
+                    f'            <a href="{url_attr(url)}" class="block px-4 py-2 text-sm text-gray-700{disabled_class}"{click_attr}>{label}</a>'
                 )
 
         parts.append("        </div>")
@@ -307,20 +313,20 @@ class Dropdown(Component):
 
     def _render_plain(self) -> str:
         """Render plain HTML dropdown"""
-        size_class = f" button-{self.size}" if self.size != "md" else ""
+        size_class = f" button-{conditional_escape(self.size)}" if self.size != "md" else ""
 
-        parts = [f'<div class="dropdown" id="{self.id}">']
+        parts = [f'<div class="dropdown" id="{conditional_escape(self.id)}">']
 
         if self.split:
             parts.append(
-                f'    <button type="button" class="button button-{self.variant}{size_class}">{self.label}</button>'
+                f'    <button type="button" class="button button-{conditional_escape(self.variant)}{size_class}">{conditional_escape(self.label)}</button>'
             )
             parts.append(
-                f'    <button type="button" class="dropdown-toggle button button-{self.variant}{size_class}">▼</button>'
+                f'    <button type="button" class="dropdown-toggle button button-{conditional_escape(self.variant)}{size_class}">▼</button>'
             )
         else:
             parts.append(
-                f'    <button type="button" class="dropdown-toggle button button-{self.variant}{size_class}">{self.label} ▼</button>'
+                f'    <button type="button" class="dropdown-toggle button button-{conditional_escape(self.variant)}{size_class}">{conditional_escape(self.label)} ▼</button>'
             )
 
         parts.append('    <div class="dropdown-menu">')
@@ -329,14 +335,14 @@ class Dropdown(Component):
             if item.get("divider"):
                 parts.append('        <hr class="dropdown-divider">')
             else:
-                label = item.get("label", "")
+                label = conditional_escape(item.get("label", ""))
                 url = item.get("url", "#")
                 disabled = item.get("disabled", False)
 
                 disabled_class = " disabled" if disabled else ""
 
                 parts.append(
-                    f'        <a href="{url}" class="dropdown-item{disabled_class}">{label}</a>'
+                    f'        <a href="{url_attr(url)}" class="dropdown-item{disabled_class}">{label}</a>'
                 )
 
         parts.append("    </div>")

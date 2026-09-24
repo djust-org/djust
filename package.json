@@ -12,16 +12,16 @@
     "lint:fix": "eslint python/djust/static/djust/ --fix"
   },
   "devDependencies": {
-    "@vitest/coverage-istanbul": "^5.0.0",
+    "@vitest/coverage-istanbul": "^5.0.1",
     "@vitest/istanbul-lib-coverage": "^1.0.1",
     "@vitest/istanbul-lib-instrument": "^1.0.1",
     "@vitest/istanbul-lib-source-maps": "^1.0.1",
     "@vitest/ui": "^5.0.0",
     "eslint": "^10.10.0",
     "eslint-plugin-security": "^4.0.1",
-    "happy-dom": "^20.14.0",
+    "happy-dom": "^20.14.5",
     "jsdom": "^30.0.1",
-    "magic-string": "^1.2.3",
+    "magic-string": "^1.4.1",
     "terser": "^5.51.2",
     "vitest": "^5.0.0"
   },

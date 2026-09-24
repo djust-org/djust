@@ -174,7 +174,10 @@ def _render_template_name_with_markers(
         rust_view.mark_safe_keys(safe_keys)
     if hasattr(rust_view, "set_raw_py_values"):
         rust_view.set_raw_py_values(build_render_sidecar(context))
-    return cast(str, rust_view.render())
+    from ..template_libraries import library_render_scope
+
+    with library_render_scope():
+        return cast(str, rust_view.render())
 
 
 _DECLARES_NAME: Dict[type, bool] = {}

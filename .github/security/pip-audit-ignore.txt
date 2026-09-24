@@ -1,0 +1,19 @@
+# pip-audit allowlist — reviewed exceptions to the release audit's pip-audit gate.
+#
+# Read by scripts/pip-audit-gate.py, which is run by the "Python Security Scan"
+# job of .github/workflows/pre-release-security-audit.yml. Publishing to PyPI
+# (release.yml, publish.yml) needs that job to pass, so every line here is a
+# vulnerability we have decided to ship with. Keep it short.
+#
+# One entry per line:
+#
+#     <VULN-ID>  # <package version(s)>: <why it is accepted>; review-by YYYY-MM-DD
+#
+# - <VULN-ID> is the ID pip-audit prints (PYSEC-…, CVE-…, GHSA-…). It is passed
+#   to pip-audit as `--ignore-vuln <VULN-ID>`, which ignores that ID for EVERY
+#   package version in the lock, so name the affected version(s) in the reason.
+# - The reason and the review-by date are both required. The gate fails once a
+#   review-by date has passed, so an exception cannot outlive its review.
+# - Remove the entry as soon as a fixed version is locked.
+
+CVE-2026-77528  # autobahn 24.4.2 (Python 3.10 installs only, via channels[daphne]): the fix, 26.7.1, requires Python >=3.11, so no fixed autobahn exists for 3.10. Python 3.11+ locks 26.7.1. Drop with 3.10 support or if a 3.10 backport ships; review-by 2026-12-31

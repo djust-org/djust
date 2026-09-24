@@ -254,8 +254,8 @@ def _radio_examples() -> list[dict[str, Any]]:
 
 def _breadcrumb_examples() -> list[dict[str, Any]]:
     items = [
-        {"label": "Home", "url": "/"},
-        {"label": "Products", "url": "/products/"},
+        {"label": "Home", "url": "#"},
+        {"label": "Products", "url": "#products"},
         {"label": "Current Page", "url": ""},
     ]
     return [
@@ -341,16 +341,16 @@ def _tooltip_examples() -> list[dict[str, Any]]:
 
 def _nav_item_examples() -> list[dict[str, Any]]:
     return [
-        {"label": "Home", "url": "/", "active": True},
-        {"label": "About", "url": "/about/", "active": False},
-        {"label": "Inbox", "url": "/inbox/", "badge": "5"},
+        {"label": "Home", "url": "#", "active": True},
+        {"label": "About", "url": "#about", "active": False},
+        {"label": "Inbox", "url": "#inbox", "badge": "5"},
     ]
 
 
 def _nav_group_examples() -> list[dict[str, Any]]:
     items = [
-        {"label": "Users", "url": "/admin/users/"},
-        {"label": "Settings", "url": "/admin/settings/"},
+        {"label": "Users", "url": "#admin-users"},
+        {"label": "Settings", "url": "#admin-settings"},
     ]
     return [
         {"label": "Admin", "items": items, "expanded": True},
@@ -360,9 +360,9 @@ def _nav_group_examples() -> list[dict[str, Any]]:
 
 def _nav_examples() -> list[dict[str, Any]]:
     items = [
-        {"label": "Home", "url": "/"},
-        {"label": "Docs", "url": "/docs/"},
-        {"label": "Gallery", "url": "/gallery/"},
+        {"label": "Home", "url": "#"},
+        {"label": "Docs", "url": "#docs"},
+        {"label": "Gallery", "url": "#gallery"},
     ]
     return [
         {"brand": "MyApp", "items": items},
@@ -374,15 +374,15 @@ def _sidebar_nav_examples() -> list[dict[str, Any]]:
         {
             "title": "Main",
             "items": [
-                {"label": "Dashboard", "url": "/dash/"},
-                {"label": "Analytics", "url": "/analytics/"},
+                {"label": "Dashboard", "url": "#dash"},
+                {"label": "Analytics", "url": "#analytics"},
             ],
         },
         {
             "title": "Settings",
             "items": [
-                {"label": "Profile", "url": "/profile/"},
-                {"label": "Billing", "url": "/billing/"},
+                {"label": "Profile", "url": "#profile"},
+                {"label": "Billing", "url": "#billing"},
             ],
         },
     ]

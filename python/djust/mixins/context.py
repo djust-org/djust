@@ -97,6 +97,21 @@ except ImportError:
     JIT_AVAILABLE = False
 
 
+def _jit_serialization_enabled() -> bool:
+    """``LIVEVIEW_CONFIG['jit_serialization']`` (default ``True``).
+
+    ``False`` skips JIT serialization (#2984; the key used to be read by
+    nothing): top-level Models, QuerySets and model lists then take the same
+    fallback as a project without the optimizer modules. Models are serialized
+    by ``normalize_django_value`` (every concrete field, minus the sensitive
+    denylist) instead of the fields the template reads, and no
+    ``select_related`` / ``prefetch_related`` is added.
+    """
+    from ..config import config
+
+    return config.get("jit_serialization", True) is not False
+
+
 def _is_json_serializable(value: Any) -> bool:
     """Return True if *value* can survive a JSON round-trip.
 
@@ -285,7 +300,7 @@ class ContextMixin:
         # _deep_serialize_dict() which falls back to DjangoJSONEncoder when
         # template_content is None.
         has_db_values = False
-        if JIT_AVAILABLE:
+        if JIT_AVAILABLE and _jit_serialization_enabled():
             for val in context.values():
                 if isinstance(val, (QuerySet, models.Model)):
                     has_db_values = True

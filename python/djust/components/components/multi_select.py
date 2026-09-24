@@ -14,7 +14,13 @@ class MultiSelect(Component):
         label: label text
         options: list of dicts with keys: value, label
         selected: list of currently selected values
-        event: dj-change event name"""
+        event: dj-change event name. Each box sends ``option`` (its value) and
+            ``value`` (whether it is now ticked)::
+
+                @event_handler()
+                def set_frameworks(self, option, value, **kwargs):
+                    picked = [s for s in self.picker.selected if s != option]
+                    self.picker.selected = picked + [option] if value else picked"""
 
     #: ADR-033 D3: the walked state keys; ``options`` (the data) compares by
     #: identity, so reassign it to re-render — never a per-node walk per click.
@@ -58,7 +64,7 @@ class MultiSelect(Component):
             cls += f" {html.escape(self.custom_class)}"
         e_name = html.escape(self.name)
         e_label = html.escape(self.label)
-        change_attrs = self.event_attrs(self.event or self.name, trigger="change")
+        event = self.event or self.name
         e_placeholder = html.escape(self.placeholder)
         label_html = f'<label class="form-label">{e_label}</label>' if self.label else ""
         cb_parts = []
@@ -72,7 +78,10 @@ class MultiSelect(Component):
             cb_parts.append(
                 f'<label class="multi-select-option">'
                 f'<input type="checkbox" name="{e_name}" value="{html.escape(ov)}"'
-                f"{checked} {change_attrs}> {html.escape(ol)}"
+                # `option` says WHICH box changed: a checkbox's change carries
+                # only whether it is ticked.
+                f"{checked} {self.event_attrs(event, trigger='change', option=ov)}>"
+                f" {html.escape(ol)}"
                 f"</label>"
             )
         return (

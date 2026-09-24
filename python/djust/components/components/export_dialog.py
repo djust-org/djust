@@ -119,8 +119,13 @@ class ExportDialog(Component):
         )
 
         return (
-            f'<div class="dj-export-dialog__backdrop" {ea_close}>'
-            f'<div class="{class_str}" onclick="event.stopPropagation()">'
+            # The close event rides a scrim BEHIND the panel, not the backdrop
+            # around it: djust delegates clicks from the root, so the panel's
+            # old inline stopPropagation() handler swallowed every click
+            # inside it — its own close, submit and format buttons included.
+            f'<div class="dj-export-dialog__backdrop">'
+            f'<div class="dj-scrim" {ea_close}></div>'
+            f'<div class="{class_str}">'
             f'<div class="dj-export-dialog__header">'
             f"<h3>{e_title}</h3>"
             f'<button class="dj-export-dialog__close" {ea_close}>&times;</button>'

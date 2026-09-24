@@ -33,7 +33,7 @@ import pytest
 import djust
 
 # The scratch project: a URLconf that routes ONE LiveView and imports a
-# sibling module holding a second, NON-routed LiveView whose ``handle_x``
+# sibling module holding a second, NON-routed LiveView whose ``toggle_x``
 # method trips V004 (the cheapest per-class check that fires on a bare
 # subclass). Nothing but the URLconf imports ``scratch2559_unrouted``.
 _SCRATCH_FILES = {
@@ -62,7 +62,7 @@ _SCRATCH_FILES = {
         class Unrouted(LiveView):
             template_name = "unrouted.html"
 
-            def handle_click(self, **kwargs):
+            def toggle_click(self, **kwargs):
                 pass
     """,
 }

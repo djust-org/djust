@@ -24,7 +24,7 @@ impl RustSpinner {
     /// Render spinner to HTML string (Bootstrap 5)
     pub fn render(&self) -> String {
         let size_class = if self.size == "sm" {
-            format!(" spinner-{}-sm", self.animation)
+            format!(" spinner-{}-sm", html_escape(&self.animation))
         } else {
             String::new()
         };
@@ -33,8 +33,8 @@ impl RustSpinner {
             r#"<div class="spinner-{} text-{}{}" role="status">
     <span class="visually-hidden">{}</span>
 </div>"#,
-            self.animation,
-            self.variant,
+            html_escape(&self.animation),
+            html_escape(&self.variant),
             size_class,
             html_escape(&self.sr_text)
         )
@@ -52,4 +52,28 @@ fn html_escape(s: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&#x27;")
+}
+
+#[cfg(test)]
+mod escaping_tests {
+    use super::*;
+
+    #[test]
+    fn variant_and_animation_are_html_escaped() {
+        let html = RustSpinner::new("x\" onmouseover=\"y", "sm", "b\"><img src=x>", "<b>").render();
+        assert!(!html.contains("x\" onmouseover"));
+        assert!(!html.contains("<img"));
+        assert!(!html.contains("<b>"));
+        assert!(html.contains("text-x&quot; onmouseover=&quot;y"));
+        assert!(html.contains("spinner-b&quot;&gt;&lt;img src=x&gt;"));
+    }
+
+    #[test]
+    fn plain_output_unchanged() {
+        let html = RustSpinner::new("primary", "sm", "border", "Loading...").render();
+        assert_eq!(
+            html,
+            "<div class=\"spinner-border text-primary spinner-border-sm\" role=\"status\">\n    <span class=\"visually-hidden\">Loading...</span>\n</div>"
+        );
+    }
 }

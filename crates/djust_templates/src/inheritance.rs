@@ -1079,11 +1079,31 @@ fn nodes_to_template_string(nodes: &[Node]) -> String {
     output
 }
 
+/// Re-emit literal text so that re-parsing yields the same text (#2890).
+///
+/// A `{% verbatim %}` body (and `{% templatetag %}` output) is a TEXT node
+/// that may hold template syntax — `{%`, `{{`, `{#`. Emitted bare into the
+/// flattened source, the re-parse lexed it as a tag: `{% verbatim %}{%{%
+/// endverbatim %}` became a stray `{%` and "Invalid block tag … expected
+/// 'endblock'". Every `{` of such text is re-emitted as `{% templatetag
+/// openbrace %}`, so no brace is left to start a tag, variable or comment —
+/// including one fused with the next node's `{{`/`{%` (a text ending in `{`).
+/// Re-wrapping in `{% verbatim %}` would not do: a body ending in `{%` fuses
+/// with the `{% endverbatim %}` that follows it.
+fn text_to_template_string(text: &str) -> String {
+    let lexes_as_syntax =
+        text.contains("{%") || text.contains("{{") || text.contains("{#") || text.ends_with('{');
+    if !lexes_as_syntax {
+        return text.to_string();
+    }
+    text.replace('{', "{% templatetag openbrace %}")
+}
+
 /// Convert a single node back to template string format
 fn node_to_template_string(node: &Node) -> String {
     match node {
         Node::Located { nodes, .. } => nodes_to_template_string(nodes),
-        Node::Text(text) => text.clone(),
+        Node::Text(text) => text_to_template_string(text),
         Node::Variable(var_name, filters, _in_attr) => {
             let mut result = format!("{{{{ {var_name} ");
             for (filter_name, arg) in filters {
@@ -1514,6 +1534,44 @@ mod tests {
     fn parse_source(source: &str) -> Vec<Node> {
         let tokens = crate::lexer::tokenize(source).unwrap();
         crate::parser::parse(&tokens).unwrap()
+    }
+
+    /// #2890: a TEXT node holding template syntax (a `{% verbatim %}` body)
+    /// must re-parse to the same text, not to a tag.
+    #[test]
+    fn test_nodes_to_template_string_text_with_template_syntax_round_trips() {
+        let texts = [
+            "{%",
+            "%}",
+            "{% theme_card title=\"x\" %}",
+            "{{ not_a_var }} and {# not a comment #}",
+            "{% endverbatim %} {% endverbatim djust_text %}",
+            "trailing brace {",
+            "plain",
+        ];
+        for text in texts {
+            let nodes = vec![
+                Node::Text(text.to_string()),
+                Node::Variable("x".to_string(), vec![], false),
+            ];
+            let source = nodes_to_template_string(&nodes);
+            let tokens = crate::lexer::tokenize(&source)
+                .unwrap_or_else(|e| panic!("{text:?} -> {source:?}: {e}"));
+            let reparsed = crate::parser::parse(&tokens)
+                .unwrap_or_else(|e| panic!("{text:?} -> {source:?}: {e}"));
+            let mut got = String::new();
+            let mut var_seen = false;
+            for node in &reparsed {
+                match node {
+                    Node::Text(t) => got.push_str(t),
+                    Node::TemplateTag(which) if which == "openbrace" => got.push('{'),
+                    Node::Variable(name, _, _) if name == "x" => var_seen = true,
+                    other => panic!("{text:?} -> {source:?}: unexpected node {other:?}"),
+                }
+            }
+            assert_eq!(got, text, "{source:?}");
+            assert!(var_seen, "{source:?}");
+        }
     }
 
     #[test]

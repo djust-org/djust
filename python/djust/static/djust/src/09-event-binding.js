@@ -2246,6 +2246,8 @@ function reinitAfterDOMUpdate(scope) {
     initReactCounters();
     initTodoItems();
     bindLiveViewEvents(scope);
+    // A clear_draft() from an event handler arrives in a patch (#2971).
+    applyDraftClearFlag();
     // Extract any new colocated hook definitions (<script type="djust/hook">)
     // from the freshly-patched DOM BEFORE we mount/update hooks so definitions
     // are visible to mountHooks().
@@ -2261,6 +2263,10 @@ function reinitAfterDOMUpdate(scope) {
         });
     }
     updateHooks();
+
+    // {% djust_offline_indicator %} text / status class for any indicator
+    // this update inserted (#3051, 52-offline-state.js).
+    if (window.djust._syncOfflineIndicators) window.djust._syncOfflineIndicators(scope || document);
 
     // dj-virtual / dj-viewport-*: re-scan after VDOM morph so new containers
     // get observers and existing ones pick up new first/last children. For

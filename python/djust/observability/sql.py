@@ -13,24 +13,32 @@ increment handler just run?" and get a clean answer.
 
 from __future__ import annotations
 
+import contextvars
+import functools
 import threading
 import time
 import traceback
 from collections import deque
 from contextlib import contextmanager
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional, TypeVar
+
+_T = TypeVar("_T")
 
 _MAX_ENTRIES = 500
 
 _buffer: "deque[Dict[str, Any]]" = deque(maxlen=_MAX_ENTRIES)
 _lock = threading.Lock()
 
-# Per-thread active scope — lets nested wrappers know the current tags.
-_active = threading.local()
+# Active capture scope — lets nested wrappers know the current tags. A
+# ContextVar rather than a thread-local so the scope follows the event turn
+# into the ``sync_to_async`` worker thread a sync handler runs on (#2961).
+_active: "contextvars.ContextVar[Optional[Dict[str, Any]]]" = contextvars.ContextVar(
+    "djust_sql_capture_scope", default=None
+)
 
 
 def _get_active() -> Optional[Dict[str, Any]]:
-    return getattr(_active, "scope", None)
+    return _active.get()
 
 
 def _push_entry(entry: Dict[str, Any]) -> None:
@@ -107,17 +115,58 @@ def capture_for_event(
         yield
         return
 
-    prev_scope = getattr(_active, "scope", None)
-    _active.scope = {
-        "session_id": session_id,
-        "event_id": event_id,
-        "handler_name": handler_name,
-    }
+    prev_scope = _active.get()
+    _active.set(
+        {
+            "session_id": session_id,
+            "event_id": event_id,
+            "handler_name": handler_name,
+        }
+    )
     try:
         with connection.execute_wrapper(_execute_wrapper):
             yield
     finally:
-        _active.scope = prev_scope
+        # ``set`` rather than ``reset(token)``: the WS transport enters and
+        # exits this scope by hand across an ``async`` context manager, and a
+        # token is only valid in the context that created it.
+        _active.set(prev_scope)
+
+
+def run_in_capture_scope(func: Callable[..., _T]) -> Callable[..., _T]:
+    """Wrap a sync callable so its queries are captured when it runs on
+    another thread (#2961).
+
+    ``capture_for_event`` installs the wrapper on the calling thread's
+    connection, but Django connections are per thread: a sync event handler
+    runs on a ``sync_to_async`` worker whose connection has no wrapper. The
+    returned callable installs the wrapper on the connection of the thread it
+    runs on, for the duration of the call, when a capture scope is active,
+    ``settings.DEBUG`` is on (the ``sql_queries`` endpoint that reads the
+    buffer is DEBUG-only, so production handlers pay nothing) and that
+    connection does not already carry it. Otherwise it calls ``func``
+    unchanged.
+    """
+
+    @functools.wraps(func)
+    def _wrapped(*args: Any, **kwargs: Any) -> _T:
+        if _active.get() is None:
+            return func(*args, **kwargs)
+        try:
+            from django.conf import settings
+            from django.db import connection
+
+            debug = bool(getattr(settings, "DEBUG", False))
+        except Exception:  # noqa: BLE001
+            return func(*args, **kwargs)
+        if not debug:
+            return func(*args, **kwargs)
+        if _execute_wrapper in connection.execute_wrappers:
+            return func(*args, **kwargs)
+        with connection.execute_wrapper(_execute_wrapper):
+            return func(*args, **kwargs)
+
+    return _wrapped
 
 
 def get_queries_since(

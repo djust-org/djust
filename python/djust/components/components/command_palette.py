@@ -1,6 +1,7 @@
 """CommandPalette component."""
 
 import html
+from django.utils.html import conditional_escape
 from djust import Component
 from typing import Any
 
@@ -57,6 +58,6 @@ class CommandPalette(Component):
             f"{self.event_attrs(self.search_event, trigger='input')}>"
             f'<button class="palette-close" {close_attrs}>Esc</button>'
             f"</div>"
-            f'<div class="palette-results">{self.content}</div>'
+            f'<div class="palette-results">{conditional_escape(self.content)}</div>'
             f"</div>"
         )

@@ -40,7 +40,12 @@ def highlight_code(code: str, language: str = "") -> str:
 _WS_BEFORE_TOKEN_RE = re.compile(
     r'(?:<span class="hl-w">([ \t]+)</span>|>([ \t]+))<span class="([^"]+)">'
 )
-_WS_SPAN_BEFORE_TEXT_RE = re.compile(r'<span class="hl-w">([ \t]+)</span>([^<]+)')
+
+#: #3026: Pygments' whitespace span followed by BARE text (a lexer such as
+#: bash emits words as plain text, not token spans). The span is unwrapped so
+#: its space joins that text node. Not before a newline: whitespace at a line
+#: end stays where it is, as the docstring below says.
+_WS_BEFORE_TEXT_RE = re.compile(r'<span class="hl-w">([ \t]+)</span>(?=[^<\r\n])')
 
 
 def _fold_whitespace(highlighted: str) -> str:
@@ -54,6 +59,11 @@ def _fold_whitespace(highlighted: str) -> str:
     space is no longer alone and survives; ``textContent`` — what ``dj-copy``
     copies — is unchanged. Whitespace at a line end is left where it is;
     newlines are never lone.
+
+    When the next token is BARE text rather than a span — the bash lexer
+    emits ``pip<span class="hl-w"> </span>install`` — the whitespace span is
+    unwrapped instead, so the space joins that text (``pip install``) and
+    survives the same way (#3026; ``pip install`` arrived as ``pipinstall``).
     """
 
     def fold(match: "re.Match[str]") -> str:
@@ -62,13 +72,7 @@ def _fold_whitespace(highlighted: str) -> str:
         return f'{lead}<span class="{match.group(3)}">{ws}'
 
     folded = _WS_BEFORE_TOKEN_RE.sub(fold, highlighted)
-    # Pygments leaves some shell tokens as plain text, so the whitespace span
-    # is followed by text rather than another token span:
-    # ``pip<span class="hl-w"> </span>install``.  That whitespace-only span is
-    # discarded by the VDOM renderer for the same reason as a bare text node.
-    # Keep the following plain token in the span so the space is attached to
-    # visible content and survives the render pipeline.
-    return _WS_SPAN_BEFORE_TEXT_RE.sub(r'<span class="hl-w">\1\2</span>', folded)
+    return _WS_BEFORE_TEXT_RE.sub(r"\1", folded)
 
 
 #: Names the catalogue and docs use that Pygments spells differently.

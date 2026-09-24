@@ -174,6 +174,12 @@ The tag:
 6. Stamps `data-djust-embedded` onto every dj-event-bearing tag inside.
 
 Any `kwargs` after `sticky=True` pass through to the child's `mount()`.
+They are **mount-time only**: a sticky child keeps its live instance across
+parent re-renders and navigations, so later renders of the tag don't pass
+new values to it. When they differ from the ones the child was mounted
+with, djust logs a warning naming the changed kwargs. Send changing data to
+the child another way, for example with a push. (Re-applying changed kwargs
+is planned for 1.3, #2919.)
 
 ### Allowlist mismatch
 
@@ -286,11 +292,11 @@ child is dropped from the survivor set, and the client receives a
 `djust:sticky-unmounted` event with `reason='server-unmount'` once
 `sticky_hold` arrives.
 
-> **Known issue: #2969.** The default `_on_sticky_unmount()` is meant to
-> cancel pending `start_async` tasks, but it calls a `cancel_async_all()`
-> method that doesn't exist, so it does nothing. Override
-> `_on_sticky_unmount()` and call `self.cancel_async(name)` for each task
-> you started.
+The default `_on_sticky_unmount()` calls `self.cancel_async_all()`, which
+drops the child's scheduled `start_async` tasks and skips the re-render of
+the ones already running. If you override it to release other resources,
+call `super()._on_sticky_unmount()` too. (Before 1.2.1 the method it called
+did not exist, so nothing was cancelled; #2969.)
 
 ### Why lightweight?
 

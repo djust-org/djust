@@ -42,6 +42,7 @@ variable.
 {% endcomment %}
 {{ preview }}
 {% if preview_note %}<p class="dc-note dc-preview-note">{{ preview_note }}</p>{% endif %}
+{% if client_script_url %}<script src="{{ client_script_url }}" defer></script>{% endif %}
 
 <section id="dc-usage" class="dc-section">
   {% card title="Usage" %}
@@ -55,6 +56,15 @@ variable.
     {{ usage_html.template }}
     {% if events %}
     <p class="dc-note">Events this component sends to the view: {% for ev in events %}<code>{{ ev }}</code>{% if not forloop.last %}, {% endif %}{% endfor %}.</p>
+    {% endif %}
+    {% if client_script %}
+    <p class="dc-note">Needs its script on the page: <code>&lt;script src="{&#37; static '{{ client_script }}' &#37;}"&gt;&lt;/script&gt;</code>. djust ships it; without it the markup renders but does not update in the browser.</p>
+    {% endif %}
+    {% if unstyled_class_root %}
+    <p class="dc-note">This is the <code>{&#37; theme_{{ name }} &#37;}</code> tag, which follows your theme. The <code>{{ unstyled_class }}</code> Python class (<code>from djust.components import {{ unstyled_class }}</code>) renders the same component <strong>unstyled</strong>: no stylesheet djust ships has a rule for its <code>{{ unstyled_class_root }}</code> classes, so you style it yourself — its docstring lists them.</p>
+    {% endif %}
+    {% if client_hook %}
+    <p class="dc-note dc-note--warning">Needs a client hook djust does not ship: <code>dj-hook="{{ client_hook }}"</code>. The markup renders, but the interaction described above is yours to add — register <code>window.djust.hooks.{{ client_hook }} = { mounted() { … } }</code> before <code>client.js</code> loads (see the <a href="{{ docs_hooks_url }}" rel="noopener">hooks guide</a>).</p>
     {% endif %}
   {% endcard %}
 </section>

@@ -775,8 +775,21 @@ fn reconcile_keyed(
         }
     };
 
-    // DJE-050: a raw unkeyed sibling alongside keyed ones.
-    if new_nb.iter().any(|(_, n)| n.key.is_none()) && new_nb.iter().any(|(_, n)| n.key.is_some()) {
+    // DJE-050: a raw unkeyed sibling alongside keyed ones. A whitespace-only
+    // text node doesn't count: it is the " " the parser keeps between inline
+    // items (#2999, `{% for %}<b dj-key=…>…</b> {% endfor %}`), not a
+    // developer mistake, and warning on it would fire on every such list.
+    let is_separator = |n: &VNode| {
+        n.is_text()
+            && n.text
+                .as_deref()
+                .is_some_and(djust_core::html_whitespace::is_html_whitespace_only)
+    };
+    if new_nb
+        .iter()
+        .any(|(_, n)| n.key.is_none() && !is_separator(n))
+        && new_nb.iter().any(|(_, n)| n.key.is_some())
+    {
         vdom_trace!("DJE-050: Mixed keyed/unkeyed siblings during keyed diff");
         tracing::warn!(
             "DJE-050: Mixed keyed/unkeyed siblings detected during keyed diff; \
@@ -837,7 +850,18 @@ fn reconcile_keyed(
     for i in 0..common {
         let (old_abs, old_node) = old_pos[i];
         let (new_abs, new_node) = new_pos[i];
-        if positionally_compatible(old_node, new_node) {
+        if old_abs != new_abs && old_node.djust_id.is_none() {
+            // #2999: an id-less sibling (a text such as the " " kept between
+            // inline items, or ", ") that changes position can't be moved —
+            // MoveChild addresses by dj-id — and left in place it would sit
+            // at its OLD position among children that are being reordered
+            // around it. Children that neither move nor get re-inserted must
+            // already be in final relative order for the placement model
+            // (patch.rs::apply_patches / the client's _applyPatchBatch)
+            // to be exact, so re-create it at its new position instead.
+            push_remove_child(old_abs, old_node, ppath, pid, out);
+            push_insert_child(new_abs, new_node, ppath, pid, out);
+        } else if positionally_compatible(old_node, new_node) {
             if old_abs != new_abs && old_node.djust_id.is_some() {
                 out.push(Patch::MoveChild {
                     path: ppath.to_vec(),

@@ -9,6 +9,8 @@ For interactive tables with event handlers, use them in LiveView event handlers.
 from typing import List, Dict, Any
 from ..base import Component
 
+from django.utils.html import conditional_escape
+
 
 # Try to import Rust implementation (will be added later)
 try:
@@ -196,7 +198,7 @@ class Table(Component):
         parts.append("    <thead>")
         parts.append("        <tr>")
         for col in self.columns:
-            label = col.get("label", "")
+            label = conditional_escape(col.get("label", ""))
             sortable = col.get("sortable", False)
             if sortable:
                 # Add sortable styling (but @click must be added by parent)
@@ -214,7 +216,7 @@ class Table(Component):
             parts.append("        <tr>")
             for col in self.columns:
                 key = col.get("key", "")
-                value = row.get(key, "")
+                value = conditional_escape(row.get(key, ""))
                 parts.append(f"            <td>{value}</td>")
             parts.append("        </tr>")
         parts.append("    </tbody>")
@@ -251,7 +253,7 @@ class Table(Component):
         parts.append('    <thead class="bg-gray-50">')
         parts.append("        <tr>")
         for col in self.columns:
-            label = col.get("label", "")
+            label = conditional_escape(col.get("label", ""))
             sortable = col.get("sortable", False)
 
             if self.size == "sm":
@@ -287,7 +289,7 @@ class Table(Component):
 
             for col in self.columns:
                 key = col.get("key", "")
-                value = row.get(key, "")
+                value = conditional_escape(row.get(key, ""))
 
                 if self.size == "sm":
                     td_padding = "px-3 py-2"
@@ -337,7 +339,7 @@ class Table(Component):
         parts.append("    <thead>")
         parts.append("        <tr>")
         for col in self.columns:
-            label = col.get("label", "")
+            label = conditional_escape(col.get("label", ""))
             sortable = col.get("sortable", False)
             if sortable:
                 parts.append(f'            <th class="sortable">{label}</th>')
@@ -352,7 +354,7 @@ class Table(Component):
             parts.append("        <tr>")
             for col in self.columns:
                 key = col.get("key", "")
-                value = row.get(key, "")
+                value = conditional_escape(row.get(key, ""))
                 parts.append(f"            <td>{value}</td>")
             parts.append("        </tr>")
         parts.append("    </tbody>")

@@ -1,6 +1,7 @@
 """Segmented Progress component for multi-step progress indicators."""
 
 import html
+from django.utils.html import conditional_escape
 from typing import Any, Dict, List, Optional, Union
 
 from djust import Component
@@ -69,7 +70,10 @@ class SegmentedProgress(Component):
 
     def _render_custom(self) -> str:
         """Render the segmented progress HTML."""
-        classes = ["dj-segmented-progress", f"dj-segmented-progress--{self.size}"]
+        classes = [
+            "dj-segmented-progress",
+            f"dj-segmented-progress--{conditional_escape(self.size)}",
+        ]
 
         if self.custom_class:
             classes.append(html.escape(self.custom_class))

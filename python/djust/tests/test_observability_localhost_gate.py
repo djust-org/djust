@@ -9,10 +9,20 @@ localhost IN every view (`views._gate`) and restricts `eval_handler` to
 @event_handler-decorated methods.
 """
 
+import pytest
 from django.test import RequestFactory, override_settings
 from django.urls import include, path
 
 from djust.observability import views
+from djust.observability.middleware import (
+    TOKEN_ENV_VAR,
+    TOKEN_HEADER,
+    TOKEN_META_KEY,
+    LocalhostOnlyObservabilityMiddleware,
+    get_observability_token,
+)
+
+from .conftest import observability_request_factory
 
 # Self-contained urlconf so the A031 tests don't depend on the ambient
 # ROOT_URLCONF (which other tests override) — `reverse("djust_observability:health")`
@@ -21,8 +31,10 @@ urlpatterns = [path("_djust/observability/", include("djust.observability.urls")
 _OBS_URLCONF = "djust.tests.test_observability_localhost_gate"
 
 
-def _req(remote_addr):
-    return RequestFactory().get("/_djust/observability/health/", REMOTE_ADDR=remote_addr)
+def _req(remote_addr, **extra):
+    return observability_request_factory().get(
+        "/_djust/observability/health/", REMOTE_ADDR=remote_addr, **extra
+    )
 
 
 # --- in-view localhost gate (the core fix; middleware NOT installed here) ---
@@ -91,7 +103,7 @@ def test_eval_handler_rejects_non_event_handler(monkeypatch):
     monkeypatch.setattr(views, "get_view_for_session", lambda sid: v)
 
     def _post(handler):
-        return RequestFactory().post(
+        return observability_request_factory().post(
             "/_djust/observability/eval_handler/?session_id=s1",
             data=json.dumps({"handler_name": handler}),
             content_type="application/json",
@@ -138,3 +150,108 @@ def test_a031_silent_when_middleware_present():
 @override_settings(DEBUG=False, MIDDLEWARE=[], ROOT_URLCONF=_OBS_URLCONF)
 def test_a031_silent_when_debug_off():
     assert _run_a031() == []
+
+
+# --- proxied requests and the observability token ---
+
+_PROXY_HEADER_CASES = [
+    {"HTTP_X_FORWARDED_FOR": "203.0.113.7"},
+    {"HTTP_FORWARDED": "for=203.0.113.7"},
+    {"HTTP_X_REAL_IP": "203.0.113.7"},
+    {"HTTP_X_FORWARDED_HOST": "example.com"},
+    {"HTTP_X_FORWARDED_PROTO": "https"},
+]
+
+_ALL_ENDPOINTS = (
+    views.health,
+    views.view_assigns,
+    views.last_traceback,
+    views.log_tail,
+    views.handler_timings,
+    views.sql_queries,
+    views.reset_view_state,
+    views.eval_handler,
+)
+
+
+@override_settings(DEBUG=True)
+@pytest.mark.parametrize("headers", _PROXY_HEADER_CASES)
+def test_loopback_peer_with_proxy_header_is_refused(headers):
+    """A loopback REMOTE_ADDR with reverse-proxy headers is a relayed request,
+    not a local one, even when it carries the token."""
+    for fn in _ALL_ENDPOINTS:
+        resp = fn(_req("127.0.0.1", **headers))
+        assert resp.status_code == 404, f"{fn.__name__} served a proxied request"
+
+
+@override_settings(DEBUG=True)
+def test_loopback_peer_without_token_is_refused():
+    """A proxy that adds no headers looks like a local client by address; the
+    token is what it cannot supply."""
+    req = RequestFactory().get("/_djust/observability/health/", REMOTE_ADDR="127.0.0.1")
+    for fn in _ALL_ENDPOINTS:
+        assert fn(req).status_code == 404, f"{fn.__name__} served a request without token"
+
+
+@override_settings(DEBUG=True)
+def test_loopback_peer_with_wrong_token_is_refused():
+    req = RequestFactory().get(
+        "/_djust/observability/health/", REMOTE_ADDR="127.0.0.1", **{TOKEN_META_KEY: "nope"}
+    )
+    assert views.health(req).status_code == 404
+
+
+@override_settings(DEBUG=True)
+def test_token_follows_secret_key():
+    token = get_observability_token()
+    assert len(token) == 64
+    with override_settings(SECRET_KEY="another-project-secret-key-value-0123456789"):
+        assert get_observability_token() != token
+        req = RequestFactory().get(
+            "/_djust/observability/health/", REMOTE_ADDR="127.0.0.1", **{TOKEN_META_KEY: token}
+        )
+        assert views.health(req).status_code == 404
+
+
+@override_settings(DEBUG=True)
+def test_token_from_environment(monkeypatch):
+    monkeypatch.setenv(TOKEN_ENV_VAR, "local-tooling-token")
+    assert get_observability_token() == "local-tooling-token"
+    ok = RequestFactory().get(
+        "/_djust/observability/health/",
+        REMOTE_ADDR="127.0.0.1",
+        **{TOKEN_META_KEY: "local-tooling-token"},
+    )
+    assert views.health(ok).status_code == 200
+
+
+def test_middleware_refuses_loopback_peer_with_proxy_header():
+    from django.http import HttpResponse
+
+    mw = LocalhostOnlyObservabilityMiddleware(lambda r: HttpResponse("ok"))
+    req = _req("127.0.0.1", HTTP_X_FORWARDED_FOR="203.0.113.7")
+    assert mw(req).status_code == 403
+    assert mw(_req("127.0.0.1")).status_code == 200
+
+
+def test_mcp_server_sends_the_token():
+    from djust.mcp.server import _observability_headers
+
+    assert _observability_headers() == {TOKEN_HEADER: get_observability_token()}
+
+
+def test_mcp_server_sends_environment_token(monkeypatch):
+    from djust.mcp.server import _observability_headers
+
+    monkeypatch.setenv(TOKEN_ENV_VAR, "local-tooling-token")
+    assert _observability_headers() == {TOKEN_HEADER: "local-tooling-token"}
+
+
+def test_token_management_command_prints_token():
+    from io import StringIO
+
+    from django.core.management import call_command
+
+    out = StringIO()
+    call_command("djust_observability_token", stdout=out)
+    assert out.getvalue().strip() == get_observability_token()

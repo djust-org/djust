@@ -6,6 +6,7 @@ Generates optimized Python serializer functions for specific variable access pat
 
 import hashlib
 import inspect
+import keyword
 import logging
 from typing import TYPE_CHECKING, Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Tuple
 
@@ -123,6 +124,11 @@ def _gate_line(indent: int, gate_var: str, obj_expr: str, names: List[str]) -> s
     return f"{'    ' * indent}{gate_var} = _djust_gate({obj_expr}, ({tup},))"
 
 
+def _is_plain_identifier(name: str) -> bool:
+    """A Python identifier that is not a keyword."""
+    return name.isidentifier() and not keyword.iskeyword(name)
+
+
 def generate_serializer_code(
     model_name: str, variable_paths: List[str], func_name: Optional[str] = None
 ) -> str:
@@ -150,6 +156,19 @@ def generate_serializer_code(
             ...
             return result
     """
+    # Path segments and names are pasted into generated source, so accept only
+    # Python identifiers (and digit list indices). The template parser already
+    # rejects anything else; this keeps codegen safe on its own. Callers catch
+    # the ValueError and fall back to regular serialization.
+    for path in variable_paths:
+        for segment in path.split("."):
+            if not (segment.isdigit() or _is_plain_identifier(segment)):
+                raise ValueError(f"unsupported serializer path segment: {segment!r} in {path!r}")
+    if not _is_plain_identifier(model_name):
+        raise ValueError(f"unsupported model name: {model_name!r}")
+    if func_name is not None and not _is_plain_identifier(func_name):
+        raise ValueError(f"unsupported serializer function name: {func_name!r}")
+
     # Generate unique function name based on paths if not provided
     if func_name is None:
         func_hash = hashlib.sha256("".join(sorted(variable_paths)).encode()).hexdigest()[:6]
@@ -563,7 +582,9 @@ def compile_serializer(code: str, func_name: str) -> Callable:
         code_obj = compile(code, f"<generated:{func_name}>", "exec")
 
         # Execute to define function in namespace
-        exec(code_obj, namespace)
+        # The source was built by generate_serializer_code from validated
+        # identifiers only, so executing it is intended.
+        exec(code_obj, namespace)  # nosec B102
 
         # Return the function
         compiled_func: Callable = namespace[func_name]

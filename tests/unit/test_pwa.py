@@ -169,7 +169,8 @@ class TestDjustOfflineIndicator:
         template = Template("{% load djust_pwa %}{% djust_offline_indicator %}")
         result = template.render(Context({}))
 
-        assert 'class="djust-offline-indicator"' in result
+        # Default show_when="offline": rendered in the offline state (#3051).
+        assert 'class="djust-offline-indicator djust-status-offline"' in result
         assert 'data-online-text="Online"' in result
         assert 'data-offline-text="Offline"' in result
         assert 'data-online-class="djust-status-online"' in result
@@ -202,9 +203,11 @@ class TestDjustOfflineIndicator:
         template = Template('{% load djust_pwa %}{% djust_offline_indicator show_when="offline" %}')
         result = template.render(Context({}))
 
-        # Should have dj-offline-show attribute and be hidden by default
+        # dj-offline-show; hidden by the tag's CSS, not an inline style that
+        # nothing ever removed (#3051).
         assert "dj-offline-show" in result
-        assert 'style="display: none;"' in result
+        assert 'style="display: none;"' not in result
+        assert "body:not(.djust-offline) .djust-offline-indicator[dj-offline-show]" in result
 
     def test_indicator_show_when_always(self):
         """Test indicator configured to show always."""
@@ -401,7 +404,7 @@ class TestGenerateSwCommand:
             "output": output_path,
             "cache_static": False,
             "cache_templates": False,
-            "version": None,
+            "sw_version": None,
             "static_extensions": "js,css,png,jpg,jpeg,gif,svg,woff,woff2,ico",
             "exclude_patterns": "admin,debug",
         }
@@ -436,7 +439,7 @@ class TestGenerateSwCommand:
             output_path = os.path.join(tmpdir, "sw.js")
             out = StringIO()
 
-            self._run_command(output_path, version="1.0.0", stdout=out)
+            self._run_command(output_path, sw_version="1.0.0", stdout=out)
 
             with open(output_path) as f:
                 content = f.read()

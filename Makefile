@@ -245,6 +245,12 @@ template-backend-lists: ## Regenerate docs/TEMPLATE_BACKEND.md's supported/unsup
 check-template-backend-lists: ## Fail when docs/TEMPLATE_BACKEND.md's generated lists differ from the engine (closes #2533)
 	@PYTHONPATH=. $(PYTHON) scripts/generate-template-backend-lists.py
 
+.PHONY: security-audit-deps
+security-audit-deps: ## Run the release audit's dependency gates locally: pip-audit (uv.lock), cargo audit, npm audit --audit-level=high
+	@UV_INDEX_URL=https://pypi.org/simple UV_DEFAULT_INDEX=https://pypi.org/simple $(PYTHON) scripts/pip-audit-gate.py
+	@cargo audit --deny unsound
+	@npm audit --audit-level=high --registry=https://registry.npmjs.org
+
 .PHONY: django-template-suite
 django-template-suite: ## Run Django's own template_tests against DjustTemplateBackend (scoreboard, closes #2517)
 	@$(PYTHON) scripts/run-django-template-suite.py --parsed-output .django-src/last-run.txt --json .django-src/last-run.json $(if $(VERBOSE),,--quiet)

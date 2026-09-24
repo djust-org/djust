@@ -242,6 +242,10 @@ class DjustAdminSite:
         for model, model_admin in self._registry.items():
             app_label = model._meta.app_label
 
+            # Only list models the user holds some ModelAdmin permission on.
+            if not model_admin.has_any_permission(request):
+                continue
+
             if app_label not in app_dict:
                 app_config = apps.get_app_config(app_label)
                 app_dict[app_label] = {

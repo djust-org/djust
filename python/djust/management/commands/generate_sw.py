@@ -5,6 +5,7 @@ Usage:
     python manage.py generate_sw
     python manage.py generate_sw --cache-static --cache-templates
     python manage.py generate_sw --output static/sw.js
+    python manage.py generate_sw --sw-version 2.1.0
 """
 
 import os
@@ -38,8 +39,12 @@ class Command(BaseCommand):
             action="store_true",
             help="Include offline templates in the service worker cache",
         )
+        # ``--sw-version``, not ``--version``: Django's BaseCommand already
+        # defines ``--version``, so the old name made argparse raise on every
+        # invocation (#2967).
         parser.add_argument(
-            "--version",
+            "--sw-version",
+            dest="sw_version",
             type=str,
             default=None,
             help="Cache version string (default: timestamp)",
@@ -79,7 +84,7 @@ class Command(BaseCommand):
             os.makedirs(output_dir)
 
         # Generate version
-        version = options["version"] or str(int(time.time()))
+        version = options.get("sw_version") or str(int(time.time()))
 
         # Collect static assets (always include djust core assets)
         core_assets = self._get_djust_core_assets()

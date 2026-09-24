@@ -31,6 +31,10 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset[str]
 # stub instead of getting an attr-defined error.
 class NonPersistableStateError(TypeError): ...
 
+# Shared ``__components__`` snapshot dispatch (#2896), used by
+# ``LiveView._restore_snapshot`` and ``time_travel.restore_snapshot``.
+def restore_components_snapshot(view: Any, components_state: Any, *, source: str) -> bool: ...
+
 class LiveView(
     StreamsMixin,
     StreamingMixin,

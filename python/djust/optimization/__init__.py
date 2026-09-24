@@ -7,7 +7,6 @@ djust Optimization Modules
 
 from .query_optimizer import analyze_queryset_optimization, optimize_queryset
 from .codegen import generate_serializer_code, compile_serializer, get_serializer_source
-from .cache import SerializerCache
 from .fingerprint import (
     StateFingerprint,
     SectionCache,
@@ -23,7 +22,6 @@ __all__ = [
     "generate_serializer_code",
     "compile_serializer",
     "get_serializer_source",
-    "SerializerCache",
     # Fingerprint optimization
     "StateFingerprint",
     "SectionCache",

@@ -39,6 +39,19 @@ from pathlib import Path
 
 import pytest
 
+from tests.git_env import isolated_git_env
+
+
+@pytest.fixture(autouse=True)
+def _no_inherited_git_env(monkeypatch):
+    """The code under test runs git in temp repos. Under a git hook an
+    inherited GIT_DIR would aim those commands at the real repository (#2608)."""
+    from tests.git_env import GIT_EXECUTION_VARS
+
+    for var in GIT_EXECUTION_VARS:
+        monkeypatch.delenv(var, raising=False)
+
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "check-changelog-tagged-sections.py"
 CHANGELOG = REPO_ROOT / "CHANGELOG.md"
@@ -256,7 +269,15 @@ class _TempRepo:
         self.set_sections([])
 
     def _git(self, *args: str) -> None:
-        subprocess.run(["git", *args], cwd=str(self.root), check=True, capture_output=True)
+        # Under a git hook an inherited GIT_DIR would point these commands at
+        # the real repository (#2608).
+        subprocess.run(
+            ["git", *args],
+            cwd=str(self.root),
+            check=True,
+            capture_output=True,
+            env=isolated_git_env(),
+        )
 
     def set_sections(self, versions: "list[str]") -> None:
         """Rewrite CHANGELOG.md with one section per version and commit."""

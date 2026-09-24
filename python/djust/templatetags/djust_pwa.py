@@ -206,13 +206,25 @@ def djust_offline_indicator(
     """
     Render an offline status indicator element.
 
-    The indicator automatically shows/hides based on connection status.
+    The client (``52-offline-state.js``) keeps ``djust-online`` /
+    ``djust-offline`` on ``<body>`` from the browser's network state, and on
+    every change swaps the indicator's text to ``online_text`` /
+    ``offline_text`` and its class to ``online_class`` / ``offline_class``.
+    The server renders the state ``show_when`` implies (offline for
+    ``"offline"``, online otherwise) so the first paint matches it.
+
+    Visibility is CSS on the body classes, not an inline style:
+    ``show_when="offline"`` adds ``dj-offline-show`` and this tag's own
+    ``<style>`` hides the indicator unless the body is ``djust-offline``;
+    ``show_when="online"`` adds ``dj-offline-hide``, which the directive CSS
+    from ``{% djust_pwa_head %}`` / ``{% djust_offline_styles %}`` hides when
+    offline.
 
     Args:
         online_text: Text to show when online
         offline_text: Text to show when offline
-        online_class: CSS class when online
-        offline_class: CSS class when offline
+        online_class: CSS class(es) applied when online
+        offline_class: CSS class(es) applied when offline
         show_when: When to show the indicator ("always", "offline", "online")
 
     Returns:
@@ -223,8 +235,11 @@ def djust_offline_indicator(
         {% djust_offline_indicator offline_text="You are offline" %}
     """
     # Determine visibility attributes based on show_when
+    # #3051: no inline ``display: none`` — nothing ever removed it, so the
+    # offline indicator never appeared. The ``<style>`` below hides it while
+    # the body is not ``djust-offline`` (including before the client runs).
     if show_when == "offline":
-        visibility = 'dj-offline-show style="display: none;"'
+        visibility = "dj-offline-show"
     elif show_when == "online":
         visibility = "dj-offline-hide"
     else:
@@ -236,8 +251,14 @@ def djust_offline_indicator(
     safe_online_class = escape(online_class)
     safe_offline_class = escape(offline_class)
     display_text = safe_offline_text if show_when == "offline" else safe_online_text
+    # The status class matching the rendered text, so the first paint is
+    # styled before the client syncs it to the real network state (#3051).
+    initial_class = safe_offline_class if show_when == "offline" else safe_online_class
+    indicator_class = "djust-offline-indicator"
+    if initial_class.strip():
+        indicator_class += " " + initial_class.strip()
 
-    indicator_html = """<div class="djust-offline-indicator" %s
+    indicator_html = """<div class="%s" %s
      data-online-text="%s"
      data-offline-text="%s"
      data-online-class="%s"
@@ -245,6 +266,7 @@ def djust_offline_indicator(
     <span class="djust-indicator-dot"></span>
     <span class="djust-indicator-text">%s</span>
 </div>""" % (
+        indicator_class,
         visibility,
         safe_online_text,
         safe_offline_text,
@@ -291,7 +313,20 @@ def djust_offline_indicator(
 .djust-status-offline .djust-indicator-dot {
     background-color: #ef4444;
 }
-</style>"""
+"""
+        + (
+            # #3051: hide the offline-only indicator unless the body is
+            # marked offline — also before the client first sets the class,
+            # so there is no flash. Scoped to the indicator so it works
+            # without {% djust_offline_styles %}.
+            """body:not(.djust-offline) .djust-offline-indicator[dj-offline-show] {
+    display: none !important;
+}
+"""
+            if show_when == "offline"
+            else ""
+        )
+        + """</style>"""
     )
 
     return mark_safe(indicator_html + "\n" + indicator_css)
@@ -330,7 +365,8 @@ body:not(.djust-online) [dj-offline-hide] {
     display: none !important;
 }
 
-body.djust-online [dj-offline-show] {
+body.djust-online [dj-offline-show],
+body:not(.djust-offline) [dj-offline-show] {
     display: none !important;
 }
 

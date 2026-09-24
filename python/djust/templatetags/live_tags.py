@@ -31,7 +31,7 @@ from django.conf import settings
 from django.core.exceptions import PermissionDenied
 from django.template import Context, Node, Template, TemplateSyntaxError
 from django.template.base import NodeList, Parser, Token
-from django.utils.html import escape, format_html
+from django.utils.html import escape, format_html, format_html_join
 from django.utils.safestring import SafeString, mark_safe
 
 from .._html import build_tag
@@ -309,6 +309,26 @@ def djust_client_config(context: Context) -> Any:
     return _client_config_html(request)
 
 
+def _form_view(view: Any, attr: str) -> Any:
+    """The view a form tag or filter is for (#2958).
+
+    ``{% live_form view %}`` names ``view`` explicitly. On the Django engine
+    and the WS path the context carries it, but a root LiveView template is
+    rendered by the Rust engine from a JSON-serialised context that cannot
+    carry the view, so ``view`` resolves to ``""``. Fall back to the view the
+    render is for — the active-parent-view thread-local
+    ``render_full_template`` / ``render_with_diff`` register (#1784), as
+    ``{% live_render %}`` does — but only when the given object cannot serve
+    ``attr`` and the fallback can. An explicitly passed view always wins.
+    """
+    if hasattr(view, attr):
+        return view
+    active = get_active_parent_view()
+    if active is not None and hasattr(active, attr):
+        return active
+    return view
+
+
 @register.simple_tag
 def live_form(view: Any, **kwargs: Any) -> Any:
     """
@@ -334,10 +354,17 @@ def live_form(view: Any, **kwargs: Any) -> Any:
             <button type="submit">Submit</button>
         </form>
     """
+    view = _form_view(view, "as_live")
     if not hasattr(view, "as_live"):
-        return "<!-- ERROR: View does not have as_live() method. Did you use FormMixin? -->"
+        return mark_safe(
+            "<!-- ERROR: View does not have as_live() method. Did you use FormMixin? -->"
+        )
 
-    return view.as_live(**kwargs)
+    # #3043: the form markup is the tag's own output, so it must not be
+    # escaped again by ``SimpleNode.render``. ``as_live()`` escapes every
+    # value it interpolates (labels, help text, errors, choices, field values
+    # and attributes — see ``djust.frameworks``) and returns a ``SafeString``.
+    return mark_safe(view.as_live(**kwargs))
 
 
 @register.simple_tag
@@ -365,10 +392,14 @@ def live_field(view: Any, field_name: str, **kwargs: Any) -> Any:
         {% live_field view "email" %}
         {% live_field view "password" label="Custom Password Label" %}
     """
+    view = _form_view(view, "as_live_field")
     if not hasattr(view, "as_live_field"):
-        return "<!-- ERROR: View does not have as_live_field() method. Did you use FormMixin? -->"
+        return mark_safe(
+            "<!-- ERROR: View does not have as_live_field() method. Did you use FormMixin? -->"
+        )
 
-    return view.as_live_field(field_name, **kwargs)
+    # #3043: see ``live_form`` — the field markup escapes its own values.
+    return mark_safe(view.as_live_field(field_name, **kwargs))
 
 
 @register.simple_tag
@@ -388,22 +419,28 @@ def live_errors(view: Any, field_name: str | None = None) -> str:
         {% live_errors view "email" %}
         {% live_errors view %}  <!-- non-field errors -->
     """
+    # #3043: the wrapper markup is the tag's own and is returned safe; every
+    # error message is escaped (``format_html_join``), since a validation
+    # message can echo what the user typed. The f-string version returned a
+    # plain ``str``, so ``SimpleNode.render`` escaped the whole thing and the
+    # page showed the markup as text.
+    view = _form_view(view, "get_field_errors")
     if field_name:
         if hasattr(view, "get_field_errors"):
             errors = view.get_field_errors(field_name)
             if errors:
-                html = '<div class="invalid-feedback d-block">'
-                for error in errors:
-                    html += f"<div>{error}</div>"
-                html += "</div>"
-                return html
+                field_html: str = format_html(
+                    '<div class="invalid-feedback d-block">{}</div>',
+                    format_html_join("", "<div>{}</div>", ((error,) for error in errors)),
+                )
+                return field_html
     else:
         if hasattr(view, "form_errors") and view.form_errors:
-            html = '<div class="alert alert-danger">'
-            for error in view.form_errors:
-                html += f"<div>{error}</div>"
-            html += "</div>"
-            return html
+            form_html: str = format_html(
+                '<div class="alert alert-danger">{}</div>',
+                format_html_join("", "<div>{}</div>", ((error,) for error in view.form_errors)),
+            )
+            return form_html
 
     return ""
 
@@ -424,6 +461,7 @@ def field_value(view: Any, field_name: str) -> Any:
         {% load live_tags %}
         <input type="text" value="{{ view|field_value:'email' }}">
     """
+    view = _form_view(view, "get_field_value")
     if hasattr(view, "get_field_value"):
         return view.get_field_value(field_name)
     return ""
@@ -445,6 +483,7 @@ def has_errors(view: Any, field_name: str) -> bool:
         {% load live_tags %}
         <input class="{% if view|has_errors:'email' %}is-invalid{% endif %}">
     """
+    view = _form_view(view, "has_field_errors")
     if hasattr(view, "has_field_errors"):
         return bool(view.has_field_errors(field_name))
     return False
@@ -851,6 +890,18 @@ def live_input(field_type: str = "text", **kwargs: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 
+def _context_view(context: Context) -> Any:
+    """The view a tag is rendering for: ``context["view"]`` on the Django
+    engine and the WS path; on a Rust render whose JSON-serialised context
+    cannot carry the view, the thread-local ``render_full_template`` /
+    ``render_with_diff`` register (#1784) — the same fallback
+    ``{% live_render %}`` uses (#2958)."""
+    view = context.get("view")
+    if view is None:
+        view = get_active_parent_view()
+    return view
+
+
 class ColocatedHookNode(Node):
     """
     Emit a ``<script type="djust/hook" data-hook="NAME">...</script>`` tag
@@ -890,7 +941,7 @@ class ColocatedHookNode(Node):
         cfg = getattr(settings, "DJUST_CONFIG", {}) or {}
         if cfg.get("hook_namespacing") != "strict":
             return self.name
-        view = context.get("view")
+        view = _context_view(context)
         if view is None:
             return self.name
         try:
@@ -1216,7 +1267,7 @@ class DjActivityNode(Node):
         # mixin can authoritatively gate events. ``ActivityMixin`` defines
         # ``_register_activity``; guarded for non-LiveView contexts (e.g.
         # unit tests that render the tag against a plain Context).
-        view = context.get("view")
+        view = _context_view(context)
         if view is not None and hasattr(view, "_register_activity"):
             try:
                 view._register_activity(name, visible=visible, eager=eager)
@@ -1440,28 +1491,65 @@ def _stamp_view_id(html: str, view_id: str) -> str:
 
 
 def _authorize_reused_child(
-    child: Any, request: Any, parent: Any, slot: str, mount_inputs: dict[str, Any]
+    child: Any,
+    request: Any,
+    parent: Any,
+    slot: str,
+    mount_inputs: dict[str, Any],
+    view_path: str,
+    *,
+    registered_view_id: Optional[str] = None,
 ) -> None:
-    """Authorize before an existing child renders or is registered for reattach."""
+    """Authorize an existing child before it renders or is registered for reattach.
+
+    Re-runs the view-level (4a) and object-level (4c) checks a fresh mount
+    runs, against the CURRENT request, so a reused child is only rendered while
+    the user may still see it. A denial refuses the embed exactly as a fresh
+    mount would; a child still registered on ``parent``
+    (``registered_view_id``) is first dropped from the registry, running its
+    unmount/cleanup hooks. A broken predicate denies too, without its message.
+    """
     from django.core.exceptions import PermissionDenied
 
     from .._exposure import uses_legacy_exposure
     from .._exposure_child_identity import child_can_reuse
     from ..auth.core import check_view_auth, enforce_object_permission
 
+    def deny() -> None:
+        if registered_view_id is not None:
+            _discard_sticky_child(parent, registered_view_id, child)
+
     # get_object() and application predicates may consult self.request.
     # Never authorize against the request left over from the previous render.
     child.request = request
+    if request is None:
+        deny()
+        raise PermissionDenied("Access denied for embedded view.")
     try:
-        if request is None or check_view_auth(child, request) is not None:
-            raise PermissionDenied("Access denied for embedded view.")
-        enforce_object_permission(child, request)
-        if not uses_legacy_exposure(child) and not child_can_reuse(
-            child, type(child), parent, request, slot, mount_inputs
-        ):
-            raise PermissionDenied("Embedded view identity changed during authorization.")
+        auth_redirect = check_view_auth(child, request)
     except Exception:  # noqa: BLE001 — broken predicates must not permit reuse
+        deny()
         raise PermissionDenied("Access denied for embedded view.") from None
+    if auth_redirect is not None:
+        deny()
+        raise TemplateSyntaxError(
+            "{%% live_render %%} target %r denied access: the child view "
+            "requires auth/permissions that the parent's request does not "
+            "satisfy (login redirect: %s)" % (view_path, auth_redirect)
+        )
+    try:
+        enforce_object_permission(child, request)
+    except Exception:  # noqa: BLE001 — broken predicates must not permit reuse
+        deny()
+        raise TemplateSyntaxError(
+            "{%% live_render %%} target %r denied access: object-level permission "
+            "check failed for the requested object." % view_path
+        ) from None
+    if not uses_legacy_exposure(child) and not child_can_reuse(
+        child, type(child), parent, request, slot, mount_inputs
+    ):
+        deny()
+        raise PermissionDenied("Embedded view identity changed during authorization.")
 
 
 def _match_sticky_child(
@@ -1501,6 +1589,84 @@ def _match_sticky_child(
 
     dispose_child_subtree(child, navigation=preserved)
     return False
+
+
+def _discard_sticky_child(parent: Any, view_id: str, child: Any) -> None:
+    """Drop a registered sticky child that may no longer be rendered.
+
+    Runs the child's ``_on_sticky_unmount`` hook (cancels background work)
+    and unregisters it from ``parent`` (which runs ``_cleanup_on_unregister``).
+    Never raises — a failing hook must not mask the refusal that follows.
+    """
+    from .._exposure import uses_legacy_exposure
+
+    # A nonlegacy child is disposed by ``_unregister_child`` below
+    # (``dispose_child_subtree``), never through its application hook.
+    hook = getattr(child, "_on_sticky_unmount", None)
+    if callable(hook) and uses_legacy_exposure(child):
+        try:
+            hook()
+        except Exception:  # noqa: BLE001 — defensive
+            logger.exception("sticky child %r _on_sticky_unmount raised", view_id)
+    unregister = getattr(parent, "_unregister_child", None)
+    if callable(unregister):
+        try:
+            unregister(view_id)
+        except Exception:  # noqa: BLE001 — defensive
+            logger.exception("live_render: unregistering sticky child %r failed", view_id)
+
+
+#: Attribute on a sticky child holding the ``{% live_render %}`` kwargs it was
+#: mounted with, and the last kwargs a change warning was logged for (#2919).
+_STICKY_MOUNT_KWARGS_ATTR = "_djust_sticky_mount_kwargs"
+_STICKY_KWARGS_WARNED_ATTR = "_djust_sticky_kwargs_warned"
+
+
+def _record_sticky_mount_kwargs(child: Any, kwargs: Dict[str, Any]) -> None:
+    """Remember the kwargs a sticky child was mounted with (#2919)."""
+    try:
+        setattr(child, _STICKY_MOUNT_KWARGS_ATTR, dict(kwargs))
+    except Exception:  # noqa: BLE001 — bookkeeping must never break the render
+        pass
+
+
+def _warn_if_sticky_kwargs_changed(child: Any, kwargs: Dict[str, Any], view_path: str) -> None:
+    """Warn when a reused sticky child is rendered with different kwargs.
+
+    A sticky child keeps its live instance across parent renders and
+    navigations, so the tag's kwargs reach ``mount()`` only once; later values
+    are ignored (#2919). Re-applying them is a 1.3 change. Until then, say so
+    once per distinct set of changed kwarg names rather than silently rendering
+    stale state.
+    """
+    recorded = getattr(child, _STICKY_MOUNT_KWARGS_ATTR, None)
+    if not isinstance(recorded, dict):
+        return
+    try:
+        changed = sorted(
+            key
+            for key in set(recorded) | set(kwargs)
+            if key not in recorded or key not in kwargs or not bool(recorded[key] == kwargs[key])
+        )
+    except Exception:  # noqa: BLE001 — an uncomparable value: say nothing
+        return
+    # Once per distinct set of changed names, not per value: a value that
+    # compares by identity (a QuerySet) differs on every render.
+    if not changed or frozenset(changed) == getattr(child, _STICKY_KWARGS_WARNED_ATTR, None):
+        return
+    try:
+        setattr(child, _STICKY_KWARGS_WARNED_ATTR, frozenset(changed))
+    except Exception:  # noqa: BLE001
+        pass
+    logger.warning(
+        "{%% live_render %%} %s sticky=True: kwargs %s changed since the child was "
+        "mounted, but a sticky child keeps its live instance, so its kwargs are "
+        "mount-time only and the new values are ignored. Pass changing data "
+        "another way (for example a push to the child) — see the sticky "
+        "LiveViews guide.",
+        view_path,
+        ", ".join(repr(k) for k in changed),
+    )
 
 
 @reconcile_child_render(owner_wrapper=True)
@@ -1845,7 +2011,7 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
         ):
             survivor = None
         if survivor is not None:
-            _authorize_reused_child(survivor, request, parent, sticky_id_value, kwargs)
+            _authorize_reused_child(survivor, request, parent, sticky_id_value, kwargs, view_path)
             try:
                 parent._register_child(sticky_id_value, survivor)
             except ValueError:
@@ -1861,6 +2027,9 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                 # may have populated attributes (auth, session, etc.)
                 # the survivor's handlers will read.
                 survivor.request = request
+                _warn_if_sticky_kwargs_changed(
+                    survivor, {k: v for k, v in kwargs.items() if k != "lazy"}, view_path
+                )
                 # ``consumer`` is guaranteed non-None here: ``survivor`` was
                 # read from ``preserved_map``, which is only set when
                 # ``consumer`` is truthy (see the ``... if consumer else None``
@@ -2215,11 +2384,24 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
             isinstance(existing_child, child_cls)
             and getattr(existing_child, "sticky_id", None) == sticky_id_value
         ):
-            _authorize_reused_child(existing_child, request, parent, preferred_view_id, kwargs)
+            # Re-authorize against the CURRENT request before the live instance
+            # renders; a denial drops it from the registry and refuses the embed.
+            _authorize_reused_child(
+                existing_child,
+                request,
+                parent,
+                preferred_view_id,
+                kwargs,
+                view_path,
+                registered_view_id=preferred_view_id,
+            )
             # Refresh the live request so handlers/middleware-populated attrs
             # (auth, session) read from the CURRENT parent render's request —
             # mirrors the ``_sticky_preserved`` auto-reattach path above.
             existing_child.request = request
+            # The tag's kwargs are mount-time only for a reused sticky child
+            # (#2919): warn when they differ from the ones it was mounted with.
+            _warn_if_sticky_kwargs_changed(existing_child, kwargs, view_path)
             # ``sticky_kwarg`` is True here, so ``sticky_id_value`` passed the
             # non-empty guard above and is a ``str``. Narrow for the helper's
             # ``str`` slot-key contract (inert at runtime).
@@ -2316,6 +2498,8 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
         mount = getattr(child, "mount", None)
         if callable(mount):
             mount(request, **kwargs)
+    if sticky_kwarg:
+        _record_sticky_mount_kwargs(child, kwargs)
 
     if sticky_kwarg and explicit_child:
         assert sticky_id_value is not None

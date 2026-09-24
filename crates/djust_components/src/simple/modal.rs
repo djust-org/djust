@@ -64,10 +64,12 @@ impl RustModal {
         let modal_class_str = modal_classes.join(" ");
         let dialog_class_str = dialog_classes.join(" ");
         let label_id = format!("{}Label", self.id);
+        let e_id = html_escape(&self.id);
+        let e_label_id = html_escape(&label_id);
 
         let mut html = format!(
             r#"<div class="{}" id="{}" tabindex="-1" aria-labelledby="{}" aria-hidden="true">"#,
-            modal_class_str, self.id, label_id
+            modal_class_str, e_id, e_label_id
         );
 
         html.push_str(&format!(
@@ -79,7 +81,7 @@ impl RustModal {
             html.push_str(r#"<div class="modal-header">"#);
             html.push_str(&format!(
                 r#"<h5 class="modal-title" id="{}">{}</h5>"#,
-                label_id,
+                e_label_id,
                 html_escape(title)
             ));
             if self.dismissable {
@@ -117,4 +119,48 @@ fn html_escape(s: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&#x27;")
+}
+
+#[cfg(test)]
+mod escaping_tests {
+    use super::*;
+
+    #[test]
+    fn id_and_title_are_html_escaped() {
+        let modal = RustModal::new(
+            "Body".to_string(),
+            "m\" onmouseover=\"y".to_string(),
+            Some("<img src=x onerror=alert(1)>".to_string()),
+            None,
+            "md",
+            false,
+            true,
+            false,
+        );
+        let html = modal.render();
+        assert!(!html.contains("m\" onmouseover"));
+        assert!(html.contains("id=\"m&quot; onmouseover=&quot;y\""));
+        assert!(html.contains("aria-labelledby=\"m&quot; onmouseover=&quot;yLabel\""));
+        assert!(!html.contains("<img"));
+        assert!(html.contains("&lt;img src=x onerror=alert(1)&gt;"));
+    }
+
+    #[test]
+    fn body_and_footer_keep_markup() {
+        let modal = RustModal::new(
+            "<b>ok</b>".to_string(),
+            "m1".to_string(),
+            Some("Title".to_string()),
+            Some("<button>Close</button>".to_string()),
+            "md",
+            false,
+            false,
+            false,
+        );
+        let html = modal.render();
+        assert_eq!(
+            html,
+            r#"<div class="modal fade" id="m1" tabindex="-1" aria-labelledby="m1Label" aria-hidden="true"><div class="modal-dialog"><div class="modal-content"><div class="modal-header"><h5 class="modal-title" id="m1Label">Title</h5></div><div class="modal-body"><b>ok</b></div><div class="modal-footer"><button>Close</button></div></div></div></div>"#
+        );
+    }
 }

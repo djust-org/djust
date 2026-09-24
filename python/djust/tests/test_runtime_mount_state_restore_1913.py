@@ -532,6 +532,53 @@ class TestRuntimeSnapshotEmit:
         assert signed
         assert unsign_snapshot(signed, VIEW_PATH, other.session_key) is None
 
+    @pytest.mark.asyncio
+    async def test_emitted_blob_does_not_contain_session_key(self):
+        """The emitted blob identifies the session by a keyed digest only; the
+        session key itself is not part of the client-held payload."""
+        session = await sync_to_async(_make_db_session)()
+        request = _make_request(session)
+        runtime, transport = _make_runtime(request)
+        await _mount(runtime, {"type": "mount", "view": VIEW_PATH, "url": PAGE_URL})
+        signed = transport.mount_frame.get("state_snapshot_signed")
+        assert signed
+        assert session.session_key
+        assert session.session_key not in signed
+
+    @pytest.mark.asyncio
+    async def test_blob_with_plain_session_key_falls_back_to_mount(self):
+        """A blob whose ``sid`` holds the plain session key (the format issued
+        by earlier releases) no longer verifies; the view mounts normally."""
+        import json
+
+        from django.core import signing
+
+        from djust.security.state_snapshot import SNAPSHOT_SALT
+
+        session = await sync_to_async(_make_db_session)()
+        request = _make_request(session)
+        runtime, transport = _make_runtime(request)
+        envelope = json.dumps(
+            {
+                "slug": VIEW_PATH,
+                "sid": session.session_key,
+                "state": json.dumps({"role": "admin", "n": 7}),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        blob = signing.TimestampSigner(salt=SNAPSHOT_SALT).sign(envelope)
+        snap = {"view_slug": VIEW_PATH, "state_json": blob}
+        await _mount(
+            runtime, {"type": "mount", "view": VIEW_PATH, "url": PAGE_URL, "state_snapshot": snap}
+        )
+        view = runtime.view_instance
+        assert view is not None, "view must still mount"
+        assert view.role == "user"
+        assert view._mounted_from_restore is False
+        assert transport.mount_frame is not None
+        assert not transport.errors
+
 
 # --------------------------------------------------------------------------- #
 # (C) Session-saved-state restore — plain reconnect resume.

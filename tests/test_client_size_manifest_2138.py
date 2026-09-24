@@ -369,7 +369,6 @@ _KNOWN_UNGUARDED_SIZE_CLAIMS = {
     "docs/state-management/STATE_MANAGEMENT_COMPARISON.md": (
         "competitor columns (Phoenix/Livewire); djust's own cell has no `~`"
     ),
-    "docs/website/guides/large-lists.md": "per-module delta, not the bundle total",
     "scripts/check-doc-snippets.py": "the checker's own explanatory comments",
     "tests/test_check_doc_snippets.py": "fixture strings, deliberately out of band",
     "tests/test_client_size_manifest_2138.py": "this file's own fixture strings",

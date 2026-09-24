@@ -711,8 +711,9 @@ class LiveViewWebSocket {
                     // HTTP content).
                     try {
                         if (window.djust && window.djust._sw && typeof window.djust._sw.cacheVdom === 'function') {
+                            // Pathname + query, the key popstate looks up (#2949).
                             const cacheUrl = (typeof window !== 'undefined' && window.location)
-                                ? window.location.pathname
+                                ? window.location.pathname + window.location.search
                                 : '/';
                             window.djust._sw.cacheVdom(cacheUrl, data.html, typeof data.version === 'number' ? data.version : 0);
                         }

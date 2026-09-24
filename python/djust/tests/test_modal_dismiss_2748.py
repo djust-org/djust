@@ -190,6 +190,8 @@ class TestFooterIsOverridableLikeTitleAndBody:
     def test_custom_footer_replaces_the_default(self, framework):
         from unittest.mock import patch
 
+        from django.utils.safestring import mark_safe
+
         from djust import config as config_module
 
         modal = ModalComponent(
@@ -197,7 +199,7 @@ class TestFooterIsOverridableLikeTitleAndBody:
             title="T",
             body="B",
             show=True,
-            footer='<button dj-click="confirm" data-component-id="m1">Yes</button>',
+            footer=mark_safe('<button dj-click="confirm" data-component-id="m1">Yes</button>'),
         )
         with patch.object(config_module.config, "get", lambda key, default=None: framework):
             html = str(modal.render())

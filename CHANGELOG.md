@@ -7,6 +7,708 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-09-24
+
+A bug-fix release for 1.2. The code is identical to 1.2.1rc2; see the `1.2.1rc2` and `1.2.1rc1` sections below for every change since 1.2.0. There are no API removals, and no default or wire-format changes. 1.1.5 carries the security fix for the 1.1 line.
+
+### Security
+
+- **This release and 1.1.5 include a fix for [GHSA-vq5h-rg2r-wfm5](https://github.com/djust-org/djust/security/advisories/GHSA-vq5h-rg2r-wfm5)** (React component props); see the advisory for details.
+
+### Behaviour changes to check when upgrading
+
+- Whitespace between inline siblings now renders in LiveView pages, as it already did on plain Django pages (#2999).
+- A class-level component's `State` counts towards `is_dirty` / `changed_fields`, so switching a component tab marks the view dirty (#2912).
+- `reset_form` is an `@event_handler` and can be called from the client (#2974).
+- A form field's callable `initial` is called, as Django does, and a form's own `self.initial` wins over the field's (#3062).
+- A resumable-upload request for an upload that no longer exists is answered `not_found` instead of `resumed` (#2972).
+- The `tenant_redis` presence backend now uses Redis rather than falling back to memory (#2973).
+- `djust_theming.E001` is a Warning instead of an Error; its id is unchanged (#3028).
+- `dj-offline-show` elements stay hidden on pages that include the directive CSS but never load the djust client (#3051).
+- `CodeBlock`'s Copy button now works (#3008). Apps that patched its markup should drop the workaround.
+
+## [1.2.1rc2] - 2026-09-24
+
+### Fixed
+
+- **A form field with a callable `initial` gets the value, not the function.** `FormMixin` and `WizardMixin` read `field.initial` directly, so `UUIDField(initial=uuid.uuid4)` or `initial=timezone.now` stored the function itself. Both now use Django's `form.get_initial_for_field()`, which calls it, at mount, in `reset_form()`, and in the wizard's `form_data` and `as_live_field`. In `FormMixin`, the bug was hidden until #2974: the sync after `form_valid` used to overwrite the function, but once `reset_form()` inside `form_valid` stopped being undone, the function object reached the page (`<function uuid4 at 0x…>`) and failed the next submit with "Enter a valid UUID". Found by running djust.org's test suite against 1.2.1rc1. This also matches Django in two smaller ways:
+  - A form's own `self.initial[...]` now wins over the field's `initial`.
+  - `datetime`/`time` initials drop microseconds when the widget doesn't render them.
+
+  The wizard also stops turning `initial=0` or `initial=False` into `""`.
+
+## [1.2.1rc1] - 2026-09-24
+
+### Changed
+
+- **Behavior change: whitespace between inline siblings is now rendered in
+  LiveView pages (#2999).** It already was on plain Django pages. Inline and
+  inline-block siblings written on separate lines or with a space between them
+  — button rows, `<img>` galleries, badges, nav links, `<label> <input>` —
+  now get the usual gap of about one space unless their container is flex or
+  grid. To keep them flush, make the container `display: flex`/`grid`, or wrap
+  the markup in `{% spaceless %}`. Custom JS that walks `childNodes`,
+  `firstChild` or `nextSibling` between inline elements now meets a `" "` text
+  node there. Patch paths count those nodes, so `BugCapture` patch lists
+  recorded by an older version are not path-comparable with new ones
+  (state-driven replays are unaffected). Known gaps: whitespace at the very
+  start or end of an inline element (`Hello<span> <b>World</b></span>`) is
+  still dropped; a table's foster-parented whitespace is repaired by the mount
+  morph rather than normalized up front; stream HTML passed to
+  `stream_to(html=…)`/`stream_insert` is sent as given, so stream containers
+  that the server also patches should be `dj-update="ignore"`.
+- **Faster full-parse renders: the fragment text map is built only when needed
+  (#3013).** `render_with_diff` rebuilt the fragment→text-node map after every
+  full parse, about 13% of the render on a 5,000-row block list whose renders
+  never take the text fast path. The fast path now builds it on first use.
+  Rust tests in `crates/djust_live/src/lib.rs` (`fast_path_flag_tests`).
+- **A patch batch finds its `{% if %}` markers with one DOM scan (#3014).**
+  Every `MoveSubtree`, `InsertSubtree` and `RemoveSubtree` in a batch scanned
+  the whole document for its marker comment; a prepend to a 1,000-item
+  `{% for %}{% if %}` list took about 2 s in jsdom. `_applyPatchBatch` now builds
+  one marker map per batch. Covered in `tests/js/dj_if_marker_index_3014.test.js`.
+- **`djust_theming.E001` is a Warning, not an Error (#3028).** The
+  `theme_context` context processor is optional: `{% theme_head %}`,
+  `{% theme_switcher %}` and `{% theme_panel %}` work without it, and it only
+  supplies the `{{ theme_head }}`-style variables. As an Error the check
+  blocked `migrate`, `runserver` and every other command. The id is unchanged,
+  so existing `SILENCED_SYSTEM_CHECKS` entries keep matching.
+
+### Fixed
+
+- **`djust.C016` flags a djust-first `TEMPLATES` entry that lacks the admin's
+  context processors (#2883).** With `DjustTemplateBackend` first, djust's engine
+  renders the admin's templates, and without
+  `django.contrib.auth.context_processors.auth` the admin index fails with
+  `KeyError: 'user'` while `/admin/login/` still renders. Django's own admin
+  checks look only at `DjangoTemplates` entries. The installation guide no
+  longer tells admin projects to avoid the djust-first order (#2872 is fixed).
+  Covered in `tests/unit/test_scaffold_cli_config_v1_2_1_13.py`.
+- **`djust new` projects can mount djust's own LiveViews (#2889, part 1).** The
+  scaffold's `LIVEVIEW_ALLOWED_MODULES` listed only the project's app, and an
+  explicit list replaces the default that admits `"djust"`, so the component
+  gallery, theme gallery and admin-extension pages rendered but never mounted.
+  The scaffold now writes `"djust"` too, and the new `djust.V015` check warns
+  when the URLconf routes a djust LiveView that the allowlist rejects. Existing
+  projects add `"djust"` themselves; always admitting it is planned for 1.3.
+  Covered in `tests/unit/test_scaffold_cli_config_v1_2_1_13.py`.
+- **`{% verbatim %}` inside a `{% block %}` of an extended template no longer
+  breaks the LiveView render (#2890).** Inheritance flattening wrote the
+  verbatim body (for example `{%`) back as bare template source. The re-parse
+  then read it as a tag, and the page failed with a misleading "Invalid block
+  tag … expected 'endblock'". Text that would re-parse as template syntax now
+  writes each `{` as `{% templatetag openbrace %}`. The output matches
+  Django's. Tests in `python/djust/tests/test_rust_renderer_v1_2_1_9.py`.
+- **A `dj-view` / `dj-root` on a `<main>`, `<section>` or `<article>` broke
+  every patch (#2892).** Finding the root and its closing tag only worked for
+  `<div>`. For any other element the initial page skipped the normalisation
+  the WebSocket render applies, the two renders described different trees, and
+  each event fell back to re-rendering the whole region from recovery HTML.
+  The root can now be any element inside `<body>`. The closing tag is matched
+  by the root's own element name. A page that declares its root on `<html>`,
+  `<head>` or `<body>`, or leaves the root unclosed, now logs one warning per
+  view instead of degrading silently. The `djust.V012` check and the Rust
+  text-node scanner use the same rule; the scanner had also treated
+  `<body dj-view-transitions>` as the root. Covered in
+  `python/djust/tests/test_root_detection_2892_2981.py` and
+  `crates/djust_live/src/lib.rs`.
+- **The signed back-navigation snapshot now restores component state (#2896).**
+  `_capture_snapshot_state` stored component state under `__components__`, but
+  `_restore_snapshot` dropped it, because `safe_setattr` refuses dunder names.
+  Both restore paths now use one helper, `restore_components_snapshot`, which
+  time-travel's restore shares. It applies each entry only to a component the
+  view registers or declares on its class, and sets values through
+  `safe_setattr`. Tests in `tests/unit/test_view_state_v1_2_1_7.py`.
+- **Text updates no longer show HTML entities such as `&amp;` (#2898).** Both
+  parse-skipping text fast paths put the raw, entity-escaped HTML into the
+  `SetText` patch, which the client assigns to `textContent`. A value like
+  `a & b` (plain, or `|safe` HTML whose first render had no entity) therefore
+  appeared on the page as `a &amp; b`. The fast paths now decode Django's
+  escapes and numeric character references. They leave the body of an element
+  the HTML parser keeps as raw text (`<script>`, `<style>`, `<noscript>`,
+  `<xmp>`, …) undecoded, and fall back to the full parse for any other entity
+  (for example `&nbsp;`) or for such an element inside `<svg>`/`<math>`. Rust tests in `crates/djust_live/src/lib.rs`, plus
+  real-patch fixtures in `tests/js/vdom_correctness_v1_2_1_8.test.js`.
+- **`is_dirty` / `changed_fields` now see a class-level component's state
+  (#2912).** A class-level component (ADR-031) lives in a `_component_<name>`
+  slot, which dirty tracking skipped, so `{% if is_dirty %}` stayed quiet after
+  a change to the component's `State`. The component is now fingerprinted under
+  its public name. A write of the same value still reads as clean. This is
+  visible: a change that only touches a component's `State` (switching a
+  `Tabs` tab, for example) now makes `is_dirty` true and lists the component in
+  `changed_fields`. A view that treats component state as UI-only can call
+  `mark_clean()` in that handler. Tests in
+  `tests/unit/test_view_state_v1_2_1_7.py`.
+- **A reused sticky child silently ignored changed `{% live_render %}`
+  kwargs (#2919, 1.2.1 part).** A sticky child keeps its live instance across
+  parent re-renders, so the tag's kwargs reach `mount()` only once. djust now
+  logs a warning naming the kwargs that changed since the child was mounted,
+  and the sticky LiveViews guide says kwargs are mount-time only. Behaviour is
+  unchanged; re-applying changed kwargs is planned for 1.3. Covered in `python/djust/tests/test_runtime_lifecycle_v121_5.py`.
+- **A component handler's `_skip_render` rendered anyway and leaked into the
+  next event (#2924).** The `component_id` event route never consulted
+  `_skip_render`, so a component handler that set `self._view._skip_render =
+  True` still re-rendered, and the flag survived until the next view event,
+  which then answered `noop` and never showed its change. The route now
+  resolves the flag through the same helper as every other route: it answers
+  `noop`, consumes the flag, and a forced full-HTML render still wins.
+  Covered in `python/djust/tests/test_runtime_lifecycle_v121_5.py`.
+- **A view whose `tick_interval` is shorter than its mount time now ticks
+  (#2945).** The tick loop starts during mount and stopped for good if its
+  first beat came before the consumer had the mounted view. It now waits
+  for the mount to finish. It also stops when a different view is mounted on
+  the same socket, instead of ticking the new view a second time.
+- **Back-navigation state snapshots collided across query strings (#2949,
+  1.2.1 part).** Snapshots, and the VDOM fast-paint cache, were keyed by
+  pathname only, so `/orders?page=1` and `/orders?page=2` shared an entry. They
+  are now keyed by pathname plus query on capture and lookup. `live_redirect`
+  also read the page it was leaving after `pushState`, so it named the
+  destination and captured nothing; it now reads it first. Old cache entries
+  simply miss once. The full key normalisation is part of 1.3. Covered in
+  `tests/js/client-behaviour-v121-10.test.js`.
+- **`start_async` work queued from a tick, `server_push` or `db_notify` turn
+  now runs (#2955).** `handle_tick`, `server_push` handlers and
+  `handle_info` run on the WebSocket consumer's own turns, and none of those
+  turns started queued background work. A `start_async` call there sat unrun
+  until a later event happened to drain it, or never ran. Each turn now
+  starts its queued work once its hook succeeds; a hook that raises starts
+  nothing.
+- **`is_dirty` / `changed_fields` now see fields declared with `state()` (#2956).**
+  A `state()` field keeps its value in a private `_state_<name>` slot, which
+  dirty tracking skipped, so changing one never marked the view dirty. The
+  fingerprint now reads these fields through the descriptor under their public
+  name. Tests in `tests/unit/test_view_state_v1_2_1_7.py`.
+- **PWA sync handlers registered with `@register_sync_handler` were never
+  called (#2957).** `sync_endpoint_view` copied them under the bare model name,
+  which the sync batch never looked up, so every action fell back to the
+  default path, and a model's create, update and delete handlers overwrote
+  each other. They are now registered under their full `<action>_<model>` key,
+  and a handler registered for a whole model with
+  `SyncManager.register_sync_handler(model_name, fn)` is used too (a full
+  `<action>_<model>` key passed there still serves that action only; the two
+  kinds are kept apart, so a client-supplied model name can't select an
+  action handler). A handler that raises now returns "Sync handler failed"
+  to the client and logs the exception, rather than returning its text.
+  Covered in
+  `python/djust/tests/test_uploads_v121_11.py`.
+- **`{% dj_activity %}`, `{% colocated_hook %}`, `{% live_form %}`,
+  `{% live_field %}` and `{% live_errors %}` now work in root LiveView templates
+  (#2958).** They had no handler in the Rust renderer, so a root template that
+  used them failed with "Invalid block tag". After `{% load live_tags %}` they
+  now go through djust's template-library bridge: Django's own nodes render
+  them, and the output is compared with the Django engine's in tests. A root
+  template is rendered from a context that cannot carry the view, so the tags,
+  and the `field_value` / `has_errors` filters, fall back to the view being
+  rendered (as `{% live_render %}` already does) when the `view` they are given
+  is not one. `dj_activity` therefore still registers the activity for event
+  gating. The rest of `live_tags` is unchanged. The markup from
+  `{% live_form %}` and `{% live_field %}` is still HTML-escaped, on the Django
+  engine as well; that is a separate defect, #3043. Tests in
+  `python/djust/tests/test_rust_renderer_v1_2_1_9.py`.
+- **Legacy views no longer save `state()` backing slots or `_reactive_state` in
+  the private session (#2959).** These are framework storage, not application
+  private state. A public `state()` field's value already travels in the public
+  state, and every restore path sets it back through the descriptor. A
+  `_`-named `state()` field, or one in `static_assigns`, is not part of the
+  public state, so its slot is still saved. So is a slot whose value holds a
+  Django model: the public path flattens a model to a dict, and the private one
+  re-hydrates it. Sessions written by earlier versions still restore. Tests in `tests/unit/test_view_state_v1_2_1_7.py`.
+- **The DEBUG SQL capture missed queries from sync event handlers (#2961).**
+  A sync handler runs on a worker thread with its own database connection,
+  which had no capture wrapper. With `DEBUG` on, the wrapper is now installed
+  on that connection for the handler call, and the capture scope follows the
+  event into the worker. Production handlers are unaffected. Covered in
+  `python/djust/tests/test_runtime_lifecycle_v121_5.py`.
+- **`self.listen()` in `mount()` never subscribed the view to NOTIFY (#2962).**
+  The WebSocket transport joined the `djust_db_notify_<channel>` groups before
+  `mount()` ran, so only a class-level `_listen_channels` worked and
+  `handle_info` never fired for the documented pattern. The transport now
+  joins every channel the view listens on after `mount()` (or a session
+  restore) and at the end of each event turn, so `listen()` also works from a
+  later handler. Joins are idempotent. Covered in `python/djust/tests/test_runtime_lifecycle_v121_5.py`.
+- **`dj-loading` states now last until `start_async`, `@background` and
+  `assign_async` work finishes (#2963).** The `async_pending` flag that
+  keeps a loading state on was computed from a legacy attribute nothing
+  sets, so loading states ended at the event's first response. Background
+  work that raises (even without `handle_async_result()`) or is cancelled
+  with `cancel_async()` now still sends its result frame, so the loading
+  state it started ends.
+- **`stream(..., limit=)` and `stream_prune()` never capped the page (#2964).**
+  They queued a `stream_prune` operation that nothing delivered, so long lists
+  kept growing. The prune now trims the stream's items on the server, and the
+  next render removes the pruned rows through the normal diff. Covered in
+  `python/djust/tests/test_client_behaviour_v121_10.py`.
+- **`push(page_loading=True)` left the page-loading bar at 90% (#2965).** The
+  client called `pageLoading.stop()`, which does not exist; it now calls
+  `finish()`. Four aborted `live_redirect` paths (an unsafe target, a
+  cross-origin target, a non-LiveView target) had the same bug and now finish
+  the bar too. Covered in `tests/js/client-behaviour-v121-10.test.js`.
+- **`manage.py generate_sw` crashed on every run (#2967).** Its `--version`
+  option clashed with Django's own. The option is now `--sw-version`
+  (`python manage.py generate_sw --sw-version 2.1.0`); `--version` could never
+  be used, so nothing that worked changes.
+- **Presence users dropped out after about a minute (#2968).** Presence
+  entries expire after 60 seconds without a heartbeat, and the client never
+  sent `presence_heartbeat`. The server now refreshes the view's tracked
+  presence on the client's 30-second connection ping, so users stay listed
+  while the page is open. No client or wire change. Covered in `python/djust/tests/test_realtime_v121_6.py`.
+- **Sticky unmount cancelled no background work (#2969).** The default
+  `_on_sticky_unmount()` called `cancel_async_all()`, which did not exist.
+  `AsyncWorkMixin.cancel_async_all()` now drops every scheduled `start_async`
+  task and marks the running ones cancelled, so their re-render is skipped.
+  While fixing this, the runtime's background-task path (which serves
+  WebSocket events) was found to ignore `cancel_async()` for a task that had
+  already started; it now honours it, as the older consumer path did,
+  including the closing `source="async"` frame that ends the event's loading
+  state.
+  Covered in `python/djust/tests/test_runtime_lifecycle_v121_5.py`.
+- **`clear_draft()` from an event handler did not clear the open page's draft
+  (#2971).** The client read `data-draft-clear` only at page load, so a flag
+  that arrived in a patch after a submit was ignored and the draft came back
+  on the next load. Over a live connection `clear_draft()` now also pushes a
+  `djust:draft-clear` event that clears the draft at once, and the flag is
+  applied after every DOM update (which covers the HTTP fallback). On the
+  server, `clear_draft()` re-arms on every call; a second call in a session
+  used to be ignored. Covered in `tests/js/client-behaviour-v121-10.test.js`
+  and `python/djust/tests/test_client_behaviour_v121_10.py`.
+- **Resumable uploads could not resume after a WebSocket drop (#2972).** The
+  disconnect aborted every in-flight writer, and `ResumableUploadWriter`'s
+  abort deleted the resume state. A disconnect now suspends a resumable
+  upload instead: the state and the inner writer are kept for up to 10
+  minutes (at most 32 per process), and the owning session's `upload_resume`
+  re-attaches it so the remaining chunks continue the same writer. When there
+  is no suspended writer to continue (another process, an expired window, no
+  matching upload slot), the reply is now `not_found` rather than `resumed`,
+  so the client starts over instead of sending chunks nothing accepts. Cancel
+  and writer errors still abort and delete the state. Covered in `python/djust/tests/test_uploads_v121_11.py`.
+- **`FormMixin.reset_form` is now an event handler, and calling it from
+  `form_valid` works (#2974).** `dj-click="reset_form"` was rejected under
+  strict event security, although the docs presented it as template-callable.
+  A `reset_form()` inside `form_valid` was also undone, because `submit_form`
+  then copied the submitted values back into `form_data`. This makes
+  `reset_form` a client-callable handler on every `FormMixin` view; it only
+  resets that session's form to the form class's initial values, and it ignores
+  its arguments. The forms demo now resets before it sets its success message.
+  Tests in `tests/unit/test_view_state_v1_2_1_7.py`.
+- **A `dj-root` with any other attribute never opened its WebSocket (#2981).**
+  The initial GET added `dj-view` only to the exact text `<div dj-root>`, so
+  `<div dj-root class="search">`, `<div class="x" dj-root>` or
+  `<section dj-root>` got no `dj-view`. The client had nothing to mount and
+  every event fell back to an HTTP POST, with no warning. `dj-view` is now
+  added to every `dj-root` element that doesn't declare one, however it is
+  written. `<div dj-root>` still renders exactly as before. Only a real
+  `dj-root` attribute gets it: a `dj-root` that appears inside an attribute
+  value (for example user text in `value="…"`) is left alone. Covered in
+  `python/djust/tests/test_root_detection_2892_2981.py`.
+- **`djust deploy <slug> --from-git` works (#2982).** Only the flag-first form
+  parsed; the form `djust deploy --help` documents failed with "No such option
+  '--from-git'". The flag is now recognised in any position. Covered in
+  `tests/unit/test_scaffold_cli_config_v1_2_1_13.py`.
+- **The deploy doctor no longer warns about sqlite on every `djust new` project
+  (#2983).** The scaffold reads the sqlite `NAME` from `DJUST_SQLITE_PATH`, the
+  writable path the host injects, but the doctor warned on any sqlite engine. It
+  now stays quiet when the `NAME` in `DATABASES` reads the environment. Covered in
+  `tests/unit/test_scaffold_cli_config_v1_2_1_13.py`.
+- **`LIVEVIEW_CONFIG['jit_serialization'] = False` turns JIT serialization off
+  (#2984, part 1).** Nothing read the key. Models, QuerySets and model lists
+  then take the non-JIT fallback. The six other keys that djust defines but never
+  reads (`jit_cache_backend`, `jit_cache_dir`, `jit_redis_url`,
+  `debug_components`, `component_wrapper_class`, `component_loading_class`) are
+  deprecated: the new `djust.C018` check warns when one is set, and 1.3 removes
+  them. Covered in `tests/unit/test_scaffold_cli_config_v1_2_1_13.py`.
+- **False `[dj-hook] No hook registered` warnings for `Countdown`,
+  `InfiniteScroll`, `ScrollSpy` and `MarkdownTextarea` (#2985, 1.2.1 part).**
+  Their scripts initialise themselves and never registered the `dj-hook` their
+  markup carries, so the browser logged a warning for components that worked.
+  Each script now registers the hook, and its `mounted()` runs the same
+  guarded init, so nothing is initialised twice. An app's own hook of the same
+  name, in `window.djust.hooks` or `window.DjustHooks`, is kept. The other components whose `dj-hook` no shipped script
+  implements are unchanged (1.3). Covered in
+  `tests/js/component_script_hooks_2985.test.js`.
+- **The CSRF meta tags and the debug-panel CSS could land outside the page's
+  `<head>` (#2987).** They were inserted before the first (meta) or every (CSS)
+  `</head>` string in the page, including one inside an inline `<script>`
+  string or a comment; the real head then lacked the meta tags and
+  `window.djust.csrfToken()` returned `''` under `CSRF_COOKIE_HTTPONLY` /
+  `CSRF_USE_SESSIONS`. Both now go into the document's real `<head>` once,
+  found on a copy of the page with script, style, comment, title and textarea
+  contents masked. The client scripts are placed before the real `</body>` the
+  same way, instead of before every `</body>` string. Tests in
+  `tests/unit/test_csrf_meta_injection.py`.
+- **Button labels and empty rating stars failed contrast on bright themes
+  (#2996, parts 1–2).** `.dj-btn`'s label fell back to a literal `white` while
+  its background followed `--primary`, which gave 2.3–2.7:1 on bright
+  primaries. `.dj-btn`, `.dj-btn-danger`, `.dj-btn-success`,
+  `.dj-notification-badge`, `.dj-notif-popover__badge` and the primary /
+  success / danger `.dj-ribbon` labels now fall back to the theme's paired
+  `--primary-foreground` / `--destructive-foreground` / `--success-foreground`.
+  The `--dj-btn-*-fg` / `--dj-notification-badge-fg` / `--dj-ribbon-fg`
+  overrides still win, and with no theme loaded the label is still white. The
+  optional `djust_theming/css/scaffold.css` does the same for `.btn-success`,
+  `.btn-danger`, `.card-header-success` and `.badge-primary`.
+  `.rating-star-empty` (and the hover preview) went from
+  `hsl(var(--muted-foreground) / 0.3)`, about 2:1, to full `--muted-foreground`.
+  That reaches 3:1 (WCAG 1.4.11) on the background and on cards for every
+  preset whose muted-foreground/background pair passes AA. Recolouring the
+  `djust` brand preset is left for 1.3 (#2885). Covered in
+  `python/djust/components/tests/test_components_css_2996_2993_3008.py`.
+- **Regression test: keyed lists (`dj-key`) stay in server order after
+  filter-and-restore and re-sort-and-restore (#2997).** This covers the
+  djust.org `/themes/` flow: 69 items filtered to 6 and restored, re-sorted and
+  restored, and filtered straight into the re-sort. The single patch-batch
+  placement model from #3009 already fixes it. Real-patch fixture in
+  `tests/js/vdom_correctness_v1_2_1_8.test.js`.
+- **`{% csrf_token %}` forms rendered over the WebSocket failed with "CSRF
+  verification failed" (403) (#2998).** The socket mount path rebuilt the view's
+  request with `RequestFactory`, carrying the session and user but no cookies,
+  so `get_token()` minted a new secret the browser never received. A form on
+  any page reached with `dj-navigate`, or on a re-mounted view, posted a token
+  that did not match the browser's CSRF cookie. Every rebuilt request now
+  binds the browser's CSRF cookie from the socket scope and runs Django's own
+  `CsrfViewMiddleware.process_request` on it, so `CSRF_COOKIE_NAME`, legacy
+  masked cookies and `CSRF_USE_SESSIONS` behave exactly as on HTTP. This covers
+  WebSocket mounts (including `mount_batch` and `live_redirect` mounts), the
+  real SSE stream request, and the request that sticky children are
+  re-stamped with on `live_redirect`. Projects that worked around this by
+  binding the cookie in `mount()` can drop the workaround. 18 regression cases
+  in `python/djust/tests/test_csrf_socket_render_2998.py`, including a
+  CSRF-enforcing `Client` that POSTs the socket-rendered token and gets 302.
+
+- **Words run together in LiveView pages: `<b>A</b> <i>B</i>` rendered as "AB"
+  (#2999).** The VDOM parser dropped every whitespace-only text node, and the
+  egress normalizer collapsed every `> <` to `><`, so the space between two
+  inline elements vanished from `render_with_diff()` and the WS frame (e.g.
+  `**Lead.** \`code\`` in rendered Markdown read "Lead.code"). Both now keep
+  whitespace between two inline-level siblings (custom elements count as
+  inline) as a single `" "` text node and still drop indentation between
+  block-level siblings; the normalizer's decision now runs in Rust next to the
+  parser's rule, and is faster than before. The client counts a text node that
+  is exactly `" "` when it resolves patch paths, so server and client agree on
+  child indices.
+
+  Applying a patch batch was reworked to one model, shared by the client and
+  the server's reference `apply_patches`: every `RemoveChild` is resolved
+  against the DOM as it was before the batch (an id-less one used to remove the
+  wrong node after a `RemoveSubtree` shifted the list), and a parent's inserts,
+  moves and `{% if %}` span inserts/moves are placed together by final index
+  (moves used to run one at a time against the live list, so a forward keyed
+  move landed one slot early — `[a,b,c]` → `[b,c,a]` came out "bac" — and
+  inserts landed before the boundaries they belonged next to had moved). Also
+  fixed: the text fast path kept patching a text node that a full parse had
+  removed (an error message that cleared and came back stayed empty), and a
+  loop-cache placeholder (`<dj-pc-…>`) could reach the page on a partial render
+  after a render with cache hits. Regression tests:
+  `python/djust/tests/test_inline_whitespace_2999.py`,
+  `python/djust/tests/test_inline_whitespace_fastpath_2999.py`,
+  `crates/djust_vdom/tests/test_inline_whitespace_2999.rs`,
+  `tests/js/inline_whitespace_parity_2999.test.js`.
+
+- **A WebSocket closed while an event was in flight now always reaches
+  `disconnect()` (#3000).** The event's reply hit a socket the client had
+  already closed. uvicorn raises `ClientDisconnected` there (an `OSError`,
+  as ASGI 2.4 specifies), which the consumer did not expect; the error
+  escaped Channels' dispatch loop, so the pending disconnect was never
+  handled. Presence, channel groups and the tick task outlived the socket,
+  and the tick kept the presence record alive indefinitely: a zombie
+  session, with nothing logged. The consumer now drops sends to a
+  peer-closed socket, runs `disconnect()` if its dispatch loop ever dies
+  before the disconnect is handled, and stops a tick loop once the socket
+  is gone.
+- **A `server_push` that arrives while the session is busy is now delivered
+  (#3001).** A push that found a user event or background result in
+  progress, or the render lock held, was dropped, so the last push of a
+  change (a game's final frame) could leave a viewer on stale state
+  indefinitely. It is now queued; once the session is free, every queued
+  push is applied in order and the view renders once. Identical queued
+  pushes are applied once, the queue is bounded, and pushes queued for a
+  view that has since been replaced are discarded.
+- **`djust.V004` no longer flags `handle_*` methods (#3002, 1.2.1 part).** An
+  undecorated `handle_*` method is how a handler is made callable by
+  `server_push` but not by browsers, and both of V004's hints (add
+  `@event_handler`, or prefix `_`) broke that. Other handler-like prefixes
+  (`on_*`, `toggle_*`, `submit_*`, …) are still flagged. An explicit
+  `@push_handler` marker is planned for 1.3. Covered in
+  `python/tests/test_checks.py`.
+- **The update check stops flagging a patched release within an hour of an
+  advisory fix (#3006).** The advisory list was cached for 24 hours, so after an
+  advisory's range was corrected, `djust.U001` and the dev-server notice kept
+  telling developers to upgrade a release that was no longer affected. A cached
+  advisory that matches the installed version is now re-fetched after an hour
+  by the dev server and the CLI. `U001` itself never fetches, so its hint names
+  the cache file to delete. Covered in
+  `tests/unit/test_scaffold_cli_config_v1_2_1_13.py`.
+- **The lifecycle schema advertised view hooks djust never calls (#3007, 1.2.1
+  part).** `connected()`, `disconnected()` and `unmount()` are removed from
+  `djust.schema.LIFECYCLE_METHODS` (read by `djust_ai_context` and tools); no
+  LiveView method by those names is ever called. The LiveView API reference
+  now shows how to tell the live mount from the HTTP render. Real hooks are
+  planned for 1.3. Covered in `python/djust/tests/test_realtime_v121_6.py`.
+- **`CodeBlock`'s Copy button did nothing (#3008).** It rendered a bare
+  `<button class="code-block-copy">` with no handler. It now carries
+  `dj-copy="#<id>"` pointing at its own `<code>` element (a per-instance id, or
+  the component's explicit `id=` when that is a plain CSS identifier), plus `type="button"`, `aria-label` and
+  `dj-copy-feedback`, so it copies the raw source. Class names are unchanged.
+  `dj-copy` is bound by the LiveView client, so the button works on LiveView
+  pages. The `{% code_block %}` tag keeps its own inline handler. Covered in
+  `python/djust/components/tests/test_components_css_2996_2993_3008.py`.
+- **Text patches inside `<pre>`, `<code>` and `<textarea>` no longer fail with
+  "node not found" (#3012).** The server keeps every text node directly inside
+  these elements, including whitespace-only ones, but the client's path walker
+  skipped them, so a `SetText` whose path crossed one was lost. The client now
+  follows the server's rule: every text child counts when its DIRECT parent is
+  `pre`, `code`, `textarea`, `script` or `style`. Real-patch fixtures in
+  `tests/js/vdom_correctness_v1_2_1_8.test.js`.
+- **The handler-metadata script is injected once, before the page's real
+  `</body>` (#3018).** `_inject_handler_metadata` used
+  `html.replace("</body>", …)`, which inserted the script before every
+  `</body>` string, including one inside an inline script, a comment or a
+  `<textarea>`. It now uses the masked lookup #3017 added for the CSRF meta and
+  the client scripts, with the page's real `</html>` as the fallback. Output is
+  unchanged for a page with a single `</body>`.
+- **The raw-text masker is linear on malformed markup (#3019).** Its
+  `<script\b[^>]*>` / `</script[^>]*>` patterns scanned to the end of the page
+  from every `<script` or `</script` with no `>` after it, so a page with many
+  of them (only reachable through `|safe` / `mark_safe` output) took seconds on
+  every render. The tag patterns now stop at the next `<`, as #3017's do. The
+  streaming split (`_split_for_streaming`) had its own mask of the same shape
+  (22 s on 32 000 unclosed `<script>` tags) and now uses the shared one, which
+  also masks comments and `<style>` bodies.
+- **T018 no longer reports string literals or filter names in `{% if %}`
+  (#3020).** `{% elif app.status == 'deploying' %}` reported `'deploying'` as
+  an undefined variable, and `{% if items|length > 0 %}` reported `length`:
+  djustlive got 92 such notices on upgrading to 1.2.0. The `if` / `elif` /
+  `while` scan now skips quoted string literals, numbers and filter names. A
+  variable filter argument (`|default:fallback`) is still checked.
+- **Third-party inclusion tags work in LiveView templates on projects without
+  the djust template backend (#3024).** Django's `InclusionNode` got the
+  `DjangoTemplates` backend's template wrapper, whose `render()` accepts only a
+  dict, and raised "context must be a dict rather than Context". The bridge now
+  hands it the engine-level template, as Django's own engine would. Output is
+  compared with Django's in
+  `python/tests/test_inclusion_tag_django_backend_3024.py`.
+- **Highlighted shell snippets keep the spaces between words (#3026).**
+  `highlight_code("pip install djust", "bash")` wrapped each space in its own
+  `hl-w` span between two bare words, and the VDOM dropped those
+  whitespace-only nodes: the page (and the Copy button) showed
+  `pipinstalldjust`. The span is now unwrapped into the following text, as
+  #3008's fix already did before a token span.
+- **A view whose `mount()` raises no longer keeps ticking (#3027).** The tick
+  task starts before `mount()`; when `mount()`, `handle_params()`, the actor
+  mount or the initial render raised, the error frame went out but the tick
+  kept calling `handle_tick` on the half-mounted view every beat until the
+  socket closed. The runtime now reports the failure to the transport, which
+  cancels that view's tick. 3 regression cases in
+  `python/djust/tests/test_mount_failure_stops_tick_3027.py`.
+- **The Python and Rust root locators agree when a quoted attribute value
+  contains markup (#3030).** Python searched the whole page with a regex that
+  could start inside `<div data-h="<section dj-root>">` and pick the `<section>`
+  in the value, then stamp `dj-view` inside it; the Rust locator skips quoted
+  values. Python now walks the page tag by tag the way the Rust locator does.
+  Both treat `<` as a tag start only before a letter, `/` or `!`, and the Rust
+  closing-tag walk does too, so `<main dj-root>a < b</main>` is found.
+- **Live navigation updates the tab title (#3036).** `dj-navigate` /
+  `live_redirect` swaps only the `dj-root`, so the tab kept the previous
+  page's `<title>` unless the view set `page_title`. The destination's
+  `<title>` (`{% block title %}` included) is now rendered with the view's
+  values and sent as a `page_metadata` title; a view's own `page_title` still
+  wins, and a title that uses `{{ block.super }}` or a context-processor
+  variable is left alone. The navigation guide now lists what live navigation
+  updates and what it keeps (`<head>` assets and outside-root scripts; diffing
+  those is planned for 1.3). 14 regression cases in
+  `python/djust/tests/test_live_redirect_title_3036.py`.
+- **The HTTP-POST fallback honours `_skip_render` (#3038).** A view or
+  `component_id` handler that set `self._skip_render = True` still got a full
+  render over the HTTP fallback, and the flag was never reset. The decision
+  now goes through the same `_resolve_skip_render` the WebSocket and SSE
+  routes use: the response is an empty patch list with no `version`, still
+  carrying flash and page-metadata commands (but, like the WebSocket noop,
+  never stored as an `@cache` hit), and `set_changed_keys()` still
+  forces a render. 5 regression cases in
+  `python/djust/tests/test_http_skip_render_3038.py`.
+- **`dj-offline-hide`, `dj-offline-show` and `dj-offline-disable` work
+  (#3041).** Their CSS keys on `body.djust-online` / `body.djust-offline`, and
+  nothing set those classes, so `dj-offline-hide` elements were always
+  hidden, `dj-offline-disable` elements always disabled and `dj-offline-show`
+  elements always shown, online or not. The client now sets the class at page load from
+  `navigator.onLine` and updates it on the browser's `online` / `offline`
+  events. 4 regression cases in `tests/js/offline-body-classes-3041.test.js`.
+- **`{% live_form %}`, `{% live_field %}` and `{% live_errors %}` render the
+  form instead of its escaped markup (#3043).** The tags returned a plain `str`,
+  so Django escaped it and the page showed `<div class="mb-3"><label …` as
+  text, on both template engines. `FormMixin.as_live()` / `as_live_field()` now
+  return a `SafeString`, and `live_errors` builds its markup with
+  `format_html`. Every value a user can influence (field values, error
+  messages, choice labels and values) stays escaped; the adapters now also
+  escape the label `for=` ids and the `wrapper_class` argument. Custom
+  `FrameworkAdapter`s must escape the values they interpolate, as the built-in
+  ones do.
+- **`{% live_input %}`, `{% djust_skeleton %}` and `{% djust_track_static %}`
+  work in root LiveView templates (#3044).** They had no Rust handler, so a
+  template using them failed with "Invalid block tag", as #2958 was for five
+  other `live_tags`. They now bridge through Django's own nodes. djust's own
+  bridged tags share one Django `RenderContext` per render, so
+  `{% djust_skeleton %}` emits its `<style>` block once per render, as on the
+  Django engine; third-party tags keep a fresh context per call. Output is
+  compared with Django's in `python/djust/tests/test_live_tags_bridged_3044.py`.
+- **Text inside `<noscript>`, `<xmp>`, `<iframe>`, `<noembed>`, `<noframes>` and
+  `<plaintext>` is no longer escaped twice (#3045).** The parser keeps their
+  bodies raw, but the VDOM serializer escaped every text node outside `<script>`
+  and `<style>`, so `<noscript>Tom &amp; Jerry</noscript>` reached the client as
+  `Tom &amp;amp; Jerry`. The serializer and the text fast path now share one
+  raw-text element list (`djust_core::raw_text`).
+- **The offline indicator and the offline banner show when offline, and the
+  indicator's text and class follow the network state (#3051).**
+  `{% djust_offline_indicator show_when="offline" %}` and
+  `python/djust/templates/djust/pwa/offline_banner.html` carried an inline `display: none` that
+  nothing removed, so neither ever appeared; and no client code read the
+  indicator's `data-online-text` / `data-offline-text` / `data-online-class` /
+  `data-offline-class`, so `show_when="always"` always read "Online" with no
+  status class. Visibility is now the `dj-offline-show` CSS on the
+  `body.djust-offline` class the client sets (#3041), and the client swaps the
+  indicator's text and `djust-status-*` class on every change. The
+  `dj-offline-show` rule from `{% djust_pwa_head %}` / `{% djust_offline_styles %}`
+  also hides elements until the body is marked offline, so they no longer
+  flash before the client runs; on a page that includes that CSS but never
+  loads djust's client they now stay hidden (they were always visible), as
+  `dj-offline-hide` elements already did. The indicator is rendered with the status
+  class of its initial state; class names, data attributes and tag arguments
+  are unchanged. 7 cases in `tests/js/offline-indicator-3051.test.js`, 12 in
+  `tests/unit/test_pwa_offline_indicator_3051.py`.
+- **React component props are serialised as real JSON and fully escaped.** A capitalised component tag such as `<Greeting who="{{ name }}" />` wrote its props into `data-react-props` with only `"` escaped, so a value with an apostrophe, backslash or control character produced JSON the client could not parse. The template renderer, the hydration pass and `ReactComponentRegistry.render()` now build the JSON with a real encoder and entity-escape the attribute value; readers decode it as before (`dataset.reactProps`). The hydration pass no longer re-resolves `{{ var }}` inside prop values the renderer has already resolved, so a context value that itself reads `{{ other }}` stays literal. Entities in literal props now reach the client as written: `label="Tom &amp;amp; Jerry"` arrives as `Tom &amp;amp; Jerry`, where it used to arrive decoded once.
+
+### Security
+
+- **The log-injection filter now covers every framework logger (#2947).**
+  `DjustLogSanitizerFilter` was attached to the `djust` logger only, and
+  Python runs a logger's filters only for records logged on that logger, so
+  records from `djust.websocket`, `djust.runtime` and the other child loggers
+  reached handlers with CR/LF and control characters intact. `DjustConfig.ready()`
+  now attaches the filter to `djust` and every `djust.*` logger, including ones
+  created later. Framework log lines whose string arguments carried newlines or
+  ran past 500 characters now appear flattened and truncated, as the filter
+  always intended. Covered in `tests/unit/test_log_sanitizer_child_loggers_2947.py`.
+- **Tenant-scoped presence works under the documented settings (#2973, part 1).**
+  `DJUST_CONFIG['PRESENCE_BACKEND'] = 'tenant_redis'`, the value `djust.tenants`
+  documents, silently selected the per-process memory backend for
+  `PresenceMixin` views; `tenant_redis` and `tenant_memory` are now accepted.
+  A view listing `PresenceMixin` before `TenantMixin` lost the `tenant:<id>:`
+  prefix on its presence key and shared presence groups across tenants; the
+  prefix now applies in either base order. An unknown value logs a warning and
+  the new `djust.C019` check flags it. **Upgrade note:** `tenant_redis` now
+  really uses Redis, so it needs the `redis` package and a reachable server,
+  as `redis` does; a deployment that relied on the silent memory fallback
+  should switch to `tenant_memory`. Tenant-keyed view state (part 2) is
+  planned for 1.3. Covered in `tests/unit/test_tenant_presence_2973.py`.
+- **Component and private-state restores are screened (#3046).** A
+  `__components__` snapshot entry named like a component method (`render`,
+  `mount`, a handler) is skipped instead of shadowing it, and
+  `_restore_private_state` skips `DANGEROUS_ATTRIBUTES` and dunder keys instead
+  of a raw `setattr`. Both inputs are server-signed or session-sourced, so this
+  is hardening, not a fix for an exploitable path. 4 regression cases in
+  `python/djust/tests/test_restore_hardening_3046.py`.
+- **autobahn advisory GHSA-hxp9-w8x3-p566 (permessage-deflate bypasses
+  `maxMessagePayloadSize` after inflation): what it means for djust.** djust
+  depends on `channels[daphne]`, and daphne depends on autobahn. On Python 3.11
+  and later the lock already resolves autobahn 26.7.1, the patched release. On
+  Python 3.10 it resolves 24.4.2, because every autobahn release from 25.9 on
+  requires Python 3.11, so no patched version installs there. A default djust
+  deployment is not exposed: daphne never enables permessage-deflate, and
+  autobahn's server rejects every compression offer unless the application
+  turns it on. If you run daphne on Python 3.10 and enable WebSocket
+  compression yourself, move to Python 3.11 or serve with uvicorn.
+- **Bandit now reports `pickle` (B301), `exec` (B102) and weak hashes (B324) in shipped code.** These rules were skipped repo-wide in the pre-commit hook, the CI Bandit step and the pre-release audit; only the reviewed `mark_safe` rules (B703, B308) are skipped now, and a test keeps the three lists in step. The remaining intentional uses are marked: the serializer code generator's `exec` carries `# nosec B102`, and it now rejects any path segment, model name or function name that is not a Python identifier before building code. The three cache-key hashes pass `usedforsecurity=False`. The audit's advisory Bandit log now applies the same excludes and skips, so it lists only findings that need a decision.
+- **Publishing to PyPI is now gated on the pre-release security audit, and
+  every scanner in it blocks.** The audit used to run alongside `release.yml`
+  on the tag push, so a release published even when the audit failed — and
+  only Bandit and ESLint could fail it anyway. It is now a reusable workflow
+  that `release.yml` and `publish.yml` call as a job their GitHub Release and
+  PyPI jobs `need`. pip-audit (over every package pinned in `uv.lock`),
+  cargo-audit (vulnerabilities and unsound advisories), `npm audit`
+  (high/critical), clippy's deny lints and CodeQL (open high/critical alerts on
+  the tag) now fail the audit, each against a reviewed allowlist
+  (`.github/security/pip-audit-ignore.txt`, `.cargo/audit.toml`, the CodeQL
+  config); Safety is removed in favour of pip-audit. The locked dependencies
+  are refreshed to clear what the gates found: anyio 4.14.2, autobahn 26.7.1
+  (Python 3.11+), click 8.3.3 and Django 5.2.17 in `uv.lock`, anyhow 1.0.104
+  in `Cargo.lock`, and brace-expansion 5.0.12 (dev-only) in
+  `package-lock.json`. See `RELEASING.md`.
+
+### Documentation
+
+- **SECURITY.md documents both vulnerability intake channels and an advisory
+  publication runbook (#2878).** GitHub Private Vulnerability Reporting is
+  listed (and preferred) next to security@djust.org. The runbook says where
+  each channel's records live, requires every advisory credit to be checked
+  against the original submission, and warns that editing `credits` through
+  the API can clear `collaborating_users`, which is an access grant.
+- **`Alert`, `Progress` and `Avatar` are documented as unstyled (#2993, docs
+  part).** No stylesheet djust ships has a rule for the markup these
+  `djust.components` classes render. Their docstrings, their catalogue pages
+  (`/theme/components/alert/` etc.) and the components guide now say so, list
+  the classes to style, and point to the styled `{% theme_alert %}` /
+  `{% theme_progress %}` / `{% theme_avatar %}` tags. The `--dj-alert-*` /
+  `--dj-progress-*` names in the docstrings are now described as suggestions
+  for your own stylesheet: nothing djust ships reads them. Shipping a default
+  stylesheet is a 1.3 item.
+- **`@rate_limit` rejections count toward the 4429 disconnect (#3003, 1.2.1
+  part).** The decorator's docstring and the best-practices guide now say
+  that each rejected event adds a warning to the connection, and that at
+  `max_warnings` (default 3) djust closes the socket with code 4429 and starts
+  an IP cooldown, so it is an abuse control rather than a UI throttle. A
+  drop-only mode is planned for 1.3.
+- **`{% badge %}` is documented as shipping no CSS (#3025, 1.2.1 part).** No
+  stylesheet djust ships styles its `dj-badge--<status>`, `dj-badge__dot`,
+  `dj-badge__dot--pulse` and `dj-badge__label` classes, so a badge renders as
+  plain text until you style it. The tag's docstring and the components guide
+  now say so, list the classes, and point to the themed `{% theme_badge %}`.
+  Shipping styles for `{% badge %}` is a 1.3 item.
+- **Release notes for djust 1.2 and 1.1.4.** `docs/website/releases/1.2.md` gathers the `1.2.0rc1` to `1.2.0` sections into one page for anyone upgrading from 1.1: what's new, the backwards incompatible changes with what to do about each, the security advisories and an upgrade checklist. `docs/website/releases/1.1.4.md` covers the 1.1.4 maintenance release. Both are listed under a new "Release notes" group in `docs/website/_config.yaml`.
+
+### Removed
+
+- **`djust.optimization.SerializerCache` is removed.** It was a persistent serializer cache (filesystem or Redis) that loaded entries with `pickle`, but nothing in djust used it, and the serializers it was meant to hold cannot be pickled, so it could only ever load data someone else had placed in its cache directory or Redis key. Compiled serializers are cached in-process, as before. If you imported it, remove the import; there is no replacement.
+
+## [1.2.0] - 2026-09-23
+
+The first stable release of the 1.2 line. The code is identical to 1.2.0rc11; see the `1.2.0rc1` to `1.2.0rc11` sections below for every change since 1.1, including the behaviour changes listed under rc11. 1.1.4 carries the same fixes for the 1.1 line.
+
+### Security
+
+- **This release and 1.1.4 include fixes for the following advisories**; see each advisory for details:
+  - [GHSA-fccp-5h88-g34j](https://github.com/djust-org/djust/security/advisories/GHSA-fccp-5h88-g34j) (DataTable)
+  - [GHSA-jv2m-fcq9-94xf](https://github.com/djust-org/djust/security/advisories/GHSA-jv2m-fcq9-94xf) (admin_ext)
+  - [GHSA-c44q-w252-mr67](https://github.com/djust-org/djust/security/advisories/GHSA-c44q-w252-mr67) (observability)
+  - [GHSA-hc2m-gvfj-x6r3](https://github.com/djust-org/djust/security/advisories/GHSA-hc2m-gvfj-x6r3) and [GHSA-r372-rrpw-5cgj](https://github.com/djust-org/djust/security/advisories/GHSA-r372-rrpw-5cgj) (components)
+  - [GHSA-j23m-jxwp-m3vq](https://github.com/djust-org/djust/security/advisories/GHSA-j23m-jxwp-m3vq) (theming)
+  - [GHSA-6q7c-hvpc-ff2q](https://github.com/djust-org/djust/security/advisories/GHSA-6q7c-hvpc-ff2q) (presence)
+  - [GHSA-5ffg-p52h-v2ph](https://github.com/djust-org/djust/security/advisories/GHSA-5ffg-p52h-v2ph) (state snapshots)
+  - [GHSA-74vj-mpp4-45cg](https://github.com/djust-org/djust/security/advisories/GHSA-74vj-mpp4-45cg) (sticky live_render)
+  - [GHSA-7fcf-23mf-rhhm](https://github.com/djust-org/djust/security/advisories/GHSA-7fcf-23mf-rhhm) (uploads)
+  - [GHSA-p9vp-rh5f-2cvq](https://github.com/djust-org/djust/security/advisories/GHSA-p9vp-rh5f-2cvq) (template filters; fixed in 1.2.0rc2, backported in 1.1.4)
+
+## [1.2.0rc11] - 2026-09-23
+
+### Changed
+
+- **djust admin applies the `DjustModelAdmin` permission hooks to every page, save and delete, and the default hooks follow Django's model permissions.** `has_view_permission`, `has_add_permission`, `has_change_permission` and `has_delete_permission` are checked before mount (list, add) or per object (change, delete), and again in `save`, `form_valid`, `confirm_delete` and the `delete_selected` action. The defaults now call `user.has_perm()` with the model's `view_`/`add_`/`change_`/`delete_` codename, as Django's `ModelAdmin` does. **Staff users who aren't superusers now need those permissions**; previously any active staff account had full access. The admin index lists only models the user has some permission on.
+- **Built-in components HTML-escape the values they render.** Every component class, `{% ... %}` component tag and Rust component renderer now passes interpolated values through `conditional_escape`, in all CSS-framework variants. **HTML passed to a content slot must be marked safe** (`mark_safe`, or another component's rendered output), or it is shown as text: this affects modal/card/sheet/popover/tabs/accordion bodies, headers and footers, icons, and similar slots. `href`/`src` values using `javascript:`, `vbscript:` or non-image `data:` render as `#`. The rich-text editor is the exception: its value is cleaned to an HTML allowlist (formatting kept, scripts and event attributes removed) instead of escaped.
+- **The observability endpoints require a project token.** Besides `DEBUG` and a loopback client, a request must carry no proxy headers (`X-Forwarded-For`, `Forwarded`, `X-Real-IP`, `X-Forwarded-Host`, `X-Forwarded-Proto`) and must send `X-Djust-Observability-Token`. The token is derived from `SECRET_KEY` (override with the `DJUST_OBSERVABILITY_TOKEN` environment variable) and printed by `manage.py djust_observability_token`. `manage.py djust_mcp` sends it automatically; other tools and hand-written requests must add the header.
+- **Back-navigation state snapshots are bound to a keyed digest of the session key instead of the key itself.** Snapshots issued by earlier versions fail verification once, and the view mounts fresh.
+
+### Fixed
+
+- **`otp_input` works: typing fills the boxes and fires the event (#2975).** The component rendered six `.otp-digit` boxes and a hidden input carrying its `dj-change`, but nothing on the client drove them. Typing left one digit in the first box and the event never fired. `python/djust/components/static/djust_components/otp-input.js` advances focus per digit, handles backspace, arrows and paste, and fills the hidden input once every box has a digit, which fires the change. Include it on the page; the catalogue now names it. Also fixed while testing every catalogue preview: `multi_select`'s checkboxes sent only whether a box was ticked, never which one, so no handler could tell; each box now sends `option` too, in both the class and the `{% multi_select %}` tag. `NotificationCenter` never opened, because its dropdown was `display: none` with nothing to show it; it gains `is_open`. The catalogue's previews now answer every event they emit: dismiss, close and accept show "Show again", host-acted events say the view received them, and overlays preview open.
+- **The HTTP event fallback and `djust.call` send a valid CSRF token when the cookie is renamed or unreadable (#2977).** The client read only a `csrfmiddlewaretoken` input or a cookie literally named `csrftoken`, so projects with `CSRF_COOKIE_NAME`, `CSRF_COOKIE_HTTPONLY` or `CSRF_USE_SESSIONS` sent an empty `X-CSRFToken` and got a 403 whenever an event went out before the WebSocket mounted. The injected bootstrap now emits `<meta name="djust-csrf-cookie">` and `<meta name="djust-csrf-token">`, and a shared `window.djust.csrfToken()` reads the input, then the configured cookie, then the meta token.
+- **Hover and active states on an accent background now use the accent's own text colour.** Forty-nine rules in `djust_components/components.css` and the theming stylesheets drew `--accent` behind the page's `--foreground` (or no colour at all), not behind `--accent-foreground`. With a neutral accent that goes unnoticed; with a vivid one it fails contrast: on djust.org's Workbench theme a hovered accordion trigger measured 1.45:1.
+- **A component that needs JavaScript beyond djust's client now says so, and its catalogue preview loads it.** Sixteen components ship a script in `djust_components/` (`countdown.js`, `scroll-spy.js`, `connection-status.js`, …) that a page must include; nothing said so, and the catalogue did not include them either, so those previews never updated. Twenty components carry a `dj-hook` that no shipped script implements (`SortableList`, `SignaturePad`, `MapPicker`, `ImageCropper`, …): their markup renders, but the interaction their docstrings describe is left to the app. `describe_component` now reports both under `client` (`hook`, `script`, `hook_shipped`), and each catalogue page loads the script and states either requirement.
+- **The component catalogue and the generated reference now say only what the component does.** `describe_component` — which both `djust.org/components/` and the docs site's reference render — reported `**kwargs` as a *required* parameter on every component, and built its events list by scraping the first example's markup. That missed events emitted in a state the example does not show (`notification_center`'s mark-read and clear, `kanban_board`'s `kanban_move`) and listed events the example itself wrote into the markup (`loading_overlay`'s demo button, `dropdown_menu`'s per-item events). Events now come from the component's own `event` / `*_event` parameters as well as its markup; server-to-client `stream_event` / `loading_event` names are excluded. The usage snippets no longer write kwargs a component does not have (`self.component.dismissed`, `NotificationCenter.is_open`), and they answer every event the copied example emits. In the previews: `dropdown_menu` opens and closes (its `toggle_menu` was unanswered, a server error), the date picker's month arrows move from `month=0`, `form_array` adds a row, five components that drew an empty box now show content, the pages that cannot preview say why, and example links stay on the page instead of opening 404s. `PromptEditor.render()` rendered the prompt as a Django template (`"Summarise  for ."`) instead of the editor; it now always renders the editor. The catalogue's Parameters table prints types as you would write them (`list | None`, not `typing.Optional[list]`) and shows `**kwargs` as what `Component.__init__` does with it rather than as a parameter named `kwargs` of type `typing.Any`; and the "Your view received …" note follows the preview instead of sitting under an open overlay's backdrop.
+- **DataTable sorts, filters and groups only on declared columns.** `on_table_sort`, `on_table_filter`, group-by and expression filters now accept only keys listed in `table_columns`, checked again where the queryset is built. Sorting is on unless a column sets `"sortable": False`; filtering needs `"filterable": True`; `table_default_sort` is always accepted. Unknown column names are ignored.
+- **A LiveView joins its channel groups (view, presence, db_notify) only after its permission checks and on_mount hooks pass.** A refused mount, including one inside `mount_batch`, leaves every group, and presence and client-push messages are no longer delivered to a connection with no mounted view. `check_permissions` and on_mount hooks now run before `on_view_mounted`.
+- **Buttons inside `{% modal %}`, `{% confirm_dialog %}`, `ExportDialog` and `BottomSheet` panels now reach the server.** Each panel carried an inline `onclick="event.stopPropagation()"`, there to stop an inside click from bubbling to the backdrop's close event. djust delegates `dj-click` from the LiveView root, though, so the same `stopPropagation()` swallowed every `dj-click` inside the panel: the close ×, Export, Cancel, and any button you put in a modal. The close event now sits on a `.dj-scrim` behind the panel, a sibling rather than an ancestor, so an outside click still closes and an inside click reaches its own handler. The inline handler is gone too, so the markup also works under a strict CSP.
+- **Resumable uploads record the session that started them.** Resume over WebSocket and the HTTP upload-status endpoint answer only that session; the status endpoint previously returned 404 even to the owner. Uploads started before the upgrade, or whose session key changed (for example at login), restart from the beginning.
+- **A reused sticky `{% live_render %}` child re-runs its view and object permission checks on every parent render**, and `live_redirect` carry-over re-checks object permissions too. A child the user may no longer see is unmounted and the render fails the same way a fresh mount would.
+- **Theme cookies that name an unregistered pack or an invalid layout fall back to the defaults, and `{% theme_css_link %}` URL-encodes its query.** An unknown pack now resolves to the session pack, then the configured default. Layout names must match `[A-Za-z0-9_-]{1,64}`.
+
 ## [1.2.0rc10] - 2026-09-22
 
 ### Changed

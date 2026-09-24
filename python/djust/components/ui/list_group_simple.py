@@ -8,6 +8,10 @@ This is a stateless Component optimized for performance.
 from typing import Any, Dict, List
 from ..base import Component
 
+from django.utils.html import conditional_escape
+
+from djust.components.utils import url_attr
+
 
 # Try to import Rust implementation (will be added later)
 try:
@@ -169,7 +173,7 @@ class ListGroup(Component):
         tag = "ol" if self.numbered else "ul"
 
         for item in self.items:
-            label = item.get("label", "")
+            label = conditional_escape(item.get("label", ""))
             url = item.get("url")
             active = item.get("active", False)
             disabled = item.get("disabled", False)
@@ -189,16 +193,16 @@ class ListGroup(Component):
                 item_classes.append("disabled")
 
             if variant:
-                item_classes.append(f"list-group-item-{variant}")
+                item_classes.append(f"list-group-item-{conditional_escape(variant)}")
 
             class_str = " ".join(item_classes)
 
             # Build content with optional badge
             content = label
             if badge:
-                badge_text = badge.get("text", "")
+                badge_text = conditional_escape(badge.get("text", ""))
                 badge_variant = badge.get("variant", "primary")
-                content = f'{label}<span class="badge bg-{badge_variant} rounded-pill float-end">{badge_text}</span>'
+                content = f'{label}<span class="badge bg-{conditional_escape(badge_variant)} rounded-pill float-end">{badge_text}</span>'
 
             # Build item
             if url and not disabled:
@@ -206,7 +210,7 @@ class ListGroup(Component):
                 disabled_attr = ' aria-disabled="true"' if disabled else ""
                 aria_current = ' aria-current="true"' if active else ""
                 list_items.append(
-                    f'  <a href="{url}" class="{class_str}"{disabled_attr}{aria_current}>{content}</a>'
+                    f'  <a href="{url_attr(url)}" class="{class_str}"{disabled_attr}{aria_current}>{content}</a>'
                 )
             else:
                 # Regular item
@@ -237,7 +241,7 @@ class ListGroup(Component):
         tag = "ol" if self.numbered else "ul"
 
         for i, item in enumerate(self.items):
-            label = item.get("label", "")
+            label = conditional_escape(item.get("label", ""))
             url = item.get("url")
             active = item.get("active", False)
             disabled = item.get("disabled", False)
@@ -276,7 +280,7 @@ class ListGroup(Component):
             content_wrapper = "flex justify-between items-center"
             content = f"<span>{label}</span>"
             if badge:
-                badge_text = badge.get("text", "")
+                badge_text = conditional_escape(badge.get("text", ""))
                 badge_variant = badge.get("variant", "primary")
                 badge_color_map = {
                     "primary": "bg-blue-100 text-blue-800",
@@ -306,7 +310,7 @@ class ListGroup(Component):
             # Build item
             if url and not disabled:
                 # Link item
-                list_items.append(f'  <a href="{url}" class="{class_str}">{content}</a>')
+                list_items.append(f'  <a href="{url_attr(url)}" class="{class_str}">{content}</a>')
             else:
                 # Regular item
                 list_items.append(f'  <li class="{class_str}">{content}</li>')
@@ -333,7 +337,7 @@ class ListGroup(Component):
         tag = "ol" if self.numbered else "ul"
 
         for i, item in enumerate(self.items):
-            label = item.get("label", "")
+            label = conditional_escape(item.get("label", ""))
             url = item.get("url")
             active = item.get("active", False)
             disabled = item.get("disabled", False)
@@ -350,16 +354,16 @@ class ListGroup(Component):
                 item_classes.append("list-group-item-disabled")
 
             if variant:
-                item_classes.append(f"list-group-item-{variant}")
+                item_classes.append(f"list-group-item-{conditional_escape(variant)}")
 
             class_str = " ".join(item_classes)
 
             # Build content with optional badge
             content = label
             if badge:
-                badge_text = badge.get("text", "")
+                badge_text = conditional_escape(badge.get("text", ""))
                 badge_variant = badge.get("variant", "primary")
-                content = f'{label} <span class="badge badge-{badge_variant}">{badge_text}</span>'
+                content = f'{label} <span class="badge badge-{conditional_escape(badge_variant)}">{badge_text}</span>'
 
             # Add number prefix if numbered
             if self.numbered:
@@ -368,7 +372,7 @@ class ListGroup(Component):
             # Build item
             if url and not disabled:
                 # Link item
-                list_items.append(f'  <a href="{url}" class="{class_str}">{content}</a>')
+                list_items.append(f'  <a href="{url_attr(url)}" class="{class_str}">{content}</a>')
             else:
                 # Regular item
                 list_items.append(f'  <li class="{class_str}">{content}</li>')

@@ -31,6 +31,8 @@ Performance:
 from ..base import Component
 from typing import Any
 
+from django.utils.html import conditional_escape
+
 # Try to import Rust implementation
 try:
     from djust._rust import RustAlert  # type: ignore[attr-defined]
@@ -99,12 +101,12 @@ class Alert(Component):
 
     def _render_bootstrap(self) -> str:
         """Render Bootstrap 5 alert"""
-        classes = f"alert alert-{self.variant}"
+        classes = f"alert alert-{conditional_escape(self.variant)}"
         if self.dismissable:
             classes += " alert-dismissible fade show"
 
         parts = [f'<div class="{classes}" role="alert">']
-        parts.append(f"    {self.text}")
+        parts.append(f"    {conditional_escape(self.text)}")
 
         if self.dismissable:
             parts.append(
@@ -128,7 +130,7 @@ class Alert(Component):
         colors = variant_map.get(self.variant, variant_map["info"])
 
         parts = [f'<div class="border rounded-lg p-4 {colors} relative" role="alert">']
-        parts.append(f"    <span>{self.text}</span>")
+        parts.append(f"    <span>{conditional_escape(self.text)}</span>")
 
         if self.dismissable:
             parts.append(
@@ -147,8 +149,8 @@ class Alert(Component):
 
     def _render_plain(self) -> str:
         """Render plain HTML alert"""
-        parts = [f'<div class="alert alert-{self.variant}" role="alert">']
-        parts.append(f"    {self.text}")
+        parts = [f'<div class="alert alert-{conditional_escape(self.variant)}" role="alert">']
+        parts.append(f"    {conditional_escape(self.text)}")
 
         if self.dismissable:
             parts.append(

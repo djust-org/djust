@@ -1,6 +1,7 @@
 """PageHeader component."""
 
 import html
+from django.utils.html import conditional_escape
 from djust import Component
 from typing import Any
 
@@ -55,7 +56,9 @@ class PageHeader(Component):
             else ""
         )
         actions_html = (
-            f'<div class="dj-page-header__actions">{self.actions}</div>' if self.actions else ""
+            f'<div class="dj-page-header__actions">{conditional_escape(self.actions)}</div>'
+            if self.actions
+            else ""
         )
         return (
             f'<header class="{cls}">'

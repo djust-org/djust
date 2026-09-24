@@ -15,6 +15,23 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Pre-release security audit — the gate. Runs in parallel with verify/build
+  # (it only reads the tree), and github-release + pypi-publish `need` it, so a
+  # failing scanner stops the release before anything is published. This is
+  # the audit's only tag-push run: the audit workflow no longer has a push
+  # trigger of its own. See the header of pre-release-security-audit.yml for
+  # what each scanner blocks on and where its allowlist lives.
+  security-audit:
+    name: Pre-release security audit
+    uses: ./.github/workflows/pre-release-security-audit.yml
+    # A called workflow can only narrow what its caller grants; these are the
+    # maxima its jobs ask for. Job-level, so id-token/contents:write are NOT
+    # passed down.
+    permissions:
+      contents: read
+      issues: write
+      security-events: write
+
   # Verify release before building
   verify:
     name: Verify release
@@ -141,16 +158,26 @@ jobs:
   # Create GitHub Release
   github-release:
     name: Create GitHub Release
-    needs: [verify, build, sdist]
+    needs: [verify, build, sdist, security-audit]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
-      - name: Download all artifacts
+      # Download only the distributions: this run also holds the security
+      # audit's report artifacts (*.md / *.json), which must not be attached
+      # to the release or handed to the PyPI upload.
+      - name: Download wheels
         uses: actions/download-artifact@v8
         with:
+          pattern: wheels-*
           path: dist
           merge-multiple: true
+
+      - name: Download sdist
+        uses: actions/download-artifact@v8
+        with:
+          name: sdist
+          path: dist
 
       - name: Check if pre-release
         id: prerelease
@@ -195,17 +222,25 @@ jobs:
   # Publish to PyPI
   pypi-publish:
     name: Publish to PyPI
-    needs: [verify, build, sdist, github-release]
+    needs: [verify, build, sdist, github-release, security-audit]
     runs-on: ubuntu-latest
     environment:
       name: pypi
       url: https://pypi.org/p/djust
     steps:
-      - name: Download all artifacts
+      # Distributions only — see github-release.
+      - name: Download wheels
         uses: actions/download-artifact@v8
         with:
+          pattern: wheels-*
           path: dist
           merge-multiple: true
+
+      - name: Download sdist
+        uses: actions/download-artifact@v8
+        with:
+          name: sdist
+          path: dist
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1

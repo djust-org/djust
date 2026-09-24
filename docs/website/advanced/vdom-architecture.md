@@ -30,7 +30,7 @@ Python LiveView           Rust VDOM (PyO3)           Browser
 
 The VDOM lives in `crates/djust_vdom/` and is organized into these modules:
 
-- **`parser.rs`** -- Parses HTML into a `VNode` tree using `html5ever`. Filters out HTML comment nodes and whitespace-only text nodes so the server VDOM matches the browser DOM.
+- **`parser.rs`** -- Parses HTML into a `VNode` tree using `html5ever`. Filters out HTML comment nodes and indentation-only text nodes, and keeps the space between two inline elements as a single `" "` text node, so the server VDOM matches the browser DOM.
 - **`diff.rs`** -- Compares two `VNode` trees and emits a minimal list of `Patch` operations. Supports both indexed (positional) and keyed child diffing.
 - **`patch.rs`** -- Applies patches to a `VNode` tree (used server-side in tests). The browser applies patches via JavaScript.
 - **`lis.rs`** -- Longest-increasing-subsequence computation used by keyed diffing to emit the fewest `MoveChild` patches.
@@ -64,7 +64,7 @@ let vdom = parse_html("<div class=\"counter\"><span>0</span></div>");
 Key behaviors during parsing:
 
 1. **Comment filtering** -- `<!-- ... -->` nodes are skipped entirely, matching browser behavior where comments are not visible to JavaScript DOM traversal.
-2. **Whitespace filtering** -- Text nodes containing only whitespace are dropped, preventing path misalignment between server and client.
+2. **Whitespace filtering** -- A text node made only of whitespace is dropped when it is indentation: between block-level siblings (`</div> <div>`, `</li> <li>`) or at the start or end of an element. Between two *inline* siblings it is the space between two words (`<strong>Lead.</strong> <code>x</code>` reads "Lead. x"), so it is kept, collapsed to exactly one `" "` text node (#2999). Neighbours are found by looking through comments. Inside `pre`, `code`, `textarea`, `script` and `style` every text node is kept verbatim. NBSP and other non-ASCII spaces are content and are always kept.
 3. **ID assignment** -- Every element gets a unique `djust_id` via a thread-local counter with base62 encoding.
 
 ## The Diff Algorithm
@@ -120,21 +120,21 @@ Patches are serialized as JSON and sent over WebSocket. The client-side JavaScri
 const node = document.querySelector(`[dj-id="${CSS.escape(djustId)}"]`);
 
 // Path-based traversal (fallback):
-// Walks childNodes, filtering out comment and whitespace-only text nodes
-// to match the server's filtered VNode tree.
+// Walks childNodes, filtering out non-dj-if comments and whitespace-only
+// text nodes — except a text node that is exactly " ", which is the space the
+// server kept between two inline siblings — to match the server's VNode tree.
 ```
 
 ### Patch Application Order
 
-Child mutations are grouped by parent and applied in a specific order to keep indices stable:
+A patch batch is applied in one model, which the client (`_applyPatchBatch`) and the server's reference `patch::apply_patches` share (#2999):
 
-1. **Subtree removes** -- `RemoveSubtree` patches, located by boundary-marker id
-2. **Removes** -- descending index order (highest index first)
-3. **Moves** -- resolved by `djust_id` of the child being moved
-4. **Inserts** -- ascending index order (lowest index first)
-5. **Subtree moves and inserts** -- `MoveSubtree` and `InsertSubtree`, interleaved by ascending target index
+1. **Resolve removals first** -- every `RemoveChild` is resolved against the DOM as it was *before* the batch (by `child_d`, else its old index), and so is every `MoveChild`'s child.
+2. **Remove** -- `RemoveSubtree` spans (by boundary-marker id), then the resolved children.
+3. **Place, per parent** -- `InsertChild`, `MoveChild`, `InsertSubtree` and `MoveSubtree` all carry the *final* index of what they place. Every moved child and moved `{% if %}` span is detached first; then everything is placed by ascending final index. The differ guarantees that what stays in place is already in final relative order, so each placement lands after exactly its final predecessors.
+4. **Node patches** -- `SetText`, `SetAttr`, `Replace` and the rest, in emitted order, by dj-id when available, else by final-tree path.
 
-Attribute and text patches are applied last, using ID-based lookup when available.
+The Rust round-trip tests (`apply_patches(old, diff(old, new)) == new`, including seeded `{% if %}` fuzzing) therefore check what the browser does.
 
 ## The Render-Diff Lifecycle
 
@@ -146,7 +146,7 @@ Attribute and text patches are applied last, using ID-based lookup when availabl
 
 ## Template Preprocessing
 
-Before the Rust VDOM parser sees the template, djust strips HTML comments and normalizes whitespace. This is critical because:
+Before the Rust VDOM parser sees the template, djust strips HTML comments and normalizes whitespace (every whitespace run becomes one space; the space between two tags is removed unless both neighbours are inline, exactly the parser's rule). This is critical because:
 
 - The Rust parser filters comments and whitespace during parsing.
 - The browser DOM includes these nodes.

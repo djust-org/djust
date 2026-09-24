@@ -15,6 +15,7 @@ from typing import Any
 from pathlib import Path
 
 from django.utils.html import escape
+from django.utils.safestring import SafeData
 
 from djust._log_utils import sanitize_for_log
 from djust.theming.contracts import COMPONENT_CONTRACTS
@@ -466,6 +467,94 @@ def component_events(rendered_html: str) -> list[str]:
     return seen
 
 
+def _is_event_param(name: str) -> bool:
+    return name == "event" or name.endswith("_event")
+
+
+#: Event parameters that do NOT name an event the view receives. A
+#: ``stream_event`` / ``loading_event`` is what the SERVER pushes to the
+#: component's client hook (``conversation_thread``'s ``new_message``,
+#: ``content_loader``'s ``data_loaded``), the opposite direction.
+_PUSH_EVENT_PARAMS = frozenset({"stream_event", "loading_event"})
+
+
+def _source_literal(source: Any) -> Any:
+    """A default in SOURCE form (``"'toggle_menu'"``) back to its value."""
+    import ast
+
+    try:
+        return ast.literal_eval(source) if isinstance(source, str) else source
+    except (ValueError, SyntaxError):
+        return None
+
+
+def _supplied_by_example(event: str, example: dict) -> bool:
+    """Did the example put ``event`` into the markup itself?
+
+    True when the name occurs inside caller-supplied data rather than as a
+    value the component turns into an event: embedded in a larger string (the
+    HTML ``content`` `loading_overlay` wraps) or anywhere in a nested
+    structure (`dropdown_menu`'s per-item ``event`` keys). A top-level value
+    EQUAL to the name — `multi_select(name="frameworks")`, which falls back to
+    its name as the event — is the component's event, not example data.
+    """
+
+    def nested(value: Any) -> bool:
+        if isinstance(value, str):
+            return event in value
+        if isinstance(value, dict):
+            return any(nested(v) for v in value.values())
+        if isinstance(value, (list, tuple)):
+            return any(nested(v) for v in value)
+        return False
+
+    for key, value in example.items():
+        if _is_event_param(key):
+            continue
+        if isinstance(value, str):
+            if value != event and event in value:
+                return True
+        elif nested(value):
+            return True
+    return False
+
+
+def contract_events(params: list, example: dict | None, rendered_html: str) -> list[str]:
+    """The server events a component sends, for a host to answer.
+
+    Two sources, because neither alone is true:
+
+    * the markup of the first example — what it emits in the state shown,
+      minus any name the example itself wrote into that markup; and
+    * the component's own event parameters (``event``, ``*_event``), at the
+      value the example passes or the default. Scraping alone missed every
+      event emitted in a state the example does not show (`notification_center`
+      with no notifications) or from a client hook (`kanban_board`'s
+      ``kanban_move``).
+
+    ``params`` are ``{"name", "default"}`` dicts with defaults in source form,
+    as :func:`get_python_component_signature` returns them; pass ``[]`` for a
+    template tag, whose events are what its markup sends. A parameter whose
+    ``doc`` calls it a *prefix* (`tour`'s ``event``, which fires
+    ``tour_next`` / ``tour_prev`` / ``tour_skip``) names no event itself and
+    is skipped.
+    """
+    example = example or {}
+    events = [
+        name for name in component_events(rendered_html) if not _supplied_by_example(name, example)
+    ]
+    for param in params:
+        name = param.get("name", "")
+        if not _is_event_param(name) or name in _PUSH_EVENT_PARAMS:
+            continue
+        if "prefix" in str(param.get("doc") or param.get("description") or "").lower():
+            continue
+        value = example[name] if name in example else _source_literal(param.get("default"))
+        if isinstance(value, str) and value and value not in events:
+            events.append(value)
+    return events
+
+
 def usage_with_events(
     snippet: str,
     events: list[str],
@@ -533,14 +622,16 @@ def usage_with_events(
                         expr = expr.replace("self.component.", f"{owner}.")
                         lines.append(f"        {owner}.{key} = {expr}")
                 else:
-                    lines.append("        ...  # write to self.component; the re-render carries it")
+                    lines.append(
+                        f"        pass  # your app acts on {event!r}; no component state moves"
+                    )
         else:
             for event in others:
                 lines += [
                     "",
                     "    @event_handler()",
                     f"    def {event}(self, value=None, **kwargs):",
-                    "        ...  # write to self.component; the re-render carries it",
+                    f"        pass  # your app acts on {event!r}; no component state moves",
                 ]
     return "\n".join(lines) + sep + template_part
 
@@ -549,6 +640,24 @@ def split_usage(snippet: str) -> dict:
     """``{"view": …, "template": …}`` — the two files the snippet shows."""
     views_part, _, template_part = snippet.partition("\n\n\n# my_template.html\n")
     return {"view": views_part.replace("# views.py\n", "", 1), "template": template_part}
+
+
+def _py_literal(value: Any) -> str:
+    """``repr(value)``, but a value marked safe is written ``mark_safe(...)``.
+
+    Components HTML-escape string arguments that are not marked safe, so the
+    copied example has to carry the ``mark_safe`` call for markup it passes.
+    """
+    if isinstance(value, SafeData):
+        return f"mark_safe({str.__repr__(str(value))})"
+    if isinstance(value, list):
+        return "[" + ", ".join(_py_literal(v) for v in value) + "]"
+    if isinstance(value, tuple):
+        inner = ", ".join(_py_literal(v) for v in value)
+        return "(" + inner + ("," if len(value) == 1 else "") + ")"
+    if isinstance(value, dict):
+        return "{" + ", ".join(f"{k!r}: {_py_literal(v)}" for k, v in value.items()) + "}"
+    return repr(value)
 
 
 def _usage_snippet(
@@ -571,7 +680,7 @@ def _usage_snippet(
     # Show the arguments that produce the example's own output, not the
     # signature's defaults: `value=0, label=None` documents nothing a reader can
     # picture, and it is not what the preview above shows.
-    args = ", ".join(f"{k}={v!r}" for k, v in first.items() if not k.startswith("slot_"))
+    args = ", ".join(f"{k}={_py_literal(v)}" for k, v in first.items() if not k.startswith("slot_"))
     slot_args = [k for k in first if k.startswith("slot_")]
 
     if component_type == "template":
@@ -595,9 +704,11 @@ def _usage_snippet(
         if slot_args:
             lines.append("        # Slots contain trusted application markup, not user input.")
         for key, value in on_view.items():
-            lines.append(f"        self.{key} = {value!r}")
+            lines.append(f"        self.{key} = {_py_literal(value)}")
         if not on_view:
             lines.append("        pass")
+        if any("mark_safe(" in line for line in lines):
+            lines.insert(2, "from django.utils.safestring import mark_safe")
         lines += [
             "",
             "",
@@ -624,6 +735,10 @@ def _usage_snippet(
         "# views.py",
         "from djust import LiveView",
         import_line,
+    ]
+    if "mark_safe(" in args:
+        lines.append("from django.utils.safestring import mark_safe")
+    lines += [
         "",
         "",
         "class MyView(LiveView):",

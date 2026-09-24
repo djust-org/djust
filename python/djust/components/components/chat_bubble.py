@@ -4,6 +4,7 @@ import html
 from typing import Any, Dict, Optional
 
 from djust import Component
+from djust.components.utils import url_attr
 
 
 class ChatBubble(Component):
@@ -66,7 +67,7 @@ class ChatBubble(Component):
         name = html.escape(str(msg.get("name", "")))
         text = html.escape(str(msg.get("text", "")))
         time_str = html.escape(str(msg.get("time", "")))
-        avatar_src = html.escape(str(msg.get("avatar", "")))
+        avatar_src = url_attr(msg.get("avatar", ""), image=True)
         status = msg.get("status", "")
 
         side = "dj-bubble--user" if sender == "user" else "dj-bubble--other"

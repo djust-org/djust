@@ -1,6 +1,7 @@
 """ScrollArea component."""
 
 import html
+from django.utils.html import conditional_escape
 from djust import Component
 from typing import Any
 
@@ -43,5 +44,5 @@ class ScrollArea(Component):
         return (
             f'<div class="{cls}" role="region" aria-label="{e_label}" '
             f'style="max-height: {e_max}; overflow-y: auto;">'
-            f"{self.content}</div>"
+            f"{conditional_escape(self.content)}</div>"
         )

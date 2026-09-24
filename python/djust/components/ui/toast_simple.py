@@ -7,6 +7,8 @@ For interactive toasts with state, use ToastComponent (LiveComponent).
 """
 
 from ..base import Component
+
+from django.utils.html import conditional_escape
 from typing import Any
 
 
@@ -184,13 +186,13 @@ class Toast(Component):
             html += f'            <span class="me-2">{icon}</span>'
 
         if self.title:
-            html += f"            <strong>{self.title}</strong>"
+            html += f"            <strong>{conditional_escape(self.title)}</strong>"
 
         if self.title and self.message:
             html += "<br>"
 
         if self.message:
-            html += f"            {self.message}\n"
+            html += f"            {conditional_escape(self.message)}\n"
 
         html += "        </div>\n"
 
@@ -228,10 +230,10 @@ class Toast(Component):
         html += '    <div class="flex-1">\n'
 
         if self.title:
-            html += f'        <div class="font-semibold">{self.title}</div>\n'
+            html += f'        <div class="font-semibold">{conditional_escape(self.title)}</div>\n'
 
         if self.message:
-            html += f'        <div class="text-sm">{self.message}</div>\n'
+            html += f'        <div class="text-sm">{conditional_escape(self.message)}</div>\n'
 
         html += "    </div>\n"
 
@@ -255,7 +257,7 @@ class Toast(Component):
         }
         icon = icon_map.get(self.variant, "ℹ") if self.show_icon else ""
 
-        html = f'<div class="toast toast-{self.variant}" role="alert">\n'
+        html = f'<div class="toast toast-{conditional_escape(self.variant)}" role="alert">\n'
 
         if icon and self.show_icon:
             html += f'    <span class="toast-icon">{icon}</span>\n'
@@ -263,10 +265,12 @@ class Toast(Component):
         html += '    <div class="toast-content">\n'
 
         if self.title:
-            html += f'        <strong class="toast-title">{self.title}</strong>\n'
+            html += (
+                f'        <strong class="toast-title">{conditional_escape(self.title)}</strong>\n'
+            )
 
         if self.message:
-            html += f'        <div class="toast-message">{self.message}</div>\n'
+            html += f'        <div class="toast-message">{conditional_escape(self.message)}</div>\n'
 
         html += "    </div>\n"
 

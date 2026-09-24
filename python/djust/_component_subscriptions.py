@@ -200,10 +200,12 @@ def compile_subscriptions(owner: type) -> tuple[SubscriptionBinding, ...]:
     for cls in owner.__mro__:
         for name, member in vars(cls).items():
             effective.setdefault(name, member)
+            # Type checks only: a class attribute may be lazy (``SimpleLazyObject``
+            # proxies ``__class__``, so ``isinstance`` would evaluate it).
             function = (
-                member.__func__ if isinstance(member, (staticmethod, classmethod)) else member
+                member.__func__ if issubclass(type(member), (staticmethod, classmethod)) else member
             )
-            if not isinstance(function, types.FunctionType):
+            if not issubclass(type(function), types.FunctionType):
                 continue
             for subscription in function.__dict__.get(_MARKER, ()):
                 source = subscription.declaration

@@ -4,6 +4,7 @@ import html
 from typing import Any, List, Optional
 
 from djust import Component
+from djust.components.utils import url_attr
 
 
 class BreadcrumbDropdown(Component):
@@ -95,7 +96,7 @@ class BreadcrumbDropdown(Component):
                 label = html.escape(str(it.get("label", "")))
                 url = it.get("url", "")
                 if url:
-                    e_url = html.escape(str(url))
+                    e_url = url_attr(url)
                     dropdown_items.append(
                         f'<li class="dj-breadcrumb__dropdown-item">'
                         f'<a href="{e_url}">{label}</a></li>'
@@ -136,7 +137,7 @@ class BreadcrumbDropdown(Component):
         aria = ' aria-current="page"' if is_last else ""
 
         if url and not is_last:
-            e_url = html.escape(str(url))
+            e_url = url_attr(url)
             content = f'<a href="{e_url}" class="dj-breadcrumb__link">{label}</a>'
         else:
             content = f'<span class="dj-breadcrumb__current">{label}</span>'

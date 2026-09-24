@@ -258,6 +258,28 @@ pub fn splice_loop_placeholders(
     Ok(found)
 }
 
+/// Can a cached item's roots stand in for its `<dj-pc>` placeholder without
+/// changing the whitespace a full parse would keep (#2999)?
+///
+/// The parser keeps a whitespace run only when its nearest neighbour on BOTH
+/// sides is inline (text or an inline-level element). An item is parsed alone,
+/// so whitespace at its edges is dropped there, and in the reduced page the
+/// `dj-pc-*` sentinel is block-level, so whitespace next to it is dropped too.
+/// Both agree with the full parse exactly when the item's first and last roots
+/// are block-level elements: then every edge whitespace run has a block
+/// neighbour in the full parse as well. An inline, text or comment boundary
+/// root makes the result depend on the neighbours, so the splice is refused
+/// and `render_with_diff` falls back to a full parse.
+fn roots_are_whitespace_splice_safe(roots: &[VNode]) -> bool {
+    let block_element = |n: &VNode| {
+        !n.is_text() && !n.is_comment() && !djust_core::html_whitespace::is_inline_level_tag(&n.tag)
+    };
+    match (roots.first(), roots.last()) {
+        (Some(first), Some(last)) => block_element(first) && block_element(last),
+        _ => false,
+    }
+}
+
 /// Recurse into `node`'s children, replacing `<dj-pc>` placeholder elements with
 /// their cached subtree roots. A placeholder can ONLY appear as a child (the
 /// loop emits it among sibling items), never as the diff root, so we operate on
@@ -288,6 +310,12 @@ fn splice_children_placeholders(
             let roots = subtrees
                 .get(&hash)
                 .ok_or_else(|| format!("no cached parsed subtree for hash {hash:x}"))?;
+            if !roots_are_whitespace_splice_safe(roots) {
+                return Err(format!(
+                    "cached subtree for hash {hash:x} has an inline, text or comment \
+                     boundary root; whitespace around it depends on its neighbours (#2999)"
+                ));
+            }
             for root in roots {
                 new_children.push(root.clone());
             }
@@ -475,9 +503,9 @@ impl VNode {
 
     /// Internal serialization with raw-text context tracking.
     ///
-    /// `in_raw_text` is true when the parent element is `<script>` or
-    /// `<style>`, whose text content must NOT be HTML-escaped per the
-    /// HTML spec (they are "raw text elements").
+    /// `in_raw_text` is true when the parent element is a raw-text element
+    /// (`djust_core::raw_text::RAW_TEXT_ELEMENTS`: `<script>`, `<style>`,
+    /// `<noscript>`, …), whose text content must NOT be HTML-escaped.
     fn _to_html(&self, in_raw_text: bool) -> String {
         let mut html = String::new();
         self.write_html(&mut html, in_raw_text);
@@ -521,8 +549,12 @@ impl VNode {
         ];
         let is_void = void_elements.contains(&self.tag.as_str());
 
-        // Raw text elements whose children must not be HTML-escaped
-        let is_raw_text = matches!(self.tag.as_str(), "script" | "style");
+        // Raw text elements whose children must not be HTML-escaped: the
+        // parser kept their text verbatim, so escaping it again would turn
+        // `&amp;` into `&amp;amp;` (#613 for script/style; #3045 for
+        // noscript, xmp, iframe, noembed, noframes and plaintext). One list,
+        // shared with the djust_live text fast path.
+        let is_raw_text = djust_core::raw_text::is_raw_text_element(&self.tag);
 
         // Opening tag
         html.push('<');
@@ -1256,12 +1288,21 @@ fn apply_text_replacements_inplace(vdom: &mut VNode, replacements: &[TextReplace
         }
     }
 
-    // Apply replacements to each affected text node
+    // Compute every node's new text FIRST and only then write them, so a
+    // rejection never leaves the tree half-updated (the caller falls back to a
+    // full parse against this same tree).
+    let mut updates: Vec<(*mut VNode, String)> = Vec::with_capacity(node_replacements.len());
     for (node_idx, mut reps) in node_replacements {
         let (esc_start, _) = escaped_offsets[node_idx];
         let (ptr, _) = text_nodes[node_idx];
-        let node = unsafe { &mut *ptr };
+        let node = unsafe { &*ptr };
         let current_text = node.text.as_deref().unwrap_or("");
+        // #2999: whether a whitespace-only text node exists at all depends on
+        // its neighbours (kept as `" "` between inline siblings, else
+        // dropped) — only the full parse can decide that.
+        if djust_core::html_whitespace::is_html_whitespace_only(current_text) {
+            return false;
+        }
         let mut current_escaped = html_escape(current_text);
 
         reps.sort_by_key(|b| std::cmp::Reverse(b.text_byte_offset));
@@ -1283,7 +1324,15 @@ fn apply_text_replacements_inplace(vdom: &mut VNode, replacements: &[TextReplace
             );
         }
 
-        node.text = Some(html_unescape(&current_escaped));
+        let new_text = html_unescape(&current_escaped);
+        if djust_core::html_whitespace::is_html_whitespace_only(&new_text) {
+            return false;
+        }
+        updates.push((ptr, new_text));
+    }
+    for (ptr, new_text) in updates {
+        let node = unsafe { &mut *ptr };
+        node.text = Some(new_text);
         node.cached_html = None;
     }
 
@@ -1500,6 +1549,36 @@ mod tests {
                 "<script>x < y && z > 0</script><br />",
                 "<aside data-d=\"keep\">&amp;cached</aside></main>"
             )
+        );
+    }
+
+    #[test]
+    fn raw_text_elements_serialize_their_text_verbatim_3045() {
+        // The parser keeps these bodies raw (scripting enabled), so the text
+        // node already holds `&amp;`; escaping it again gave `&amp;amp;`.
+        for tag in [
+            "noscript", "xmp", "iframe", "noembed", "noframes", "style", "script",
+        ] {
+            let node = VNode::element(tag).with_child(VNode::text("Tom &amp; Jerry <b>"));
+            assert_eq!(
+                node.to_html(),
+                format!("<{tag}>Tom &amp; Jerry <b></{tag}>"),
+                "{tag}"
+            );
+        }
+        // Ordinary and RCDATA elements still escape.
+        let node = VNode::element("textarea").with_child(VNode::text("a & b"));
+        assert_eq!(node.to_html(), "<textarea>a &amp; b</textarea>");
+    }
+
+    #[test]
+    fn noscript_round_trips_through_the_parser_3045() {
+        let html = "<div dj-root><noscript>Tom &amp; Jerry</noscript></div>";
+        let vnode = crate::parser::parse_html(html).unwrap();
+        assert!(
+            vnode.to_html().contains(">Tom &amp; Jerry</noscript>"),
+            "{}",
+            vnode.to_html()
         );
     }
 

@@ -563,6 +563,26 @@ pub fn item_html_is_foster_safe(item_html: &str) -> bool {
     !is_foster_unsafe_tag(&first_tag)
 }
 
+/// Is this item PARSE-CACHE-eligible? Foster-safe (above) AND its first
+/// element is block-level (#2999).
+///
+/// Whitespace between two inline-level siblings is a kept `" "` node in the
+/// VDOM, so the whitespace at an item's edges depends on the item's
+/// neighbours — which a cached, separately-parsed subtree cannot see. An
+/// item that starts with an inline-level element (`<span>`, `<a>`, …) would
+/// be refused at splice time (`djust_vdom::splice_loop_placeholders`, which
+/// also checks the LAST root) and cost a wasted reduced parse, so it is not
+/// offered to the parse cache at all. Its render-cache entry is unaffected.
+pub fn item_html_is_parse_cache_eligible(item_html: &str) -> bool {
+    if !item_html_is_foster_safe(item_html) {
+        return false;
+    }
+    match first_element_tag(item_html) {
+        Some(tag) => !djust_core::html_whitespace::is_inline_level_tag(&tag),
+        None => false,
+    }
+}
+
 /// Does `html` contain the literal placeholder-tag prefix `<dj-pc` (case-
 /// insensitive on the tag, since html5ever lowercases)? Used to fast-reject
 /// parse-cache eligibility for items whose content embeds a literal sentinel.

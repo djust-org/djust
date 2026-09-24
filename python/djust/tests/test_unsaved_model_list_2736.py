@@ -142,11 +142,16 @@ def template_dir():
 
 def _repoint_template_engines() -> None:
     from django.template import engines
+    from django.template.engine import Engine
 
     from djust.utils import _get_template_dirs_cached
 
     engines._engines = {}
     engines.__dict__.pop("templates", None)
+    # Django's own ``reset_template_engines`` clears this too. Without it,
+    # ``Engine.get_default()`` keeps returning an engine that ``engines.all()``
+    # no longer holds, for every later test on the worker (#2991).
+    Engine.get_default.cache_clear()
     _get_template_dirs_cached.cache_clear()
 
 

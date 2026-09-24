@@ -6,6 +6,7 @@ Provides buttons with multiple variants, sizes, and states.
 
 from typing import Dict, Any
 from ..base import LiveComponent
+from django.utils.html import conditional_escape
 from django.utils.safestring import SafeString, mark_safe
 
 
@@ -125,18 +126,18 @@ class ButtonComponent(LiveComponent):
         disabled_attr = " disabled" if self.disabled else ""
 
         # Click handler
-        click_attr = f' dj-click="{self.on_click}"' if self.on_click else ""
+        click_attr = f' dj-click="{conditional_escape(self.on_click)}"' if self.on_click else ""
 
         # Icon and label
         if self.icon:
             if self.icon_position == "left":
-                content = f"{self.icon} {self.label}"
+                content = f"{conditional_escape(self.icon)} {conditional_escape(self.label)}"
             else:
-                content = f"{self.label} {self.icon}"
+                content = f"{conditional_escape(self.label)} {conditional_escape(self.icon)}"
         else:
-            content = self.label
+            content = conditional_escape(self.label)
 
-        return f'<button type="{self.button_type}" class="{classes}" id="{self.component_id}"{disabled_attr}{click_attr}>{content}</button>'
+        return f'<button type="{conditional_escape(self.button_type)}" class="{classes}" id="{conditional_escape(self.component_id)}"{disabled_attr}{click_attr}>{content}</button>'
 
     def _render_tailwind(self) -> str:
         """Render Tailwind CSS button"""
@@ -191,19 +192,19 @@ class ButtonComponent(LiveComponent):
         disabled_attr = " disabled" if self.disabled else ""
 
         # Click handler
-        click_attr = f' dj-click="{self.on_click}"' if self.on_click else ""
+        click_attr = f' dj-click="{conditional_escape(self.on_click)}"' if self.on_click else ""
 
         # Icon and label
         if self.icon:
             icon_spacing = "space-x-2" if self.icon else ""
             if self.icon_position == "left":
-                content = f'<span class="inline-flex items-center {icon_spacing}">{self.icon}<span>{self.label}</span></span>'
+                content = f'<span class="inline-flex items-center {icon_spacing}">{conditional_escape(self.icon)}<span>{conditional_escape(self.label)}</span></span>'
             else:
-                content = f'<span class="inline-flex items-center {icon_spacing}"><span>{self.label}</span>{self.icon}</span>'
+                content = f'<span class="inline-flex items-center {icon_spacing}"><span>{conditional_escape(self.label)}</span>{conditional_escape(self.icon)}</span>'
         else:
-            content = self.label
+            content = conditional_escape(self.label)
 
-        return f'<button type="{self.button_type}" class="{classes}" id="{self.component_id}"{disabled_attr}{click_attr}>{content}</button>'
+        return f'<button type="{conditional_escape(self.button_type)}" class="{classes}" id="{conditional_escape(self.component_id)}"{disabled_attr}{click_attr}>{content}</button>'
 
     def _render_plain(self) -> str:
         """Render plain HTML button"""
@@ -211,18 +212,18 @@ class ButtonComponent(LiveComponent):
         disabled_attr = " disabled" if self.disabled else ""
 
         # Click handler
-        click_attr = f' dj-click="{self.on_click}"' if self.on_click else ""
+        click_attr = f' dj-click="{conditional_escape(self.on_click)}"' if self.on_click else ""
 
         # Classes
-        classes = f"button button-{self.variant} button-{self.size}"
+        classes = f"button button-{conditional_escape(self.variant)} button-{conditional_escape(self.size)}"
 
         # Icon and label
         if self.icon:
             if self.icon_position == "left":
-                content = f"{self.icon} {self.label}"
+                content = f"{conditional_escape(self.icon)} {conditional_escape(self.label)}"
             else:
-                content = f"{self.label} {self.icon}"
+                content = f"{conditional_escape(self.label)} {conditional_escape(self.icon)}"
         else:
-            content = self.label
+            content = conditional_escape(self.label)
 
-        return f'<button type="{self.button_type}" class="{classes}" id="{self.component_id}"{disabled_attr}{click_attr}>{content}</button>'
+        return f'<button type="{conditional_escape(self.button_type)}" class="{classes}" id="{conditional_escape(self.component_id)}"{disabled_attr}{click_attr}>{content}</button>'

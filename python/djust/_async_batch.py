@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import uuid4
 
-from .mixins.async_work import track_async_task
+from .mixins.async_work import track_async_task, track_running_async_task
 
 logger = logging.getLogger(__name__)
 
@@ -54,10 +54,11 @@ class AsyncBatch:
     def dispatch(self, transport: Any, runner: Callable[..., Awaitable[None]]) -> None:
         if not self.queued:
             return
-        tasks = {
-            asyncio.ensure_future(runner(name, callback, args, kwargs))
+        named = [
+            (name, asyncio.ensure_future(runner(name, callback, args, kwargs)))
             for name, (callback, args, kwargs) in self.queued
-        }
+        ]
+        tasks = {task for _name, task in named}
         self.queued = []
 
         def settled(task: asyncio.Future[None]) -> None:
@@ -69,6 +70,8 @@ class AsyncBatch:
                 # removed. No rendering or state mutation occurs here.
                 self._finish(transport)
 
-        for task in tuple(tasks):
+        for name, task in named:
             track_async_task(self.owner, task)
+            # cancel_async_all() marks running names cancelled (#2969).
+            track_running_async_task(self.owner, name, task)
             task.add_done_callback(settled)

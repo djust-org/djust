@@ -5,17 +5,12 @@
 // LiveView. No re-render, no assigns diff — pure request/response. Rejects
 // with an Error carrying {code, status, details} on non-2xx responses.
 //
-// CSRF: reads the hidden input (preferred) then falls back to the cookie.
-// Mirrors the resolver in src/11-event-handler.js for consistency.
+// CSRF: window.djust.csrfToken() (00-namespace.js), shared with the
+// HTTP event fallback in src/11-event-handler.js.
 
 (function () {
     function _csrf() {
-        try {
-            const input = document.querySelector('[name=csrfmiddlewaretoken]');
-            if (input && input.value) return input.value;
-        } catch (_) { /* SSR / detached DOM */ }
-        const m = (document.cookie || '').match(/(?:^|;\s*)csrftoken=([^;]+)/);
-        return m ? m[1] : '';
+        return window.djust.csrfToken();
     }
 
     async function call(viewSlug, funcName, params) {

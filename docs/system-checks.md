@@ -21,7 +21,9 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C013 | Config | Warning | Stale collectstatic copy of client.min.js |
 | C014 | Config | Warning | Multi-tenant ASGI without TENANT_LIMIT_SET_CALLS |
 | C015 | Config | Error | Unknown adapter name in DJUST_CONFIG['extensions'] |
-| C016 | Config | Warning | DjangoTemplates listed before DjustTemplateBackend, or no DjangoTemplates fallback for admin |
+| C016 | Config | Warning | DjangoTemplates listed before DjustTemplateBackend, no DjangoTemplates fallback for admin, or a djust-first entry lacking the admin's context processors |
+| C018 | Config | Warning | Deprecated LIVEVIEW_CONFIG key set that djust never reads (removed in 1.3) |
+| C019 | Config | Warning | Unknown DJUST_CONFIG['PRESENCE_BACKEND'] value (presence falls back to in-process memory) |
 | V001 | LiveView | Warning | LiveView missing template_name attribute |
 | V002 | LiveView | Info | LiveView missing mount() method |
 | V003 | LiveView | Error | mount() has wrong signature |
@@ -33,6 +35,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V012 | LiveView | Warning | Sticky child template declares its own dj-view (nested duplicate binding) |
 | V013 | LiveView | Warning | HTTP-only dispatch()/get()/post() override never runs on a WebSocket mount |
 | V014 | LiveView | Warning | Time-travel-enabled view has PII-looking model/form fields not in `time_travel_excluded_fields` |
+| V015 | LiveView | Warning | LIVEVIEW_ALLOWED_MODULES rejects a djust LiveView the URLconf routes (add `"djust"`) |
 | S001 | Security | Error | mark_safe() with f-string (XSS risk) |
 | S002 | Security | Warning | @csrf_exempt without justification comment |
 | S003 | Security | Warning | Bare except: pass swallows all exceptions |
@@ -215,14 +218,13 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 
 ### V004 — Public method looks like event handler but missing @event_handler
 - **Severity**: Info
-- **Method**: AST (method name heuristic — `handle_*` prefix and similar)
+- **Method**: Class inspection (method name heuristic — `on_*`, `toggle_*`, `submit_*` and similar prefixes)
 - **What it detects**: Public methods whose names match the event-handler naming pattern but lack the `@event_handler` decorator
 - **Suppression** (any of):
   - `abstract = True` class attribute on an abstract base
   - `DJUST_CONFIG = {"suppress_checks": ["V004"]}` — global (fixed in #1607)
   - `SILENCED_SYSTEM_CHECKS = ["djust.V004"]`
-  - `# noqa: V004` on the method
-- **False positives**: `handle_params()`, `handle_disconnect()`, `handle_connect()`, and `handle_event()` are djust lifecycle methods, not event handlers — the `handle_*` heuristic fires on them incorrectly
+- **Not flagged**: `handle_*` methods. `server_push` may call an undecorated `handle_*` method, and leaving it undecorated is how a handler is made callable by server push but not by browsers — adding `@event_handler` or a `_` prefix would break it (#3002). The framework's own lifecycle names (`mount`, `handle_params`, `handle_info`, `handle_tick`, …) were already exempt.
 
 ### V005 — Module not in LIVEVIEW_ALLOWED_MODULES
 - **Severity**: Warning
@@ -266,7 +268,7 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 ### V012 — Sticky child declares its own `dj-view`
 - **Severity**: Warning
 - **Method**: Runtime (walks `LiveView` subclasses with `sticky = True`, scans each one's template root)
-- **What it detects**: A sticky-child view (`sticky = True`, embedded via `{% live_render ... sticky=True %}`) whose own template root carries a `dj-view` attribute. The `live_render` wrapper already emits `<div dj-view dj-sticky-view="<id>" ...>`, so the child's own `dj-view` nests a **duplicate** binding inside the wrapper — the child's client-side mount breaks and its events silently don't bind.
+- **What it detects**: A sticky-child view (`sticky = True`, embedded via `{% live_render ... sticky=True %}`) whose own template root carries a `dj-view` attribute (on any element, not only a `<div>`, since #2892). The `live_render` wrapper already emits `<div dj-view dj-sticky-view="<id>" ...>`, so the child's own `dj-view` nests a **duplicate** binding inside the wrapper — the child's client-side mount breaks and its events silently don't bind.
 - **Why it's subtle**: normal page views *require* `dj-view="<path>"` on their root to be mountable, so authors (and code-generating agents) reasonably add it everywhere — including sticky children, where it's wrong.
 - **Fix**: remove `dj-view` from the sticky child's root element; the wrapper provides it. See the [sticky LiveViews guide](website/guides/sticky-liveviews.md#v012-system-check).
 - **False positives**: none on normal page views — only `sticky = True` views are inspected. A `dj-view` appearing only inside a `{% comment %}` block (e.g. documenting the wrapper) is ignored (comments are stripped before scanning).

@@ -124,13 +124,24 @@ class TestStripCommentsAndWhitespace:
         assert "</textarea></div>" in result
 
     def test_whitespace_between_sibling_tags_collapsed(self, mixin):
-        """Whitespace between a sibling tag and a <textarea> is STRIPPED (#1737)."""
+        """Whitespace between a BLOCK sibling and a <textarea> is STRIPPED (#1737)."""
+        html = "<div>a</div>   \n   <textarea>keep\nme</textarea>"
+        result = mixin._strip_comments_and_whitespace(html)
+        assert "keep\nme" in result
+        # A <textarea> boundary is a tag boundary — whitespace next to a
+        # block-level sibling collapses to nothing, matching the Rust
+        # render_with_diff() pass (#1737).
+        assert "</div><textarea>" in result
+
+    def test_whitespace_between_inline_sibling_and_textarea_kept(self, mixin):
+        """#2999: ``<span>`` and ``<textarea>`` are both inline-level, so the
+        whitespace between them is a space the reader sees; the Rust parser
+        keeps it as one ``" "`` node and so does the normalizer. (This test's
+        predecessor asserted ``</span><textarea>`` — the #2999 bug.)"""
         html = "<span>a</span>   \n   <textarea>keep\nme</textarea>"
         result = mixin._strip_comments_and_whitespace(html)
         assert "keep\nme" in result
-        # A <textarea> boundary is a tag boundary — whitespace collapses to
-        # nothing, matching the Rust render_with_diff() pass (#1737).
-        assert "</span><textarea>" in result
+        assert "</span> <textarea>" in result
 
     def test_textarea_case_insensitive(self, mixin):
         html = "<TEXTAREA>hello\nworld</TEXTAREA>"

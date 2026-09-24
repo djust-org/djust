@@ -1,0 +1,23 @@
+# cargo-audit configuration — read automatically by `cargo audit` run from the
+# repository root (locally and in the "Rust Security Scan" job of
+# .github/workflows/pre-release-security-audit.yml, which gates publishing).
+#
+# Policy:
+#   - vulnerabilities    always fail (cargo-audit's default);
+#   - unsound advisories fail too (`deny` below) unless allowlisted here;
+#   - unmaintained / yanked stay warnings (reported, not blocking).
+#
+# Allowlist: add an advisory ID to `ignore` only with a comment on the same
+# line giving the affected crate + version, why it is accepted, and a
+# review-by date. Remove it as soon as Cargo.lock carries a fixed version.
+
+[advisories]
+ignore = [
+    # (none) — RUSTSEC-2026-0190 (anyhow unsound) was fixed by locking
+    # anyhow 1.0.104. RUSTSEC-2025-0141 (bincode unmaintained) is a warning
+    # under this policy, so it needs no entry.
+]
+
+[output]
+deny = ["unsound"]
+quiet = false

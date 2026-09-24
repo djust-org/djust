@@ -118,6 +118,53 @@ async def run_async_callback(
     return result
 
 
+def track_running_async_task(view: Any, task_name: str, future: "asyncio.Future[Any]") -> None:
+    """Record ``task_name`` as running on ``view`` until ``future`` finishes.
+
+    ``cancel_async_all()`` reads ``_async_running`` to know which names to
+    mark cancelled (#2969). Both background-work dispatchers (the runtime's
+    and the WS consumer's) call this for every task they spawn.
+    """
+    running = getattr(view, "_async_running", None)
+    if running is None:
+        running = set()
+        try:
+            view._async_running = running
+        except AttributeError:  # pragma: no cover — slotted test doubles
+            return
+    running.add(task_name)
+
+    def _done(_fut: "asyncio.Future[Any]") -> None:
+        running.discard(task_name)
+        # A cancel the task never consumed (it arrived while the task waited
+        # for the render lock, or the callback raised) must not outlive it:
+        # left in place it would silently skip the next task started under
+        # the same name.
+        cancelled = getattr(view, "_async_cancelled", None)
+        if cancelled:
+            cancelled.discard(task_name)
+
+    future.add_done_callback(_done)
+
+
+def has_pending_async_work(view: Any) -> bool:
+    """True when ``view`` has background work queued for after this turn.
+
+    Drives the ``async_pending`` wire flag that keeps the client's loading
+    state (``dj-loading``, ``dj-disable-with``, ``dj-lock``) up until the
+    work's ``source="async"`` result frame arrives. ``start_async`` (and
+    ``@background``, which calls it) queues into ``_async_tasks``; the legacy
+    single-task ``_async_pending`` tuple is still honoured. Reading only the
+    legacy field left the flag permanently off (#2963). Every site that sets
+    the flag must call this, so the transports cannot drift.
+    """
+    if view is None:
+        return False
+    return bool(getattr(view, "_async_tasks", None)) or (
+        getattr(view, "_async_pending", None) is not None
+    )
+
+
 class AsyncWorkMixin:
     """
     Mixin that provides start_async() for running slow work after
@@ -234,16 +281,37 @@ class AsyncWorkMixin:
         self._async_cancelled.add(name)
 
     def cancel_async_all(self) -> None:
-        """Drop queued work and request cancellation of dispatched callbacks.
+        """
+        Cancel every scheduled and running ``start_async`` task on this view.
 
-        Coroutine cancellation is cooperative. Already-running synchronous
-        callbacks cannot be interrupted; their awaiting task is cancelled so
-        their completion handler/render is suppressed. This does not roll back
-        application side effects or cancel independently created application tasks.
+        Tasks that have not started are dropped (including a legacy
+        ``_async_pending`` task). Dispatched callbacks are cancelled
+        cooperatively: the work generation advances, so a callback that
+        completes afterwards cannot reach its completion handler or render,
+        and each dispatched task is cancelled on its owning loop. Names that are
+        actually running are also marked cancelled, so their re-render is
+        skipped when they finish; a task started later under the same name is
+        not cancelled in advance.
+
+        Like :meth:`cancel_async`, this cannot interrupt a synchronous callback
+        mid-run, does not roll back application side effects, and does not
+        cancel tasks the application created itself.
+
+        The default ``StickyMixin._on_sticky_unmount()`` calls this when a
+        sticky child is discarded (#2969).
         """
         self._async_work_generation = getattr(self, "_async_work_generation", 0) + 1
-        self._async_tasks = {}
+        tasks = getattr(self, "_async_tasks", None)
+        if tasks:
+            tasks.clear()
+        else:
+            self._async_tasks = {}
         self._async_pending = None
+        running = getattr(self, "_async_running", None)
+        if running:
+            if not hasattr(self, "_async_cancelled"):
+                self._async_cancelled = set()
+            self._async_cancelled.update(running)
         handles = getattr(self, "_async_task_handles", None)
         if handles:
             pending = tuple(handles)

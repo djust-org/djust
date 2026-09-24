@@ -82,7 +82,7 @@ impl RustProgress {
             r#"<div class="progress"{}><div class="{} bg-{}" role="progressbar" style="width: {:.1}%" aria-valuenow="{}" aria-valuemin="{}" aria-valuemax="{}">{}</div></div>"#,
             outer_style,
             bar_class_str,
-            self.variant,
+            html_escape(&self.variant),
             percentage,
             self.value,
             self.min_value,
@@ -103,4 +103,39 @@ fn html_escape(s: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&#x27;")
+}
+
+#[cfg(test)]
+mod escaping_tests {
+    use super::*;
+
+    #[test]
+    fn variant_and_label_are_html_escaped() {
+        let html = RustProgress::new(
+            40.0,
+            "x\" onmouseover=\"y",
+            false,
+            false,
+            false,
+            Some("<img src=x onerror=alert(1)>".to_string()),
+            None,
+            0.0,
+            100.0,
+        )
+        .render();
+        assert!(!html.contains("x\" onmouseover"));
+        assert!(html.contains("bg-x&quot; onmouseover=&quot;y"));
+        assert!(!html.contains("<img"));
+        assert!(html.contains("&lt;img"));
+    }
+
+    #[test]
+    fn plain_output_unchanged() {
+        let html =
+            RustProgress::new(50.0, "success", false, false, true, None, None, 0.0, 100.0).render();
+        assert_eq!(
+            html,
+            r#"<div class="progress"><div class="progress-bar bg-success" role="progressbar" style="width: 50.0%" aria-valuenow="50" aria-valuemin="0" aria-valuemax="100">50%</div></div>"#
+        );
+    }
 }

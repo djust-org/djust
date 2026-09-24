@@ -550,6 +550,7 @@ _SIZE_CLAIM_FILES = [
     "docs/TEMPLATE_BACKEND.md",
     "docs/guides/sw-enhancements.md",
     "docs/state-management/IMPLEMENTATION_PHASE2.md",
+    "docs/state-management/STATE_MANAGEMENT_TUTORIAL.md",
     "docs/website/core-concepts/templates.md",
     "docs/website/getting-started/core-concepts.md",
     "docs/website/getting-started/first-liveview.md",
