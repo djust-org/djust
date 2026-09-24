@@ -103,11 +103,11 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 | Priority | Task | Milestone |
 |---|---|---|
-| **P1** | #2956 — `is_dirty` / `changed_fields` never see `state()` fields | v1.2.1 |
-| **P1** | #2912 — Dirty baseline never sees a class-level component's state | v1.2.1 |
-| **P1** | #2896 — Signed back-navigation snapshot captures `__components__` but `_restore_snapshot` never applies it | v1.2.1 |
-| **P1** | #2959 — Legacy views save `state()` backing slots and framework state in the private session | v1.2.1 |
-| **P1** | #2974 — `FormMixin.reset_form` is not an `@event_handler` and is undone by `_sync_form_data` | v1.2.1 |
+| ~~**P1**~~ | ~~#2956 — `is_dirty` / `changed_fields` never see `state()` fields~~ ✅ (#3042) | v1.2.1 |
+| ~~**P1**~~ | ~~#2912 — Dirty baseline never sees a class-level component's state~~ ✅ (#3042) | v1.2.1 |
+| ~~**P1**~~ | ~~#2896 — Signed back-navigation snapshot captures `__components__` but `_restore_snapshot` never applies it~~ ✅ (#3042) | v1.2.1 |
+| ~~**P1**~~ | ~~#2959 — Legacy views save `state()` backing slots and framework state in the private session~~ ✅ (#3042) | v1.2.1 |
+| ~~**P1**~~ | ~~#2974 — `FormMixin.reset_form` is not an `@event_handler` and is undone by `_sync_form_data`~~ ✅ (#3042) | v1.2.1 |
 
 ### v1.2.1-8 — VDOM diff correctness (after #3009) (drain bucket → ships in 1.2.1)
 
@@ -115,9 +115,9 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 | Priority | Task | Milestone |
 |---|---|---|
-| **P1** | #2997 — Keyed list (`dj-key`) out of order after filter-to-subset then restore (verify against #3009; regression test) | v1.2.1 |
-| **P1** | #2898 — VDOM diff double-escapes a SafeString value whose first render carried no HTML entity | v1.2.1 |
-| **P1** | #3012 — Text patches whose path crosses whitespace inside `<code>`/`<pre>` fail with 'node not found' | v1.2.1 |
+| ~~**P1**~~ | ~~#2997 — Keyed list (`dj-key`) out of order after filter-to-subset then restore (verify against #3009; regression test)~~ ✅ (#3042) | v1.2.1 |
+| ~~**P1**~~ | ~~#2898 — VDOM diff double-escapes a SafeString value whose first render carried no HTML entity~~ ✅ (#3042) | v1.2.1 |
+| ~~**P1**~~ | ~~#3012 — Text patches whose path crosses whitespace inside `<code>`/`<pre>` fail with 'node not found'~~ ✅ (#3042) | v1.2.1 |
 
 ### v1.2.1-9 — Rust template renderer gaps (drain bucket → ships in 1.2.1)
 
@@ -125,9 +125,9 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 | Priority | Task | Milestone |
 |---|---|---|
-| **P1** | #2890 — `{% verbatim %}` inside a `{% block %}` breaks the LiveView render path | v1.2.1 |
-| **P1** | #2958 — Rust renderer has no handler for `dj_activity`, `colocated_hook`, `live_form`/`live_field`/`live_errors` | v1.2.1 |
-| **P1** | #2918 — Bridged tags under an armed `block.super` run the handler 60× vs Django's 12× (may slip to 1.3 if invasive) | v1.2.1 |
+| ~~**P1**~~ | ~~#2890 — `{% verbatim %}` inside a `{% block %}` breaks the LiveView render path~~ ✅ (#3042) | v1.2.1 |
+| ~~**P1**~~ | ~~#2958 — Rust renderer has no handler for `dj_activity`, `colocated_hook`, `live_form`/`live_field`/`live_errors`~~ ✅ (#3042) | v1.2.1 |
+| ~~**P1**~~ | ~~#2918 — Bridged tags under an armed `block.super` run the handler 60× vs Django's 12× (may slip to 1.3 if invasive)~~ → 1.3 (memoising diverges from Django; lazy `block` object needed; design on #2918) | v1.2.1 |
 
 ### v1.2.1-10 — Client JS behaviour (drain bucket → ships in 1.2.1)
 

@@ -395,6 +395,11 @@ issue or be explicitly closed with a reason.
 | 353 | `dj-track-static` deploy detection needs a mount-frame manifest check (a wire addition) | PR #3039 | #2966 | Open | 1.3. A page re-fetch was tried and rejected: a GET re-runs the HTTP mount and overwrites session state |
 | 354 | Flaky `presenter_reverse` crossing assertion in `test_model_backed_render_2532` (`302 < 302`) | PR #3047 | #3048 | Open | pattern: flaky-test. A stale thread-local `in_rust_render` flag is the likely cause; passed on rerun |
 | 355 | Dependabot #157: autobahn 24.4.2 stays in `uv.lock` for Python 3.10 (no patched release supports 3.10) | PR #3047 | Dependabot #157 | Open | Owner decision: dismiss as tolerable risk (daphne never enables permessage-deflate), or clear it when 3.10 support is dropped |
+| 356 | `{% live_form %}` / `{% live_field %}` / `{% live_errors %}` render their markup HTML-escaped on both engines (plain `str` returned to a `simple_tag`) | PR #3042 | #3043 | Open | Needs `SafeString` + `format_html` and a security pass: error messages can echo input |
+| 357 | `live_input`, `djust_skeleton`, `djust_track_static` have no Rust handler (same class as #2958) | PR #3042 | #3044 | Open | pattern: parallel-path-drift. Candidates for `_DJUST_TAGS_BRIDGED`; check `djust_skeleton`'s `render_context` dedupe first |
+| 358 | VDOM `write_html` escapes text inside raw-text elements other than script/style (`noscript`, `xmp`, …) | PR #3042 | #3045 | Open | pattern: parallel-path-drift. Share one raw-text table between the parser, the serializer and the #2898 fast paths |
+| 359 | Hardening: snapshot/private-state restore can shadow component methods; replay window now covers component state | PR #3042 | #3046 | Open | Security Check IMPROVEMENT notes; not exploitable today (inputs are signed or server-sourced) |
+| 360 | Bridged tags under an armed `block.super` run the handler 60× vs Django's 12× | PR #3042 | #2918 | Open | 1.3. Memoising diverges on side-effecting parents; the lazy `block` object across the Rust→Python boundary is the likely fix |
 
 ## Retro backfill — 14 un-retro'd drain buckets (v1.1.0-9 … v1.2.0-5)
 
@@ -619,6 +624,74 @@ None in this batch.
 ## v1.2.1-13 — Scaffolding, CLI, config and checks (PR #3047)
 
 Shipped in the security hygiene + scaffolding batch with v1.2.1-4, one commit per bucket. The retro, review stats and open items are in the v1.2.1-4 entry above.
+
+## v1.2.1-7 — state and rendering batch: v1.2.1-7, -8 and -9 (PR #3042)
+
+**Date**: 2026-09-24
+**Scope**: Three drain buckets in one PR, one commit per bucket, squash-merged as `8bb04dacb`.
+- v1.2.1-7 (LiveView state):
+  - #2956: dirty tracking sees `state()` fields.
+  - #2912: dirty tracking sees class-level component state.
+  - #2896: the signed snapshot restores `__components__` through one helper shared with time-travel.
+  - #2959: public `state()` slots and `_reactive_state` leave the private session; a model-holding slot stays.
+  - #2974: `reset_form` is an `@event_handler` and survives `form_valid`.
+- v1.2.1-8 (VDOM):
+  - #2898: the text fast paths send decoded text.
+  - #3012: the client counts whitespace directly inside `pre`/`code`/`textarea`, as `build_children` does.
+  - #2997: a regression fixture; it was already fixed by #3009.
+- v1.2.1-9 (Rust renderer):
+  - #2890: `{% verbatim %}` inside an extended block.
+  - #2958: five `live_tags` tags bridge through Django's nodes in root templates.
+  - #2918 moved to 1.3.
+
+**Tests at close**:
+- `tests/unit/test_view_state_v1_2_1_7.py`
+- `tests/js/vdom_correctness_v1_2_1_8.test.js`, with three new real-patch fixtures from `scripts/gen_vdom_diff_fixtures.py`
+- `python/djust/tests/test_rust_renderer_v1_2_1_9.py`
+- Rust cases in `fast_path_flag_tests` (`crates/djust_live/src/lib.rs`) and `inheritance.rs`
+
+Targeted runs: pytest 13,116, vitest 385, `make test-rust` 2,529. CI green at the merge head. Retro: https://github.com/djust-org/djust/pull/3042#issuecomment-5808112085
+
+### What We Learned
+
+**1. Test a "now works in X" fix through X.** The first #2958 tests handed `view` to a bare `RustLiveView` context, but a root LiveView's Rust context cannot carry the view. So the form tags printed their "no as_live()" comment in every real page (Code Review 🟡). The next test checked `"id_name" in html`, which escaped markup also passes (Re-Review). The shipped test renders a real `FormMixin` view through `render_with_diff` and compares each section with the Django engine's render of the same view.
+
+**2. A fast path that re-implements the parser must use the parser's table.** The first #2898 fix left only `script`/`style` bodies undecoded. html5ever also keeps `noscript` (scripting is on), `xmp`, `iframe`, `noembed`, `noframes` and `plaintext` as raw text, and under `svg`/`math` the same names decode. Self-Review proved the gap against `diff_html` (🔴). The fast path now falls back to the full parse under foreign content.
+
+**3. "The other path carries it" needs checking value by value.** #2959's precondition checked that the public restore sets `state()` through the descriptor. It did not check that the public path keeps every value the private one does. A Django model is flattened to a dict in the public state, but the private path re-hydrates it (#1994), so a model-holding slot still goes to the private session.
+
+### Insights
+- #2898 was wider than filed: plain auto-escaped text (`"plain"` → `"a & b"`) reached the page as `a &amp; b` through the fragment fast path. Only the reproducer showed it.
+- #2890: re-wrapping text in `{% verbatim %}` cannot round-trip a body that ends in `{%`, because it fuses with the end tag. `{% templatetag openbrace %}` for every `{` can.
+
+### Review Stats
+
+| Metric | #3042 |
+|---|---|
+| Issues | 11: 10 closed, 0 split, 1 moved to 1.3 (#2918) |
+| 🔴 Findings | 1 (Self-Review, raw-text elements in #2898), fixed pre-merge |
+| 🟡 Findings | 4 (Self-Review 2, Security 1, Code Review 1), all fixed pre-merge |
+| Re-Reviews | 2: the first failed on #2958's claim (narrowed; the escaping is pre-existing, #3043), the second passed |
+| CI failures | 0 |
+| Findings by pattern class | `unverified-claim` ×2, `parallel-path-drift` ×2 |
+
+### Process Improvements Applied
+None in this batch.
+
+### Open Items
+- [ ] Form tags escape their markup. Tracked in Action Tracker #356 (GitHub #3043).
+- [ ] Three more `live_tags` tags without a Rust handler. Tracked in Action Tracker #357 (GitHub #3044).
+- [ ] `write_html` and raw-text elements. Tracked in Action Tracker #358 (GitHub #3045).
+- [ ] Restore hardening. Tracked in Action Tracker #359 (GitHub #3046).
+- [ ] Bridged tags under an armed `block.super` (1.3). Tracked in Action Tracker #360 (GitHub #2918).
+
+## v1.2.1-8 — VDOM diff correctness (PR #3042)
+
+Shipped in the state and rendering batch with v1.2.1-7, one commit per bucket. The retro, review stats and open items are in the v1.2.1-7 entry above.
+
+## v1.2.1-9 — Rust template renderer gaps (PR #3042)
+
+Shipped in the state and rendering batch with v1.2.1-7, one commit per bucket. The retro, review stats and open items are in the v1.2.1-7 entry above.
 
 ## v1.2.1-2 — server-originated turns and tick lifecycle (PR #3035)
 
