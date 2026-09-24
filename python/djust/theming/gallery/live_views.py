@@ -1054,6 +1054,11 @@ class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVi
         from .component_registry import component_client
 
         client = component_client(component_name)
+        from .component_registry import unstyled_python_class
+
+        # The tag this page previews is styled; its Python class twin is not
+        # (#2993). Say so where the reader chooses between them.
+        ctx["unstyled_class"], ctx["unstyled_class_root"] = unstyled_python_class(component_name)
         ctx["client_hook"] = client["hook"] if not client["hook_shipped"] else ""
         ctx["client_script"] = client["script"]
         ctx["client_script_url"] = static(client["script"]) if client["script"] else ""

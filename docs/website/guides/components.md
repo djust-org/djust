@@ -956,6 +956,23 @@ All components use CSS custom properties. Override them to match any theme:
 
 This is what makes them style-agnostic: change the variables, and every component adapts. Works standalone or with `djust.theming` for full design system support.
 
+#### Unstyled Python components
+
+Three `djust.components` classes render markup that **no stylesheet djust
+ships has a rule for**, so they appear as bare markup until you style them.
+Each has a styled template-tag twin that follows the active theme:
+
+| Class (`from djust.components import …`) | Classes it renders | Custom properties its docstring suggests | Styled equivalent |
+| --- | --- | --- | --- |
+| `Alert` | `dj-alert`, `dj-alert-<variant>`, `dj-alert-dismissible`, `dj-alert-icon`, `dj-alert-message`, `dj-alert-dismiss` | `--dj-alert-{bg,fg,border,radius,padding}`, `--dj-alert-<variant>-{bg,fg,border}` | `{% theme_alert %}` |
+| `Progress` | `dj-progress`, `dj-progress-<variant>`, `dj-progress-<size>`, `dj-progress-label`, `dj-progress-track`, `dj-progress-bar`, `dj-progress-value` | `--dj-progress-{bg,bar-bg,radius,height}`, `--dj-progress-<variant>-bg` | `{% theme_progress %}` |
+| `Avatar` | `dj-avatar`, `dj-avatar-<size>`, `dj-avatar-img`, `dj-avatar-initials`, `dj-avatar-status`, `dj-avatar-status-<status>` | none | `{% theme_avatar %}` |
+
+The custom properties are naming suggestions for your own stylesheet. Nothing
+djust ships reads them. To get the styled version, use the tag instead
+(`{% load theme_components %}`). Their catalogue pages
+(`/theme/components/alert/` and so on) preview the tag and say the same.
+
 ## djust-theming
 
 `djust.theming` is a production-ready theming system inspired by shadcn/ui, shipped in core. It provides CSS custom properties-based theming with light/dark mode, 12 design systems × 68 color presets, and reactive theme switching via djust LiveViews.
