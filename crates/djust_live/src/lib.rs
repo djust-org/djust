@@ -939,6 +939,21 @@ impl RustLiveViewBackend {
                     }
                 }
                 if all_text && !text_changes.is_empty() {
+                    // Build the fragment→text-node map lazily (#3013): only a
+                    // text fast path needs it, so it is built here, from the
+                    // PREVIOUS render's fragments and tree, rather than after
+                    // every full parse. `old_node_cache` is exactly the
+                    // fragment list the eager build used to see (it concatenates
+                    // to `last_html`, which `last_vdom` was parsed from), so
+                    // the map is the one the eager build produced.
+                    if self.fragment_text_map.is_none() && !old_node_cache.is_empty() {
+                        if let (Some(ref vdom), Some(ref full_html)) =
+                            (&self.last_vdom, &self.last_html)
+                        {
+                            self.fragment_text_map =
+                                Some(build_fragment_text_map(&old_node_cache, vdom, full_html));
+                        }
+                    }
                     // Use the fragment text map to produce patches directly.
                     // First verify all fragments have mappings, then apply.
                     if let Some(ref frag_map) = self.fragment_text_map {
@@ -1223,27 +1238,22 @@ impl RustLiveViewBackend {
             self.last_vdom = Some(new_vdom);
             self.version += 1;
 
-            // Build fragment→VDOM text node map for text-fast-path on subsequent renders.
-            // Match each plain-text fragment to a VDOM text node by BYTE POSITION
-            // in the assembled HTML (#1617 — content equality is insufficient when
-            // a variable is adjacent to literal template text).
+            // Fragment→VDOM text node map for the text fast path on later renders.
+            // Each plain-text fragment is matched to a VDOM text node by BYTE
+            // POSITION in the assembled HTML (#1617 — content equality is
+            // insufficient when a variable is adjacent to literal template text).
             //
             // #2999: a full parse can change structure (a text node that went
             // whitespace-only disappears), so the map built against the old
-            // tree is stale — rebuild it. Before this reset, a fragment that
+            // tree is stale — drop it. Before this reset, a fragment that
             // emptied and refilled kept being patched at a path that no
             // longer existed.
+            //
+            // #3013: it is NOT rebuilt here. Building it after every full parse
+            // cost ~13% of render_with_diff on a large block list whose renders
+            // never take the text fast path; the fast path builds it on demand.
             if took_full_parse {
                 self.fragment_text_map = None;
-            }
-            if self.fragment_text_map.is_none() && !self.node_html_cache.is_empty() {
-                if let (Some(ref vdom), Some(ref full_html)) = (&self.last_vdom, &self.last_html) {
-                    self.fragment_text_map = Some(build_fragment_text_map(
-                        &self.node_html_cache,
-                        vdom,
-                        full_html,
-                    ));
-                }
             }
 
             // Rebuild the text-region fast-path index whenever we just went
@@ -5939,6 +5949,85 @@ mod fast_path_flag_tests {
         ] {
             assert_eq!(d(s), None, "{s:?}");
         }
+    }
+
+    // #3013: the fragment text map is built lazily, by the text fast path,
+    // not after every full parse.
+    #[test]
+    fn full_parse_renders_do_not_build_the_fragment_text_map() {
+        let mut view = mounted();
+        assert!(
+            view.fragment_text_map.is_none(),
+            "first render builds no map"
+        );
+        for h in [7, 3, 5] {
+            view.update_state_rust(state("v0", h, 107));
+            view.set_changed_keys(vec!["highlight_id".to_string()]);
+            view.render_with_diff().expect("re-render");
+            assert_eq!(timing(&view, "fast_path"), FAST_PATH_NONE);
+            assert!(
+                view.fragment_text_map.is_none(),
+                "a full parse leaves no map"
+            );
+        }
+    }
+
+    #[test]
+    fn fragment_fast_path_builds_the_map_on_demand_and_keeps_it() {
+        let mut view = mounted();
+        view.update_state_rust(state("v1", 0, 107));
+        view.set_changed_keys(vec!["label".to_string()]);
+        let (html1, patches, _v) = view.render_with_diff().expect("re-render");
+        assert_eq!(timing(&view, "fast_path"), FAST_PATH_FRAGMENT);
+        assert!(patches.expect("patches").contains("SetText"));
+        assert!(html1.contains("v1"));
+        assert!(
+            view.fragment_text_map.is_some(),
+            "the fast path built the map"
+        );
+
+        // A second text change reuses it and still patches the right node.
+        view.update_state_rust(state("v2", 0, 107));
+        view.set_changed_keys(vec!["label".to_string()]);
+        let (_html, patches, _v) = view.render_with_diff().expect("re-render");
+        assert_eq!(timing(&view, "fast_path"), FAST_PATH_FRAGMENT);
+        let patches = patches.expect("patches");
+        assert!(patches.contains("\"v2\""), "patches: {patches}");
+    }
+
+    #[test]
+    fn fast_path_after_a_full_parse_matches_the_new_tree() {
+        // Full parse (attribute change), then a text change: the lazily built
+        // map is built against the post-full-parse tree, so the SetText path
+        // is the same one a full diff would produce.
+        let mut view = mounted();
+        view.update_state_rust(state("v0", 7, 107));
+        view.set_changed_keys(vec!["highlight_id".to_string()]);
+        view.render_with_diff().expect("full parse");
+        view.update_state_rust(state("v9", 7, 107));
+        view.set_changed_keys(vec!["label".to_string()]);
+        let (_html, fast, _v) = view.render_with_diff().expect("fast path");
+        assert_eq!(timing(&view, "fast_path"), FAST_PATH_FRAGMENT);
+
+        let mut slow = mounted();
+        slow.update_state_rust(state("v0", 7, 107));
+        slow.set_changed_keys(vec!["highlight_id".to_string()]);
+        slow.render_with_diff().expect("full parse");
+        slow.update_state_rust(state("v9", 7, 107));
+        slow.set_changed_keys(vec!["label".to_string(), "highlight_id".to_string()]);
+        slow.fragment_text_map = None;
+        slow.node_html_cache = Vec::new(); // force a full render + diff
+        let (_html, full, _v) = slow.render_with_diff().expect("full diff");
+        let (fast, full) = (fast.expect("patches"), full.expect("patches"));
+        let path_of = |p: &str| -> String {
+            let v: serde_json::Value = serde_json::from_str(p).expect("json patches");
+            v.as_array()
+                .and_then(|a| a.iter().find(|x| x["type"] == "SetText"))
+                .map(|x| x["path"].to_string())
+                .unwrap_or_default()
+        };
+        assert!(!path_of(&fast).is_empty(), "fast: {fast}");
+        assert_eq!(path_of(&fast), path_of(&full), "fast: {fast} full: {full}");
     }
 
     #[test]

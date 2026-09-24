@@ -52,7 +52,7 @@ Revokes the server session and removes the local credentials file.
 ```bash
 djust deploy                      # deploy-dir: upload the current directory
 djust deploy <project-slug>       # deploy-dir with an explicit slug
-djust deploy --from-git <slug>    # deploy: git-based deploy
+djust deploy <slug> --from-git    # deploy: git-based deploy (the flag may come first)
 ```
 
 ### `deploy-dir`

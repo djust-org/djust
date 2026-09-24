@@ -122,6 +122,58 @@ def _routed_liveview_classes() -> Iterator[type]:
         return
 
 
+def _check_routed_djust_views_allowlisted(errors: list, routed: "set[type]") -> None:
+    """V015 -- djust's own URL-routed LiveViews blocked by an explicit allowlist (#2889).
+
+    V005 skips classes defined in ``djust.*`` (they are framework code, not the
+    project's), so nothing flagged the case #2889 reports: an explicit
+    ``LIVEVIEW_ALLOWED_MODULES`` REPLACES the fallback that admits ``"djust"``,
+    so a project that routes the component gallery, the theme gallery or the
+    admin extension gets pages that render but never mount ("View not
+    mounted"). Only routed views are checked, so installing ``djust.theming``
+    for the theme switcher alone stays silent. The same gate the WebSocket
+    mount uses (``is_view_path_allowed``) decides.
+    """
+    from django.conf import settings
+
+    from djust.security.mount import is_view_path_allowed
+
+    if _is_check_suppressed("djust.V015"):
+        return
+    allowed = getattr(settings, "LIVEVIEW_ALLOWED_MODULES", None)
+    if not allowed:
+        return
+
+    def _is_test_module(module: str) -> bool:
+        return any(part == "tests" or part.startswith("test_") for part in module.split("."))
+
+    blocked = sorted(
+        "%s.%s" % (cls.__module__, cls.__name__)
+        for cls in routed
+        if (getattr(cls, "__module__", "") or "").startswith("djust.")
+        and not _is_test_module(cls.__module__)
+        and not is_view_path_allowed("%s.%s" % (cls.__module__, cls.__name__))
+    )
+    if not blocked:
+        return
+    shown = ", ".join(blocked[:3]) + (
+        " and %d more" % (len(blocked) - 3) if len(blocked) > 3 else ""
+    )
+    errors.append(
+        DjustWarning(
+            "LIVEVIEW_ALLOWED_MODULES does not admit djust's own LiveViews that "
+            "your URLconf routes (%s); their pages render but never mount." % shown,
+            hint=(
+                "Add 'djust' to LIVEVIEW_ALLOWED_MODULES. An explicit list replaces "
+                "the default, which includes it. Suppress with DJUST_CONFIG = "
+                "{'suppress_checks': ['V015']}."
+            ),
+            id="djust.V015",
+            fix_hint="Add `'djust'` to the `LIVEVIEW_ALLOWED_MODULES` list in your Django settings file.",
+        )
+    )
+
+
 @register("djust")
 def check_liveviews(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     """Validate LiveView subclasses."""
@@ -578,6 +630,9 @@ def check_liveviews(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
     # V010 -- TutorialMixin listed after LiveView in MRO (#691)
     _check_tutorial_mixin_mro(errors, LiveView)
+
+    # V015 -- a routed djust LiveView that LIVEVIEW_ALLOWED_MODULES rejects (#2889)
+    _check_routed_djust_views_allowlisted(errors, _routed)
 
     # V006 -- service instance in mount() (AST-based scan of project files)
     _check_service_instances_in_mount(errors)

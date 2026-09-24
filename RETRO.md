@@ -393,6 +393,8 @@ issue or be explicitly closed with a reason.
 | 351 | The #2663 raw-text masker is quadratic on many `<script` tags with no `>` | PR #3017 | #3019 | Open | pattern: redos |
 | 352 | The HTTP-POST fallback ignores `_skip_render` on the view and component routes | PR #3039 | #3038 | Open | pattern: parallel-path-drift. Predates #3039; #2924 fixed the runtime `component_id` route only |
 | 353 | `dj-track-static` deploy detection needs a mount-frame manifest check (a wire addition) | PR #3039 | #2966 | Open | 1.3. A page re-fetch was tried and rejected: a GET re-runs the HTTP mount and overwrites session state |
+| 354 | Flaky `presenter_reverse` crossing assertion in `test_model_backed_render_2532` (`302 < 302`) | PR #3047 | #3048 | Open | pattern: flaky-test. A stale thread-local `in_rust_render` flag is the likely cause; passed on rerun |
+| 355 | Dependabot #157: autobahn 24.4.2 stays in `uv.lock` for Python 3.10 (no patched release supports 3.10) | PR #3047 | Dependabot #157 | Open | Owner decision: dismiss as tolerable risk (daphne never enables permessage-deflate), or clear it when 3.10 support is dropped |
 
 ## Retro backfill — 14 un-retro'd drain buckets (v1.1.0-9 … v1.2.0-5)
 
@@ -577,6 +579,46 @@ Shipped in the runtime and client batch with v1.2.1-5, one commit per bucket. Th
 ## v1.2.1-11 — Offline sync, uploads, PWA command (PR #3039)
 
 Shipped in the runtime and client batch with v1.2.1-5, one commit per bucket. The retro, review stats and open items are in the v1.2.1-5 entry above.
+
+## v1.2.1-4 — security hygiene + scaffolding/CLI/config batch: v1.2.1-4 and -13 (PR #3047)
+
+**Date**: 2026-09-24
+**Scope**: Two drain buckets and one Dependabot alert in one PR, one commit per bucket, squash-merged as `614a464ab`. v1.2.1-4 (security hygiene): #2947 the log sanitizer is attached to every `djust.*` logger at `ready()`; #2973 (part 1: `tenant_redis`/`tenant_memory` in the presence registry, tenant prefix in either base order, `djust.C019`); #2878 (PVR intake + advisory publication runbook in `SECURITY.md`). v1.2.1-13 (scaffolding, CLI, config): #2889 (part 1: scaffold writes `"djust"`, `djust.V015`); #2983 deploy doctor sqlite; #2982 `deploy <slug> --from-git`; #2883 (C016 context-processor case); #2884 (part 1: stale comment); #2984 (part 1: `jit_serialization=False`, `djust.C018`); #3006 advisory cache re-check after an hour; #3013 lazy `fragment_text_map`; #3014 one dj-if marker map per patch batch. Dependabot #157 (autobahn): no lock change possible, documented in a security fragment.
+**Tests at close**: `tests/unit/test_log_sanitizer_child_loggers_2947.py`, `tests/unit/test_tenant_presence_2973.py`, `tests/unit/test_scaffold_cli_config_v1_2_1_13.py`, `tests/js/dj_if_marker_index_3014.test.js`, plus 3 Rust cases in `fast_path_flag_tests` (`crates/djust_live/src/lib.rs`). The #3014 scan-count cases fail on main (50 and 5 scans against 1). CI green at the merge head after one flaky shard (#3048). Retro: https://github.com/djust-org/djust/pull/3047#issuecomment-5807944518
+
+### What We Learned
+
+**1. Base a check on what triggers the failure, not on what triage listed.** The plan's C020 fired on installed djust apps. But every scaffold installs `djust.theming` for the theme switcher, so every existing project would have been warned. The shipped check (V015) walks the URLconf and fires only for routed djust LiveViews, which is the case that actually breaks.
+
+**2. A per-batch cache needs every producer in the batch, not the obvious one.** #3014's map registered markers from InsertSubtree fragments only. The Code Review found that an InsertChild node can carry dj-if markers too (🟡). The fix registers those, and a new test fails without it.
+
+**3. Making a documented setting real is still an upgrade for someone.** `tenant_redis` used to fall back to in-process memory without a word; now it really uses Redis. The Code Review asked for an upgrade note (🟡, added to the fragment).
+
+### Insights
+- The check-id uniqueness canary (#2070) caught the first cut of #2883, which emitted `djust.C016` from a helper function. Helpers now return data, and the warning stays in the owning check.
+- Python applies a logger's filters only to records logged on that logger. The documented "every framework message is sanitized" had been false since the filter shipped. A shared, idempotent helper (the same shape as #2973's presence key) is how both fixes close their parallel paths.
+
+### Review Stats
+
+| Metric | #3047 |
+|---|---|
+| Issues | 12: 8 closed, 4 split (1.2.1 part landed), 0 moved to 1.3 |
+| 🔴 Findings | 0 |
+| 🟡 Findings | 2 (Code Review), both fixed pre-merge |
+| 🟢 Findings | 2: 1 fixed, 1 declined (a cosmetic duplicate-filter race) |
+| CI failures | 1 flaky benchmark shard, passed on rerun, filed #3048 |
+| Findings by pattern class | `parallel-path-drift` ×1, upgrade-note ×1 |
+
+### Process Improvements Applied
+None in this batch.
+
+### Open Items
+- [ ] Flaky crossing assertion. Tracked in Action Tracker #354 (GitHub #3048).
+- [ ] Dependabot #157 on the Python 3.10 lock entry. Tracked in Action Tracker #355.
+
+## v1.2.1-13 — Scaffolding, CLI, config and checks (PR #3047)
+
+Shipped in the security hygiene + scaffolding batch with v1.2.1-4, one commit per bucket. The retro, review stats and open items are in the v1.2.1-4 entry above.
 
 ## v1.2.1-2 — server-originated turns and tick lifecycle (PR #3035)
 

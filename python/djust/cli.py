@@ -939,9 +939,12 @@ def cmd_deploy(rest: list[str]) -> int:
         first = rest[0]
         if first in ("login", "logout", "status"):
             argv = rest
-        elif first == "--from-git":
-            # `djust deploy --from-git <slug>` — git-based deploy.
-            argv = ["deploy", *rest[1:]]
+        elif "--from-git" in rest:
+            # `djust deploy --from-git <slug>` or `djust deploy <slug> --from-git`
+            # — git-based deploy. The flag is a routing switch, not an option of
+            # the `deploy` subcommand, so it is dropped wherever it appears
+            # (#2982: only the flag-first form used to parse).
+            argv = ["deploy", *[arg for arg in rest if arg != "--from-git"]]
         elif first.startswith("-"):
             # `djust deploy --yes` / `djust deploy --no-create` etc. —
             # flags-only invocation routes to the guided directory flow,

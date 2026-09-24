@@ -8480,13 +8480,26 @@ function _extractDjIfMarkerId(text) {
  * Uses a TreeWalker filtered to comment nodes for cheap traversal.
  * Reuses `isDjIfComment` to ignore non-dj-if comments.
  *
+ * Inside `_applyPatchBatch` the per-batch map answers instead of a scan
+ * (#3014). A miss there is final for InsertSubtree's "already present?"
+ * probe, the common case (a fresh id); `scanOnMiss` makes Move/Remove, which
+ * expect the marker, confirm a miss with the full scan.
+ *
  * @param {string} targetId — the id substring to match (e.g. `"if-abc-0"`).
  * @param {Node} [root=document.body] — scoping root for the search.
+ * @param {boolean} [scanOnMiss=false] — confirm a map miss with a scan.
  * @returns {Comment|null}
  */
-function _findDjIfOpenMarker(targetId, root) {
+function _findDjIfOpenMarker(targetId, root, scanOnMiss = false) {
     const scopeRoot = root || document.body;
     if (!scopeRoot) return null;
+    const index = _djIfMarkerIndex;
+    if (index && index.root === scopeRoot) {
+        const hit = index.byId.get(targetId);
+        // A marker a RemoveSubtree detached earlier in the batch is absent.
+        if (hit && hit.isConnected && scopeRoot.contains(hit)) return hit;
+        if (!scanOnMiss) return null;
+    }
     const walker = document.createTreeWalker(scopeRoot, NodeFilter.SHOW_COMMENT, null);
     let n = walker.nextNode();
     while (n) {
@@ -8498,6 +8511,42 @@ function _findDjIfOpenMarker(targetId, root) {
         n = walker.nextNode();
     }
     return null;
+}
+
+/**
+ * The per-batch dj-if marker map (#3014): `{root, byId}` while
+ * `_applyPatchBatch` runs, else `null`.
+ *
+ * Every MoveSubtree / InsertSubtree / RemoveSubtree used to find its open
+ * marker with a full-document TreeWalker scan, so a batch of N subtree ops cost
+ * N scans (a 1,000-row `{% for %}{% if %}` prepend took ~2 s in jsdom). The
+ * batch now scans once. The map stays correct through the batch because:
+ * moves keep node identity; a removed marker is detached, which the lookup
+ * checks (`isConnected` + inside the scope); and an InsertSubtree registers
+ * the markers of the fragment it inserts (`_registerDjIfMarkers`).
+ */
+let _djIfMarkerIndex = null;
+
+/** Add every dj-if open marker under `node` to `byId`; the first one per id wins. */
+function _collectDjIfMarkers(node, byId) {
+    const walker = document.createTreeWalker(node, NodeFilter.SHOW_COMMENT, null);
+    let n = walker.nextNode();
+    while (n) {
+        const text = n.textContent || '';
+        if (isDjIfComment(text)) {
+            const id = _extractDjIfMarkerId(text.trim());
+            if (id !== null) {
+                const known = byId.get(id);
+                if (!known || !known.isConnected) byId.set(id, n);
+            }
+        }
+        n = walker.nextNode();
+    }
+}
+
+/** Register the markers of a fragment about to be inserted, if a batch map is live. */
+function _registerDjIfMarkers(fragment) {
+    if (_djIfMarkerIndex && fragment) _collectDjIfMarkers(fragment, _djIfMarkerIndex.byId);
 }
 
 /**
@@ -8589,7 +8638,7 @@ function applyRemoveSubtree(patch, rootEl = null) {
         console.warn('[LiveView] RemoveSubtree patch missing id, skipping');
         return false;
     }
-    const open = _findDjIfOpenMarker(targetId, rootEl);
+    const open = _findDjIfOpenMarker(targetId, rootEl, true);
     if (!open) {
         // Idempotent no-op: the marker is already gone (likely removed by a
         // prior patch in the same batch, or an earlier patch cycle that
@@ -8686,6 +8735,7 @@ function applyInsertSubtree(patch, rootEl = null) {
     // parsed via <template>.innerHTML (see _parseSubtreeHtml above) and is
     // therefore inert-by-spec exactly like #1848 — loud DEBUG-mode warning.
     _warnDeadScripts(fragment);
+    _registerDjIfMarkers(fragment);
     // Determine insert position: index counted against significant
     // children (matches InsertChild semantics).
     const children = getSignificantChildren(parent);
@@ -8722,7 +8772,7 @@ function applyMoveSubtree(patch, rootEl = null) {
         console.warn('[LiveView] MoveSubtree patch missing id, skipping');
         return false;
     }
-    const open = _findDjIfOpenMarker(targetId, rootEl);
+    const open = _findDjIfOpenMarker(targetId, rootEl, true);
     if (!open) {
         // Marker absent — nothing to move. Idempotent no-op (a prior patch in
         // the batch may have torn it down); returning false would trigger the
@@ -8993,7 +9043,7 @@ function _removeChildNode(parent, child) {
 
 /** The nodes of a dj-if span, open marker through close marker, or null. */
 function _djIfSpanNodes(id, rootEl) {
-    const open = _findDjIfOpenMarker(String(id || ''), rootEl);
+    const open = _findDjIfOpenMarker(String(id || ''), rootEl, true);
     if (!open) return null;
     const close = _findDjIfCloseMarker(open);
     if (!close) return null;
@@ -9059,6 +9109,9 @@ function _placeChildren(parent, ops, movedChildOf, rootEl, tally) {
                 tally(applySinglePatch(op, rootEl), op);
                 continue;
             }
+            // A created subtree can carry dj-if markers; register them so a
+            // later InsertSubtree's "already present?" probe sees them (#3014).
+            _registerDjIfMarkers(created);
             nodes = [created];
         } else if (op.type === 'InsertSubtree') {
             if (op.id && _findDjIfOpenMarker(String(op.id), rootEl)) {
@@ -9071,6 +9124,7 @@ function _placeChildren(parent, ops, movedChildOf, rootEl, tally) {
             }
             const fragment = _parseSubtreeHtml(op.html);
             _warnDeadScripts(fragment);
+            _registerDjIfMarkers(fragment);
             nodes = Array.from(fragment.childNodes);
         } else {
             nodes = carried.get(op) || [];
@@ -9114,6 +9168,24 @@ function _placeChildren(parent, ops, movedChildOf, rootEl, tally) {
  * @returns {{ok: number, failed: number, failedIndices: number[]}}
  */
 function _applyPatchBatch(patches, rootEl) {
+    // One dj-if marker map for the batch when it has subtree ops (#3014).
+    const needsIndex = patches.some((p) => p && (p.type === 'MoveSubtree' ||
+        p.type === 'InsertSubtree' || p.type === 'RemoveSubtree'));
+    const scopeRoot = rootEl || document.body;
+    if (!needsIndex || !scopeRoot || _djIfMarkerIndex) {
+        return _applyPatchBatchInner(patches, rootEl);
+    }
+    const byId = new Map();
+    _collectDjIfMarkers(scopeRoot, byId);
+    _djIfMarkerIndex = { root: scopeRoot, byId };
+    try {
+        return _applyPatchBatchInner(patches, rootEl);
+    } finally {
+        _djIfMarkerIndex = null;
+    }
+}
+
+function _applyPatchBatchInner(patches, rootEl) {
     let ok = 0;
     let failed = 0;
     const failedIndices = [];

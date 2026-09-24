@@ -556,6 +556,22 @@ class Product(models.Model):
         return 100  # ✅ Returns int
 ```
 
+### Turning JIT serialization off
+
+```python
+# settings.py
+LIVEVIEW_CONFIG = {
+    'jit_serialization': False,
+}
+```
+
+With it off, Models, QuerySets and model lists in the context are serialized
+with every concrete field (minus the sensitive-field denylist) rather than the
+fields the template reads, and no `select_related` / `prefetch_related` is
+added. Before 1.2.1 the key was read by nothing and had no effect (#2984). The
+`jit_cache_backend`, `jit_cache_dir` and `jit_redis_url` keys are still read by
+nothing: `djust.C018` warns when they are set, and 1.3 removes them.
+
 ### Debugging Serialization Issues
 
 If data isn't appearing in your template, check:

@@ -219,13 +219,21 @@ class DjustLogSanitizerFilter(logging.Filter):
     """
     A logging.Filter that sanitizes all string arguments in log records.
 
-    Install this filter on the 'djust' logger (or its handlers) to
-    automatically sanitize every log message emitted by the framework,
-    preventing log injection without per-callsite sanitization.
+    Python runs a logger's filters only for records logged on THAT logger;
+    a record propagating up from ``djust.websocket`` never passes through
+    the ``djust`` logger's filters (#2947). So the filter has to sit on every
+    framework logger, which :func:`install_log_sanitizer` arranges:
+    ``DjustConfig.ready()`` calls it, it attaches the filter to ``djust`` and
+    every ``djust.*`` logger that exists, and it makes ``logging.getLogger``
+    attach it to any ``djust.*`` logger created afterwards. The filter runs
+    at the originating logger, so string arguments are sanitized before any
+    handler formats the record.
 
-    Installed automatically by DjustConfig.ready() on the 'djust' logger.
+    Only ``record.args`` are sanitized. The format string is the framework's
+    own text, and ``exc_info`` tracebacks are left alone.
 
-    Usage in Django LOGGING config (optional — already done by AppConfig):
+    Usage in Django LOGGING config (optional; it also covers application
+    loggers, which ``install_log_sanitizer`` does not touch):
         LOGGING = {
             "filters": {
                 "djust_sanitize": {"()": "djust.security.DjustLogSanitizerFilter"},
@@ -253,3 +261,46 @@ class DjustLogSanitizerFilter(logging.Filter):
             elif isinstance(record.args, str):
                 record.args = sanitize_for_log(record.args)
         return True
+
+
+def _is_djust_logger_name(name: str) -> bool:
+    return name == "djust" or name.startswith("djust.")
+
+
+def _attach_sanitizer(logger: logging.Logger) -> None:
+    if not any(isinstance(f, DjustLogSanitizerFilter) for f in logger.filters):
+        logger.addFilter(DjustLogSanitizerFilter())
+
+
+def install_log_sanitizer() -> None:
+    """Attach :class:`DjustLogSanitizerFilter` to every ``djust`` logger (#2947).
+
+    - ``djust`` and every ``djust.*`` logger that already exists get the
+      filter now;
+    - the logging manager's ``getLogger`` is wrapped once so a ``djust.*``
+      logger created later (lazy imports are common in djust) gets it at
+      creation.
+
+    Idempotent: a logger never carries two copies, and the manager is wrapped
+    once. Loggers outside the ``djust`` namespace (``djustfoo``,
+    ``django.djust.updates``, application loggers) are never touched.
+    """
+    manager = logging.Logger.manager
+    _attach_sanitizer(logging.getLogger("djust"))
+    for name, existing in list(manager.loggerDict.items()):
+        if isinstance(existing, logging.Logger) and _is_djust_logger_name(name):
+            _attach_sanitizer(existing)
+
+    current = manager.getLogger
+    if getattr(current, "_djust_log_sanitizer", False):
+        return
+
+    def get_logger(name: str) -> logging.Logger:
+        logger = current(name)
+        if isinstance(name, str) and _is_djust_logger_name(name):
+            _attach_sanitizer(logger)
+        return logger
+
+    get_logger._djust_log_sanitizer = True  # type: ignore[attr-defined]
+    get_logger.__wrapped__ = current  # type: ignore[attr-defined]
+    manager.getLogger = get_logger  # type: ignore[method-assign]

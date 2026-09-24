@@ -252,10 +252,11 @@ class TenantMixin:
             if hasattr(super(), "get_presence_key")
             else self.__class__.__name__
         )
+        # Shared with PresenceMixin.get_presence_key, which applies the same
+        # (idempotent) prefix when it comes first in the MRO (#2973).
+        from djust.presence import tenant_scoped_presence_key
 
-        if self._tenant:
-            return f"tenant:{self._tenant.id}:{base_key}"
-        return base_key
+        return tenant_scoped_presence_key(self, base_key)
 
     def get_state_key_prefix(self) -> str:
         """
