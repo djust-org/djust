@@ -164,8 +164,14 @@ async def wait_text(page, selector, expected, timeout=8000):
 
 
 async def wait_mounted(page):
+    # ``liveViewInstance`` is assigned before the transport even connects, so
+    # it is no mount signal: a click sent before the mount frame is applied
+    # falls back to an HTTP POST, which slow CI runners hit. ``viewMounted``
+    # flips only once the mount frame is applied (and resets on disconnect,
+    # so the reconnect check below waits for the remount too).
     await page.wait_for_function(
-        "() => !!(window.djust && (window.djust.liveViewInstance || window.djust._mountReady))",
+        "() => !!(window.djust && window.djust.liveViewInstance"
+        " && window.djust.liveViewInstance.viewMounted)",
         timeout=10000,
     )
 
