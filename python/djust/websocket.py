@@ -3585,11 +3585,19 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 sanitize_for_log(str(data.get("view"))),
             )
             data = {**data, "view": resolved_view}
+        # #3036: ask the runtime to record the destination's document <title>.
+        self._live_redirect_mounting = True
         try:
-            await self.handle_mount(
-                data,
-                sticky_preserved=sticky_preserved,
-                state_snapshot=state_snapshot,
+            try:
+                await self.handle_mount(
+                    data,
+                    sticky_preserved=sticky_preserved,
+                    state_snapshot=state_snapshot,
+                )
+            finally:
+                self._live_redirect_mounting = False
+            self._queue_destination_title(
+                getattr(getattr(self, "_runtime", None), "mount_document_title", None)
             )
             # Anything the new view's ``mount()`` queued for the client has to
             # go out here. On an HTTP load the document carries the title and
@@ -3615,6 +3623,26 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         )
             self._sticky_preserved = {}
             raise
+
+    def _queue_destination_title(self, title: Optional[str]) -> None:
+        """Queue the destination page's ``<title>`` after a live redirect (#3036).
+
+        Live navigation swaps only the ``dj-root``, so the tab kept the
+        previous page's title unless the new view set ``page_title``. When the
+        view queued no title of its own, queue the one its rendered document
+        carries (``{% block title %}``) as an ordinary ``page_metadata`` title
+        command; ``_flush_all_pending`` sends it. A view's own ``page_title``
+        always wins.
+        """
+        view = self.view_instance
+        if not title or view is None:
+            return
+        pending = getattr(view, "_pending_page_metadata", None)
+        if not isinstance(pending, list):
+            return
+        if any(isinstance(cmd, dict) and cmd.get("action") == "title" for cmd in pending):
+            return
+        pending.append({"action": "title", "value": title})
 
     def _resolve_view_path_from_url(self, url: str) -> Optional[str]:
         """Resolve a ``live_redirect`` destination URL to its djust LiveView
