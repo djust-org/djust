@@ -61,6 +61,7 @@ from asgiref.sync import sync_to_async
 
 from .rate_limit import ConnectionRateLimiter
 from .security import handle_exception, sanitize_for_log
+from .mixins.async_work import has_pending_async_work
 from .serialization import fast_json_loads
 from .validation import validate_handler_params
 from .websocket_utils import (
@@ -3305,7 +3306,7 @@ class ViewRuntime:
                 if pre_identity == post_identity:
                     skip_render = True
 
-        has_async = getattr(view, "_async_pending", None) is not None
+        has_async = has_pending_async_work(view)
 
         if skip_render:
             # (_skip_render was already consumed by _resolve_skip_render
@@ -3340,12 +3341,12 @@ class ViewRuntime:
             await self.transport.send(noop_msg)
             # Dispatch background work UNCONDITIONALLY after the turn (matches WS
             # handle_event websocket.py:4235, NOT the legacy SSE which gated this
-            # on has_async). ``has_async`` reflects only the legacy ``_async_pending``
-            # single-task format (never set in current code) and drives the loading
-            # UX flag — the actual dispatch must also cover the ``_async_tasks``
-            # named-task format that ``start_async`` populates, so converging onto
-            # the correct WS behavior here FIXES the legacy SSE drop of
-            # ``start_async`` work (#1887 / #1646). No-op when no tasks are queued.
+            # on has_async). ``has_async`` (``has_pending_async_work``, both task
+            # formats since #2963) only drives the loading UX flag; this call is
+            # what starts the ``_async_tasks`` work ``start_async`` queued, so
+            # converging onto the correct WS behavior here FIXES the legacy SSE
+            # drop of ``start_async`` work (#1887 / #1646). No-op when no tasks
+            # are queued.
             self._dispatch_async_work(event_name)
             # dj_activity flush (Phase 2.3a, #1903): a skip-render handler can
             # still flip an activity visible via set_activity_visible(); drain its
@@ -3517,7 +3518,7 @@ class ViewRuntime:
             else:
                 view._changed_keys = _compute_changed_keys(pre_assigns, post_assigns)
 
-        has_async = getattr(view, "_async_pending", None) is not None
+        has_async = has_pending_async_work(view)
 
         if skip_render:
             # (_skip_render was already consumed by _resolve_skip_render —
@@ -5268,23 +5269,24 @@ class ViewRuntime:
                 task_name,
                 view.__class__.__name__ if view else "?",
             )
-            if hasattr(view, "handle_async_result"):
-                try:
-                    # Same locked shape as the success arm (#2840 twin): the
-                    # error-state mutation + re-render must not interleave with
-                    # a concurrent lock-holding render. Ordering preserved:
-                    # handler → in-lock identity re-check → render.
-                    async with self.transport.event_context(view):
+            try:
+                # Same locked shape as the success arm (#2840 twin): the
+                # error-state mutation + re-render must not interleave with
+                # a concurrent lock-holding render. Ordering preserved:
+                # handler → in-lock identity re-check → render. The result
+                # frame is sent even without a ``handle_async_result``: the
+                # turn announced ``async_pending`` (#2963), and this frame is
+                # what ends the client's loading state.
+                async with self.transport.event_context(view):
+                    if hasattr(view, "handle_async_result"):
                         await sync_to_async(view.handle_async_result)(
                             task_name, result=None, error=exc
                         )
-                        if self.view_instance is not view:
-                            return
-                        await self._render_async_result(event_name)
-                except Exception:
-                    logger.exception(
-                        "Runtime: error in handle_async_result for task '%s'", task_name
-                    )
+                    if self.view_instance is not view:
+                        return
+                    await self._render_async_result(event_name)
+            except Exception:
+                logger.exception("Runtime: error in handle_async_result for task '%s'", task_name)
 
     async def _render_async_result(self, event_name: Optional[str]) -> None:
         """Re-sync + re-render after background work and emit the result frame.

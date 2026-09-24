@@ -160,7 +160,7 @@ Drive the spinner from server state (`generating`), not from `dj-loading.*`. The
 4. The consumer spawns `_do_generate()` in an asyncio background task
 5. When `_do_generate()` returns, the view re-renders and sends updated patches (`generating` is `False`, so the spinner disappears)
 
-> **Known issue: #2963.** The server is meant to flag the first response with `async_pending: true` so that `dj-loading.*` states stay active through the background work. At 1.2.0rc10 that flag is never sent for `start_async()`, `@background` or `assign_async()`, so `dj-loading.*` states end at the first response while the work is still running. Until it is fixed, show progress from server state as in the template above.
+The first response carries `async_pending: true` whenever the handler queued background work with `start_async()`, `@background` or `assign_async()`, so `dj-loading.*` states on the triggering element stay active until the work's result is rendered.
 
 ### Passing Arguments
 
@@ -182,7 +182,7 @@ def _run_export(self, format="csv"):
 
 If the background callback raises an exception:
 - The exception is logged (not sent to the client)
-- Unless the view defines `handle_async_result()`, no re-render is sent, so any state set before the failure (such as `generating = True`) stays on screen
+- The view re-renders its current state, which ends any `dj-loading.*` state the event started. Unless `handle_async_result()` resets it, state set before the failure (such as `generating = True`) stays on screen
 
 To handle errors gracefully, catch exceptions in your callback and set error state:
 
@@ -294,11 +294,11 @@ def handle_async_result(self, name: str, result=None, error=None):
         self.status = "Export complete"
 ```
 
-This method is optional. If it is not implemented, successful tasks still re-render. A failed task is only logged: no re-render is sent, so state set before the failure stays on screen.
+This method is optional. If it is not implemented, tasks still re-render when they finish. A failed task is logged and re-renders the state as it stands, so state set before the failure stays on screen.
 
 ## Combining Both Systems
 
-`dj-loading.*` directives cover the round-trip of an event: they start when the event is sent and stop when the server responds. The design is for `start_async()` to extend them through the background work with an `async_pending` flag, but at 1.2.0rc10 that flag is never sent (known issue: #2963), so loading states end at the first response in both cases.
+`dj-loading.*` directives cover the round-trip of an event: they start when the event is sent and stop when the server responds. When the handler queued background work, the response carries an `async_pending` flag and the directives stay on until the work's result arrives.
 
 Use the two together like this:
 

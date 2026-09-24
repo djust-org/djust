@@ -70,6 +70,24 @@ async def run_async_callback(
     return result
 
 
+def has_pending_async_work(view: Any) -> bool:
+    """True when ``view`` has background work queued for after this turn.
+
+    Drives the ``async_pending`` wire flag that keeps the client's loading
+    state (``dj-loading``, ``dj-disable-with``, ``dj-lock``) up until the
+    work's ``source="async"`` result frame arrives. ``start_async`` (and
+    ``@background``, which calls it) queues into ``_async_tasks``; the legacy
+    single-task ``_async_pending`` tuple is still honoured. Reading only the
+    legacy field left the flag permanently off (#2963). Every site that sets
+    the flag must call this, so the transports cannot drift.
+    """
+    if view is None:
+        return False
+    return bool(getattr(view, "_async_tasks", None)) or (
+        getattr(view, "_async_pending", None) is not None
+    )
+
+
 class AsyncWorkMixin:
     """
     Mixin that provides start_async() for running slow work after
