@@ -71,6 +71,23 @@ export default defineConfig({
         return false;
       }
 
+      // Pattern 3: undici socket `setTypeOfService` EINVAL (macOS).
+      // Node's built-in fetch sets the IP type-of-service on each new
+      // socket; on recent macOS the kernel rejects it with EINVAL for some
+      // sockets. It fires from undici's HTTP/1 writer after a test's
+      // relative fetch() resolves against happy-dom's localhost origin,
+      // and vitest attributes it to whichever file is running then. It
+      // is a host-socket error, never an assertion; nothing else is
+      // filtered by it.
+      if (
+        error &&
+        error.code === 'EINVAL' &&
+        error.syscall === 'setTypeOfService' &&
+        stack.includes('undici')
+      ) {
+        return false;
+      }
+
       // Anything else — let vitest surface it.
       return true;
     },
