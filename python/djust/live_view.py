@@ -261,6 +261,28 @@ def _holds_model(value: Any) -> bool:
     return False
 
 
+def _shadows_component_method(component: Any, key: str) -> bool:
+    """Whether ``key`` names a callable on the component's class (#3046).
+
+    Checks the component's own class and, for a class-level component bound
+    to a view (``BoundComponent``, ADR-031), the descriptor's class too, since
+    that is where its handlers live. Class-level lookup only: an instance
+    value never counts.
+    """
+    classes = [type(component)]
+    descriptor = getattr(component, "__dict__", {}).get("_descriptor")
+    if descriptor is not None:
+        classes.append(type(descriptor))
+    for cls in classes:
+        try:
+            member = getattr(cls, key, None)
+        except Exception:  # noqa: BLE001 — a raising class attr is not a method
+            continue
+        if callable(member):
+            return True
+    return False
+
+
 def restore_components_snapshot(view: Any, components_state: Any, *, source: str) -> bool:
     """Apply a ``__components__`` snapshot map to ``view``'s components.
 
@@ -307,6 +329,18 @@ def restore_components_snapshot(view: Any, components_state: Any, *, source: str
             continue
         for key, value in component_snap.items():
             if not isinstance(key, str) or key in _COMPONENT_INTERNAL_ATTRS:
+                continue
+            if _shadows_component_method(component, key):
+                # A snapshot field named like a method (``render``, ``mount``,
+                # a handler) would shadow it on the instance (#3046). No real
+                # state field has such a name, so skip it.
+                logger.warning(
+                    "%s: component restore skipped id=%s key=%s (names a method)",
+                    source,
+                    component_id,
+                    key,
+                )
+                ok = False
                 continue
             try:
                 applied = safe_setattr(component, key, value, allow_private=False)
@@ -1029,9 +1063,19 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
 
     def _restore_private_state(self, private_state: Dict[str, Any]) -> None:
         """Restore previously-saved private attributes onto this instance."""
+        from .security import DANGEROUS_ATTRIBUTES
+
         framework: frozenset[str] = getattr(self, "_framework_attrs", frozenset())
         meta_attrs = {"_framework_attrs", "_user_private_keys"}
         for key, value in private_state.items():
+            if not isinstance(key, str):
+                continue
+            # The session is trusted, but this path used a raw setattr with no
+            # screen at all, unlike the public one (#3046). A dunder
+            # (``__class__``, ``__dict__``) is never user private state.
+            if key in DANGEROUS_ATTRIBUTES or (key.startswith("__") and key.endswith("__")):
+                logger.warning("Skipping restore of reserved private attribute %r", key)
+                continue
             if key.startswith("_") and key not in framework and key not in meta_attrs:
                 # #1994: re-hydrate model refs back to model instances (fresh DB
                 # fetch) so a private model attr comes back a MODEL, not a dict.
