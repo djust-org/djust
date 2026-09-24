@@ -17,6 +17,7 @@ pub mod errors;
 pub mod html_whitespace;
 pub mod locale;
 pub mod object_key;
+pub mod raw_text;
 pub mod render_env;
 pub mod serialization;
 

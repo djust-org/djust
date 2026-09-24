@@ -4304,21 +4304,10 @@ fn queryset_value_to_json(value: &Bound<'_, PyAny>) -> PyResult<serde_json::Valu
 /// fast path does not guess there: `None`, full parse. `None` too when the
 /// text can't be decoded exactly (see [`decode_text_entities`]).
 fn text_node_value(vdom: &VNode, path: &[usize], raw: &str) -> Option<String> {
-    const RAW_TEXT_TAGS: [&str; 8] = [
-        "script",
-        "style",
-        "xmp",
-        "iframe",
-        "noembed",
-        "noframes",
-        "plaintext",
-        "noscript",
-    ];
     let (_, parent_path) = path.split_last()?;
     let parent = get_vdom_node(vdom, parent_path)?;
-    let raw_parent = RAW_TEXT_TAGS
-        .iter()
-        .any(|t| parent.tag.eq_ignore_ascii_case(t));
+    // The one raw-text list, shared with the VDOM serializer (#3045).
+    let raw_parent = djust_core::raw_text::is_raw_text_element(&parent.tag);
     if raw_parent {
         let foreign = (0..=parent_path.len()).any(|n| {
             get_vdom_node(vdom, &parent_path[..n]).is_some_and(|a| {
