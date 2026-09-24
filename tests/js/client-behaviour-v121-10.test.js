@@ -6,8 +6,6 @@
  * - #2971: a data-draft-clear flag that arrives in a patch clears the draft.
  * - #2949: state snapshots (and the VDOM fast-paint cache) are keyed by
  *   pathname + query, so two queries on one path never share an entry.
- * - #2966: dj-track-static compares a re-fetched copy of the page with the
- *   page-load snapshot on reconnect, so a deploy is detected.
  *
  * All run against the BUILT client.js.
  */
@@ -98,14 +96,35 @@ describe('#2971 clear_draft from an event', () => {
         return { window, document };
     }
 
-    it('a patched data-draft-clear clears localStorage and drops the flag', () => {
+    it('a patched data-draft-clear clears localStorage and keeps the server-owned flag', () => {
         const { window, document } = draftEnv();
         const form = document.getElementById('f');
         // The server's next render carried data-draft-clear (a patch).
         form.setAttribute('data-draft-clear', '');
         window.djust.reinitAfterDOMUpdate();
         expect(window.localStorage.getItem('djust_draft_post_1')).toBeNull();
-        expect(form.hasAttribute('data-draft-clear')).toBe(false);
+        // Left for the server's VDOM to remove, so a later render that carries
+        // it again still matches the DOM.
+        expect(form.hasAttribute('data-draft-clear')).toBe(true);
+    });
+
+    it('the djust:draft-clear push event clears the named draft', () => {
+        const { window } = draftEnv();
+        window.dispatchEvent(new window.CustomEvent('djust:push_event', {
+            detail: { event: 'djust:draft-clear', payload: { key: 'post_1' } },
+        }));
+        expect(window.localStorage.getItem('djust_draft_post_1')).toBeNull();
+    });
+
+    it('ignores other push events and malformed payloads', () => {
+        const { window } = draftEnv();
+        window.dispatchEvent(new window.CustomEvent('djust:push_event', {
+            detail: { event: 'other', payload: { key: 'post_1' } },
+        }));
+        window.dispatchEvent(new window.CustomEvent('djust:push_event', {
+            detail: { event: 'djust:draft-clear', payload: { key: 42 } },
+        }));
+        expect(window.localStorage.getItem('djust_draft_post_1')).not.toBeNull();
     });
 
     it('leaves the draft alone without the flag', () => {
@@ -198,96 +217,5 @@ describe('#2949 state snapshot keys', () => {
         dom.window.djust._sw.captureState = (url, slug) => captured.push({ url, slug });
         dom.window.djust._stateSnapshot._capture(null);
         expect(captured).toEqual([{ url: '/orders/?page=3', slug: 'test.views.Orders' }]);
-    });
-});
-
-// ---------------------------------------------------------------------------
-// #2966 — dj-track-static detects a deploy
-// ---------------------------------------------------------------------------
-
-function trackEnv(headHtml, serverHtml, opts = {}) {
-    const dom = new JSDOM(
-        `<!DOCTYPE html><html><head>${headHtml}</head>
-         <body><div dj-view="test.views.TestView" dj-root></div></body></html>`,
-        { runScripts: 'dangerously', url: 'http://localhost/page/' },
-    );
-    class MockWebSocket {
-        static CONNECTING = 0; static OPEN = 1; static CLOSING = 2; static CLOSED = 3;
-        constructor() { this.readyState = MockWebSocket.OPEN; }
-        send() {} close() {}
-    }
-    dom.window.WebSocket = MockWebSocket;
-    dom.window.DJUST_USE_WEBSOCKET = false;
-    quietConsole(dom.window);
-    const fetchCalls = [];
-    dom.window.fetch = vi.fn().mockImplementation(async (url, init) => {
-        fetchCalls.push({ url, init });
-        return {
-            ok: opts.ok !== false,
-            redirected: !!opts.redirected,
-            type: opts.type || 'basic',
-            text: async () => serverHtml,
-        };
-    });
-    dom.window.eval(clientCode);
-    dom.window.document.dispatchEvent(new dom.window.Event('DOMContentLoaded'));
-    const events = [];
-    dom.window.document.addEventListener('dj:stale-assets', (e) => events.push(e.detail));
-    return { dom, events, fetchCalls };
-}
-
-const page = (head) => `<!DOCTYPE html><html><head>${head}</head><body></body></html>`;
-
-describe('#2966 dj-track-static', () => {
-    it('reports a deploy that changed a tracked URL', async () => {
-        const { dom, events, fetchCalls } = trackEnv(
-            '<script dj-track-static src="/static/app.abc.js"></script>',
-            page('<script dj-track-static src="/static/app.def.js"></script>'),
-        );
-        await dom.window.djust.djTrackStatic._onWsReconnected();
-        expect(fetchCalls).toHaveLength(1);
-        expect(fetchCalls[0].url).toBe('http://localhost/page/');
-        expect(fetchCalls[0].init.redirect).toBe('manual');
-        expect(events).toEqual([{ changed: ['/static/app.def.js'] }]);
-    });
-
-    it('stays quiet when the server serves the same URLs', async () => {
-        const { dom, events } = trackEnv(
-            '<script dj-track-static src="/static/app.abc.js"></script>',
-            page('<script dj-track-static src="/static/app.abc.js"></script>'),
-        );
-        await dom.window.djust.djTrackStatic._onWsReconnected();
-        expect(events).toEqual([]);
-    });
-
-    it('ignores a redirect and a page without tracked assets', async () => {
-        const redirected = trackEnv(
-            '<script dj-track-static src="/static/app.abc.js"></script>',
-            page('<script dj-track-static src="/static/login.js"></script>'),
-            { type: 'opaqueredirect', ok: false },
-        );
-        await redirected.dom.window.djust.djTrackStatic._onWsReconnected();
-        expect(redirected.events).toEqual([]);
-
-        const bare = trackEnv(
-            '<script dj-track-static src="/static/app.abc.js"></script>',
-            page('<title>500</title>'),
-        );
-        await bare.dom.window.djust.djTrackStatic._onWsReconnected();
-        expect(bare.events).toEqual([]);
-    });
-
-    it('does not fetch on a page with no tracked assets', async () => {
-        const { dom, fetchCalls } = trackEnv('', page(''));
-        await dom.window.djust.djTrackStatic._onWsReconnected();
-        expect(fetchCalls).toHaveLength(0);
-    });
-
-    it('asks for a reload when a changed asset is marked reload', () => {
-        const { dom } = trackEnv('<link dj-track-static="reload" rel="stylesheet" href="/s/a.1.css">', '');
-        const result = dom.window.djust.djTrackStatic._compareWithServerPage(
-            page('<link dj-track-static="reload" rel="stylesheet" href="/s/a.2.css">'),
-        );
-        expect(result).toEqual({ changed: ['/s/a.2.css'], shouldReload: true });
     });
 });

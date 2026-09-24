@@ -2790,7 +2790,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             resumed = None
             try:
                 if mgr is not None:
-                    resumed = mgr.resume_entry(upload_id, session_key)
+                    # Off the event loop: re-attaching may abort expired
+                    # suspended uploads, which can be network I/O (S3).
+                    resumed = await sync_to_async(mgr.resume_entry)(upload_id, session_key)
             except Exception:  # noqa: BLE001 — resume must never crash the consumer
                 logger.exception("upload_resume: re-attaching the upload failed")
             if resumed is None:

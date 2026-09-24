@@ -75,6 +75,12 @@ class DraftModeMixin:
         # (re-)arm it: get_context_data resets it to False after a render, so a
         # hasattr() guard ignored every clear_draft() after the first (#2971).
         self._draft_clear_requested = True
+        # Over a live connection, also tell the open page directly. The
+        # attribute alone can't be relied on there: when the previous render
+        # already carried it, the next one produces no patch for it (#2971).
+        push = getattr(self, "push_event", None)
+        if callable(push):
+            push("djust:draft-clear", {"key": self.get_draft_key()})
 
     def get_context_data(self, **kwargs: Any) -> dict[str, Any]:
         """

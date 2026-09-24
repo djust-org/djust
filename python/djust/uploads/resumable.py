@@ -468,7 +468,10 @@ SUSPENDED_UPLOAD_WINDOW_SECONDS = 600
 #: Most suspended uploads held per process.
 MAX_SUSPENDED_UPLOADS = 32
 
-_suspended: "OrderedDict[str, Tuple[UploadEntry, float]]" = OrderedDict()
+# Keyed by (owner session key, ref): the ref comes from the client, so a
+# second session registering the same ref must not displace (and abort)
+# another session's parked upload.
+_suspended: "OrderedDict[Tuple[str, str], Tuple[UploadEntry, float]]" = OrderedDict()
 _suspended_lock = threading.Lock()
 
 
@@ -486,22 +489,31 @@ def _evict_suspended(now: float) -> List["UploadEntry"]:
     """Pop expired and over-cap entries. Caller holds the lock and aborts
     what is returned OUTSIDE it (abort may do network I/O)."""
     evicted: List["UploadEntry"] = []
-    for ref in [r for r, (_, expires) in _suspended.items() if expires <= now]:
-        evicted.append(_suspended.pop(ref)[0])
+    for key in [k for k, (_, expires) in _suspended.items() if expires <= now]:
+        evicted.append(_suspended.pop(key)[0])
     while len(_suspended) > MAX_SUSPENDED_UPLOADS:
         evicted.append(_suspended.popitem(last=False)[1][0])
     return evicted
 
 
 def park_suspended_upload(entry: "UploadEntry") -> None:
-    """Hold a suspended resumable upload until its client resumes it."""
+    """Hold a suspended resumable upload until its client resumes it.
+
+    The entry must carry its owner's session key (the caller only parks
+    uploads that do); one without is aborted instead.
+    """
+    owner = entry._session_key
+    if owner is None:
+        _abort_parked(entry, "session closed")
+        return
     writer = entry.writer_instance
     ttl = getattr(writer, "ttl", SUSPENDED_UPLOAD_WINDOW_SECONDS)
     window = min(SUSPENDED_UPLOAD_WINDOW_SECONDS, ttl or SUSPENDED_UPLOAD_WINDOW_SECONDS)
     now = time.monotonic()
+    key = (owner, entry.ref)
     with _suspended_lock:
-        previous = _suspended.pop(entry.ref, None)
-        _suspended[entry.ref] = (entry, now + window)
+        previous = _suspended.pop(key, None)
+        _suspended[key] = (entry, now + window)
         evicted = _evict_suspended(now)
     if previous is not None and previous[0] is not entry:
         evicted.append(previous[0])
@@ -515,18 +527,31 @@ def claim_suspended_upload(ref: str, session_key: Optional[str]) -> Optional["Up
     ``session_key`` must equal the key recorded at ``upload_register``; an
     upload without a recorded owner is never handed out.
     """
+    if session_key is None:
+        sweep_suspended_uploads()
+        return None
     now = time.monotonic()
     with _suspended_lock:
         evicted = _evict_suspended(now)
-        item = _suspended.get(ref)
-        claimed: Optional["UploadEntry"] = None
-        if item is not None:
-            owner = item[0]._session_key
-            if owner is not None and session_key is not None and owner == session_key:
-                claimed = _suspended.pop(ref)[0]
+        item = _suspended.pop((session_key, ref), None)
     for old in evicted:
         _abort_parked(old, "resume window expired")
-    return claimed
+    return item[0] if item is not None else None
+
+
+def sweep_suspended_uploads() -> None:
+    """Abort parked uploads whose window has passed.
+
+    Runs on every park and claim, and from ``UploadManager.cleanup`` (every
+    disconnect of a view with uploads), so an expired writer does not wait
+    for the next resumable upload to be released.
+    """
+    with _suspended_lock:
+        if not _suspended:
+            return
+        evicted = _evict_suspended(time.monotonic())
+    for old in evicted:
+        _abort_parked(old, "resume window expired")
 
 
 def _reset_suspended_uploads() -> None:
@@ -619,6 +644,7 @@ __all__ = [
     "ResumableUploadWriter",
     "claim_suspended_upload",
     "park_suspended_upload",
+    "sweep_suspended_uploads",
     "compact_chunks",
     "expand_ranges",
     "bytes_received_from_ranges",

@@ -371,6 +371,8 @@ class SlowView(LiveView):
 
     async def _work(self):
         await self._gate.wait()
+        if getattr(self, "_fail", False):
+            raise RuntimeError("boom")
         self.result = "done"
 
     @event_handler()
@@ -396,6 +398,30 @@ class TestRuntimeHonoursCancel:
         assert async_frames == [], async_frames
         assert "export" not in view._async_running
         assert "export" not in view._async_cancelled
+
+    @pytest.mark.asyncio
+    async def test_an_unconsumed_cancel_does_not_skip_the_next_task(self):
+        """A task cancelled while running whose callback then raises never
+        reaches the post-callback cancel check. The mark must not outlive it
+        and silently skip the next task started under the same name."""
+        view, runtime, transport = _mounted(SlowView)
+        view._gate = asyncio.Event()
+        view._fail = True
+        await runtime.dispatch_event({"type": "event", "event": "go", "params": {}, "ref": 1})
+        await asyncio.sleep(0)
+        view.cancel_async("export")  # while it runs
+        view._gate.set()
+        for _ in range(5):
+            await asyncio.sleep(0.01)
+        assert "export" not in view._async_running
+        assert "export" not in view._async_cancelled
+        view._fail = False
+        before = len([f for f in transport.sent if f.get("source") == "async"])
+        await runtime.dispatch_event({"type": "event", "event": "go", "params": {}, "ref": 2})
+        for _ in range(5):
+            await asyncio.sleep(0.01)
+        after = [f for f in transport.sent if f.get("source") == "async"]
+        assert len(after) == before + 1 and "done" in str(after[-1])
 
     @pytest.mark.asyncio
     async def test_uncancelled_task_still_renders(self):
@@ -462,6 +488,8 @@ class TestStickyKwargsWarning:
                 view.n = 2
                 html = self._render(view)
                 html = self._render(view)  # same changed value: no second warning
+                view.n = 3
+                self._render(view)  # the same kwarg changed again: still one warning
         warnings = [r for r in caplog.records if "mount-time only" in r.getMessage()]
         assert len(warnings) == 1, [r.getMessage() for r in warnings]
         assert "'n'" in warnings[0].getMessage()

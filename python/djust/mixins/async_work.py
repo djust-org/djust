@@ -88,6 +88,13 @@ def track_running_async_task(view: Any, task_name: str, future: "asyncio.Future[
 
     def _done(_fut: "asyncio.Future[Any]") -> None:
         running.discard(task_name)
+        # A cancel the task never consumed (it arrived while the task waited
+        # for the render lock, or the callback raised) must not outlive it:
+        # left in place it would silently skip the next task started under
+        # the same name.
+        cancelled = getattr(view, "_async_cancelled", None)
+        if cancelled:
+            cancelled.discard(task_name)
 
     future.add_done_callback(_done)
 

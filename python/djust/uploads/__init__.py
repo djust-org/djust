@@ -1306,7 +1306,13 @@ class UploadManager:
             if entry.writer_instance is not None and not entry._complete:
                 # Imported here, and only for a live writer: the module is also
                 # loaded standalone (without its package) by some tests.
-                from .resumable import ResumableUploadWriter, park_suspended_upload
+                from .resumable import (
+                    ResumableUploadWriter,
+                    park_suspended_upload,
+                    sweep_suspended_uploads,
+                )
+
+                sweep_suspended_uploads()
 
                 writer = entry.writer_instance
                 if (

@@ -12,18 +12,13 @@
 //   <script dj-track-static="reload" src="..."></script>
 //
 // Behavior:
-//   The page-load snapshot records each [dj-track-static] element's
-//   src/href. On every djust:ws-reconnected event:
-//     1. each tracked element still in the page is compared with its
-//        snapshot URL (catches a patch that rewrote one in place);
-//     2. otherwise the page is re-fetched (GET, same origin, no redirects
-//        followed) and its [dj-track-static] URLs are compared with the
-//        snapshot. A new deploy changes them there, never in the running
-//        page's <head> — without this step a deploy was never detected
-//        (#2966).
-//   If anything changed, dispatch a dj:stale-assets CustomEvent
-//   (detail = { changed: [...urls] }). If a changed asset carries
-//   dj-track-static="reload", call window.location.reload() instead.
+//   On the FIRST djust:ws-reconnected event the snapshot is empty, so
+//   the first connect seeds it. On every subsequent reconnect, each
+//   [dj-track-static] element's src/href is compared against the
+//   initial snapshot. If any differ, dispatch a dj:stale-assets
+//   CustomEvent (detail = { changed: [...urls] }). If any of the
+//   changed elements carried dj-track-static="reload", call
+//   window.location.reload() instead.
 
 // #880: Using `Map` (not `WeakMap`) deliberately: the reconnect-diff step
 // iterates ALL tracked elements to compare snapshot URLs with current URLs.
@@ -68,7 +63,7 @@ function _checkStale() {
         const currentUrl = _urlOf(el);
         if (currentUrl !== oldUrl) {
             changed.push(currentUrl);
-            if (_isReloadAsset(el)) {
+            if ((el.getAttribute('dj-track-static') || '').trim() === 'reload') {
                 shouldReload = true;
             }
         }
@@ -76,78 +71,10 @@ function _checkStale() {
     return { changed: changed, shouldReload: shouldReload };
 }
 
-function _isReloadAsset(el) {
-    return (el.getAttribute('dj-track-static') || '').trim() === 'reload';
-}
-
-/**
- * Compare the tracked assets of a freshly fetched copy of the page with the
- * page-load snapshot (#2966). ``html`` is the page source. Returns
- * ``{changed, shouldReload}`` — ``changed`` lists URLs the server now serves
- * that the running page did not load.
- */
-function _compareWithServerPage(html) {
-    const empty = { changed: [], shouldReload: false };
-    if (!_djTrackStaticSnapshot || _djTrackStaticSnapshot.size === 0) return empty;
-    let doc;
-    try {
-        doc = new DOMParser().parseFromString(html, 'text/html');
-    } catch (_e) {
-        return empty;
-    }
-    const served = Array.from(doc.querySelectorAll('[dj-track-static]'));
-    // A page with no tracked assets (an error page, a different layout) says
-    // nothing about a deploy.
-    if (served.length === 0) return empty;
-    const loaded = new Set(_djTrackStaticSnapshot.values());
-    const servedUrls = new Set(served.map(_urlOf));
-    const changed = [];
-    let shouldReload = false;
-    served.forEach(function (el) {
-        const url = _urlOf(el);
-        if (url && !loaded.has(url) && changed.indexOf(url) === -1) {
-            changed.push(url);
-            if (_isReloadAsset(el)) shouldReload = true;
-        }
-    });
-    if (changed.length > 0) {
-        // A "reload" asset the server no longer serves also asks for a reload.
-        _djTrackStaticSnapshot.forEach(function (oldUrl, el) {
-            if (_isReloadAsset(el) && !servedUrls.has(oldUrl)) shouldReload = true;
-        });
-    }
-    return { changed: changed, shouldReload: shouldReload };
-}
-
-let _serverCheckInFlight = false;
-
-function _fetchAndCompare() {
-    if (_serverCheckInFlight) return Promise.resolve(null);
-    if (!_djTrackStaticSnapshot || _djTrackStaticSnapshot.size === 0) return Promise.resolve(null);
-    if (typeof window === 'undefined' || typeof window.fetch !== 'function') return Promise.resolve(null);
-    _serverCheckInFlight = true;
-    return window.fetch(window.location.href, {
-        method: 'GET',
-        credentials: 'same-origin',
-        cache: 'no-store',
-        // A redirect (for example to a login page) would compare another
-        // page's assets: skip the check instead.
-        redirect: 'manual',
-        headers: { 'Accept': 'text/html' },
-    }).then(function (response) {
-        if (!response || !response.ok || response.redirected || response.type === 'opaqueredirect') {
-            return null;
-        }
-        return response.text().then(_compareWithServerPage);
-    }).catch(function () {
-        return null;
-    }).finally(function () {
-        _serverCheckInFlight = false;
-    });
-}
-
-function _reportStale(result) {
-    if (!result || result.changed.length === 0) return;
+function _onWsReconnected() {
+    const result = _checkStale();
+    if (!result) return;  // First connect — snapshot was just seeded.
+    if (result.changed.length === 0) return;
     if (result.shouldReload) {
         window.location.reload();
         return;
@@ -155,18 +82,6 @@ function _reportStale(result) {
     document.dispatchEvent(new CustomEvent('dj:stale-assets', {
         detail: { changed: result.changed },
     }));
-}
-
-function _onWsReconnected() {
-    const result = _checkStale();
-    if (!result) return null;  // First connect — snapshot was just seeded.
-    if (result.changed.length > 0) {
-        _reportStale(result);
-        return null;
-    }
-    // The running page's <head> never changes on a deploy: ask the server
-    // for the page it would serve now (#2966).
-    return _fetchAndCompare().then(_reportStale);
 }
 
 function _installDjTrackStatic() {
@@ -190,6 +105,5 @@ globalThis.djust.djTrackStatic = {
     _snapshotAssets,
     _checkStale,
     _onWsReconnected,
-    _compareWithServerPage,
     _resetSnapshot: function () { _djTrackStaticSnapshot = null; },
 };

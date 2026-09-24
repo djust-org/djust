@@ -90,6 +90,30 @@ class TestRegisteredSyncHandlersRun:
         assert seen == [1]
         assert result.success is True
 
+    def test_a_client_model_name_cannot_reach_an_action_handler(self, global_handlers):
+        """The model name is client input: ``model="create_Task"`` with
+        ``type="delete"`` must not fall back to the ``create_Task`` handler."""
+        calls = []
+
+        @pwa_sync.register_sync_handler("Task", "create")
+        def create_task(batch):
+            calls.append(batch)
+            return {"processed": len(batch), "failed": 0}
+
+        pwa_sync.sync_endpoint_view(_post([_action("delete", "create_Task", 5)]))
+        assert calls == []
+
+    def test_handler_exception_text_stays_in_the_log(self, global_handlers):
+        @pwa_sync.register_sync_handler("Note", "create")
+        def boom(batch):
+            raise RuntimeError("duplicate key value violates unique constraint secret_idx")
+
+        body = json.loads(
+            pwa_sync.sync_endpoint_view(_post([_action("create", "Note", 6)])).content
+        )
+        assert body["failed_count"] == 1
+        assert "secret_idx" not in json.dumps(body)
+
     def test_action_specific_handler_wins_over_model_wide(self):
         manager = pwa_sync.SyncManager()
         manager.register_sync_handler("Task", lambda b: {"processed": 0, "failed": len(b)})
@@ -225,6 +249,30 @@ class TestDisconnectSuspendsResumableUploads:
         mgr.cleanup()
         assert _manager().resume_entry(entry.ref, "sess-B") is None
         assert _manager().resume_entry(entry.ref, "sess-A") is entry
+
+    def test_another_session_reusing_the_ref_cannot_displace_it(self, store):
+        """The ref comes from the client; a second session registering the
+        same ref and disconnecting must not abort the owner's parked upload."""
+        mine = _manager()
+        entry = _start(mine)
+        mine.cleanup()
+        theirs = _manager()
+        _start(theirs, key="sess-B")
+        theirs.cleanup()
+        assert entry.writer_instance._inner.aborted_with is None
+        assert _manager().resume_entry(entry.ref, "sess-A") is entry
+
+    def test_cleanup_sweeps_expired_uploads(self, store, monkeypatch):
+        mgr = _manager()
+        entry = _start(mgr)
+        mgr.cleanup()
+        with resumable._suspended_lock:
+            key = next(iter(resumable._suspended))
+            resumable._suspended[key] = (entry, 0.0)  # window already over
+        other = _manager()
+        _start(other, ref="dddddddd-2222-3333-4444-555555555555", key=None)
+        other.cleanup()  # an unrelated disconnect releases it
+        assert isinstance(entry.writer_instance._inner.aborted_with, ConnectionAbortedError)
 
     def test_explicit_cancel_still_aborts_and_deletes(self, store):
         mgr = _manager()

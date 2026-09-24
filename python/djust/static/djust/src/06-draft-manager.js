@@ -152,23 +152,37 @@ function initDraftMode() {
     });
 
     // Check for draft clear flag
-    applyDraftClearFlag();
+    if (draftRoot.hasAttribute('data-draft-clear')) {
+        if (globalThis.djustDebug) console.log('[DraftMode] Draft clear flag detected, clearing draft...');
+        globalDraftManager.clearDraft(draftKey);
+        draftRoot.removeAttribute('data-draft-clear');
+    }
 }
 
 /**
- * Clear the draft of every draft root carrying `data-draft-clear`, then drop
- * the flag. `DraftModeMixin.clear_draft()` sets it on the NEXT render, which
- * usually arrives as a patch or morph after an event (a successful submit), not
- * as a page load — so this runs after every DOM update (reinitAfterDOMUpdate)
- * as well as at init (#2971).
+ * Clear the draft of every draft root carrying `data-draft-clear`.
+ * `DraftModeMixin.clear_draft()` sets it on the NEXT render, which usually
+ * arrives as a patch after an event (a successful submit), not as a page load,
+ * so this runs after every DOM update (reinitAfterDOMUpdate) (#2971). The
+ * attribute is left in place: the server's VDOM still has it, and removing it
+ * here would keep a later render that carries it again from patching it back.
+ * The server drops it on its next render.
  */
 function applyDraftClearFlag() {
     document.querySelectorAll('[data-draft-enabled][data-draft-clear]').forEach(function (root) {
         const key = root.getAttribute('data-draft-key');
-        if (key) {
-            if (globalThis.djustDebug) console.log('[DraftMode] Draft clear flag detected, clearing draft...');
-            globalDraftManager.clearDraft(key);
+        if (key) globalDraftManager.clearDraft(key);
+    });
+}
+
+// Over a live connection clear_draft() also pushes `djust:draft-clear`
+// (#2971), which reaches the page even when the render carries no patch.
+if (typeof window !== 'undefined') {
+    window.addEventListener('djust:push_event', function (e) {
+        if (!e || !e.detail || e.detail.event !== 'djust:draft-clear') return;
+        const payload = e.detail.payload || {};
+        if (typeof payload.key === 'string' && payload.key) {
+            globalDraftManager.clearDraft(payload.key);
         }
-        root.removeAttribute('data-draft-clear');
     });
 }

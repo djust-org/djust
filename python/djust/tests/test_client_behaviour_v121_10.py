@@ -42,6 +42,15 @@ class TestClearDraftReArms:
         view.clear_draft()
         assert view.get_context_data().get("draft_clear") is True
 
+    def test_clear_draft_pushes_the_clear_event(self):
+        """Over a live connection the flag alone can miss: when the previous
+        render already carried it, the next one produces no patch."""
+        view = DraftView()
+        view.mount(None)
+        view.clear_draft()
+        events = [e for e in view._pending_push_events if e[0] == "djust:draft-clear"]
+        assert events == [("djust:draft-clear", {"key": "post_2971"})]
+
     def test_the_render_carries_the_flag_once(self):
         view = DraftView()
         view.mount(None)

@@ -1478,25 +1478,26 @@ def _warn_if_sticky_kwargs_changed(child: Any, kwargs: Dict[str, Any], view_path
     A sticky child keeps its live instance across parent renders and
     navigations, so the tag's kwargs reach ``mount()`` only once; later values
     are ignored (#2919). Re-applying them is a 1.3 change. Until then, say so
-    once per distinct set of kwargs rather than silently rendering stale state.
+    once per distinct set of changed kwarg names rather than silently rendering
+    stale state.
     """
     recorded = getattr(child, _STICKY_MOUNT_KWARGS_ATTR, None)
     if not isinstance(recorded, dict):
         return
     try:
-        if kwargs == recorded or kwargs == getattr(child, _STICKY_KWARGS_WARNED_ATTR, None):
-            return
         changed = sorted(
             key
             for key in set(recorded) | set(kwargs)
-            if key not in recorded or key not in kwargs or recorded[key] != kwargs[key]
+            if key not in recorded or key not in kwargs or not bool(recorded[key] == kwargs[key])
         )
     except Exception:  # noqa: BLE001 — an uncomparable value: say nothing
         return
-    if not changed:
+    # Once per distinct set of changed names, not per value: a value that
+    # compares by identity (a QuerySet) differs on every render.
+    if not changed or frozenset(changed) == getattr(child, _STICKY_KWARGS_WARNED_ATTR, None):
         return
     try:
-        setattr(child, _STICKY_KWARGS_WARNED_ATTR, dict(kwargs))
+        setattr(child, _STICKY_KWARGS_WARNED_ATTR, frozenset(changed))
     except Exception:  # noqa: BLE001
         pass
     logger.warning(
