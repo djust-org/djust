@@ -97,7 +97,11 @@ sensitive payloads.**
 - Focused ADR-036 Python suites: 542 passed.
 - Focused bundle suites: 130 passed.
 - Playwright matrix: passes on all three transports.
-- The full-suite result is recorded below.
+- Full Python suite at `cf2ea4aa2`, run from a frozen detached worktree:
+  33,791 passed, 949 skipped, 2 failed. Both failures are in
+  `tests/test_changelog_tagged_sections.py` and fail alone too: release tags
+  are reachable from this branch, so they are not caused by this change.
+- Full vitest run at the same commit: 2,299 passed across 206 files.
 
 ## ADR-038 activation review — E6-5
 
