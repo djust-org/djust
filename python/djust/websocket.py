@@ -5104,15 +5104,16 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 # Set before a render error surfaces, as the stock turn does:
                 # start_async work the hooks queued still runs (finally below).
                 dispatch_work = applied
-                if render_error is not None:
-                    raise render_error
                 if self.view_instance is not view or not applied:
                     return
                 # A hook that changed ``push_scope`` moves the session's
-                # scoped-push groups now, under the render lock (#3004).
+                # scoped-push groups now, under the render lock (#3004) --
+                # before a render error surfaces, as in the stock turn.
                 from .push import sync_push_scope_groups
 
                 await sync_push_scope_groups(self, view)
+                if render_error is not None:
+                    raise render_error
                 if self.view_instance is not view:
                     return
                 if not render:
