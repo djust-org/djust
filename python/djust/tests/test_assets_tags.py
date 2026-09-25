@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import logging
+
 import pytest
 from django.core.exceptions import ImproperlyConfigured
 from django.template import Context, Template
 from django.test import override_settings
 
 from djust.assets.manifest import sri
-from djust.assets.tags import asset_tags, asset_url
+from djust.assets.tags import asset_tags, asset_url, clear_integrity_cache
 from djust.tests._asset_fixtures import write_asset
 
 CONTENT = b"console.log(1);\n"
@@ -93,6 +95,55 @@ def test_template_tag(tmp_path):
     with _settings(tmp_path):
         out = Template('{% load djust_assets %}{% djust_asset "test-lib" %}').render(Context())
     assert out.startswith('<script src="/static/testlib/lib.js" integrity="sha384-')
+
+
+def test_storage_open_failure_falls_back_to_finder_with_a_warning(tmp_path, monkeypatch, caplog):
+    """R8: a swallowed storage exception (e.g. the remote-storage credentials/
+    network case) must not be silent — it's logged, and the finder fallback
+    (runserver before collectstatic) still renders the tag."""
+    from django.contrib.staticfiles.storage import staticfiles_storage
+
+    clear_integrity_cache()
+
+    def _raise(*args, **kwargs):
+        raise PermissionError("denied")
+
+    # STATIC_URL (set by _settings) resets staticfiles_storage's lazy wrapped
+    # instance, so the storage must be patched AFTER entering that context —
+    # patching first would be discarded before `asset_tags` ever runs.
+    with _settings(tmp_path), caplog.at_level(logging.WARNING, logger="djust.assets"):
+        monkeypatch.setattr(staticfiles_storage, "open", _raise)
+        html = asset_tags("test-lib")
+
+    assert html == (f'<script src="/static/testlib/lib.js" integrity="{sri(CONTENT)}"></script>')
+    assert any(
+        record.name == "djust.assets"
+        and record.levelno == logging.WARNING
+        and "PermissionError" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_storage_and_finder_both_failing_reports_the_storage_exception(tmp_path, monkeypatch):
+    """R8: when the fallback also can't find the file, the real cause (the
+    storage exception) must be in the error message and chained, not hidden
+    behind a generic "neither storage nor finder" message."""
+    from django.contrib.staticfiles.storage import staticfiles_storage
+
+    clear_integrity_cache()
+
+    def _raise(*args, **kwargs):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr("django.contrib.staticfiles.finders.find", lambda path: None)
+
+    with _settings(tmp_path):
+        # See the sibling test above: patch AFTER entering, since STATIC_URL
+        # resets staticfiles_storage's lazy wrapped instance on entry.
+        monkeypatch.setattr(staticfiles_storage, "open", _raise)
+        with pytest.raises(ImproperlyConfigured, match="PermissionError") as exc_info:
+            asset_tags("test-lib")
+    assert isinstance(exc_info.value.__cause__, PermissionError)
 
 
 def test_component_requires_assets_renders_its_tags(tmp_path):

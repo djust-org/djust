@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import logging
+
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.html import format_html
 from django.utils.safestring import SafeString, mark_safe
 
 from .manifest import Asset, AssetFile, sri
 from .registry import get_registry
+
+logger = logging.getLogger("djust.assets")
 
 _integrity_cache: dict[tuple[str, str], str] = {}
 
@@ -45,13 +49,25 @@ def _read_static(path: str) -> bytes:
     try:
         with staticfiles_storage.open(stored) as handle:
             return handle.read()
-    except Exception:  # noqa: BLE001 - any backend's "not stored here"; fall back to the source
+    except Exception as exc:  # noqa: BLE001 - any backend's "not stored here"; fall back to the source
+        # FileNotFoundError is the normal dev path (not collected yet); anything
+        # else (permissions, network, credentials — the remote-storage case
+        # R8 calls out) is unexpected and worth a WARNING, not silence.
+        level = logging.DEBUG if isinstance(exc, FileNotFoundError) else logging.WARNING
+        logger.log(
+            level,
+            "static storage could not open %r (%s: %s); falling back to staticfiles finders",
+            stored,
+            type(exc).__name__,
+            exc,
+        )
         found = finders.find(path)
         if not found:
             raise ImproperlyConfigured(
                 f"djust asset file {path!r} is in neither static storage nor any "
-                "staticfiles finder (see check djust.B003)."
-            ) from None
+                f"staticfiles finder (see check djust.B003); static storage raised "
+                f"{type(exc).__name__}: {exc}."
+            ) from exc
         with open(found, "rb") as handle:
             return handle.read()
 
