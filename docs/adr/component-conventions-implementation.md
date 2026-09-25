@@ -1884,6 +1884,18 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
     tests, with 949 skipped and only the 2 known tag-reachability failures.
     The Playwright matrix passes again on the compacted client over all
     three transports.
+  Owner decision R1, `dj-auto-recover` stays legacy (commit d8cd2b2cb):
+  - A handler that a literal `dj-auto-recover` in the view's own template
+    targets resolves to the legacy policy in dispatch and in the public
+    manifest. The target is read from the server-owned template, so no
+    client can claim the downgrade.
+  - An explicit strict declaration on such a handler is the warning
+    `djust.V019`.
+  - Evidence: 7 cases in `test_recovery_handler_policy.py`, 5 of which fail
+    without the change. They cover recovery in a strict project, the
+    declared-strict warning, other handlers staying strict, the manifest,
+    and the legacy project unchanged. Full Python suite from a frozen
+    worktree: 33,776 passed and 949 skipped, plus the 2 known tag failures.
   - Remaining P2 items:
     - render-producer coverage for child/component creation, removal and
       replacement;
