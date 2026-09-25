@@ -9,6 +9,12 @@ let _djustHttpFallbackWarned = false;
 const _localEventTransport = {};
 let _httpPageGeneration = 0;
 const _pendingHttpControllers = new Set();
+// HTTP fallback events run one at a time, in dispatch order, like frames on
+// one socket. Each POST restores and saves the view's session state, so two
+// in flight at once lose one's changes, and a stale response can overwrite
+// input typed since. Null when nothing is in flight, so an event sent alone
+// still goes out synchronously.
+let _httpEventChain = null;
 for (const event of ['djust:before-navigate', 'turbo:before-visit', 'pagehide']) {
     window.addEventListener(event, () => {
         _httpPageGeneration += 1;
@@ -381,7 +387,20 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     const httpGeneration = _httpPageGeneration;
     const ownsHttpResponse = () => httpOwner === (document.querySelector('[dj-root]') || document.body)
         && httpUrl === window.location.href && httpGeneration === _httpPageGeneration;
+    // Keepalive teardown sends are not queued: they must leave with the page.
+    const previousHttpEvent = teardown ? null : _httpEventChain;
+    let releaseHttpEvent = null;
+    if (!teardown) {
+        const settled = new Promise(resolve => { releaseHttpEvent = resolve; });
+        _httpEventChain = settled;
+        settled.then(() => { if (_httpEventChain === settled) _httpEventChain = null; });
+    }
     try {
+        if (previousHttpEvent) {
+            await previousHttpEvent;
+            // Navigation while queued makes this event belong to a gone page.
+            if (!ownsHttpResponse()) return;
+        }
         // Input, configured-name cookie, then server meta tag (00-namespace.js).
         const csrfToken = window.djust.csrfToken();
         const response = await fetch(teardown ? teardown.url : window.location.href, {
@@ -422,6 +441,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     } finally {
         if (httpController) _pendingHttpControllers.delete(httpController);
         if (httpRequest) cancelEventRequests(_localEventTransport, httpRequest.ref);
+        if (releaseHttpEvent) releaseHttpEvent();
     }
 }
 window.djust.handleEvent = handleEvent;

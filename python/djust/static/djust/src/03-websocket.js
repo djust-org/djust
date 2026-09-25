@@ -245,6 +245,29 @@ function applyServiceWorkerMountMetadata(data) {
     }
 }
 
+// #1610: morph the HTTP-prerendered DOM against a mount frame's HTML, so
+// mount-context state (per-connection values, and ADR-034's per-instance
+// component identities) reaches the page. Shared by the WebSocket and SSE
+// mount paths (#1646: one path, not two).
+function _morphPrerenderedMount(container, html, formRecoverySnapshot) {
+    const temp = document.createElement('div');
+    // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
+    temp.innerHTML = html;
+    morphChildren(container, temp);
+    if (formRecoverySnapshot) window.djust._restoreFormRecovery(formRecoverySnapshot);
+    // #1813 (a): embedded-view wrappers carry NO `id`, so morphChildren can
+    // only align them positionally. Reconcile them by the stable
+    // `data-djust-embedded` value and copy the server's dj-id onto the live
+    // wrapper, or the first parent patch misses it.
+    _stampEmbeddedWrapperDjIds(container, temp);
+    // #1848: morphChildren re-creates inline <script> nodes inert. Re-run
+    // classic page scripts inside the dj-root so their init runs on mount.
+    _runInsertedScripts(container);
+    // #2058: anything _runInsertedScripts() didn't re-execute gets a loud
+    // DEBUG-mode warning instead of silently staying dead.
+    _warnDeadScripts(container);
+}
+
 class LiveViewWebSocket {
     constructor() {
         this.ws = null;
@@ -621,38 +644,7 @@ class LiveViewWebSocket {
                         const _morphContainer = findPageViewContainer()
                                             || document.querySelector('[dj-root]');
                         if (_morphContainer) {
-                            const _morphTemp = document.createElement('div');
-                            // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
-                            _morphTemp.innerHTML = data.html;
-                            morphChildren(_morphContainer, _morphTemp);
-                            if (formRecoverySnapshot) window.djust._restoreFormRecovery(formRecoverySnapshot);
-                            // #1813 (a): embedded-view wrappers
-                            // (<div dj-view dj-sticky-view dj-sticky-root
-                            //  data-djust-embedded=...>) carry NO `id`, so
-                            // morphChildren can only align them positionally
-                            // (Strategy 2). If sibling counts diverge before a
-                            // wrapper, it never aligns → morphElement never runs
-                            // → the server's dj-id is never copied onto the live
-                            // wrapper. The first parent patch then targets the
-                            // wrapper by dj-id, finds nothing, falls back to a
-                            // positional path, and breaks once the child subtree
-                            // drifts → triggers html_recovery (the trigger half
-                            // of the sticky-child data-loss bug). Reconcile by
-                            // the STABLE `data-djust-embedded` value (the same
-                            // selector 45-child-view.js uses) and copy the
-                            // server's dj-id onto the live wrapper.
-                            _stampEmbeddedWrapperDjIds(_morphContainer, _morphTemp);
-                            // #1848: morphChildren re-creates inline <script>
-                            // nodes inert (clone+insert never executes them).
-                            // Re-run classic page scripts inside the dj-root so
-                            // their addEventListener / init runs on mount.
-                            _runInsertedScripts(_morphContainer);
-                            // #2058: defense-in-depth — anything
-                            // _runInsertedScripts() didn't re-execute (should
-                            // be nothing for classic scripts) gets a loud
-                            // DEBUG-mode warning instead of silently staying
-                            // dead.
-                            _warnDeadScripts(_morphContainer);
+                            _morphPrerenderedMount(_morphContainer, data.html, formRecoverySnapshot);
                             if (globalThis.djustDebug) console.log('[LiveView] Morphed pre-rendered DOM against WS-mount HTML (#1610)');
                         } else {
                             // Fallback: no [dj-view]/[dj-root] container found

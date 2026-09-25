@@ -28,13 +28,10 @@ import sys
 
 from playwright.async_api import async_playwright
 
+from _transports import INIT, TransportWatch
+
 BASE = os.environ.get("STRICT_BASE", "http://localhost:18436")
 PATH = "/demos/strict-parameters/"
-INIT = {
-    "websocket": "",
-    "sse": "window.DJUST_USE_WEBSOCKET = false;",
-    "http": "window.DJUST_USE_WEBSOCKET = false; window.EventSource = undefined;",
-}
 ERRORS = """
 (() => {
     window.__strictErrors = [];
@@ -59,6 +56,7 @@ async def run(browser, transport, failures):
     context = await browser.new_context()
     await context.add_init_script(INIT[transport] + ERRORS)
     page = await context.new_page()
+    watch = TransportWatch(page)
     sent = []
 
     page.on(
@@ -183,6 +181,7 @@ async def run(browser, transport, failures):
     await expect("#strict-result", "legacy:mode,row")
     await expect("#strict-calls", "4")
 
+    watch.check(transport, label, failures)
     await context.close()
 
 

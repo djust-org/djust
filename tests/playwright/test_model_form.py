@@ -26,13 +26,10 @@ import sys
 
 from playwright.async_api import async_playwright
 
+from _transports import INIT, TransportWatch
+
 STAGE: dict = {}
 BASE = os.environ.get("MODEL_FORM_BASE", "http://localhost:18437")
-INIT = {
-    "websocket": "",
-    "sse": "window.DJUST_USE_WEBSOCKET = false;",
-    "http": "window.DJUST_USE_WEBSOCKET = false; window.EventSource = undefined;",
-}
 
 
 async def run(browser, transport, failures):
@@ -40,6 +37,7 @@ async def run(browser, transport, failures):
     context = await browser.new_context()
     await context.add_init_script(INIT[transport])
     page = await context.new_page()
+    watch = TransportWatch(page)
 
     async def text(selector):
         return ((await page.text_content(selector)) or "").strip()
@@ -151,6 +149,7 @@ async def run(browser, transport, failures):
     if bodies != [(403, 0), (403, 0)]:
         failures.append(f"{label}: denial pages {bodies!r}")
 
+    watch.check(transport, label, failures)
     await context.close()
 
 

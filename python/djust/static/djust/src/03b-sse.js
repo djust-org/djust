@@ -235,7 +235,11 @@ class LiveViewSSE {
                         if (typeof data.view === 'string') container.setAttribute('dj-view', data.view);
                         const hasDataDjAttrs = data.has_ids === true;
                         if (hasDataDjAttrs && !this._replacingView) {
-                            _stampDjIds(data.html);
+                            // The page was prerendered over HTTP: morph it
+                            // against the mount HTML, as the WebSocket mount
+                            // does (#1610), so mount-time state such as
+                            // ADR-034 component identities reaches the DOM.
+                            _morphPrerenderedMount(container, data.html, null);
                         } else {
                             // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                             container.innerHTML = data.html;

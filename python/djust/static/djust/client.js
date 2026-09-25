@@ -1019,6 +1019,29 @@ function applyServiceWorkerMountMetadata(data) {
     }
 }
 
+// #1610: morph the HTTP-prerendered DOM against a mount frame's HTML, so
+// mount-context state (per-connection values, and ADR-034's per-instance
+// component identities) reaches the page. Shared by the WebSocket and SSE
+// mount paths (#1646: one path, not two).
+function _morphPrerenderedMount(container, html, formRecoverySnapshot) {
+    const temp = document.createElement('div');
+    // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
+    temp.innerHTML = html;
+    morphChildren(container, temp);
+    if (formRecoverySnapshot) window.djust._restoreFormRecovery(formRecoverySnapshot);
+    // #1813 (a): embedded-view wrappers carry NO `id`, so morphChildren can
+    // only align them positionally. Reconcile them by the stable
+    // `data-djust-embedded` value and copy the server's dj-id onto the live
+    // wrapper, or the first parent patch misses it.
+    _stampEmbeddedWrapperDjIds(container, temp);
+    // #1848: morphChildren re-creates inline <script> nodes inert. Re-run
+    // classic page scripts inside the dj-root so their init runs on mount.
+    _runInsertedScripts(container);
+    // #2058: anything _runInsertedScripts() didn't re-execute gets a loud
+    // DEBUG-mode warning instead of silently staying dead.
+    _warnDeadScripts(container);
+}
+
 class LiveViewWebSocket {
     constructor() {
         this.ws = null;
@@ -1395,38 +1418,7 @@ class LiveViewWebSocket {
                         const _morphContainer = findPageViewContainer()
                                             || document.querySelector('[dj-root]');
                         if (_morphContainer) {
-                            const _morphTemp = document.createElement('div');
-                            // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
-                            _morphTemp.innerHTML = data.html;
-                            morphChildren(_morphContainer, _morphTemp);
-                            if (formRecoverySnapshot) window.djust._restoreFormRecovery(formRecoverySnapshot);
-                            // #1813 (a): embedded-view wrappers
-                            // (<div dj-view dj-sticky-view dj-sticky-root
-                            //  data-djust-embedded=...>) carry NO `id`, so
-                            // morphChildren can only align them positionally
-                            // (Strategy 2). If sibling counts diverge before a
-                            // wrapper, it never aligns → morphElement never runs
-                            // → the server's dj-id is never copied onto the live
-                            // wrapper. The first parent patch then targets the
-                            // wrapper by dj-id, finds nothing, falls back to a
-                            // positional path, and breaks once the child subtree
-                            // drifts → triggers html_recovery (the trigger half
-                            // of the sticky-child data-loss bug). Reconcile by
-                            // the STABLE `data-djust-embedded` value (the same
-                            // selector 45-child-view.js uses) and copy the
-                            // server's dj-id onto the live wrapper.
-                            _stampEmbeddedWrapperDjIds(_morphContainer, _morphTemp);
-                            // #1848: morphChildren re-creates inline <script>
-                            // nodes inert (clone+insert never executes them).
-                            // Re-run classic page scripts inside the dj-root so
-                            // their addEventListener / init runs on mount.
-                            _runInsertedScripts(_morphContainer);
-                            // #2058: defense-in-depth — anything
-                            // _runInsertedScripts() didn't re-execute (should
-                            // be nothing for classic scripts) gets a loud
-                            // DEBUG-mode warning instead of silently staying
-                            // dead.
-                            _warnDeadScripts(_morphContainer);
+                            _morphPrerenderedMount(_morphContainer, data.html, formRecoverySnapshot);
                             if (globalThis.djustDebug) console.log('[LiveView] Morphed pre-rendered DOM against WS-mount HTML (#1610)');
                         } else {
                             // Fallback: no [dj-view]/[dj-root] container found
@@ -2679,7 +2671,11 @@ class LiveViewSSE {
                         if (typeof data.view === 'string') container.setAttribute('dj-view', data.view);
                         const hasDataDjAttrs = data.has_ids === true;
                         if (hasDataDjAttrs && !this._replacingView) {
-                            _stampDjIds(data.html);
+                            // The page was prerendered over HTTP: morph it
+                            // against the mount HTML, as the WebSocket mount
+                            // does (#1610), so mount-time state such as
+                            // ADR-034 component identities reaches the DOM.
+                            _morphPrerenderedMount(container, data.html, null);
                         } else {
                             // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                             container.innerHTML = data.html;
@@ -7561,6 +7557,12 @@ let _djustHttpFallbackWarned = false;
 const _localEventTransport = {};
 let _httpPageGeneration = 0;
 const _pendingHttpControllers = new Set();
+// HTTP fallback events run one at a time, in dispatch order, like frames on
+// one socket. Each POST restores and saves the view's session state, so two
+// in flight at once lose one's changes, and a stale response can overwrite
+// input typed since. Null when nothing is in flight, so an event sent alone
+// still goes out synchronously.
+let _httpEventChain = null;
 for (const event of ['djust:before-navigate', 'turbo:before-visit', 'pagehide']) {
     window.addEventListener(event, () => {
         _httpPageGeneration += 1;
@@ -7933,7 +7935,20 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     const httpGeneration = _httpPageGeneration;
     const ownsHttpResponse = () => httpOwner === (document.querySelector('[dj-root]') || document.body)
         && httpUrl === window.location.href && httpGeneration === _httpPageGeneration;
+    // Keepalive teardown sends are not queued: they must leave with the page.
+    const previousHttpEvent = teardown ? null : _httpEventChain;
+    let releaseHttpEvent = null;
+    if (!teardown) {
+        const settled = new Promise(resolve => { releaseHttpEvent = resolve; });
+        _httpEventChain = settled;
+        settled.then(() => { if (_httpEventChain === settled) _httpEventChain = null; });
+    }
     try {
+        if (previousHttpEvent) {
+            await previousHttpEvent;
+            // Navigation while queued makes this event belong to a gone page.
+            if (!ownsHttpResponse()) return;
+        }
         // Input, configured-name cookie, then server meta tag (00-namespace.js).
         const csrfToken = window.djust.csrfToken();
         const response = await fetch(teardown ? teardown.url : window.location.href, {
@@ -7974,6 +7989,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     } finally {
         if (httpController) _pendingHttpControllers.delete(httpController);
         if (httpRequest) cancelEventRequests(_localEventTransport, httpRequest.ref);
+        if (releaseHttpEvent) releaseHttpEvent();
     }
 }
 window.djust.handleEvent = handleEvent;

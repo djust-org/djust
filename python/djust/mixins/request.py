@@ -1145,7 +1145,12 @@ class RequestMixin:
                 patches = json_module.loads(patches_json)
                 patch_count = len(patches)
 
-                if patch_count > 0 and patch_count <= PATCH_THRESHOLD:
+                # Zero patches is a render with no DOM change. Answer with
+                # the new version and no patches, as the socket runtime's
+                # no-op does. Resetting the diff baseline here restarted the
+                # server's version at 1, so the client's next version check
+                # failed and it reloaded the page, losing its state.
+                if 0 <= patch_count <= PATCH_THRESHOLD:
                     response_data = {"patches": patches, "version": version, **contract_fields}
                     if cache_request_id:
                         response_data["cache_request_id"] = cache_request_id

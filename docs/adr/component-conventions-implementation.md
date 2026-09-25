@@ -85,6 +85,9 @@ browser-visible validation/save feedback.**
   (`test_form_hooks_adr035.py` and the form suites) unchanged.
 - `tests/playwright/test_model_form.py` checks the field error, the save
   message and the reloaded values in Chromium. Its canary fails 18 checks.
+  Correction: its SSE and HTTP-only runs were WebSocket runs until ADR-034 C2
+  pinned the transport. Real HTTP-only needed two fixes, recorded there. See
+  F2 below.
 
 **Documentation (Compatibility and migration: guide, AI reference and
 migration recipe after the lifecycle gates).**
@@ -145,6 +148,8 @@ path, `coerce_types=False`.**
 - `tests/playwright/test_strict_parameters.py` checks outbound payloads and
   handler results in Chromium over WebSocket, SSE and HTTP-only. Its canary
   against the pre-activation client fails 24 checks.
+  Correction: until ADR-034 C2 pinned the transport, its SSE and HTTP-only runs
+  were WebSocket runs. Re-run on the real transports, it passes unchanged.
 
 **Missing/extra/duplicate arguments, keyword-only signatures, forms' open
 payloads, client metadata separation, forged component injection.**
@@ -2044,6 +2049,14 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
     checks, 8 per transport. The permissive parser sent `7x` as `7` and the
     handler ran; strict `dj-input`/`dj-submit` were refused by the server
     because of `field`/`_target`/extra fields.
+  - **Correction (2026-09-25, ADR-034 C2).** The "SSE" and "HTTP-only"
+    runs above did not use those transports. The page's own configuration
+    script re-assigns `window.DJUST_USE_WEBSOCKET` after the test's init
+    script, so all three runs used WebSocket. `tests/playwright/_transports.py`
+    now pins the setting and checks which transport the page actually used.
+    Re-run with real SSE and HTTP-only transports, the matrix passes on all
+    three unchanged. With the old init script, the transport check fails for
+    SSE and HTTP.
   - Full Python suite from a frozen worktree at 3724f4857: 33,767 passed and
     949 skipped, plus the 2 known tag-reachability failures and one real
     finding. The actor bridge delivered a `**` payload's keys in a Rust
@@ -2208,6 +2221,18 @@ Source: [decisions and acceptance](035-django-native-form-and-object-lifecycle.m
   It passes on all three transports, against the worktree's demo server on
   port 18437. Canary: with the adapter's `instance` binding removed it fails
   18 checks, 6 per transport.
+
+  **Correction (2026-09-25, ADR-034 C2).** As with ADR-036's matrix, the
+  "SSE" and "HTTP-only" runs above actually used WebSocket, because the page's
+  configuration script overrode the test's transport setting. With the
+  transport pinned and checked (`tests/playwright/_transports.py`), SSE passed
+  but real HTTP-only failed: the save stored the old values. Two HTTP-fallback
+  fixes, recorded under ADR-034 C2, make it pass:
+  - a render with no DOM change no longer resets the server's version;
+  - HTTP events are now sent one at a time.
+
+  Now it passes on all three real transports, five runs of five. Without event
+  ordering it failed 3 runs of 4.
 - [ ] **FR — retirement.** (Open; trigger met for adopting views. It is
   scheduled as its own deletion PR on ADR-027's playbook, landing after the
   deprecation window the ADR requires, because the targets still serve legacy
@@ -2278,7 +2303,7 @@ Source: [decisions and acceptance](034-component-scoped-events-and-bindings.md).
   back-navigation path (Service Worker capture and `live_redirect_mount`
   restore). The server half (signed manifest, real WebSocket restore) is
   already tested here.
-- [ ] **C2 — dropdown pilot and observations.** Implement the documented state
+- [x] **C2 — dropdown pilot and observations.** Implement the documented state
   owner, local mechanics and semantic outputs. Verify two same-type menus,
   source injection, valid/forged/disabled selections and callback rendering.
   Optional native-toggle observations must report actual visibility without
@@ -2289,7 +2314,61 @@ Source: [decisions and acceptance](034-component-scoped-events-and-bindings.md).
   visibility. The browser listener, local selection dismissal, pending-report
   coalescing and reconnect reporting are staged in the client bundle
   (`696248975`, 8 cases in `tests/js/native-dropdown-observations.test.js`).
-  They are not yet verified in a real browser. Independent state-backend claims now pass the former HTTP
+  They are not yet verified in a real browser.
+  **Closed 2026-09-25.** `tests/playwright/test_interactive_dropdown.py` drives
+  `/demos/interactive-dropdown/` (two server-owned menus of the same type, and
+  three client-owned menus) in Chromium over WebSocket, SSE and HTTP-only. The
+  transport each run really used is checked (`tests/playwright/_transports.py`).
+  It verifies:
+  - The two server menus open and select independently. Each selection runs
+    only its own callback, once, and the callback's change renders.
+  - The disabled item is not clickable. Hand-crafted disabled, unknown and
+    stale-id selections, and a direct call to the output callback, change
+    nothing. Socket runs raise `djust:error`; HTTP answers 4xx.
+  - Client menus:
+    - A toggle reports the actual visibility after a click, Escape, an outside
+      click and a keyboard open.
+    - The quiet observer's reports cause zero DOM mutations; the live
+      observer's change renders.
+    - The unobserved menu sends nothing.
+    - Choosing an item dismisses the popover at once.
+    - A server patch leaves an open popover open.
+  - Over WebSocket, toggles while disconnected stay local, and after the
+    reconnect each observed menu reports its current value once.
+
+  Real SSE and HTTP-only runs exposed three transport bugs, all fixed:
+  - **SSE mount.** It only stamped `dj-id`s onto the prerendered page, so
+    every interactive event targeted a stale component identity ("Component
+    not found"). It now morphs the page against the mount HTML through
+    `_morphPrerenderedMount`, the helper it shares with the WebSocket mount
+    (#1610; #1646 parity).
+  - **HTTP zero-patch renders.** A render with no DOM change reset the
+    server's diff baseline and restarted its version at 1. The client's
+    version check then reloaded the page. A client-owned selection changes no
+    markup, so every one hit this. The fallback now answers with an empty
+    patch list and the new version, as the socket runtime's no-op does.
+  - **HTTP event ordering.** Concurrent HTTP events each restored and saved
+    the session, so one's changes were lost. They are now sent one at a time,
+    in dispatch order, like frames on a socket. An event sent alone still goes
+    out synchronously.
+
+  Evidence and canaries:
+  - Removing the SSE fix fails the SSE run. Restoring the zero-patch reset
+    fails the HTTP runs of both this matrix and ADR-035's. Removing HTTP
+    ordering failed ADR-035's HTTP run 3 times in 4; with it, 5 of 5 passed.
+  - New tests: `tests/js/sse-mount-prerender-morph.test.js` (gate-off fails)
+    and `test_http_zero_patch_version.py` (gate-off fails).
+  - Existing vitest cases updated:
+    - HTTP ordering: 1 case in `dj-input-click-widgets`, 1 in
+      `http-request-correlation` (two parameterizations), and 2 in
+      `native-dropdown-observations`.
+    - SSE mount HTML: 1 case in `dj-cloak`.
+    - The #1610/#1813 source pins now read the shared helper. One of them had
+      matched the sticky-root exclusion only in a comment, and now pins
+      `findPageViewContainer()`.
+  - Out of scope, not fixed: ADR-038 E5's `tests/playwright/test_exposure_matrix.py`
+    uses the same unpinned init script, so its SSE runs were WebSocket runs.
+    It was not re-run here. Independent state-backend claims now pass the former HTTP
   exception/retry failure and prevent stale session copies from replaying reports.
   Concurrent memory and actual Redis claims are tested; memory remains
   process-local. Missing/expired cursors fail closed until a fresh binding is
