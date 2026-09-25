@@ -228,23 +228,6 @@ function storeSignedSnapshot(data, primaryViewPath) {
     }
 }
 
-// ADR-038 D-n: service-worker cache metadata carried on mount frames. The
-// identity marker is compared before anything from this mount is cached, so a
-// changed or vanished identity clears the previous identity's caches first.
-function applyServiceWorkerMountMetadata(data) {
-    if (!data || data.type !== 'mount') return;
-    if (typeof data.state_snapshot_max_age === 'number' && data.state_snapshot_max_age > 0) {
-        window.djust._stateSnapshotMaxAge = data.state_snapshot_max_age;
-    }
-    try {
-        if (window.djust._sw && typeof window.djust._sw.syncIdentity === 'function') {
-            window.djust._sw.syncIdentity(data.sw_identity);
-        }
-    } catch (_e) {
-        if (globalThis.djustDebug) console.log('[LiveView] service-worker identity sync failed:', _e);
-    }
-}
-
 class LiveViewWebSocket {
     constructor() {
         this.ws = null;
@@ -554,7 +537,8 @@ class LiveViewWebSocket {
 
     async _handleMessageImpl(data) {
         if (globalThis.djustDebug) console.log('[LiveView] Received: %s %o', String(data.type), data);
-        applyServiceWorkerMountMetadata(data);
+        // ADR-038 D-n: compared before anything from this mount is cached.
+        if (window.djust._sw) window.djust._sw.applyMountMetadata(data);
         storeSignedSnapshot(data, this.primaryViewPath);
 
         switch (data.type) {

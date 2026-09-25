@@ -41,3 +41,11 @@ query-filters:
   # ruff. Excluded repo-wide as pure false-positive noise.
   - exclude:
       id: py/ineffectual-statement
+  # py/cyclic-import builds its graph from every import statement, including
+  # the ones deferred into a function body. All ~50 cycles it reported were
+  # guarded that way: none can fail at import time. The guard that replaces it
+  # is python/djust/tests/test_no_module_level_import_cycles.py, which fails on
+  # any cycle made of module-level imports alone. py/unsafe-cyclic-import (a
+  # cycle that reads a module attribute during import) stays enabled.
+  - exclude:
+      id: py/cyclic-import
