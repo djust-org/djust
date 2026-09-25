@@ -178,7 +178,10 @@ CHANNEL_LAYERS = {
 It behaves like `channels.layers.InMemoryChannelLayer`, with one difference.
 - **Channels' layer** sweeps every channel and group for expired entries on *every* `receive()` and `group_send()`. A broadcast round across N sessions therefore costs O(N²) on the event loop: 17.7 ms per round at 224 sessions in rooms of 4.
 - **djust's layer** sweeps at most once per `clean_interval`, which is 4.4 ms per round at 224 sessions.
-- The trade-off is timing: an expired message or group membership is removed up to `clean_interval` seconds later. Messages expire after 60 s by default, so this does not matter in practice.
+- The trade-off is timing: an expired message or group membership is removed up to `clean_interval` seconds later.
+  - Until then, an expired message may still be delivered to a consumer that finally reads its queue.
+  - A queue full of expired messages keeps refusing new ones for that long. `group_send` skips a full channel, as it always has.
+  - Messages expire after 60 s by default, so this only affects consumers that have not read for a minute.
 
 ## Redis Setup
 

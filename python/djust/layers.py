@@ -27,8 +27,10 @@ Several processes need a shared layer (``channels_redis``), as before.
 
 The only behaviour difference is timing: a message or a group membership is
 removed up to ``clean_interval`` seconds after it expires rather than on the
-next message. With ``clean_interval=0`` the layer behaves exactly like
-Channels' own.
+next message, so until then an expired message may still be delivered, and a
+queue full of expired messages keeps raising ``ChannelFull``. That only
+touches a consumer that has not read for ``expiry`` (60 s). With
+``clean_interval=0`` the layer behaves exactly like Channels' own.
 """
 
 from __future__ import annotations
