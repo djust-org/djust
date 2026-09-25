@@ -111,6 +111,7 @@ ALLOWLIST_SETUP = ALLOWLIST_BACKEND | frozenset(
         "djust.checks.updates",
         "djust.checks.accounts",  # ADR-039 account checks (A100-A106)
         "djust.checks.parameters",  # ADR-036 parameter contract checks (V016-V018)
+        "djust.checks.bindings",  # ADR-037 template event binding checks (T019-T022)
         "djust.checks.utils",
         "djust.config",
         "djust.observability",
@@ -127,7 +128,7 @@ ALLOWLIST_SETUP = ALLOWLIST_BACKEND | frozenset(
         "djust.template_filters",
     }
 )
-assert len(ALLOWLIST_SETUP) == 61
+assert len(ALLOWLIST_SETUP) == 62
 
 # ``DEBUG=True`` additionally auto-enables hot reload: the file watcher only.
 # ``djust.websocket`` (and ``channels``) are deferred to a change event (#2566).

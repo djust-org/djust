@@ -432,7 +432,7 @@ class _Flattener:
                 if node.nodelist_empty:
                     self.nodes(node.nodelist_empty, node_file, blocks, depth + 1)
                     flat.emit(BRANCH)
-            elif type(node).__module__.startswith(_TRANSPARENT_MODULES):
+            elif getattr(type(node), "__module__", "").startswith(_TRANSPARENT_MODULES):
                 children = [
                     getattr(node, name, None) for name in getattr(node, "child_nodelists", ())
                 ]
