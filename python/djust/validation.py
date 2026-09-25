@@ -45,18 +45,28 @@ def get_strict_handler_contract(handler: Callable) -> ParameterContract:
         return variants[bound]
 
 
+def get_project_parameter_policy() -> str:
+    """The project default, shared by dispatch and the startup system check."""
+    from .config import config
+    from ._parameter_contract import ContractError
+
+    policy = config.get("event_parameter_policy", "legacy")
+    if policy not in ("legacy", "strict"):
+        raise ContractError("event_parameter_policy must be 'legacy' or 'strict'.")
+    return str(policy)
+
+
 def get_handler_parameter_policy(handler: Callable) -> str:
     """Resolve only server-owned policy, independently of client metadata."""
-    from .config import config
     from ._parameter_contract import ContractError
 
     decorators = getattr(handler, "_djust_decorators", {})
     metadata = decorators.get("event_handler", decorators.get("server_function", {}))
     policy = metadata.get("parameter_policy")
     if policy is None:
-        policy = config.get("event_parameter_policy", "legacy")
+        return get_project_parameter_policy()
     if policy not in ("legacy", "strict"):
-        raise ContractError("event_parameter_policy must be 'legacy' or 'strict'.")
+        raise ContractError("parameter_policy must be 'legacy' or 'strict'.")
     return str(policy)
 
 

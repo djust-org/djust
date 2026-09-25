@@ -9,6 +9,7 @@ Legacy validation remains in validation.py until transport parity is implemented
 import inspect
 import math
 import re
+import sys
 import types
 from dataclasses import dataclass
 from datetime import date
@@ -31,6 +32,10 @@ _INTEGER = re.compile(r"[+-]?[0-9]+\Z")
 _NUMBER = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?\Z")
 _DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}\Z")
 _SERVER_DEFAULT = object()
+# D5: routing identities every transport extracts before validation. HTTP flat
+# bodies also drop "_"-prefixed keys, and the strict client collector refuses
+# both, so a keyword-capable application parameter can never receive them.
+FRAMEWORK_ARGUMENT_NAMES = frozenset({"view_id", "component_id"})
 
 
 class ContractError(ValueError):
@@ -67,7 +72,67 @@ def _compile_type(annotation: Any, depth: int = 0) -> _Type:
     if origin is list and len(args) == 1:
         child = _compile_type(args[0], depth + 1)
         return _Type(list, f"list[{child.label}]", child)
-    raise ContractError("Unsupported parameter annotation; use a supported type or explicit Any.")
+    raise ContractError(
+        "Unsupported annotation; use str, int, float, bool, Decimal, UUID, date, "
+        "Optional[T], list[T] or explicit Any."
+    )
+
+
+def _defining_class(function: Any) -> type | None:
+    """The class whose body declared ``function``, found from the function alone.
+
+    Resolution must not depend on which subclass or instance happens to be
+    asking: contracts are cached per function and shared by dispatch, schema
+    tooling and system checks. Classes local to a function body are not
+    reachable by qualified name, so their methods resolve against globals only.
+    """
+    parts = getattr(function, "__qualname__", "").split(".")[:-1]
+    scope: Any = sys.modules.get(getattr(function, "__module__", None) or "")
+    if not parts or "<locals>" in parts or scope is None:
+        return None
+    for part in parts:
+        scope = vars(scope).get(part)
+        if not isinstance(scope, type):
+            return None
+    for member in vars(scope).values():
+        if isinstance(member, (staticmethod, classmethod)):
+            member = member.__func__
+        if isinstance(member, types.FunctionType) and inspect.unwrap(member) is function:
+            return scope
+    return None
+
+
+def declaration_namespaces(
+    handler: Callable[..., Any],
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """Global and class namespaces for a handler's deferred annotations.
+
+    Mirrors Python's eager class-body scoping: names in the defining class win
+    over module globals, so ``from __future__ import annotations`` and quoted
+    forward references resolve as they would have without deferral.
+    """
+    origin = inspect.unwrap(getattr(handler, "__func__", handler))
+    globalns = getattr(origin, "__globals__", None)
+    owner = _defining_class(origin)
+    return globalns, dict(vars(owner)) if owner is not None else {}
+
+
+def _resolve_annotation(
+    name: str, annotation: Any, globalns: dict[str, Any] | None, localns: dict[str, Any]
+) -> Any:
+    # A synthetic single-input function: a return annotation (which may refer
+    # to a containing class or an output provider) is never evaluated.
+    def inputs() -> None:
+        pass
+
+    inputs.__annotations__ = {name: annotation}
+    try:
+        return get_type_hints(inputs, globalns=globalns, localns=localns, include_extras=True)[name]
+    except (TypeError, ValueError, NameError, AttributeError, SyntaxError):
+        raise ContractError(
+            f"Parameter '{name}' annotation cannot be resolved; define the name in the "
+            "module or the defining class body, outside an 'if TYPE_CHECKING:' block."
+        ) from None
 
 
 def _check_budget(params: dict[str, Any], positional: list[Any] | tuple[Any, ...]) -> None:
@@ -199,37 +264,33 @@ class ParameterContract:
     def compile(cls, handler: Callable[..., Any]) -> "ParameterContract":
         try:
             signature = inspect.signature(handler)
-
-            # An input contract must not evaluate a return annotation (which
-            # may refer to a containing class or an optional output provider).
-            def inputs() -> None:
-                pass
-
-            inputs.__annotations__ = {
-                name: parameter.annotation
-                for name, parameter in signature.parameters.items()
-                if parameter.annotation is not inspect.Parameter.empty
-            }
-            origin = inspect.unwrap(handler)
-            namespace = getattr(origin, "__globals__", None)
-            hints = get_type_hints(inputs, globalns=namespace, include_extras=True)
-        except (TypeError, ValueError, NameError, AttributeError):
-            raise ContractError(
-                "Cannot resolve the handler's signature and parameter annotations."
-            ) from None
+        except (TypeError, ValueError):
+            raise ContractError("Cannot inspect the handler's signature.") from None
         if len(signature.parameters) > MAX_COLLECTION:
             raise ContractError("Handler declares too many parameters.")
+        globalns, localns = declaration_namespaces(handler)
         compiled = []
         for name, param in signature.parameters.items():
-            annotation = hints.get(name, inspect.Parameter.empty)
-            if annotation is inspect.Parameter.empty:
-                if param.kind in (param.VAR_KEYWORD, param.VAR_POSITIONAL):
-                    annotation = Any
-                else:
-                    raise ContractError(
-                        f"Parameter '{name}' requires an annotation; use Any for unchecked input."
-                    )
-            compiled.append((name, _compile_type(annotation)))
+            if param.kind in (param.POSITIONAL_OR_KEYWORD, param.KEYWORD_ONLY) and (
+                name in FRAMEWORK_ARGUMENT_NAMES or name.startswith("_")
+            ):
+                raise ContractError(
+                    f"Parameter '{name}' uses a framework-reserved name; application "
+                    "arguments cannot be named view_id, component_id or start with '_'."
+                )
+            annotation = param.annotation
+            if annotation is not inspect.Parameter.empty:
+                annotation = _resolve_annotation(name, annotation, globalns, localns)
+            elif param.kind in (param.VAR_KEYWORD, param.VAR_POSITIONAL):
+                annotation = Any
+            else:
+                raise ContractError(
+                    f"Parameter '{name}' requires an annotation; use Any for unchecked input."
+                )
+            try:
+                compiled.append((name, _compile_type(annotation)))
+            except ContractError as exc:
+                raise ContractError(f"Parameter '{name}': {exc}") from None
         # Binding only needs to know whether a default exists. Retaining the
         # actual object here would let a function-keyed cache retain its owner
         # through a default/owner/function cycle. Python applies real defaults

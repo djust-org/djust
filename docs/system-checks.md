@@ -25,18 +25,22 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C018 | Config | Warning | Deprecated LIVEVIEW_CONFIG key set that djust never reads (removed in 1.3) |
 | C019 | Config | Warning | Unknown DJUST_CONFIG['PRESENCE_BACKEND'] value (presence falls back to in-process memory) |
 | C020 | Config | Error | `DJUST_SERVER_STATE_MAX_AGE` is not an integer from 1 to 86400 |
+| C021 | Config | Error | `LIVEVIEW_CONFIG['event_parameter_policy']` is not `'legacy'` or `'strict'` (ADR-036) |
 | V001 | LiveView | Warning | LiveView missing template_name attribute |
 | V002 | LiveView | Info | LiveView missing mount() method |
 | V003 | LiveView | Error | mount() has wrong signature |
 | V004 | LiveView | Info | Public method looks like event handler but missing @event_handler |
 | V005 | LiveView | Warning | Module not in LIVEVIEW_ALLOWED_MODULES |
 | V006 | LiveView | Warning | Service instance assigned in mount() — high-confidence subset of V008 |
-| V007 | LiveView | Warning | Event handler missing **kwargs |
+| V007 | LiveView | Warning | Event handler missing **kwargs (legacy-policy handlers only) |
 | V008 | LiveView | Info | Non-primitive type assigned in mount() — broader, lower-confidence (skips V006 patterns) |
 | V012 | LiveView | Warning | Sticky child template declares its own dj-view (nested duplicate binding) |
 | V013 | LiveView | Warning | HTTP-only dispatch()/get()/post() override never runs on a WebSocket mount |
 | V014 | LiveView | Warning | Time-travel-enabled view has PII-looking model/form fields not in `time_travel_excluded_fields` |
 | V015 | LiveView | Warning | LIVEVIEW_ALLOWED_MODULES rejects a djust LiveView the URLconf routes (add `"djust"`) |
+| V016 | LiveView | Error | Strict-policy handler declaration that strict dispatch rejects (ADR-036) |
+| V017 | LiveView | Error | Async strict event handler on an actor view (`use_actors = True`) |
+| V018 | LiveView | Warning | `@event_handler(params=[...])` disagrees with a strict handler's signature |
 | S001 | Security | Error | mark_safe() with f-string (XSS risk) |
 | S002 | Security | Warning | @csrf_exempt without justification comment |
 | S003 | Security | Warning | Bare except: pass swallows all exceptions |
@@ -160,6 +164,13 @@ console.log("debug info"); // noqa: Q003
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C020"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C020"]` (the runtime still fails closed)
 - **False positives**: None
 
+### C021 — Invalid `event_parameter_policy`
+- **Severity**: Error
+- **Method**: Settings inspection, through the resolver dispatch uses (`djust.validation.get_project_parameter_policy`)
+- **What it detects**: `LIVEVIEW_CONFIG['event_parameter_policy']` (or the same key in `DJUST_CONFIG`) is set to something other than `'legacy'` or `'strict'`. Every handler without its own `parameter_policy` inherits the value, and dispatch rejects each of their events while it is invalid. An absent key is the `'legacy'` default and never reports. The ADR-036 strict policy is a staged opt-in, not yet a supported migration target.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C021"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C021"]` (the runtime still rejects the events)
+- **False positives**: None
+
 ---
 
 ## LiveView Checks (V)
@@ -257,6 +268,7 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Severity**: Warning
 - **Method**: AST (inspects `@event_handler` decorated methods)
 - **What it detects**: An event handler method does not accept `**kwargs`, which causes a `TypeError` when djust passes extra keyword arguments
+- **Not reported for strict-policy handlers**: under ADR-036's strict policy the closed signature is the handler's parameter contract, so adding `**kwargs` would open it. V016 checks those declarations instead.
 - **Suppression** (any of):
   - Fix the signature (the real fix)
   - `abstract = True` class attribute on an abstract base
@@ -301,6 +313,33 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Not `DEBUG`-gated**: the runtime surfaces (`BugCapture.encode`, the replay route) are, because they *do* something. A system check only tells you something, and `manage.py check --deploy` on the way to production is exactly when you want to hear that a shipped view records a password field.
 - **Suppression**: `DJUST_CONFIG = {'suppress_checks': ['V014']}` or `SILENCED_SYSTEM_CHECKS = ["djust.V014"]`
 - Added in the unreleased line (#1561)
+
+### V016 — Strict-policy handler declaration that strict dispatch rejects
+- **Severity**: Error
+- **Method**: Runtime (walks user `LiveView` and `LiveComponent` subclasses; compiles each strict `@event_handler` / `@server_function` contract with the same cached resolver dispatch uses, without constructing a view or running a handler)
+- **What it detects**, for handlers whose resolved `parameter_policy` is `'strict'` (declared on the decorator or inherited from `event_parameter_policy`):
+  - an annotation that cannot be resolved: a misspelled name, a name imported only under `if TYPE_CHECKING:`, or a name that exists only in another class. Deferred annotations (`from __future__ import annotations`, quoted forward references) resolve against the defining class body first, then the module, as eager evaluation would. Classes defined inside a function body are not reachable by qualified name, so their class-body names cannot be resolved;
+  - an unsupported type or shape (`dict`, unions other than `Optional[T]`, bare `list`, `Annotated`, `set`, ...). Supported: `str`, `int`, `float`, `bool`, `Decimal`, `UUID`, `date`, `Optional[T]`, `list[T]` and explicit `Any`;
+  - a named parameter without an annotation (use `Any` for unchecked input; unannotated `*args` / `**kwargs` are an intentional open contract);
+  - a keyword-capable parameter named `view_id` or `component_id`, or starting with `_`. Transports strip those routing keys before validation, so the parameter could never receive an application value (ADR-036 D5). Positional-only parameters may use any name;
+  - a handler whose own `parameter_policy` metadata is not `'legacy'` or `'strict'`.
+- **Reporting**: one message per declaration, under the declaring class when it is itself checked, otherwise under its first user with `(declared as ...)`. Handlers that inherit an invalid project policy are covered by C021 instead.
+- **Legacy handlers**: never reported. Legacy remains the default.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V016"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V016"]` (dispatch still rejects the events)
+- **False positives**: None: the check and dispatch share one compiled contract.
+
+### V017 — Async strict event handler on an actor view
+- **Severity**: Error
+- **Method**: Runtime (user `LiveView` subclasses with `use_actors = True`)
+- **What it detects**: a strict-policy `async def` event handler on an actor view. Actor dispatch rejects strict async handlers before invoking them.
+- **Limitation**: components hosted by an actor view are not inspected: the host is not known statically.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V017"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V017"]`
+
+### V018 — `params=` disagrees with a strict handler's signature
+- **Severity**: Warning
+- **Method**: Runtime (decorator metadata compared with the compiled strict contract)
+- **What it detects**: `@event_handler(params=[...])` names a different set of parameters from the strict handler's signature. Under the strict policy the signature is the contract; the explicit list is ignored by validation and misleads tooling that reads it.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V018"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V018"]`
 
 ---
 

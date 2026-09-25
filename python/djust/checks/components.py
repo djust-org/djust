@@ -20,6 +20,7 @@ from djust.checks.utils import (
     DjustWarning,
     _has_noqa,
     _is_check_suppressed,
+    _is_framework_internal_class,
     _iter_python_files,
     _iter_template_files,
     _parse_python_file,
@@ -82,6 +83,17 @@ def _strip_template_comments(content: str) -> str:
     content = _DJANGO_INLINE_COMMENT_RE.sub("", content)
     content = _HTML_COMMENT_RE.sub("", content)
     return content
+
+
+def _declares_strict_policy(method: Any) -> bool:
+    """Whether dispatch resolves ``method`` to ADR-036's strict parameter policy."""
+    from djust._parameter_contract import ContractError
+    from djust.validation import get_handler_parameter_policy
+
+    try:
+        return get_handler_parameter_policy(method) == "strict"
+    except ContractError:
+        return False  # djust.C021 / V016 report the invalid policy value.
 
 
 def _routed_liveview_classes() -> Iterator[type]:
@@ -209,13 +221,11 @@ def check_liveviews(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
         discovered,
         key=lambda c: (getattr(c, "__module__", ""), getattr(c, "__qualname__", "")),
     ):
-        # Skip abstract-looking classes (mixins, bases defined in djust itself)
+        # Skip internal djust classes -- only check user classes, but still
+        # check classes in djust's own examples/tests.
         module = getattr(cls, "__module__", "") or ""
-        if module.startswith("djust.") or module.startswith("djust_"):
-            # Skip internal djust classes -- only check user classes
-            # But still check classes in djust's own examples/tests
-            if "test" not in module and "example" not in module:
-                continue
+        if _is_framework_internal_class(cls):
+            continue
 
         # User-declared abstract base classes opt out of all per-class V/Q checks
         # by setting `abstract = True` on the class body (#1605). Consulted via
@@ -462,6 +472,10 @@ def check_liveviews(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
             if not callable(method):
                 continue
             if not is_event_handler(method):
+                continue
+            # ADR-036 D1: a strict handler's closed signature is its contract;
+            # adding **kwargs would open it. V016 checks strict declarations.
+            if _declares_strict_policy(method):
                 continue
             # Unwrap decorators to get original function
             inner = method

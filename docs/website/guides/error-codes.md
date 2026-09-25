@@ -291,6 +291,16 @@ In development, pages render without Tailwind utilities until you compile the CS
 
 ---
 
+### C021: Invalid event_parameter_policy
+
+**Severity**: Error
+
+**What causes it**: `LIVEVIEW_CONFIG['event_parameter_policy']` is set to something other than `'legacy'` or `'strict'`. Every event handler without its own `parameter_policy` inherits this value, and dispatch rejects each of their events until it is fixed. The strict policy (ADR-036) is a staged opt-in; `'legacy'` is the default.
+
+**Fix**: Set the key to `'legacy'` or `'strict'`, or remove it. Suppress with `DJUST_CONFIG = {"suppress_checks": ["C021"]}` (the runtime still rejects the events).
+
+---
+
 ### C301: Invalid VDOM cache TTL
 
 **Severity**: Error
@@ -532,7 +542,7 @@ self.api_client = MySerializableClient()  # noqa: V006
 
 **Severity**: Warning
 
-**What causes it**: An `@event_handler` decorated method does not include `**kwargs` in its signature. Event handlers receive all event parameters from the client, and without `**kwargs`, extra parameters will cause errors.
+**What causes it**: An `@event_handler` decorated method does not include `**kwargs` in its signature. Event handlers receive all event parameters from the client, and without `**kwargs`, extra parameters will cause errors. Handlers using the staged strict parameter policy (ADR-036) are not reported: their closed signature is the contract, and V016 checks it instead.
 
 **Fix**:
 
@@ -650,6 +660,36 @@ V008 is broader than V006 and will flag any custom class instantiation, not just
 **What causes it**: `LIVEVIEW_ALLOWED_MODULES` is set, your URLconf routes a LiveView that djust ships (the component gallery, the theme gallery, the admin extension), and the list doesn't admit it. An explicit list replaces the default, which includes `"djust"`, so those pages render but never mount ("View not mounted. Please reload the page."). V005 doesn't cover this case because it skips classes defined in djust.
 
 **Fix**: Add `"djust"` to `LIVEVIEW_ALLOWED_MODULES`, as `djust new` does since 1.2.1. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V015"]}`.
+
+---
+
+### V016: Strict event parameter contract is invalid
+
+**Severity**: Error
+
+**What causes it**: An event handler or server function uses the staged strict parameter policy (ADR-036), and strict dispatch would reject every call to it. Message: "<view>.<handler>(): strict event parameter contract is invalid: Parameter '<name>' ...". The causes are an annotation that cannot be resolved (a misspelled name, a `TYPE_CHECKING`-only import, a name from another class), an unsupported type (supported: `str`, `int`, `float`, `bool`, `Decimal`, `UUID`, `date`, `Optional[T]`, `list[T]`, explicit `Any`), a named parameter without an annotation, or a keyword parameter named `view_id`, `component_id` or starting with `_`, which the framework reserves for routing.
+
+**Fix**: Correct the named parameter's declaration, use `Any` for input you validate yourself, or keep the handler on `parameter_policy="legacy"`. Legacy handlers are never reported.
+
+---
+
+### V017: Async strict handler on an actor view
+
+**Severity**: Error
+
+**What causes it**: A view with `use_actors = True` declares a strict-policy `async def` event handler. Actor dispatch rejects strict async handlers before they run.
+
+**Fix**: Make the handler synchronous, set `use_actors = False`, or use `parameter_policy="legacy"`.
+
+---
+
+### V018: params= disagrees with a strict signature
+
+**Severity**: Warning
+
+**What causes it**: `@event_handler(params=[...])` lists different parameters from a strict handler's signature. Under the strict policy the signature is the contract, so the list is ignored by validation and only misleads tooling.
+
+**Fix**: Remove `params=` or make it match the signature.
 
 ---
 

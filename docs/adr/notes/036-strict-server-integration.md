@@ -133,8 +133,10 @@ replay-binding slice, and no live-browser or complete ADR acceptance is claimed.
 
 ## Remaining P1–P3 work
 
-- Registration/system-check coverage, including class-local annotation resolution
-  and invalid project policies before an event arrives.
+- Registration/system-check coverage is staged in
+  [registration checks](036-registration-checks.md): C021 and V016–V018,
+  class-local annotation resolution and reserved argument names. Legacy-code
+  migration inventory and template-binding checks (ADR-037) remain.
 - Trusted component source injection separate from client payloads, coordinated
   with ADR-034's typed subscriptions.
 - Scope-aware public client contracts for root, child and component identities;
