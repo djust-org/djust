@@ -111,26 +111,45 @@ class AudioMixin:
         self._audio_ready = bool(getattr(self, "_websocket_session_id", None))
         if len(self.audio_banks) > 4:
             raise ValueError("At most four audio banks are supported per view")
+        provide_context(
+            self, context, AUDIO_PROVIDER.name, "djust_audio_manifest", self._audio_manifest()
+        )
+        return context
+
+    def _audio_manifest(self):
+        """The manifest JSON, built once per view and reused on every render.
+
+        Building it resolves every sound through ``static()`` (a storage
+        lookup each) and re-serialises the banks, on every render of the view:
+        a game pushing frames paid that for sounds that never change. It is
+        rebuilt only when an input changes: the scope, the banks (reassigned
+        or swapped for another ``SoundBank``; banks themselves are immutable),
+        or the allowed static origins.
+        """
+        origins = list(getattr(settings, "DJUST_AUDIO_STATIC_ORIGINS", []))
+        key = (
+            self._audio_scope,
+            tuple((name, id(bank)) for name, bank in self.audio_banks.items()),
+            tuple(origins),
+        )
+        cached = getattr(self, "_audio_manifest_cache", None)
+        if cached is not None and cached[0] == key:
+            return cached[1]
         banks = {}
         for name in self.audio_banks:
             bank = self._audio_bank(name)
             banks[name] = {
                 "maxVoices": bank.max_voices,
                 "sounds": {
-                    key: {"url": static(sound.path), "volume": sound.volume}
-                    for key, sound in bank.sounds.items()
+                    sound_name: {"url": static(sound.path), "volume": sound.volume}
+                    for sound_name, sound in bank.sounds.items()
                 },
             }
         manifest = json.dumps(
-            {
-                "version": 1,
-                "scope": self._audio_scope,
-                "banks": banks,
-                "origins": list(getattr(settings, "DJUST_AUDIO_STATIC_ORIGINS", [])),
-            }
+            {"version": 1, "scope": self._audio_scope, "banks": banks, "origins": origins}
         )
-        provide_context(self, context, AUDIO_PROVIDER.name, "djust_audio_manifest", manifest)
-        return context
+        self._audio_manifest_cache = (key, manifest)
+        return manifest
 
     def play_sound(self, bank, sound, *, event_id=None):
         self.play_sounds(

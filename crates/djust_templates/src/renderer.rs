@@ -14,6 +14,25 @@ use pyo3::{Py, PyAny, Python};
 use regex::Regex;
 use std::collections::HashSet;
 
+/// `{% djust_audio %}` markup around the escaped manifest. Must stay
+/// byte-identical to `djust_audio` in `python/djust/templatetags/live_tags.py`
+/// (the Django-engine path); `tests/unit/test_audio.py` pins the two together.
+const DJUST_AUDIO_OPEN: &str = "<div dj-audio=\"";
+const DJUST_AUDIO_CLOSE: &str = concat!(
+    "\">",
+    "<div dj-update=\"ignore\" data-audio-controls>",
+    "<button type=\"button\" data-audio-toggle aria-pressed=\"false\">",
+    "<svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" ",
+    "stroke-width=\"1.7\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\">",
+    "<path d=\"M11 5 6 9H3v6h3l5 4V5Z\"/><path d=\"M15 8a6 6 0 0 1 0 8M18 5a10 10 0 0 1 0 14\"/>",
+    "</svg><span data-audio-label>Enable sound</span></button>",
+    "<label><span>Volume</span><input data-audio-volume type=\"range\" min=\"0\" max=\"1\" ",
+    "step=\"0.05\" value=\"0.5\" aria-label=\"Sound volume\"></label>",
+    "<output data-audio-level aria-hidden=\"true\">50%</output>",
+    "<span data-audio-status role=\"status\">Sound off</span>",
+    "</div></div>",
+);
+
 /// Should this render emit the `<!--dj-if-->` VDOM markers (#2519)?
 ///
 /// Two bodies, one seam. With the `liveview` feature (the default) the
@@ -495,6 +514,8 @@ fn node_is_element_bearing(node: &Node) -> bool {
         // unused marker pair is harmless (browsers ignore comments)
         // while a missed marker breaks Iter 3's differ.
         Node::CsrfToken => true,
+        // `{% djust_audio %}` always renders its control `<div>`s.
+        Node::DjustAudio => true,
         // Other static text-emitting tags — none produce elements
         // unless the user template itself surrounds them with HTML
         // (which would appear in adjacent Text nodes).
@@ -3891,6 +3912,18 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
             }
         }
 
+        Node::DjustAudio => {
+            // Same markup and escaping as the Python `djust_audio` tag
+            // (`format_html`, which escapes the manifest like `html_escape`).
+            let manifest = context.get("djust_audio_manifest").ok_or_else(|| {
+                DjangoRustError::TemplateError(
+                    "djust_audio requires AudioMixin on the view".to_string(),
+                )
+            })?;
+            let escaped = filters::html_escape(&manifest.to_string());
+            Ok(format!("{DJUST_AUDIO_OPEN}{escaped}{DJUST_AUDIO_CLOSE}"))
+        }
+
         Node::Static(operand) => {
             // Render static file URL
             // Get STATIC_URL from context (should be provided by Django)
@@ -7072,6 +7105,31 @@ mod tests {
         assert!(result.contains("No properties found"));
         assert!(result.contains("<a href=\"/add\">"));
         assert!(result.contains("colspan=\"6\""));
+    }
+
+    #[test]
+    fn test_djust_audio_tag_escapes_the_manifest_into_fixed_markup() {
+        let tokens = tokenize("{% djust_audio %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set(
+            "djust_audio_manifest".to_string(),
+            Value::String("{\"a\":\"<x>&'\"}".to_string()),
+        );
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert!(result.starts_with(
+            "<div dj-audio=\"{&quot;a&quot;:&quot;&lt;x&gt;&amp;&#x27;&quot;}\"><div dj-update=\"ignore\""
+        ));
+        assert!(result.ends_with("</div></div>"));
+        assert!(!result.contains("<x>"));
+    }
+
+    #[test]
+    fn test_djust_audio_tag_without_manifest_is_an_error() {
+        let tokens = tokenize("{% djust_audio %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let err = render_nodes(&nodes, &Context::new()).unwrap_err();
+        assert!(err.to_string().contains("AudioMixin"), "{err}");
     }
 
     #[test]

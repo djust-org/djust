@@ -200,3 +200,79 @@ def test_manifest_resolves_through_static_storage(monkeypatch):
     monkeypatch.setattr(audio, "static", lambda path: "/static/eat.abc123.wav")
     manifest = json.loads(mounted().get_context_data()["djust_audio_manifest"])
     assert manifest["banks"]["test"]["sounds"]["eat"]["url"] == "/static/eat.abc123.wav"
+
+
+def test_manifest_is_built_once_per_view_not_per_render(monkeypatch):
+    from djust import audio
+
+    calls = []
+    monkeypatch.setattr(audio, "static", lambda path: calls.append(path) or f"/s/{path}")
+    view = mounted()
+    first = view.get_context_data()["djust_audio_manifest"]
+    for _ in range(5):
+        assert view.get_context_data()["djust_audio_manifest"] is first
+    assert calls == ["sound/eat.wav"]
+    # Another view has its own scope, so its own manifest.
+    other = mounted().get_context_data()["djust_audio_manifest"]
+    assert json.loads(other)["scope"] != json.loads(first)["scope"]
+
+
+def test_manifest_follows_a_changed_bank_or_origins(monkeypatch):
+    view = mounted()
+    first = json.loads(view.get_context_data()["djust_audio_manifest"])
+    view.audio_banks = {"test": SoundBank({"ping": Sound("sound/ping.wav")})}
+    swapped = json.loads(view.get_context_data()["djust_audio_manifest"])
+    assert (
+        list(swapped["banks"]["test"]["sounds"])
+        == ["ping"]
+        != list(first["banks"]["test"]["sounds"])
+    )
+    with override_settings(DJUST_AUDIO_STATIC_ORIGINS=["https://cdn.example.com"]):
+        assert json.loads(view.get_context_data()["djust_audio_manifest"])["origins"] == [
+            "https://cdn.example.com"
+        ]
+
+
+def test_an_invalid_bank_swapped_in_is_still_rejected():
+    view = mounted()
+    view.get_context_data()
+    view.audio_banks = {"test": "not a bank"}
+    with pytest.raises(TypeError):
+        view.get_context_data()
+
+
+def test_the_manifest_cache_is_never_persisted():
+    from djust import LiveView
+
+    class RealView(AudioMixin, LiveView):
+        audio_banks = View.audio_banks
+
+    view = RealView()
+    view.get_context_data()
+    assert hasattr(view, "_audio_manifest_cache")
+    assert "_audio_manifest_cache" not in (view._get_private_state() or {})
+
+
+@override_settings(STATIC_URL="/static/")
+def test_the_native_tag_matches_the_django_tag_byte_for_byte():
+    """The Rust engine renders ``{% djust_audio %}`` natively (no Python call
+    per render); the Django engine keeps the ``simple_tag``. Same markup, same
+    escaping, including a manifest that needs every escape."""
+    from djust._rust import RustLiveView
+
+    view = mounted()
+    view.audio_banks = {"test": SoundBank({"eat": Sound('sound/it\'s_<&>"eat".wav')})}
+    context = view.get_context_data()
+    django_html = Template("{% load live_tags %}{% djust_audio %}").render(Context(context))
+    rust = RustLiveView("<div>{% djust_audio %}</div>")
+    rust.update_state({"djust_audio_manifest": context["djust_audio_manifest"]})
+    rust_html = rust.render()
+    assert rust_html == f"<div>{django_html}</div>"
+    assert "<&>" not in rust_html
+
+
+def test_the_native_tag_without_audio_mixin_fails_loudly():
+    from djust._rust import RustLiveView
+
+    with pytest.raises(Exception, match="AudioMixin"):
+        RustLiveView("<div>{% djust_audio %}</div>").render()

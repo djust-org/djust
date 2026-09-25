@@ -367,6 +367,7 @@ fn node_references_block_super(node: &Node) -> bool {
         | Node::Load(_)
         | Node::TemplateTag(_)
         | Node::CsrfToken
+        | Node::DjustAudio
         | Node::Static(_)
         | Node::Now(_)
         | Node::Extends(_)
@@ -1228,6 +1229,7 @@ fn node_to_template_string(node: &Node) -> String {
             result
         }
         Node::CsrfToken => "{% csrf_token %}".to_string(),
+        Node::DjustAudio => "{% djust_audio %}".to_string(),
         Node::Static(operand) => format!("{{% static {operand} %}}"),
         Node::ReactComponent { .. } => {
             // React components should be preserved as-is if possible
