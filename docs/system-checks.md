@@ -66,6 +66,10 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | T015 | Templates | Warning | Legacy data-djust-root / data-djust-view root attributes |
 | T017 | Templates | Warning | dj-view / dj-root on a table-section element (foster-parented to silent garbage) |
 | T018 | Templates | Warning | Template references a variable that resolves nowhere (renders blank, no error) |
+| T019 | Templates | Warning | An event binding names no browser-callable handler on its owner (ADR-037) |
+| T020 | Templates | Warning | An event binding's arguments are missing, unexpected or supplied twice (ADR-037) |
+| T021 | Templates | Warning | An event binding's literal value or wire-type hint does not fit the handler (ADR-037) |
+| T022 | Templates | Warning | Markup supplies routing context (`view_id` / `component_id`) as an argument (ADR-037) |
 | Q001 | Quality | Info | print() statement found |
 | Q002 | Quality | Warning | f-string in logger call |
 | Q003 | Quality | Info | console.log without djustDebug guard |
@@ -689,6 +693,58 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
   found nothing".
 - **Scope**: Static check only; abstract base LiveViews (`abstract = True`)
   are skipped, matching the other V/T checks' convention.
+
+### T019–T022 — Template event bindings (ADR-037)
+- **Severity**: Warning (all four, in 1.3)
+- **Method**: Each LiveView's and LiveComponent's template is compiled with
+  Django's parser, never rendered. `{% extends %}` and constant
+  `{% include %}` are followed, every `{% if %}` branch and `{% for %}` body
+  is kept, and the result is parsed as HTML. Each literal `dj-*` event binding
+  is then checked against its owner. The owner is the view, or the component
+  whose template it is. Handlers are resolved through the same discovery
+  dispatch uses. Arguments go through the runtime's own parameter policy,
+  coercion and strict contract. Nothing is constructed or mounted, no handler
+  runs and no queryset is evaluated.
+- **What each detects**:
+  - `T019`: the name resolves to no browser-callable handler on the owner. This
+    covers a missing method, one without `@event_handler` (under the default
+    strict `event_security`), and an output-subscription callback. It also
+    covers an action or output of a declared interactive component, which a
+    view-owned binding never reaches. The last cases are an invalid event name,
+    and arguments on a directive that sends its value verbatim (`dj-submit`,
+    `dj-keydown`, `dj-keyup`, `dj-click-away`).
+  - `T020`: a required argument the binding never sends; an argument the
+    handler does not accept (under the legacy policy, `dj-input`, `dj-change`
+    and `dj-submit` always send `field` and `_target`); extra positional
+    arguments; or two attributes that send the same name. Under the strict
+    policy, `data-*` attributes are not sent at all: use `dj-value-*`.
+  - `T021`: a literal the handler's annotation rejects (`data-count="abc"` for
+    `count: int`). Also an unknown wire hint, or one that does not fit the
+    declared type (`dj-value-id:bool` for `id: int`), and a field name that is
+    not in a static `form_class` for `validate_field` / `submit_form`.
+  - `T022`: `data-view-id`, `dj-value-component-id` or similar in markup.
+    These are routing context the framework attaches itself, and could
+    redirect the event.
+- **Not reported** (counted in the coverage report instead):
+  - a binding whose name is computed by the template;
+  - one inside markup a component or child view owns;
+  - one outside the live root;
+  - a handler with a `**kwargs` catch-all, whose unknown arguments cannot be
+    checked;
+  - an attribute set that is itself conditional (missing arguments are then
+    unknown).
+- **Not seen**: markup rendered by a third-party template tag or a dynamic
+  `{% include %}`. Each is recorded as a gap, and the owner's event graph is
+  reported as incomplete.
+- **Coverage**: `manage.py djust_check` prints a summary line of how many
+  bindings were checked, dynamic or unsupported. `djust_check --format json`
+  adds a `coverage` object with per-owner counts, per-binding status and gaps.
+  Its binding findings carry `owner`, `binding`, `expected` and `supplied`.
+- **Suppression**: a local comment with a reason, on the binding's line or the
+  line above: `{# noqa: T019 -- rendered by the date-picker widget #}`. A
+  noqa without a reason does not suppress these IDs; the message says so.
+  `DJUST_CONFIG = {"suppress_checks": ["T019"]}` turns a check off
+  project-wide.
 
 ---
 

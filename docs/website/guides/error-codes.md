@@ -1110,6 +1110,66 @@ class MyView(LiveView):
 
 **Fix**: Fix the typo, or, if the variable is set dynamically, silence it with a `{# djust_typecheck: noqa <name> #}` template comment. For extends-based templates, run `manage.py djust_typecheck`. Suppress globally with `DJUST_CONFIG = {"suppress_checks": ["T018"]}`. See [Template type checking](typecheck.md).
 
+### T019: Event binding names no handler on its owner
+
+**Severity**: Warning
+
+**What causes it**: A `dj-*` event binding names something its owner cannot
+receive from the browser. That might be a missing method, a method without
+`@event_handler`, or an output callback. It might be an action or output of an
+interactive component the view declares, which a view-owned binding never
+reaches. It might also be an invalid event name, or arguments on `dj-submit` /
+`dj-keydown` / `dj-keyup` / `dj-click-away`, which send their value verbatim.
+The message names the file and line of the binding.
+
+**Fix**: Add or decorate the handler, correct the name, or let the component's
+own markup send its actions. Suppress one binding with
+`{# noqa: T019 -- <reason> #}` on its line or the line above.
+
+---
+
+### T020: Event binding arguments do not match the handler
+
+**Severity**: Warning
+
+**What causes it**: The binding never sends a required argument, sends one the
+handler does not accept, passes extra positional arguments, or sends one name
+twice. Under the legacy policy, `dj-input`, `dj-change` and `dj-submit` also
+send `field` and `_target`, which a closed legacy signature rejects. Under the
+strict policy, only `dj-value-*` attributes are sent, never `data-*`.
+
+**Fix**: Send the argument (for example `data-item-id` or `dj-value-item-id`),
+accept the generated names with a catch-all, or move the handler to the strict
+policy. Suppress with `{# noqa: T020 -- <reason> #}`.
+
+---
+
+### T021: Event binding literal does not fit the handler
+
+**Severity**: Warning
+
+**What causes it**: A literal value the handler's annotation rejects, such as
+`data-count="abc"` for `count: int`. Also an unknown wire hint, or one that does
+not fit the declared type. For `validate_field` / `submit_form`, a field name
+that is not in the view's static `form_class`.
+
+**Fix**: Correct the literal, hint or field name. Suppress with
+`{# noqa: T021 -- <reason> #}`.
+
+---
+
+### T022: Markup supplies routing context
+
+**Severity**: Warning
+
+**What causes it**: An attribute such as `data-view-id` or
+`dj-value-component-id` sends `view_id` / `component_id`. The server reads
+these as routing context, not as arguments, so the event can reach another
+owner.
+
+**Fix**: Rename the attribute. The framework attaches view and component context
+itself.
+
 ---
 
 ## Code Quality (Q0xx)
