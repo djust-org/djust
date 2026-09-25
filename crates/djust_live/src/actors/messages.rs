@@ -26,7 +26,7 @@ pub enum SessionMsg {
     /// Mount a new view (Phase 5: Now includes Python view instance)
     Mount {
         view_path: String,
-        params: EventParams,
+        params: HashMap<String, Value>,
         python_view: Option<Py<PyAny>>,
         /// The view's template source (#2599). `None` mounts the actor on an
         /// EMPTY template — the pre-#2599 shape, kept for pure-Rust tests.

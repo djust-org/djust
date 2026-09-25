@@ -241,7 +241,7 @@ impl SessionActor {
     async fn handle_mount(
         &mut self,
         view_path: String,
-        params: EventParams,
+        params: HashMap<String, Value>,
         python_view: Option<pyo3::Py<pyo3::PyAny>>,
         template: Option<String>,
         template_dirs: Vec<String>,
@@ -292,9 +292,7 @@ impl SessionActor {
                     .set_python_view_with_contracts(python_view, parameter_contract_module)
                     .await?;
             }
-            view_handle
-                .update_state(params.into_iter().collect())
-                .await?;
+            view_handle.update_state(params).await?;
             view_handle.render_with_diff().await
         }
         .await;
@@ -489,7 +487,7 @@ impl SessionActorHandle {
     pub async fn mount(
         &self,
         view_path: String,
-        params: EventParams,
+        params: HashMap<String, Value>,
         python_view: Option<pyo3::Py<pyo3::PyAny>>,
     ) -> Result<MountResponse, ActorError> {
         self.mount_with_template(view_path, params, python_view, None, Vec::new(), None)
@@ -504,7 +502,7 @@ impl SessionActorHandle {
     pub async fn mount_with_template(
         &self,
         view_path: String,
-        params: EventParams,
+        params: HashMap<String, Value>,
         python_view: Option<pyo3::Py<pyo3::PyAny>>,
         template: Option<String>,
         template_dirs: Vec<String>,
@@ -841,7 +839,7 @@ mod tests {
             let with = handle
                 .mount_with_template(
                     "t2741.V".to_string(),
-                    state.clone().into_iter().collect(),
+                    state.clone(),
                     None,
                     Some(PROBE.to_string()),
                     Vec::new(),
@@ -906,7 +904,7 @@ mod tests {
         tokio::spawn(actor.run());
 
         let result = handle
-            .mount("test.view".to_string(), EventParams::new(), None)
+            .mount("test.view".to_string(), HashMap::new(), None)
             .await;
 
         assert!(result.is_ok());
@@ -947,7 +945,7 @@ mod tests {
 
         // Mount view first
         handle
-            .mount("test.view".to_string(), EventParams::new(), None)
+            .mount("test.view".to_string(), HashMap::new(), None)
             .await
             .unwrap();
 
@@ -968,11 +966,11 @@ mod tests {
 
         // Mount multiple views
         let view1 = handle
-            .mount("view1".to_string(), EventParams::new(), None)
+            .mount("view1".to_string(), HashMap::new(), None)
             .await
             .unwrap();
         let _view2 = handle
-            .mount("view2".to_string(), EventParams::new(), None)
+            .mount("view2".to_string(), HashMap::new(), None)
             .await
             .unwrap();
 
@@ -1017,7 +1015,7 @@ mod tests {
 
         // Mount a view
         handle
-            .mount("test.view".to_string(), EventParams::new(), None)
+            .mount("test.view".to_string(), HashMap::new(), None)
             .await
             .unwrap();
 
@@ -1049,11 +1047,11 @@ mod tests {
 
         // Mount two views
         let view1 = handle
-            .mount("view1".to_string(), EventParams::new(), None)
+            .mount("view1".to_string(), HashMap::new(), None)
             .await
             .unwrap();
         let view2 = handle
-            .mount("view2".to_string(), EventParams::new(), None)
+            .mount("view2".to_string(), HashMap::new(), None)
             .await
             .unwrap();
 

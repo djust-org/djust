@@ -3029,7 +3029,7 @@ impl SessionActorHandlePy {
         let handle = self.handle.clone();
 
         // Convert Python dict to Rust HashMap<String, Value>
-        let params_rust = python_dict_to_params(params)?;
+        let params_rust = python_dict_to_hashmap(params)?;
         // ADR-029 (#2741): snapshot the render environment HERE, on the
         // Python thread that pushed it, before the mount crosses to the
         // tokio worker that will do every render for this view.
