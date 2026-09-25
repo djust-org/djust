@@ -38,7 +38,16 @@ class ContractError(ValueError):
 
 
 class ParameterError(ValueError):
-    """An invalid invocation; messages contain no client keys or values."""
+    """An invalid invocation; messages contain no client keys or values.
+
+    ``public_message`` is the text a client may be shown. It is set from the
+    framework-written message at the raise site, so error envelopes read it
+    rather than formatting the exception object.
+    """
+
+    def __init__(self, public_message: str) -> None:
+        super().__init__(public_message)
+        self.public_message = public_message
 
 
 @dataclass(frozen=True)

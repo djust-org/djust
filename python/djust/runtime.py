@@ -1915,6 +1915,8 @@ class WSConsumerTransport:
         try:
             await task
         except asyncio.CancelledError:
+            # Expected: we just cancelled the tick task and only wait for it to
+            # unwind.
             pass
         except Exception as exc:  # noqa: BLE001 — the loop logs its own errors
             from ._exposure_diagnostics import log_failure_for
