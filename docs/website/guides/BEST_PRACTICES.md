@@ -1329,8 +1329,11 @@ Always add `data-key` to list items:
 - `djust.V007`, which recommended the catch-all, is retired (ADR-037)
 
 **Solution:**
-Declare the parameters the template sends. Keep an explicit catch-all such as
-`**form_data` for a handler that receives a whole form:
+Declare the parameters the template sends. Under the default legacy parameter
+policy, `dj-input`, `dj-change` and `dj-submit` also send `field` and `_target`,
+so a legacy handler for them keeps a catch-all such as `**form_data`, and
+`manage.py check` reports one that does not (`djust.T020`). The strict policy
+(ADR-036) sends only the names the handler declares:
 
 ```python
 # ❌ Don't do this
