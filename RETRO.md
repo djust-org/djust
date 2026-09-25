@@ -828,6 +828,61 @@ None in this bucket.
 - [ ] The `v1.3.0rc1` tag is not reachable from main. Tracked in Action Tracker #367 (GitHub #3072).
 - [ ] Backport #3061 to 1.2.2.
 
+## v1.3.0-2 — thread race + memory growth (PR #3083, 1.2 backport #3084)
+
+**Date**: 2026-09-25
+**Scope**:
+- #3079: `presence.tenant_scoped_presence_key` read `TenantMixin` off a partially initialised `djust.tenants.mixin` while another thread was importing it.
+- #3080: process RSS grew under WebSocket load and was never released. The root cause is that `InMemoryStateBackend` never applied `SESSION_TTL` at runtime.
+- `performance.MemoryTracker` retried `import psutil` on every event.
+
+Main PR #3083 was squash-merged as `f2bfd6c17`. The backport to `1.2` (for 1.2.2, not yet cut) is PR #3084, squash-merged as `fe26163d1`.
+
+**Tests at close**:
+- 3 cases in `tests/unit/test_presence_tenant_import_race_3079.py`. They use a slow-import shim, and fail without the fix with the exact `AttributeError`.
+- 9 in `python/tests/test_memory_state_backend_ttl_3080.py`. 5 fail without the fix.
+- 4 in `python/tests/test_memory_tracker_psutil_probe.py`. All 4 fail without the fix.
+- The pre-push selected pytest passed on every push.
+- PR CI: #3083 had 22 checks pass and 0 fail; #3084 had 21 pass and 0 fail.
+
+Retro: https://github.com/djust-org/djust/pull/3083#issuecomment-5834380455
+Investigation: https://github.com/djust-org/djust/issues/3080#issuecomment-5834086079
+
+### What We Learned
+
+**1. For an RSS report, measure the live heap separately from RSS before hunting a leak.** In a Python/Rust process, `tracemalloc` sees neither the Rust heap, where `RustLiveView` state lives, nor allocator retention. `malloc_zone_statistics` plus the backend's entry count was the decisive measurement:
+- about 270 KB of live heap per session was held forever;
+- all of it was released by `delete_all()`;
+- RSS stayed flat afterwards, because the allocator keeps freed pages.
+
+The 0.9 MB/s steady climb reported from #3074 did not reproduce on 3.12 stock. The issue comment says so, rather than claiming the fix covers it.
+
+**2. A fix that reads a setting at construction must accept every type the setting arrives as.** Code Review caught the case (`fix-reproduces-own-bug`): moving the TTL comparison into `__init__` made a string `SESSION_TTL` from the environment fail every mount. The fix is `_coerce_ttl`, with a parametrised type test.
+
+**3. A PR body's non-breaking claims need a caller trace, just like docs.** The first PR body said an expired entry makes `mount()` run again. In fact `mount()` is skipped based on the Django-session restore (`mounted_from_restore`); the backend entry is only the compiled `RustLiveView` and its diff baseline. This is the second `unverified-claim` in a row, after #3070. That points at the Code Review checklist, not more retro text.
+
+### Insights
+- A TTL that is documented but never enforced is a state-lifetime gap, and no test exercised it. Any backend that has a `cleanup_*()` method should be asked who calls it at runtime.
+- **Before a memory profile counts, check the load average and the client success rate.** The first `tracemalloc` run was made at load 47, and 124 of 128 clients failed.
+
+### Review Stats
+
+| Metric | #3083 |
+|---|---|
+| Tests added | 16 Python (3 files) |
+| 🔴 Findings | 0 |
+| 🟡 Findings | 1 (a non-int `SESSION_TTL` raised `TypeError` at construction), fixed before merge |
+| 🟢 Findings | 3 (the docs sweep interval and the meaning of "written"; the changelog count; the plan path), all fixed. One Re-Review nit (`float("inf")` raises `OverflowError`) is not fixed |
+| CI failures | 0 |
+| Findings by pattern class | `fix-reproduces-own-bug` ×1, `unverified-claim` ×1 (the PR body) |
+
+### Process Improvements Applied
+None in this bucket.
+
+### Open Items
+- [ ] Not traced: with the fix, live malloc at the cycle low points still creeps by about 1 MB per four cycles (noted on #3080).
+- [ ] 1.2.2 backport candidate still on main: #3070 (the #3061 half). Its #3068 half is ADR-039 accounts and applies to 1.3 only.
+
 ## v1.2.1-7 — state and rendering batch: v1.2.1-7, -8 and -9 (PR #3042)
 
 **Date**: 2026-09-24
