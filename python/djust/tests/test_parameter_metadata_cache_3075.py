@@ -1,0 +1,399 @@
+"""The handler-discovery plan is cached per class (#3075).
+
+``parameter_contract_manifest`` runs on every render. Resolving each public
+name with ``inspect.getattr_static`` cost ~1 ms per frame on an ordinary
+LiveView, longer than the render. The class half is now resolved once per
+class and re-validated each call; these tests pin that the cached discovery
+returns exactly what the uncached one did, and that no class change is missed.
+"""
+
+import inspect
+import types
+from typing import Any
+
+import pytest
+
+from djust import LiveView, event_handler
+from djust import _parameter_metadata as pm
+from djust._parameter_metadata import _ABSENT, _instance_dict, parameter_contract_manifest
+from djust.components.descriptors.base import LiveComponent, TypedState
+from djust.decorators import is_event_handler
+
+
+# The discovery exactly as it was before the cache (main @ d23acbf9f), kept
+# verbatim as the oracle the cached one must agree with.
+def reference_event_methods(owner: Any) -> dict[str, Any]:
+    from djust.components.base import BoundComponent, LiveComponent
+
+    bound_component = isinstance(owner, BoundComponent)
+    storage = _instance_dict(owner)
+    declaration = storage["_descriptor"] if bound_component else owner
+    members: dict[str, Any] = {}
+    for cls in type(declaration).__mro__:
+        if bound_component and (
+            cls is LiveComponent or cls.__dict__.get("_djust_framework_component_base")
+        ):
+            break
+        for name, member in cls.__dict__.items():
+            members.setdefault(name, member)
+    for name, member in storage.items():
+        members.setdefault(name, member)
+
+    methods = {}
+    for name in members:
+        if name.startswith("_"):
+            continue
+        # Dispatch resolves real wrapper attributes before forwarding to the
+        # descriptor. This includes None and instance-assigned callables.
+        wrapper_member = inspect.getattr_static(owner, name, _ABSENT)
+        member = members[name] if wrapper_member is _ABSENT else wrapper_member
+        binding_class = type(declaration) if wrapper_member is _ABSENT else type(owner)
+        if type(member) in (types.FunctionType, staticmethod, classmethod):
+            function = member.__func__ if type(member) in (staticmethod, classmethod) else member
+            if not is_event_handler(function):
+                continue
+            # Only Python's known method descriptors are executed, never an
+            # application property or custom descriptor during discovery.
+            if name in storage:
+                method = member
+            else:
+                method = member.__get__(owner, binding_class)
+        elif type(member) is types.MethodType:
+            method = member
+        else:
+            continue
+        if is_event_handler(method):
+            methods[name] = method
+
+    if bound_component:
+        meta = inspect.getattr_static(type(declaration), "Meta", None)
+        event = inspect.getattr_static(meta, "event", None) if isinstance(meta, type) else None
+        if (
+            isinstance(event, str)
+            and not event.startswith("_")
+            and event not in members
+            and inspect.getattr_static(owner, event, _ABSENT) is _ABSENT
+        ):
+            methods[event] = owner._meta_event_handler(event)
+    return methods
+
+
+class Base(LiveView):
+    @event_handler()
+    def legacy(self, value: str = "", **kwargs):
+        pass
+
+    @event_handler(parameter_policy="strict")
+    def strict(self, value: int):
+        pass
+
+    @event_handler(parameter_policy="strict")
+    @staticmethod
+    def static_strict(value: int):
+        pass
+
+    def undecorated(self):
+        pass
+
+    @property
+    def prop(self):
+        raise AssertionError("discovery must not evaluate a property")
+
+    title = "plain class attribute"
+
+
+class Child(Base):
+    @event_handler(parameter_policy="strict")
+    def legacy(self, value: int):  # overrides a base handler
+        pass
+
+    @property
+    def strict(self):  # a shadowing property hides the base handler
+        raise AssertionError("discovery must not evaluate a property")
+
+
+class Menu(LiveComponent):
+    class State(TypedState):
+        selected: int = 0
+
+    @event_handler(parameter_policy="strict")
+    def choose(self, value: int):
+        pass
+
+    @event_handler(parameter_policy="strict")
+    def get(self, value: int):  # hidden by the wrapper's own ``get``
+        pass
+
+
+class DeleteOnly:
+    """A data descriptor through ``__delete__`` alone (no ``__set__``)."""
+
+    def __get__(self, obj, owner=None):
+        # Class access returns the descriptor, as any well-behaved one does:
+        # other suites (the API registry) getattr every LiveView subclass.
+        if obj is None:
+            return self
+        raise AssertionError("discovery must not evaluate a descriptor")
+
+    def __delete__(self, obj):
+        pass
+
+
+class WithDescriptors(Base):
+    guarded = DeleteOnly()
+
+    @classmethod
+    @event_handler(parameter_policy="strict")
+    def class_strict(cls, value: int):
+        pass
+
+
+class Picker(LiveComponent):
+    class State(TypedState):
+        picked: int = 0
+
+    class Meta:
+        event = "pick"
+
+
+class Page(LiveView):
+    menu = Menu()
+    picker = Picker()
+
+    @event_handler()
+    def save(self, **kwargs):
+        pass
+
+
+@event_handler(parameter_policy="strict")
+def assigned(value: str):
+    pass
+
+
+def owners():
+    plain, child, page = Base(), Child(), Page()
+    shadowed_none = Base()
+    shadowed_none.legacy = None
+    shadowed_fn = Child()
+    shadowed_fn.title = assigned
+    storage_only = Base()
+    storage_only.extra = assigned
+    storage_only.not_a_handler = lambda: None
+    bound = Page().menu
+    object.__setattr__(bound, "choose", None)
+    # Instance handlers under names a class data descriptor owns: the class
+    # attribute wins, so neither may be advertised.
+    guarded = WithDescriptors()
+    guarded.__dict__["guarded"] = assigned
+    guarded.__dict__["prop"] = assigned
+    return [
+        plain,
+        child,
+        page,
+        page.menu,
+        page.picker,
+        shadowed_none,
+        shadowed_fn,
+        storage_only,
+        bound,
+        guarded,
+    ]
+
+
+def comparable(methods: dict) -> list:
+    """Name, the underlying function AND what it is bound to, so a wrong
+    ``binding_class`` shows up too. Functions compare by qualified name:
+    ``Meta.event`` handlers are minted fresh on every call, in both versions."""
+    out = []
+    for name, method in methods.items():
+        function = getattr(method, "__func__", method)
+        out.append(
+            (name, function.__module__, function.__qualname__, getattr(method, "__self__", None))
+        )
+    return out
+
+
+@pytest.mark.parametrize("index", range(len(owners())))
+def test_cached_discovery_matches_the_uncached_oracle(index):
+    owner = owners()[index]
+    expected = comparable(reference_event_methods(owner))
+    assert comparable(pm._event_methods(owner)) == expected
+    # Again from the warm plan, which is the per-render path.
+    assert comparable(pm._event_methods(owner)) == expected
+
+
+def test_a_warm_manifest_does_not_walk_the_mro_per_name(monkeypatch):
+    """Regression for #3075: fails on the uncached discovery, which called
+    ``inspect.getattr_static`` once per public name on every render."""
+    view = Child()
+    parameter_contract_manifest(view)  # builds the plan
+    calls = []
+    real = inspect.getattr_static
+    monkeypatch.setattr(
+        pm.inspect, "getattr_static", lambda *a, **k: calls.append(a[1]) or real(*a, **k)
+    )
+    for _ in range(3):
+        parameter_contract_manifest(view)
+    # Only the instance-storage probes (``__dict__``) remain; the uncached
+    # discovery made one probe per public name, ~150 here, on every call.
+    assert set(calls) == {"__dict__"} and len(calls) <= 2 * 3
+
+
+def test_a_monkeypatched_handler_is_seen_at_once(monkeypatch):
+    view = Base()
+    assert "added" not in pm._event_methods(view)
+
+    @event_handler(parameter_policy="strict")
+    def added(self, value: int):
+        pass
+
+    monkeypatch.setattr(Base, "added", added, raising=False)
+    assert "added" in pm._event_methods(view)
+
+    @event_handler(parameter_policy="strict")
+    def replacement(self, value: str):
+        pass
+
+    monkeypatch.setattr(Base, "strict", replacement)
+    data = parameter_contract_manifest(view)
+    assert data["owners"][0]["handlers"]["strict"]["parameters"][0]["type"] == "str"
+    monkeypatch.delattr(Base, "strict")
+    assert "strict" not in pm._event_methods(view)
+
+
+def test_a_change_on_a_base_class_reaches_a_warm_subclass_plan(monkeypatch):
+    view = Child()
+    pm._event_methods(view)
+
+    @event_handler()
+    def from_base(self, **kwargs):
+        pass
+
+    monkeypatch.setattr(LiveView, "from_base", from_base, raising=False)
+    assert "from_base" in pm._event_methods(view)
+
+
+def test_hot_view_replacement_swaps_the_class_and_the_plan():
+    view = Base()
+    assert "strict" in pm._event_methods(view)
+
+    class Replaced(LiveView):
+        @event_handler()
+        def only_new(self, **kwargs):
+            pass
+
+    view.__class__ = Replaced
+    methods = pm._event_methods(view)
+    assert "only_new" in methods and "strict" not in methods
+
+
+def test_an_instance_handler_under_a_delete_only_descriptor_is_not_advertised():
+    """Review of #3077: ``__delete__`` alone makes a data descriptor."""
+    view = WithDescriptors()
+    view.__dict__["guarded"] = assigned
+    assert "guarded" not in pm._event_methods(view)
+    assert "guarded" not in reference_event_methods(view)
+
+
+def test_swapping_two_attributes_values_rebuilds_the_plan():
+    """Same key set, same values, different pairing: still a change."""
+
+    @event_handler(parameter_policy="strict")
+    def first(self, value: int):
+        pass
+
+    @event_handler(parameter_policy="strict")
+    def second(self, value: str):
+        pass
+
+    class Swap(LiveView):
+        pass
+
+    Swap.a, Swap.b = first, second
+    view = Swap()
+    assert pm._event_methods(view)["a"].__func__ is first
+    del Swap.a, Swap.b
+    Swap.b, Swap.a = first, second
+    assert pm._event_methods(view)["a"].__func__ is second
+    assert comparable(pm._event_methods(view)) == comparable(reference_event_methods(view))
+
+
+def test_reassigning_bases_rebuilds_the_plan():
+    class B1(LiveView):
+        @event_handler()
+        def from_base(self, **kwargs):
+            return "b1"
+
+    class B2(LiveView):
+        @event_handler()
+        def from_base(self, **kwargs):
+            return "b2"
+
+    class Reloaded(B1):
+        pass
+
+    view = Reloaded()
+    assert pm._event_methods(view)["from_base"].__func__ is B1.__dict__["from_base"]
+    Reloaded.__bases__ = (B2,)
+    assert pm._event_methods(view)["from_base"].__func__ is B2.__dict__["from_base"]
+
+
+def test_a_descriptor_class_gaining_delete_rebuilds_the_plan(monkeypatch):
+    class Plain:
+        def __get__(self, obj, owner=None):
+            if obj is None:
+                return self
+            raise AssertionError("discovery must not evaluate a descriptor")
+
+    class Holder(LiveView):
+        slot = Plain()
+
+    view = Holder()
+    view.__dict__["slot"] = assigned
+    assert "slot" in pm._event_methods(view)  # non-data: the instance wins
+    monkeypatch.setattr(Plain, "__delete__", lambda self, obj: None, raising=False)
+    assert "slot" not in pm._event_methods(view)  # now a data descriptor
+    assert "slot" not in reference_event_methods(view)
+
+
+def test_a_descriptor_class_rebased_onto_a_data_descriptor_rebuilds_the_plan():
+    class Root:  # a shared layout, so ``__bases__`` may be swapped
+        pass
+
+    class Other(Root):
+        pass
+
+    class Deleter(Root):
+        def __delete__(self, obj):
+            pass
+
+    class Plain(Other):
+        def __get__(self, obj, owner=None):
+            if obj is None:
+                return self
+            raise AssertionError("discovery must not evaluate a descriptor")
+
+    class Holder(LiveView):
+        slot = Plain()
+
+    view = Holder()
+    view.__dict__["slot"] = assigned
+    assert "slot" in pm._event_methods(view)
+    Plain.__bases__ = (Deleter,)
+    assert "slot" not in pm._event_methods(view)
+    assert "slot" not in reference_event_methods(view)
+
+
+def test_immutable_types_are_not_snapshotted():
+    """They cannot change, and they were most of the freshness check's cost."""
+    plan = pm._class_plan(Child, Child, False)
+    assert all(not cls.__flags__ & pm._IMMUTABLE_TYPE for cls, _, _ in plan.snapshot)
+
+
+def test_the_plan_cache_is_bounded(monkeypatch):
+    monkeypatch.setattr(pm, "_PLAN_LIMIT", 4)
+    monkeypatch.setattr(pm, "_PLANS", {})
+    for index in range(10):
+        view = type(f"View{index}", (Base,), {})()
+        pm._event_methods(view)
+        assert len(pm._PLANS) <= 4
