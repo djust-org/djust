@@ -1200,31 +1200,46 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
             obj.__dict__[self._descriptor_attr_name or "component"] = value
 
     def _make_event_handler(self, event_name: str) -> Callable[..., Any]:
-        """Create an event handler that routes to the correct component instance."""
+        """Create the view-level ``Meta.event`` alias for this component type.
+
+        The client names the target with ``component_id``. It is resolved only
+        against the owner class's declared descriptors of this component type,
+        before any view attribute is read, so an alias cannot drive a component
+        of another type or evaluate an arbitrary view attribute (#3078). An
+        unknown or foreign id is ignored, as an unresolved id always was.
+
+        The alias is pinned to the legacy parameter policy: its ``component_id``
+        is a reserved framework name and ``value`` is untyped, so it cannot be a
+        strict contract, and a project-wide strict policy must not break it.
+        """
+        import inspect
+
         component_type = type(self)
 
         def handler(view_self: Any, value: Any = "", component_id: str = "", **kwargs: Any) -> None:
-            # Auto-resolve if only one instance of this component type
+            owner = type(view_self)
+            descriptors = getattr(owner, "_component_descriptors", None) or {}
+            owned = {
+                name: descriptor
+                for name, descriptor in descriptors.items()
+                if isinstance(descriptor, component_type)
+                and inspect.getattr_static(owner, name, None) is descriptor
+            }
             if not component_id:
-                descriptors = getattr(type(view_self), "_component_descriptors", {})
-                matches = [n for n, d in descriptors.items() if isinstance(d, component_type)]
-                if len(matches) == 1:
-                    component_id = matches[0]
-            if not component_id:
+                # Auto-resolve if only one instance of this component type.
+                if len(owned) != 1:
+                    return
+                component_id = next(iter(owned))
+            if type(component_id) is not str or component_id not in owned:
                 return
+            descriptor = owned[component_id]
 
             state = getattr(view_self, component_id, None)
             if isinstance(state, BoundComponent):
                 state = state.state
             if state is None:
                 return
-
-            # Find the component's action method (e.g., toggle, set, open, close)
-            # Convention: the first non-private, non-dunder method that isn't
-            # mount/render/get_context_data is the action
-            descriptor = getattr(type(view_self), component_id, None)
-            if descriptor and hasattr(descriptor, "_handle_event"):
-                descriptor._handle_event(state, value=value, **kwargs)
+            descriptor._handle_event(state, value=value, **kwargs)
 
         # Preserve the event name for djust dispatch
         handler.__name__ = event_name
@@ -1234,7 +1249,7 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
         try:
             from djust.decorators import event_handler as eh_decorator
 
-            handler = eh_decorator(handler)
+            handler = eh_decorator(parameter_policy="legacy")(handler)
         except ImportError:
             # @event_handler is optional here; skip decoration if decorators module isn't available.
             pass
