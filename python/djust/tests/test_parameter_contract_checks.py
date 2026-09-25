@@ -504,14 +504,9 @@ def test_actor_bridge_rejects_what_v017_reports(fixture_module):
     assert actor_handler_arguments(view.sync_strict, {"count": "2"}) == ((2,), {})
 
 
-def test_strict_handlers_are_not_told_to_add_kwargs(fixture_module):
+def test_no_handler_is_told_to_add_kwargs(fixture_module):
     from djust.checks.components import check_liveviews
 
-    v007 = {
-        m.msg.split(" ")[0]
-        for m in check_liveviews(None)
-        if m.id == "djust.V007" and m.msg.startswith(MODULE + ".")
-    }
-    # Legacy closed signatures keep the existing V007 advice; strict ones,
-    # valid or not, do not (their signature is the contract, V016 checks it).
-    assert v007 == {_label("Valid", "legacy_closed")}
+    # V007 is retired (ADR-037 D3): closed signatures, legacy or strict, are
+    # never reported for lacking **kwargs.
+    assert [m for m in check_liveviews(None) if m.id == "djust.V007"] == []

@@ -538,25 +538,12 @@ self.api_client = MySerializableClient()  # noqa: V006
 
 ---
 
-### V007: Event handler missing **kwargs
+### V007: Retired
 
-**Severity**: Warning
-
-**What causes it**: An `@event_handler` decorated method does not include `**kwargs` in its signature. Event handlers receive all event parameters from the client, and without `**kwargs`, extra parameters will cause errors. Handlers using the strict parameter policy (ADR-036) are not reported: their closed signature is the contract, and V016 checks it instead.
-
-**Fix**:
-
-```python
-# WRONG - will fail if client sends unexpected parameters
-@event_handler()
-def search(self, query: str = ""):
-    self.results = search(query)
-
-# CORRECT
-@event_handler()
-def search(self, query: str = "", **kwargs):
-    self.results = search(query)
-```
+**Retired in 1.3** (ADR-037). V007 recommended `**kwargs` on every event handler.
+A closed signature is now encouraged: a catch-all hides a misspelled parameter.
+djust no longer emits V007, and the ID is never reused. Existing suppressions of
+V007 have no effect and can be removed.
 
 ---
 

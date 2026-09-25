@@ -32,7 +32,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V004 | LiveView | Info | Public method looks like event handler but missing @event_handler |
 | V005 | LiveView | Warning | Module not in LIVEVIEW_ALLOWED_MODULES |
 | V006 | LiveView | Warning | Service instance assigned in mount() — high-confidence subset of V008 |
-| V007 | LiveView | Warning | Event handler missing **kwargs (legacy-policy handlers only) |
+| V007 | LiveView | Retired | Retired in 1.3 (ADR-037): recommended `**kwargs` on every handler. Never emitted; the ID is not reused |
 | V008 | LiveView | Info | Non-primitive type assigned in mount() — broader, lower-confidence (skips V006 patterns) |
 | V012 | LiveView | Warning | Sticky child template declares its own dj-view (nested duplicate binding) |
 | V013 | LiveView | Warning | HTTP-only dispatch()/get()/post() override never runs on a WebSocket mount |
@@ -188,7 +188,7 @@ from djust import LiveView
 
 class BaseLiveView(LiveView):
     """Abstract base — provides shared mount + auth boilerplate."""
-    abstract = True   # skip V001 / V005 / V002 / V003 / V004 / V007 / Q007
+    abstract = True   # skip V001 / V005 / V002 / V003 / V004 / Q007
     login_required = True
 
     def mount(self, request, **kwargs):
@@ -268,18 +268,11 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Suppression**: `# noqa: V006` inline on the assignment
 - **False positives**: Objects whose class name contains "Service", "Client", "Session", "API", or "Connection" but are actually lightweight and serialisable
 
-### V007 — Event handler missing **kwargs
-- **Severity**: Warning
-- **Method**: AST (inspects `@event_handler` decorated methods)
-- **What it detects**: An event handler method does not accept `**kwargs`, which causes a `TypeError` when djust passes extra keyword arguments
-- **Not reported for strict-policy handlers**: under ADR-036's strict policy the closed signature is the handler's parameter contract, so adding `**kwargs` would open it. V016 checks those declarations instead.
-- **Suppression** (any of):
-  - Fix the signature (the real fix)
-  - `abstract = True` class attribute on an abstract base
-  - `DJUST_CONFIG = {"suppress_checks": ["V007"]}` — global (fixed in #1607)
-  - `SILENCED_SYSTEM_CHECKS = ["djust.V007"]`
-  - `# noqa: V007` inline
-- **False positives**: None
+### V007 — Retired
+- **Retired in**: 1.3 (ADR-037 D3)
+- **What it did**: warned when an `@event_handler` did not accept `**kwargs`
+- **Why it was retired**: a closed signature is encouraged, not suspicious. A catch-all hides misspelled parameters. The template binding checks report known missing and unexpected arguments instead
+- **Migration**: remove `"V007"` from `suppress_checks`, `SILENCED_SYSTEM_CHECKS` and `# noqa` comments at your convenience; they now have no effect. The ID is never reused
 
 ### V008 — Non-primitive type assigned in mount() (AST)
 - **Severity**: Info

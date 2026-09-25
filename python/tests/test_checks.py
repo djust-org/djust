@@ -2633,15 +2633,15 @@ class TestV006ServiceInstanceInMount:
 
 
 # ---------------------------------------------------------------------------
-# V007 -- Event handler signature validation
+# V007 -- retired (ADR-037 D3)
 # ---------------------------------------------------------------------------
 
 
-class TestV007EventHandlerSignature:
-    """V007 -- event handler missing **kwargs."""
+class TestV007Retired:
+    """V007 ("event handler missing **kwargs") is retired: a closed signature is
+    encouraged, not suspicious. The ID is never emitted and never reused."""
 
-    def test_v007_missing_kwargs(self):
-        """V007 fires when @event_handler method lacks **kwargs."""
+    def test_closed_legacy_signature_is_not_reported(self):
         import pytest
 
         if not _liveview_available():
@@ -2659,7 +2659,7 @@ class TestV007EventHandlerSignature:
             pass
 
         cls = type(
-            "V007NoKwargsView",
+            "V007ClosedSignatureView",
             (LiveView,),
             {
                 "__module__": "myapp.views",
@@ -2671,117 +2671,7 @@ class TestV007EventHandlerSignature:
 
         try:
             errors = check_liveviews(None)
-            v007 = [e for e in errors if e.id == "djust.V007"]
-            assert any("V007NoKwargsView" in e.msg and "handle_click" in e.msg for e in v007)
-        finally:
-            del cls
-            _force_gc()
-
-    def test_v007_passes_with_kwargs(self):
-        """V007 should not fire when **kwargs is present."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
-
-        from djust.live_view import LiveView
-        from djust.decorators import event_handler
-        from djust.checks import check_liveviews
-
-        def mount(self, request, **kwargs):
-            pass
-
-        @event_handler()
-        def handle_click(self, item_id=0, **kwargs):
-            pass
-
-        cls = type(
-            "V007WithKwargsView",
-            (LiveView,),
-            {
-                "__module__": "myapp.views",
-                "template_name": "t.html",
-                "mount": mount,
-                "handle_click": handle_click,
-            },
-        )
-
-        try:
-            errors = check_liveviews(None)
-            v007 = [e for e in errors if e.id == "djust.V007"]
-            assert not any("V007WithKwargsView" in e.msg for e in v007)
-        finally:
-            del cls
-            _force_gc()
-
-    def test_v007_passes_with_event_alias(self):
-        """V007 should not fire when **event is used instead of **kwargs."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
-
-        from djust.live_view import LiveView
-        from djust.decorators import event_handler
-        from djust.checks import check_liveviews
-
-        def mount(self, request, **kwargs):
-            pass
-
-        @event_handler()
-        def handle_click(self, **event):
-            pass
-
-        cls = type(
-            "V007EventAliasView",
-            (LiveView,),
-            {
-                "__module__": "myapp.views",
-                "template_name": "t.html",
-                "mount": mount,
-                "handle_click": handle_click,
-            },
-        )
-
-        try:
-            errors = check_liveviews(None)
-            v007 = [e for e in errors if e.id == "djust.V007"]
-            assert not any("V007EventAliasView" in e.msg for e in v007)
-        finally:
-            del cls
-            _force_gc()
-
-    def test_v007_ignores_non_event_handlers(self):
-        """V007 should not fire for methods without @event_handler."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
-
-        from djust.live_view import LiveView
-        from djust.checks import check_liveviews
-
-        def mount(self, request, **kwargs):
-            pass
-
-        def helper(self, item_id=0):
-            pass
-
-        cls = type(
-            "V007NonHandlerView",
-            (LiveView,),
-            {
-                "__module__": "myapp.views",
-                "template_name": "t.html",
-                "mount": mount,
-                "helper": helper,
-            },
-        )
-
-        try:
-            errors = check_liveviews(None)
-            v007 = [e for e in errors if e.id == "djust.V007"]
-            assert not any("V007NonHandlerView" in e.msg for e in v007)
+            assert [e for e in errors if e.id == "djust.V007"] == []
         finally:
             del cls
             _force_gc()

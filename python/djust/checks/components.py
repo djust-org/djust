@@ -85,17 +85,6 @@ def _strip_template_comments(content: str) -> str:
     return content
 
 
-def _declares_strict_policy(method: Any) -> bool:
-    """Whether dispatch resolves ``method`` to ADR-036's strict parameter policy."""
-    from djust._parameter_contract import ContractError
-    from djust.validation import get_handler_parameter_policy
-
-    try:
-        return get_handler_parameter_policy(method) == "strict"
-    except ContractError:
-        return False  # djust.C021 / V016 report the invalid policy value.
-
-
 def _routed_liveview_classes() -> Iterator[type]:
     """Yield LiveView subclasses reachable from the root URLconf.
 
@@ -467,51 +456,8 @@ def check_liveviews(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                 )
             )
 
-        # V007 -- event handler missing **kwargs
-        for name, method in cls.__dict__.items():
-            if not callable(method):
-                continue
-            if not is_event_handler(method):
-                continue
-            # ADR-036 D1: a strict handler's closed signature is its contract;
-            # adding **kwargs would open it. V016 checks strict declarations.
-            if _declares_strict_policy(method):
-                continue
-            # Unwrap decorators to get original function
-            inner = method
-            for _attempt in range(10):
-                inner = getattr(inner, "__wrapped__", None) or getattr(inner, "func", None)
-                if inner is None:
-                    break
-            sig_target = inner if inner is not None else method
-            try:
-                sig = inspect.signature(sig_target)
-            except (ValueError, TypeError):
-                continue
-            has_var_keyword = any(
-                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
-            )
-            if not has_var_keyword and not _is_check_suppressed("djust.V007"):
-                method_file = ""
-                method_line = None
-                try:
-                    method_file = inspect.getfile(sig_target)
-                    method_line = inspect.getsourcelines(sig_target)[1]
-                except (OSError, TypeError):
-                    pass  # Source introspection may fail for built-in or C-extension classes
-                errors.append(
-                    DjustWarning(
-                        "%s.%s() event handler missing **kwargs in signature." % (cls_label, name),
-                        hint="Add **kwargs to the event handler signature to receive event parameters.",
-                        id="djust.V007",
-                        fix_hint=(
-                            "Add `**kwargs` to the `%s` method signature in `%s`."
-                            % (name, method_file or cls_label)
-                        ),
-                        file_path=method_file,
-                        line_number=method_line,
-                    )
-                )
+        # V007 (event handler missing **kwargs) is retired by ADR-037 D3: a
+        # closed signature is encouraged, not suspicious. The ID is never reused.
 
         # V009 -- on_mount contains non-callable items
         on_mount_hooks = cls.__dict__.get("on_mount")
