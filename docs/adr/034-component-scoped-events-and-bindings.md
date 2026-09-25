@@ -527,6 +527,27 @@ implementation ledger. One fix is an owner decision about behavior:
   ADR-035 form save stored stale values in 3 runs of 4. An event sent alone
   still goes out at once.
 
+## C3 decisions (2026-09-25)
+
+Keyed collections (D5, gate 5). Q0–Q6 are owner decisions; N1–N4 are
+implementation choices within D5 that the owner accepted.
+
+| # | Question | Decision | Reason |
+| --- | --- | --- | --- |
+| Q0 | Collection subscription | `@rows.on.selected` / `@rows.on.toggled`: one callback per collection and output, receiving the emitting member (`component.key` is its collection key). Typed exactly like the fixed menu's outputs. | D1/D5's single convention. Per-member callbacks would be a third spelling and would persist bound methods; a separate keyed output would duplicate `component.key`. |
+| Q1 | Where `sync()` runs | Anywhere server code runs on the bound view, including the collection's own callback. A callback that removes its member finishes against it; later events for that member are refused. | Reconciliation exists for lists that change after mount. |
+| Q2 | Lookup API | `sync()`, `.values` (a tuple in sync order), `get(key)` (the live member, or `None` for an unknown or removed key), `len()` and iteration (live members in sync order). Nothing else. | Owner decision: the lookups views need, with no `__contains__`, `keys()` or `__getitem__`. |
+| Q3 | Exported collection type | None. `DropdownMenu.collection()` is the constructor; the type is inferred and has its own typing fixtures. | Keeps the public surface to what the ADR names. |
+| Q4 | Member configuration | Per member: `label`, `items`, `visibility`. `.on.toggled` observes only client-visibility members; `.on.selected` covers all. | One configuration model: the constructor. |
+| Q5 | The declarations passed to `sync()` | Configuration only: copied, never bound or mutated, reusable across keys and syncs. | D4: declarations are configuration, not state. |
+| Q6 | Size cap | None. The existing state-size limits and warnings apply. | D5 already requires pagination or virtualization for large lists. |
+| N1 | Changing a retained member's `visibility` | Starts a new member lifetime (new identity). | The state owner changes, so the old state and identity do not carry over. |
+| N2 | Server session persistence | One record per collection: keys, configuration, identities, state and observation cursors in sync order, validated in full before any change. A request or reconnect restored from the session gets the latest membership, and client members rotate their observation lifetime. | Server-written state reflects the last `sync()`, so a removed member is never resurrected. |
+| N3 | Client-signed navigation snapshots | A view that declares a collection is not signed for back-navigation; Back mounts it fresh, and `sync()` supplies the current membership. | A signed snapshot would restore the membership it captured, resurrecting members removed since (D5). |
+| N4 | Debug time travel | Restores member state for members that still exist; membership is not rolled back. | A dev tool must not resurrect removed members either. |
+
+Collection documentation and snippets are published with C4, after this proof.
+
 ## Alternatives considered
 
 | Alternative | Assessment |

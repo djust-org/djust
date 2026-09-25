@@ -338,12 +338,16 @@ class RequestMixin:
         # state.
         if uses_legacy_exposure(self):
             from .context import legacy_render_only_keys
+            from ..components.base import is_component_collection
 
             _render_only = legacy_render_only_keys(self)
             _session_state = {
                 k: v
                 for k, v in _cached.items()
-                if not isinstance(v, LiveComponent) and k != "streams" and k not in _render_only
+                if not isinstance(v, LiveComponent)
+                and not is_component_collection(v)
+                and k != "streams"
+                and k not in _render_only
             }
             request.session[view_key] = normalize_django_value(_session_state, state_roundtrip=True)
 
@@ -725,7 +729,7 @@ class RequestMixin:
 
     def post(self, request: "HttpRequest", *args: Any, **kwargs: Any) -> HttpResponse:
         """Handle POST requests - event handling"""
-        from ..components.base import LiveComponent, SESSION_COMPONENT_TYPES
+        from ..components.base import LiveComponent
 
         # Referenced by the ``except`` at the end of this method, which must not
         # raise its own UnboundLocalError when the failure precedes their
@@ -860,9 +864,11 @@ class RequestMixin:
             component_state = (
                 request.session.get(f"{view_key}_components", {}) if legacy_exposure else {}
             )
+            from ..components.base import is_session_component
+
             for key, state in component_state.items():
                 component = getattr(self, key, None)
-                if component and isinstance(component, SESSION_COMPONENT_TYPES):
+                if component is not None and is_session_component(component):
                     self._restore_component_state(component, state)
 
             # --- Authorization layer 3 of 3: object-level (ADR-017) ----------
@@ -995,12 +1001,15 @@ class RequestMixin:
 
                 updated_context = self.get_context_data()
                 from .context import legacy_render_only_keys
+                from ..components.base import is_component_collection
 
                 render_only = legacy_render_only_keys(self)
                 state = {
                     k: v
                     for k, v in updated_context.items()
-                    if not isinstance(v, LiveComponent) and k not in render_only
+                    if not isinstance(v, LiveComponent)
+                    and not is_component_collection(v)
+                    and k not in render_only
                 }
                 request.session[view_key] = normalize_django_value(state, state_roundtrip=True)
                 self._save_components_to_session(request, updated_context)

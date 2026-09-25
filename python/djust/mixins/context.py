@@ -328,6 +328,10 @@ class ContextMixin:
                 if isinstance(value, LiveComponent):
                     self._register_component(value, attr_name=key)
                 context[key] = value
+            elif getattr(type(value), "_djust_component_collection", False):
+                # ADR-034 C3: a bound keyed collection renders its members
+                # (``{% for menu in row_menus.values %}``).
+                context[key] = value
             elif isinstance(value, BoundComponent):
                 # ADR-031: a class-level component resolved through ``__get__``
                 # above. It is not JSON-serializable itself (the #694 gate
@@ -625,7 +629,10 @@ class ContextMixin:
             if name in ("view", "streams"):
                 raise ExposureError("Component context provider uses a reserved name")
             if (
-                not isinstance(declaration, LiveComponent)
+                not (
+                    isinstance(declaration, LiveComponent)
+                    or getattr(type(declaration), "_djust_component_collection", False)
+                )
                 or getattr_static(type(self), name) is not declaration
             ):
                 raise ExposureError("Component context provider no longer matches its declaration")

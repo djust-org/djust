@@ -2162,6 +2162,17 @@ def normalize_django_value(value: Any, _depth: int = 0, *, state_roundtrip: bool
             return component_for_state_roundtrip(value)
         if isinstance(value, (Component, LiveComponent)):
             return str(value)
+        # ADR-034 C3: a keyed collection renders as its ordered members. It is
+        # never session state: its members persist as their own record.
+        if getattr(type(value), "_djust_component_collection", False):
+            if state_roundtrip:
+                raise TypeError("An interactive collection is not session state")
+            return {
+                "values": [
+                    normalize_django_value(member, _depth + 1, state_roundtrip=False)
+                    for member in value.values
+                ]
+            }
         # ADR-031: a class-level component crosses as its rendered HTML when it
         # declares a template (``{{ nav }}`` — ``{{ nav.active }}`` still
         # resolves through the raw-object sidecar), otherwise as its State so

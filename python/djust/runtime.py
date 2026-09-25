@@ -2904,19 +2904,21 @@ class ViewRuntime:
                 await sync_to_async(view_instance._assign_component_ids)()
 
                 # Restore component state.
-                from .components.base import SESSION_COMPONENT_TYPES
+                from .components.base import is_session_component
 
                 component_state = await session.aget(f"{view_key}_components", {})
                 for key, state in component_state.items():
                     component = getattr(view_instance, key, None)
-                    if component and isinstance(component, SESSION_COMPONENT_TYPES):
+                    if component is not None and is_session_component(component):
                         await sync_to_async(view_instance._restore_component_state)(
                             component, state
                         )
-                        from .components._interactive import DropdownMenu
+                        from .components._interactive import DropdownMenu, DropdownMenuCollection
 
                         if isinstance(component, DropdownMenu):
                             component._renew_observation_lifetime()
+                        elif isinstance(component, DropdownMenuCollection):
+                            component._renew_observation_lifetimes()
 
                 mounted_from_restore = True
 
@@ -4428,7 +4430,6 @@ class ViewRuntime:
             if save_session is None:
                 return
 
-            from .components.base import LiveComponent as _LC
             from .serialization import normalize_django_value as _normalize
 
             save_path = mount_request.path if mount_request is not None else "/"
@@ -4458,10 +4459,14 @@ class ViewRuntime:
             from .mixins.context import legacy_render_only_keys
 
             render_only = legacy_render_only_keys(target_view)
+            from .components.base import LiveComponent as _LC, is_component_collection
+
             save_state = {
                 k: v
                 for k, v in save_context.items()
-                if not isinstance(v, _LC) and k not in render_only
+                if not isinstance(v, _LC)
+                and not is_component_collection(v)
+                and k not in render_only
             }
             await save_session.aset(save_view_key, _normalize(save_state, state_roundtrip=True))
 

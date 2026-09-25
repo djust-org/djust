@@ -9,6 +9,7 @@ from .exposure_demo import ExposureMatrixView, LegacyExposureMatrixView
 from .strict_parameters_demo import StrictParametersView
 from .model_form_demo import ModelFormDemoView, model_form_index
 from .interactive_dropdown_demo import InteractiveDropdownView
+from .interactive_collection_demo import InteractiveCollectionView
 from .table_select_demo import TableSelectView
 from .demos import (
     TodoView,
@@ -58,6 +59,7 @@ __all__ = [
     "ModelFormDemoView",
     "model_form_index",
     "InteractiveDropdownView",
+    "InteractiveCollectionView",
     "TableSelectView",
     "TodoView",
     "ChatView",

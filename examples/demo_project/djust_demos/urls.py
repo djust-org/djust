@@ -35,6 +35,12 @@ urlpatterns = [
     path("model-form/<int:pk>/", ModelFormDemoView.as_view(), name="model-form"),
     # ADR-034 C2 live surface (tests/playwright/test_interactive_dropdown.py).
     path("interactive-dropdown/", InteractiveDropdownView.as_view(), name="interactive-dropdown"),
+    # ADR-034 C3 live surface (tests/playwright/test_interactive_collection.py).
+    path(
+        "interactive-collection/",
+        InteractiveCollectionView.as_view(),
+        name="interactive-collection",
+    ),
     # Table-selection canary (#2781) - selectable TableComponent multi-select.
     path("table-select/", TableSelectView.as_view(), name="table-select"),
     path("todo/", TodoView.as_view(), name="todo"),

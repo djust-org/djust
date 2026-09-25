@@ -2377,9 +2377,56 @@ Source: [decisions and acceptance](034-component-scoped-events-and-bindings.md).
   process-local. Missing/expired cursors fail closed until a fresh binding is
   rendered. Browser recovery for this boundary remains open. This is not C2
   acceptance or an exactly-once application callback guarantee.
-- [ ] **C3 — collection lifecycle.** Prove keyed repetition, reorder, duplicate
+- [x] **C3 — collection lifecycle.** Prove keyed repetition, reorder, duplicate
   keys, removal/re-addition, nesting, reconnect and restore. Include a separate
   authorized delegated-row example; do not present it as stateful repetition.
+  **Closed 2026-09-25** (gate 5's separate proof), under the owner's C3
+  decisions in ADR-034 (Q0–Q6, N1–N4). `DropdownMenu.collection()` is
+  implemented in `components/_interactive.py`, with rendering, the explicit
+  provider, session persistence and restore wired through
+  `components.base.is_session_component`.
+  Evidence:
+  - `test_interactive_collections_c3.py` (26 tests):
+    - sync order, `get`/`len`/iteration and `.values`;
+    - invalid pairs, including duplicate keys, change nothing;
+    - reordering keeps state and identity;
+    - retained configuration updates, and an invalidated selection clears
+      without an output;
+    - a `visibility` change starts a new lifetime;
+    - declarations are copied and reusable;
+    - removal and re-addition give a new identity;
+    - the member is the callback source, and `toggled` fires only for client
+      members;
+    - runtime dispatch refuses removed, re-added-old and unknown identities,
+      including after the collection's own callback removes its member;
+    - HTTP session round trip, and a WebSocket reconnect restore, keep
+      identities and state and never resurrect a removed member;
+    - an invalid session record changes nothing;
+    - no signed snapshot for views with collections;
+    - rendering in both engines and both policies;
+    - membership and state changes render.
+  - `test_adr034_delegated_rows.py` (2 tests) runs the ADR's own D5
+    `RowActionsView` through the HTTP fallback: rows carry their own ids
+    before and after a reorder, forged ids and actions are refused, and no
+    component exists per row.
+  - Typing proof: 31 negative locations (10 new for collections) rejected by
+    mypy and Pyright 1.1.408; the positive and runtime assertions pass.
+  - Browser: `tests/playwright/test_interactive_collection.py` on
+    `/demos/interactive-collection/`, over pinned WebSocket, SSE and HTTP-only,
+    checks:
+    - independent rows, and the keyed callback firing once;
+    - reordering keeps state with its row;
+    - removal from the member's own callback;
+    - the removed row's forged event is refused;
+    - restore gives a new identity;
+    - the client row's keyed observation.
+    It passes on all three. Canary: with removed members kept registered and
+    dispatchable, it fails on WebSocket and SSE. HTTP-only restores membership
+    from the session on every request, so the leak cannot occur there.
+  - Gate-offs in the unit suite: members not unregistered fails 3 tests;
+    duplicate keys undetected fails 1; members matched by position fails 7;
+    session restore not applied fails 2.
+  Not yet published: collection docs and snippets go out with C4.
 - [ ] **C4 — acceptance and publication.** Run HTTP/WS and real browser tests
   with both template backends: focus/dismissal/default actions, user isolation,
   async/error behavior, duplicate/reordered observations and stale identities.
