@@ -122,6 +122,38 @@ class SharedNoteView(LiveView):
 
 The receiver is named `handle_broadcast` because pushed handlers must start with `handle_` (or be `@event_handler`-decorated). The sender skips its own broadcast, and peers receive it and update their state normally.
 
+## Scoped Push: One Room, Not Every Room
+
+`push_to_view(view_path, ...)` reaches **every** session of the view class. For a view that serves many independent rooms (a game room, a document, a chat channel), a room's broadcast would then reach every session in every room. Each of those sessions runs the handler only to find the message is for another room, and sends a no-op frame back. The work grows with rooms × sessions.
+
+Give each session a **push scope** instead, and push to one scope:
+
+```python
+from djust import LiveView, push_to_view
+
+class RoomView(LiveView):
+    template_name = "room.html"
+
+    def mount(self, request, room="lobby", **kwargs):
+        self.room = room
+        self.push_scope = room  # this session receives pushes for its room
+
+    def handle_refresh(self, **kwargs):
+        self.players = load_players(self.room)
+
+# Anywhere (a handler, a Celery task, a background loop):
+push_to_view("games.views.RoomView", handler="handle_refresh", scope="room-42")
+```
+
+- `push_scope` is a `str` or an `int`, a list, tuple or set of them (a session can be in up to 64 scopes), or `None`, the default, which means view-wide pushes only.
+- Set it in `mount()`. **Reassigning it moves the session.** djust joins the new scopes and leaves the dropped ones at the end of the turn that changed it: an event handler, a server-push hook, `handle_tick` or `handle_info`.
+- `push_scope` is ordinary view state. It is restored with the session on reconnect, and a template can read it.
+- `scope=` takes one `str` or `int`. `push_to_view` and `apush_to_view` both accept it.
+- **A push without `scope` is unchanged**: it still reaches every session of the view, including sessions that set a `push_scope`.
+- Scopes belong to one view path. `scope="room-42"` for `RoomView` does not reach another view class whose sessions use the same scope; push to each view path.
+- Scoped groups are ordinary channel-layer groups. They work across processes with the Redis channel layer, like view-wide push.
+- WebSocket sessions only. SSE and HTTP-only sessions receive no server push, scoped or not.
+
 ## Event Sequencing
 
 Server pushes, ticks, and async completions are all treated as *background* updates. If a user event (click, submit, etc.) is in flight when a server push arrives, the push is buffered on the client and applied after the user event round-trip completes. This prevents version interleaving where a background update would silently discard the user's action.
@@ -132,8 +164,8 @@ This is automatic and requires no developer action.
 
 ## How It Works
 
-1. When a client connects via WebSocket, the consumer joins a channel-layer group named `djust_view_<view_path>` (dots replaced with underscores).
-2. `push_to_view()` sends a message to that group via Django Channels.
+1. When a client connects via WebSocket, the consumer joins a channel-layer group named `djust_view_<view_path>` (dots replaced with underscores). After mount it also joins one group per `push_scope` value, `djust_scope_<digest of view path and scope>`.
+2. `push_to_view()` sends a message to the view's group, or to the scope's group when `scope=` is given, via Django Channels.
 3. Each connected consumer receives the message, applies state updates and/or calls the handler, re-renders, and sends DOM patches to the client.
 
 ## Requirements
@@ -154,9 +186,9 @@ CHANNEL_LAYERS = {
 
 ## API Reference
 
-### `push_to_view(view_path, *, state=None, handler=None, payload=None)`
+### `push_to_view(view_path, *, state=None, handler=None, payload=None, scope=None)`
 
-Synchronous. Sends an update to all clients connected to `view_path`.
+Synchronous. Sends an update to all clients connected to `view_path`, or with `scope`, only to those whose view's `push_scope` includes it.
 
 | Parameter   | Type   | Description                                   |
 | ----------- | ------ | --------------------------------------------- |
@@ -164,10 +196,15 @@ Synchronous. Sends an update to all clients connected to `view_path`.
 | `state`     | `dict` | Attribute names and values to set on the view |
 | `handler`   | `str`  | Name of a method to call on the view — must start with `handle_` or be decorated with `@event_handler`; other names are blocked |
 | `payload`   | `dict` | Keyword arguments passed to the handler       |
+| `scope`     | `str` or `int` | Only the sessions in this scope (see [Scoped Push](#scoped-push-one-room-not-every-room)); `None` reaches every session |
 
-### `apush_to_view(view_path, *, state=None, handler=None, payload=None)`
+### `apush_to_view(view_path, *, state=None, handler=None, payload=None, scope=None)`
 
 Async version of `push_to_view`. Same parameters.
+
+### `LiveView.push_scope`
+
+The scope or scopes this session receives scoped pushes for: a `str`, an `int`, a list, tuple or set of them (at most 64), or `None` (the default). Usually set in `mount()`; reassigning it in a handler, push hook, `handle_tick` or `handle_info` moves the session.
 
 ### `LiveView.tick_interval`
 

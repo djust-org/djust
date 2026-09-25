@@ -6,11 +6,23 @@ state updates to connected LiveView clients.
 """
 
 import contextvars
+import hashlib
+import logging
 import re
-from typing import Any, Optional
+from typing import Any, FrozenSet, Optional, Union
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
+
+logger = logging.getLogger(__name__)
+
+#: The most scopes one session may be in: every scope is a channel-layer group
+#: membership (a join per scope, and a key per scope with the Redis layer).
+MAX_PUSH_SCOPES = 64
+
+#: What ``scope=`` and a view's ``push_scope`` accept: a string or an int (a
+#: room slug, a document id), or, for ``push_scope`` only, several of them.
+PushScope = Union[str, int]
 
 _VIEW_PATH_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+$")
 
@@ -36,12 +48,142 @@ def view_group_name(view_path: str) -> str:
     return f"djust_view_{view_path.replace('.', '_')}"
 
 
+def _scope_key(scope: Any) -> str:
+    """Validate one scope value and return its canonical string."""
+    if isinstance(scope, bool) or not isinstance(scope, (str, int)):
+        raise TypeError(
+            f"A push scope must be a str or an int, got {type(scope).__name__}: {scope!r}"
+        )
+    key = str(scope)
+    if not key:
+        raise ValueError("A push scope must not be empty")
+    return key
+
+
+def push_scope_group_name(view_path: str, scope: PushScope) -> str:
+    """Return the channel-layer group for ONE scope of a view (#3004).
+
+    Sessions of ``view_path`` whose view sets ``push_scope`` to ``scope`` are
+    in this group, and ``push_to_view(view_path, scope=scope)`` sends to it.
+    The name is a digest of the view path and the scope, so any scope string
+    maps to a valid group name (Channels allows only ``[A-Za-z0-9_.-]``, under
+    100 characters) and two different scopes never share a group.
+    """
+    key = _scope_key(scope)
+    digest = hashlib.sha256(f"{view_path}\x00{key}".encode()).hexdigest()[:40]
+    return f"djust_scope_{digest}"
+
+
+def view_push_scopes(view: Any) -> FrozenSet[str]:
+    """The scope keys a view instance asks to receive scoped pushes for.
+
+    Reads ``view.push_scope``: ``None`` (the default) means none; a str or an
+    int is one scope; a list, tuple or set is several (at most
+    ``MAX_PUSH_SCOPES``). An invalid value raises ``TypeError`` /
+    ``ValueError``.
+    """
+    raw = getattr(view, "push_scope", None)
+    if raw is None:
+        return frozenset()
+    if isinstance(raw, (str, int)):
+        return frozenset((_scope_key(raw),))
+    # A list, tuple or set -- NOT any iterable: a generator or ``map`` would
+    # be used up by the first sync, and the next one would leave every group.
+    if isinstance(raw, (list, tuple, set, frozenset)):
+        if len(raw) > MAX_PUSH_SCOPES:
+            raise ValueError(
+                f"push_scope has {len(raw)} scopes; at most {MAX_PUSH_SCOPES} are allowed"
+            )
+        return frozenset(_scope_key(item) for item in raw)
+    raise TypeError(
+        "push_scope must be None, a str, an int, or a list, tuple or set of them; "
+        f"got {type(raw).__name__}"
+    )
+
+
+async def sync_push_scope_groups(consumer: Any, view: Any) -> None:
+    """Make ``consumer``'s scoped-push group membership match ``view.push_scope``.
+
+    Joins the group of every scope the view now has and leaves the groups of
+    scopes it dropped, so a view can move between scopes (a player changing
+    rooms) by assigning ``self.push_scope``. Idempotent; called by the
+    WebSocket transport after mount and after every event, server-push, tick
+    and ``handle_info`` turn, while the turn still holds the render lock. An
+    invalid ``push_scope`` is logged (once, until it is valid again) and
+    treated as "no scopes"; a failed join or leave is logged and retried on
+    the next call.
+    """
+    view_path = getattr(consumer, "_view_path", None) or ""
+    joined: dict = getattr(consumer, "_push_scope_groups", None) or {}
+    try:
+        wanted = view_push_scopes(view) if view is not None and view_path else frozenset()
+    except (TypeError, ValueError):
+        # Once per consumer until the value becomes valid again: this runs
+        # after every tick, and a tick can be every few milliseconds.
+        if not getattr(consumer, "_push_scope_invalid_logged", False):
+            logger.warning(
+                "%s.push_scope is invalid (a str, an int, a list, tuple or set of at "
+                "most %d of them, or None); it receives no scoped pushes",
+                type(view).__name__,
+                MAX_PUSH_SCOPES,
+            )
+            consumer._push_scope_invalid_logged = True
+        wanted = frozenset()
+    else:
+        consumer._push_scope_invalid_logged = False
+    channel_layer = getattr(consumer, "channel_layer", None)
+    if channel_layer is None or (not wanted and not joined):
+        return
+    current = dict(joined)
+    for key in sorted(set(current) - wanted):
+        try:
+            await channel_layer.group_discard(current[key], consumer.channel_name)
+        except Exception:  # noqa: BLE001 - kept, so the next sync retries the leave
+            logger.warning("Error leaving a scoped push group of %s", view_path)
+            continue
+        del current[key]
+    for key in sorted(wanted - set(current)):
+        group = push_scope_group_name(view_path, key)
+        try:
+            await channel_layer.group_add(group, consumer.channel_name)
+        except Exception:  # noqa: BLE001 - retried on the next turn
+            logger.warning("Error joining a scoped push group of %s", view_path)
+            continue
+        current[key] = group
+    consumer._push_scope_groups = current
+
+
+async def leave_push_scope_groups(consumer: Any) -> None:
+    """Leave every scoped-push group ``consumer`` joined (disconnect, redirect)."""
+    joined: dict = getattr(consumer, "_push_scope_groups", None) or {}
+    consumer._push_scope_groups = {}
+    channel_layer = getattr(consumer, "channel_layer", None)
+    if channel_layer is None:
+        return
+    for group in joined.values():
+        try:
+            await channel_layer.group_discard(group, consumer.channel_name)
+        except Exception:  # noqa: BLE001 - leaving is best effort
+            logger.warning("Error leaving scoped push group %s", group)
+
+
+def _push_group(view_path: str, scope: Optional[PushScope]) -> str:
+    if not _VIEW_PATH_RE.match(view_path):
+        raise ValueError(
+            f"Invalid view_path: {view_path!r}. Expected dotted Python path like 'myapp.views.MyView'"
+        )
+    if scope is None:
+        return view_group_name(view_path)
+    return push_scope_group_name(view_path, scope)
+
+
 def push_to_view(
     view_path: str,
     *,
     state: Optional[dict[str, Any]] = None,
     handler: Optional[str] = None,
     payload: Optional[dict[str, Any]] = None,
+    scope: Optional[PushScope] = None,
 ) -> None:
     """
     Push an update to all clients connected to a LiveView.
@@ -54,9 +196,14 @@ def push_to_view(
         state: Dict of attribute names → values to set on the view instance
         handler: Name of a handler method to call on the view instance
         payload: Dict passed as kwargs to the handler method
+        scope: Reach only the sessions whose view set ``push_scope`` to this
+            value (a room, a document id), instead of every session of the
+            view (#3004). ``None`` (the default) reaches every session.
 
     Raises:
-        ValueError: If view_path is not a valid dotted Python path.
+        ValueError: If view_path is not a valid dotted Python path, or scope
+            is an empty string.
+        TypeError: If scope is not a str or an int.
 
     Example::
 
@@ -70,13 +217,13 @@ def push_to_view(
         # Call a handler
         push_to_view("myapp.views.ChatView", handler="on_new_message",
                       payload={"text": "hello"})
+
+        # Only the sessions in one room (their view set push_scope = room)
+        push_to_view("games.views.RoomView", handler="handle_refresh",
+                     scope="room-42")
     """
-    if not _VIEW_PATH_RE.match(view_path):
-        raise ValueError(
-            f"Invalid view_path: {view_path!r}. Expected dotted Python path like 'myapp.views.MyView'"
-        )
+    group = _push_group(view_path, scope)
     channel_layer = get_channel_layer()
-    group = view_group_name(view_path)
     message = {
         "type": "server_push",
         "state": state,
@@ -95,21 +242,21 @@ async def apush_to_view(
     state: Optional[dict[str, Any]] = None,
     handler: Optional[str] = None,
     payload: Optional[dict[str, Any]] = None,
+    scope: Optional[PushScope] = None,
 ) -> None:
     """
     Async version of :func:`push_to_view`.
 
     Use from async contexts (async views, async Celery tasks, etc.).
+    ``scope`` works as in :func:`push_to_view`.
 
     Raises:
-        ValueError: If view_path is not a valid dotted Python path.
+        ValueError: If view_path is not a valid dotted Python path, or scope
+            is an empty string.
+        TypeError: If scope is not a str or an int.
     """
-    if not _VIEW_PATH_RE.match(view_path):
-        raise ValueError(
-            f"Invalid view_path: {view_path!r}. Expected dotted Python path like 'myapp.views.MyView'"
-        )
+    group = _push_group(view_path, scope)
     channel_layer = get_channel_layer()
-    group = view_group_name(view_path)
     message = {
         "type": "server_push",
         "state": state,

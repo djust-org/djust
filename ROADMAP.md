@@ -70,7 +70,7 @@ Two name shapes appear in this roadmap, with distinct meanings:
 | Priority | Task | Milestone |
 |---|---|---|
 | ~~**P1**~~ | ~~#3074 (1/7) — Release the GIL in `RustLiveView.render_with_diff` (detach around the pure-Rust render and VDOM diff; registry lookups attach before they lock)~~ ✅ (#3087) | v1.3.0 |
-| **P1** | #3074 (2/7) — Opt-in pinned session worker pool (`LIVEVIEW_CONFIG["worker_threads"]`): each WebSocket session stays on one thread; HTTP and SSE unchanged | v1.3.0 |
+| ~~**P1**~~ | ~~#3074 (2/7) — Opt-in pinned session worker pool (`LIVEVIEW_CONFIG["worker_threads"]`): each WebSocket session stays on one thread; HTTP and SSE unchanged~~ ✅ (#3091) | v1.3.0 |
 | **P1** | #3004 / #3074 (3/7) — Scoped server push: reach a subset of a view's sessions (e.g. one room) instead of every session of the view | v1.3.0 |
 | **P2** | #3074 (4/7) — Event-loop offload: pre-event snapshot in the handler's hop, one worker hop per server-push turn, no per-message `close_old_connections` hop for channel-layer messages | v1.3.0 |
 | **P2** | #3074 (5/7) — Channels in-memory layer expiry sweep is O(n²) per broadcast round | v1.3.0 |

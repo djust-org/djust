@@ -1035,6 +1035,17 @@ class WSConsumerTransport:
             except Exception as e:  # noqa: BLE001
                 logger.warning("Error joining db_notify group for %s: %s", ch, e)
 
+    async def _sync_push_scopes(self, view: Any) -> None:
+        """Match the consumer's scoped-push groups to ``view.push_scope`` (#3004).
+
+        See ``push.sync_push_scope_groups``: idempotent, joins new scopes and
+        leaves dropped ones, logs (never raises) on a bad value or a layer
+        error.
+        """
+        from .push import sync_push_scope_groups
+
+        await sync_push_scope_groups(self._consumer, view)
+
     async def on_event_recorded(self, view: Any, snapshot: Any) -> None:
         """Emit the DEBUG-gated ``time_travel_event`` frame for WS.
 
@@ -1318,6 +1329,11 @@ class WSConsumerTransport:
             # A handler that called ``listen()`` joins its NOTIFY group now,
             # while the turn still holds the render lock (#2962).
             await self._join_listen_channels(view)
+            # Likewise a handler that changed ``push_scope`` (#3004) -- unless
+            # the view was replaced during the turn (a live_redirect does not
+            # take the render lock): its scopes are not this socket's any more.
+            if getattr(consumer, "view_instance", None) is view:
+                await self._sync_push_scopes(view)
         finally:
             sql_scope.__exit__(None, None, None)
             PerformanceTracker.set_current(None)
@@ -1771,8 +1787,10 @@ class WSConsumerTransport:
 
         consumer = self._consumer
         # mount() (or a session restore) has run and the view is admitted:
-        # join the NOTIFY groups for channels ``listen()`` added (#2962).
+        # join the NOTIFY groups for channels ``listen()`` added (#2962), and
+        # the scoped-push groups for the view's ``push_scope`` (#3004).
         await self._join_listen_channels(view)
+        await self._sync_push_scopes(view)
         sticky_preserved = getattr(consumer, "_sticky_preserved", None)
         if not sticky_preserved:
             return html
@@ -1929,6 +1947,10 @@ class WSConsumerTransport:
         if isinstance(channels, set) and channels:
             groups.extend(f"djust_db_notify_{ch}" for ch in channels)
             consumer._db_notify_channels = set()
+        scoped = getattr(consumer, "_push_scope_groups", None)
+        if isinstance(scoped, dict) and scoped:
+            groups.extend(scoped.values())
+            consumer._push_scope_groups = {}
         channel_layer = getattr(consumer, "channel_layer", None)
         if channel_layer is None:
             return
