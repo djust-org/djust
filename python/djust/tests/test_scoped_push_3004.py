@@ -60,6 +60,47 @@ class _OtherView(LiveView):
         pass
 
 
+class _TickView(LiveView):
+    """Moves itself from room t1 to t2 on its first tick."""
+
+    template = '<div dj-root dj-view="djust.tests.test_scoped_push_3004._TickView">{{ room }}:{{ pings }}</div>'
+    tick_interval = 50
+
+    def mount(self, request, **kwargs):
+        self.room = request.GET.get("room", "t1")
+        self.pings = 0
+        self.push_scope = self.room
+
+    def handle_tick(self):
+        if self.room == "t1":
+            self.room = "t2"
+            self.push_scope = "t2"
+        else:
+            self._skip_render = True
+
+    def handle_ping(self, **kwargs):
+        self.pings += 1
+
+
+class _InfoView(LiveView):
+    """Moves to the room a db_notify payload names (``handle_info``)."""
+
+    template = '<div dj-root dj-view="djust.tests.test_scoped_push_3004._InfoView">{{ room }}:{{ pings }}</div>'
+
+    def mount(self, request, **kwargs):
+        self.room = request.GET.get("room", "i1")
+        self.pings = 0
+        self.push_scope = self.room
+        self._listen_channels = {"moves_3004"}
+
+    def handle_info(self, message):
+        self.room = message["payload"]["room"]
+        self.push_scope = self.room
+
+    def handle_ping(self, **kwargs):
+        self.pings += 1
+
+
 class _BadScopeView(LiveView):
     template = '<div dj-root dj-view="djust.tests.test_scoped_push_3004._BadScopeView">x</div>'
 
@@ -317,3 +358,104 @@ async def test_live_redirect_leaves_the_old_views_scope_groups():
             assert not layer.groups.get(group), "the old view's scope group was not left"
         finally:
             await a.disconnect()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_a_tick_that_changes_push_scope_moves_the_session():
+    view = f"{__name__}._TickView"
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
+        a = await _connect(view, "t1")
+        try:
+            moved = await _receive_until(a, "patch")  # the first tick's render
+            assert "t2" in _patch_text(moved)
+            await apush_to_view(view, handler="handle_ping", scope="t2")
+            frame = await _pinged(a)
+            assert frame is not None and "t2:1" in _patch_text(frame)
+            await apush_to_view(view, handler="handle_ping", scope="t1")
+            assert await _pinged(a) is None
+        finally:
+            await a.disconnect()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_a_handle_info_that_changes_push_scope_moves_the_session():
+    from channels.layers import get_channel_layer
+
+    view = f"{__name__}._InfoView"
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
+        a = await _connect(view, "i1")
+        try:
+            await get_channel_layer().group_send(
+                "djust_db_notify_moves_3004",
+                {"type": "db_notify", "channel": "moves_3004", "payload": {"room": "i2"}},
+            )
+            moved = await _receive_until(a, "patch")
+            assert "i2" in _patch_text(moved)
+            await apush_to_view(view, handler="handle_ping", scope="i2")
+            frame = await _pinged(a)
+            assert frame is not None and "i2:1" in _patch_text(frame)
+        finally:
+            await a.disconnect()
+
+
+class _FlakyLayer:
+    """A channel layer whose first group_discard fails."""
+
+    def __init__(self):
+        self.groups: dict = {}
+        self.fail_next_discard = True
+
+    async def group_add(self, group, channel):
+        self.groups.setdefault(group, set()).add(channel)
+
+    async def group_discard(self, group, channel):
+        if self.fail_next_discard:
+            self.fail_next_discard = False
+            raise ConnectionError("layer down")
+        self.groups.get(group, set()).discard(channel)
+
+
+class _FakeConsumer:
+    def __init__(self):
+        self.channel_layer = _FlakyLayer()
+        self.channel_name = "chan-1"
+        self._view_path = VIEW
+
+
+class _FakeView:
+    push_scope = "a"
+
+
+def test_a_failed_leave_is_retried_on_the_next_sync():
+    from djust.push import sync_push_scope_groups
+
+    consumer, view = _FakeConsumer(), _FakeView()
+    asyncio.run(sync_push_scope_groups(consumer, view))
+    group_a = push_scope_group_name(VIEW, "a")
+    assert consumer.channel_layer.groups[group_a] == {"chan-1"}
+    view.push_scope = "b"
+    asyncio.run(sync_push_scope_groups(consumer, view))  # the leave fails
+    assert consumer.channel_layer.groups[group_a] == {"chan-1"}
+    assert "a" in consumer._push_scope_groups  # still recorded ...
+    asyncio.run(sync_push_scope_groups(consumer, view))  # ... so it is retried
+    assert consumer.channel_layer.groups[group_a] == set()
+    assert set(consumer._push_scope_groups) == {"b"}
+
+
+def test_an_invalid_push_scope_warns_once_until_it_is_valid_again(caplog):
+    from djust.push import sync_push_scope_groups
+
+    consumer, view = _FakeConsumer(), _FakeView()
+    consumer.channel_layer.fail_next_discard = False
+    view.push_scope = 1.5
+    with caplog.at_level("WARNING", logger="djust.push"):
+        for _ in range(5):  # e.g. five ticks
+            asyncio.run(sync_push_scope_groups(consumer, view))
+        assert caplog.text.count("push_scope is invalid") == 1
+        view.push_scope = "ok"
+        asyncio.run(sync_push_scope_groups(consumer, view))
+        view.push_scope = 1.5
+        asyncio.run(sync_push_scope_groups(consumer, view))
+    assert caplog.text.count("push_scope is invalid") == 2

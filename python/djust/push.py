@@ -107,22 +107,30 @@ async def sync_push_scope_groups(consumer: Any, view: Any) -> None:
     Joins the group of every scope the view now has and leaves the groups of
     scopes it dropped, so a view can move between scopes (a player changing
     rooms) by assigning ``self.push_scope``. Idempotent; called by the
-    WebSocket transport after mount and after every event and server-push
-    turn, while the turn still holds the render lock. An invalid
-    ``push_scope`` is logged and treated as "no scopes"; a join failure is
-    logged and retried on the next call.
+    WebSocket transport after mount and after every event, server-push, tick
+    and ``handle_info`` turn, while the turn still holds the render lock. An
+    invalid ``push_scope`` is logged (once, until it is valid again) and
+    treated as "no scopes"; a failed join or leave is logged and retried on
+    the next call.
     """
     view_path = getattr(consumer, "_view_path", None) or ""
     joined: dict = getattr(consumer, "_push_scope_groups", None) or {}
     try:
         wanted = view_push_scopes(view) if view is not None and view_path else frozenset()
     except (TypeError, ValueError):
-        logger.warning(
-            "%s.push_scope is invalid (a str, an int, an iterable of them, or None); "
-            "it receives no scoped pushes",
-            type(view).__name__,
-        )
+        # Once per consumer until the value becomes valid again: this runs
+        # after every tick, and a tick can be every few milliseconds.
+        if not getattr(consumer, "_push_scope_invalid_logged", False):
+            logger.warning(
+                "%s.push_scope is invalid (a str, an int, a list, tuple or set of at "
+                "most %d of them, or None); it receives no scoped pushes",
+                type(view).__name__,
+                MAX_PUSH_SCOPES,
+            )
+            consumer._push_scope_invalid_logged = True
         wanted = frozenset()
+    else:
+        consumer._push_scope_invalid_logged = False
     channel_layer = getattr(consumer, "channel_layer", None)
     if channel_layer is None or (not wanted and not joined):
         return
