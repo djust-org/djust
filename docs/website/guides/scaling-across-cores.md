@@ -86,7 +86,7 @@ With the pool on, djust also moves per-frame work off the event loop:
 - a server push to a view that doesn't use ADR-038 explicit exposure runs as a single hop on the session's thread;
 - for those same pushes, when the frame carries nothing but patches, the rendered patch goes into it without being re-encoded on the loop;
 - a tick's change-detection snapshots run in the same hop as `handle_tick`;
-- Django's stale-connection check, which Channels runs in its own thread hop before every WebSocket frame, runs on the session's thread before its next task instead.
+- Django's stale-connection check, which Channels 4.2+ runs in its own thread hop before every WebSocket frame, runs on the session's thread before its next task instead.
 
 Some per-event savings apply with or without the pool: the handler-permission and object-permission checks make no thread hop when there is nothing to check (no `@permission_required`, no `get_object` override), the handler's signature and type hints are worked out once per function, and `djust.layers.InMemoryChannelLayer` delivers a group send without creating a task per session.
 

@@ -609,3 +609,97 @@ async def test_a_tick_skip_does_not_leak_into_the_next_tick(pool):
             await comm.disconnect()
     assert first.get("source") == second.get("source") == "tick"
     assert "1" in json.dumps(first["patches"]) and "2" in json.dumps(second["patches"])
+
+
+def test_a_handler_changed_after_first_use_is_resolved_again():
+    """The caches follow the function: changed annotations or defaults give
+    the same result as without a cache."""
+    from djust import validation
+
+    class _V:
+        def handler(self, x: int = 0, **kwargs):
+            pass
+
+    v = _V()
+    assert validation.coerce_parameter_types(v.handler, {"x": "3"}) == {"x": 3}
+    _V.handler.__annotations__["x"] = str  # mutated in place
+    assert validation.coerce_parameter_types(v.handler, {"x": "3"}) == {"x": "3"}
+    assert validation._handler_type_hints(v.handler) == {"x": str}
+    _V.handler.__defaults__ = (7,)
+    assert validation._handler_signature(v.handler).parameters["x"].default == 7
+
+
+@pytest.mark.asyncio
+async def test_a_permission_required_handler_is_still_denied(rf):
+    from unittest.mock import AsyncMock, MagicMock
+
+    import djust.websocket_utils as wu
+
+    class _Guarded(LiveView):
+        template = "<div dj-root>x</div>"
+
+        @permission_required("auth.change_user")
+        @event_handler()
+        def guarded(self, **kwargs):
+            pass
+
+        @event_handler()
+        def open_door(self, **kwargs):
+            pass
+
+    view = _Guarded()
+    request = rf.get("/")
+    request.user = MagicMock(has_perms=MagicMock(return_value=False))
+    view.request = request
+    ws = MagicMock(send_error=AsyncMock(), close=AsyncMock(), _client_ip="127.0.0.1")
+    assert await wu._validate_event_security(ws, "guarded", view, MagicMock()) is None
+    ws.send_error.assert_awaited_with("Permission denied")
+    # The undecorated handler on the same view passes without a hop.
+    assert await wu._validate_event_security(ws, "open_door", view, MagicMock()) is not None
+
+
+def test_no_deferral_under_a_parent_sync_thread_or_without_the_channels_check(monkeypatch):
+    from asgiref.sync import AsyncToSync, SyncToAsync
+
+    from djust import worker_pool
+
+    var = SyncToAsync.thread_sensitive_context
+    slot = worker_pool._Slot(96)
+    slot.checks_on_run = True
+    token = var.set(slot)
+    try:
+        assert worker_pool.mark_db_check_due() is True
+        slot.db_check_due = False
+        AsyncToSync.executors.current = object()  # an async_to_sync parent thread
+        try:
+            assert worker_pool.mark_db_check_due() is False
+            assert worker_pool.offload_enabled() is False
+        finally:
+            del AsyncToSync.executors.current
+        monkeypatch.setattr(worker_pool, "_CHANNELS_CHECKS_PER_MESSAGE", False)
+        assert worker_pool.mark_db_check_due() is False
+        assert slot.db_check_due is False
+    finally:
+        var.reset(token)
+
+
+def test_group_send_still_reaches_every_member_when_one_send_fails():
+    from djust.layers import InMemoryChannelLayer
+
+    class _Flaky(InMemoryChannelLayer):
+        async def send(self, channel, message):
+            if channel == self.bad:
+                raise RuntimeError("boom")
+            await super().send(channel, message)
+
+    async def scenario():
+        layer = _Flaky()
+        a, bad, c = [await layer.new_channel() for _ in range(3)]
+        layer.bad = bad
+        for ch in (a, bad, c):
+            await layer.group_add("g", ch)
+        with pytest.raises(RuntimeError):
+            await layer.group_send("g", {"type": "m"})
+        return await layer.receive(a), await layer.receive(c)
+
+    assert asyncio.run(scenario()) == ({"type": "m"}, {"type": "m"})

@@ -5671,16 +5671,26 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             if offload_enabled():
                 tick_view = self.view_instance
 
-                def tick_turn() -> Tuple[bool, bool]:
+                def tick_turn() -> Tuple[bool, bool, Optional[BaseException]]:
                     before = _snapshot_assigns(tick_view)
                     tick_view.handle_tick()
-                    if _resolve_skip_render(tick_view):
-                        return True, False
-                    if getattr(tick_view, "_force_full_html", False):
-                        return False, False
-                    return False, before == _snapshot_assigns(tick_view)
+                    # handle_tick ran: a later failure is reported after the
+                    # caller marks its queued work for dispatch, as in the
+                    # stock path.
+                    try:
+                        if _resolve_skip_render(tick_view):
+                            return True, False, None
+                        if getattr(tick_view, "_force_full_html", False):
+                            return False, False, None
+                        return False, before == _snapshot_assigns(tick_view), None
+                    except Exception as exc:  # noqa: BLE001 - re-raised on the loop
+                        return False, False, exc
 
-                offloaded = await sync_to_async(tick_turn)()
+                skip, unchanged, after_error = await sync_to_async(tick_turn)()
+                offloaded = (skip, unchanged)
+                if after_error is not None:
+                    dispatch_work = True
+                    raise after_error
             else:
                 # Snapshot state before tick to detect changes
                 pre_assigns = _snapshot_assigns(self.view_instance)

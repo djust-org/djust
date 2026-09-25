@@ -104,11 +104,19 @@ class InMemoryChannelLayer(_ChannelsInMemoryChannelLayer):
         members = self.groups.get(group)
         if not members:
             return
+        error: Exception | None = None
         for channel in list(members):
             try:
                 await self.send(channel, message)
             except ChannelFull:
                 pass
+            except Exception as exc:  # noqa: BLE001 - raised after every member got it
+                # Channels' tasks still deliver to the other members when one
+                # send fails, and the first failure then propagates.
+                if error is None:
+                    error = exc
+        if error is not None:
+            raise error
 
     async def flush(self) -> None:
         await super().flush()

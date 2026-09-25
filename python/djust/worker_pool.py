@@ -73,6 +73,18 @@ _lock = threading.Lock()
 _pool: List[_Slot] = []
 
 
+def _channels_checks_per_message() -> bool:
+    """Channels 4.2+ runs ``aclose_old_connections()`` before every message."""
+    try:
+        import channels.consumer
+    except ImportError:  # pragma: no cover - channels is a dependency
+        return False
+    return hasattr(channels.consumer, "aclose_old_connections")
+
+
+_CHANNELS_CHECKS_PER_MESSAGE = _channels_checks_per_message()
+
+
 def _run_checked(slot: _Slot, fn: Any, args: Any, kwargs: Any) -> Any:
     """Run one task on a slot's thread, first doing a DB check that is due."""
     if slot.db_check_due:
@@ -243,6 +255,14 @@ def pool_stats() -> List[dict]:
         return [{"index": s.index, "sessions": s.sessions} for s in _pool]
 
 
+def _parent_sync_thread() -> bool:
+    """Whether asgiref would send thread-sensitive calls to a parent sync
+    thread (``async_to_sync`` further up) instead of the session's slot."""
+    from asgiref.sync import AsyncToSync
+
+    return getattr(AsyncToSync.executors, "current", None) is not None
+
+
 def offload_enabled() -> bool:
     """Whether the calling session is pinned to a pool thread (#3074).
 
@@ -255,7 +275,7 @@ def offload_enabled() -> bool:
     bottleneck.
     """
     var = _thread_sensitive_context()
-    return var is not None and isinstance(var.get(None), _Slot)
+    return var is not None and isinstance(var.get(None), _Slot) and not _parent_sync_thread()
 
 
 def mark_db_check_due() -> bool:
@@ -274,9 +294,11 @@ def mark_db_check_due() -> bool:
     False when the calling session is not pinned to a pool thread whose
     executor honours the mark (the caller keeps Channels' hop).
     """
+    if not _CHANNELS_CHECKS_PER_MESSAGE:
+        return False  # nothing to defer: this Channels makes no per-message check
     var = _thread_sensitive_context()
     slot = var.get(None) if var is not None else None
-    if not isinstance(slot, _Slot) or not slot.checks_on_run:
+    if not isinstance(slot, _Slot) or not slot.checks_on_run or _parent_sync_thread():
         return False
     slot.db_check_due = True
     return True

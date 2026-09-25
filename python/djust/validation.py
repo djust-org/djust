@@ -45,9 +45,27 @@ def get_strict_handler_contract(handler: Callable) -> ParameterContract:
         return variants[bound]
 
 
-_SIGNATURES: weakref.WeakKeyDictionary[Any, Dict[bool, inspect.Signature]] = (
-    weakref.WeakKeyDictionary()
-)
+def _definition_key(function: Any) -> tuple:
+    """What a function's signature and type hints are derived from.
+
+    A cache entry is used only while this still matches, so a function whose
+    code, defaults, annotations or ``__signature__`` / ``__wrapped__`` are
+    changed after its first event is resolved again, exactly as it would be
+    without the cache. The annotations are compared by value (a dict mutated
+    in place still differs) and are small.
+    """
+    annotations = getattr(function, "__annotations__", None)
+    return (
+        function.__code__,
+        function.__defaults__,
+        tuple(function.__kwdefaults__.items()) if function.__kwdefaults__ else None,
+        tuple(annotations.items()) if annotations else None,
+        function.__dict__.get("__signature__"),
+        function.__dict__.get("__wrapped__"),
+    )
+
+
+_SIGNATURES: weakref.WeakKeyDictionary[Any, Dict[bool, tuple]] = weakref.WeakKeyDictionary()
 
 
 def _handler_signature(handler: Callable) -> inspect.Signature:
@@ -56,43 +74,50 @@ def _handler_signature(handler: Callable) -> inspect.Signature:
     Building a signature is the most expensive step of validating an event's
     parameters, and it runs on the event loop for every event. Keyed like the
     strict contracts: by the underlying function (weakly) and whether it is
-    bound, never by a bound method or its owner instance. A ``Signature`` is
+    bound, never by a bound method or its owner instance, and valid only
+    while :func:`_definition_key` still matches. A ``Signature`` is
     immutable, so sharing one is safe across threads.
     """
     bound = inspect.ismethod(handler)
     function: Any = getattr(handler, "__func__", handler) if bound else handler
     if not inspect.isfunction(function):
         return inspect.signature(handler)
+    key = _definition_key(function)
     variants = _SIGNATURES.get(function)
     if variants is None:
         with _STRICT_CONTRACT_LOCK:
             variants = _SIGNATURES.setdefault(function, {})
-    sig = variants.get(bound)
-    if sig is None:
-        sig = inspect.signature(handler)
-        variants[bound] = sig
+    entry = variants.get(bound)
+    if entry is not None and entry[0] == key:
+        cached: inspect.Signature = entry[1]
+        return cached
+    sig = inspect.signature(handler)
+    variants[bound] = (key, sig)
     return sig
 
 
-_TYPE_HINTS: weakref.WeakKeyDictionary[Any, Dict[str, Any]] = weakref.WeakKeyDictionary()
+_TYPE_HINTS: weakref.WeakKeyDictionary[Any, tuple] = weakref.WeakKeyDictionary()
 
 
 def _handler_type_hints(handler: Callable) -> Dict[str, Any]:
     """``get_type_hints(handler)``, resolved once per function (#3095).
 
-    Same keying as :func:`_handler_signature`; the hints of a bound method
-    are its function's. Only a successful resolution is cached: a forward
-    reference that fails now raises again next time, as before. Callers only
-    read the returned dict.
+    Same keying and validity check as :func:`_handler_signature`; the hints
+    of a bound method are its function's. Only a successful resolution is
+    cached: a forward reference that fails now raises again next time, as
+    before. Callers only read the returned dict.
     """
     function: Any = getattr(handler, "__func__", handler) if inspect.ismethod(handler) else handler
     if not inspect.isfunction(function):
         return get_type_hints(handler)
-    hints = _TYPE_HINTS.get(function)
-    if hints is None:
-        hints = get_type_hints(handler)
-        with _STRICT_CONTRACT_LOCK:
-            _TYPE_HINTS[function] = hints
+    key = _definition_key(function)
+    entry = _TYPE_HINTS.get(function)
+    if entry is not None and entry[0] == key:
+        hints: Dict[str, Any] = entry[1]
+        return hints
+    hints = get_type_hints(handler)
+    with _STRICT_CONTRACT_LOCK:
+        _TYPE_HINTS[function] = (key, hints)
     return hints
 
 
