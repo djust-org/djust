@@ -88,6 +88,36 @@ def recovery_handler_names(view_class: type) -> frozenset[str]:
 
 
 _RENDERED_RECOVERY: "weakref.WeakKeyDictionary[Any, frozenset[str]]" = weakref.WeakKeyDictionary()
+_DECLARES_STRICT: "weakref.WeakKeyDictionary[type, bool]" = weakref.WeakKeyDictionary()
+
+
+def _declares_strict(view_class: type) -> bool:
+    """Whether any handler the class declares opts into the strict policy."""
+    cached = _DECLARES_STRICT.get(view_class)
+    if cached is None:
+        from ._parameter_metadata import declared_handlers
+
+        cached = False
+        for handler in declared_handlers(view_class, server_functions=True):
+            decorators = getattr(handler.function, "_djust_decorators", {})
+            metadata = decorators.get("event_handler", decorators.get("server_function", {}))
+            if metadata.get("parameter_policy") == "strict":
+                cached = True
+                break
+        _DECLARES_STRICT[view_class] = cached
+    return cached
+
+
+def _strict_possible(view: Any) -> bool:
+    """Whether a recovery target could change a policy for ``view`` (fails safe)."""
+    from ._parameter_contract import ContractError
+
+    try:
+        if get_project_parameter_policy() == "strict":
+            return True
+        return _declares_strict(type(view))
+    except (ContractError, TypeError):
+        return True
 
 
 def note_rendered_recovery_targets(view: Any, html: str) -> None:
@@ -101,7 +131,9 @@ def note_rendered_recovery_targets(view: Any, html: str) -> None:
     """
     try:
         names: frozenset[str] = frozenset()
-        if "dj-auto-recover" in html:
+        # R1 only downgrades strict handlers: a legacy-only view never needs the
+        # parse (it cost ~3 ms per 20 KB render, PR #3122 review).
+        if "dj-auto-recover" in html and _strict_possible(view):
             from html.parser import HTMLParser
 
             found: set[str] = set()
@@ -144,13 +176,32 @@ def get_handler_parameter_policy(handler: Callable) -> str:
     policy = metadata.get("parameter_policy")
     if policy is not None and policy not in ("legacy", "strict"):
         raise ContractError("parameter_policy must be 'legacy' or 'strict'.")
+    if policy == "legacy":
+        return "legacy"
     owner = getattr(handler, "__self__", None)
-    if owner is not None and not isinstance(owner, type) and _is_live_view(owner):
-        if is_recovery_target(owner, getattr(handler, "__name__", "")):
-            return "legacy"
+
+    def _recovery_target() -> bool:
+        return (
+            owner is not None
+            and not isinstance(owner, type)
+            and _is_live_view(owner)
+            and is_recovery_target(owner, getattr(handler, "__name__", ""))
+        )
+
     if policy is None:
-        return get_project_parameter_policy()
-    return str(policy)
+        try:
+            resolved = get_project_parameter_policy()
+        except ContractError:
+            # R1 wins even over an invalid project policy, as before.
+            if _recovery_target():
+                return "legacy"
+            raise
+    else:
+        resolved = str(policy)
+    # R1 only ever downgrades strict, so legacy apps never scan templates here.
+    if resolved == "strict" and _recovery_target():
+        return "legacy"
+    return resolved
 
 
 def _is_live_view(owner: Any) -> bool:

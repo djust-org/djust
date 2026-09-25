@@ -288,9 +288,16 @@ def test_a_client_cannot_claim_the_downgrade(templates):
     ],
 )
 def test_the_render_scan_agrees_with_the_binding_parser(html):
-    """ADR-037 row 19: the per-render scan is kept for cost, pinned to the parser."""
+    """ADR-037 row 19: the per-render scan is kept for cost, pinned to the parser.
+
+    It runs only where a recovery target can change a policy (strict), so the
+    parity check does too (PR #3122 review).
+    """
     from djust._template_bindings import EVENT_NAME, markup_bindings
+    from djust.config import config
     from djust.validation import _RENDERED_RECOVERY, note_rendered_recovery_targets
+
+    config.set("event_parameter_policy", "strict")
 
     class Probe:
         pass
