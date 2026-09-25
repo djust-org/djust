@@ -25,6 +25,7 @@ python tests/playwright/test_draft_mode.py
 ## Available Tests
 
 - **test_loading_attribute.py** - Tests @loading HTML attributes (disable, class, show, hide)
+- **test_strict_parameters.py** - ADR-036 strict event parameters over WebSocket, SSE and HTTP-only (`STRICT_BASE`, default `http://localhost:18436`; standalone, exits non-zero on failure)
 - **test_cache_decorator.py** - Tests @cache decorator client-side caching
 - **test_draft_mode.py** - Tests DraftModeMixin functionality
 

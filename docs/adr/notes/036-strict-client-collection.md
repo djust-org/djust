@@ -138,3 +138,18 @@ Evidence: `tests/js/strict_native_binding.test.js` has 18 bundle cases:
 
 The full JavaScript suite passes. The shipped gzip grew 2,275 bytes, and the repository's size claims
 were updated to the measured figures.
+
+## Real-browser acceptance (P2 sub-slice (d))
+
+`tests/playwright/test_strict_parameters.py` drives `/demos/strict-parameters/`
+in Chromium over WebSocket, SSE and HTTP-only. It checks the outbound payloads
+and the handler results for the same flows the bundle tests cover:
+- strict typed click;
+- a rejected literal: no request, no `dj-disable-with`, one value-free
+  `djust:error`;
+- declared-only `dj-input` and `dj-submit` values;
+- the legacy control;
+- a hand-crafted forged `component` message.
+
+It passes on all three transports. Against the pre-(b) client bundle it fails
+24 checks, 8 per transport, which shows the script sees the difference.

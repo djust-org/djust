@@ -28,6 +28,8 @@ urlpatterns = [
     # ADR-038 E5 live matrix (tests/playwright/test_exposure_matrix.py).
     path("exposure/", ExposureMatrixView.as_view(), name="exposure"),
     path("exposure-legacy/", LegacyExposureMatrixView.as_view(), name="exposure-legacy"),
+    # ADR-036 P2 live matrix (tests/playwright/test_strict_parameters.py).
+    path("strict-parameters/", StrictParametersView.as_view(), name="strict-parameters"),
     # Table-selection canary (#2781) - selectable TableComponent multi-select.
     path("table-select/", TableSelectView.as_view(), name="table-select"),
     path("todo/", TodoView.as_view(), name="todo"),

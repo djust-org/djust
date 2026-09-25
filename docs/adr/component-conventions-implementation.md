@@ -1574,7 +1574,7 @@ Source: [decisions and acceptance](038-explicit-context-and-state-exposure.md).
 
 Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
 
-- [ ] **P1 — canonical contract.** Implement signature-derived metadata and
+- [x] **P1 — canonical contract.** Implement signature-derived metadata and
   freeze the valid/invalid conversion matrix, including optional/collection and
   unsupported types, resource limits, duplicate/extra/missing values and
   framework-versus-application arguments.
@@ -1634,10 +1634,23 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
   885 tests; mypy passes 1,175 files. Full suite from a frozen worktree at
   bf17b7d6e (four workers, 347.74 s): 33,750 passed, 949 skipped, and the same
   2 tag-reachability failures in `tests/test_changelog_tagged_sections.py`.
-  Still open in P1: client/transport acceptance (strict native binders and
-  browser verification). Also recorded there: the actor path fails closed on
-  a root `view_id`, and the legacy descriptor alias takes `component_id` from
-  the client.
+  Still open in P1 at that point: client/transport acceptance (strict native
+  binders and browser verification). Also recorded there: the actor path
+  fails closed on a root `view_id`, and the legacy descriptor alias takes
+  `component_id` from the client.
+  **P1 closed (2026-09-24).** The client/transport acceptance it lacked was
+  delivered with P2 sub-slices (a)–(d):
+  - owner-scoped contract delivery on every transport, including HTTP;
+  - strict native collection under owner decisions Q1/Q2;
+  - the 43-row eight-path parity matrix;
+  - the real-browser matrix (see P2 (d)).
+
+  Every element of this gate now has implementation, named tests and run
+  results: signature-derived metadata; the frozen conversion matrix
+  (optional, collection and unsupported types); resource limits;
+  duplicate/extra/missing values; framework-versus-application arguments;
+  registration checks. Remaining ADR-036 work is P2's open producer items,
+  P3 acceptance and PR.
 - [ ] **P2 — wire/dispatch parity.** Route real DOM extraction and every server
   dispatch path through that contract. Verify forms' open payloads,
   keyword-only arguments, forged component injection, `coerce_types=False` and
@@ -1820,6 +1833,32 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
   - Uploads are not event arguments: a file field sent to a strict `**`
     form handler is rejected in the browser. Async actor handlers remain a
     V017 rejection.
+  Sub-slice (d), real-browser acceptance, `tests/playwright/test_strict_parameters.py`:
+  - Surface: the demo view `/demos/strict-parameters/`, in Chromium over
+    WebSocket, SSE and HTTP-only.
+  - Asserts both what the browser sent and what the view received:
+    - a typed strict click sends only its `dj-value-*` argument, never
+      `data-*`;
+    - a malformed literal sends nothing, applies no `dj-disable-with`, and
+      raises one value-free `djust:error`, shown by the DEBUG overlay without
+      the literal;
+    - strict `dj-input` and `dj-submit` send only declared values, with no
+      `_target`;
+    - the legacy control still receives `dj-value-*` and `data-*`;
+    - a hand-crafted forged `component` message never reaches the handler.
+  - Result: passes on all three transports, run against the worktree's demo
+    server on port 18436.
+  - Canary: the same script against the pre-(b) client bundle fails 24
+    checks, 8 per transport. The permissive parser sent `7x` as `7` and the
+    handler ran; strict `dj-input`/`dj-submit` were refused by the server
+    because of `field`/`_target`/extra fields.
+  - Remaining P2 items:
+    - render-producer coverage for child/component creation, removal and
+      replacement;
+    - deferred, hot-reload and cached-DOM producers;
+    - a strict `dj-auto-recover` convention (a naming decision);
+    - `dj-model`, which is unchanged;
+    - the known same-path double-root limitation.
 - [ ] **P3 — acceptance.** Execute documented examples under their stated policy;
   verify redacted diagnostics and the ADR's complete conversion/parity matrix.
 - [ ] **PR — retirement.** Delete the superseded coercion path per

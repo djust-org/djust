@@ -6,6 +6,7 @@ from .counter_demo import CounterView
 from .nav_demo import NavDemoPageAView, NavDemoPageBView
 from .smoke_demo import BrowserSmokeView
 from .exposure_demo import ExposureMatrixView, LegacyExposureMatrixView
+from .strict_parameters_demo import StrictParametersView
 from .table_select_demo import TableSelectView
 from .demos import (
     TodoView,
@@ -51,6 +52,7 @@ __all__ = [
     "BrowserSmokeView",
     "ExposureMatrixView",
     "LegacyExposureMatrixView",
+    "StrictParametersView",
     "TableSelectView",
     "TodoView",
     "ChatView",
