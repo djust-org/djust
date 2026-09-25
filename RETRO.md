@@ -947,6 +947,31 @@ None in this bucket.
 
 **Review stats**: 0 🔴, 4 🟡 (generator scopes, stale-view sync, tick/`handle_info` not syncing, two untested paths) and 4 🟢, all fixed. The re-review raised 3 follow-ups (the log flood, missing regression tests, stale strings), all fixed. Filed: #3095 (the presence broadcast fans out the same way).
 
+### PR 4/7 — event-loop offload with the worker pool on (PR #3100)
+
+**Date**: 2026-09-25. Squash-merged as `4de06d6a8`. Retro: https://github.com/djust-org/djust/pull/3100 (retrospective comment).
+
+**Tests at close**:
+- `python/djust/tests/test_event_loop_offload_3074.py`: 6 tests, 11 cases, each run with the pool on and off, over real WebSocket sessions. It covers where the snapshot runs, the one-hop push turn, the skipped Channels hop, version order, spliced vs stock frame equality, a push hook moving `push_scope`, and a render error still running the queued `start_async` work.
+- The #1817 armed-version pin is now 17.
+- The full suite with the pool forced on (not committed) gave 33,877 passed and 1 failed, `test_exposure_child_reconnect`. That failure did not reproduce in 15 targeted runs or in 5 runs of 1,602 tests each.
+- CI: green after a re-run for an unrelated flake (#3099 class).
+
+**Measured** (snake, one process, 4 interleaved rounds on 3.14t):
+
+| Clients | PRs 1–3 | With this PR |
+|---|---|---|
+| 192 | 3.8–6.7 fps | 7.05–7.28 fps |
+| 256 | 3.7–4.2 fps | 6.3–6.5 fps, up to 5.1 cores |
+
+On 3.12 frames did not change; the GIL caps the process.
+
+**What we learned**
+1. **Re-implementing a turn means walking the original's `try`/`finally` and every early return.** Two error-path divergences reached review: a render error dropped the queued work, and an `await` could leak the lock. A test for each error path belongs in the first commit.
+2. **Build PR measurement tables from every row, with a script.** A hand-picked table left out a run that narrowed the headline.
+
+**Review stats**: 0 🔴, 2 🟡 (the render-error dispatch and the lock leak), 3 🟢, and 1 re-review nit (scope sync before a render error). All were fixed. Filed: #3099 (the hot-reload frame leak in tests).
+
 ## v1.2.1-7 — state and rendering batch: v1.2.1-7, -8 and -9 (PR #3042)
 
 **Date**: 2026-09-24
