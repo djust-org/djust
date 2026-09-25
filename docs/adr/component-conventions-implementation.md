@@ -2599,12 +2599,68 @@ Source: [decisions and acceptance](034-component-scoped-events-and-bindings.md).
 
 Source: [decisions and acceptance](037-event-contract-checks-and-executable-documentation.md).
 
-- [ ] **D1 — shared checks.** Use the same contract as runtime for ownership,
+- [x] **D1 — shared checks.** Use the same contract as runtime for ownership,
   arguments, injection and exposure checks. Test positive/negative fixtures,
   inherited/decorated handlers, native controls, intentional catch-alls,
   authorized ORM rendering, includes/shared/dynamic templates, locations,
   reasoned suppressions and machine-readable output. No mounts, handlers or
   querysets may execute during checking.
+
+  **Built (2026-09-25).** The owner decisions are recorded in ADR-037: Q1–Q9, the
+  djust-docs plan, N1, and the retirement table (rows 1–23 plus V020, Q004 and S013).
+  - **One discovery.** `_parameter_metadata.declared_handlers` is the handler
+    discovery. Dispatch's `_event_methods`, the V016–V019 checks, `djust_audit`, the
+    AI schema, the debug panel, the API registry, hot view replacement, the runtime
+    handler metadata, `LiveViewSmokeTest` and the interactive reference generator
+    all use it.
+  - **The scan.** `_template_bindings` compiles each LiveView and LiveComponent
+    template without rendering it, follows `{% extends %}` and constant
+    `{% include %}`, and parses the markup as HTML. `DIRECTIVES` there is the one
+    Python description of what each `dj-*` directive sends. A test pins it against
+    every `dj-*` attribute the client reads.
+  - **The checks.** `checks/bindings.py` reports T019–T022, all Warnings. Findings
+    carry owner, binding, expected and supplied. The coverage object reports
+    checked, dynamic and unsupported bindings, with gaps. Suppression is local and
+    needs a reason.
+  - **Tests.**
+    - `python/djust/tests/test_adr037_binding_checks.py` (23): names and
+      ownership, legacy and strict arguments, literals, routing context, dynamic
+      and outside-root bindings, includes/parents and shared templates, locations,
+      suppression, decorated handlers, managed objects and authorized querysets.
+      One fixture raises if anything runs during checking (mount, context,
+      property, handler or queryset). Also `djust_check` JSON/text output and the
+      client and schema pins.
+    - `python/djust/tests/test_adr037_shared_discovery.py` (12): discovery, the
+      row 9 oracle across framework and demo views, and the debug panel.
+    - `python/djust/tests/test_find_handlers_for_template.py` (5).
+    - `python/djust/tests/test_recovery_handler_policy.py` (17).
+
+  **Retirement commits** (the branch's PR is the deletion PR):
+  - row 1 (V007) `7cede1b3e`;
+  - row 4 `79fbb77e3`;
+  - row 5 `7b2fe4fe7`;
+  - row 6 `4bd808540`;
+  - row 9 `c64fc5867` (pin) and `15cfc2dc2`;
+  - row 10 `2d7a75ad0`;
+  - row 11 `9035a37f1`;
+  - row 12 `de79d8a7d`;
+  - row 13 `0b435e373`;
+  - row 14 `17659940a`;
+  - row 15 `9f67b2fa7`;
+  - row 18 `f3768bbc9`;
+  - row 20 `86d31d0db`.
+
+  **Findings.**
+  - The demo project's 85 T019 findings are all undecorated handlers on 33 views the
+    URLconf does not route.
+  - Row 20's browser test found that `dj-paste` attaches no owner context, and that
+    over HTTP-only every embedded-child event reaches the root view. Neither is
+    decided by the stamp list.
+  - `get_debug_info()` crashes on a property that raises something other than
+    `AttributeError`: tracked as #3103, not fixed here.
+  - Under the legacy policy, `dj-input`, `dj-change` and `dj-submit` send `field`
+    and `_target`, so a closed legacy handler for them fails at runtime. T020 now
+    reports those bindings; V007 was the blanket guard.
 - [ ] **D2 — executable documentation and catalogue.** Make examples canonical
   fixtures and deliberately break each test layer to prove its gate fails.
   Verify website navigation and report skipped fixtures. Include the originally
