@@ -1329,8 +1329,11 @@ class WSConsumerTransport:
             # A handler that called ``listen()`` joins its NOTIFY group now,
             # while the turn still holds the render lock (#2962).
             await self._join_listen_channels(view)
-            # Likewise a handler that changed ``push_scope`` (#3004).
-            await self._sync_push_scopes(view)
+            # Likewise a handler that changed ``push_scope`` (#3004) -- unless
+            # the view was replaced during the turn (a live_redirect does not
+            # take the render lock): its scopes are not this socket's any more.
+            if getattr(consumer, "view_instance", None) is view:
+                await self._sync_push_scopes(view)
         finally:
             sql_scope.__exit__(None, None, None)
             PerformanceTracker.set_current(None)

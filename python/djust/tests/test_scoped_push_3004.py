@@ -43,10 +43,21 @@ class _RoomView(LiveView):
     def handle_ping(self, **kwargs):
         self.pings += 1
 
+    def handle_move(self, room: str = "", **kwargs):
+        self.room = room
+        self.push_scope = room
+
     @event_handler()
     def move(self, room: str = "", **kwargs):
         self.room = room
         self.push_scope = room
+
+
+class _OtherView(LiveView):
+    template = '<div dj-root dj-view="djust.tests.test_scoped_push_3004._OtherView">other</div>'
+
+    def mount(self, request, **kwargs):
+        pass
 
 
 class _BadScopeView(LiveView):
@@ -101,10 +112,19 @@ def test_view_push_scopes_spellings():
     assert view_push_scopes(v) == {"7"}
     v.push_scope = ["r1", 7, "r1"]
     assert view_push_scopes(v) == {"r1", "7"}
-    for bad in (1.5, {"r": 1}, b"r", [""]):
+    # A generator (or map/filter) would be used up by the first sync and the
+    # next one would leave every group, so only list/tuple/set are accepted.
+    for bad in (1.5, {"r": 1}, b"r", [""], (r for r in ["r1"]), map(str, [1])):
         v.push_scope = bad
         with pytest.raises((TypeError, ValueError)):
             view_push_scopes(v)
+    from djust.push import MAX_PUSH_SCOPES
+
+    v.push_scope = [str(i) for i in range(MAX_PUSH_SCOPES)]
+    assert len(view_push_scopes(v)) == MAX_PUSH_SCOPES
+    v.push_scope = [str(i) for i in range(MAX_PUSH_SCOPES + 1)]
+    with pytest.raises(ValueError, match="at most"):
+        view_push_scopes(v)
 
 
 def test_push_to_view_sends_to_the_scope_group_or_the_view_group(monkeypatch):
@@ -254,3 +274,46 @@ async def test_an_invalid_push_scope_is_logged_and_the_mount_still_works(caplog)
             a = await _connect(f"{__name__}._BadScopeView", "x")
             await a.disconnect()
     assert "push_scope is invalid" in caplog.text
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_a_push_hook_that_changes_push_scope_moves_the_session():
+    """The server-push turn syncs the scopes a push's own hook changed."""
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
+        a = await _connect(VIEW, "r1")
+        try:
+            await apush_to_view(VIEW, handler="handle_move", payload={"room": "r5"}, scope="r1")
+            assert await _pinged(a) is not None
+            await apush_to_view(VIEW, handler="handle_ping", scope="r1")
+            assert await _pinged(a) is None
+            await apush_to_view(VIEW, handler="handle_ping", scope="r5")
+            frame = await _pinged(a)
+            assert frame is not None and "r5:1" in _patch_text(frame)
+        finally:
+            await a.disconnect()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_live_redirect_leaves_the_old_views_scope_groups():
+    from channels.layers import get_channel_layer
+
+    layer = get_channel_layer()
+    group = push_scope_group_name(VIEW, "r-redirect")
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
+        a = await _connect(VIEW, "r-redirect")
+        try:
+            assert len(layer.groups.get(group, {})) == 1
+            await a.send_json_to(
+                {
+                    "type": "live_redirect_mount",
+                    "view": f"{__name__}._OtherView",
+                    "url": "/other/",
+                    "params": {},
+                }
+            )
+            await _receive_until(a, "mount")
+            assert not layer.groups.get(group), "the old view's scope group was not left"
+        finally:
+            await a.disconnect()

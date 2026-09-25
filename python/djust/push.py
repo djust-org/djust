@@ -9,12 +9,16 @@ import contextvars
 import hashlib
 import logging
 import re
-from typing import Any, FrozenSet, Iterable, Optional, Union
+from typing import Any, FrozenSet, Optional, Union
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 
 logger = logging.getLogger(__name__)
+
+#: The most scopes one session may be in: every scope is a channel-layer group
+#: membership (a join per scope, and a key per scope with the Redis layer).
+MAX_PUSH_SCOPES = 64
 
 #: What ``scope=`` and a view's ``push_scope`` accept: a string or an int (a
 #: room slug, a document id), or, for ``push_scope`` only, several of them.
@@ -74,18 +78,26 @@ def view_push_scopes(view: Any) -> FrozenSet[str]:
     """The scope keys a view instance asks to receive scoped pushes for.
 
     Reads ``view.push_scope``: ``None`` (the default) means none; a str or an
-    int is one scope; any other iterable is several. An invalid value raises
-    ``TypeError`` / ``ValueError``.
+    int is one scope; a list, tuple or set is several (at most
+    ``MAX_PUSH_SCOPES``). An invalid value raises ``TypeError`` /
+    ``ValueError``.
     """
     raw = getattr(view, "push_scope", None)
     if raw is None:
         return frozenset()
     if isinstance(raw, (str, int)):
         return frozenset((_scope_key(raw),))
-    if isinstance(raw, Iterable) and not isinstance(raw, (bytes, bytearray, dict)):
+    # A list, tuple or set -- NOT any iterable: a generator or ``map`` would
+    # be used up by the first sync, and the next one would leave every group.
+    if isinstance(raw, (list, tuple, set, frozenset)):
+        if len(raw) > MAX_PUSH_SCOPES:
+            raise ValueError(
+                f"push_scope has {len(raw)} scopes; at most {MAX_PUSH_SCOPES} are allowed"
+            )
         return frozenset(_scope_key(item) for item in raw)
     raise TypeError(
-        f"push_scope must be None, a str, an int, or an iterable of them; got {type(raw).__name__}"
+        "push_scope must be None, a str, an int, or a list, tuple or set of them; "
+        f"got {type(raw).__name__}"
     )
 
 
@@ -118,8 +130,9 @@ async def sync_push_scope_groups(consumer: Any, view: Any) -> None:
     for key in sorted(set(current) - wanted):
         try:
             await channel_layer.group_discard(current[key], consumer.channel_name)
-        except Exception:  # noqa: BLE001 - leaving is best effort
+        except Exception:  # noqa: BLE001 - kept, so the next sync retries the leave
             logger.warning("Error leaving a scoped push group of %s", view_path)
+            continue
         del current[key]
     for key in sorted(wanted - set(current)):
         group = push_scope_group_name(view_path, key)

@@ -5181,6 +5181,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
                 if self.view_instance is not view:
                     return
+                # handle_info may have moved the session (#3004).
+                from .push import sync_push_scope_groups
+
+                await sync_push_scope_groups(self, view)
+                if self.view_instance is not view:
+                    return
                 # _resolve_skip_render owns the decision (#2834):
                 # _force_full_html (#1981, set_changed_keys()) wins over
                 # _skip_render — the explicitly requested forced render must
@@ -5410,6 +5416,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # released (#2955).
             dispatch_work = True
 
+            if self.view_instance is not view:
+                return False
+            # handle_tick may have moved the session (#3004).
+            from .push import sync_push_scope_groups
+
+            await sync_push_scope_groups(self, view)
             if self.view_instance is not view:
                 return False
             # Views can set _skip_render = True inside handle_tick to

@@ -619,8 +619,9 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
     tick_interval: Optional[int] = None  # Periodic tick in ms (e.g. 2000 for 2s)
     # Scoped server push (#3004): the scope(s) this session receives
     # ``push_to_view(..., scope=...)`` for — a str or int (a room, a document
-    # id), an iterable of them, or None (default: only view-wide pushes).
-    # Usually set in mount(); reassigning it in a handler moves the session.
+    # id), a list/tuple/set of them (at most 64), or None (default: only
+    # view-wide pushes). Usually set in mount(); reassigning it in a handler,
+    # push hook, handle_tick or handle_info moves the session.
     push_scope: Any = None
 
     # Class-level marker for abstract base LiveView classes (#1605).
