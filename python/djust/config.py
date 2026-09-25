@@ -49,6 +49,11 @@ class LiveViewConfig:
             "upload_rate": 200,
             "upload_burst": 400,
         },
+        # Pinned session worker pool for WebSocket sync work (#3074). None
+        # (default) = asgiref's one shared thread for every session; True /
+        # "auto" = one thread per available CPU (max 32); an int = that many
+        # threads. Each session stays on one thread. See djust.worker_pool.
+        "worker_threads": None,
         # Maximum incoming WebSocket message size in bytes (0 = no limit)
         "max_message_size": 65536,  # 64KB
         # Event security mode: "open", "warn", or "strict"

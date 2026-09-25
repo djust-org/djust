@@ -754,7 +754,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         loop dies before the disconnect was dispatched, run the cleanup now,
         then re-raise so the server still sees the failure. Cancellation
         (server shutdown) is not intercepted.
+
+        With ``LIVEVIEW_CONFIG["worker_threads"]`` on (#3074), the session is
+        pinned to one thread of the worker pool for its lifetime: every
+        thread-sensitive ``sync_to_async`` this consumer (and every task it
+        spawns) makes runs on that thread. See ``djust.worker_pool``.
         """
+        from .worker_pool import bind_session
+
+        binding = bind_session()
         try:
             await super().__call__(scope, receive, send)
         except Exception:
@@ -771,6 +779,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         traceback=True,
                     )
             raise
+        finally:
+            if binding is not None:
+                binding.release()
 
     async def websocket_disconnect(self, message: Dict[str, Any]) -> None:
         """Record that the disconnect reached us, then run Channels' handler."""
