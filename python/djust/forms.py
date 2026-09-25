@@ -7,9 +7,24 @@ enabling real-time validation, error display, and reactive form handling.
 
 import logging
 import math
-from typing import Dict, Any, FrozenSet, Optional, Type, List
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    FrozenSet,
+    Generic,
+    List,
+    Mapping,
+    Optional,
+    Tuple,
+    Type,
+    TypeVar,
+    Union,
+)
 from django import forms
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
+from django.db import models
+from django.http import Http404
 from django.utils.safestring import SafeString
 
 from ._deprecation import warn_deprecated
@@ -261,7 +276,9 @@ class FormMixin:
 
     # ADR-038 E2-3: under the explicit policy the form keys are a registered,
     # render-only provider (see FORM_PROVIDER and get_context_data).
-    _djust_context_providers = (FORM_PROVIDER,)
+    _djust_context_providers: Tuple[
+        Union[ProviderContract, Callable[[type], ProviderContract]], ...
+    ] = (FORM_PROVIDER,)
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
@@ -890,6 +907,272 @@ class FormMixin:
             adapter.render_field(field, field_name, value, errors, **kwargs)
         )
         return field_html
+
+
+_ModelT = TypeVar("_ModelT", bound=models.Model)
+
+#: ADR-035 D4: the edit adapter's configuration and framework slots. They are
+#: never inferred template context and never persisted or snapshotted state.
+_MODEL_FORM_CONFIGURATION = frozenset(
+    {
+        "model",
+        "queryset",
+        "pk_url_kwarg",
+        "slug_url_kwarg",
+        "slug_field",
+        "query_pk_and_slug",
+        "context_object_name",
+        "kwargs",
+        "object",
+    }
+)
+
+_MANAGED_OBJECT_PROVIDER = "djust.forms.object"
+
+_RETARGET_MESSAGE = (
+    "self.object can only be replaced by the same record, as in "
+    "`self.object = form.save()`. To edit a different record, navigate to its URL."
+)
+
+
+def _managed_object_provider(view_class: type) -> ProviderContract:
+    """Render-only ``object`` (and the opt-in ``context_object_name``)."""
+    keys = {"object"}
+    alias = getattr(view_class, "context_object_name", None)
+    if alias:
+        keys.add(alias)
+    return ProviderContract(_MANAGED_OBJECT_PROVIDER, rendered=frozenset(keys))
+
+
+class ModelFormMixin(FormMixin, Generic[_ModelT]):
+    """Edit one authorized model instance with a ``ModelForm`` (ADR-035).
+
+    Usage::
+
+        class EditProjectView(ModelFormMixin[Project], LiveView):
+            template_name = "projects/edit.html"
+            model = Project
+            form_class = ProjectForm  # a ModelForm naming its editable fields
+            login_required = True
+
+            def get_queryset(self):
+                return super().get_queryset().filter(owner=self.request.user)
+
+            def has_object_permission(self, request, obj):
+                return obj.owner_id == request.user.pk
+
+            def form_valid(self, form):
+                self.object = form.save()
+                self.success_message = "Saved!"
+
+    The route supplies the lookup (``pk_url_kwarg`` / ``slug_url_kwarg``);
+    ``self.kwargs`` is the route's resolved URL kwargs on every transport, never
+    client mount parameters. Before the form exists, ``mount()`` resolves the
+    object through ``get_queryset()``/``get_object()`` and authorizes it with
+    ``has_object_permission()`` (ADR-017). Every later event resolves and
+    authorizes it again before the form is built. A missing, filtered-out or
+    forbidden object is the same ``PermissionDenied``; nothing is created in
+    its place.
+
+    ``self.object`` is the object authorized for the current dispatch. It
+    renders as ``object`` (plus ``context_object_name``, if set) and is never
+    persisted: only the route identifies the record. It can be replaced by the
+    same record (``self.object = form.save()``); anything else is a
+    ``ValueError``. ``form_valid`` decides whether and how to save.
+    """
+
+    model: Optional[Type[_ModelT]] = None
+    queryset: Optional["models.QuerySet[_ModelT]"] = None
+    pk_url_kwarg: str = "pk"
+    slug_url_kwarg: str = "slug"
+    slug_field: str = "slug"
+    query_pk_and_slug: bool = False
+    context_object_name: Optional[str] = None
+
+    kwargs: Dict[str, Any]
+
+    # The ADR-017 object lifecycle treats "no object" as a denial for this view.
+    _djust_object_required = True
+    _djust_configuration_names = _MODEL_FORM_CONFIGURATION
+    _djust_injects_context = FormMixin._djust_injects_context | frozenset({"object"})
+    _djust_context_providers = (_managed_object_provider,)
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        # Allocated before LiveView records its framework slots, so the legacy
+        # session never mistakes the verdict for user private state.
+        self._djust_authorized_object: Optional[tuple] = None
+        super().__init__(*args, **kwargs)
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        for owner in cls.__mro__:
+            if owner is ModelFormMixin:
+                break
+            if "_model_instance" in vars(owner):
+                raise ImproperlyConfigured(
+                    "%s uses ModelFormMixin and _model_instance together. "
+                    "ModelFormMixin resolves self.object from the route; "
+                    "remove _model_instance." % cls.__name__
+                )
+        alias = cls.context_object_name
+        if alias is not None and (
+            type(alias) is not str
+            or not alias.isidentifier()
+            or alias.startswith("_")
+            or alias == "object"
+            or alias in FormMixin._djust_injects_context
+        ):
+            raise ImproperlyConfigured(
+                "%s.context_object_name must be a template name other than "
+                "'object' and the form's own context names." % cls.__name__
+            )
+
+    # -- the managed object --------------------------------------------------
+
+    @property
+    def object(self) -> Optional[_ModelT]:
+        """The object authorized for the current dispatch, or ``None``."""
+        obj: Optional[_ModelT] = self.__dict__.get("_object")
+        return obj
+
+    @object.setter
+    def object(self, value: Optional[_ModelT]) -> None:
+        current = self.__dict__.get("_object")
+        if value is current:
+            return
+        if (
+            current is None
+            or not isinstance(value, models.Model)
+            or value._meta.concrete_model is not current._meta.concrete_model
+            or value.pk is None
+            or value.pk != current.pk
+        ):
+            raise ValueError(_RETARGET_MESSAGE)
+        self._object = value
+
+    def _djust_bind_route_kwargs(self, route_kwargs: Optional[Mapping[str, Any]]) -> None:
+        """Framework hook: the route's resolved kwargs, bound before mount/restore.
+
+        ``None`` means the transport could not resolve this view's own route;
+        the lookup then fails closed.
+        """
+        self.kwargs = dict(route_kwargs) if route_kwargs is not None else {}
+
+    def _djust_render_only_context(self) -> Dict[str, Any]:
+        """The managed object's template names (render-only, never persisted)."""
+        obj = self.object
+        items: Dict[str, Any] = {"object": obj}
+        if self.context_object_name:
+            items[self.context_object_name] = obj
+        return items
+
+    def _djust_render_only_context_keys(self) -> FrozenSet[str]:
+        return frozenset(self._djust_render_only_context())
+
+    # -- Django's single-object vocabulary -----------------------------------
+
+    def get_queryset(self) -> "models.QuerySet[_ModelT]":
+        """A fresh queryset from ``queryset`` or ``model``."""
+        if self.queryset is not None:
+            return self.queryset.all()
+        if self.model is not None:
+            return self.model._default_manager.all()
+        raise ImproperlyConfigured(
+            "%(cls)s is missing a QuerySet. Define %(cls)s.model, %(cls)s.queryset, "
+            "or override %(cls)s.get_queryset()." % {"cls": type(self).__name__}
+        )
+
+    def get_slug_field(self) -> str:
+        """The model field a route slug is matched against."""
+        return self.slug_field
+
+    def get_object(self, queryset: Optional["models.QuerySet[_ModelT]"] = None) -> _ModelT:
+        """Look up the route's record in ``queryset`` (default ``get_queryset()``).
+
+        The result is not authorized by this call; the framework runs
+        ``has_object_permission()`` on it before it becomes ``self.object``.
+        """
+        if queryset is None:
+            queryset = self.get_queryset()
+        route = getattr(self, "kwargs", None) or {}
+        pk = route.get(self.pk_url_kwarg)
+        slug = route.get(self.slug_url_kwarg)
+        if pk is not None:
+            queryset = queryset.filter(pk=pk)
+        if slug is not None and (pk is None or self.query_pk_and_slug):
+            queryset = queryset.filter(**{self.get_slug_field(): slug})
+        if pk is None and slug is None:
+            raise ImproperlyConfigured(
+                "%s must be routed with a %r or %r URL kwarg; client mount "
+                "parameters never select the object."
+                % (type(self).__name__, self.pk_url_kwarg, self.slug_url_kwarg)
+            )
+        try:
+            obj: _ModelT = queryset.get()
+        except queryset.model.DoesNotExist:
+            raise Http404("No object matches the route")
+        return obj
+
+    # -- lifecycle -----------------------------------------------------------
+
+    def mount(self, request: Any, **kwargs: Any) -> None:
+        """Resolve and authorize the object, then build the form around it."""
+        if self._model_instance is not None:
+            raise ImproperlyConfigured(
+                "%s sets _model_instance; ModelFormMixin resolves self.object from "
+                "the route instead." % type(self).__name__
+            )
+        if "kwargs" not in self.__dict__:
+            # Nothing bound the route: never fall back to the mount parameters.
+            self.kwargs = {}
+        if not self._authorize_object(request):
+            # Denied: no object and no form. The object-permission check that
+            # follows mount on every transport reports the denial.
+            return
+        super().mount(request, **kwargs)
+
+    def _authorize_object(self, request: Any) -> bool:
+        from .auth.core import enforce_object_permission
+
+        self._djust_authorized_object = None
+        try:
+            enforce_object_permission(self, request)
+        except PermissionDenied:
+            self._object = None
+            self._djust_authorized_object = (request, None)
+            return False
+        self._djust_authorized_object = (request, self._object)
+        return True
+
+    def get_form(self, form_class: Optional[Type[forms.Form]] = None) -> forms.Form:
+        form_class = form_class or self.get_form_class()
+        if form_class is None or not issubclass(form_class, forms.ModelForm):
+            raise ImproperlyConfigured(
+                "%s.form_class must be a ModelForm that declares its editable fields."
+                % type(self).__name__
+            )
+        return super().get_form(form_class)
+
+    def get_form_kwargs(self) -> Dict[str, Any]:
+        """Bind the authorized object; never construct a form for a new record."""
+        obj = self.object
+        if obj is None:
+            raise PermissionDenied("No authorized object to edit.")
+        kwargs = super().get_form_kwargs()
+        kwargs["instance"] = obj
+        return kwargs
+
+    def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
+        context = super().get_context_data(**kwargs)
+        from ._exposure import uses_legacy_exposure
+
+        # Legacy views receive these through the attribute walk, before its
+        # model serialization, and drop them from every session save.
+        if not uses_legacy_exposure(self):
+            provide_context_items(
+                self, context, _MANAGED_OBJECT_PROVIDER, self._djust_render_only_context()
+            )
+        return context
 
 
 class LiveViewForm(forms.Form):

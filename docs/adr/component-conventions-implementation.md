@@ -2039,10 +2039,32 @@ Source: [decisions and acceptance](035-django-native-form-and-object-lifecycle.m
 
 - [x] Foundation: public form-construction hooks, empty binding, initial values,
   prefixes and legacy `_create_form` bridge; see `test_form_hooks_adr035.py`.
-- [ ] **F1 — managed object.** Implement resolve → authorize → bind, managed
+- [x] **F1 — managed object.** Implement resolve → authorize → bind, managed
   `self.object`, opt-in ModelForm integration and explicit application policy.
   Prove authorization precedes construction/validation and within-dispatch reuse
   avoids duplicate queries without persisting ORM objects or permission caches.
+  Done 2026-09-25 under the owner's
+  [lifecycle decisions](035-django-native-form-and-object-lifecycle.md#lifecycle-decisions-2026-09-25)
+  (Q1–Q6, N1–N6). `djust.forms.ModelFormMixin` lives in `forms.py`. The
+  required-object rule and the one-shot mount verdict are in ADR-017's shared
+  check (`auth/core.py`). Route binding happens in `RequestMixin.get`/`post` and
+  `ViewRuntime.dispatch_mount`. The legacy filters are in the context walk and
+  the three legacy session saves. `djust.S013` is in `checks/security.py`.
+  Evidence: `test_model_form_lifecycle_adr035.py` (31 tests) covers:
+  - lifecycle order (lookup → permission → form) on HTTP GET/POST, the shared
+    runtime, real WebSocket in normal and actor mode (the actor turn is asserted),
+    real SSE, and a WebSocket restore that skips `mount()`;
+  - exactly one object lookup (SQL) per mount and per event;
+  - missing, filtered, revoked, forged mount parameter, other view's route and
+    unrouted mounts, all denied with the same frame or response and no form;
+  - revocation between events: no form, no `form_valid`, no write;
+  - `self.object = form.save()`, and retarget / `None` / unbound raising
+    `ValueError`;
+  - nothing from the object or configuration reaching the legacy session;
+  - `context_object_name`, sensitive fields not rendered under either policy;
+  - configuration errors, and S013 with its suppressions.
+  Limitation recorded in the ADR: `live_patch` within one view keeps the
+  mounted target.
 - [ ] **F2 — form acceptance.** Exercise no-custom-mount edit, create and
   non-model examples; independent/inherited hooks; choices, relations, uploads,
   empty submission, validation and exactly-once save. Cover missing/tampered/
@@ -2050,10 +2072,12 @@ Source: [decisions and acceptance](035-django-native-form-and-object-lifecycle.m
   Django/Rust rendering, typing and browser-visible input/errors/save feedback.
 - [ ] **FR — retirement.** Delete the pre-hook object plumbing per
   [ADR-035 Step R](035-django-native-form-and-object-lifecycle.md):
-  the `_model_instance` attribute (`forms.py:51`, reads `:93-95`, `:215`),
-  `_ensure_model_instance()` (`:223-225`) and the docstring example (`:39-42`),
-  with their tests. `_create_form` (`:281`) is a bridge that stays; its removal is
-  a separate later decision and is not counted as a saving here.
+  the `_model_instance` attribute (`forms.py:228`, used at `:342-344`,
+  `:527-531`, plus the adapter's conflict guards at `:996` and `:1105`),
+  `_ensure_model_instance()` (`:471-501`, called at `:463`, `:627`, `:686`) and
+  the docstring example (`:213-220`), with their tests. `_create_form` (`:541`)
+  is a bridge that stays; its removal is a separate later decision and is not
+  counted as a saving here. Citations refreshed with F1.
 
 ### ADR-034 — component-scoped events and bindings
 

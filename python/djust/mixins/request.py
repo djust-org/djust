@@ -242,6 +242,12 @@ class RequestMixin:
                 return HttpResponseRedirect("/")
             return HttpResponseRedirect(hook_redirect)
 
+        # ADR-035: a view that looks its object up from the route receives the
+        # URL kwargs Django resolved for this request, never other input.
+        bind_route = getattr(self, "_djust_bind_route_kwargs", None)
+        if callable(bind_route):
+            bind_route(kwargs)
+
         # IMPORTANT: mount() must be called first to initialize clean state
         t0 = time.perf_counter()
         self.mount(request, **kwargs)
@@ -331,10 +337,13 @@ class RequestMixin:
         # per GET, and streams exist precisely to keep large collections OUT of
         # state.
         if uses_legacy_exposure(self):
+            from .context import legacy_render_only_keys
+
+            _render_only = legacy_render_only_keys(self)
             _session_state = {
                 k: v
                 for k, v in _cached.items()
-                if not isinstance(v, LiveComponent) and k != "streams"
+                if not isinstance(v, LiveComponent) and k != "streams" and k not in _render_only
             }
             request.session[view_key] = normalize_django_value(_session_state, state_roundtrip=True)
 
@@ -816,6 +825,11 @@ class RequestMixin:
             if private_state:
                 self._restore_private_state(private_state)
 
+            # ADR-035: bound after the restore so saved state cannot supply it.
+            bind_route = getattr(self, "_djust_bind_route_kwargs", None)
+            if callable(bind_route):
+                bind_route(kwargs)
+
             self._initialize_temporary_assigns()
 
             # Run on_mount hooks (auth guards, etc.) before mount
@@ -980,8 +994,13 @@ class RequestMixin:
                     request.session.pop(f"{view_key}__private", None)
 
                 updated_context = self.get_context_data()
+                from .context import legacy_render_only_keys
+
+                render_only = legacy_render_only_keys(self)
                 state = {
-                    k: v for k, v in updated_context.items() if not isinstance(v, LiveComponent)
+                    k: v
+                    for k, v in updated_context.items()
+                    if not isinstance(v, LiveComponent) and k not in render_only
                 }
                 request.session[view_key] = normalize_django_value(state, state_roundtrip=True)
                 self._save_components_to_session(request, updated_context)

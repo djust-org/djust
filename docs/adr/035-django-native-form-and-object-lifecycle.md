@@ -24,8 +24,9 @@ Keep `FormMixin` for ordinary forms and create forms. Add an opt-in
 The public object is an authorized, request/event-local framework object, not an
 ordinary persisted reactive attribute. The existing object-permission lifecycle
 remains the authority. The public form-construction hooks are implemented on this
-branch; the model adapter and authorized lifecycle remain proposed. The example
-`ModelFormMixin` import below is not available in the current release.
+branch, and so is F1's authorized object lifecycle (see
+[Lifecycle decisions](#lifecycle-decisions-2026-09-25)); F2's form acceptance is
+pending. The example `ModelFormMixin` import below is not in a released version.
 
 ## Context
 
@@ -86,14 +87,14 @@ same-named class imported under an alias. It supplies the single-object editing
 contract and is declared before `LiveView` in the MRO:
 
 ```python
-# Proposed API; ModelFormMixin is not available in the current release.
+# ModelFormMixin is not in a released version yet.
 from djust import LiveView
 from djust.forms import ModelFormMixin
 from .forms import ProjectForm
 from .models import Project
 
 
-class EditProjectView(ModelFormMixin, LiveView):
+class EditProjectView(ModelFormMixin[Project], LiveView):
     template_name = "projects/edit.html"
     model = Project
     form_class = ProjectForm
@@ -199,6 +200,32 @@ their operations; no blanket concurrency guarantee is implied by this adapter.
 Prefer small public hook overrides over new wrappers around `mount()`. Existing
 ordinary forms and composite forms must not acquire model lookup requirements.
 
+## Lifecycle decisions (2026-09-25)
+
+F1 left six public questions open. They are decided. Q1–Q6 are owner
+decisions. N1–N6 are implementation choices within the rules above, which the
+owner accepted. A later change to any of them changes its implementation and
+tests, not just this table.
+
+| # | Question | Decision | Reason |
+| --- | --- | --- | --- |
+| Q1 | How does the object reach templates? | Always as `object`, render-only: never persisted, never in a client snapshot, `None` when unbound. `context_object_name` is an opt-in alias, default `None`. There is no automatic `<model_name>` alias. | Owner decision. D4 requires explicit visibility. An automatic alias such as `project` could silently collide with application state. |
+| Q2 | What does a missing, or filtered-out, target return? | `PermissionDenied`, exactly like a failed permission check. Each transport gives its existing denial: HTTP 403, a `permission_denied` frame, WebSocket close 4403. | Owner decision. It reuses the existing transport failure behavior (D3), and a client cannot tell a missing record from a forbidden one. |
+| Q3 | Where does the lookup id come from? | `self.kwargs`, set to the route's resolved URL kwargs on every transport. It is a framework slot, kept out of context and snapshots, and never the client's mount parameters. | Owner decision. It is Django's own spelling (`View.setup` sets it on HTTP), so Django-style `get_object()` overrides work unchanged. The WebSocket mount merges client parameters into mount's `**kwargs`, so those cannot identify the object. |
+| Q4 | What may be assigned to `self.object`? | The same record: same concrete model and the same pk, as in `self.object = form.save()`. Anything else, including `None` or an assignment while unbound, raises a plain `ValueError` that points to navigation. | Owner decision. D4: identity changes require explicit navigation. |
+| Q5 | What if a view overrides neither `get_queryset()` nor `has_object_permission()`? | The default stays permissive (`has_object_permission` returns `True`, as in Django's `UpdateView`). `djust.S013` warns about such a view. | Owner decision. Refusing the class outright would break public-data and staff-only editors. The warning makes the IDOR shape visible. |
+| Q6 | How is `self.object` typed? | `ModelFormMixin` is generic in the model: `ModelFormMixin[Project]`. It still works at runtime without a type argument. | Owner decision. This matches django-stubs' single-object mixins. |
+| N1 | Lookup vocabulary | Django's: `model`, `queryset`, `pk_url_kwarg`, `slug_url_kwarg`, `slug_field`/`get_slug_field()`, `query_pk_and_slug`, `get_queryset()`, `get_object(queryset=None)`. A route with neither kwarg is `ImproperlyConfigured`, which fails closed. `get_object()` does not authorize; the lifecycle does. | Django vocabulary; D2. |
+| N2 | Mount ordering and reuse | `mount()` resolves and authorizes through the ADR-017 helper before the form is built. It leaves a one-shot verdict that the next object check consumes, whatever that check is, and honors only for the same request object. So the post-mount check on every transport does not repeat the lookup, and the next event always resolves again. On denial, mount builds no form and the post-mount check reports the denial. | Authorization precedes form construction (D3) without reordering legacy `mount()`. One lookup per dispatch, and no session-long cache. |
+| N3 | Storage | `self.object` is a managed view over ADR-017's existing `_object` slot, not a second cache. `_djust_object_required` makes "no object" a denial in the shared check, which also clears the slot on any denial. | D4: no second model cache. |
+| N4 | Route binding | HTTP GET/POST bind the kwargs Django resolved. The WebSocket/SSE runtime binds `page_url`'s kwargs only when that route serves the mounted view class, after both restore mechanisms and before `mount()`. Mounts that have no route (the HTTP API, `{% live_render %}` children) fail closed. | Client parameters, restored state and URLs routed to other views never select the object. |
+| N5 | Legacy compatibility filters | The adapter's configuration names and `kwargs` are skipped by the legacy attribute walk. `object` enters the legacy context before model serialization, so it renders field by field like any other model. It is dropped from all three legacy session saves (GET, HTTP POST, WebSocket event). Explicit-policy views receive it from a render-only provider. | D4 for legacy views, without a denylist per form feature. |
+| N6 | Application policy | No save, success URL or transaction is added (D5). `form_class` must be a `ModelForm`, and a form is never built without an authorized object. `_model_instance` on an adapter view is a configuration error. | D2 and D5; "Do not mix both instance mechanisms". |
+
+Known limitation: SPA `live_patch` navigation within one adapter view keeps
+the mounted route kwargs, so it cannot retarget the record. Use a full
+navigation (`live_redirect`) to edit a different record.
+
 ## Alternatives considered
 
 | Alternative | Assessment |
@@ -258,11 +285,13 @@ Step R fires only after **F2**, and only for views adopting `ModelFormMixin`.
 
 | Target | Cited at | Retired because |
 | --- | --- | --- |
-| `_model_instance` attribute and its declaration | `forms.py:51`; reads at `:93-95`, `:215` | Replaced by `self.object`, resolved through `get_object()` under the authorized lifecycle |
-| `_ensure_model_instance()` | `forms.py:223-225` | Exists only to "re-hydrate `_model_instance` from stored PK if lost after WS serialization" — a repair for state the new lifecycle does not create |
-| The `_model_instance` docstring example | `forms.py:39-42` | Teaches the pattern this ADR replaces |
+| `_model_instance` attribute and its declaration | `forms.py:228`; used at `:342-344` (the `model_pk`/`model_label` stamp in `mount()`) and `:527-531` (`get_form_kwargs()`); the adapter's two conflict guards at `:996` and `:1105` go with it | Replaced by `self.object`, resolved through `get_object()` under the authorized lifecycle |
+| `_ensure_model_instance()` | `forms.py:471-501`; called at `:463`, `:627`, `:686` | Exists only to "re-hydrate `_model_instance` from stored PK if lost after WS serialization" — a repair for state the new lifecycle does not create |
+| The `_model_instance` docstring example | `forms.py:213-220` | Teaches the pattern this ADR replaces |
 
-`_create_form` (`forms.py:281`, called at `:104`, `:119`, `:216`, `:370`) is a
+Line numbers were refreshed with F1 (2026-09-25).
+
+`_create_form` (`forms.py:541`, called at `:353`, `:368`, `:464`, `:630`, `:689`, `:774`) is a
 **compatibility bridge, not a Step R target** — it stays until the public
 construction hooks are the only caller, at which point its removal is a separate,
 later decision with its own evidence. Naming it here prevents it being counted

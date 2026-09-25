@@ -3045,6 +3045,13 @@ class ViewRuntime:
         if mounted_from_restore:
             view_instance._force_full_html = True
 
+        # ADR-035: a view that looks its object up from the route gets only the
+        # kwargs of its own route, never client params. Bound after both restore
+        # mechanisms, so restored state cannot supply it, and before mount().
+        bind_route = getattr(view_instance, "_djust_bind_route_kwargs", None)
+        if callable(bind_route):
+            bind_route(self._own_route_kwargs(view_instance, page_url))
+
         if not mounted_from_restore:
             try:
                 await sync_to_async(view_instance.mount)(request, **mount_kwargs)
@@ -4448,7 +4455,14 @@ class ViewRuntime:
             else:
                 save_context = await sync_to_async(_gcd_save)()
 
-            save_state = {k: v for k, v in save_context.items() if not isinstance(v, _LC)}
+            from .mixins.context import legacy_render_only_keys
+
+            render_only = legacy_render_only_keys(target_view)
+            save_state = {
+                k: v
+                for k, v in save_context.items()
+                if not isinstance(v, _LC) and k not in render_only
+            }
             await save_session.aset(save_view_key, _normalize(save_state, state_roundtrip=True))
 
             # Components — sync helper, wrap with sync_to_async.
@@ -5518,6 +5532,25 @@ class ViewRuntime:
             return dict(match.kwargs) if match.kwargs else {}
         except Exception:
             return {}
+
+    def _own_route_kwargs(self, view_instance: Any, page_url: str) -> Optional[Dict[str, Any]]:
+        """``page_url``'s resolved kwargs if that route serves this view class.
+
+        ``None`` when the URL does not resolve, or resolves to another view: the
+        client names both the view and the URL, so a URL routed elsewhere must
+        not select this view's object.
+        """
+        try:
+            from urllib.parse import unquote
+
+            from django.urls import resolve
+
+            match = resolve(unquote(page_url))
+        except Exception:  # noqa: BLE001 — unresolvable means no route kwargs
+            return None
+        if getattr(match.func, "view_class", None) is not type(view_instance):
+            return None
+        return dict(match.kwargs)
 
     def _extract_cache_config(self, view_instance: Any) -> Optional[Dict[str, Any]]:
         """Extract @cache decorator metadata from the view's handlers.

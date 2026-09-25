@@ -285,9 +285,38 @@ def check_object_permission(view_instance: Any, request: Any) -> None:
     if not _has_custom_get_object(view_instance):
         return
 
+    # ADR-035: a managed-object view (``djust.forms.ModelFormMixin``) resolves
+    # and authorizes its object inside ``mount()``, before its form exists, and
+    # leaves a one-shot verdict for the check that immediately follows mount on
+    # every transport. It is consumed by the next check whatever that is, and
+    # only honoured for the same request object, so it never outlives the
+    # dispatch that produced it.
+    verdict = view_instance.__dict__.get("_djust_authorized_object")
+    if verdict is not None:
+        view_instance._djust_authorized_object = None
+        verdict_request, verdict_object = verdict
+        if verdict_request is request:
+            if verdict_object is None:
+                raise PermissionDenied(
+                    f"Access denied for object on {view_instance.__class__.__name__}"
+                )
+            view_instance._object = verdict_object
+            return
+
+    # ADR-035 D3: an edit adapter requires its object. "Not found", "filtered
+    # out by the queryset" and "no object" are all a denial there, raised with
+    # the same exception and message as a failed permission check, so the
+    # client cannot tell a missing record from a forbidden one.
+    required = getattr(view_instance, "_djust_object_required", False) is True
+
     try:
         obj = view_instance.get_object()
     except (ObjectDoesNotExist, Http404):
+        if required:
+            view_instance._object = None
+            raise PermissionDenied(
+                f"Access denied for object on {view_instance.__class__.__name__}"
+            )
         # OWASP IDOR mitigation: developer's get_object() did
         # `Model.objects.get(pk=self.<x>_id)` (raises DoesNotExist) or
         # `get_object_or_404(...)` (raises Http404) and the row doesn't
@@ -298,6 +327,10 @@ def check_object_permission(view_instance: Any, request: Any) -> None:
         # ObjectDoesNotExist.
         view_instance._object = None
         return
+
+    if obj is None and required:
+        view_instance._object = None
+        raise PermissionDenied(f"Access denied for object on {view_instance.__class__.__name__}")
 
     if obj is None:
         # Explicit "no object" — clear cache (was implicit before; making
@@ -313,7 +346,16 @@ def check_object_permission(view_instance: Any, request: Any) -> None:
     # poisoned cache would let subsequent events read a stale-allowed
     # `_object` for the same view instance. Strict ordering: check
     # first, cache second.
-    ok = view_instance.has_object_permission(request, obj)
+    try:
+        ok = view_instance.has_object_permission(request, obj)
+    except Exception:
+        if required:
+            view_instance._object = None
+        raise
+    if ok is False and required:
+        # A managed object is only ever the one authorized for this dispatch;
+        # a revoked grant must not leave the previous one readable.
+        view_instance._object = None
     if ok is False:
         logger.info(
             "Object-permission denied for %s: has_object_permission(...) returned False",

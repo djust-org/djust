@@ -51,6 +51,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | S009 | Security | Warning | View-auth'd LiveView exposes a public `@event_handler` with no per-handler gate |
 | S011 | Security | Warning | Inline executable `<script>` inside a `dj-root` with no CSP configured (#1848) |
 | S012 | Security | Error | LiveView gates auth via `@method_decorator(..., name="dispatch")` or an overridden `dispatch()` — not enforced over WebSocket (#14; reallocated from a duplicate S004, #2070) |
+| S013 | Security | Warning | A `ModelFormMixin` edit view overrides neither `get_queryset()` nor `has_object_permission()` (ADR-035) |
 | T001 | Templates | Warning | Deprecated @click/@input syntax |
 | T002 | Templates | Info | LiveView template missing dj-root |
 | T003 | Templates | Info | wrapper_template uses {% include %} instead of liveview_content |
@@ -494,6 +495,23 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
   suppressed `djust.S004` (via `# noqa: S004` or `SILENCED_SYSTEM_CHECKS`)
   specifically to silence the dispatch-auth warning, update the suppression
   to `djust.S012`.
+
+### S013 — Edit view neither scopes nor authorizes its object
+- **Severity**: Warning
+- **Method**: Class inspection of imported `djust.forms.ModelFormMixin` views
+  (nothing is mounted or queried)
+- **What it detects**: A `ModelFormMixin` view that inherits both
+  `get_queryset()` and `has_object_permission()` from djust. The route's id
+  then selects any row of `model`, so every user who passes the view-level
+  checks can edit every record by changing the URL. The default is
+  deliberately permissive, like Django's `UpdateView`; this warning makes
+  the choice visible.
+- **Fix**: Override `get_queryset()` to limit the rows the requesting user
+  may edit, or `has_object_permission(self, request, obj)` to authorize each
+  object. Either one silences the check.
+- **Suppression**: `# noqa: S013` on the `class` line, or
+  `DJUST_CONFIG = {'suppress_checks': ['S013']}`.
+- **Availability**: `ModelFormMixin` is not in a released version yet.
 
 ---
 
