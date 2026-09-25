@@ -2368,7 +2368,10 @@ Source: [decisions and acceptance](034-component-scoped-events-and-bindings.md).
       `findPageViewContainer()`.
   - Out of scope, not fixed: ADR-038 E5's `tests/playwright/test_exposure_matrix.py`
     uses the same unpinned init script, so its SSE runs were WebSocket runs.
-    It was not re-run here. Independent state-backend claims now pass the former HTTP
+    It was not re-run here. Tracked as #3097.
+  - **Owner decision (2026-09-25):** HTTP fallback events stay ordered. They
+    are sent one at a time, as frames are on a socket, because of the
+    lost-update evidence above. Independent state-backend claims now pass the former HTTP
   exception/retry failure and prevent stale session copies from replaying reports.
   Concurrent memory and actual Redis claims are tested; memory remains
   process-local. Missing/expired cursors fail closed until a fresh binding is

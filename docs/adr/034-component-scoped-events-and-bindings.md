@@ -515,6 +515,18 @@ any of them changes its implementation and tests, not just this table.
 | Q6 | Keyed collections | This ADR's spelling: `DropdownMenu.collection()`, `.sync([(key, declaration), ...])`, `.values` and read-only `component.key`. Built in this arc (C3). Documented only once gate 5's separate proof passes. | Changing the spelling later would break the typing proof. Gate 5 forbids publishing before the proof. |
 | Q7 | #3078 legacy alias | Fixed, not retired. The alias resolves ids only against the view's declared descriptors of its own type, and is pinned to the legacy parameter policy. Foreign or unknown ids are a no-op. | The legacy descriptor components continue (Compatibility and migration; Step R). |
 
+## C2 notes (2026-09-25)
+
+The C2 browser matrix, run on real WebSocket, SSE and HTTP-only transports,
+found three transport defects. They are fixed and recorded in the
+implementation ledger. One fix is an owner decision about behavior:
+
+- **HTTP fallback events are ordered.** They are sent one at a time, in
+  dispatch order, as frames are on a socket. Two events in flight at once each
+  restored and saved the view's session state, so one's changes were lost. An
+  ADR-035 form save stored stale values in 3 runs of 4. An event sent alone
+  still goes out at once.
+
 ## Alternatives considered
 
 | Alternative | Assessment |
