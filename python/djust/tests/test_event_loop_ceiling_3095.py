@@ -459,3 +459,47 @@ async def test_a_tick_that_forces_a_render_renders(pool):
         finally:
             await comm.disconnect()
     assert frame.get("source") == "tick", frame
+
+
+def test_type_hints_are_resolved_once_and_failures_are_not_cached(monkeypatch):
+    from djust import validation
+
+    calls = []
+    real = validation.get_type_hints
+
+    def counting(obj, *a, **k):
+        calls.append(obj)
+        return real(obj, *a, **k)
+
+    monkeypatch.setattr(validation, "get_type_hints", counting)
+
+    class _V:
+        def handler(self, amount: int = 0, **kwargs):
+            pass
+
+        def broken(self, x: "NotDefinedAnywhere3095" = None, **kwargs):  # noqa: F821
+            pass
+
+    v = _V()
+    for _ in range(3):
+        assert validation.coerce_parameter_types(v.handler, {"amount": "3"}) == {"amount": 3}
+    assert len(calls) == 1
+    calls.clear()
+    for _ in range(2):
+        # Unresolvable: params come back unchanged, and it is retried each time.
+        assert validation.coerce_parameter_types(v.broken, {"x": "1"}) == {"x": "1"}
+    assert len(calls) == 2
+
+
+def test_the_near_miss_warning_still_fires_once_with_the_fast_key_path(caplog):
+    from djust import validation
+
+    class _V:
+        def handler(self, field_name: str = "", **kwargs):
+            pass
+
+    validation._NEAR_MISS_WARNED.clear()
+    with caplog.at_level("WARNING", logger="djust.validation"):
+        for _ in range(3):
+            validation.validate_handler_params(_V().handler, {"fieldname": "x"}, "handler")
+    assert caplog.text.count("similarly-named 'field_name'") == 1

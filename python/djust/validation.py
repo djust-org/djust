@@ -74,6 +74,28 @@ def _handler_signature(handler: Callable) -> inspect.Signature:
     return sig
 
 
+_TYPE_HINTS: weakref.WeakKeyDictionary[Any, Dict[str, Any]] = weakref.WeakKeyDictionary()
+
+
+def _handler_type_hints(handler: Callable) -> Dict[str, Any]:
+    """``get_type_hints(handler)``, resolved once per function (#3095).
+
+    Same keying as :func:`_handler_signature`; the hints of a bound method
+    are its function's. Only a successful resolution is cached: a forward
+    reference that fails now raises again next time, as before. Callers only
+    read the returned dict.
+    """
+    function: Any = getattr(handler, "__func__", handler) if inspect.ismethod(handler) else handler
+    if not inspect.isfunction(function):
+        return get_type_hints(handler)
+    hints = _TYPE_HINTS.get(function)
+    if hints is None:
+        hints = get_type_hints(handler)
+        with _STRICT_CONTRACT_LOCK:
+            _TYPE_HINTS[function] = hints
+    return hints
+
+
 def get_handler_parameter_policy(handler: Callable) -> str:
     """Resolve only server-owned policy, independently of client metadata."""
     from .config import config
@@ -194,7 +216,7 @@ def coerce_parameter_types(handler: Callable, params: Dict[str, Any]) -> Dict[st
         {"count": 42, "enabled": True}
     """
     try:
-        type_hints = get_type_hints(handler)
+        type_hints = _handler_type_hints(handler)
     except Exception:
         # If type hints can't be extracted, return params unchanged
         return params
@@ -433,7 +455,13 @@ def _warn_on_near_miss_kwargs(
         # 20 KB apiece. `_is_near_miss` still sees the FULL key, so matching
         # semantics are unchanged; for a normal identifier `sanitize_for_log`
         # is the identity, so the common path is unaffected.
-        safe_key = sanitize_for_log(key, max_length=100)
+        # An identifier of at most 100 characters is what sanitize_for_log
+        # returns unchanged; skip the call on that common path (#3095).
+        safe_key = (
+            key
+            if len(key) <= 100 and key.isidentifier() and key.isascii()
+            else sanitize_for_log(key, max_length=100)
+        )
         pair = (module, name, safe_key)
         if pair in _NEAR_MISS_WARNED:
             # Checked BEFORE the match below, so the steady state on a
@@ -692,7 +720,7 @@ def validate_parameter_types(
         >>> assert errors[0]["actual"] == "str"
     """
     try:
-        type_hints = get_type_hints(handler)
+        type_hints = _handler_type_hints(handler)
     except Exception:
         # If type hints can't be extracted, skip type validation
         return None
