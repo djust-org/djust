@@ -859,9 +859,18 @@ endif
 test-js-coverage: ## Measure dynamic JavaScript coverage and enforce regression floors
 	@npm run test:coverage
 
-.PHONY: markdown-editor-build test-markdown-editor
-markdown-editor-build: ## Build the optional visual editor assets (Node is for contributors only)
-	cd js/markdown-editor && npm ci && npm run build
+.PHONY: vendor vendor-check test-vendor
+VENDOR_OUTPUTS := python/djust/components/djust_assets.json python/djust/admin_ext/djust_assets.json \
+	python/djust/djust.cdx.json python/djust/components/static/djust_components \
+	python/djust/admin_ext/static
 
-test-markdown-editor: ## Test Markdown/Visual conversion and native form integration
-	cd js/markdown-editor && npm ci && npm test
+vendor: ## Build vendored third-party browser assets, their manifests and python/djust/djust.cdx.json (ADR-040)
+	cd js/vendor && npm ci && npm run build
+	PYTHONPATH=python $(PYTHON) -m djust.assets.sbom --distribution
+
+vendor-check: vendor ## Fail when committed vendored assets, manifests or djust.cdx.json differ from a rebuild
+	@git diff --exit-code -- $(VENDOR_OUTPUTS) || { echo "Vendored outputs are stale: run 'make vendor' and commit."; exit 1; }
+	@test -z "$$(git status --porcelain --untracked-files=all -- $(VENDOR_OUTPUTS))" || { git status --short -- $(VENDOR_OUTPUTS); echo "Untracked vendored outputs: run 'make vendor' and commit."; exit 1; }
+
+test-vendor: ## Test the vendored bundles (Markdown/Visual conversion, manifests, licenses)
+	cd js/vendor && npm ci && npm test

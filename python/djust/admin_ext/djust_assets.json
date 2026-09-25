@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "assets": {
+    "admin-css": {
+      "files": [
+        {
+          "path": "djust_admin/admin.css",
+          "integrity": "sha384-29GwXF2ntluzGHZXtYA1FWSKUusS5kZ0yQQQjKASUg6fn1AKbZcbWxJV946VdITF"
+        }
+      ],
+      "packages": [
+        {
+          "purl": "pkg:npm/tailwindcss@3.4.19",
+          "license": "MIT"
+        }
+      ]
+    }
+  }
+}

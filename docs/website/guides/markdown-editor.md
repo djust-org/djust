@@ -156,11 +156,11 @@ rendering code.
 
 The optional visual bundle is approximately 155 KiB gzip and does not enter the
 core djust client. Its pinned MIT dependencies and license notices live with the
-standalone build in `js/markdown-editor/` and the generated static assets.
+vendored-asset build in `js/vendor/` and the generated static assets.
 
 ```shell
-make markdown-editor-build
-make test-markdown-editor
+make vendor
+make test-vendor
 npx vitest run tests/js/markdown_editor.test.js
 pytest python/tests/test_markdown_editor_preview.py
 ```

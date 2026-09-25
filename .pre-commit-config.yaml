@@ -41,10 +41,12 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
     hooks:
+      # Vendored outputs (make vendor) are byte-exact: their manifests pin each
+      # file's SRI hash, so a whitespace "fix" would break the integrity check.
       - id: trailing-whitespace
-        exclude: '\.min\.js(\.map)?$|\.pxd$'
+        exclude: '\.min\.js(\.map)?$|\.pxd$|^python/djust/components/static/djust_components/(vendor/|markdown-visual\.)|^python/djust/admin_ext/static/djust_admin/admin\.css$'
       - id: end-of-file-fixer
-        exclude: '\.min\.js(\.map)?$|\.pxd$'
+        exclude: '\.min\.js(\.map)?$|\.pxd$|^python/djust/components/static/djust_components/(vendor/|markdown-visual\.)|^python/djust/admin_ext/static/djust_admin/admin\.css$'
       - id: check-yaml
       - id: check-added-large-files
         args: [--maxkb=1000]
