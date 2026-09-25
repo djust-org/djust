@@ -71,6 +71,22 @@ def test_encoder_depth_is_per_thread():
     assert DjangoJSONEncoder._depth == 0
 
 
+def test_encoder_depth_instance_spelling_reads_the_same_counter():
+    """``self._depth`` (a subclass reading it) is the class-level per-thread
+    value, and writing it through the instance leaves nothing on the instance."""
+    from djust.serialization import DjangoJSONEncoder
+
+    enc = DjangoJSONEncoder()
+    assert enc._depth == 0
+    enc._depth += 2
+    try:
+        assert DjangoJSONEncoder._depth == 2
+        assert "_depth" not in vars(enc)
+    finally:
+        DjangoJSONEncoder._depth = 0
+    assert enc._depth == 0
+
+
 def test_backend_registry_builds_one_backend_under_concurrent_first_use():
     from djust.utils import BackendRegistry
 
