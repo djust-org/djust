@@ -4552,11 +4552,13 @@ function _lookupParameterContract(transport, viewPath, viewId, componentId, even
 // ADR-036 staged collector. Deliberately not called by legacy binders. The
 // owner-scoped binder must supply only documented generated application values;
 // routing context is attached afterwards, never collected from markup here.
-function _collectStrictEventParams(element, generated = {}, positional = []) {
+// `accept(key, hint)` lets the binder veto a dj-value-* argument (contract checks).
+function _collectStrictEventParams(element, generated = {}, positional = [], accept = () => true) {
     const reject = () => { throw new Error('Invalid strict event arguments'); };
     const values = Object.create(null);
-    const reserved = new Set([...UNSAFE_KEYS, '_args', 'component_id', 'view_id',
-        '_targetElement', '_optimisticUpdateId', '_skipLoading', '_djTargetSelector']);
+    // Routing names; every "_" name (_args, client bookkeeping) fails the
+    // identifier rule in put() below.
+    const reserved = new Set([...UNSAFE_KEYS, 'component_id', 'view_id']);
     let nodes = 0;
     let textSize = 0;
     const active = new Set();
@@ -4618,6 +4620,7 @@ function _collectStrictEventParams(element, generated = {}, positional = []) {
         if (parts.length > 2 || (parts.length === 2 && !parts[1])) reject();
         const key = parts[0].replace(/-/g, '_');
         const hint = parts[1];
+        if (!accept(key, hint)) reject();
         let value = attr.value;
         const text = value.replace(/^[ \t\n\r\v\f]+|[ \t\n\r\v\f]+$/g, '');
         if (hint) {
@@ -5181,10 +5184,10 @@ function _installScopedDelegation() {
                             generated.innerHeight = window.innerHeight;
                         }
                         const strictParams = _strictBinding(entry.element, entry.parsed.name,
-                            generated, entry.parsed.args);
+                            generated, entry.parsed.args, entry.element);
                         if (strictParams === false) return;
                         if (strictParams) {
-                            handleEvent(entry.parsed.name, _withEventContext(strictParams, entry.element));
+                            handleEvent(entry.parsed.name, strictParams);
                             return;
                         }
 
@@ -5401,13 +5404,7 @@ function buildFormEventParams(element, value) {
  */
 function _strictFormBinding(handlerString, field, value) {
     const parsed = parseEventHandler(handlerString || '');
-    return _strictBinding(field, parsed.name, {value, field: getFieldName(field)}, parsed.args);
-}
-
-/** Routing context for a strict payload (never collected from markup). */
-function _withEventContext(params, element) {
-    addEventContext(params, element);
-    return params;
+    return _strictBinding(field, parsed.name, {value, field: getFieldName(field)}, parsed.args, field);
 }
 
 /** The dj-paste payload: text, html and file metadata (never file bytes). */
@@ -5417,7 +5414,10 @@ function _pastePayload(clipboardData) {
     const files = [];
     try { text = clipboardData.getData('text/plain') || ''; } catch (_err) { /* older browsers */ }
     try { html = clipboardData.getData('text/html') || ''; } catch (_err) { /* older browsers */ }
-    for (const f of clipboardData.files || []) {
+    const list = clipboardData.files || [];
+    for (let i = 0; i < list.length; i++) {
+        // eslint-disable-next-line security/detect-object-injection
+        const f = list[i];
         files.push({name: f.name || 'clipboard-paste', type: f.type || '', size: f.size || 0});
     }
     return {text, html, has_files: files.length > 0, files};
@@ -5705,7 +5705,7 @@ async function _handleDjChange(element, e) {
     const parsedChange = parseEventHandler(changeHandler);
 
     const value = changeValue;
-    const params = strictParams ? _withEventContext(strictParams, e.target) : buildFormEventParams(e.target, value);
+    const params = strictParams || buildFormEventParams(e.target, value);
 
     // Add positional arguments from handler syntax if present
     // e.g., dj-change="toggle_todo(3)" -> params._args = [3]
@@ -5752,7 +5752,7 @@ async function _handleDjInput(element, e) {
     const inputHandler = element.getAttribute('dj-input');
     const parsedInput = parseEventHandler(inputHandler);
 
-    const params = strictParams ? _withEventContext(strictParams, e.target) : buildFormEventParams(e.target, e.target.value);
+    const params = strictParams || buildFormEventParams(e.target, e.target.value);
     if (!strictParams && parsedInput.args.length > 0) {
         params._args = parsedInput.args;
     }
@@ -5784,7 +5784,7 @@ async function _handleDjBlur(element, e) {
     const blurHandler = element.getAttribute('dj-blur');
     const parsedBlur = parseEventHandler(blurHandler);
 
-    const params = strictParams ? _withEventContext(strictParams, e.target) : buildFormEventParams(e.target, e.target.value);
+    const params = strictParams || buildFormEventParams(e.target, e.target.value);
     if (!strictParams && parsedBlur.args.length > 0) {
         params._args = parsedBlur.args;
     }
@@ -5812,7 +5812,7 @@ async function _handleDjFocus(element, e) {
     const focusHandler = element.getAttribute('dj-focus');
     const parsedFocus = parseEventHandler(focusHandler);
 
-    const params = strictParams ? _withEventContext(strictParams, e.target) : buildFormEventParams(e.target, e.target.value);
+    const params = strictParams || buildFormEventParams(e.target, e.target.value);
     if (!strictParams && parsedFocus.args.length > 0) {
         params._args = parsedFocus.args;
     }
@@ -5858,26 +5858,8 @@ async function _handleDjPaste(element, e) {
     // blow the WS frame budget. Instead, set a dj-upload slot on
     // the element and UploadMixin will pick up any files from the
     // clipboard files list via the existing upload pipeline.
-    let text = '';
-    let html = '';
-    const files = [];
-    try {
-        text = clipboardData.getData('text/plain') || '';
-    } catch (_err) { /* older browsers */ }
-    try {
-        html = clipboardData.getData('text/html') || '';
-    } catch (_err) { /* older browsers */ }
-    if (clipboardData.files) {
-        for (let i = 0; i < clipboardData.files.length; i++) {
-            // eslint-disable-next-line security/detect-object-injection
-            const f = clipboardData.files[i];
-            files.push({
-                name: f.name || 'clipboard-paste',
-                type: f.type || '',
-                size: f.size || 0,
-            });
-        }
-    }
+    const payload = _pastePayload(clipboardData);
+    const files = payload.files;
 
     // If the element has an upload slot configured, route pasted
     // files through the upload pipeline (image paste → chat, etc).
@@ -5891,12 +5873,7 @@ async function _handleDjPaste(element, e) {
         }
     }
 
-    const params = strictPaste || {
-        text: text,
-        html: html,
-        has_files: files.length > 0,
-        files: files,
-    };
+    const params = strictPaste || payload;
     if (!strictPaste && parsedPaste.args.length > 0) {
         params._args = parsedPaste.args;
     }
@@ -6386,11 +6363,11 @@ function bindLiveViewEvents(scope) {
         // bind-time snapshot would keep dispatching the old ones (#2858).
         const firePoll = () => {
             if (document.hidden) return;
-            const strictParams = _strictBinding(element, parsed.name, {}, []);
+            // Strict: routing context lets the owner that resolved the contract receive it.
+            const strictParams = _strictBinding(element, parsed.name, {}, [], element);
             if (strictParams === false) return;
             if (strictParams) {
-                // Routing context lets the owner that resolved the contract receive it.
-                handleEvent(parsed.name, Object.assign(_withEventContext(strictParams, element), { _skipLoading: true }));
+                handleEvent(parsed.name, Object.assign(strictParams, { _skipLoading: true }));
                 return;
             }
             handleEvent(parsed.name, Object.assign(extractTypedParams(element), { _skipLoading: true }));
@@ -7253,7 +7230,7 @@ function _processFormRecovery() {
         const strictParams = _strictFormBinding(handlerString, field, domValue);
         if (strictParams === false) continue;
         if (strictParams) {
-            pendingEvents.push({ handlerName: handlerName, params: _withEventContext(strictParams, field) });
+            pendingEvents.push({ handlerName: handlerName, params: strictParams });
             continue;
         }
 
@@ -7674,86 +7651,54 @@ function _resolveParameterContract(element, eventName) {
     return {policy: contract.policy, contract, transport, viewId, componentId};
 }
 
-// Wire hints a declared type accepts (ADR-036 D3): a conflicting explicit hint
-// is rejected rather than converted twice. Unhinted text is always accepted.
-const _WIRE_HINT_TYPES = {
-    int: ['int', 'float', 'Decimal'], integer: ['int', 'float', 'Decimal'],
-    float: ['float'], number: ['float'],
-    bool: ['bool'], boolean: ['bool'],
-    json: null, array: ['list'], list: ['list'], object: [],
-};
+// Declared types each wire hint may produce (ADR-036 D3); a conflicting
+// explicit hint is rejected rather than converted twice. `json` fits any type.
+const _WIRE_HINT_TYPES = {int: 'int float Decimal', integer: 'int float Decimal',
+    float: 'float', number: 'float', bool: 'bool', boolean: 'bool', array: 'list', list: 'list'};
 
-function _hintAccepted(hint, label) {
-    let type = label;
-    const optional = /^Optional\[(.*)\]$/.exec(type);
-    if (optional) type = optional[1];
-    if (type === 'Any') return true;
-    const base = type.startsWith('list[') ? 'list' : type;
-    // eslint-disable-next-line security/detect-object-injection
-    const accepted = _WIRE_HINT_TYPES[hint];
-    return accepted === null || (accepted !== undefined && accepted.includes(base));
-}
-
-// ADR-036 strict collection for a native binding. Returns null when the
-// binding is not strict: the caller keeps its unchanged legacy params. For a
-// strict handler it returns the application payload: dj-value-* arguments
-// (strict literals) plus only the generated values the handler declares, or
-// all of them for a ** catch-all (Q1). _target is never generated (Q2).
-// Throws, with a value-free message, when the arguments are rejected.
-function _strictEventParams(element, eventName, generated = {}, positional = []) {
-    const resolved = _resolveParameterContract(element, eventName);
-    if (resolved.policy !== 'strict') return null;
-    const parameters = resolved.contract.parameters;
-    const named = new Map(parameters
-        .filter(p => p.kind === 'positional_or_keyword' || p.kind === 'keyword_only')
-        .map(p => [p.name, p]));
-    const openPayload = parameters.find(p => p.kind === 'var_keyword');
-    const reject = () => { throw new Error('Invalid strict event arguments'); };
-    const explicit = new Map();
-    for (const attr of element.attributes) {
-        if (!attr.name.startsWith('dj-value-')) continue;
-        const parts = attr.name.slice(9).split(':');
-        explicit.set(parts[0].replace(/-/g, '_'), parts[1]);
-    }
-    const sent = Object.create(null);
-    for (const key of Object.keys(generated)) {
-        if (explicit.has(key)) reject();
-        if (named.has(key) || openPayload) {
-            // eslint-disable-next-line security/detect-object-injection
-            sent[key] = generated[key];
-        }
-    }
-    for (const [key, hint] of explicit) {
-        if (!hint) continue;
-        const parameter = named.get(key) || openPayload;
-        if (parameter && !_hintAccepted(hint, parameter.type)) reject();
-    }
-    const values = _collectStrictEventParams(element, sent, positional);
-    // A value supplied both positionally and by name is an error, not a choice.
-    const leading = parameters
-        .filter(p => p.kind === 'positional_only' || p.kind === 'positional_or_keyword')
-        .slice(0, positional.length);
-    if (leading.some(p => Object.hasOwn(values, p.name))) reject();
-    return values;
-}
-
-// Value-free, before any disable/optimistic/loading effect (ADR-036 N1).
-function _reportStrictRejection(eventName) {
-    console.error('[LiveView] Event arguments rejected by the handler contract:', eventName);
-    window.dispatchEvent(new CustomEvent('djust:error', {detail: {
-        error: 'Invalid event arguments for this handler.',
-        traceback: null, event: eventName, validation_details: null,
-    }}));
-}
-
-// Binder entry point. Returns strict params, null for a legacy/unknown binding
-// (keep the legacy params), or false when a strict binding was rejected and
-// reported: the caller must return before any effect.
-function _strictBinding(element, eventName, generated, positional) {
+// ADR-036 binder entry point, called before any lock, confirmation,
+// disable-with, optimistic or loading effect. Returns null for a legacy or
+// unlisted binding (the caller keeps its unchanged legacy params). For a strict
+// handler it returns the application payload, with routing context from
+// `contextElement` when given: dj-value-* arguments (strict literals) plus only
+// the generated values the handler declares, or all of them for a ** catch-all
+// (Q1); _target is never generated (Q2). A rejected binding is reported
+// value-free (N1) and returns false: the caller must stop.
+function _strictBinding(element, eventName, generated = {}, positional = [], contextElement = null) {
     try {
-        return _strictEventParams(element, eventName, generated, positional);
+        const resolved = _resolveParameterContract(element, eventName);
+        if (resolved.policy !== 'strict') return null;
+        const parameters = resolved.contract.parameters;
+        const named = new Map();
+        let open = null;
+        for (const p of parameters) {
+            if (p.kind === 'var_keyword') open = p;
+            else if (p.kind === 'positional_or_keyword' || p.kind === 'keyword_only') named.set(p.name, p);
+        }
+        const sent = Object.create(null);
+        for (const key of Object.keys(generated)) {
+            // eslint-disable-next-line security/detect-object-injection
+            if (named.has(key) || open) sent[key] = generated[key];
+        }
+        const values = _collectStrictEventParams(element, sent, positional, (key, hint) => {
+            const type = (named.get(key) || open || {type: 'Any'}).type
+                .replace(/^Optional\[(.*)\]$/, '$1').replace(/^list\[.*/, 'list');
+            // A dj-value-* name may not reuse any generated name, sent or not.
+            return !Object.hasOwn(generated, key) && (!hint || hint === 'json' || type === 'Any' ||
+                // eslint-disable-next-line security/detect-object-injection
+                (Object.hasOwn(_WIRE_HINT_TYPES, hint) && _WIRE_HINT_TYPES[hint].split(' ').includes(type)));
+        });
+        // A value supplied both positionally and by name is an error, not a choice.
+        if (parameters.filter(p => p.kind.startsWith('positional')).slice(0, positional.length)
+            .some(p => Object.hasOwn(values, p.name))) throw new Error();
+        if (contextElement) addEventContext(values, contextElement);
+        return values;
     } catch {
-        _reportStrictRejection(eventName);
+        console.error('[LiveView] Event arguments rejected by the handler contract:', eventName);
+        window.dispatchEvent(new CustomEvent('djust:error', {detail: {
+            error: 'Invalid event arguments for this handler.',
+            traceback: null, event: eventName, validation_details: null,
+        }}));
         return false;
     }
 }

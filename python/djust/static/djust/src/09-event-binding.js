@@ -511,10 +511,10 @@ function _installScopedDelegation() {
                             generated.innerHeight = window.innerHeight;
                         }
                         const strictParams = _strictBinding(entry.element, entry.parsed.name,
-                            generated, entry.parsed.args);
+                            generated, entry.parsed.args, entry.element);
                         if (strictParams === false) return;
                         if (strictParams) {
-                            handleEvent(entry.parsed.name, _withEventContext(strictParams, entry.element));
+                            handleEvent(entry.parsed.name, strictParams);
                             return;
                         }
 
@@ -731,13 +731,7 @@ function buildFormEventParams(element, value) {
  */
 function _strictFormBinding(handlerString, field, value) {
     const parsed = parseEventHandler(handlerString || '');
-    return _strictBinding(field, parsed.name, {value, field: getFieldName(field)}, parsed.args);
-}
-
-/** Routing context for a strict payload (never collected from markup). */
-function _withEventContext(params, element) {
-    addEventContext(params, element);
-    return params;
+    return _strictBinding(field, parsed.name, {value, field: getFieldName(field)}, parsed.args, field);
 }
 
 /** The dj-paste payload: text, html and file metadata (never file bytes). */
@@ -747,7 +741,10 @@ function _pastePayload(clipboardData) {
     const files = [];
     try { text = clipboardData.getData('text/plain') || ''; } catch (_err) { /* older browsers */ }
     try { html = clipboardData.getData('text/html') || ''; } catch (_err) { /* older browsers */ }
-    for (const f of clipboardData.files || []) {
+    const list = clipboardData.files || [];
+    for (let i = 0; i < list.length; i++) {
+        // eslint-disable-next-line security/detect-object-injection
+        const f = list[i];
         files.push({name: f.name || 'clipboard-paste', type: f.type || '', size: f.size || 0});
     }
     return {text, html, has_files: files.length > 0, files};
@@ -1035,7 +1032,7 @@ async function _handleDjChange(element, e) {
     const parsedChange = parseEventHandler(changeHandler);
 
     const value = changeValue;
-    const params = strictParams ? _withEventContext(strictParams, e.target) : buildFormEventParams(e.target, value);
+    const params = strictParams || buildFormEventParams(e.target, value);
 
     // Add positional arguments from handler syntax if present
     // e.g., dj-change="toggle_todo(3)" -> params._args = [3]
@@ -1082,7 +1079,7 @@ async function _handleDjInput(element, e) {
     const inputHandler = element.getAttribute('dj-input');
     const parsedInput = parseEventHandler(inputHandler);
 
-    const params = strictParams ? _withEventContext(strictParams, e.target) : buildFormEventParams(e.target, e.target.value);
+    const params = strictParams || buildFormEventParams(e.target, e.target.value);
     if (!strictParams && parsedInput.args.length > 0) {
         params._args = parsedInput.args;
     }
@@ -1114,7 +1111,7 @@ async function _handleDjBlur(element, e) {
     const blurHandler = element.getAttribute('dj-blur');
     const parsedBlur = parseEventHandler(blurHandler);
 
-    const params = strictParams ? _withEventContext(strictParams, e.target) : buildFormEventParams(e.target, e.target.value);
+    const params = strictParams || buildFormEventParams(e.target, e.target.value);
     if (!strictParams && parsedBlur.args.length > 0) {
         params._args = parsedBlur.args;
     }
@@ -1142,7 +1139,7 @@ async function _handleDjFocus(element, e) {
     const focusHandler = element.getAttribute('dj-focus');
     const parsedFocus = parseEventHandler(focusHandler);
 
-    const params = strictParams ? _withEventContext(strictParams, e.target) : buildFormEventParams(e.target, e.target.value);
+    const params = strictParams || buildFormEventParams(e.target, e.target.value);
     if (!strictParams && parsedFocus.args.length > 0) {
         params._args = parsedFocus.args;
     }
@@ -1188,26 +1185,8 @@ async function _handleDjPaste(element, e) {
     // blow the WS frame budget. Instead, set a dj-upload slot on
     // the element and UploadMixin will pick up any files from the
     // clipboard files list via the existing upload pipeline.
-    let text = '';
-    let html = '';
-    const files = [];
-    try {
-        text = clipboardData.getData('text/plain') || '';
-    } catch (_err) { /* older browsers */ }
-    try {
-        html = clipboardData.getData('text/html') || '';
-    } catch (_err) { /* older browsers */ }
-    if (clipboardData.files) {
-        for (let i = 0; i < clipboardData.files.length; i++) {
-            // eslint-disable-next-line security/detect-object-injection
-            const f = clipboardData.files[i];
-            files.push({
-                name: f.name || 'clipboard-paste',
-                type: f.type || '',
-                size: f.size || 0,
-            });
-        }
-    }
+    const payload = _pastePayload(clipboardData);
+    const files = payload.files;
 
     // If the element has an upload slot configured, route pasted
     // files through the upload pipeline (image paste → chat, etc).
@@ -1221,12 +1200,7 @@ async function _handleDjPaste(element, e) {
         }
     }
 
-    const params = strictPaste || {
-        text: text,
-        html: html,
-        has_files: files.length > 0,
-        files: files,
-    };
+    const params = strictPaste || payload;
     if (!strictPaste && parsedPaste.args.length > 0) {
         params._args = parsedPaste.args;
     }
@@ -1716,11 +1690,11 @@ function bindLiveViewEvents(scope) {
         // bind-time snapshot would keep dispatching the old ones (#2858).
         const firePoll = () => {
             if (document.hidden) return;
-            const strictParams = _strictBinding(element, parsed.name, {}, []);
+            // Strict: routing context lets the owner that resolved the contract receive it.
+            const strictParams = _strictBinding(element, parsed.name, {}, [], element);
             if (strictParams === false) return;
             if (strictParams) {
-                // Routing context lets the owner that resolved the contract receive it.
-                handleEvent(parsed.name, Object.assign(_withEventContext(strictParams, element), { _skipLoading: true }));
+                handleEvent(parsed.name, Object.assign(strictParams, { _skipLoading: true }));
                 return;
             }
             handleEvent(parsed.name, Object.assign(extractTypedParams(element), { _skipLoading: true }));
@@ -2583,7 +2557,7 @@ function _processFormRecovery() {
         const strictParams = _strictFormBinding(handlerString, field, domValue);
         if (strictParams === false) continue;
         if (strictParams) {
-            pendingEvents.push({ handlerName: handlerName, params: _withEventContext(strictParams, field) });
+            pendingEvents.push({ handlerName: handlerName, params: strictParams });
             continue;
         }
 

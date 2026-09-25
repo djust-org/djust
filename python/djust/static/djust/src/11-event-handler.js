@@ -99,86 +99,54 @@ function _resolveParameterContract(element, eventName) {
     return {policy: contract.policy, contract, transport, viewId, componentId};
 }
 
-// Wire hints a declared type accepts (ADR-036 D3): a conflicting explicit hint
-// is rejected rather than converted twice. Unhinted text is always accepted.
-const _WIRE_HINT_TYPES = {
-    int: ['int', 'float', 'Decimal'], integer: ['int', 'float', 'Decimal'],
-    float: ['float'], number: ['float'],
-    bool: ['bool'], boolean: ['bool'],
-    json: null, array: ['list'], list: ['list'], object: [],
-};
+// Declared types each wire hint may produce (ADR-036 D3); a conflicting
+// explicit hint is rejected rather than converted twice. `json` fits any type.
+const _WIRE_HINT_TYPES = {int: 'int float Decimal', integer: 'int float Decimal',
+    float: 'float', number: 'float', bool: 'bool', boolean: 'bool', array: 'list', list: 'list'};
 
-function _hintAccepted(hint, label) {
-    let type = label;
-    const optional = /^Optional\[(.*)\]$/.exec(type);
-    if (optional) type = optional[1];
-    if (type === 'Any') return true;
-    const base = type.startsWith('list[') ? 'list' : type;
-    // eslint-disable-next-line security/detect-object-injection
-    const accepted = _WIRE_HINT_TYPES[hint];
-    return accepted === null || (accepted !== undefined && accepted.includes(base));
-}
-
-// ADR-036 strict collection for a native binding. Returns null when the
-// binding is not strict: the caller keeps its unchanged legacy params. For a
-// strict handler it returns the application payload: dj-value-* arguments
-// (strict literals) plus only the generated values the handler declares, or
-// all of them for a ** catch-all (Q1). _target is never generated (Q2).
-// Throws, with a value-free message, when the arguments are rejected.
-function _strictEventParams(element, eventName, generated = {}, positional = []) {
-    const resolved = _resolveParameterContract(element, eventName);
-    if (resolved.policy !== 'strict') return null;
-    const parameters = resolved.contract.parameters;
-    const named = new Map(parameters
-        .filter(p => p.kind === 'positional_or_keyword' || p.kind === 'keyword_only')
-        .map(p => [p.name, p]));
-    const openPayload = parameters.find(p => p.kind === 'var_keyword');
-    const reject = () => { throw new Error('Invalid strict event arguments'); };
-    const explicit = new Map();
-    for (const attr of element.attributes) {
-        if (!attr.name.startsWith('dj-value-')) continue;
-        const parts = attr.name.slice(9).split(':');
-        explicit.set(parts[0].replace(/-/g, '_'), parts[1]);
-    }
-    const sent = Object.create(null);
-    for (const key of Object.keys(generated)) {
-        if (explicit.has(key)) reject();
-        if (named.has(key) || openPayload) {
-            // eslint-disable-next-line security/detect-object-injection
-            sent[key] = generated[key];
-        }
-    }
-    for (const [key, hint] of explicit) {
-        if (!hint) continue;
-        const parameter = named.get(key) || openPayload;
-        if (parameter && !_hintAccepted(hint, parameter.type)) reject();
-    }
-    const values = _collectStrictEventParams(element, sent, positional);
-    // A value supplied both positionally and by name is an error, not a choice.
-    const leading = parameters
-        .filter(p => p.kind === 'positional_only' || p.kind === 'positional_or_keyword')
-        .slice(0, positional.length);
-    if (leading.some(p => Object.hasOwn(values, p.name))) reject();
-    return values;
-}
-
-// Value-free, before any disable/optimistic/loading effect (ADR-036 N1).
-function _reportStrictRejection(eventName) {
-    console.error('[LiveView] Event arguments rejected by the handler contract:', eventName);
-    window.dispatchEvent(new CustomEvent('djust:error', {detail: {
-        error: 'Invalid event arguments for this handler.',
-        traceback: null, event: eventName, validation_details: null,
-    }}));
-}
-
-// Binder entry point. Returns strict params, null for a legacy/unknown binding
-// (keep the legacy params), or false when a strict binding was rejected and
-// reported: the caller must return before any effect.
-function _strictBinding(element, eventName, generated, positional) {
+// ADR-036 binder entry point, called before any lock, confirmation,
+// disable-with, optimistic or loading effect. Returns null for a legacy or
+// unlisted binding (the caller keeps its unchanged legacy params). For a strict
+// handler it returns the application payload, with routing context from
+// `contextElement` when given: dj-value-* arguments (strict literals) plus only
+// the generated values the handler declares, or all of them for a ** catch-all
+// (Q1); _target is never generated (Q2). A rejected binding is reported
+// value-free (N1) and returns false: the caller must stop.
+function _strictBinding(element, eventName, generated = {}, positional = [], contextElement = null) {
     try {
-        return _strictEventParams(element, eventName, generated, positional);
+        const resolved = _resolveParameterContract(element, eventName);
+        if (resolved.policy !== 'strict') return null;
+        const parameters = resolved.contract.parameters;
+        const named = new Map();
+        let open = null;
+        for (const p of parameters) {
+            if (p.kind === 'var_keyword') open = p;
+            else if (p.kind === 'positional_or_keyword' || p.kind === 'keyword_only') named.set(p.name, p);
+        }
+        const sent = Object.create(null);
+        for (const key of Object.keys(generated)) {
+            // eslint-disable-next-line security/detect-object-injection
+            if (named.has(key) || open) sent[key] = generated[key];
+        }
+        const values = _collectStrictEventParams(element, sent, positional, (key, hint) => {
+            const type = (named.get(key) || open || {type: 'Any'}).type
+                .replace(/^Optional\[(.*)\]$/, '$1').replace(/^list\[.*/, 'list');
+            // A dj-value-* name may not reuse any generated name, sent or not.
+            return !Object.hasOwn(generated, key) && (!hint || hint === 'json' || type === 'Any' ||
+                // eslint-disable-next-line security/detect-object-injection
+                (Object.hasOwn(_WIRE_HINT_TYPES, hint) && _WIRE_HINT_TYPES[hint].split(' ').includes(type)));
+        });
+        // A value supplied both positionally and by name is an error, not a choice.
+        if (parameters.filter(p => p.kind.startsWith('positional')).slice(0, positional.length)
+            .some(p => Object.hasOwn(values, p.name))) throw new Error();
+        if (contextElement) addEventContext(values, contextElement);
+        return values;
     } catch {
-        _reportStrictRejection(eventName);
+        console.error('[LiveView] Event arguments rejected by the handler contract:', eventName);
+        window.dispatchEvent(new CustomEvent('djust:error', {detail: {
+            error: 'Invalid event arguments for this handler.',
+            traceback: null, event: eventName, validation_details: null,
+        }}));
         return false;
     }
 }

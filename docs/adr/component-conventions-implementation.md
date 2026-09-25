@@ -1814,6 +1814,23 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
   - The shipped gzip grew 2,275 bytes. The repository's 33 client-size claim
     lines, including the unminified one, were moved to the measured figures
     in `client-sizes.json`.
+  - Compaction, at the owner's request:
+    - `_strictEventParams` and the rejection report were merged into a
+      single `_strictBinding`.
+    - The contract checks moved into the collector's own attribute pass, as
+      an `accept` hook, so `dj-value-*` names are parsed once.
+    - The wire-hint table was shortened.
+    - `dj-paste`'s legacy payload now reuses `_pastePayload`.
+    - The collector's reserved names that the identifier rule already
+      rejects were dropped.
+    - Routing context is attached inside `_strictBinding`.
+
+    Behaviour is unchanged: the 21 strict-binding cases and the full
+    JavaScript suite pass. The shipped gzip went from 71,944 to 71,786
+    bytes (-158). Of the remaining (b) growth, about 850 bytes is the
+    previously dead, already-reviewed collector becoming reachable.
+    Compaction cannot return the claims to the earlier figure without
+    removing reviewed checks, so they stay at the rounded measured value.
   Sub-slice (c), [transport parity matrix](notes/036-strict-server-integration.md#transport-parity-matrix),
   commit 0afd54252:
   - A 43-row strict matrix runs identically through the shared runtime,

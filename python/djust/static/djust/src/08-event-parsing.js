@@ -611,11 +611,13 @@ function _lookupParameterContract(transport, viewPath, viewId, componentId, even
 // ADR-036 staged collector. Deliberately not called by legacy binders. The
 // owner-scoped binder must supply only documented generated application values;
 // routing context is attached afterwards, never collected from markup here.
-function _collectStrictEventParams(element, generated = {}, positional = []) {
+// `accept(key, hint)` lets the binder veto a dj-value-* argument (contract checks).
+function _collectStrictEventParams(element, generated = {}, positional = [], accept = () => true) {
     const reject = () => { throw new Error('Invalid strict event arguments'); };
     const values = Object.create(null);
-    const reserved = new Set([...UNSAFE_KEYS, '_args', 'component_id', 'view_id',
-        '_targetElement', '_optimisticUpdateId', '_skipLoading', '_djTargetSelector']);
+    // Routing names; every "_" name (_args, client bookkeeping) fails the
+    // identifier rule in put() below.
+    const reserved = new Set([...UNSAFE_KEYS, 'component_id', 'view_id']);
     let nodes = 0;
     let textSize = 0;
     const active = new Set();
@@ -677,6 +679,7 @@ function _collectStrictEventParams(element, generated = {}, positional = []) {
         if (parts.length > 2 || (parts.length === 2 && !parts[1])) reject();
         const key = parts[0].replace(/-/g, '_');
         const hint = parts[1];
+        if (!accept(key, hint)) reject();
         let value = attr.value;
         const text = value.replace(/^[ \t\n\r\v\f]+|[ \t\n\r\v\f]+$/g, '');
         if (hint) {
