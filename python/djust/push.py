@@ -74,6 +74,20 @@ def push_scope_group_name(view_path: str, scope: PushScope) -> str:
     return f"djust_scope_{digest}"
 
 
+def presence_scope_group_name(view_path: str, presence_key: str) -> str:
+    """Return the channel-layer group of the sessions of ``view_path`` that
+    share one presence key (#3095).
+
+    ``PresenceMixin`` puts every WebSocket session of a presence view in the
+    group of its presence key, and sends a scoped presence-change broadcast
+    there, so a join or leave wakes only the sessions that count the same
+    presence. A separate namespace from :func:`push_scope_group_name`, so no
+    ``push_scope`` value can collide with it.
+    """
+    digest = hashlib.sha256(f"{view_path}\x00presence\x00{presence_key}".encode()).hexdigest()[:40]
+    return f"djust_pscope_{digest}"
+
+
 def view_push_scopes(view: Any) -> FrozenSet[str]:
     """The scope keys a view instance asks to receive scoped pushes for.
 
@@ -132,6 +146,8 @@ async def sync_push_scope_groups(consumer: Any, view: Any) -> None:
     else:
         consumer._push_scope_invalid_logged = False
     channel_layer = getattr(consumer, "channel_layer", None)
+    if channel_layer is not None:
+        await _sync_presence_scope_group(consumer, view, view_path, channel_layer)
     if channel_layer is None or (not wanted and not joined):
         return
     current = dict(joined)
@@ -153,13 +169,79 @@ async def sync_push_scope_groups(consumer: Any, view: Any) -> None:
     consumer._push_scope_groups = current
 
 
+async def _sync_presence_scope_group(
+    consumer: Any, view: Any, view_path: str, channel_layer: Any
+) -> None:
+    """Keep ``consumer`` in the presence-scope group of its view's presence key.
+
+    Every WebSocket session of a ``PresenceMixin`` view joins, whether or not
+    it tracks its own presence (a read-only viewer still shows
+    ``online_count``), unless the view sets ``presence_broadcast_scoped =
+    False``. The key is ``view._presence_scope_key``: ``track_presence``
+    records it, and for a session that never tracks it is computed once here,
+    on the session's own thread (``get_presence_key`` is application code and
+    may touch the database). A failed join is logged and retried on the next
+    turn.
+    """
+    current = getattr(consumer, "_presence_scope_group", None)
+    wanted: Optional[str] = None
+    if (
+        view is not None
+        and view_path
+        and callable(getattr(view, "get_presence_key", None))
+        and getattr(view, "presence_broadcast_scoped", None) is not False
+    ):
+        key = getattr(view, "_presence_scope_key", None)
+        if key is None and getattr(consumer, "_presence_scope_failed_view", None) is not view:
+            from asgiref.sync import sync_to_async
+
+            try:
+                key = await sync_to_async(view.get_presence_key)()
+            except Exception:  # noqa: BLE001 - app code; the view-wide broadcast still works
+                # Once per view instance: this runs after every turn.
+                logger.warning(
+                    "%s.get_presence_key() failed; the session gets no scoped presence broadcasts",
+                    type(view).__name__,
+                )
+                consumer._presence_scope_failed_view = view
+                key = None
+            if isinstance(key, str):
+                view._presence_scope_key = key
+        if isinstance(key, str):
+            wanted = presence_scope_group_name(view_path, key)
+    if wanted == current:
+        return
+    if current:
+        try:
+            await channel_layer.group_discard(current, consumer.channel_name)
+        except Exception:  # noqa: BLE001 - kept, so the next sync retries the leave
+            logger.warning("Error leaving the presence-scope group of %s", view_path)
+            return
+        consumer._presence_scope_group = None
+    if wanted:
+        try:
+            await channel_layer.group_add(wanted, consumer.channel_name)
+        except Exception:  # noqa: BLE001 - retried on the next turn
+            logger.warning("Error joining the presence-scope group of %s", view_path)
+            return
+        consumer._presence_scope_group = wanted
+
+
 async def leave_push_scope_groups(consumer: Any) -> None:
-    """Leave every scoped-push group ``consumer`` joined (disconnect, redirect)."""
+    """Leave every scoped-push group ``consumer`` joined (disconnect, redirect),
+    and its presence-scope group (#3095)."""
     joined: dict = getattr(consumer, "_push_scope_groups", None) or {}
     consumer._push_scope_groups = {}
+    presence_group = getattr(consumer, "_presence_scope_group", None)
+    consumer._presence_scope_group = None
     channel_layer = getattr(consumer, "channel_layer", None)
     if channel_layer is None:
         return
+    if isinstance(presence_group, str) and presence_group:
+        try:
+            await channel_layer.group_discard(presence_group, consumer.channel_name)
+        except Exception:  # noqa: BLE001 - leaving is best effort
+            logger.warning("Error leaving presence-scope group %s", presence_group)
     for group in joined.values():
         try:
             await channel_layer.group_discard(group, consumer.channel_name)
@@ -175,6 +257,44 @@ def _push_group(view_path: str, scope: Optional[PushScope]) -> str:
     if scope is None:
         return view_group_name(view_path)
     return push_scope_group_name(view_path, scope)
+
+
+def _server_push_message(
+    state: Optional[dict[str, Any]],
+    handler: Optional[str],
+    payload: Optional[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "type": "server_push",
+        "state": state,
+        "handler": handler,
+        "payload": payload,
+        # Originating session's channel (#1677), if pushed from within an event
+        # handler — lets that session skip its redundant self-broadcast.
+        "sender_channel": origin_channel.get(),
+    }
+
+
+def push_to_presence_scope(
+    view_path: str,
+    presence_key: str,
+    *,
+    handler: Optional[str] = None,
+    payload: Optional[dict[str, Any]] = None,
+) -> None:
+    """Push to the sessions of ``view_path`` that share ``presence_key`` (#3095).
+
+    What ``PresenceMixin`` uses for a scoped presence-change broadcast; see
+    :func:`presence_scope_group_name`. Works from sync code only, like
+    :func:`push_to_view`.
+    """
+    if not _VIEW_PATH_RE.match(view_path):
+        raise ValueError(
+            f"Invalid view_path: {view_path!r}. Expected dotted Python path like 'myapp.views.MyView'"
+        )
+    group = presence_scope_group_name(view_path, presence_key)
+    channel_layer = get_channel_layer()
+    async_to_sync(channel_layer.group_send)(group, _server_push_message(None, handler, payload))
 
 
 def push_to_view(
@@ -224,15 +344,7 @@ def push_to_view(
     """
     group = _push_group(view_path, scope)
     channel_layer = get_channel_layer()
-    message = {
-        "type": "server_push",
-        "state": state,
-        "handler": handler,
-        "payload": payload,
-        # Originating session's channel (#1677), if pushed from within an event
-        # handler — lets that session skip its redundant self-broadcast.
-        "sender_channel": origin_channel.get(),
-    }
+    message = _server_push_message(state, handler, payload)
     async_to_sync(channel_layer.group_send)(group, message)
 
 
@@ -257,13 +369,5 @@ async def apush_to_view(
     """
     group = _push_group(view_path, scope)
     channel_layer = get_channel_layer()
-    message = {
-        "type": "server_push",
-        "state": state,
-        "handler": handler,
-        "payload": payload,
-        # Originating session's channel (#1677), if pushed from within an event
-        # handler — lets that session skip its redundant self-broadcast.
-        "sender_channel": origin_channel.get(),
-    }
+    message = _server_push_message(state, handler, payload)
     await channel_layer.group_send(group, message)
