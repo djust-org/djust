@@ -7,6 +7,7 @@ never an authorization decision or a replacement for server validation.
 
 import inspect
 import json
+import operator
 import types
 from typing import Any
 
@@ -30,56 +31,165 @@ def _instance_dict(owner: Any) -> dict[str, Any]:
     return descriptor.__get__(owner, type(owner))
 
 
+_METHOD_TYPES = (types.FunctionType, staticmethod, classmethod)
+
+
+def _mro_lookup(cls: type, name: str) -> Any:
+    """The class-level half of ``inspect.getattr_static``: the first entry
+    for ``name`` in ``cls.__mro__``, or ``_ABSENT``."""
+    for base in cls.__mro__:
+        found = base.__dict__.get(name, _ABSENT)
+        if found is not _ABSENT:
+            return found
+    return _ABSENT
+
+
+def _is_data_descriptor(value: Any) -> bool:
+    kind = type(value)
+    return _mro_lookup(kind, "__get__") is not _ABSENT and _mro_lookup(kind, "__set__") is not (
+        _ABSENT
+    )
+
+
+class _ClassPlan:
+    """Everything ``_event_methods`` needs from the CLASSES, resolved once.
+
+    ``inspect.getattr_static`` walks the MRO for every public name, and the
+    manifest is rebuilt on every render (#3075): for a typical LiveView that
+    was ~1 ms per frame, longer than the render itself. Only the instance
+    storage varies between calls, so the class half is resolved here and the
+    instance half is re-applied per call, exactly as ``getattr_static`` would.
+
+    ``fresh()`` re-checks every class dict in both MROs, so a hot view
+    replacement (a new class), a monkeypatched method or an added attribute
+    all rebuild the plan instead of serving a stale one.
+    """
+
+    __slots__ = ("entries", "names", "snapshot")
+
+    def __init__(self, owner_type: type, declaration_type: type, bound_component: bool) -> None:
+        from .components.base import LiveComponent
+
+        members: dict[str, Any] = {}
+        for cls in declaration_type.__mro__:
+            if bound_component and (
+                cls is LiveComponent or cls.__dict__.get("_djust_framework_component_base")
+            ):
+                break
+            for name, member in cls.__dict__.items():
+                members.setdefault(name, member)
+        entries = []
+        for name, member in members.items():
+            if name.startswith("_"):
+                continue
+            wrapper = _mro_lookup(owner_type, name)
+            data = wrapper is not _ABSENT and _is_data_descriptor(wrapper)
+            entries.append((name, member, wrapper, data))
+        self.entries = tuple(entries)
+        self.names = frozenset(members)
+        classes = dict.fromkeys(owner_type.__mro__ + declaration_type.__mro__)
+        self.snapshot = tuple(
+            (cls, frozenset(cls.__dict__), tuple(cls.__dict__.values())) for cls in classes
+        )
+
+    def fresh(self) -> bool:
+        for cls, keys, values in self.snapshot:
+            current = cls.__dict__
+            if (
+                len(current) != len(values)
+                or current.keys() != keys
+                or not all(map(operator.is_, current.values(), values))
+            ):
+                return False
+        return True
+
+
+# Plans hold the classes (and their functions, whose ``__class__`` cells point
+# back at the class), so a weak-keyed cache could never let a replaced class
+# go. A bounded plain dict does: hot view replacement strands at most this many
+# old plans, and an app with more (owner, declaration) pairs than this merely
+# rebuilds plans, which is the pre-cache cost, never a wrong answer.
+_PLAN_LIMIT = 512
+_PLANS: dict[tuple[type, type, bool], _ClassPlan] = {}
+
+
+def _class_plan(owner_type: type, declaration_type: type, bound_component: bool) -> _ClassPlan:
+    key = (owner_type, declaration_type, bound_component)
+    plan = _PLANS.get(key)
+    if plan is None or not plan.fresh():
+        plan = _ClassPlan(owner_type, declaration_type, bound_component)
+        if len(_PLANS) >= _PLAN_LIMIT:
+            _PLANS.clear()
+        _PLANS[key] = plan
+    return plan
+
+
+def _resolve_method(
+    owner: Any, name: str, member: Any, in_storage: bool, binding_class: type
+) -> Any:
+    """The dispatchable event handler ``member`` resolves to, or None."""
+    if type(member) in _METHOD_TYPES:
+        function = member.__func__ if type(member) in (staticmethod, classmethod) else member
+        if not is_event_handler(function):
+            return None
+        # Only Python's known method descriptors are executed, never an
+        # application property or custom descriptor during discovery.
+        method = member if in_storage else member.__get__(owner, binding_class)
+    elif type(member) is types.MethodType:
+        method = member
+    else:
+        return None
+    return method if is_event_handler(method) else None
+
+
 def _event_methods(owner: Any) -> dict[str, Any]:
-    from .components.base import BoundComponent, LiveComponent
+    from .components.base import BoundComponent
 
     bound_component = isinstance(owner, BoundComponent)
     storage = _instance_dict(owner)
     declaration = storage["_descriptor"] if bound_component else owner
-    members: dict[str, Any] = {}
-    for cls in type(declaration).__mro__:
-        if bound_component and (
-            cls is LiveComponent or cls.__dict__.get("_djust_framework_component_base")
-        ):
-            break
-        for name, member in cls.__dict__.items():
-            members.setdefault(name, member)
-    for name, member in storage.items():
-        members.setdefault(name, member)
+    owner_type, declaration_type = type(owner), type(declaration)
+    plan = _class_plan(owner_type, declaration_type, bound_component)
 
     methods = {}
-    for name in members:
-        if name.startswith("_"):
-            continue
+    for name, member, wrapper, wrapper_is_data in plan.entries:
         # Dispatch resolves real wrapper attributes before forwarding to the
         # descriptor. This includes None and instance-assigned callables.
-        wrapper_member = inspect.getattr_static(owner, name, _ABSENT)
-        member = members[name] if wrapper_member is _ABSENT else wrapper_member
-        binding_class = type(declaration) if wrapper_member is _ABSENT else type(owner)
-        if type(member) in (types.FunctionType, staticmethod, classmethod):
-            function = member.__func__ if type(member) in (staticmethod, classmethod) else member
-            if not is_event_handler(function):
-                continue
-            # Only Python's known method descriptors are executed, never an
-            # application property or custom descriptor during discovery.
-            if name in storage:
-                method = member
-            else:
-                method = member.__get__(owner, binding_class)
-        elif type(member) is types.MethodType:
-            method = member
+        # Same precedence as ``inspect.getattr_static(owner, name)``: a data
+        # descriptor on the class, then the instance storage, then the class.
+        in_storage = name in storage
+        if in_storage and not wrapper_is_data:
+            wrapper = storage[name]
+        if wrapper is _ABSENT:
+            method = _resolve_method(owner, name, member, in_storage, declaration_type)
         else:
+            method = _resolve_method(owner, name, wrapper, in_storage, owner_type)
+        if method is not None:
+            methods[name] = method
+    # Names only the instance holds. Anything but a function or method there
+    # can never resolve to a handler, so only those take the full lookup.
+    for name, value in storage.items():
+        if (
+            name.startswith("_")
+            or name in plan.names
+            or type(value) not in (_METHOD_TYPES + (types.MethodType,))
+        ):
             continue
-        if is_event_handler(method):
+        wrapper = inspect.getattr_static(owner, name, _ABSENT)
+        member = value if wrapper is _ABSENT else wrapper
+        binding_class = declaration_type if wrapper is _ABSENT else owner_type
+        method = _resolve_method(owner, name, member, True, binding_class)
+        if method is not None:
             methods[name] = method
 
     if bound_component:
-        meta = inspect.getattr_static(type(declaration), "Meta", None)
+        meta = inspect.getattr_static(declaration_type, "Meta", None)
         event = inspect.getattr_static(meta, "event", None) if isinstance(meta, type) else None
         if (
             isinstance(event, str)
             and not event.startswith("_")
-            and event not in members
+            and event not in plan.names
+            and event not in storage
             and inspect.getattr_static(owner, event, _ABSENT) is _ABSENT
         ):
             methods[event] = owner._meta_event_handler(event)
