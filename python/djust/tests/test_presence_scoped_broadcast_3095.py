@@ -388,6 +388,7 @@ class _KeyView(PresenceMixin):
     """A presence view whose key follows ``room``; never tracks by default."""
 
     push_scope = None
+    presence_broadcast_scoped = True
 
     def __init__(self, room="k1", fail=False):
         super().__init__()
@@ -457,6 +458,19 @@ def test_opting_out_leaves_and_joins_nothing():
     view.presence_broadcast_scoped = False
     _sync(consumer, view)
     assert _members(consumer, "k1") == set()
+
+
+def test_a_presence_view_that_does_not_opt_in_joins_nothing():
+    """Default flag and no push_scope: the broadcast stays view-wide, so the
+    session joins no group and makes no extra hop."""
+    consumer, view = _Consumer(VIEW_PATH), _KeyView()
+    view.presence_broadcast_scoped = None
+    _sync(consumer, view)
+    assert consumer.channel_layer.groups == {}
+    assert view.calls == 0
+    view.push_scope = "k1"  # opting in later joins
+    _sync(consumer, view)
+    assert _members(consumer, "k1") == {"chan-1"}
 
 
 def test_a_view_that_is_not_a_presence_view_joins_nothing():

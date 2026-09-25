@@ -187,10 +187,11 @@ async def _sync_presence_scope_group(
 ) -> None:
     """Keep ``consumer`` in the presence-scope group of its view's presence key.
 
-    Every WebSocket session of a ``PresenceMixin`` view joins, whether or not
-    it tracks its own presence (a read-only viewer still shows
-    ``online_count``), unless the view sets ``presence_broadcast_scoped =
-    False``. While the view tracks, the key is the one ``track_presence``
+    Every WebSocket session of a ``PresenceMixin`` view whose broadcast is
+    scoped (``push_scope`` set, or ``presence_broadcast_scoped = True``)
+    joins, whether or not it tracks its own presence (a read-only viewer still
+    shows ``online_count``). Other presence views join nothing, so a view that
+    does not opt in pays nothing. While the view tracks, the key is the one ``track_presence``
     recorded (``view._presence_scope_key``). Otherwise it is computed on the
     session's own thread, once per view and ``push_scope`` value, so a viewer
     that moves rooms follows. A failed join is logged and retried on the next
@@ -210,7 +211,7 @@ async def _sync_presence_scope_group(
         view is not None
         and view_path
         and isinstance(view, PresenceMixin)
-        and getattr(view, "presence_broadcast_scoped", None) is not False
+        and view._presence_broadcast_is_scoped()
     ):
         if getattr(view, "_presence_tracked", False):
             key = getattr(view, "_presence_scope_key", None)
@@ -230,7 +231,8 @@ async def _sync_presence_scope_group(
                 except Exception:  # noqa: BLE001 - app code; the view-wide broadcast still works
                     key = None
                 if not isinstance(key, str):
-                    # Once per view and push_scope value: this runs after every turn.
+                    # Once per view and push_scope value on this connection:
+                    # this runs after every turn.
                     logger.warning(
                         "%s.get_presence_key() failed or returned a non-string; the "
                         "session gets no scoped presence broadcasts",
@@ -257,7 +259,7 @@ async def _sync_presence_scope_group(
         logger.warning("Error joining the presence-scope group of %s", view_path)
         return
     consumer._presence_scope_group = wanted
-    if hasattr(view, "online_count") and view._presence_broadcast_is_scoped():
+    if hasattr(view, "online_count"):
         from asgiref.sync import sync_to_async
 
         _, stale = await sync_to_async(_presence_probe)(view, False, True)

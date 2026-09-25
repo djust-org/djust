@@ -146,9 +146,15 @@ Each join or leave pushes `_on_presence_change` to peer sessions. In a view
 that sets [`push_scope`](../advanced/server-push.md#scoped-push-one-room-not-every-room)
 (one room per session), that push reaches **only the sessions that share this
 session's presence key**, so a join in one room does not wake every other
-room. Every WebSocket session of a presence view is in the group of its own
+room. Every WebSocket session of such a view is in the group of its own
 presence key, including sessions that show `online_count` without calling
-`track_presence()`.
+`track_presence()`. For a session that tracks, the key is the one
+`track_presence()` used; for one that does not, it is worked out again
+whenever its `push_scope` changes.
+
+Sessions that share a presence key must agree on scoping. If only some
+sessions of a view set `push_scope` (a lobby without one, rooms with one),
+set `presence_broadcast_scoped = True` on the class so they all join.
 
 A view without `push_scope` keeps the view-wide broadcast. Set
 `presence_broadcast_scoped` to choose explicitly:
