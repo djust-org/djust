@@ -6513,8 +6513,6 @@ class ViewRuntime:
         parent acknowledgement advertises or completes it. Legacy roots and
         legacy children keep their existing behavior.
         """
-        from ._async_batch import AsyncBatch
-        from ._child_async import dispatch_child_work
         from ._exposure import uses_legacy_exposure
 
         root = self.view_instance
@@ -6525,6 +6523,11 @@ class ViewRuntime:
             or getattr(root, "_djust_child_disposed", False)
         ):
             return
+        # Imported past the legacy early return: this runs after every turn,
+        # on the event loop (#3095).
+        from ._async_batch import AsyncBatch
+        from ._child_async import dispatch_child_work
+
         pending = [root]
         seen: set = set()
         owners = []

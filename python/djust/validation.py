@@ -45,6 +45,35 @@ def get_strict_handler_contract(handler: Callable) -> ParameterContract:
         return variants[bound]
 
 
+_SIGNATURES: weakref.WeakKeyDictionary[Any, Dict[bool, inspect.Signature]] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _handler_signature(handler: Callable) -> inspect.Signature:
+    """``inspect.signature(handler)``, computed once per function (#3095).
+
+    Building a signature is the most expensive step of validating an event's
+    parameters, and it runs on the event loop for every event. Keyed like the
+    strict contracts: by the underlying function (weakly) and whether it is
+    bound, never by a bound method or its owner instance. A ``Signature`` is
+    immutable, so sharing one is safe across threads.
+    """
+    bound = inspect.ismethod(handler)
+    function: Any = getattr(handler, "__func__", handler) if bound else handler
+    if not inspect.isfunction(function):
+        return inspect.signature(handler)
+    variants = _SIGNATURES.get(function)
+    if variants is None:
+        with _STRICT_CONTRACT_LOCK:
+            variants = _SIGNATURES.setdefault(function, {})
+    sig = variants.get(bound)
+    if sig is None:
+        sig = inspect.signature(handler)
+        variants[bound] = sig
+    return sig
+
+
 def get_handler_parameter_policy(handler: Callable) -> str:
     """Resolve only server-owned policy, independently of client metadata."""
     from .config import config
@@ -499,7 +528,7 @@ def validate_handler_params(
     # server-only BoundArguments; invokers consume validated_call_arguments(),
     # never serialize the bound call into a response or state snapshot.
     # Map positional arguments to named parameters based on handler signature
-    sig = inspect.signature(handler)
+    sig = _handler_signature(handler)
 
     # Build list of parameter names (excluding self, *args, **kwargs)
     param_names = []
