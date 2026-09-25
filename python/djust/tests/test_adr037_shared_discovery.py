@@ -172,3 +172,42 @@ def test_the_check_side_mirror_is_retired():
     from djust.checks import parameters
 
     assert not hasattr(parameters, "_declared_handlers")
+
+
+def test_audit_lists_the_shared_discovery_minus_framework_surface(collect):
+    from djust.management.commands.djust_audit import _get_handler_metadata
+
+    class Framework:
+        @event_handler
+        def framework_handler(self):
+            pass
+
+        @event_handler
+        def overridable(self):
+            pass
+
+    class AppBase(Framework):
+        @event_handler
+        def overridable(self):
+            pass
+
+    class App(AppBase):
+        @event_handler
+        def zeta(self):
+            pass
+
+        @event_handler
+        def alpha(self):
+            pass
+
+    names = [name for name, _meta in _get_handler_metadata(App, base_classes=[Framework])]
+    # Sorted; the framework's own handler is skipped; an application class's
+    # override of it is the application's handler.
+    assert names == ["alpha", "overridable", "zeta"]
+    assert [n for n, _ in _get_handler_metadata(App)] == [
+        "alpha",
+        "framework_handler",
+        "overridable",
+        "zeta",
+    ]
+    assert all("event_handler" in meta for _n, meta in _get_handler_metadata(App))
