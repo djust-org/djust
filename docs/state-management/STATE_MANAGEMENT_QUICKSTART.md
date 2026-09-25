@@ -211,7 +211,7 @@ Explore complete working examples in the repository:
 ### 💬 Get Help
 
 - 📖 [Full Documentation](https://djust.org/docs)
-- 💬 [Discord Community](https://discord.gg/djust)
+- 💬 [Discord Community](https://discord.gg/7sPKf3wtp9)
 - 🐛 [Issue Tracker](https://github.com/johnrtipton/djust/issues)
 
 ---
@@ -292,4 +292,4 @@ You've mastered the basics of djust state management. You now know how to:
 
 ---
 
-**Questions or feedback?** Open an issue or join our [Discord](https://discord.gg/djust)!
+**Questions or feedback?** Open an issue or join our [Discord](https://discord.gg/7sPKf3wtp9)!

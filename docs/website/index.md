@@ -191,5 +191,5 @@ Rust powers the core rendering engine:
 ## Community
 
 - [GitHub](https://github.com/djust-org/djust) — Source, issues, PRs
-- [Discord](https://discord.gg/djust) — Chat and support
+- [Discord](https://discord.gg/7sPKf3wtp9) — Chat and support
 - [Changelog](../../CHANGELOG.md) — What's new

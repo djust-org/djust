@@ -600,7 +600,7 @@ Every contribution, big or small, helps make djust better for everyone!
 ## Questions?
 
 - Open a discussion on GitHub
-- Join our Discord: https://discord.gg/djust
+- Join our Discord: https://discord.gg/7sPKf3wtp9
 - Email: dev@djust.org
 
 ## Code of Conduct
