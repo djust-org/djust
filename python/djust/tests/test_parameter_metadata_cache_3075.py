@@ -129,6 +129,10 @@ class DeleteOnly:
     """A data descriptor through ``__delete__`` alone (no ``__set__``)."""
 
     def __get__(self, obj, owner=None):
+        # Class access returns the descriptor, as any well-behaved one does:
+        # other suites (the API registry) getattr every LiveView subclass.
+        if obj is None:
+            return self
         raise AssertionError("discovery must not evaluate a descriptor")
 
     def __delete__(self, obj):
@@ -337,6 +341,8 @@ def test_reassigning_bases_rebuilds_the_plan():
 def test_a_descriptor_class_gaining_delete_rebuilds_the_plan(monkeypatch):
     class Plain:
         def __get__(self, obj, owner=None):
+            if obj is None:
+                return self
             raise AssertionError("discovery must not evaluate a descriptor")
 
     class Holder(LiveView):
@@ -348,6 +354,40 @@ def test_a_descriptor_class_gaining_delete_rebuilds_the_plan(monkeypatch):
     monkeypatch.setattr(Plain, "__delete__", lambda self, obj: None, raising=False)
     assert "slot" not in pm._event_methods(view)  # now a data descriptor
     assert "slot" not in reference_event_methods(view)
+
+
+def test_a_descriptor_class_rebased_onto_a_data_descriptor_rebuilds_the_plan():
+    class Root:  # a shared layout, so ``__bases__`` may be swapped
+        pass
+
+    class Other(Root):
+        pass
+
+    class Deleter(Root):
+        def __delete__(self, obj):
+            pass
+
+    class Plain(Other):
+        def __get__(self, obj, owner=None):
+            if obj is None:
+                return self
+            raise AssertionError("discovery must not evaluate a descriptor")
+
+    class Holder(LiveView):
+        slot = Plain()
+
+    view = Holder()
+    view.__dict__["slot"] = assigned
+    assert "slot" in pm._event_methods(view)
+    Plain.__bases__ = (Deleter,)
+    assert "slot" not in pm._event_methods(view)
+    assert "slot" not in reference_event_methods(view)
+
+
+def test_immutable_types_are_not_snapshotted():
+    """They cannot change, and they were most of the freshness check's cost."""
+    plan = pm._class_plan(Child, Child, False)
+    assert all(not cls.__flags__ & pm._IMMUTABLE_TYPE for cls, _, _ in plan.snapshot)
 
 
 def test_the_plan_cache_is_bounded(monkeypatch):

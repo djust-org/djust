@@ -55,6 +55,11 @@ def _is_data_descriptor(value: Any) -> bool:
     )
 
 
+# ``Py_TPFLAGS_IMMUTABLETYPE``: built-in and extension types whose attributes
+# cannot be set, so a snapshot of them can never go stale.
+_IMMUTABLE_TYPE = 1 << 8
+
+
 def _dict_snapshot(cls: type) -> tuple[type, tuple[str, ...], tuple[Any, ...]]:
     namespace = cls.__dict__
     return (cls, tuple(namespace), tuple(namespace.values()))
@@ -85,7 +90,7 @@ class _ClassPlan:
         # built then fails the very next ``fresh()`` rather than never.
         self.mros = ((owner_type, owner_type.__mro__), (declaration_type, declaration_type.__mro__))
         classes = dict.fromkeys(owner_type.__mro__ + declaration_type.__mro__)
-        snapshot = [_dict_snapshot(cls) for cls in classes]
+        snapshot = [_dict_snapshot(cls) for cls in classes if not cls.__flags__ & _IMMUTABLE_TYPE]
         members: dict[str, Any] = {}
         for cls in declaration_type.__mro__:
             if bound_component and (
@@ -103,13 +108,23 @@ class _ClassPlan:
             entries.append((name, member, wrapper, data))
         self.entries = tuple(entries)
         self.names = frozenset(members)
-        # The data-descriptor verdicts depend on the descriptors' own classes.
+        # The data-descriptor verdicts depend on the descriptors' own classes
+        # (their dicts AND their MROs). Immutable types (``str``, ``function``,
+        # ``property``, ...) can never gain ``__set__``/``__delete__``, so they
+        # are left out; they were most of the check's cost.
+        mros = list(self.mros)
         for _name, _member, wrapper, _data in entries:
-            if wrapper is not _ABSENT:
-                for cls in type(wrapper).__mro__:
-                    if cls not in classes:
-                        classes[cls] = None
-                        snapshot.append(_dict_snapshot(cls))
+            if wrapper is _ABSENT:
+                continue
+            kind = type(wrapper)
+            if kind.__flags__ & _IMMUTABLE_TYPE or kind in classes:
+                continue
+            mros.append((kind, kind.__mro__))
+            for cls in kind.__mro__:
+                if cls not in classes and not cls.__flags__ & _IMMUTABLE_TYPE:
+                    classes[cls] = None
+                    snapshot.append(_dict_snapshot(cls))
+        self.mros = tuple(mros)
         self.snapshot = tuple(snapshot)
 
     def fresh(self) -> bool:
