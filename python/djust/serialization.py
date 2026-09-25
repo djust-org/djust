@@ -7,6 +7,7 @@ Extracted from live_view.py for modularity.
 import importlib.util
 import json
 import logging
+import threading
 from datetime import datetime, date, time, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, Union, cast
@@ -389,7 +390,32 @@ def django_json_datetime(value: Union[datetime, date, time, timedelta]) -> str:
     return cast(str, _DJANGO_JSON_ENCODER.default(value))
 
 
-class DjangoJSONEncoder(json.JSONEncoder):
+_ENCODER_DEPTH = threading.local()
+
+
+class _EncoderDepthMeta(type):
+    """Keeps ``DjangoJSONEncoder._depth`` per THREAD (#3074).
+
+    The recursion-depth counter used to be a plain class attribute, shared by
+    every thread. Two renders serialising models at the same time (a
+    ``worker_threads`` pool, or an HTTP request thread beside the WebSocket
+    thread) then read each other's depth: one session's nesting decided
+    whether another's related objects were serialised, and an interleaved
+    ``+=``/``-=`` could leave the counter off for the rest of the process.
+    The class-level spelling ``DjangoJSONEncoder._depth`` still reads and
+    writes the calling thread's value.
+    """
+
+    @property
+    def _depth(cls) -> int:
+        return int(getattr(_ENCODER_DEPTH, "value", 0))
+
+    @_depth.setter
+    def _depth(cls, value: int) -> None:
+        _ENCODER_DEPTH.value = value
+
+
+class DjangoJSONEncoder(json.JSONEncoder, metaclass=_EncoderDepthMeta):
     """
     Custom JSON encoder that handles common Django and Python types.
 
@@ -402,8 +428,8 @@ class DjangoJSONEncoder(json.JSONEncoder):
     - QuerySets → list
     """
 
-    # Class variable to track recursion depth
-    _depth = 0
+    # Recursion depth: a per-thread counter behind a class-level property
+    # (``DjangoJSONEncoder._depth``), see ``_EncoderDepthMeta``.
 
     # Cache @property names per model class to avoid repeated MRO walks
     _property_cache: Dict[type, List[str]] = {}
