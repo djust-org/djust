@@ -671,3 +671,14 @@ def test_every_directive_is_one_the_client_binds():
         assert name in source or (family in ("dj-window-", "dj-document-") and family in source), (
             name
         )
+
+
+def test_rendered_markup_events_use_the_same_parser():
+    """The catalogue's component_events (row 14) sees key modifiers and calls."""
+    from djust.theming.gallery.catalogue import component_events
+
+    html = (
+        '<input dj-keydown.enter="send"><button dj-click="pick(1)">a</button>'
+        '<pre>&lt;button dj-click="escaped"&gt;</pre><button dj-click="send">b</button>'
+    )
+    assert component_events(html) == ["send", "pick"]

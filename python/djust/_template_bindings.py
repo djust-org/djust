@@ -867,6 +867,23 @@ def _js_commands(value: str) -> list[tuple[str, Optional[list[Any]], Optional[st
     return entries
 
 
+def markup_event_names(html: str) -> list[str]:
+    """The event names rendered markup sends, in order of first appearance.
+
+    For markup a component has already rendered: the same element and
+    directive parsing as a template scan, with no template to follow.
+    """
+    parser = _Markup(html)
+    parser.feed(html)
+    parser.close()
+    names: list[str] = []
+    for element in parser.elements:
+        for binding in _bindings_of(element, set()):
+            if binding.name and binding.name not in names:
+                names.append(binding.name)
+    return names
+
+
 def scan_source(engine: Any, template: Any, label: str, file: str, source: str) -> TemplateScan:
     """Scan one compiled Django template. ``file``/``source`` label its own lines."""
     flat = _Flat()

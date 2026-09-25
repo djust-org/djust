@@ -451,20 +451,14 @@ def styles_for(html: str) -> list[dict]:
     return found
 
 
-_EVENT_ATTR_RE = re.compile(
-    r'dj-(?:click|change|input|submit|keydown|keyup|blur|focus)="([A-Za-z_][\w]*)"'
-)
-
-
 def component_events(rendered_html: str) -> list[str]:
     """The server events a component's markup emits, in the order they appear:
     every ``dj-click`` / ``dj-change`` / ``dj-input`` / … name in the rendered
-    example. These are the handlers a host view has to answer."""
-    seen: list[str] = []
-    for name in _EVENT_ATTR_RE.findall(rendered_html or ""):
-        if name not in seen:
-            seen.append(name)
-    return seen
+    example. These are the handlers a host view has to answer. Parsed by the
+    same binding scanner ``manage.py check`` uses (ADR-037)."""
+    from djust._template_bindings import markup_event_names
+
+    return markup_event_names(rendered_html or "")
 
 
 def _is_event_param(name: str) -> bool:
