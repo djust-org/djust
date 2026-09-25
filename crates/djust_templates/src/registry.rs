@@ -1782,6 +1782,15 @@ pub fn has_library_loader() -> PyResult<bool> {
 /// loader runs, so its own `register_*` write-locks cannot deadlock against
 /// the parser's read-locks.
 pub fn call_library_loader(args: &[String]) -> Result<(), DjangoRustError> {
+    // No loader installed (Rust-only callers, tests): nothing to attach for.
+    // The guard is dropped before any attach.
+    if LIBRARY_LOADER
+        .read()
+        .map(|slot| slot.is_none())
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
     // Attach BEFORE taking the read lock (see "Lock order" above).
     let loader = Python::attach(|py| -> Result<Option<Py<PyAny>>, DjangoRustError> {
         let slot = LIBRARY_LOADER

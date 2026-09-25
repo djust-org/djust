@@ -784,8 +784,14 @@ impl RustLiveViewBackend {
     /// detach. The registry lookups those callbacks make take their locks
     /// only while attached (see `registry.rs` "Lock order"), so a detached
     /// render never waits for the GIL while holding a registry lock.
+    ///
+    /// The body carries its own `guard_panic` (it is also the actor path's
+    /// entry); this one is the Python entry point's boundary, so a panic in
+    /// the detach itself still surfaces as a containable exception.
     fn render_with_diff(&mut self, py: Python<'_>) -> PyResult<(String, Option<String>, u64)> {
-        py.detach(|| self.render_with_diff_detached())
+        guard_panic("render_with_diff", move || {
+            py.detach(|| self.render_with_diff_detached())
+        })
     }
 
     /// Render and return patches as MessagePack bytes
@@ -1343,7 +1349,7 @@ impl RustLiveViewBackend {
     /// Body of [`render_with_diff`](Self::render_with_diff), callable with
     /// or without the interpreter attached (the actor path and the Rust
     /// tests call it directly). Returns (html, patches_json, version).
-    pub(crate) fn render_with_diff_detached(&mut self) -> PyResult<(String, Option<String>, u64)> {
+    fn render_with_diff_detached(&mut self) -> PyResult<(String, Option<String>, u64)> {
         guard_panic("render_with_diff", move || {
             use std::time::Instant;
 
