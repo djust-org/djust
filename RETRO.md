@@ -911,6 +911,25 @@ None in this bucket.
 
 **Process note**: The pre-push hook fails the two #3072 tests in any checkout that has the `v1.3.0rc1` tag. This batch pushes from private `--no-tags` clones, which match CI. The first such push ran no hook, because the clone lacked the repo-local `core.hooksPath`. That was disclosed on the PR, and the full pre-push stage was then run by hand.
 
+### PR 2/7 — opt-in pinned session worker pool (PR #3091)
+
+**Date**: 2026-09-25. Squash-merged as `1889b0d71`. Retro: https://github.com/djust-org/djust/pull/3091 (retrospective comment).
+
+**Tests at close**:
+- `python/djust/tests/test_worker_pool_3074.py`: 11 functions, 19 cases. These are real `WebsocketCommunicator` round trips covering overlap, pinning, isolation, ordering, the default path being unchanged, release (including on a crash), and an outer context.
+- `test_worker_pool_thread_safety_3074.py`: 7 cases. With a 1 µs switch interval, 3 or 4 of them fail on the old code on 3.12.
+- The full Python suite with the pool forced on (not committed) gave 33,845 passed.
+- CI: 22 checks passed. One flake, #3092, passed on re-run.
+
+**What we learned**
+1. **asgiref's `SyncToAsync.thread_sensitive_context` is the right hook for per-session threads.**
+   - Django's ASGI handler already uses it per HTTP request.
+   - Setting it in the consumer's `__call__` moves every thread-sensitive hop the session makes, including third-party ones, without replacing `sync_to_async` anywhere.
+2. **Thread-affinity audits need their negative claims checked.** The audit agent said nothing closes stale DB connections on the WebSocket path, but Channels' `AsyncConsumer.dispatch` does it for every message.
+3. **Doc sentences that cite an experiment must quote the row they come from.** Two review rounds were spent on claims that paraphrased #3074's conclusions past its data (`unverified-claim`).
+
+**Review stats**: 0 🔴. There were 3 🟡: instance `_depth` access, over-broad performance claims, and head-of-line blocking not documented. There were 6 🟢. Re-review then found 1 more 🟡: the knee attribution. All were fixed. Filed: #3089 (`PerformanceTracker` thread-local on the loop) and #3092 (flake).
+
 ## v1.2.1-7 — state and rendering batch: v1.2.1-7, -8 and -9 (PR #3042)
 
 **Date**: 2026-09-24
