@@ -54,6 +54,17 @@ result = client.send_event("delete_item", item_id=5)
 
 **Returns:** Dict with the handler result.
 
+`send_event` runs the same authorization gates as the WebSocket consumer before it calls the handler. A handler with `@permission_required` is refused when the mounted user lacks the permission, and a view that overrides `get_object` has `has_object_permission` re-checked on every event. A refused event does not run the handler. It returns `success=False` with `code="permission_denied"`, so a test of a gated handler fails if the gate is removed:
+
+```python
+client = LiveViewTestClient(BoardView, user=reader)  # lacks app.add_decision
+client.mount()
+result = client.send_event("decide", verdict="go")
+assert result["code"] == "permission_denied"
+```
+
+`mount()` does not check the view-level `login_required` or `permission_required`, and `@rate_limit` is not applied.
+
 ---
 
 #### `assert_state(**expected)`

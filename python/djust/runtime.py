@@ -2620,6 +2620,21 @@ class ViewRuntime:
                 sanitize_for_log(view_path),
             )
 
+        # Value-free service-worker cache signals (#2948): an HMAC identity
+        # marker the client compares to clear caches on identity change or
+        # logout, and the snapshot lifetime when a snapshot is shipped. Never
+        # breaks mount.
+        try:
+            from .security.service_worker import mount_frame_metadata
+
+            mount_msg.update(
+                await sync_to_async(mount_frame_metadata)(
+                    request, mount_msg.get("state_snapshot_signed")
+                )
+            )
+        except Exception:  # noqa: BLE001 — metadata is optional
+            logger.warning("Service-worker cache metadata unavailable for mount")
+
         # Optional cache_config (mirrors WS consumer)
         cache_config = self._extract_cache_config(view_instance)
         if cache_config:
