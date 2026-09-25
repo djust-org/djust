@@ -15,6 +15,20 @@ from .base import StateBackend, DjustPerformanceWarning, DEFAULT_STATE_SIZE_WARN
 logger = logging.getLogger(__name__)
 
 
+def _coerce_ttl(value: Any) -> int:
+    """``SESSION_TTL`` as an int (#3080).
+
+    The TTL is now compared at construction and on every ``get()``, so a
+    value read from the environment as a string must not fail every mount.
+    Anything ``int()`` cannot take falls back to the one-hour default.
+    """
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        logger.warning("InMemoryStateBackend: SESSION_TTL %r is not a number; using 3600 s", value)
+        return 3600
+
+
 class InMemoryStateBackend(StateBackend):
     """
     Thread-safe in-memory state backend for development and testing.
@@ -61,13 +75,13 @@ class InMemoryStateBackend(StateBackend):
         """
         self._cache: Dict[str, Tuple[RustLiveView, float]] = {}
         self._state_sizes: Dict[str, int] = {}  # Track state sizes for monitoring
-        self._default_ttl = default_ttl
+        self._default_ttl = _coerce_ttl(default_ttl)
         self._state_size_warning_kb = state_size_warning_kb
         self._lock = RLock()  # Reentrant lock for thread safety
         self._observations: Dict[str, Tuple[int, float]] = {}
         # Amortised expiry sweep from set() (#3080): at most once per
         # interval, so a busy server pays one O(entries) pass a minute.
-        self._sweep_interval = min(default_ttl, 60) if default_ttl > 0 else 0
+        self._sweep_interval = min(self._default_ttl, 60) if self._default_ttl > 0 else 0
         self._next_sweep = time.monotonic() + self._sweep_interval
         logger.info(
             f"InMemoryStateBackend initialized with TTL={default_ttl}s, "

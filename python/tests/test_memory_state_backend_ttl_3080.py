@@ -129,3 +129,14 @@ def test_real_clock_smoke():
     backend.set("k", _view())
     assert backend.get("k") is not None
     assert backend._next_sweep > time.monotonic()
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"), [("60", 60), (60.0, 60), (None, 3600), ("soon", 3600)]
+)
+def test_ttl_that_is_not_an_int_is_coerced_not_fatal(raw, expected):
+    """A TTL from the environment (a string) must not break every mount."""
+    backend = InMemoryStateBackend(default_ttl=raw)
+    assert backend._default_ttl == expected
+    backend.set("k", _view())
+    assert backend.get("k") is not None
