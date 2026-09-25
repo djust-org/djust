@@ -1755,6 +1755,27 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
   30,741 full-suite Python tests passed (952 skipped), and mypy 1,044 files clean.
   These close the reproduced replay-binding defect, not the remaining P1–P3
   checks, delivery, native-binding and browser-acceptance gates.
+  Sub-slice (a), [HTTP delivery and binder resolution](notes/036-owner-contract-manifests.md#initial-page-and-http-fallback-delivery),
+  commit 0fe319bd8:
+  - The initial GET renders the root manifest into a JSON data block outside
+    dj-root.
+  - HTTP-fallback render responses, including `_skip_render`, carry the
+    rendered tree's snapshot. An `X-Djust-Parameter-Contracts` request header
+    turns omission into an explicit clear for a strict page scope. Discovery
+    failure withholds the HTTP DOM update.
+  - The client installs the page scope at init and Turbo navigation.
+    `_resolveParameterContract` resolves a binding's owner (child, then
+    component, then root) and handler against the transport `handleEvent`
+    would use.
+  - All-legacy pages and responses are unchanged. Native binders do not
+    consume contracts yet: (b) waits on the collection-convention decision
+    (generated values, `_target`).
+  - Evidence: 10 Python and 11 bundle cases. Full Python suite from a frozen
+    worktree: 33,760 passed, 949 skipped, and the 2 known tag-reachability
+    failures. Full JavaScript suite: 2,275 tests in 204 files passed. Mypy
+    passes 1,176 files. Guards: init-order, cross-IIFE, bundle ESLint and the
+    doc size claims. The shipped gzip grew by 219 bytes, and the #2632
+    call-site pin now counts 2 contract helpers in `11-event-handler.js`.
 - [ ] **P3 — acceptance.** Execute documented examples under their stated policy;
   verify redacted diagnostics and the ADR's complete conversion/parity matrix.
 - [ ] **PR — retirement.** Delete the superseded coercion path per
