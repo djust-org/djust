@@ -867,20 +867,24 @@ def _js_commands(value: str) -> list[tuple[str, Optional[list[Any]], Optional[st
     return entries
 
 
+def markup_bindings(html: str) -> list[Binding]:
+    """The event bindings of rendered markup, with no template to follow."""
+    parser = _Markup(html)
+    parser.feed(html)
+    parser.close()
+    return [b for element in parser.elements for b in _bindings_of(element, set())]
+
+
 def markup_event_names(html: str) -> list[str]:
     """The event names rendered markup sends, in order of first appearance.
 
     For markup a component has already rendered: the same element and
-    directive parsing as a template scan, with no template to follow.
+    directive parsing as a template scan.
     """
-    parser = _Markup(html)
-    parser.feed(html)
-    parser.close()
     names: list[str] = []
-    for element in parser.elements:
-        for binding in _bindings_of(element, set()):
-            if binding.name and binding.name not in names:
-                names.append(binding.name)
+    for binding in markup_bindings(html):
+        if binding.name and binding.name not in names:
+            names.append(binding.name)
     return names
 
 
@@ -969,3 +973,105 @@ def _scan_flat(flat: _Flat, label: str, file: str) -> TemplateScan:
                 binding.region = "embedded"
             bindings.append(binding)
     return TemplateScan(label, file, bindings, flat.gaps, flat.files)
+
+
+# ---------------------------------------------------------------------------
+# A class's own template
+# ---------------------------------------------------------------------------
+
+
+def django_engine() -> Any:
+    """The project's first Django template engine, or None."""
+    from django.template import engines
+
+    for backend in engines.all():
+        engine = getattr(backend, "engine", None)
+        if engine is not None and hasattr(engine, "get_template"):
+            return engine
+    return None
+
+
+def _inline_location(cls: type) -> tuple[str, int]:
+    """The file of ``cls`` and the line its ``template`` string starts on."""
+    import inspect
+
+    try:
+        file = inspect.getsourcefile(cls) or ""
+        lines, start = inspect.getsourcelines(cls)
+    except (OSError, TypeError):
+        return "<%s.%s.template>" % (cls.__module__, cls.__qualname__), 1
+    for index, text in enumerate(lines):
+        if re.match(r"\s*template\s*(:[^=]*)?=", text):
+            return file, start + index
+    return file, start
+
+
+def _uncompiled(engine: Any, name: str, exc: Exception) -> Any:
+    """Tokens of a template Django finds but cannot compile, else the failure."""
+    from django.template import TemplateSyntaxError
+
+    if not isinstance(exc, TemplateSyntaxError):
+        return type(exc).__name__
+    for loader in engine.template_loaders:
+        for origin in loader.get_template_sources(name):
+            try:
+                source = loader.get_contents(origin)
+            except Exception:  # noqa: BLE001, S112 -- try the next source, as Django's loader does
+                continue
+            return scan_tokens(source, name, origin.name, type(exc).__name__)
+    return type(exc).__name__
+
+
+def scan_class_template(
+    cls: type, engine: Any, cache: dict[Any, Any]
+) -> tuple[str, Optional[tuple[Any, ...]]]:
+    """Scan the ``template`` or ``template_name`` a class declares, into ``cache``.
+
+    Returns ``(label, cache key)``; the cached value is a ``TemplateScan``, or
+    the name of the failure when the template cannot be loaded. The key is None
+    when the class declares neither.
+    """
+    inline = getattr(cls, "template", None)
+    name = getattr(cls, "template_name", None)
+    if isinstance(inline, str) and inline:
+        file, first_line = _inline_location(cls)
+        key: tuple[Any, ...] = ("inline", inline, file, first_line)
+        if key not in cache:
+            try:
+                template = engine.from_string(inline)
+            except Exception as exc:  # noqa: BLE001 -- djust-only syntax falls back to tokens
+                scan = scan_tokens(inline, "<inline>", file, type(exc).__name__)
+            else:
+                scan = scan_source(engine, template, "<inline>", file, inline)
+            offset = first_line - 1
+            for item in [*scan.bindings, *scan.gaps]:
+                if item.file == file:
+                    item.line += offset
+            cache[key] = scan
+        return "%s.template" % cls.__qualname__, key
+    if isinstance(name, str) and name:
+        key = ("file", name)
+        if key not in cache:
+            try:
+                template = engine.get_template(name)
+            except Exception as exc:  # noqa: BLE001 -- a loader or syntax failure is examined here
+                cache[key] = _uncompiled(engine, name, exc)
+            else:
+                path = getattr(getattr(template, "origin", None), "name", None) or name
+                cache[key] = scan_source(engine, template, name, path, template.source)
+        return name, key
+    return "", None
+
+
+def recovery_targets(cls: type) -> frozenset[str]:
+    """Handlers a literal ``dj-auto-recover`` in the class's template targets,
+    including its includes and parents (ADR-037 row 18)."""
+    engine = django_engine()
+    if engine is None:
+        return frozenset()
+    cache: dict[Any, Any] = {}
+    _label, key = scan_class_template(cls, engine, cache)
+    scan = cache.get(key) if key is not None else None
+    if not isinstance(scan, TemplateScan):
+        return frozenset()
+    return frozenset(b.name for b in scan.bindings if b.directive == "dj-auto-recover" and b.name)

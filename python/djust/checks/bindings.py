@@ -96,13 +96,9 @@ class OwnerReport:
 
 
 def _django_engine() -> Any:
-    from django.template import engines
+    from djust._template_bindings import django_engine
 
-    for backend in engines.all():
-        engine = getattr(backend, "engine", None)
-        if engine is not None and hasattr(engine, "get_template"):
-            return engine
-    return None
+    return django_engine()
 
 
 def _owners() -> list[tuple[type, str]]:
@@ -135,79 +131,20 @@ def _overrides(cls: type, name: str, framework: tuple[type, ...]) -> bool:
     return False
 
 
-def _uncompiled(engine: Any, name: str, exc: Exception) -> Any:
-    """Tokens of a template Django finds but cannot compile, else the failure."""
-    from django.template import TemplateSyntaxError
-
-    from djust._template_bindings import scan_tokens
-
-    if not isinstance(exc, TemplateSyntaxError):
-        return type(exc).__name__
-    for loader in engine.template_loaders:
-        for origin in loader.get_template_sources(name):
-            try:
-                source = loader.get_contents(origin)
-            except Exception:  # noqa: BLE001, S112 -- try the next source, as Django's loader does
-                continue
-            return scan_tokens(source, name, origin.name, type(exc).__name__)
-    return type(exc).__name__
-
-
-def _inline_location(cls: type) -> tuple[str, int]:
-    """The file of ``cls`` and the line its ``template`` string starts on."""
-    try:
-        file = inspect.getsourcefile(cls) or ""
-        lines, start = inspect.getsourcelines(cls)
-    except (OSError, TypeError):
-        return "<%s.%s.template>" % (cls.__module__, cls.__qualname__), 1
-    for index, text in enumerate(lines):
-        if re.match(r"\s*template\s*(:[^=]*)?=", text):
-            return file, start + index
-    return file, start
-
-
 def scan_owner(cls: type, kind: str, engine: Any, cache: dict[Any, Any]) -> OwnerReport:
     """Scan the template ``cls`` renders, or report why it cannot be."""
-    from djust._template_bindings import scan_source, scan_tokens
+    from djust._template_bindings import scan_class_template
     from djust.components.base import LiveComponent
     from djust.live_view import LiveView
 
     framework = (LiveView, LiveComponent)
-    inline = getattr(cls, "template", None)
-    name = getattr(cls, "template_name", None)
     if kind == "view" and (
         _overrides(cls, "get_template", framework)
         or _overrides(cls, "get_template_names", framework)
     ):
         return OwnerReport(cls, "", "", error="the template is chosen at runtime")
-    if isinstance(inline, str) and inline:
-        file, first_line = _inline_location(cls)
-        key = ("inline", inline, file, first_line)
-        if key not in cache:
-            try:
-                template = engine.from_string(inline)
-            except Exception as exc:  # noqa: BLE001 -- djust-only syntax falls back to tokens
-                scan = scan_tokens(inline, "<inline>", file, type(exc).__name__)
-            else:
-                scan = scan_source(engine, template, "<inline>", file, inline)
-            offset = first_line - 1
-            for item in [*scan.bindings, *scan.gaps]:
-                if item.file == file:
-                    item.line += offset
-            cache[key] = scan
-        label = "%s.template" % cls.__qualname__
-    elif isinstance(name, str) and name:
-        key = ("file", name)
-        if key not in cache:
-            try:
-                template = engine.get_template(name)
-            except Exception as exc:  # noqa: BLE001 -- a loader or syntax failure is examined below
-                cache[key] = _uncompiled(engine, name, exc)
-            else:
-                path = getattr(getattr(template, "origin", None), "name", None) or name
-                cache[key] = scan_source(engine, template, name, path, template.source)
-        label = name
-    else:
+    label, key = scan_class_template(cls, engine, cache)
+    if key is None:
         return OwnerReport(cls, "", "", error="no template or template_name")
     scan = cache[key]
     if isinstance(scan, str):

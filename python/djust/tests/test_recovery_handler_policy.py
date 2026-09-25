@@ -238,8 +238,11 @@ def test_rendered_recovery_targets_follow_includes_extends_and_dynamic_values(
 
     config.set("event_parameter_policy", "strict")
     view, runtime = _mounted(view_class)
-    # Invisible to the class-level scan of the view's own template source.
-    assert "restore_state" not in recovery_handler_names(view_class)
+    # The class-level scan follows includes and parents (ADR-037 row 18); a
+    # computed target is seen only in the render.
+    assert ("restore_state" in recovery_handler_names(view_class)) is (
+        view_class is not DynamicRecovery
+    )
     assert get_handler_parameter_policy(view.restore_state) == "legacy"
     _send(runtime, "restore_state", dict(ENVELOPE))
     assert CALLS == [("restore_state", ENVELOPE)]
@@ -247,10 +250,12 @@ def test_rendered_recovery_targets_follow_includes_extends_and_dynamic_values(
 
 
 @pytest.mark.django_db
-def test_a_recovery_form_revealed_by_an_event_becomes_legacy_after_that_render(templates):
+def test_a_recovery_form_in_a_conditional_include_is_legacy_from_mount(templates):
+    """The class-level scan keeps every {% if %} branch (ADR-037 row 18), so a
+    recovery form an event reveals later is already a legacy target at mount."""
     config.set("event_parameter_policy", "strict")
     view, runtime = _mounted(ToggledRecovery)
-    assert get_handler_parameter_policy(view.restore_state) == "strict"
+    assert get_handler_parameter_policy(view.restore_state) == "legacy"
     _send(runtime, "reveal", {})
     assert get_handler_parameter_policy(view.restore_state) == "legacy"
     _send(runtime, "restore_state", dict(ENVELOPE))
@@ -270,3 +275,31 @@ def test_a_client_cannot_claim_the_downgrade(templates):
     assert get_handler_parameter_policy(view.pick) == "strict"
     _send(runtime, "pick", dict(ENVELOPE))
     assert CALLS == []
+
+
+@pytest.mark.parametrize(
+    "html",
+    [
+        '<div dj-auto-recover="restore_state"></div>',
+        "<div DJ-AUTO-RECOVER='restore_state'><p dj-auto-recover=\"other\"></p></div>",
+        '<pre>&lt;div dj-auto-recover="escaped"&gt;</pre>',
+        '<div dj-auto-recover=""></div><div dj-click="restore_state"></div>',
+        '<div dj-auto-recover="not valid"></div>',
+    ],
+)
+def test_the_render_scan_agrees_with_the_binding_parser(html):
+    """ADR-037 row 19: the per-render scan is kept for cost, pinned to the parser."""
+    from djust._template_bindings import EVENT_NAME, markup_bindings
+    from djust.validation import _RENDERED_RECOVERY, note_rendered_recovery_targets
+
+    class Probe:
+        pass
+
+    probe = Probe()
+    note_rendered_recovery_targets(probe, html)
+    parsed = {
+        b.name
+        for b in markup_bindings(html)
+        if b.directive == "dj-auto-recover" and b.name and EVENT_NAME.match(b.name)
+    }
+    assert _RENDERED_RECOVERY[probe] == parsed
