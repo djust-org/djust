@@ -173,7 +173,10 @@ rejection before application code runs. The rows cover:
 - an open `**fields: str` form payload;
 - extra keys and a forged `component` source.
 
-All eight paths agree on every row. The browser half is in
+All eight paths agree on every row, with one recorded difference: the actor
+bridge passes a `**` payload through a Rust map, so its keys do not arrive in
+the payload's order (equal as a dict; found by a full-suite run, and the
+matrix compares open payloads order-independently). The browser half is in
 `tests/js/strict_native_binding.test.js`. The strict collector now also
 refuses `_`-prefixed `dj-value-*` names, matching the server's reserved-name
 rule, along with forged `dj-value-component-id` / `dj-value-view-id`.

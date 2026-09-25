@@ -1852,7 +1852,15 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
     checks, 8 per transport. The permissive parser sent `7x` as `7` and the
     handler ran; strict `dj-input`/`dj-submit` were refused by the server
     because of `field`/`_target`/extra fields.
+  - Full Python suite from a frozen worktree at 3724f4857: 33,767 passed and
+    949 skipped, plus the 2 known tag-reachability failures and one real
+    finding. The actor bridge delivers a `**` payload's keys in a Rust
+    map's order, not the payload's. The matrix now compares open payloads
+    order-independently, and the difference is recorded in the
+    server-integration note. The WebSocket parity tests then passed 5
+    consecutive runs; the full suite was not repeated.
   - Remaining P2 items:
+    - actor `**` payload key order (above);
     - render-producer coverage for child/component creation, removal and
       replacement;
     - deferred, hot-reload and cached-DOM producers;

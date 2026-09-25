@@ -94,7 +94,9 @@ class ParityView(LiveView):
 
     @strict()
     def t_form(self, **fields: str):
-        self._done("t_form", dict(fields))
+        # Sorted: the actor bridge passes keys through a Rust map, so their
+        # order is not the payload's order (recorded in the ADR-036 notes).
+        self._done("t_form", dict(sorted(fields.items())))
 
 
 class ActorParityView(ParityView):
