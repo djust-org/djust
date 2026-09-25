@@ -73,8 +73,11 @@ def recovery_handler_names(view_class: type) -> frozenset[str]:
     ADR-036 owner decision R1: recovery handlers run under the legacy policy,
     because their ``_form_values`` / ``_data_attrs`` envelope cannot be a strict
     signature. The template is server-owned, so a client cannot claim this.
-    Read from ``template`` or ``template_name`` once per class; a dynamic
-    attribute value or an included template is not seen.
+    Read from ``template`` or ``template_name`` once per class. It does not see
+    includes, parents or dynamic values: dispatch also uses the targets of each
+    render (``note_rendered_recovery_targets``); this scan serves the V019
+    startup check and renders Python does not see (actors, an HTTP instance
+    before it renders).
     """
     cached = _RECOVERY_HANDLERS.get(view_class)
     if cached is None:
