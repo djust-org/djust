@@ -77,6 +77,16 @@ Two name shapes appear in this roadmap, with distinct meanings:
 | ~~**P2**~~ | ~~#3074 (6/7) — Free-threaded `cp314t` wheels, and a CI job that runs a core subset on 3.14t with the GIL off~~ ✅ (#3102) | v1.3.0 |
 | ~~**P2**~~ | ~~#3074 (7/7) — Guide: scaling a djust process across cores~~ ✅ (#3105) | v1.3.0 |
 
+### v1.3.0-5 — event-loop ceiling (#3095)
+
+*Kind:* performance / scalability. On free-threaded 3.14t with `worker_threads` and scoped push, snake-arena in production saturates at about 160 players with the asyncio event-loop thread at 0.87–0.97 of a core while the pool threads use about 3 cores. These rows take per-message work off the loop thread. Every behaviour change is opt-in or proven safe.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| **P1** | #3095 — `PresenceMixin` presence broadcasts respect `push_scope`: a join or leave wakes only the sessions sharing the presence key, not every room (`presence_broadcast_scoped` to choose) | v1.3.0 |
+| **P1** | #3095 — Profile the loop thread at 160–192 players (SIGALRM sampler) and move the CPU-heavy per-frame work into the worker pool, keeping per-session order | v1.3.0 |
+| **P3** | #3095 — Evaluate several event loops per process on 3.14t (design note) | v1.3.0 |
+
 ## Next: v1.2.1 — non-breaking fixes (drain)
 
 > Planned 2026-09-24 from a triage of every open issue. **Policy:** non-breaking bug fixes ship in 1.2.1; anything breaking, new features, and parser/dependency upgrades go to 1.3. Issues split into a 1.2.1 part and a 1.3 part are marked. The ADR-034–038 stack (#2944, #2954) merges after 1.2.1 is cut. Already shipped toward 1.2.1 on `main`: #3009 (inline whitespace, #2999/#3010), the CSRF resolver (#2978), SerializerCache removal (#2992), the audit gate (#2989).

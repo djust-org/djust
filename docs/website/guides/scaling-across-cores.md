@@ -99,6 +99,8 @@ What to know before turning it on (details in [Deployment](deployment.md#more-th
 
 Set `self.push_scope` and push with `scope=` so a broadcast reaches only its room; see [Scoped Push](../advanced/server-push.md#scoped-push-one-room-not-every-room).
 
+`PresenceMixin` follows: in a view that sets `push_scope`, a join or leave wakes only the sessions that share its presence key (see [Presence](presence.md#multi-room-views-who-a-join-wakes)).
+
 ### 4. The in-process channel layer
 
 Channels' `InMemoryChannelLayer` checks every channel for expiry on every message. A broadcast round across N sessions therefore costs O(N²) on the event loop:
