@@ -33,7 +33,6 @@ import shutil
 from importlib import import_module
 
 import pytest
-from django.apps import apps
 from django.conf import settings
 from django.template import loader
 from django.test import override_settings
@@ -117,9 +116,12 @@ _DJUST_BACKEND = "djust.template.backend.DjustTemplateBackend"
 
 
 @pytest.fixture
-def _templates_2663():
-    app_config = apps.get_app_config("demo_app")
-    dest_dir = os.path.join(app_config.path, "templates", "demo2663")
+def _templates_2663(tmp_path):
+    # A temporary DIRS entry, not the demo app's template tree: the dev
+    # hot-reload watcher watches that tree, and files written there broadcast
+    # a ``reload`` frame into unrelated WebSocket tests in the same worker
+    # (#3099).
+    dest_dir = os.path.join(str(tmp_path), "demo2663")
     os.makedirs(dest_dir, exist_ok=True)
     for name, body in (
         ("base.html", _BASE_HTML),
@@ -133,7 +135,7 @@ def _templates_2663():
         TEMPLATES=[
             {
                 "BACKEND": _DJUST_BACKEND,
-                "DIRS": [],
+                "DIRS": [str(tmp_path)],
                 "APP_DIRS": True,
                 "OPTIONS": {
                     "context_processors": ["django.template.context_processors.request"],
