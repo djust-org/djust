@@ -1,6 +1,6 @@
 # ADR-035: Django-native form hooks and an authorized object lifecycle
 
-**Status**: Accepted: gates F1–F2 closed on `feat/adr-034-037`, with evidence in the [acceptance review](component-conventions-implementation.md#adr-035-acceptance-review--f2); acceptance is confirmed at that branch's review. `ModelFormMixin` is available from djust 1.3. FR (Step R) stays open by this ADR's own rule: its targets serve only legacy `FormMixin` views, and removing legacy support needs an explicit deprecation window.
+**Status**: Accepted: gates F1–F2 closed on `feat/adr-034-037`, with evidence in the [acceptance review](component-conventions-implementation.md#adr-035-acceptance-review--f2); acceptance is confirmed at that branch's review. `ModelFormMixin` is available from djust 1.3. FR (Step R) is open: its trigger is met for adopting views, and it is scheduled as its own deletion PR on ADR-027's playbook, after the deprecation window this ADR requires for removing legacy support.
 **Date**: 2026-09-19
 **Deciders**: Project maintainers
 **Evidence baseline**: `0d1aeb882` on `feat/components-catalogue`.
@@ -223,6 +223,16 @@ tests, not just this table.
 | N5 | Legacy compatibility filters | The adapter's configuration names and `kwargs` are skipped by the legacy attribute walk. `object` enters the legacy context before model serialization, so it renders field by field like any other model. It is dropped from all three legacy session saves (GET, HTTP POST, WebSocket event). Explicit-policy views receive it from a render-only provider. | D4 for legacy views, without a denylist per form feature. |
 | N6 | Application policy | No save, success URL or transaction is added (D5). `form_class` must be a `ModelForm`, and a form is never built without an authorized object. `_model_instance` on an adapter view is a configuration error. | D2 and D5; "Do not mix both instance mechanisms". |
 
+**Publication decision (2026-09-25, owner).** The form guide and the AI form
+reference teach `ModelFormMixin` now, in new sections marked "Available from
+djust 1.3" (not in the 1.3.0rc1 pre-release), with a migration recipe from
+`_model_instance`. The owner judged that the version note satisfies "do not
+change current release examples to import an unavailable class", since it
+states that the class is not in the current release. The existing
+`_model_instance` examples are unchanged. The examples are executed as tests.
+The generator and AI-schema updates this ADR also names are recorded as
+pending ADR-037 work in the ledger.
+
 Known limitation: SPA `live_patch` navigation within one adapter view keeps
 the mounted route kwargs, so it cannot retarget the record. Use a full
 navigation (`live_redirect`) to edit a different record.
@@ -302,16 +312,18 @@ as a saving this ADR delivers.
 method and their tests together; a grep showing no `_model_instance` reference
 outside history; and a recorded account of anything retained.
 
-**Status at acceptance (2026-09-25): open, not triggered.** F2 is closed, and
-for views adopting `ModelFormMixin` the targets are already unreachable:
-`_model_instance` on such a view is a configuration error, `self.object` is
-never re-hydrated from a stored pk, and their tests pin both. The targets
-themselves still serve every legacy `FormMixin` edit view, which is the
-current release's documented pattern. Deleting them removes that support,
-and [Compatibility and migration](#compatibility-and-migration) requires an
-explicit deprecation window for any removal. The gate fires once that
-deprecation is announced in a release and its window has passed. Citations
-above were refreshed at F1.
+**Status at acceptance (2026-09-25): open; trigger met for adopting views.**
+F2 is closed. For views adopting `ModelFormMixin`, the targets are already
+unreachable: `_model_instance` on such a view is a configuration error, and
+`self.object` is never rebuilt from a stored pk. Tests pin both. The deletion
+is scheduled as its own PR, following ADR-027's terminal-delete playbook, and
+nothing is deleted at acceptance.
+
+The targets themselves still serve every legacy `FormMixin` edit view, which
+is the current release's documented pattern. Deleting them therefore removes
+legacy support, and [Compatibility and migration](#compatibility-and-migration)
+requires an explicit deprecation window first. The deletion PR lands after
+that window. Citations above were refreshed at F1.
 
 ## Consequences and non-goals
 

@@ -92,8 +92,14 @@ migration recipe after the lifecycle gates).**
   migration recipe from `_model_instance`. `docs/ai/forms.md` gains the
   adapter section. Both are marked "Available from djust 1.3" (not in the
   1.3.0rc1 pre-release).
-- The existing `_model_instance` examples are unchanged, because the ADR
-  says not to change current-release examples.
+- The owner chose to publish with a version note (2026-09-25, recorded in
+  the ADR). The existing `_model_instance` examples are unchanged.
+- Generators and AI schema: pending under ADR-037 D2/D3 (see that entry).
+  - Lifecycle checks are covered:
+    - `djust.S013` is new.
+    - `djust_typecheck`'s context manifest declares `object`.
+    - The X008 IDOR audit does not flag adapter views, since they bind no
+      id in `mount()`.
 - `test_adr035_documented_examples.py` extracts both documents' Python with
   the doc-snippet checker's own extractor and executes it. It uses the
   guide's route block and the paired HTML, then checks author, other user
@@ -2202,9 +2208,11 @@ Source: [decisions and acceptance](035-django-native-form-and-object-lifecycle.m
   It passes on all three transports, against the worktree's demo server on
   port 18437. Canary: with the adapter's `instance` binding removed it fails
   18 checks, 6 per transport.
-- [ ] **FR — retirement.** (Open, not triggered: see the ADR's status at
-  acceptance. It fires once a `_model_instance` deprecation is announced in a
-  release and its window has passed.) Delete the pre-hook object plumbing per
+- [ ] **FR — retirement.** (Open; trigger met for adopting views. It is
+  scheduled as its own deletion PR on ADR-027's playbook, landing after the
+  deprecation window the ADR requires, because the targets still serve legacy
+  `FormMixin` views. Nothing is deleted yet.) Delete the pre-hook object
+  plumbing per
   [ADR-035 Step R](035-django-native-form-and-object-lifecycle.md):
   the `_model_instance` attribute (`forms.py:228`, used at `:342-344`,
   `:527-531`, plus the adapter's conflict guards at `:996` and `:1105`),
@@ -2307,6 +2315,17 @@ Source: [decisions and acceptance](037-event-contract-checks-and-executable-docu
   The final full Python suite passes 30,583 tests with 952 skipped.
   The corrected usage sections were checked in an isolated browser catalogue;
   this does not establish publication on the user's running site or D2 closure.
+  **Pending from ADR-035 (2026-09-25).** ADR-035 names "generators, and
+  lifecycle checks" among the updates to make together under ADR-037. The
+  generator side is not built yet:
+  - `python/djust/schema.py`'s `"forms"` pattern (about lines 1241–1258)
+    still teaches `_model_instance` in `mount()`.
+  - Its `OPTIONAL_MIXINS` list has no `ModelFormMixin` entry.
+  - The MCP `scaffold_view` tool (`mcp/server.py`, `form` feature) generates
+    only a `FormMixin` view, with no edit variant.
+  - `djust_gen_live` generates no forms, so nothing to change there.
+  Each needs an executed fixture, as D2 requires. They land with the D2
+  generator work, not as ADR-035 scope.
 - [ ] **D3 — final acceptance.** Run the ADR acceptance matrices at the final
   revision, complete migration/AI guidance, and verify actual website delivery
   rather than equating repository Markdown with publication. Record remaining
