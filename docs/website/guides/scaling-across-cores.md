@@ -84,7 +84,7 @@ assert not sys._is_gil_enabled(), "something re-enabled the GIL"
 With the pool on, djust also moves per-frame work off the event loop:
 - the pre-event snapshot of the view's state runs on the session's thread;
 - a server push to a view that doesn't use ADR-038 explicit exposure runs as a single hop on the session's thread;
-- when a push frame carries nothing but patches, the rendered patch goes into it without being re-encoded on the loop.
+- for those same pushes, when the frame carries nothing but patches, the rendered patch goes into it without being re-encoded on the loop.
 
 What to know before turning it on (details in [Deployment](deployment.md#more-than-one-core-per-process-worker_threads)):
 

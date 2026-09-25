@@ -887,7 +887,40 @@ None in this bucket.
 
 ## v1.3.0-3 — multi-core rendering (#3074)
 
-**Scope**: The #3074 experiment productionised as seven PRs, one per ROADMAP row. Each PR has its own entry below as it merges; the bucket summary is written when the last one lands.
+**Scope**: The #3074 experiment productionised as seven PRs, one per ROADMAP row, all merged on 2026-09-25: #3087 (GIL release), #3091 (worker pool), #3096 (scoped push, closes #3004), #3100 (event-loop offload), #3101 (`djust.layers.InMemoryChannelLayer`), #3102 (cp314t wheels and the 3.14t CI job), and #3105 (guide).
+
+### Bucket summary
+
+**Outcome.** Measured on the snake load test, one process, a shared 12-core Mac, interleaved rounds:
+
+| Setup | Load it carries |
+|---|---|
+| Stock 1.3 on CPython 3.12 | saturates at about 32 clients on one core |
+| The opt-in settings on 3.12 (`worker_threads`, scoped push) | about 64 clients |
+| Free-threaded 3.14t with the opt-in settings | 192–256 clients at full frame rate (6.3–7.3 fps) on 4–6.6 cores |
+
+The 3.14t result is about 6–8× stock 3.12 in one process. The defaults are unchanged:
+- every behaviour change is opt-in (`worker_threads`, `push_scope` / `scope=`, `djust.layers`);
+- the one unconditional change, the GIL release in `render_with_diff`, changes nothing but concurrency.
+
+**What the bucket learned**
+1. **"Opt-in or proven safe" needed both halves.**
+   - Opt-in: every new path is gated on `worker_threads`, and the offload is gated on the session being bound to a pool slot.
+   - Proven safe: the full suite was run with the pool forced on (twice, not committed). A read-only audit swept for thread-affine state, and turned up six real races that were fixed first.
+2. **Test the GIL claim against its baseline.** A tautological concurrency test reached review in PR 1. After that, every GIL or race test was run against the old code or extension before it was trusted.
+3. **Per-turn sync points must enumerate every turn type** (PR 3: tick and `handle_info` were missing). **Re-implemented turns must mirror every `try`/`finally` and early return** (PR 4). Both are `parallel-path-drift`.
+4. **Measurement tables come from all the rows, by script**, and every doc sentence citing the experiment quotes the row behind it. Three `unverified-claim` findings (PRs 2, 4 and 5) were all about numbers or links written by hand.
+5. **Process: pushes came from private `--no-tags` clones**, to match CI's tag-less checkout (#3072). The first one lacked `core.hooksPath` and pushed with no hook run. That was disclosed on PR 1 and fixed in the clone script.
+
+**Open items**
+- #3072: the `v1.3.0rc1` tag is not reachable from main.
+- #3088: registry writers drop replaced `Py` handlers under the write lock, and 3.14t stop-the-world is blocked by readers waiting on a lock.
+- #3089: the `PerformanceTracker` thread-local lives on the event loop.
+- #3092: a signed-snapshot seconds-boundary flake.
+- #3095: presence broadcasts fan out to every room.
+- #3099: the dev watcher auto-starts under pytest. Two fixtures are fixed; the watcher is not.
+- Upstream Channels issue draft: https://github.com/djust-org/djust/issues/3074#issuecomment-5838187207 (not filed).
+- Not reproduced: one "Child state unavailable" failure in `test_exposure_child_reconnect` in a forced-pool full run. The same error appeared in stock tests at load average 132, so it looks load-sensitive rather than pool-related.
 
 ### PR 1/7 — release the GIL in `render_with_diff` (PR #3087)
 
@@ -1004,6 +1037,14 @@ On 3.12 frames did not change; the GIL caps the process.
 2. **Test the GIL-off claim without the override.** `PYTHON_GIL=0` makes any GIL assertion pass trivially; only an import check without it tests `gil_used = false`.
 
 **Review stats**: 0 🔴, 2 🟡 (a 3.14t cell could block the release; the PyPI size cap) and 5 🟢, all addressed. The `release-workflow-reviewed` label was applied with a risk summary.
+
+### PR 7/7 — guide: scaling a djust process across cores (PR #3105)
+
+**Date**: 2026-09-25. Squash-merged as `0a81f7fac`. Retro: https://github.com/djust-org/djust/pull/3105 (retrospective comment).
+
+The new guide is `docs/website/guides/scaling-across-cores.md`. A truth review checked every API name, key, default and number, and every cell of its measured table, against the code, `results.jsonl` and PyPI. 1 🟡 (the summary overgeneralised the gated offload) and 3 🟢, all fixed.
+
+**Lesson:** a summary line about a gated optimisation must carry its gates.
 
 ## v1.2.1-7 — state and rendering batch: v1.2.1-7, -8 and -9 (PR #3042)
 

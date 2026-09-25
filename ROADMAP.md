@@ -63,7 +63,7 @@ Two name shapes appear in this roadmap, with distinct meanings:
 | ~~**P1**~~ | ~~#3080 — Process RSS grows under WebSocket load and is never released. Root cause: `InMemoryStateBackend` never applied its TTL at runtime (only `djust clear` did), so every session's view state stayed for the life of the process. Expire on `get()`, sweep from `set()` at most once per `min(ttl, 60)` s; document the per-session cost and allocator retention~~ ✅ (#3083; 1.2 backport #3084) | v1.3.0 |
 | ~~**P3**~~ | ~~`performance.MemoryTracker` retries `import psutil` on every event (about 42 µs when psutil is absent); probe once at module import~~ ✅ (#3083; 1.2 backport #3084) | v1.3.0 |
 
-### v1.3.0-3 — multi-core rendering (#3074)
+### v1.3.0-3 — multi-core rendering (#3074) ✅
 
 *Kind:* performance / scalability. One process used about one core for LiveView work. The experiment on #3074 scaled one process to about 5 cores on free-threaded CPython 3.14t. These PRs productionise it, one per row, in order. Every behaviour change is opt-in, and stock behaviour stays the default. The exception is row 1: it releases the GIL during a render, which changes nothing but concurrency, so it is unconditional.
 
@@ -75,7 +75,7 @@ Two name shapes appear in this roadmap, with distinct meanings:
 | ~~**P2**~~ | ~~#3074 (4/7) — Event-loop offload: pre-event snapshot in the handler's hop, one worker hop per server-push turn, no per-message `close_old_connections` hop for channel-layer messages~~ ✅ (#3100) | v1.3.0 |
 | ~~**P2**~~ | ~~#3074 (5/7) — Channels in-memory layer expiry sweep is O(n²) per broadcast round~~ ✅ (#3101: `djust.layers.InMemoryChannelLayer`) | v1.3.0 |
 | ~~**P2**~~ | ~~#3074 (6/7) — Free-threaded `cp314t` wheels, and a CI job that runs a core subset on 3.14t with the GIL off~~ ✅ (#3102) | v1.3.0 |
-| **P2** | #3074 (7/7) — Guide: scaling a djust process across cores | v1.3.0 |
+| ~~**P2**~~ | ~~#3074 (7/7) — Guide: scaling a djust process across cores~~ ✅ (#3105) | v1.3.0 |
 
 ## Next: v1.2.1 — non-breaking fixes (drain)
 
