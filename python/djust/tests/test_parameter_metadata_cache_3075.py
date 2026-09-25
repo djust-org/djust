@@ -125,8 +125,36 @@ class Menu(LiveComponent):
         pass
 
 
+class DeleteOnly:
+    """A data descriptor through ``__delete__`` alone (no ``__set__``)."""
+
+    def __get__(self, obj, owner=None):
+        raise AssertionError("discovery must not evaluate a descriptor")
+
+    def __delete__(self, obj):
+        pass
+
+
+class WithDescriptors(Base):
+    guarded = DeleteOnly()
+
+    @classmethod
+    @event_handler(parameter_policy="strict")
+    def class_strict(cls, value: int):
+        pass
+
+
+class Picker(LiveComponent):
+    class State(TypedState):
+        picked: int = 0
+
+    class Meta:
+        event = "pick"
+
+
 class Page(LiveView):
     menu = Menu()
+    picker = Picker()
 
     @event_handler()
     def save(self, **kwargs):
@@ -149,11 +177,36 @@ def owners():
     storage_only.not_a_handler = lambda: None
     bound = Page().menu
     object.__setattr__(bound, "choose", None)
-    return [plain, child, page, page.menu, shadowed_none, shadowed_fn, storage_only, bound]
+    # Instance handlers under names a class data descriptor owns: the class
+    # attribute wins, so neither may be advertised.
+    guarded = WithDescriptors()
+    guarded.__dict__["guarded"] = assigned
+    guarded.__dict__["prop"] = assigned
+    return [
+        plain,
+        child,
+        page,
+        page.menu,
+        page.picker,
+        shadowed_none,
+        shadowed_fn,
+        storage_only,
+        bound,
+        guarded,
+    ]
 
 
 def comparable(methods: dict) -> list:
-    return [(name, getattr(m, "__func__", m)) for name, m in methods.items()]
+    """Name, the underlying function AND what it is bound to, so a wrong
+    ``binding_class`` shows up too. Functions compare by qualified name:
+    ``Meta.event`` handlers are minted fresh on every call, in both versions."""
+    out = []
+    for name, method in methods.items():
+        function = getattr(method, "__func__", method)
+        out.append(
+            (name, function.__module__, function.__qualname__, getattr(method, "__self__", None))
+        )
+    return out
 
 
 @pytest.mark.parametrize("index", range(len(owners())))
@@ -228,6 +281,73 @@ def test_hot_view_replacement_swaps_the_class_and_the_plan():
     view.__class__ = Replaced
     methods = pm._event_methods(view)
     assert "only_new" in methods and "strict" not in methods
+
+
+def test_an_instance_handler_under_a_delete_only_descriptor_is_not_advertised():
+    """Review of #3077: ``__delete__`` alone makes a data descriptor."""
+    view = WithDescriptors()
+    view.__dict__["guarded"] = assigned
+    assert "guarded" not in pm._event_methods(view)
+    assert "guarded" not in reference_event_methods(view)
+
+
+def test_swapping_two_attributes_values_rebuilds_the_plan():
+    """Same key set, same values, different pairing: still a change."""
+
+    @event_handler(parameter_policy="strict")
+    def first(self, value: int):
+        pass
+
+    @event_handler(parameter_policy="strict")
+    def second(self, value: str):
+        pass
+
+    class Swap(LiveView):
+        pass
+
+    Swap.a, Swap.b = first, second
+    view = Swap()
+    assert pm._event_methods(view)["a"].__func__ is first
+    del Swap.a, Swap.b
+    Swap.b, Swap.a = first, second
+    assert pm._event_methods(view)["a"].__func__ is second
+    assert comparable(pm._event_methods(view)) == comparable(reference_event_methods(view))
+
+
+def test_reassigning_bases_rebuilds_the_plan():
+    class B1(LiveView):
+        @event_handler()
+        def from_base(self, **kwargs):
+            return "b1"
+
+    class B2(LiveView):
+        @event_handler()
+        def from_base(self, **kwargs):
+            return "b2"
+
+    class Reloaded(B1):
+        pass
+
+    view = Reloaded()
+    assert pm._event_methods(view)["from_base"].__func__ is B1.__dict__["from_base"]
+    Reloaded.__bases__ = (B2,)
+    assert pm._event_methods(view)["from_base"].__func__ is B2.__dict__["from_base"]
+
+
+def test_a_descriptor_class_gaining_delete_rebuilds_the_plan(monkeypatch):
+    class Plain:
+        def __get__(self, obj, owner=None):
+            raise AssertionError("discovery must not evaluate a descriptor")
+
+    class Holder(LiveView):
+        slot = Plain()
+
+    view = Holder()
+    view.__dict__["slot"] = assigned
+    assert "slot" in pm._event_methods(view)  # non-data: the instance wins
+    monkeypatch.setattr(Plain, "__delete__", lambda self, obj: None, raising=False)
+    assert "slot" not in pm._event_methods(view)  # now a data descriptor
+    assert "slot" not in reference_event_methods(view)
 
 
 def test_the_plan_cache_is_bounded(monkeypatch):

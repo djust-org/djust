@@ -45,10 +45,19 @@ def _mro_lookup(cls: type, name: str) -> Any:
 
 
 def _is_data_descriptor(value: Any) -> bool:
+    """``inspect.getattr_static``'s test: ``__get__`` plus ``__set__`` OR
+    ``__delete__`` on the value's type. Either one makes the class attribute
+    win over the instance dictionary."""
     kind = type(value)
-    return _mro_lookup(kind, "__get__") is not _ABSENT and _mro_lookup(kind, "__set__") is not (
-        _ABSENT
+    return _mro_lookup(kind, "__get__") is not _ABSENT and (
+        _mro_lookup(kind, "__set__") is not _ABSENT
+        or _mro_lookup(kind, "__delete__") is not _ABSENT
     )
+
+
+def _dict_snapshot(cls: type) -> tuple[type, tuple[str, ...], tuple[Any, ...]]:
+    namespace = cls.__dict__
+    return (cls, tuple(namespace), tuple(namespace.values()))
 
 
 class _ClassPlan:
@@ -60,16 +69,23 @@ class _ClassPlan:
     storage varies between calls, so the class half is resolved here and the
     instance half is re-applied per call, exactly as ``getattr_static`` would.
 
-    ``fresh()`` re-checks every class dict in both MROs, so a hot view
-    replacement (a new class), a monkeypatched method or an added attribute
-    all rebuild the plan instead of serving a stale one.
+    ``fresh()`` re-checks both MROs (a reassigned ``__bases__``) and every
+    class dict in them, keys in order and values by identity, plus the classes
+    of the descriptors the plan resolved. A hot view replacement (a new
+    class), a monkeypatched, added, deleted or swapped attribute therefore
+    rebuilds the plan instead of serving a stale one.
     """
 
-    __slots__ = ("entries", "names", "snapshot")
+    __slots__ = ("entries", "mros", "names", "snapshot")
 
     def __init__(self, owner_type: type, declaration_type: type, bound_component: bool) -> None:
         from .components.base import LiveComponent
 
+        # Snapshot BEFORE resolving: a class changed while the plan is being
+        # built then fails the very next ``fresh()`` rather than never.
+        self.mros = ((owner_type, owner_type.__mro__), (declaration_type, declaration_type.__mro__))
+        classes = dict.fromkeys(owner_type.__mro__ + declaration_type.__mro__)
+        snapshot = [_dict_snapshot(cls) for cls in classes]
         members: dict[str, Any] = {}
         for cls in declaration_type.__mro__:
             if bound_component and (
@@ -87,17 +103,24 @@ class _ClassPlan:
             entries.append((name, member, wrapper, data))
         self.entries = tuple(entries)
         self.names = frozenset(members)
-        classes = dict.fromkeys(owner_type.__mro__ + declaration_type.__mro__)
-        self.snapshot = tuple(
-            (cls, frozenset(cls.__dict__), tuple(cls.__dict__.values())) for cls in classes
-        )
+        # The data-descriptor verdicts depend on the descriptors' own classes.
+        for _name, _member, wrapper, _data in entries:
+            if wrapper is not _ABSENT:
+                for cls in type(wrapper).__mro__:
+                    if cls not in classes:
+                        classes[cls] = None
+                        snapshot.append(_dict_snapshot(cls))
+        self.snapshot = tuple(snapshot)
 
     def fresh(self) -> bool:
+        for cls, mro in self.mros:
+            if cls.__mro__ != mro:
+                return False
         for cls, keys, values in self.snapshot:
             current = cls.__dict__
             if (
                 len(current) != len(values)
-                or current.keys() != keys
+                or tuple(current) != keys
                 or not all(map(operator.is_, current.values(), values))
             ):
                 return False
