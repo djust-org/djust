@@ -1,0 +1,142 @@
+from __future__ import annotations
+
+import json
+
+from django.test import override_settings
+
+from djust.checks.assets import (
+    check_asset_files,
+    check_asset_manifests,
+    check_required_assets,
+    check_sbom_not_served,
+    check_undeclared_origins,
+)
+from djust.tests._asset_fixtures import write_asset
+
+
+def ids(messages):
+    return sorted(m.id for m in messages)
+
+
+def _with(tmp_path, *manifests, static_dirs=(), **extra):
+    return override_settings(
+        DJUST_ASSET_MANIFESTS=[str(m) for m in manifests],
+        STATICFILES_DIRS=[str(d) for d in static_dirs],
+        **extra,
+    )
+
+
+def test_clean_project_has_no_asset_messages(tmp_path):
+    static_dir, manifest = write_asset(tmp_path)
+    with _with(tmp_path, manifest, static_dirs=[static_dir]):
+        found = check_asset_manifests(None) + check_asset_files(None)
+    assert [m for m in found if "test-lib" in m.msg] == []
+
+
+def test_b001_b002_b006_come_from_parse_problems(tmp_path):
+    bad = tmp_path / "bad.json"
+    bad.write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "assets": {
+                    "a": {"files": [], "packages": []},
+                    "b": {
+                        "files": [{"path": "b.js", "integrity": "sha384-AAAA"}],
+                        "packages": [{"purl": "pkg:npm/b", "license": "MIT"}],
+                    },
+                    "c": {
+                        "files": [{"url": "https://x.example/c@1.0.0/c.js"}],
+                        "packages": [{"purl": "pkg:npm/c@1.0.0", "license": "MIT"}],
+                    },
+                },
+            }
+        )
+    )
+    with _with(tmp_path, bad):
+        found = [m for m in check_asset_manifests(None) if str(bad) in m.msg]
+    assert set(ids(found)) == {"djust.B001", "djust.B002", "djust.B006"}
+
+
+def test_b003_missing_file_and_b004_hash_mismatch(tmp_path):
+    static_dir, manifest = write_asset(tmp_path)
+    with _with(tmp_path, manifest):  # no STATICFILES_DIRS: the file can't be found
+        assert "djust.B003" in ids(check_asset_files(None))
+    (static_dir / "testlib" / "lib.js").write_bytes(b"tampered\n")
+    with _with(tmp_path, manifest, static_dirs=[static_dir]):
+        (b004,) = [m for m in check_asset_files(None) if m.id == "djust.B004"]
+    assert "testlib/lib.js" in b004.msg and "make vendor" in b004.hint
+
+
+def test_b005_external_needs_opt_in(tmp_path):
+    manifest = tmp_path / "ext.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "assets": {
+                    "cdn-lib": {
+                        "files": [
+                            {
+                                "url": "https://cdn.example/lib@1.0.0/lib.js",
+                                "integrity": "sha384-" + "A" * 64,
+                            }
+                        ],
+                        "packages": [{"purl": "pkg:npm/lib@1.0.0", "license": "MIT"}],
+                    }
+                },
+            }
+        )
+    )
+    with _with(tmp_path, manifest):
+        assert "djust.B005" in ids(check_asset_files(None))
+    with _with(tmp_path, manifest, DJUST_ALLOW_EXTERNAL_ASSETS=True):
+        assert "djust.B005" not in ids(check_asset_files(None))
+
+
+def test_b007_undeclared_required_asset(tmp_path):
+    from djust.components.base import Component
+
+    class NeedsGhost(Component):
+        requires_assets = ("ghost-lib",)
+        template = "<div></div>"
+
+    (b007,) = [m for m in check_required_assets(None) if "ghost-lib" in m.msg]
+    assert b007.id == "djust.B007" and "NeedsGhost" in b007.msg
+
+
+def test_b008_sbom_in_static_dirs(tmp_path):
+    static_dir = tmp_path / "static"
+    (static_dir / "pkg").mkdir(parents=True)
+    (static_dir / "pkg" / "vendor.cdx.json").write_text("{}")
+    with override_settings(STATICFILES_DIRS=[str(static_dir)]):
+        (b008,) = [m for m in check_sbom_not_served(None) if "vendor.cdx.json" in m.msg]
+    assert b008.id == "djust.B008"
+
+
+def test_b009_shadowing_names_both_versions(tmp_path):
+    s1, first = write_asset(tmp_path / "a", version="2.0.0")
+    _, second = write_asset(tmp_path / "b", version="1.0.0")
+    with _with(tmp_path, first, second, static_dirs=[s1]):
+        (b009,) = [m for m in check_asset_manifests(None) if m.id == "djust.B009"]
+    assert "2.0.0" in b009.msg and "1.0.0" in b009.msg
+
+
+def test_b010_undeclared_cdn_in_project_template(tmp_path):
+    tpl = tmp_path / "templates"
+    tpl.mkdir()
+    (tpl / "page.html").write_text(
+        '<script src="https://cdn.other.example/x.js"></script>\n'
+        '<script src="https://cdn.ok.example/y.js"></script> {# noqa: B010 #}\n'
+    )
+    templates = [
+        {
+            "BACKEND": "django.template.backends.django.DjangoTemplates",
+            "DIRS": [str(tpl)],
+            "APP_DIRS": False,
+        }
+    ]
+    with override_settings(TEMPLATES=templates):
+        found = check_undeclared_origins(None)
+    assert [m.id for m in found] == ["djust.B010"]
+    assert "cdn.other.example" in found[0].msg and "page.html:1" in found[0].msg
