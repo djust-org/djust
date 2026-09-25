@@ -1942,7 +1942,20 @@ def code_block(
             "}).observe(document.body,{childList:true,subtree:true});"
             "}"
             "if(window.hljs){doHL();installObserver();return;}"
-            "var iv=setInterval(function(){if(window.hljs){clearInterval(iv);doHL();installObserver();}},50);"
+            # Wait loop for a highlight.js <script> served async by a proxy
+            # (on a normal page load the vendored <script src> is
+            # parser-blocking, so window.hljs already exists above and this
+            # never runs). Bounded to 200 ticks (~10s, R14): an SRI mismatch,
+            # CSP block, or 404 must not poll forever.
+            "var tries=0;"
+            "var iv=setInterval(function(){"
+            "if(window.hljs){clearInterval(iv);doHL();installObserver();return;}"
+            "if(++tries>=200){clearInterval(iv);"
+            "if(!window.__djcHljsWarned){window.__djcHljsWarned=true;"
+            "console.warn('[djust] highlight.js did not load; code blocks stay "
+            "unhighlighted. Check the browser console for an integrity (SRI) or "
+            "CSP error.');}}"
+            "},50);"
             "})();"
             "</script>"
         )

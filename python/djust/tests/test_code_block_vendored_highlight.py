@@ -40,3 +40,16 @@ def test_ttyd_template_imports_vendored_xterm():
 def test_dependencies_module_is_gone():
     with pytest.raises(ModuleNotFoundError):
         __import__("djust.components.dependencies")
+
+
+def test_wait_loop_gives_up_after_200_ticks_and_warns_once():
+    """R14: if the vendored highlight.js never loads (bad SRI, CSP block,
+    404), the fallback poll must not run forever."""
+    html = str(code_block(code="x = 1", language="python"))
+    assert "tries>=200" in html
+    assert "clearInterval(iv)" in html
+    assert "__djcHljsWarned" in html
+    assert "console.warn(" in html
+    assert "highlight.js did not load" in html
+    # The warn is guarded by the flag, not unconditional.
+    assert "if(!window.__djcHljsWarned){window.__djcHljsWarned=true;" in html
