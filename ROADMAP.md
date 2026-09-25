@@ -65,7 +65,7 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 ### v1.3.0-3 — multi-core rendering (#3074)
 
-*Kind:* performance / scalability. One process used about one core for LiveView work. The experiment on #3074 scaled one process to about 5 cores on free-threaded CPython 3.14t. These PRs productionise it, one per row, in order. Every behaviour change is opt-in; stock behaviour stays the default.
+*Kind:* performance / scalability. One process used about one core for LiveView work. The experiment on #3074 scaled one process to about 5 cores on free-threaded CPython 3.14t. These PRs productionise it, one per row, in order. Every behaviour change is opt-in, and stock behaviour stays the default. The exception is row 1: it releases the GIL during a render, which changes nothing but concurrency, so it is unconditional.
 
 | Priority | Task | Milestone |
 |---|---|---|
