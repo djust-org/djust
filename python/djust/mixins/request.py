@@ -59,16 +59,21 @@ PARAMETER_CONTRACTS_HEADER = "X-Djust-Parameter-Contracts"
 def _initial_parameter_contracts(view: Any, view_path: str) -> Optional[str]:
     """Escaped JSON for the initial page's contract element, or None if legacy.
 
-    ``false`` marks discovery failure: the client installs an invalid scope and
-    strict lookups fail closed instead of guessing a legacy contract.
+    ``false`` marks discovery failure where strict contracts can exist: the
+    client installs an invalid scope and strict lookups fail closed instead of
+    guessing a legacy contract. A view that can only be legacy keeps its legacy
+    page, as the socket path keeps a legacy session's frame shape.
     """
     from .._parameter_metadata import parameter_contract_manifest
     from ..security import escape_json_for_script
+    from ..validation import _strict_possible
 
     try:
         manifest = parameter_contract_manifest(view)
     except Exception:  # noqa: BLE001 — declaration errors must not break the page
         logger.warning("Initial parameter contracts unavailable")
+        if not _strict_possible(view):
+            return None
         return escape_json_for_script(json.dumps({"view": view_path, "contracts": False}))
     if manifest is None:
         return None
@@ -78,14 +83,19 @@ def _initial_parameter_contracts(view: Any, view_path: str) -> Optional[str]:
 def _http_parameter_contract_fields(view: Any, request: Any) -> Optional[Dict[str, Any]]:
     """Contract fields for an HTTP render response (``{}`` for a legacy tree).
 
-    None means discovery failed: the caller withholds the DOM update.
+    None means discovery failed where strict contracts can exist: the caller
+    withholds the DOM update. A legacy-only view whose client never advertised
+    contracts keeps its legacy response shape instead.
     """
     from .._parameter_metadata import parameter_contract_manifest
+    from ..validation import _strict_possible
 
     try:
         manifest = parameter_contract_manifest(view)
     except Exception:  # noqa: BLE001 — never send a DOM update with invalid contracts
         logger.warning("Render parameter contracts unavailable")
+        if request.headers.get(PARAMETER_CONTRACTS_HEADER) != "1" and not _strict_possible(view):
+            return {}
         return None
     if manifest is None and request.headers.get(PARAMETER_CONTRACTS_HEADER) != "1":
         return {}
