@@ -61,6 +61,7 @@ def build_auth(request: Optional[HttpRequest], form: Any = None, step: str = "")
             try:
                 links[name] = reverse(f"djust_auth:{name}")
             except NoReverseMatch:
+                # The project did not mount this account URL; omit the link.
                 pass
     providers = (
         backend.providers(request) if (request is not None and backend.supports("social")) else []

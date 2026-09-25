@@ -311,6 +311,22 @@
 
     // ADR-038 D-n: the server's snapshot max age (seconds), learned from the
     // mount frame; the worker falls back to its documented 3600s default.
+    // ADR-038 D-n: service-worker cache metadata carried on mount frames. The
+    // identity marker is compared before anything from this mount is cached,
+    // so a changed or vanished identity clears the previous identity's caches
+    // first. Both transports call this for every frame.
+    function applyMountMetadata(data) {
+        if (!data || data.type !== 'mount') return;
+        if (typeof data.state_snapshot_max_age === 'number' && data.state_snapshot_max_age > 0) {
+            globalThis.djust._stateSnapshotMaxAge = data.state_snapshot_max_age;
+        }
+        try {
+            syncIdentity(data.sw_identity);
+        } catch (_e) {
+            if (globalThis.djustDebug) console.log('[LiveView] service-worker identity sync failed:', _e);
+        }
+    }
+
     function _stateMaxAge() {
         const value = globalThis.djust && globalThis.djust._stateSnapshotMaxAge;
         return typeof value === 'number' && value > 0 ? value : undefined;
@@ -536,6 +552,7 @@
         lookupState: lookupState,
         cacheKey: cacheKey,
         syncIdentity: syncIdentity,
+        applyMountMetadata: applyMountMetadata,
         clearCaches: clearCaches,
     };
 })();

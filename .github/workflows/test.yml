@@ -461,7 +461,8 @@ jobs:
             python/djust/tests/test_inmemory_layer_3074.py \
             python/djust/tests/test_free_threaded_contract_3074.py \
             python/djust/tests/test_ws_send_version_1788.py \
-            python/djust/tests/test_server_push_deferred_3001.py
+            python/djust/tests/test_server_push_deferred_3001.py \
+            python/djust/tests/test_overload_memory_3114.py
 
   # JavaScript tests - runs in parallel
   javascript-tests:
