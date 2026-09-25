@@ -897,7 +897,7 @@ None in this bucket.
 |---|---|
 | Stock 1.3 on CPython 3.12 | saturates at about 32 clients on one core |
 | The opt-in settings on 3.12 (`worker_threads`, scoped push) | about 64 clients |
-| Free-threaded 3.14t with the opt-in settings | 192–256 clients at full frame rate (6.3–7.3 fps) on 4–6.6 cores |
+| Free-threaded 3.14t with the opt-in settings | 192–256 clients at full frame rate (6.3–7.3 fps) on 4–6.6 cores; at 256 clients the 6.6 cores need `djust.layers` (5.0 cores and a near-saturated loop without it) |
 
 The 3.14t result is about 6–8× stock 3.12 in one process. The defaults are unchanged:
 - every behaviour change is opt-in (`worker_threads`, `push_scope` / `scope=`, `djust.layers`);
@@ -909,7 +909,7 @@ The 3.14t result is about 6–8× stock 3.12 in one process. The defaults are un
    - Proven safe: the full suite was run with the pool forced on (twice, not committed). A read-only audit swept for thread-affine state, and turned up six real races that were fixed first.
 2. **Test the GIL claim against its baseline.** A tautological concurrency test reached review in PR 1. After that, every GIL or race test was run against the old code or extension before it was trusted.
 3. **Per-turn sync points must enumerate every turn type** (PR 3: tick and `handle_info` were missing). **Re-implemented turns must mirror every `try`/`finally` and early return** (PR 4). Both are `parallel-path-drift`.
-4. **Measurement tables come from all the rows, by script**, and every doc sentence citing the experiment quotes the row behind it. Three `unverified-claim` findings (PRs 2, 4 and 5) were all about numbers or links written by hand.
+4. **Measurement tables come from all the rows, by script**, and every doc sentence citing the experiment quotes the row behind it. The `unverified-claim` findings in PRs 2, 4 and 5 were all about numbers or links written by hand.
 5. **Process: pushes came from private `--no-tags` clones**, to match CI's tag-less checkout (#3072). The first one lacked `core.hooksPath` and pushed with no hook run. That was disclosed on PR 1 and fixed in the clone script.
 
 **Open items**
