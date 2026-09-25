@@ -990,6 +990,21 @@ On 3.12 frames did not change; the GIL caps the process.
 
 **Review stats**: 0 🔴, 1 🟡 (the unlinked upstream draft) and 4 🟢 (delivery semantics in the docs, clock-patching tests, a deny test that does not need its template, rounds wording). All were addressed or explained.
 
+### PR 6/7 — cp314t wheels and the 3.14t CI job (PR #3102)
+
+**Date**: 2026-09-25. Squash-merged as `ac3484082`. Retro: https://github.com/djust-org/djust/pull/3102 (retrospective comment).
+
+**Tests at close**:
+- `python/djust/tests/test_free_threaded_contract_3074.py`: 5 tests. They cover `gil_used = false`, orjson staying out of the core dependencies, djust working without orjson, the 3.14t release matrix, and the GIL being off on free-threaded builds.
+- On GitHub's 3.14t runner, the job printed "GIL off after importing djust" with no override, then ran the multi-core subset: 93 passed, 1 skipped.
+- CI: 23 checks passed.
+
+**What we learned**
+1. **A new release-matrix dimension needs a failure policy.** The release workflow cannot be dry-run before a tag, and some 3.14t dependencies build from source. The 3.14t cells are therefore non-fatal until they have soaked. Otherwise one failed cell would block every wheel.
+2. **Test the GIL-off claim without the override.** `PYTHON_GIL=0` makes any GIL assertion pass trivially; only an import check without it tests `gil_used = false`.
+
+**Review stats**: 0 🔴, 2 🟡 (a 3.14t cell could block the release; the PyPI size cap) and 5 🟢, all addressed. The `release-workflow-reviewed` label was applied with a risk summary.
+
 ## v1.2.1-7 — state and rendering batch: v1.2.1-7, -8 and -9 (PR #3042)
 
 **Date**: 2026-09-24
