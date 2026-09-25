@@ -252,3 +252,19 @@ passed and 952 skipped, with no expected failures. Its focused matrix passed
 clients. Mypy passed 1,052 source files and both type checkers still rejected all
 21 negative fixtures. This does not establish live multi-worker HTTP deployment,
 browser recovery, or completion of C2.
+
+## Public export (C1 closed, 2026-09-25)
+
+The owner's C1 decisions (ADR-034, "C1 decisions") make
+`djust.components.interactive` the public import for `DropdownMenu`,
+`ActionItem` and `SeparatorItem`. The typing proof's `prototype.py` now imports
+from that module, not the private one. With Pyright 1.1.408 pinned through
+`npx`, `make test-component-binding-types PYRIGHT_COMMAND='npx --yes pyright@1.1.408'`
+reports that both checkers reject all 21 negative locations, the positive and
+prototype files are clean, and the runtime assertions pass.
+
+The output-authoring pieces (`Outputs`, output contracts, `subscribe`, `_emit`)
+stay private for 1.3. Interactive components on actor views are refused at
+runtime and reported at startup by `djust.V020`. The in-browser signed
+back-navigation check moves to C4's browser matrix. Its server half is covered
+above.

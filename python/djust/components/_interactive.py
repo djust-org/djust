@@ -1,8 +1,10 @@
-"""Staged ADR-034 dropdown; not yet a public component import.
+"""The ADR-034 interactive dropdown; import it from ``djust.components.interactive``.
 
 Real concrete per-owner instances use the existing LiveComponent registry and
-transport actions. The client-owned mode has a server observation contract;
-native client wiring, collections and public rollout remain acceptance gates.
+transport actions. The output-authoring pieces here (``Outputs``, the output
+contracts and ``_emit``), the local action names and the observation markup are
+framework-internal (owner decision Q4); only the names re-exported by
+``djust.components.interactive`` are public.
 """
 
 from __future__ import annotations

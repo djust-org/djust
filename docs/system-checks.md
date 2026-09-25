@@ -42,6 +42,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V017 | LiveView | Error | Async strict event handler on an actor view (`use_actors = True`) |
 | V018 | LiveView | Warning | `@event_handler(params=[...])` disagrees with a strict handler's signature |
 | V019 | LiveView | Warning | A `dj-auto-recover` handler declares `parameter_policy="strict"`; recovery always runs under legacy policy |
+| V020 | LiveView | Error | A `use_actors = True` view declares an interactive component (`djust.components.interactive`); actor views do not support them |
 | S001 | Security | Error | mark_safe() with f-string (XSS risk) |
 | S002 | Security | Warning | @csrf_exempt without justification comment |
 | S003 | Security | Warning | Bare except: pass swallows all exceptions |
@@ -68,6 +69,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | Q001 | Quality | Info | print() statement found |
 | Q002 | Quality | Warning | f-string in logger call |
 | Q003 | Quality | Info | console.log without djustDebug guard |
+| Q004 | Quality | Warning | One module imports both the interactive and the legacy `DropdownMenu` |
 | Q007 | Quality | Warning | Overlapping static_assigns and temporary_assigns |
 | Q010 | Quality | Info | Event handler sets nav state without patch() (heuristic) |
 | Y001 | Accessibility | Warning | Interactive element (icon-only `<button>`/`<a>`) missing an accessible name |
@@ -350,6 +352,18 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **What it detects**: a handler that a `dj-auto-recover` binding targets and that declares `parameter_policy="strict"`. Recovery handlers receive the `_form_values` / `_data_attrs` dictionaries, so dispatch always runs them under the legacy policy (ADR-036 decision R1), whatever the declaration or project policy. Recovery targets are not otherwise checked by V016.
 - **Limitation**: this startup check sees only the view's own template source. A binding in an included or parent template, or with a dynamic value, is not reported here, but dispatch still treats the handler as legacy once a render contains it.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V019"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V019"]`
+
+### V020 — Interactive component on an actor view
+- **Severity**: Error
+- **Method**: Runtime (class inspection; nothing is constructed or mounted)
+- **What it detects**: a LiveView with `use_actors = True` that declares an
+  interactive component from `djust.components.interactive`, such as
+  `DropdownMenu`. Actor views are not supported by interactive components in
+  djust 1.3: the actor path has its own dispatch and render baseline. Without
+  this check the view fails the first time the component is used.
+- **Fix**: remove `use_actors = True` from the view, or move the component to
+  a view that does not use actors.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V020"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V020"]`
 
 ---
 
@@ -708,6 +722,16 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Correct guard**: `if (globalThis.djustDebug) { console.log(...); }`
 - **Suppression**: `// noqa: Q003` inline or `SILENCED_SYSTEM_CHECKS = ["djust.Q003"]`
 - **False positives**: Intentional debug logging that you intend to remove before merging
+
+### Q004 — Both DropdownMenu classes imported in one module
+- **Severity**: Warning
+- **Method**: AST (`from ... import DropdownMenu` statements)
+- **What it detects**: a module that imports the interactive `DropdownMenu`
+  (`djust.components.interactive`, with typed `.on.selected` outputs) and the
+  legacy plain `DropdownMenu` renderer (`djust.components.components`). The
+  two share a name, so one is easily used where the other was meant.
+- **Fix**: import one `DropdownMenu` per module.
+- **Suppression**: `# noqa: Q004` on the later import, or `SILENCED_SYSTEM_CHECKS = ["djust.Q004"]`
 
 ### Q007 — Overlapping static_assigns and temporary_assigns
 - **Severity**: Warning

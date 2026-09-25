@@ -500,6 +500,21 @@ The concrete native-event binding syntax must be checked against the existing
 client before being published; this ADR does not claim a `dj-toggle` attribute
 already exists.
 
+## C1 decisions (2026-09-25)
+
+C1 left the public names open. These are owner decisions. A later change to
+any of them changes its implementation and tests, not just this table.
+
+| # | Question | Decision | Reason |
+| --- | --- | --- | --- |
+| Q1 | Public import path | `djust.components.interactive` exports `DropdownMenu`. It keeps the legacy renderer's name in a new module. `djust.Q004` warns when one module imports both. | The name this ADR proposes. The module path says which component it is (D7), and the check catches mixing. |
+| Q2 | State-owner setting | `visibility="server" \| "client"`, default `"server"`. | Short. Already used by the staged code, tests and signed snapshots. "Client" matches D0/D8's wording. |
+| Q3 | Item types | `ActionItem{label, value, disabled?}` and `SeparatorItem{separator: Literal[True]}`, exported. Values are nonempty and unique. | D2 requires typed configuration. These are the staged TypedDicts. |
+| Q4 | Output-authoring API | Private for 1.3: `OutputContract`, `subscribe`, the `Outputs` namespace and `_emit`. The local action names and the `data-dj-observe-*` markup are framework-internal. | D3 forbids a parallel emit API, and a public author API needs its own typing proof and docs. Components render their own actions, so nothing on the wire is published. |
+| Q5 | Actor views | Unsupported in 1.3, documented, and reported by `djust.V020` (Error) at `manage.py check`. | The actor path has separate dispatch and render baselines. Supporting it is its own gate. |
+| Q6 | Keyed collections | This ADR's spelling: `DropdownMenu.collection()`, `.sync([(key, declaration), ...])`, `.values` and read-only `component.key`. Built in this arc (C3). Documented only once gate 5's separate proof passes. | Changing the spelling later would break the typing proof. Gate 5 forbids publishing before the proof. |
+| Q7 | #3078 legacy alias | Fixed, not retired. The alias resolves ids only against the view's declared descriptors of its own type, and is pinned to the legacy parameter policy. Foreign or unknown ids are a no-op. | The legacy descriptor components continue (Compatibility and migration; Step R). |
+
 ## Alternatives considered
 
 | Alternative | Assessment |

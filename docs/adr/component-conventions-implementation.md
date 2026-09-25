@@ -2227,7 +2227,7 @@ Source: [decisions and acceptance](034-component-scoped-events-and-bindings.md).
 
 - [x] Foundation: native child lifecycle isolation and component-owned loading.
   This is not the proposed typed subscription API or repeated-request support.
-- [ ] **C1 — typed binding API.** Implement per-instance binding, declared outputs
+- [x] **C1 — typed binding API.** Implement per-instance binding, declared outputs
   and subscriptions with positive/negative typing fixtures for inheritance,
   renames, misspellings, wrong sources and async callbacks. Route only through
   registered identities; reject direct client invocation of subscriptions and
@@ -2254,6 +2254,30 @@ Source: [decisions and acceptance](034-component-scoped-events-and-bindings.md).
   resumes send current HTML rather than retaining historical controls. Browser
   signed-navigation/debug transport, actor lifecycle, public export and full
   browser acceptance remain open; see the proof document for evidence boundaries.
+  **Closed 2026-09-25** under the owner's C1 decisions (recorded in ADR-034):
+  - Q1/Q3: `djust.components.interactive` now exports exactly `DropdownMenu`,
+    `ActionItem` and `SeparatorItem`. `djust.Q004` warns when one module imports
+    both the interactive and the legacy `DropdownMenu`.
+  - Q4: the output-authoring API stays private.
+  - Q5: actor views stay unsupported, and `djust.V020` (Error) reports one that
+    declares an interactive component at `manage.py check`.
+  - The typing proof now imports the public module. mypy and Pyright 1.1.408
+    reject all 21 negative locations, and the runtime assertions pass.
+  - The debug transport is exercised over a real WebSocket.
+    `time_travel_jump` restores both menus' pre-selection state and keeps their
+    identities, emits no output, and the restored menu still dispatches to its
+    own callback. A stale id is refused.
+  - #3078 is fixed (`0463cdf20`): the legacy `Meta.event` alias resolves only
+    its own component type and is pinned to the legacy policy.
+
+  Evidence: `test_interactive_public_api_c1.py` (12 tests),
+  `test_legacy_component_alias_3078.py` (14), plus the existing binding,
+  snapshot and observation suites.
+
+  Moved to C4, where the browser matrix lives: the in-browser signed
+  back-navigation path (Service Worker capture and `live_redirect_mount`
+  restore). The server half (signed manifest, real WebSocket restore) is
+  already tested here.
 - [ ] **C2 — dropdown pilot and observations.** Implement the documented state
   owner, local mechanics and semantic outputs. Verify two same-type menus,
   source injection, valid/forged/disabled selections and callback rendering.
@@ -2262,8 +2286,10 @@ Source: [decisions and acceptance](034-component-scoped-events-and-bindings.md).
   The private server contract now validates client-mode observations, source,
   subscription, lifetime and sequence; unchanged HTTP/WS observers return no-op
   while reactive observers render. Cursor state is separate from authoritative
-  visibility. Browser listeners/selection dismissal and reconnect coalescing are
-  not wired yet. Independent state-backend claims now pass the former HTTP
+  visibility. The browser listener, local selection dismissal, pending-report
+  coalescing and reconnect reporting are staged in the client bundle
+  (`696248975`, 8 cases in `tests/js/native-dropdown-observations.test.js`).
+  They are not yet verified in a real browser. Independent state-backend claims now pass the former HTTP
   exception/retry failure and prevent stale session copies from replaying reports.
   Concurrent memory and actual Redis claims are tested; memory remains
   process-local. Missing/expired cursors fail closed until a fresh binding is
