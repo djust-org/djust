@@ -345,9 +345,9 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 
 ### V019 — Strict declaration on a `dj-auto-recover` handler
 - **Severity**: Warning
-- **Method**: Runtime (literal `dj-auto-recover="name"` in the view's own `template` / `template_name` source)
+- **Method**: Runtime (literal `dj-auto-recover="name"` in the view's own `template` / `template_name` source; dispatch additionally uses the HTML each render produced)
 - **What it detects**: a handler that a `dj-auto-recover` binding targets and that declares `parameter_policy="strict"`. Recovery handlers receive the `_form_values` / `_data_attrs` dictionaries, so dispatch always runs them under the legacy policy (ADR-036 decision R1), whatever the declaration or project policy. Recovery targets are not otherwise checked by V016.
-- **Limitation**: a dynamic attribute value, or a binding in an included template, is not detected, and that handler keeps its declared policy.
+- **Limitation**: this startup check sees only the view's own template source. A binding in an included or parent template, or with a dynamic value, is not reported here, but dispatch still treats the handler as legacy once a render contains it.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V019"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V019"]`
 
 ---

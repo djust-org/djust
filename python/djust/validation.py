@@ -94,6 +94,54 @@ def recovery_handler_names(view_class: type) -> frozenset[str]:
     return cached
 
 
+_RENDERED_RECOVERY: "weakref.WeakKeyDictionary[Any, frozenset[str]]" = weakref.WeakKeyDictionary()
+
+
+def note_rendered_recovery_targets(view: Any, html: str) -> None:
+    """Record the recovery targets in the HTML the server just rendered for ``view``.
+
+    This follows ``{% include %}``, ``{% extends %}``, conditional blocks and
+    dynamic attribute values, which the class-level template scan cannot. Only
+    real ``dj-auto-recover`` attributes of parsed elements count; escaped text
+    that merely spells one does not. The render is server output, so a client
+    payload cannot add a target.
+    """
+    try:
+        names: frozenset[str] = frozenset()
+        if "dj-auto-recover" in html:
+            from html.parser import HTMLParser
+
+            found: set[str] = set()
+
+            class _Targets(HTMLParser):
+                def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+                    for name, value in attrs:
+                        if name == "dj-auto-recover" and value and value.isidentifier():
+                            found.add(value)
+
+                handle_startendtag = handle_starttag
+
+            _Targets().feed(html)
+            names = frozenset(found)
+        _RENDERED_RECOVERY[view] = names
+    except TypeError:
+        pass  # Not weak-referenceable: the template scan still applies.
+
+
+def is_recovery_target(view: Any, name: str) -> bool:
+    """R1: a handler a ``dj-auto-recover`` binding targets in this view.
+
+    The union of the last server render of this instance and the class-level
+    template scan (which also covers renders Python did not see, such as actor
+    renders, and a reconstructed HTTP instance before it renders).
+    """
+    try:
+        rendered = _RENDERED_RECOVERY.get(view, frozenset())
+    except TypeError:  # an unhashable or non-weak-referenceable view
+        rendered = frozenset()
+    return name in rendered or name in recovery_handler_names(type(view))
+
+
 def get_handler_parameter_policy(handler: Callable) -> str:
     """Resolve only server-owned policy, independently of client metadata."""
     from ._parameter_contract import ContractError
@@ -105,7 +153,7 @@ def get_handler_parameter_policy(handler: Callable) -> str:
         raise ContractError("parameter_policy must be 'legacy' or 'strict'.")
     owner = getattr(handler, "__self__", None)
     if owner is not None and not isinstance(owner, type) and _is_live_view(owner):
-        if getattr(handler, "__name__", None) in recovery_handler_names(type(owner)):
+        if is_recovery_target(owner, getattr(handler, "__name__", "")):
             return "legacy"
     if policy is None:
         return get_project_parameter_policy()

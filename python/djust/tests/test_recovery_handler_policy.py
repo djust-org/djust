@@ -120,3 +120,153 @@ def test_legacy_project_is_unchanged():
     transport = _dispatch(RecoveryView, "restore_state", dict(ENVELOPE))
     assert CALLS == [("restore_state", ENVELOPE)], transport.sent
     assert get_handler_parameter_policy(RecoveryView().pick) == "legacy"
+
+
+# --- targets discovered from what the server rendered ------------------------
+
+MOD = __name__
+
+
+class _RecoveryBase(LiveView):
+    def mount(self, request, **kwargs):
+        self.show = False
+        self.target = "restore_state"
+        self.note = ""
+
+    def get_context_data(self, **kwargs):
+        return {"show": self.show, "target": self.target, "note": self.note}
+
+    @event_handler
+    def restore_state(self, **kwargs):
+        CALLS.append(("restore_state", kwargs))
+
+    @event_handler(parameter_policy="strict")
+    def pick(self, item_id: int):
+        CALLS.append(("pick", item_id))
+
+    @event_handler(parameter_policy="legacy")
+    def reveal(self, **kwargs):
+        self.show = True
+
+    @event_handler(parameter_policy="legacy")
+    def echo(self, text="", **kwargs):
+        self.note = text
+
+
+class IncludedRecovery(_RecoveryBase):
+    template_name = "rec_r1/included.html"
+
+
+class ExtendedRecovery(_RecoveryBase):
+    template_name = "rec_r1/child.html"
+
+
+class ToggledRecovery(_RecoveryBase):
+    template_name = "rec_r1/toggled.html"
+
+
+class DynamicRecovery(_RecoveryBase):
+    template_name = "rec_r1/dynamic.html"
+
+
+@pytest.fixture
+def templates(tmp_path):
+    from django.test import override_settings
+    from djust.utils import clear_template_dirs_cache
+
+    d = tmp_path / "templates" / "rec_r1"
+    d.mkdir(parents=True)
+    form = '<div dj-auto-recover="restore_state"><input name="title"></div>'
+    (d / "form.html").write_text(form)
+    (d / "included.html").write_text(
+        f'<div dj-root dj-view="{MOD}.IncludedRecovery">{{% include "rec_r1/form.html" %}}'
+        "<p>{{ note }}</p></div>"
+    )
+    (d / "base.html").write_text(
+        f'<div dj-root dj-view="{MOD}.ExtendedRecovery">{form}{{% block body %}}{{% endblock %}}</div>'
+    )
+    (d / "child.html").write_text(
+        '{% extends "rec_r1/base.html" %}{% block body %}<p>{{ note }}</p>{% endblock %}'
+    )
+    (d / "toggled.html").write_text(
+        f'<div dj-root dj-view="{MOD}.ToggledRecovery">'
+        '{% if show %}{% include "rec_r1/form.html" %}{% endif %}<p>{{ note }}</p></div>'
+    )
+    (d / "dynamic.html").write_text(
+        f'<div dj-root dj-view="{MOD}.DynamicRecovery">'
+        '<div dj-auto-recover="{{ target }}"></div><p>{{ note }}</p></div>'
+    )
+    with override_settings(
+        TEMPLATES=[
+            {
+                "BACKEND": "django.template.backends.django.DjangoTemplates",
+                "DIRS": [str(tmp_path / "templates")],
+                "APP_DIRS": False,
+                "OPTIONS": {},
+            }
+        ],
+        LIVEVIEW_ALLOWED_MODULES=[MOD],
+    ):
+        clear_template_dirs_cache()
+        try:
+            yield
+        finally:
+            clear_template_dirs_cache()
+
+
+def _mounted(view_class):
+    from djust.tests.test_runtime_child_routing_1892 import _make_runtime_with_view
+
+    view = view_class()
+    view.mount(None)
+    view.render_with_diff()
+    return view, _make_runtime_with_view(view)[0]
+
+
+def _send(runtime, event, params):
+    from asgiref.sync import async_to_sync
+
+    async_to_sync(runtime.dispatch_event)({"type": "event", "event": event, "params": params})
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("view_class", [IncludedRecovery, ExtendedRecovery, DynamicRecovery])
+def test_rendered_recovery_targets_follow_includes_extends_and_dynamic_values(
+    templates, view_class
+):
+    from djust.validation import recovery_handler_names
+
+    config.set("event_parameter_policy", "strict")
+    view, runtime = _mounted(view_class)
+    # Invisible to the class-level scan of the view's own template source.
+    assert "restore_state" not in recovery_handler_names(view_class)
+    assert get_handler_parameter_policy(view.restore_state) == "legacy"
+    _send(runtime, "restore_state", dict(ENVELOPE))
+    assert CALLS == [("restore_state", ENVELOPE)]
+    assert get_handler_parameter_policy(view.pick) == "strict"
+
+
+@pytest.mark.django_db
+def test_a_recovery_form_revealed_by_an_event_becomes_legacy_after_that_render(templates):
+    config.set("event_parameter_policy", "strict")
+    view, runtime = _mounted(ToggledRecovery)
+    assert get_handler_parameter_policy(view.restore_state) == "strict"
+    _send(runtime, "reveal", {})
+    assert get_handler_parameter_policy(view.restore_state) == "legacy"
+    _send(runtime, "restore_state", dict(ENVELOPE))
+    assert CALLS == [("restore_state", ENVELOPE)]
+
+
+@pytest.mark.django_db
+def test_a_client_cannot_claim_the_downgrade(templates):
+    config.set("event_parameter_policy", "strict")
+    view, runtime = _mounted(IncludedRecovery)
+    # Neither an envelope-shaped payload nor client text that spells the
+    # attribute (rendered escaped) makes another handler a recovery target.
+    _send(runtime, "echo", {"text": '<div dj-auto-recover="pick"></div>'})
+    # The rendered text spells the attribute (a regex over the HTML would be
+    # fooled); only parsed element attributes count.
+    assert '&lt;div dj-auto-recover="pick"&gt;' in view.render_with_diff()[0]
+    assert get_handler_parameter_policy(view.pick) == "strict"
+    _send(runtime, "pick", dict(ENVELOPE))
+    assert CALLS == []

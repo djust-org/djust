@@ -1896,6 +1896,15 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
     declared-strict warning, other handlers staying strict, the manifest,
     and the legacy project unchanged. Full Python suite from a frozen
     worktree: 33,776 passed and 949 skipped, plus the 2 known tag failures.
+  - Follow-up: recovery targets are now also discovered from the HTML each
+    render produced for the view instance, which covers `{% include %}`,
+    `{% extends %}`, `{% if %}`-toggled forms and dynamic values.
+    - Only parsed element attributes count. A test shows escaped client text
+      that spells the attribute does not downgrade a strict handler.
+    - The class-level template scan remains for renders Python does not see
+      (actor renders, and a reconstructed HTTP instance before it renders)
+      and for the V019 startup check.
+    - Evidence: 5 new cases, 4 of which fail without it (12 in the file).
   Producer coverage (the last P2 item):
   - An audit of every DOM-carrying frame type found two producers without a
     contract snapshot: the hot-reload patch and `StreamingMixin.push_state`.

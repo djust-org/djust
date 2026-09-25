@@ -367,6 +367,10 @@ class RequestMixin:
         from .._child_rendering import render_view_full_template, render_view_with_diff
 
         html = render_view_full_template(self, request, serialized_context=state_serializable)
+        # ADR-036 R1: recovery targets come from what the server rendered.
+        from ..validation import note_rendered_recovery_targets
+
+        note_rendered_recovery_targets(self, html)
         t_render_full = (time.perf_counter() - t0) * 1000
         liveview_content = html
 
