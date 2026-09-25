@@ -1938,7 +1938,7 @@ class WSConsumerTransport:
         """
         consumer = self._consumer
         groups: List[str] = []
-        for attr in ("_view_group", "_presence_group"):
+        for attr in ("_view_group", "_presence_group", "_presence_scope_group"):
             group = getattr(consumer, attr, None)
             if isinstance(group, str) and group:
                 groups.append(group)

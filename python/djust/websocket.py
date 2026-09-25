@@ -697,6 +697,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         self.use_actors = False  # Will be set based on view class
         self._view_group: Optional[str] = None
         self._presence_group: Optional[str] = None
+        # The presence-scope group of the view's presence key (#3095).
+        self._presence_scope_group: Optional[str] = None
         self._tick_task = None
         # Hot View Replacement (v0.6.1): per-consumer dedup + version
         # counter. ``_hvr_last_reload_id`` drops duplicate broadcasts

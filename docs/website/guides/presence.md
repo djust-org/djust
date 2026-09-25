@@ -140,6 +140,35 @@ joined" to everyone else), override `_on_presence_change`, which fires on peer
 sessions, call `super()._on_presence_change(**kwargs)`, and diff
 `list_presences()` against the list you saw last time.
 
+### Multi-room views: who a join wakes
+
+Each join or leave pushes `_on_presence_change` to peer sessions. In a view
+that sets [`push_scope`](../advanced/server-push.md#scoped-push-one-room-not-every-room)
+(one room per session), that push reaches **only the sessions that share this
+session's presence key**, so a join in one room does not wake every other
+room. Every WebSocket session of such a view is in the group of its own
+presence key, including sessions that show `online_count` without calling
+`track_presence()`. For a session that tracks, the key is the one
+`track_presence()` used; for one that does not, it is worked out again
+whenever its `push_scope` changes.
+
+Sessions that share a presence key must agree on scoping. If only some
+sessions of a view set `push_scope` (a lobby without one, rooms with one),
+set `presence_broadcast_scoped = True` on the class so they all join.
+
+A view without `push_scope` keeps the view-wide broadcast. Set
+`presence_broadcast_scoped` to choose explicitly:
+
+```python
+class RoomView(PresenceMixin, LiveView):
+    presence_key = "room:{room}"
+    presence_broadcast_scoped = True   # scoped even without push_scope
+    # presence_broadcast_scoped = False  # every session of the view, every room
+```
+
+Use `False` only when an `_on_presence_change` override must hear about joins
+and leaves under *other* presence keys.
+
 ## PresenceMixin API
 
 ### Class Attributes
@@ -147,6 +176,7 @@ sessions, call `super()._on_presence_change(**kwargs)`, and diff
 | Attribute | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `presence_key` | `str` or `None` | `None` | Group identifier. Supports format variables from view attributes (e.g., `"doc:{doc_id}"`). |
+| `presence_broadcast_scoped` *(v1.3+)* | `bool` or `None` | `None` | Who a join or leave wakes. `None`: the sessions sharing the presence key when the view sets `push_scope`, otherwise every session of the view. `True`: the sessions sharing the presence key. `False`: every session of the view. |
 | `presence_unique_per_connection` *(v1.0.0rc12+)* | `bool` | `False` | When `True`, anonymous users get a per-WebSocket-connection unique id (`anon_conn_<ws_session_id>`) instead of a per-session id. Authenticated users always use `user.id` regardless. Use for anonymous-tab demos. |
 
 ### Instance Attributes (auto-maintained)
@@ -173,7 +203,7 @@ sessions, call `super()._on_presence_change(**kwargs)`, and diff
 |----------|------------|
 | `handle_presence_join(presence)` | This view's own `track_presence()` joins the group (runs on the joining session only) |
 | `handle_presence_leave(presence)` | This view's own `untrack_presence()` leaves the group (runs on the leaving session only) |
-| `_on_presence_change(**kwargs)` *(v1.0.0rc12+)* | Auto-fires on every other session when this view's `track`/`untrack` runs. Default body refreshes `online_count`. Override to do additional work; call `super()._on_presence_change(**kwargs)` to preserve the count refresh. |
+| `_on_presence_change(**kwargs)` *(v1.0.0rc12+)* | Auto-fires on other sessions when this view's `track`/`untrack` runs: every session of the view, or only those sharing the presence key (see `presence_broadcast_scoped`). Default body refreshes `online_count`. Override to do additional work; call `super()._on_presence_change(**kwargs)` to preserve the count refresh. |
 
 ## CursorTracker
 
