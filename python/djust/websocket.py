@@ -12,7 +12,12 @@ import weakref
 from typing import Any, Awaitable, Callable, ContextManager, Deque, Dict, List, Optional, Tuple
 from asgiref.sync import sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
-from ._background_render import BackgroundRender, render_background
+from ._background_render import (
+    BackgroundRender,
+    _discard_baseline,
+    render_background,
+    render_background_sync,
+)
 from ._render_operation import settle_render_operation
 from ._child_rendering import reconcile_child_render
 from .change_detection import (
@@ -782,6 +787,27 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         finally:
             if binding is not None:
                 binding.release()
+
+    async def dispatch(self, message: Dict[str, Any]) -> None:
+        """Channels' dispatch, minus one hop for ``server_push`` with the pool on.
+
+        Channels runs ``aclose_old_connections()``, a ``sync_to_async`` hop,
+        before EVERY message. With the worker pool on (#3074) a
+        ``server_push`` message skips that hop here: the push turn runs
+        Django's ``close_old_connections()`` itself, on the session's thread
+        and before any hook can touch the database (inside the offloaded
+        turn's single hop, or as the stock turn's first step). A push that is
+        skipped (the session's own broadcast) or deferred does no DB work, so
+        it needs no check. Every other message, and every message with the
+        pool off, goes through Channels unchanged.
+        """
+        if message.get("type") == "server_push":
+            from .worker_pool import offload_enabled
+
+            if offload_enabled():
+                await self.server_push(message)
+                return
+        await super().dispatch(message)
 
     async def websocket_disconnect(self, message: Dict[str, Any]) -> None:
         """Record that the disconnect reached us, then run Channels' handler."""
@@ -4883,6 +4909,20 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         captured before the lock wait; if another view replaced it meanwhile,
         nothing is applied.
         """
+        from .worker_pool import offload_enabled
+
+        if offload_enabled():
+            from ._exposure import uses_legacy_exposure
+
+            if view is not None and uses_legacy_exposure(view):
+                await self._run_server_push_turn_offloaded(view, events)
+                return
+            # This path's hooks hop to the worker one by one. ``dispatch``
+            # skipped Channels' per-message DB-connection check for this push
+            # (#3074), so run it here, once, before any hook touches the DB.
+            from channels.db import aclose_old_connections
+
+            await aclose_old_connections()
         try:
             dispatch_work = False
             try:
@@ -4966,8 +5006,160 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         except Exception as e:
             self._log_view_hook_failure(view, e, "Error in server_push: %s", e, traceback=True)
 
+    async def _run_server_push_turn_offloaded(
+        self, view: Any, events: Tuple[Dict[str, Any], ...]
+    ) -> None:
+        """One worker hop for a whole server-push turn (#3074, worker pool on).
+
+        :meth:`_run_server_push_turn` with the per-frame work moved off the
+        asyncio event loop onto the session's pool thread: Django's stale
+        DB-connection check, every push's state and hook, the skip decision,
+        the state sync, the render and diff all run in ONE ``sync_to_async``
+        hop, where the stock path makes one hop per hook, one for the render
+        and one (in ``dispatch``) for the connection check. On the loop, the
+        Rust patch JSON is spliced into the frame as is, instead of being
+        parsed and re-serialised, whenever the frame carries nothing else.
+
+        Same contract as the stock turn: the caller holds ``_render_lock``,
+        which this releases; the wire version is allocated on the loop after
+        the hop and before the send, under the lock, so frames stay in
+        order; a raising hook is logged and skipped; nothing renders unless
+        some hook asked for it. Legacy-exposure views only: an explicit
+        (ADR-038) root authorizes and commits around the render
+        asynchronously, so it keeps the stock path.
+        """
+        try:
+            dispatch_work = False
+            try:
+                if self.view_instance is not view:
+                    return
+                runtime = getattr(self, "_runtime", None)
+                tenant = getattr(view, "_tenant", None)
+
+                def turn() -> Tuple[List[BaseException], bool, bool, Any]:
+                    from django.db import close_old_connections
+
+                    close_old_connections()
+                    failures: List[BaseException] = []
+                    applied = render = False
+                    for event in events:
+                        try:
+                            hook = self._prepare_server_push(view, event)
+                            if hook is not None:
+                                handler_fn, payload = hook
+                                handler_fn(**payload)
+                        except Exception as exc:  # noqa: BLE001 - logged on the loop
+                            failures.append(exc)
+                            continue
+                        applied = True
+                        if not _resolve_skip_render(view):
+                            render = True
+                    rendered: Any = None
+                    if applied and render and self.view_instance is view:
+                        with _tenant_context(tenant):
+                            rendered = render_background_sync(view, runtime) or False
+                    return failures, applied, render, rendered
+
+                try:
+                    failures, applied, render, rendered = await settle_render_operation(
+                        sync_to_async(turn)()
+                    )
+                except asyncio.CancelledError:
+                    _discard_baseline(view)
+                    raise
+                for exc in failures:
+                    self._log_view_hook_failure(
+                        view, exc, "Error in server_push: %s", exc, traceback=True
+                    )
+                dispatch_work = applied
+                if self.view_instance is not view or not applied:
+                    return
+                if not render:
+                    await self._flush_all_pending()
+                    await self._send_noop()
+                    return
+                if rendered is None:
+                    return  # the view was replaced before the render
+                if rendered is False:
+                    logger.warning("Background render parameter contracts unavailable")
+                    await self.send_error(
+                        "Render parameter contracts unavailable.",
+                        code="render_error",
+                        source="async",
+                        _exc_info=(None, None, None),
+                    )
+                    return
+                if rendered.send_fields and runtime is not None:
+                    runtime._parameter_contracts_active = True
+                await self._send_broadcast_render(rendered)
+            finally:
+                self._end_explicit_turn(view)
+                self._render_lock.release()
+                if dispatch_work and self.view_instance is view:
+                    await self._dispatch_async_work(event_name=None)
+        except Exception as e:
+            self._log_view_hook_failure(view, e, "Error in server_push: %s", e, traceback=True)
+
+    async def _send_broadcast_render(self, rendered: BackgroundRender) -> None:
+        """Send a server-push render as the stock turn does, but splice the
+        Rust patch JSON into the frame when the frame carries nothing else.
+
+        The spliced frame is the same JSON object ``_send_update`` builds
+        (``type``, ``patches``, ``version``, ``broadcast``, ``source``); it
+        skips a ``fast_json_loads`` + ``json.dumps`` round trip of the patches
+        on the event loop. Anything that adds fields (binary mode, DEBUG's
+        debug payload, parameter contracts, a signed snapshot) takes the
+        ``_send_update`` path unchanged. One wire version per frame, allocated
+        (and recovery armed) before any branch.
+        """
+        html, patches = rendered.html, rendered.patches
+        version = self._next_version_armed(html)
+        if patches is None:
+            await self._send_update(
+                html=rendered.content,
+                version=version,
+                broadcast=True,
+                source="broadcast",
+                **rendered.send_fields,
+            )
+            return
+        if isinstance(patches, str) and not rendered.send_fields and not self.use_binary:
+            from django.conf import settings
+
+            if not getattr(settings, "DEBUG", False):
+                await self._send_frame(
+                    text_data='{"type":"patch","patches":%s,"version":%d,'
+                    '"broadcast":true,"source":"broadcast"}' % (patches, version)
+                )
+                await self._flush_all_pending()
+                return
+        if isinstance(patches, str):
+            patches = fast_json_loads(patches)
+        await self._send_update(
+            patches=patches,
+            version=version,
+            broadcast=True,
+            source="broadcast",
+            **rendered.send_fields,
+        )
+
     async def _apply_server_push(self, view: Any, event: Dict[str, Any]) -> None:
         """Apply one push's ``state`` and call its handler (the push's hook)."""
+        hook = self._prepare_server_push(view, event)
+        if hook is not None:
+            handler_fn, payload = hook
+            await sync_to_async(handler_fn)(**payload)
+
+    @staticmethod
+    def _prepare_server_push(
+        view: Any, event: Dict[str, Any]
+    ) -> Optional[Tuple[Callable[..., Any], Dict[str, Any]]]:
+        """Apply one push's ``state``; return its allowed handler and payload.
+
+        Synchronous so the offloaded push turn (#3074) can run it on the
+        session's worker thread; :meth:`_apply_server_push` runs it on the
+        loop and calls the handler through ``sync_to_async``.
+        """
         # Apply state updates before handler call so the handler can read
         # the new values. _sync_state_to_rust runs after both to push the
         # final Python state to Rust for rendering.
@@ -5001,8 +5193,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         handler_name,
                     )
                 else:
-                    payload = event.get("payload") or {}
-                    await sync_to_async(handler_fn)(**payload)
+                    return handler_fn, event.get("payload") or {}
+        return None
 
     def _defer_server_push(self, event: Dict[str, Any], owner: Any = _ACTIVE_VIEW) -> None:
         """Queue a push that found the session busy, and make sure a drain runs.
