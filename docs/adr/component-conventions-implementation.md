@@ -2065,11 +2065,51 @@ Source: [decisions and acceptance](035-django-native-form-and-object-lifecycle.m
   - configuration errors, and S013 with its suppressions.
   Limitation recorded in the ADR: `live_patch` within one view keeps the
   mounted target.
-- [ ] **F2 — form acceptance.** Exercise no-custom-mount edit, create and
+- [x] **F2 — form acceptance.** Exercise no-custom-mount edit, create and
   non-model examples; independent/inherited hooks; choices, relations, uploads,
   empty submission, validation and exactly-once save. Cover missing/tampered/
   revoked targets, callback failures, HTTP/WS reconnect/back navigation,
   Django/Rust rendering, typing and browser-visible input/errors/save feedback.
+  Done 2026-09-25. `test_model_form_acceptance_adr035.py` (30 tests) counts every
+  write in SQL and covers:
+  - an edit view with no `mount()` saves exactly once;
+  - a `form_valid` that doesn't save writes nothing (D5);
+  - a `FormMixin` create form inserts one row;
+  - a non-model form needs no lookup;
+  - a denied edit never creates a row;
+  - `get_initial`/`get_prefix`/`get_form_kwargs` work declared on the view and
+    inherited by a subclass;
+  - M2M (`Group.permissions`) and FK (`Permission.content_type`) initial values
+    are primary keys, choices are listed, and both save;
+  - an upload reaches the form through a `get_form_kwargs` override and is
+    required by the form's validation;
+  - an empty submission revalidates the current values;
+  - blank and duplicate names show their errors, call `form_invalid`, and write
+    nothing;
+  - a payload `id`/`pk` does not retarget the save;
+  - revoked, deleted and removed-membership targets are denied between events;
+  - `get_queryset`/`has_object_permission` raising fail closed on HTTP and on
+    WebSocket mount and event, without leaking the message;
+  - reconnect keeps typed input (per-event session save), which is validated
+    again before saving. A blank draft is refused and nothing is saved;
+  - reconnect after deletion is denied;
+  - `object`/`form_data` render the same in the Django and Rust engines under
+    both policies;
+  - mypy types `self.object` as `Optional[Group]` and rejects a wrong model.
+
+  Browser: `tests/playwright/test_model_form.py` drives
+  `/demos/model-form/<pk>/` (a demo `Product` editor with no `mount()`) over
+  WebSocket, SSE and HTTP-only. It checks:
+  - the initial render;
+  - a field error with nothing saved;
+  - the save message and the saved values after a fresh load;
+  - a working form after leaving and using Back;
+  - a forged `id`/`pk` event does not retarget the save;
+  - filtered-out and forbidden products are the same 403 with no form.
+
+  It passes on all three transports, against the worktree's demo server on
+  port 18437. Canary: with the adapter's `instance` binding removed it fails
+  18 checks, 6 per transport.
 - [ ] **FR — retirement.** Delete the pre-hook object plumbing per
   [ADR-035 Step R](035-django-native-form-and-object-lifecycle.md):
   the `_model_instance` attribute (`forms.py:228`, used at `:342-344`,

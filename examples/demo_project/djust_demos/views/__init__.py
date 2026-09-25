@@ -7,6 +7,7 @@ from .nav_demo import NavDemoPageAView, NavDemoPageBView
 from .smoke_demo import BrowserSmokeView
 from .exposure_demo import ExposureMatrixView, LegacyExposureMatrixView
 from .strict_parameters_demo import StrictParametersView
+from .model_form_demo import ModelFormDemoView, model_form_index
 from .table_select_demo import TableSelectView
 from .demos import (
     TodoView,
@@ -53,6 +54,8 @@ __all__ = [
     "ExposureMatrixView",
     "LegacyExposureMatrixView",
     "StrictParametersView",
+    "ModelFormDemoView",
+    "model_form_index",
     "TableSelectView",
     "TodoView",
     "ChatView",
