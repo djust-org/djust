@@ -263,6 +263,7 @@ function reinitLiveViewForTurboNav() {
 
     // Auto-stamp root attributes on new content before querying containers
     autoStampRootAttributes();
+    globalThis.djust._installPageParameterContracts();
 
     // Find all LiveView containers in the new content
     const allContainers = document.querySelectorAll('[dj-view]');
@@ -7480,6 +7481,69 @@ for (const event of ['djust:before-navigate', 'turbo:before-visit', 'pagehide'])
     });
 }
 
+// ADR-036: the page's own (HTTP) contract scope. get() renders the root
+// mount's owner contracts into #djust-parameter-contracts, outside dj-root;
+// HTTP fallback responses refresh them like WS/SSE render frames. A page whose
+// data block names another view (a socket live_redirect replaced the root)
+// leaves the scope unknown rather than applying a stale mount's rules.
+function _installPageParameterContracts() {
+    const root = findPageViewContainer();
+    const path = root ? root.getAttribute('dj-view') : null;
+    _localEventTransport.primaryViewPath = path || null;
+    _localEventTransport._parameterContracts = new Map();
+    _localEventTransport._parameterContractApplied = new Map();
+    if (!path) return;
+    const block = document.getElementById('djust-parameter-contracts');
+    let manifest = null;
+    if (block) {
+        let payload = null;
+        try { payload = JSON.parse(block.textContent); } catch { payload = null; }
+        if (!payload || payload.view !== path) {
+            if (payload === null) _localEventTransport._parameterContracts.set(path, false);
+            return;
+        }
+        manifest = payload.contracts;
+    }
+    try {
+        _installParameterContracts(_localEventTransport, manifest, path, true, 0);
+    } catch {
+        // The scope is recorded as invalid; strict lookups fail closed.
+        if (globalThis.djustDebug) console.warn('[LiveView] Invalid page parameter contracts');
+    }
+}
+
+// The transport handleEvent() would send through right now.
+function _eventContractTransport() {
+    const socket = liveViewWS;
+    if (socket && socket.enabled && socket.viewMounted &&
+        (!socket.ws || (typeof WebSocket !== 'undefined' && socket.ws.readyState === WebSocket.OPEN))) {
+        return socket;
+    }
+    return _localEventTransport;
+}
+
+// Resolve the public contract a native binding would dispatch under. The
+// owner address matches server routing: an embedded child's view_id wins over
+// a component inside it. Returns {policy: 'legacy'|'strict'|'unknown', ...}.
+// 'unknown' (no record for this mount, owner or handler) cannot be strict: the
+// server validates it. An invalid strict scope throws, so callers fail closed.
+function _resolveParameterContract(element, eventName) {
+    const transport = _eventContractTransport();
+    const root = findPageViewContainer();
+    const path = root ? root.getAttribute('dj-view') : null;
+    const mounts = transport._parameterContracts;
+    if (!path || !mounts || !mounts.has(path)) return {policy: 'unknown', transport};
+    const owners = mounts.get(path);
+    if (owners === null) return {policy: 'legacy', transport};
+    if (owners === false) throw new Error('Invalid public parameter contracts');
+    const viewId = (element && getEmbeddedViewId(element)) || null;
+    const componentId = viewId ? null : ((element && getComponentId(element)) || null);
+    const handlers = owners.get(JSON.stringify([viewId, componentId]));
+    if (!handlers || !handlers.has(eventName)) return {policy: 'unknown', transport};
+    const contract = handlers.get(eventName);
+    return {policy: contract.policy, contract, transport, viewId, componentId};
+}
+
 // Main Event Handler
 //
 // `_rateBypass` (#2656) is the re-entry flag for the @debounce / @throttle
@@ -7720,7 +7784,11 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
             headers: {
                 'Content-Type': 'application/json',
                 'X-CSRFToken': csrfToken,
-                'X-Djust-Event': eventName
+                'X-Djust-Event': eventName,
+                // A strict (or invalid) page scope asks for an explicit
+                // contract clear when the rendered tree no longer has one.
+                ...(_localEventTransport._parameterContracts?.get(_localEventTransport.primaryViewPath) != null
+                    ? {'X-Djust-Parameter-Contracts': '1'} : {})
             },
             body: JSON.stringify(paramsToSend)
         });
@@ -7750,6 +7818,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     }
 }
 window.djust.handleEvent = handleEvent;
+window.djust._installPageParameterContracts = _installPageParameterContracts;
 
 // === VDOM Patch Application ===
 
@@ -10951,6 +11020,7 @@ function djustInit() {
 
     // Auto-stamp root attributes on all [dj-view] elements
     const allContainers = autoStampRootAttributes();
+    _installPageParameterContracts();
 
     if (allContainers.length === 0) {
         if (globalThis.djustDebug) console.error(

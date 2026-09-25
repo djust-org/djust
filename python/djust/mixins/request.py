@@ -50,6 +50,54 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: Sent by the client when its HTTP scope holds strict contracts, so a response
+#: whose tree no longer has any carries an explicit clear (the stateless HTTP
+#: counterpart of the socket runtime's ``_parameter_contracts_active``).
+PARAMETER_CONTRACTS_HEADER = "X-Djust-Parameter-Contracts"
+
+
+def _initial_parameter_contracts(view: Any, view_path: str) -> Optional[str]:
+    """Escaped JSON for the initial page's contract element, or None if legacy.
+
+    ``false`` marks discovery failure: the client installs an invalid scope and
+    strict lookups fail closed instead of guessing a legacy contract.
+    """
+    from .._parameter_metadata import parameter_contract_manifest
+    from ..security import escape_json_for_script
+
+    try:
+        manifest = parameter_contract_manifest(view)
+    except Exception:  # noqa: BLE001 — declaration errors must not break the page
+        logger.warning("Initial parameter contracts unavailable")
+        return escape_json_for_script(json.dumps({"view": view_path, "contracts": False}))
+    if manifest is None:
+        return None
+    return escape_json_for_script(json.dumps({"view": view_path, "contracts": manifest}))
+
+
+def _http_parameter_contract_fields(view: Any, request: Any) -> Optional[Dict[str, Any]]:
+    """Contract fields for an HTTP render response (``{}`` for a legacy tree).
+
+    None means discovery failed: the caller withholds the DOM update.
+    """
+    from .._parameter_metadata import parameter_contract_manifest
+
+    try:
+        manifest = parameter_contract_manifest(view)
+    except Exception:  # noqa: BLE001 — never send a DOM update with invalid contracts
+        logger.warning("Render parameter contracts unavailable")
+        return None
+    if manifest is None and request.headers.get(PARAMETER_CONTRACTS_HEADER) != "1":
+        return {}
+    view_path = f"{view.__class__.__module__}.{view.__class__.__name__}"
+    return {"parameter_contracts": manifest, "parameter_contract_view": view_path}
+
+
+def _contract_error_response() -> JsonResponse:
+    return JsonResponse(
+        {"type": "error", "error": "Render parameter contracts unavailable."}, status=500
+    )
+
 
 class RequestMixin:
     """HTTP handling: get, post."""
@@ -390,6 +438,13 @@ class RequestMixin:
         # where the author did not declare dj-view themselves (#2981).
         view_path = f"{self.__class__.__module__}.{self.__class__.__name__}"
         html = self._stamp_dj_view(html, view_path)
+
+        # ADR-036: the page's own owner contracts, for events sent before a
+        # socket mounts or over the HTTP fallback. Emitted outside dj-root so
+        # the VDOM baseline is unaffected; all-legacy pages are unchanged.
+        self.__dict__["_initial_parameter_contracts"] = _initial_parameter_contracts(
+            self, view_path
+        )
 
         # Inject LiveView client script
         html = self._inject_client_script(html)
@@ -958,6 +1013,10 @@ class RequestMixin:
 
             if _resolve_skip_render(self):
                 skip_response: Dict[str, Any] = {"patches": []}
+                contract_fields = _http_parameter_contract_fields(self, request)
+                if contract_fields is None:
+                    return _contract_error_response()
+                skip_response.update(contract_fields)
                 if hasattr(self, "_drain_flash"):
                     flash_commands = self._drain_flash()
                     if flash_commands:
@@ -979,6 +1038,14 @@ class RequestMixin:
                 t0_render = time.perf_counter()
                 html, patches_json, version = render_view_with_diff(self, request)
                 t_render_ms = (time.perf_counter() - t0_render) * 1000
+
+            # ADR-036: the rendered tree's owner contracts travel with the DOM
+            # update they describe. Discovery failure withholds that update and
+            # drops the unsent diff baseline, as the socket runtime does.
+            contract_fields = _http_parameter_contract_fields(self, request)
+            if contract_fields is None:
+                self._rust_view.reset()
+                return _contract_error_response()
 
             if not legacy_exposure:
                 from .._exposure_child_persistence import save_child_states
@@ -1056,7 +1123,7 @@ class RequestMixin:
                 patch_count = len(patches)
 
                 if patch_count > 0 and patch_count <= PATCH_THRESHOLD:
-                    response_data = {"patches": patches, "version": version}
+                    response_data = {"patches": patches, "version": version, **contract_fields}
                     if cache_request_id:
                         response_data["cache_request_id"] = cache_request_id
                     _inject_side_channels(response_data)
@@ -1064,14 +1131,14 @@ class RequestMixin:
                     return JsonResponse(response_data)
                 else:
                     self._rust_view.reset()
-                    response_data = {"html": html, "version": version}
+                    response_data = {"html": html, "version": version, **contract_fields}
                     if cache_request_id:
                         response_data["cache_request_id"] = cache_request_id
                     _inject_side_channels(response_data)
                     _inject_debug(response_data)
                     return JsonResponse(response_data)
             else:
-                response_data = {"html": html, "version": version}
+                response_data = {"html": html, "version": version, **contract_fields}
                 if cache_request_id:
                     response_data["cache_request_id"] = cache_request_id
                 _inject_side_channels(response_data)

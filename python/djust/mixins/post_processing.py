@@ -439,6 +439,14 @@ class PostProcessingMixin:
             script += f'\n        <script src="{client_dev_js_url}" defer data-turbo-track="reload"></script>'
 
         full_script = config_script + script
+        # ADR-036: public owner contracts of the initial page (set by get();
+        # escaped JSON, outside dj-root). A data block, not executable script.
+        initial_contracts = self.__dict__.pop("_initial_parameter_contracts", None)
+        if initial_contracts:
+            full_script = (
+                '<script type="application/json" id="djust-parameter-contracts">'
+                f"{initial_contracts}</script>" + full_script
+            )
 
         # The HTTP event fallback and djust.call need the CSRF token even when
         # the project renames the cookie (CSRF_COOKIE_NAME) or keeps it out of

@@ -270,6 +270,59 @@ integer handler. The subsequent
 [replay integration](036-strict-server-integration.md#time-travel-replay-integration)
 routes strict arguments through the canonical binder before restoration.
 
+## Initial page and HTTP fallback delivery
+
+`get()` renders the root mount's manifest into a JSON data block,
+`<script type="application/json" id="djust-parameter-contracts">`, after the
+live root and outside it, so the server's VDOM baseline never contains it.
+The payload is `{"view": <mount path>, "contracts": <manifest>}`: the same
+public fields as the mount frame, escaped for script context. All-legacy pages
+emit nothing. If discovery fails, `contracts` is `false`, a value-free marker.
+The client installs an invalid scope and strict lookups fail closed. (A
+strict declaration that does not compile already fails the page render
+itself, through handler metadata. V016 reports it at startup.)
+
+The client installs that block as the page's own scope (`_localEventTransport`)
+at init and after Turbo navigation, keyed by the root's `dj-view`. A block
+naming a different view leaves the scope unknown rather than applying another
+mount's rules. HTTP fallback render responses (patches, full HTML and the
+`_skip_render` empty patch list) carry `parameter_contracts` and
+`parameter_contract_view` for the rendered tree. The existing refresh rules
+apply them after the DOM update. The HTTP runtime is stateless, so the client
+sends `X-Djust-Parameter-Contracts: 1` while its page scope is strict. A
+response whose tree no longer has a strict owner then carries an explicit
+`null` clear instead of omitting the field, which would invalidate the scope.
+Legacy requests without the header get their previous response shape.
+Discovery failure withholds the DOM update: a fixed 500 error, and the unsent
+diff baseline is dropped.
+
+`_resolveParameterContract(element, eventName)` is the binder-side lookup.
+- **Transport.** It uses the transport `handleEvent` would send through: a
+  mounted, open WebSocket or SSE instance, otherwise the page scope.
+- **Owner address.** Matches server routing: an embedded child's `view_id`
+  wins over an enclosing component, then `component_id`, then the root.
+- **Result.** `legacy`, the frozen `strict` record, or `unknown` (no record
+  for that mount, owner or handler). An unknown handler cannot be strict:
+  every strict handler is listed, and the server validates it anyway.
+- **Invalid scope.** Throws, so callers fail closed.
+- **Scope of this slice.** Native binders do not call it yet. Connecting them
+  is the next sub-slice and waits on the collection-convention decision
+  (generated values, `_target`).
+
+Owner generations are not added. Manifests are whole-tree snapshots applied
+atomically with the DOM they describe, and ordered by receipt. Two root mounts
+of the same view path on one page remain unsupported by this addressing.
+
+Evidence:
+- `test_http_parameter_contracts.py`: 10 cases. Initial block placement and
+  redaction, the legacy page unchanged, discovery failure marked invalid,
+  strict render and skip responses, legacy responses with and without the
+  header, and a withheld DOM update.
+- `tests/js/parameter_contract_page_scope.test.js`: 11 bundle cases. Page scope
+  installation, owner resolution precedence, stale-view and invalid blocks,
+  the HTTP header, explicit clears, render snapshots, missing-snapshot
+  invalidation, and transport selection.
+
 ## Evidence and remaining gates
 
 Actual WebSocket (normal and actor mode) and SSE endpoint tests failed before the
@@ -288,8 +341,9 @@ These are automated suite results, not live-browser acceptance evidence.
 
 This does not complete P2. Before activating strict native binding:
 
-1. Deliver initial HTTP-only contracts and complete render-producer coverage,
-   including child/component creation, removal and replacement. Verify cached
+1. Initial HTTP-only and HTTP fallback delivery are now in place (above).
+   Complete render-producer coverage remains, including child/component
+   creation, removal and replacement. Verify cached
    DOM updates and recovery producers against the applied-snapshot rules above.
 2. Match the current DOM owner and its generation, not just reusable string IDs.
    Cover buffered/stale frames, reconnect and repeated same-path root instances.

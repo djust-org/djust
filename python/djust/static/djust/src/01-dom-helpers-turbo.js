@@ -95,6 +95,7 @@ function reinitLiveViewForTurboNav() {
 
     // Auto-stamp root attributes on new content before querying containers
     autoStampRootAttributes();
+    globalThis.djust._installPageParameterContracts();
 
     // Find all LiveView containers in the new content
     const allContainers = document.querySelectorAll('[dj-view]');
