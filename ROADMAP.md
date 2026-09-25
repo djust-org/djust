@@ -86,7 +86,7 @@ Two name shapes appear in this roadmap, with distinct meanings:
 | ~~**P1**~~ | ~~#3114 — `djust.worker_pool.PooledHTTP` (opt-in): HTTP requests run on a bounded pool of threads instead of one new thread each; pool threads start from an empty context; scaling guide "Memory under overload" (RSS per client, allocator retention, bounded queues)~~ ✅ (#3118) | v1.3.0 |
 | **P2** | #3116 — The diagnostic owner-slot ContextVar holds strong refs to the consumer and runtime; context copies (tasks started in a turn, threads on 3.14t) pin disconnected sessions. Store weak refs (ADR-038 code) | v1.3.0 |
 
-### v1.3.0-5 — event-loop ceiling (#3095)
+### v1.3.0-5 — event-loop ceiling (#3095) ✅
 
 *Kind:* performance / scalability. On free-threaded 3.14t with `worker_threads` and scoped push, snake-arena in production saturates at about 160 players with the asyncio event-loop thread at 0.87–0.97 of a core while the pool threads use about 3 cores. These rows take per-message work off the loop thread. Every behaviour change is opt-in or proven safe.
 
