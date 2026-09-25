@@ -63,6 +63,20 @@ Two name shapes appear in this roadmap, with distinct meanings:
 | ~~**P1**~~ | ~~#3080 — Process RSS grows under WebSocket load and is never released. Root cause: `InMemoryStateBackend` never applied its TTL at runtime (only `djust clear` did), so every session's view state stayed for the life of the process. Expire on `get()`, sweep from `set()` at most once per `min(ttl, 60)` s; document the per-session cost and allocator retention~~ ✅ (#3083; 1.2 backport #3084) | v1.3.0 |
 | ~~**P3**~~ | ~~`performance.MemoryTracker` retries `import psutil` on every event (about 42 µs when psutil is absent); probe once at module import~~ ✅ (#3083; 1.2 backport #3084) | v1.3.0 |
 
+### v1.3.0-3 — multi-core rendering (#3074)
+
+*Kind:* performance / scalability. One process used about one core for LiveView work. The experiment on #3074 scaled one process to about 5 cores on free-threaded CPython 3.14t. These PRs productionise it, one per row, in order. Every behaviour change is opt-in, and stock behaviour stays the default. The exception is row 1: it releases the GIL during a render, which changes nothing but concurrency, so it is unconditional.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| **P1** | #3074 (1/7) — Release the GIL in `RustLiveView.render_with_diff` (detach around the pure-Rust render and VDOM diff; registry lookups attach before they lock) | v1.3.0 |
+| **P1** | #3074 (2/7) — Opt-in pinned session worker pool (`LIVEVIEW_CONFIG["worker_threads"]`): each WebSocket session stays on one thread; HTTP and SSE unchanged | v1.3.0 |
+| **P1** | #3004 / #3074 (3/7) — Scoped server push: reach a subset of a view's sessions (e.g. one room) instead of every session of the view | v1.3.0 |
+| **P2** | #3074 (4/7) — Event-loop offload: pre-event snapshot in the handler's hop, one worker hop per server-push turn, no per-message `close_old_connections` hop for channel-layer messages | v1.3.0 |
+| **P2** | #3074 (5/7) — Channels in-memory layer expiry sweep is O(n²) per broadcast round | v1.3.0 |
+| **P2** | #3074 (6/7) — Free-threaded `cp314t` wheels, and a CI job that runs a core subset on 3.14t with the GIL off | v1.3.0 |
+| **P2** | #3074 (7/7) — Guide: scaling a djust process across cores | v1.3.0 |
+
 ## Next: v1.2.1 — non-breaking fixes (drain)
 
 > Planned 2026-09-24 from a triage of every open issue. **Policy:** non-breaking bug fixes ship in 1.2.1; anything breaking, new features, and parser/dependency upgrades go to 1.3. Issues split into a 1.2.1 part and a 1.3 part are marked. The ADR-034–038 stack (#2944, #2954) merges after 1.2.1 is cut. Already shipped toward 1.2.1 on `main`: #3009 (inline whitespace, #2999/#3010), the CSRF resolver (#2978), SerializerCache removal (#2992), the audit gate (#2989).
