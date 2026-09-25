@@ -45,6 +45,11 @@ navigation:
         file: core-concepts/components.md
         order: 3
         level: beginner
+      - title: Interactive Components
+        slug: interactive-components
+        file: guides/interactive-components.md
+        order: 3.5
+        level: intermediate
       - title: Templates
         slug: templates
         file: core-concepts/templates.md

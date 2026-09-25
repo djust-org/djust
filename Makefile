@@ -241,6 +241,14 @@ check-doc-snippets: ## Smoke-check fenced Python doc snippets + Django/JS-size c
 template-backend-lists: ## Regenerate docs/TEMPLATE_BACKEND.md's supported/unsupported tag+filter lists from the engine (closes #2533)
 	@PYTHONPATH=. $(PYTHON) scripts/generate-template-backend-lists.py --write
 
+.PHONY: interactive-reference
+interactive-reference: ## Regenerate the interactive-components reference tables in docs/website/api-reference/components.md (ADR-034)
+	@PYTHONPATH=python:. $(PYTHON) scripts/generate-interactive-reference.py --write
+
+.PHONY: check-interactive-reference
+check-interactive-reference: ## Fail when the interactive-components reference differs from the components' contracts (ADR-034)
+	@PYTHONPATH=python:. $(PYTHON) scripts/generate-interactive-reference.py
+
 .PHONY: check-template-backend-lists
 check-template-backend-lists: ## Fail when docs/TEMPLATE_BACKEND.md's generated lists differ from the engine (closes #2533)
 	@PYTHONPATH=. $(PYTHON) scripts/generate-template-backend-lists.py

@@ -1,6 +1,6 @@
 # ADR-034: Typed component bindings and instance-scoped events
 
-**Status**: Proposed
+**Status**: Accepted: gates C1–C4 closed on `feat/adr-034-037`, with evidence in the [acceptance review](component-conventions-implementation.md#adr-034-acceptance-review--c4); acceptance is confirmed at that branch's review. `djust.components.interactive` is available from djust 1.3. CR (Step R) is closed: C1–C4 revealed no retirement target, as this ADR expected.
 **Date**: 2026-09-19
 **Deciders**: Project maintainers
 **Evidence baseline**: `40786f668` on `feat/components-catalogue`.
@@ -22,7 +22,7 @@ creating a server-side component per row. When a reusable, stateful component ow
 the behavior, the view subscribes to its typed outputs using Python references:
 
 ```python
-# Proposed API; not available in the current release.
+# Available from djust 1.3 (not in the 1.3.0rc1 pre-release).
 @project_menu.on.selected
 def on_project_menu_selected(self, component: DropdownMenu, value: str) -> None:
     self.selected_action = value
@@ -39,9 +39,10 @@ they are not required just to repeat an action button.
 `.on` with an unrestricted `__getattr__`, `Any`, or an untyped decorator would
 undermine this decision.
 
-New component APIs and imports below are proposals; the delegated row example
-uses existing view-handler syntax. This ADR neither implements the proposed APIs
-nor changes the status of ADR-031 through ADR-033.
+The component APIs and imports below are implemented in
+`djust.components.interactive`, available from djust 1.3. The delegated row
+example uses existing view-handler syntax. This ADR does not change the status
+of ADR-031 through ADR-033.
 
 ## Context and problem
 
@@ -65,7 +66,7 @@ At the evidence baseline:
   state and component-local dispatch. However, descriptor access currently
   returns an untyped proxy; simply adding new decorator syntax is insufficient.
 - [ViewRuntime._dispatch_component_event](../../python/djust/runtime.py) already
-  resolves component IDs against the view's registry. The proposed API should
+  resolves component IDs against the view's registry. The new API should
   build on this dispatch path, not invent a second browser event system.
 - [event_handler](../../python/djust/decorators.py) has no `component=` or
   `event=` subscription arguments today.
@@ -126,7 +127,7 @@ object; class construction resolves its attribute name and validates ownership.
 It does not look up a component by a user-written string.
 
 ```python
-# Proposed imports and API, not executable against the current release.
+# Available from djust 1.3 (not in the 1.3.0rc1 pre-release).
 from djust import LiveView
 from djust.components.interactive import DropdownMenu
 
@@ -216,9 +217,9 @@ this ADR. A pleasing syntax without working negative type tests is not sufficien
 The [C1 typing proof](notes/034-typing-proof.md) first passed with an isolated descriptor
 and now passes against the real staged bindings. Mypy follows Django's installed
 source declarations, and the LiveView stub includes its real constructor; both
-checkers reject all twenty-one negative locations without a new dependency. C1 and
-this ADR remain open pending the lifecycle, browser and publication requirements;
-the private implementation is not yet the released interactive API.
+checkers reject all twenty-one negative locations without a new dependency. At
+acceptance the proof imports the public module and covers keyed collections:
+both checkers reject 31 negative locations.
 
 ### D3. Components own mechanics; views handle semantic outputs
 
@@ -342,7 +343,7 @@ namespace; a generic container that degrades `.on` to `Any` is not an acceptable
 shortcut. The same callback receives whichever bound item emitted the output.
 
 ```python
-# Proposed API. Static rows keep this example independent of a database model.
+# Available from djust 1.3. Static rows keep this example independent of a database model.
 from djust import LiveView
 from djust.components.interactive import DropdownMenu
 
@@ -445,7 +446,7 @@ visibility mode is client-owned, subscribing to its typed `toggled` observation
 opts into a server notification after the browser changes visibility:
 
 ```python
-# Proposed subscription; project_menu has client-owned visibility in this case.
+# project_menu has client-owned visibility in this case.
 # logger is the application's ordinary Python logger.
 @project_menu.on.toggled
 def on_project_menu_toggled(self, component: DropdownMenu, open: bool) -> None:
@@ -569,7 +570,7 @@ bindings does not remove the need for runtime validation.
 
 ## Compatibility and migration
 
-Introduce the new family explicitly under the proposed
+Introduce the new family explicitly under the
 `djust.components.interactive` module. The first implementation is an interactive
 `DropdownMenu` that can reuse the existing visual renderer. Do not silently turn
 today's plain `DropdownMenu` into a descriptor or change existing event routing.
@@ -631,8 +632,8 @@ the real browser client, and Django and Rust template backends. Specifically tes
 - Every documented output is exercised, and every local action resolves; browser
   tests inspect visible results and server errors, not merely HTTP 200 responses.
 
-This document-only change can validate links and snippet syntax. It cannot claim
-that these future runtime or type-checking acceptance gates have passed.
+These gates are evidenced in the implementation ledger's ADR-034 acceptance
+review.
 
 ## Retirement (Step R — delete)
 
@@ -657,6 +658,12 @@ This ADR is therefore a **net addition** to the framework's surface: new
 requirement that goes with them. It must be justified on developer-facing value,
 not on code removed. If C1-C4 reveal a genuine retirement target, it is recorded
 here and gated like the others.
+
+**Status at acceptance (2026-09-25): closed, nothing retired.** C1–C4
+revealed no retirement target. The one candidate was the legacy `Meta.event`
+alias (#3078). It was fixed rather than retired (owner decision C1-Q7), because
+the legacy descriptor components continue. `event=`, `name=`, `toggle_event=`
+and item `event` all continue as stated above.
 
 ## Consequences and non-goals
 

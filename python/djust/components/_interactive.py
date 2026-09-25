@@ -83,9 +83,11 @@ class Outputs:
         self._source = source
 
     def selected(self, callback: Selected) -> Selected:
+        """After a valid selection, with the chosen item's value."""
         return subscribe(self._source, _SELECTED, callback)
 
     def toggled(self, callback: Toggled) -> Toggled:
+        """After the menu opens or closes, with its new visibility."""
         return subscribe(self._source, _TOGGLED, callback)
 
 
@@ -179,6 +181,7 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
 
     @property
     def key(self) -> str:
+        """Read-only: the declared attribute name, or the collection key of a member."""
         if self._collection is not None:
             return self._member_key
         return self._declaration._name if self._declaration is not None else self._name
@@ -193,6 +196,7 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
 
     @property
     def label(self) -> str:
+        """The trigger button's text."""
         return self._label
 
     @property
@@ -203,10 +207,12 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
 
     @property
     def visibility(self) -> Literal["server", "client"]:
+        """Who owns open/closed: the server, or the browser's native popover."""
         return self._visibility
 
     @property
     def open(self) -> bool:
+        """Whether a server-owned menu is open; Python may read and set it."""
         if self.visibility == "client":
             raise ValueError("Visibility is client-owned; use the toggled observation payload")
         return self._open
@@ -222,6 +228,7 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
 
     @property
     def selected(self) -> str:
+        """The last selected item's value, or ``""``."""
         return self._selected
 
     @property
@@ -248,6 +255,7 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
 
     @event_handler(parameter_policy="strict", coerce_types=False)
     async def observe_toggle(self, open: bool, sequence: int, lifetime: str) -> None:
+        """Report a client-owned popover's visibility; emits ``toggled`` if observed."""
         self._bound_owner()
         if self.visibility != "client":
             raise ValueError("Visibility observations require client-owned mode")
@@ -339,12 +347,14 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
 
     @event_handler(parameter_policy="strict", coerce_types=False)
     async def toggle(self) -> None:
+        """Open or close a server-owned menu; emits ``toggled``."""
         self._bound_owner()
         self.open = not self.open
         await self._emit(_TOGGLED, {"open": self.open})
 
     @event_handler(parameter_policy="strict", coerce_types=False)
     async def close(self) -> None:
+        """Close an open server-owned menu; emits ``toggled``."""
         self._bound_owner()
         if self.open:
             self.open = False
@@ -357,6 +367,7 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
 
     @event_handler(parameter_policy="strict", coerce_types=False)
     async def select(self, value: str) -> None:
+        """Choose an enabled item: validate it, record it, close; emits ``selected``."""
         self._bound_owner()
         if type(value) is not str:
             raise TypeError("Selection must be a string")
@@ -569,9 +580,11 @@ class DropdownMenuCollection(ComponentDeclaration):
         return self._members.get(key)
 
     def __len__(self) -> int:
+        """The number of current members."""
         return len(self._order)
 
     def __iter__(self) -> Iterator[DropdownMenu]:
+        """The live members, in ``sync()`` order."""
         return iter(self.values)
 
     def sync(self, pairs: Sequence[tuple[str, DropdownMenu]]) -> None:

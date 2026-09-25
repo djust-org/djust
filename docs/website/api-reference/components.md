@@ -134,6 +134,69 @@ class DashboardView(LiveView):
 
 ---
 
+## Interactive components (`djust.components.interactive`)
+
+**Available from djust 1.3** (not in the 1.3.0rc1 pre-release). An interactive
+component owns its mechanics and reports typed outputs to its view; see the
+[Interactive Components guide](../guides/interactive-components.md). The tables
+below are generated from the component's own contracts by
+`scripts/generate-interactive-reference.py` (`make interactive-reference`). The
+action names describe what the component does; they are not an API for writing
+components.
+
+<!-- BEGIN GENERATED: interactive components (scripts/generate-interactive-reference.py) -->
+
+### `DropdownMenu` configuration
+
+| Argument | Type | Default |
+| --- | --- | --- |
+| `label` | `str` | required |
+| `items` | `list[ActionItem \| SeparatorItem]` | required |
+| `visibility` | `Literal['server', 'client']` | 'server' |
+
+| Item type | Keys |
+| --- | --- |
+| `ActionItem` | `label: str`, `value: str`, `disabled: bool` (optional) |
+| `SeparatorItem` | `separator: Literal[True]` |
+
+### State
+
+| Property | Type | Meaning |
+| --- | --- | --- |
+| `key` | `str` | Read-only: the declared attribute name, or the collection key of a member. |
+| `open` | `bool` | Whether a server-owned menu is open; Python may read and set it. |
+| `selected` | `str` | The last selected item's value, or `""`. |
+| `label` | `str` | The trigger button's text. |
+| `visibility` | `Literal['server', 'client']` | Who owns open/closed: the server, or the browser's native popover. |
+
+### Outputs
+
+| Subscription | Callback payload | When |
+| --- | --- | --- |
+| `@menu.on.selected` | `component: DropdownMenu, value: str` | After a valid selection, with the chosen item's value. |
+| `@menu.on.toggled` | `component: DropdownMenu, open: bool` | After the menu opens or closes, with its new visibility. |
+
+### Local actions
+
+| Action | Parameters | What it does |
+| --- | --- | --- |
+| `close` | none | Close an open server-owned menu; emits `toggled`. |
+| `observe_toggle` | `open: bool, sequence: int, lifetime: str` | Report a client-owned popover's visibility; emits `toggled` if observed. |
+| `select` | `value: str` | Choose an enabled item: validate it, record it, close; emits `selected`. |
+| `toggle` | none | Open or close a server-owned menu; emits `toggled`. |
+
+### Keyed collection (`DropdownMenu.collection()`)
+
+| Member | Meaning |
+| --- | --- |
+| `rows.sync()` | Reconcile the members with ordered `(key, declaration)` pairs. |
+| `rows.get()` | The live member for `key`, or `None` if it is unknown or removed. |
+| `rows.values` | The live members, in `sync()` order. |
+| `len(rows)` | The number of current members. |
+| `iter(rows)` | The live members, in `sync()` order. |
+
+<!-- END GENERATED: interactive components -->
+
 ## Built-in Components
 
 ### `AlertComponent`

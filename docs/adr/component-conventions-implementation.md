@@ -24,6 +24,103 @@ D6's wording changes to match.
 The diagnostics suites now assert the value-free contract under
 `DEBUG = False`, with `DEBUG = True` cases asserting that the details appear.
 
+## ADR-034 acceptance review — C4
+
+This maps ADR-034's implementation gates and required integration coverage to
+the evidence at the final revision. C1–C3 closure accounts, and C4's
+acceptance progress, are in the checklist below. Owner decisions are
+recorded in ADR-034 as "C1 decisions" (Q1–Q7), "C2 notes" and
+"C3 decisions" (Q0–Q6, N1–N4).
+
+**Gate 1: typing proof.** `tests/typing_component_bindings` imports the public
+module. mypy and Pyright 1.1.408 reject 31 negative locations, including
+inherited declarations, wrong sources, async callbacks, misspelled outputs and
+the collection API. The positive files and runtime assertions pass.
+
+**Gate 2: binding and dispatch.**
+- `test_interactive_bindings.py`, `test_interactive_snapshots.py` and
+  `test_interactive_observations.py` cover the fixed-binding lifecycle.
+- `test_interactive_public_api_c1.py` covers the public import, V020, Q004 and
+  the debug time-travel jump over a real WebSocket.
+- `test_legacy_component_alias_3078.py` pins the fixed legacy alias.
+- Registry-only lookup: unknown and stale identities are refused on every
+  transport.
+
+**Gate 3: dropdown pilot.**
+- `tests/playwright/test_interactive_dropdown.py`: two same-type menus, forged
+  selections, observations and reconnect reporting, on pinned WebSocket, SSE
+  and HTTP-only.
+- `test_adr034_delegated_rows.py`: the separate presentation-only delegated
+  rows.
+
+**Gate 4: documentation.**
+- `guides/interactive-components.md` is new, in the nav next to Components,
+  and has every D7 section:
+  - ownership;
+  - configuration, state, actions and outputs;
+  - one instance, and two instances;
+  - client visibility and observations;
+  - delegated rows, and keyed collections;
+  - persistence, keyboard and focus as implemented, and security.
+- `core-concepts/components.md` gains "Choose the owner", and
+  `docs/ai/components.md` gains an interactive section.
+- `api-reference/components.md` carries the generated tables:
+  `scripts/generate-interactive-reference.py`, `make interactive-reference`, a
+  pre-commit hook, and `tests/test_generate_interactive_reference.py`.
+- All marked "Available from djust 1.3" (not in the 1.3.0rc1 pre-release).
+- `test_adr034_documented_examples.py` extracts every documented view with the
+  doc-snippet extractor and drives it through a real GET and the HTTP
+  fallback. That is six views across the guide and the AI reference.
+- djust-docs `docs_verify`, pointed at this branch's `docs/` and djust:
+  - links, symbols (709) and a11y pass;
+  - the nav finding (`guides/accounts.md`) pre-dates this branch;
+  - its symbol check lists the component-scoped decorators
+    (`@project_menu.on.selected`) as advisory "not a known djust decorator"
+    (recorded under ADR-037 D2).
+- The djust-docs site, run locally on port 18462, serves the page at
+  `/guides/interactive-components/`. It is linked from the Components page's
+  nav and pager, all five sections and ten code blocks render, and the API
+  reference renders the generated tables.
+- Publication on the live sites happens at release (owner decision C4-Q4).
+  The catalogue entry is pending under ADR-037 D2 (C4-Q3).
+
+**Gate 5: stateful repetition.** C3's separate proof: 26 unit tests, the typing
+fixtures, and `tests/playwright/test_interactive_collection.py`. Collection
+docs were published only after it passed.
+
+**Required integration coverage.**
+- **Transports:** HTTP, WebSocket (plus actors refused via V020) and SSE in
+  every browser matrix, with the transport checked. Real runs found and fixed
+  three transport defects (C2) and the HTTP `djust:error` gap (C4).
+- **Template backends:** Django and Rust (`test_interactive_collections_c3.py`,
+  `test_interactive_bindings.py`).
+- **Isolation:** one dropdown doesn't mutate another, or another user's view
+  (C2 matrix; `test_interactive_acceptance.py` two-browser case).
+- **Selections:** a selection runs only the matching callback, once, with the
+  actual source; forged, disabled and unknown values never emit (C2, C3, C4
+  matrices).
+- **Collection lifecycle:** reorder, duplicate keys, removal and re-addition,
+  reconnect and restored navigation (C3).
+- **Nested ownership:** an action inside nested component markup names the
+  nearest owner, never an ancestor (`tests/js/interactive-nested-ownership.test.js`).
+  The server routes that identity only through the registry (gate 2).
+- **Refusals:** direct invocation of a subscription callback and unknown scoped
+  targets are refused, with no fallback to a view handler.
+- **Rendering and errors:** sibling and view state changes render; async and
+  failing callbacks behave as documented (C4).
+- **Legacy:** plain components keep their handlers (C4 acceptance, #3078
+  tests).
+- **Delegated rows:** they carry the correct id after a reorder and refuse
+  unauthorized ids.
+- **Native visibility:** focus and dismissal through patches and reconnects;
+  no traffic without an observation subscription; unchanged observers cause
+  no render; duplicate, reordered and old-lifetime reports are dropped
+  (C2, C4).
+- **Signed Back navigation:** session and signed paths (C4).
+
+**Final-revision runs.**
+- The full-suite result is recorded below.
+
 ## ADR-035 acceptance review — F2
 
 This review maps each item in the ADR's "Scope and verification" list to its
@@ -2427,7 +2524,7 @@ Source: [decisions and acceptance](034-component-scoped-events-and-bindings.md).
     duplicate keys undetected fails 1; members matched by position fails 7;
     session restore not applied fails 2.
   Not yet published: collection docs and snippets go out with C4.
-- [ ] **C4 — acceptance and publication.** Run HTTP/WS and real browser tests
+- [x] **C4 — acceptance and publication.** Run HTTP/WS and real browser tests
   with both template backends: focus/dismissal/default actions, user isolation,
   async/error behavior, duplicate/reordered observations and stale identities.
   Publish runnable examples, generated reference, website navigation and AI
@@ -2476,7 +2573,11 @@ Source: [decisions and acceptance](034-component-scoped-events-and-bindings.md).
     existing "no force-save on a 500" behavior, not new.
   - The C2 and C3 matrices, and ADR-035's and ADR-036's, still pass on all
     three transports after the client change.
-- [ ] **CR — retirement (expected empty).** [ADR-034 Step R](034-component-scoped-events-and-bindings.md)
+  **Closed 2026-09-25** with the documentation (owner decisions C4-Q1–Q4); see
+  [ADR-034 acceptance review — C4](#adr-034-acceptance-review--c4).
+- [x] **CR — retirement (expected empty).** Closed 2026-09-25, nothing retired.
+  C1–C4 revealed no target. The #3078 legacy alias was fixed, not retired
+  (C1-Q7). Recorded in ADR-034 Step R. [ADR-034 Step R](034-component-scoped-events-and-bindings.md)
   records that this ADR retires **no** existing code: `event=` is kept per ADR-033 D5,
   the string-routed alternative was rejected rather than shipped, and the existing
   `name=` / `toggle_event=` / item `event` arguments continue. This gate closes by
@@ -2525,6 +2626,14 @@ Source: [decisions and acceptance](037-event-contract-checks-and-executable-docu
   - `djust_gen_live` generates no forms, so nothing to change there.
   Each needs an executed fixture, as D2 requires. They land with the D2
   generator work, not as ADR-035 scope.
+
+  **Pending from ADR-034 (2026-09-25):**
+  - A catalogue entry for the interactive `DropdownMenu`, including a keyed
+    collection (owner decision C4-Q3). The catalogue's usage snippets are
+    generated, so the entry comes from the D2 generator, not by hand.
+  - djust-docs' symbol check reports component-scoped decorators
+    (`@<menu>.on.selected`) as advisory "not a known djust decorator". Teach
+    it the interactive subscription form.
 - [ ] **D3 — final acceptance.** Run the ADR acceptance matrices at the final
   revision, complete migration/AI guidance, and verify actual website delivery
   rather than equating repository Markdown with publication. Record remaining
