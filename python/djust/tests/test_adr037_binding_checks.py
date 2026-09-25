@@ -682,3 +682,33 @@ def test_rendered_markup_events_use_the_same_parser():
         '<pre>&lt;button dj-click="escaped"&gt;</pre><button dj-click="send">b</button>'
     )
     assert component_events(html) == ["send", "pick"]
+
+
+def test_the_ai_schema_event_directives_agree_with_the_directive_table():
+    """ADR-037 row 21: the schema keeps its prose; its facts match the table."""
+    from djust._template_bindings import DIRECTIVES
+    from djust.schema import DIRECTIVES as SCHEMA
+
+    documented = set()
+    for entry in SCHEMA:
+        if entry.get("category") != "event":
+            continue
+        name = entry["name"]
+        if name.endswith("-*"):
+            family = [d for d in DIRECTIVES if d.startswith(name[:-1])]
+            assert family, name
+            documented.update(family)
+            continue
+        assert name in DIRECTIVES, name
+        documented.add(name)
+        sent = [p for p in entry.get("params_sent") or [] if " " not in p]
+        if sent:
+            assert set(sent) == set(DIRECTIVES[name].generated), name
+    # Directives the schema does not document yet; the D2 schema work adds them.
+    assert set(DIRECTIVES) - documented == {
+        "dj-auto-recover",
+        "dj-copy-event",
+        "dj-dialog-close-event",
+        "dj-viewport-bottom",
+        "dj-viewport-top",
+    }
