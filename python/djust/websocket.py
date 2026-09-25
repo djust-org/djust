@@ -2361,6 +2361,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if self._presence_group:
             await self.channel_layer.group_discard(self._presence_group, self.channel_name)
 
+        # Leave the scoped server-push groups of the view's push_scope (#3004)
+        from .push import leave_push_scope_groups
+
+        await leave_push_scope_groups(self)
+
         # Leave db_notify groups registered by NotificationMixin.listen()
         db_notify_channels = getattr(self, "_db_notify_channels", None)
         if db_notify_channels:
@@ -3808,6 +3813,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if self._view_group:
             await self.channel_layer.group_discard(self._view_group, self.channel_name)
             self._view_group = None
+        # ... and its scoped server-push groups (#3004); the new view joins
+        # its own after its mount.
+        from .push import leave_push_scope_groups
+
+        await leave_push_scope_groups(self)
 
         # Cancel old tick task
         if self._tick_task:
@@ -4908,6 +4918,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     if not _resolve_skip_render(view):
                         render = True
                 if self.view_instance is not view or not dispatch_work:
+                    return
+                # A hook that changed ``push_scope`` moves the session's
+                # scoped-push groups now, under the render lock (#3004).
+                from .push import sync_push_scope_groups
+
+                await sync_push_scope_groups(self, view)
+                if self.view_instance is not view:
                     return
                 if not render:
                     await self._flush_all_pending()
