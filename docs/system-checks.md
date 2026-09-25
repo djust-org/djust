@@ -41,6 +41,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V016 | LiveView | Error | Strict-policy handler declaration that strict dispatch rejects (ADR-036) |
 | V017 | LiveView | Error | Async strict event handler on an actor view (`use_actors = True`) |
 | V018 | LiveView | Warning | `@event_handler(params=[...])` disagrees with a strict handler's signature |
+| V019 | LiveView | Warning | A `dj-auto-recover` handler declares `parameter_policy="strict"`; recovery always runs under legacy policy |
 | S001 | Security | Error | mark_safe() with f-string (XSS risk) |
 | S002 | Security | Warning | @csrf_exempt without justification comment |
 | S003 | Security | Warning | Bare except: pass swallows all exceptions |
@@ -341,6 +342,13 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Method**: Runtime (decorator metadata compared with the compiled strict contract)
 - **What it detects**: `@event_handler(params=[...])` names a different set of parameters from the strict handler's signature. Under the strict policy the signature is the contract; the explicit list is ignored by validation and misleads tooling that reads it.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V018"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V018"]`
+
+### V019 — Strict declaration on a `dj-auto-recover` handler
+- **Severity**: Warning
+- **Method**: Runtime (literal `dj-auto-recover="name"` in the view's own `template` / `template_name` source)
+- **What it detects**: a handler that a `dj-auto-recover` binding targets and that declares `parameter_policy="strict"`. Recovery handlers receive the `_form_values` / `_data_attrs` dictionaries, so dispatch always runs them under the legacy policy (ADR-036 decision R1), whatever the declaration or project policy. Recovery targets are not otherwise checked by V016.
+- **Limitation**: a dynamic attribute value, or a binding in an included template, is not detected, and that handler keeps its declared policy.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V019"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V019"]`
 
 ---
 

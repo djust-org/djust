@@ -683,6 +683,16 @@ V008 is broader than V006 and will flag any custom class instantiation, not just
 
 ---
 
+### V019: Strict declaration on a dj-auto-recover handler
+
+**Severity**: Warning
+
+**What causes it**: A handler targeted by `dj-auto-recover` in the view's template declares `parameter_policy="strict"`. Recovery handlers receive the `_form_values` and `_data_attrs` dictionaries, so they always run under the legacy policy.
+
+**Fix**: Remove `parameter_policy="strict"` from the recovery handler.
+
+---
+
 ### V018: params= disagrees with a strict signature
 
 **Severity**: Warning

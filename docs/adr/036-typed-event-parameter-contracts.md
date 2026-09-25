@@ -200,8 +200,8 @@ strict contracts, with trusted source injection outside the client payload.
 
 ## Completion decisions (2026-09-24)
 
-P2 left the strict-collection conventions open. These are decided. Q1 and Q2
-are owner decisions. N1–N3 are implementation choices the owner accepted. A
+P2 left the strict-collection conventions open. These are decided. Q1, Q2
+and R1 are owner decisions. N1–N3 are implementation choices the owner accepted. A
 later change to any of them changes its implementation and tests, not just
 this table.
 
@@ -211,6 +211,7 @@ this table.
 | Q2 | `_target` (the triggering field or submitter name) under strict | Not sent. Use `field` or an explicit `dj-value-*`. Legacy bindings are unchanged and keep sending `_target`. | Owner decision. `_`-prefixed names are framework-reserved and cannot be declared by a strict handler (D5). Renaming it would add public API that `field` and `dj-value-*` already cover. |
 | N1 | How is a client-side strict rejection shown? | The existing error path: a fixed, value-free `console.error` and the `djust:error` event (dev overlay, application toasts). It happens before `dj-disable-with`, optimistic and loading effects. | No new UI or API, and nothing is applied that would then have to be rolled back. |
 | N2 | How do HTTP-only pages and the HTTP fallback get contracts? | The initial page renders a framework-internal JSON block (`<script type="application/json" data-djust-parameter-contracts>`) outside the live root. HTTP-fallback render responses carry the additive `parameter_contracts` / `parameter_contract_view` fields that socket frames already use. | Additive, and it keeps the server's VDOM baseline free of framework markup. |
+| R1 | `dj-auto-recover` handlers under strict (decided 2026-09-25) | Recovery stays legacy. A handler that a literal `dj-auto-recover` in the view's own template targets is dispatched, and advertised in the public contract, with the legacy policy, whatever the project or handler policy. The `_form_values` / `_data_attrs` envelope is unchanged. An explicit `parameter_policy="strict"` on such a handler is a startup warning (`djust.V019`). | Owner decision. The envelope's `_`-prefixed dictionaries cannot be strict parameters, and new public names or strict dict types are not worth adding now. Revisit with ADR-035's form lifecycle, which may replace custom recovery handlers. The target is read from the server-owned template, so a client cannot claim the downgrade for any other handler. |
 | N3 | Server-issued owner generation tokens | Not added unless the parity matrix shows a concrete stale-owner failure. Two root mounts of the same view path on one page remain a known limitation. | Manifests are whole-tree snapshots applied atomically with the DOM they describe, in receipt order. |
 
 ## Alternatives considered

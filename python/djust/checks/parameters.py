@@ -1,4 +1,4 @@
-"""djust event parameter contract checks, ``djust.V016``-``V018`` (ADR-036).
+"""djust event parameter contract checks, ``djust.V016``-``V019`` (ADR-036).
 
 A strict-policy handler's declaration problems surface at startup instead of
 on the first event. Each check calls the runtime's own resolvers
@@ -118,6 +118,25 @@ def _handler_messages(
     own_policy = decorators.get("event_handler", decorators.get("server_function", {})).get(
         "parameter_policy"
     )
+    if _recovery_target(cls, name):
+        # Owner decision R1: a dj-auto-recover target runs under legacy policy.
+        if own_policy == "strict" and not _is_check_suppressed("djust.V019"):
+            messages.append(
+                DjustWarning(
+                    "%s: declares parameter_policy='strict' but is a dj-auto-recover "
+                    "handler, which always runs under the legacy policy." % label,
+                    hint=(
+                        "Recovery handlers receive the _form_values / _data_attrs "
+                        "dictionaries, which a strict signature cannot declare, so "
+                        "dispatch ignores the strict declaration for them."
+                    ),
+                    id="djust.V019",
+                    fix_hint="Remove parameter_policy='strict' from `%s`." % label,
+                    file_path=file_path,
+                    line_number=line_number,
+                )
+            )
+        return messages
     if own_policy is None and not project_policy_valid:
         return messages  # djust.C021 reports the project value once.
 
@@ -193,6 +212,14 @@ def _handler_messages(
     return messages
 
 
+def _recovery_target(cls: type, name: str) -> bool:
+    """Whether a literal dj-auto-recover in the view's own template targets it."""
+    from djust.live_view import LiveView
+    from djust.validation import recovery_handler_names
+
+    return issubclass(cls, LiveView) and name in recovery_handler_names(cls)
+
+
 def _owner_classes() -> Iterator[tuple[type, Callable[[type], bool], bool]]:
     """User LiveViews and LiveComponents, deterministic, each with its MRO stop."""
     try:
@@ -225,7 +252,7 @@ def _owner_classes() -> Iterator[tuple[type, Callable[[type], bool], bool]]:
 
 @register("djust")
 def check_event_parameter_contracts(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
-    """``djust.V016``-``V018``: strict-policy handler declarations (ADR-036)."""
+    """``djust.V016``-``V019``: strict-policy handler declarations (ADR-036)."""
     from djust._parameter_contract import ContractError
     from djust.validation import get_project_parameter_policy
 

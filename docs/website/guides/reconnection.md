@@ -143,6 +143,9 @@ For views with complex state that cannot be inferred from form values alone (can
 </div>
 ```
 
+A recovery handler always runs under the legacy parameter policy, even in a
+project using the staged strict policy (ADR-036).
+
 On reconnect, djust fires the `restore_state` handler with two dict arguments
 (they are not flattened into separate kwargs):
 - `_form_values`: the container's form field values, keyed by `name`

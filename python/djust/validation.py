@@ -10,6 +10,7 @@ Provides runtime validation of event handler signatures including:
 """
 
 import inspect
+import re
 import logging
 import types
 import threading
@@ -62,6 +63,37 @@ def get_project_parameter_policy() -> str:
     return str(policy)
 
 
+_RECOVERY_BINDING = re.compile(r"""dj-auto-recover\s*=\s*["']([A-Za-z_][A-Za-z0-9_]*)["']""")
+_RECOVERY_HANDLERS: "weakref.WeakKeyDictionary[type, frozenset[str]]" = weakref.WeakKeyDictionary()
+
+
+def recovery_handler_names(view_class: type) -> frozenset[str]:
+    """Handlers a literal ``dj-auto-recover`` in the view's own template targets.
+
+    ADR-036 owner decision R1: recovery handlers run under the legacy policy,
+    because their ``_form_values`` / ``_data_attrs`` envelope cannot be a strict
+    signature. The template is server-owned, so a client cannot claim this.
+    Read from ``template`` or ``template_name`` once per class; a dynamic
+    attribute value or an included template is not seen.
+    """
+    cached = _RECOVERY_HANDLERS.get(view_class)
+    if cached is None:
+        source = getattr(view_class, "template", None)
+        if not isinstance(source, str) or not source:
+            source = ""
+            name = getattr(view_class, "template_name", None)
+            if isinstance(name, str) and name:
+                try:
+                    from django.template import loader
+
+                    source = loader.get_template(name).template.source
+                except Exception:  # noqa: BLE001 — a missing template names no handler
+                    source = ""
+        cached = frozenset(_RECOVERY_BINDING.findall(source))
+        _RECOVERY_HANDLERS[view_class] = cached
+    return cached
+
+
 def get_handler_parameter_policy(handler: Callable) -> str:
     """Resolve only server-owned policy, independently of client metadata."""
     from ._parameter_contract import ContractError
@@ -69,11 +101,21 @@ def get_handler_parameter_policy(handler: Callable) -> str:
     decorators = getattr(handler, "_djust_decorators", {})
     metadata = decorators.get("event_handler", decorators.get("server_function", {}))
     policy = metadata.get("parameter_policy")
+    if policy is not None and policy not in ("legacy", "strict"):
+        raise ContractError("parameter_policy must be 'legacy' or 'strict'.")
+    owner = getattr(handler, "__self__", None)
+    if owner is not None and not isinstance(owner, type) and _is_live_view(owner):
+        if getattr(handler, "__name__", None) in recovery_handler_names(type(owner)):
+            return "legacy"
     if policy is None:
         return get_project_parameter_policy()
-    if policy not in ("legacy", "strict"):
-        raise ContractError("parameter_policy must be 'legacy' or 'strict'.")
     return str(policy)
+
+
+def _is_live_view(owner: Any) -> bool:
+    from .live_view import LiveView
+
+    return isinstance(owner, LiveView)
 
 
 def get_handler_coercion(handler: Callable) -> bool:
