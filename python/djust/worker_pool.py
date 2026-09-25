@@ -104,10 +104,15 @@ def configured_pool_size() -> int:
     """
     from .config import config
 
+    value = config.get("worker_threads", None)
     try:
-        return resolve_pool_size(config.get("worker_threads", None))
-    except ValueError as exc:
-        logger.warning("%s; using the default shared thread", exc)
+        return resolve_pool_size(value)
+    except ValueError:
+        logger.warning(
+            "LIVEVIEW_CONFIG['worker_threads'] = %r is not None, False, True, 'auto' "
+            "or an integer >= 0; using the default shared thread (see djust.C021)",
+            value,
+        )
         return 0
 
 
