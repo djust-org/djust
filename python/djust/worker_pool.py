@@ -84,7 +84,9 @@ def _run_checked(slot: _Slot, fn: Any, args: Any, kwargs: Any) -> Any:
         try:
             close_old_connections()
         except Exception:  # noqa: BLE001 - never fail another session's task
-            logger.warning("djust worker pool: close_old_connections() failed", exc_info=True)
+            # Value-free: a database error's message can carry query values.
+            # The task's own database access reports a real failure.
+            logger.warning("djust worker pool: close_old_connections() failed")
     return fn(*args, **kwargs)
 
 
