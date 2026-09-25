@@ -3897,7 +3897,6 @@ class ViewRuntime:
         # Snapshot pre-handler assigns for change detection.
         from .websocket import _compute_changed_keys, _resolve_skip_render, _snapshot_assigns
 
-        pre_assigns = _snapshot_assigns(view)
         # Identity snapshot for the #700 push_commands-only auto-skip below:
         # {attr: id(value)} over the public assigns. Immune to the deep-copy
         # sentinel false-positives _snapshot_assigns can produce for non-copyable
@@ -3905,7 +3904,29 @@ class ViewRuntime:
         # push_event()/push_commands() without touching real state is detected as
         # a true no-op (mirrors WS handle_event websocket.py:3551-3556).
         _fw_attrs: frozenset[str] = getattr(view, "_framework_attrs", frozenset())
-        pre_identity = {k: id(v) for k, v in view.__dict__.items() if k not in _fw_attrs}
+        pre_assigns: Optional[Dict[str, Any]]
+        pre_identity: Optional[Dict[str, int]]
+        _pre_box: Dict[str, Any] = {}
+        from .worker_pool import offload_enabled
+
+        if offload_enabled() and not inspect.iscoroutinefunction(handler):
+            # Worker pool on (#3074): take both snapshots on the session's
+            # thread, in the SAME hop as the sync handler, instead of on the
+            # event loop before it. The render lock is held across both, so
+            # nothing can change the view between the snapshot and the call.
+            _inner_handler = handler
+
+            def handler(*args: Any, **kwargs: Any) -> Any:  # noqa: F811
+                _pre_box["assigns"] = _snapshot_assigns(view)
+                _pre_box["identity"] = {
+                    k: id(v) for k, v in view.__dict__.items() if k not in _fw_attrs
+                }
+                return _inner_handler(*args, **kwargs)
+
+            pre_assigns = pre_identity = None
+        else:
+            pre_assigns = _snapshot_assigns(view)
+            pre_identity = {k: id(v) for k, v in view.__dict__.items() if k not in _fw_attrs}
 
         # Call handler. The time-travel record is finalized + pushed in the
         # ``finally`` for BOTH the success and the raising path (mirrors WS
@@ -3934,6 +3955,13 @@ class ViewRuntime:
         finally:
             record_event_end(view, _tt_snapshot, error=_tt_error)
             await self._push_tt_event(view, _tt_snapshot)
+        if _pre_box:
+            pre_assigns = _pre_box["assigns"]
+            pre_identity = _pre_box["identity"]
+        if pre_assigns is None or pre_identity is None:
+            # Unreachable: the offloaded wrapper always snapshots before it
+            # calls the handler, and a raising handler returned above.
+            raise RuntimeError("pre-event snapshot missing")
 
         # Per-handler percentile telemetry (#1907, THE FLIP). The WS bespoke
         # view-path recorded ``record_handler_timing`` right after a SUCCESSFUL

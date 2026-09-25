@@ -276,6 +276,12 @@ LIVEVIEW_CONFIG = {
 - Different sessions' handlers run at the same time on different threads. A session's own events still run one at a time, in order.
 - HTTP requests and SSE streams are unchanged: Django already gives each HTTP request its own thread.
 - The default (`None`) keeps the single shared thread. An invalid value is reported by the system check `djust.C021`.
+- **With the pool on, djust also moves per-frame work off the asyncio event loop**, which becomes the next bottleneck once sessions render in parallel:
+  - the snapshot of the view's assigns taken before an event runs on the session's thread, in the same hop as a sync handler;
+  - a server push is one hop on the session's thread (Django's stale-connection check, the push hooks, the render and the diff), and the patch JSON goes into the frame without being parsed and re-serialised on the loop;
+  - Channels' separate `close_old_connections` hop before each `server_push` message is skipped, because the push turn runs that check itself before any hook can touch the database.
+
+  With the pool off these paths are unchanged.
 
 Things to know before you turn it on:
 

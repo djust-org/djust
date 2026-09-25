@@ -361,7 +361,7 @@ BARE_ASSIGN = re.compile(r"\b[a-z_]+ = self\._next_version\(\)")
 
 # The pinned counts, at module level so the canaries below can assert that a
 # deleted render-send path actually breaks the pin (#2238).
-EXPECTED_ARMED_INVOCATIONS = 16
+EXPECTED_ARMED_INVOCATIONS = 17
 EXPECTED_BARE_SEND_SITES = 0
 
 
@@ -446,10 +446,12 @@ def test_every_client_checked_send_path_uses_next_version():
     #     db_notify: 2 (patch + full-HTML fallback)
     #     _tick_once: 2 (patch + full-HTML fallback)
     #     _run_server_push_turn: 1 (full-HTML fallback)
-    #   ASSIGNMENT (X = self._next_version_armed(html)), 3:
+    #   ASSIGNMENT (X = self._next_version_armed(html)), 4:
     #     _run_async_work success arms: 2
     #     _run_server_push_turn: 1 (wire_version; server_push's render, #3001)
-    # Total armed invocations = 16.
+    #     _send_broadcast_render: 1 (the offloaded server-push turn with the
+    #       worker pool on, #3074 — one version for all three of its branches)
+    # Total armed invocations = 17.
     #
     # #1907 THE FLIP: the 2 ``handle_event`` ASSIGN sites (the event patch +
     # html_update fallback ``wire_version = self._next_version_armed(html)``) were
