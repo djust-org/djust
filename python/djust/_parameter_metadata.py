@@ -79,19 +79,26 @@ def declared_handlers(
     stop: Callable[[type], bool] = view_stop,
     *,
     server_functions: bool = False,
+    decorated: bool = False,
 ) -> Iterator[DeclaredHandler]:
     """The public event handlers ``cls`` declares, nearest first, in MRO order.
 
     The same resolution dispatch uses, over the class alone: a nearer attribute
     shadows a farther one even when it is not a handler, and only Python's own
     method types count. Nothing is instantiated and no descriptor is called.
-    ``server_functions`` also yields ``@server_function`` methods.
+    ``server_functions`` also yields ``@server_function`` methods, and
+    ``decorated`` any public method carrying djust decorator metadata (a
+    ``@debounce`` without ``@event_handler`` still publishes client metadata).
     """
     for name, (member, owner) in _class_members(cls, stop).items():
         if name.startswith("_") or type(member) not in _METHOD_TYPES:
             continue
         function = _function(member)
-        if is_event_handler(function) or (server_functions and is_server_function(function)):
+        if (
+            is_event_handler(function)
+            or (server_functions and is_server_function(function))
+            or (decorated and "_djust_decorators" in vars(function))
+        ):
             yield DeclaredHandler(name, member, function, owner)
 
 
@@ -145,6 +152,47 @@ def _event_methods(owner: Any) -> dict[str, Any]:
         ):
             methods[event] = owner._meta_event_handler(event)
     return methods
+
+
+def handler_metadata(method: Any) -> dict[str, Any]:
+    """The decorator metadata a bound handler publishes to the client.
+
+    A strict handler's parameters come from its compiled contract (no server
+    default values, and a copy, never the shared decorator dictionaries); a
+    legacy handler's are the decorator's own.
+    """
+    decorators = method._djust_decorators
+    if get_handler_parameter_policy(method) != "strict":
+        return decorators
+    metadata = dict(decorators)
+    key = "event_handler" if "event_handler" in metadata else "server_function"
+    if key in metadata:
+        parameters = list(get_strict_handler_contract(method).metadata())
+        item = dict(metadata[key])
+        item.update(
+            parameter_policy="strict",
+            params=parameters,
+            param_names=[p["name"] for p in parameters],
+            required=[p["name"] for p in parameters if p["required"]],
+            optional=[p["name"] for p in parameters if not p["required"]],
+        )
+        metadata[key] = item
+    return metadata
+
+
+def published_handlers(view: Any) -> dict[str, Any]:
+    """Every decorated method a view publishes client metadata for, bound, by name.
+
+    Event handlers are exactly the ones dispatch resolves (``_event_methods``);
+    server functions and other decorated methods come from the same
+    class-level discovery. No property or other descriptor is evaluated.
+    """
+    methods = dict(_event_methods(view))
+    storage = _instance_dict(view)
+    for handler in declared_handlers(type(view), view_stop, server_functions=True, decorated=True):
+        if handler.name not in methods and handler.name not in storage:
+            methods[handler.name] = handler.member.__get__(view, type(view))
+    return {name: methods[name] for name in sorted(methods)}
 
 
 def _handlers(owner: Any) -> dict[str, Any]:

@@ -211,3 +211,43 @@ def test_audit_lists_the_shared_discovery_minus_framework_surface(collect):
         "zeta",
     ]
     assert all("event_handler" in meta for _n, meta in _get_handler_metadata(App))
+
+
+def _dir_walk_metadata(view):
+    """The retired runtime walk (ADR-037 row 9), kept as the test oracle."""
+    from djust._parameter_metadata import handler_metadata
+
+    metadata = {}
+    for name in dir(view):
+        if name.startswith("_"):
+            continue
+        try:
+            method = getattr(view, name)
+            if callable(method) and hasattr(method, "_djust_decorators"):
+                metadata[name] = handler_metadata(method)
+        except (AttributeError, TypeError):
+            continue
+    return metadata
+
+
+def test_published_metadata_equals_the_dir_walk_on_framework_and_demo_views():
+    from djust._parameter_metadata import handler_metadata, published_handlers
+    from djust.checks.components import _routed_liveview_classes
+    from djust.checks.utils import _walk_subclasses
+
+    classes = set(_routed_liveview_classes()) | set(_walk_subclasses(LiveView)) | {LiveView}
+    compared = 0
+    for cls in sorted(classes, key=lambda c: (c.__module__, c.__qualname__)):
+        try:
+            view = cls()
+        except Exception:  # noqa: BLE001 -- a view that needs mount arguments is skipped
+            continue
+        try:
+            expected = _dir_walk_metadata(view)
+        except Exception:  # noqa: BLE001 -- the walk ran a raising property; discovery does not
+            continue
+        actual = {name: handler_metadata(m) for name, m in published_handlers(view).items()}
+        assert list(actual) == list(expected), cls
+        assert actual == expected, cls
+        compared += 1
+    assert compared > 50
