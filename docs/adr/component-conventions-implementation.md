@@ -1912,6 +1912,9 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
     creation → replacement → removal with dispatch after each). 3 of them
     fail before the fix. Existing hot-reload, streaming and #1788 suites
     pass (603 tests).
+  - Full Python suite from a frozen worktree at 25f264478: 33,782 passed and
+    949 skipped, plus the 2 known tag failures. Full JavaScript suite: 2,296
+    tests in 205 files passed.
 
   **P2 closed (2026-09-25).**
   - Real DOM extraction and every server dispatch path go through the
