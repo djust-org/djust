@@ -288,7 +288,9 @@ class SyncManager:
                 except Exception as e:
                     logger.error("Batch sync failed: %s", e, exc_info=True)
                     failed_count += len(batch)
-                    errors.append(f"Batch sync error: {str(e)}")
+                    # The errors reach the client in the sync endpoint's JSON response,
+                    # and exception text can quote other rows' data (#2950).
+                    errors.append(f"Batch sync error: {type(e).__name__}")
 
         duration = time.time() - start_time
 
@@ -391,7 +393,12 @@ class SyncManager:
 
             except Exception as e:
                 failed += 1
-                errors.append(f"Create failed for action {action.id}: {str(e)}")
+                logger.warning(
+                    "Create sync failed for action %s",
+                    sanitize_for_log(str(action.id)),
+                    exc_info=True,
+                )
+                errors.append(f"Create failed for action {action.id}: {type(e).__name__}")
 
         return {"processed": processed, "failed": failed, "errors": errors}
 
@@ -444,7 +451,12 @@ class SyncManager:
 
             except Exception as e:
                 failed += 1
-                errors.append(f"Update failed for action {action.id}: {str(e)}")
+                logger.warning(
+                    "Update sync failed for action %s",
+                    sanitize_for_log(str(action.id)),
+                    exc_info=True,
+                )
+                errors.append(f"Update failed for action {action.id}: {type(e).__name__}")
 
         return {"processed": processed, "failed": failed, "conflicts": conflicts, "errors": errors}
 
@@ -471,7 +483,12 @@ class SyncManager:
 
             except Exception as e:
                 failed += 1
-                errors.append(f"Delete failed for action {action.id}: {str(e)}")
+                logger.warning(
+                    "Delete sync failed for action %s",
+                    sanitize_for_log(str(action.id)),
+                    exc_info=True,
+                )
+                errors.append(f"Delete failed for action {action.id}: {type(e).__name__}")
 
         return {"processed": processed, "failed": failed, "errors": errors}
 
