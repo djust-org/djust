@@ -281,6 +281,8 @@ Worker count formula:
 
 ### More than one core per process: `worker_threads`
 
+For the whole picture, including free-threaded Python, scoped push, the in-process channel layer, measured numbers and the multi-process alternative, see [Scaling a djust Process Across Cores](scaling-across-cores.md).
+
 By default every WebSocket session's sync work — `mount`, event handlers, hooks, renders — runs on **one thread shared by all sessions** in the process (asgiref's `sync_to_async` default). One process then does LiveView work on at most about one core, and one session's slow handler or database query delays every other session's.
 
 `LIVEVIEW_CONFIG["worker_threads"]` (djust 1.3, opt-in) gives the WebSocket path a pool of threads instead:
