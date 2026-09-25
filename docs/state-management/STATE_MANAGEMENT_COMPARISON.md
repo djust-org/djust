@@ -771,7 +771,7 @@ function search() {
 **djust:**
 - GitHub: https://github.com/yourusername/djust
 - Docs: https://djust.readthedocs.io
-- Discord: https://discord.gg/djust
+- Discord: https://discord.gg/7sPKf3wtp9
 
 **Phoenix LiveView:**
 - GitHub: https://github.com/phoenixframework/phoenix_live_view
