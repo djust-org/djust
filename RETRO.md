@@ -930,6 +930,23 @@ None in this bucket.
 
 **Review stats**: 0 🔴. There were 3 🟡: instance `_depth` access, over-broad performance claims, and head-of-line blocking not documented. There were 6 🟢. Re-review then found 1 more 🟡: the knee attribution. All were fixed. Filed: #3089 (`PerformanceTracker` thread-local on the loop) and #3092 (flake).
 
+### PR 3/7 — scoped server push (PR #3096, closes #3004)
+
+**Date**: 2026-09-25. Squash-merged as `8b824d4f9`. Retro: https://github.com/djust-org/djust/pull/3096 (retrospective comment).
+
+**Tests at close**:
+- `python/djust/tests/test_scoped_push_3004.py`: 15 tests, 19 cases.
+  - End to end over real consumers and the in-memory layer: scoped vs unscoped delivery, and moving between scopes from a handler, a push hook, a tick or `handle_info`.
+  - Leaving on disconnect and on `live_redirect`, a retried leave, and warning once on an invalid value.
+- CI: 22 checks passed, 0 failed.
+
+**What we learned**
+1. **Per-turn state sync must cover every turn entry point.** The plan copied `listen()`'s three sync points (mount, event and push) and missed tick and `handle_info`. Review found it. The list to check: event, push, tick, `db_notify`, async completion, mount, restore and redirect. This is `parallel-path-drift` (#1646).
+2. **Anything that now runs per tick needs a log-rate check.** Syncing scopes on ticks turned one invalid `push_scope` into about 20 warnings a second per session. The fix is to warn once per consumer until the value is valid again.
+3. **Sanitised names can merge identities.** Group names are a digest of the view path and the scope, because `re.sub` sanitising would have put rooms `"room 1"` and `"room_1"` in one group.
+
+**Review stats**: 0 🔴, 4 🟡 (generator scopes, stale-view sync, tick/`handle_info` not syncing, two untested paths) and 4 🟢, all fixed. The re-review raised 3 follow-ups (the log flood, missing regression tests, stale strings), all fixed. Filed: #3095 (the presence broadcast fans out the same way).
+
 ## v1.2.1-7 — state and rendering batch: v1.2.1-7, -8 and -9 (PR #3042)
 
 **Date**: 2026-09-24
