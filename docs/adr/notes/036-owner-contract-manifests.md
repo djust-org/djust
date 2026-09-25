@@ -339,16 +339,36 @@ tests with 952 skipped; three full JavaScript runs each passed 2,104 tests acros
 mypy passed for 1,034 files, and bundle ESLint reported zero warnings.
 These are automated suite results, not live-browser acceptance evidence.
 
-This does not complete P2. Before activating strict native binding:
+These gates, as they stood before activation, are now closed or recorded:
 
-1. Initial HTTP-only and HTTP fallback delivery are now in place (above).
-   Complete render-producer coverage remains, including child/component
-   creation, removal and replacement. Verify cached
-   DOM updates and recovery producers against the applied-snapshot rules above.
-2. Match the current DOM owner and its generation, not just reusable string IDs.
-   Cover buffered/stale frames, reconnect and repeated same-path root instances.
-3. Connect every binder to the strict collector before loading/optimistic effects,
-   with typed-literal provenance, generated native values and form conventions.
-4. Execute the real browser/transport matrix and retain server-side validation of
-   hand-crafted messages. No browser activation or website publication is claimed
-   by mount-frame tests.
+1. **Delivery.** Initial HTTP-only and HTTP-fallback delivery are in place
+   (above). A producer audit of every DOM-carrying frame type found two that
+   sent patch/HTML without a snapshot: the hot-reload patch and
+   `StreamingMixin.push_state`. On a strict page each made the client
+   invalidate its scope, so strict events failed closed until the next
+   render, and a hot reload that changes declarations could also advertise
+   stale rules. Both now capture the snapshot in the same operation as the
+   render (`_background_render.render_contract_fields`). A hot reload whose
+   contracts cannot be discovered sends a full `reload`; a failed `push_state`
+   is withheld. The other producers either already went through
+   `_send_render_frame` or the render-bound capture, or carry no owner change:
+   - stream operations insert fragments of the existing tree;
+   - a layout swap leaves the live root in place;
+   - `sticky_hold` changes no owners;
+   - the unused `child_update`/`sticky_update` helpers.
+
+   Component creation, replacement and removal on a real WebSocket are covered
+   in `test_producer_parameter_contracts.py`, alongside the runtime-level
+   replacement/removal test. Cached `@cache` hits re-apply earlier patches
+   without touching the snapshot: owners are server state a cache hit does not
+   change, a stale element resolves against the current contracts, and the
+   server validates it.
+2. **Owner generations.** Not added (decision N3). Snapshots are whole-tree,
+   applied with their DOM, in receipt order, including buffered frames,
+   reconnect and recovery. Two root mounts of the same view path on one page
+   remain a known limitation.
+3. **Binders.** Done: see
+   [native binder activation](036-strict-client-collection.md#native-binder-activation-p2-sub-slice-b).
+4. **Real browser.** Done: see
+   [real-browser acceptance](036-strict-client-collection.md#real-browser-acceptance-p2-sub-slice-d).
+   Server validation of hand-crafted messages is retained and tested.

@@ -141,10 +141,11 @@ replay-binding slice, and no live-browser or complete ADR acceptance is claimed.
   [trusted dispatch context](036-trusted-dispatch-context.md): one strict
   dispatch-context rule on every transport, trusted contract parameters, and
   ADR-034 output callbacks bound strictly with a framework-supplied source.
-  Client collection activation and browser acceptance remain.
-- Scope-aware public client contracts for root, child and component identities;
-  strict `dj-value-*` collection, typed-literal and collision rejection, and
-  unchanged legacy precedence.
+  Client collection and browser acceptance followed in P2.
+- Scope-aware public client contracts, strict `dj-value-*` collection,
+  typed-literal and collision rejection, and unchanged legacy precedence are
+  done (P2 sub-slices (a)–(d)); see the
+  [collector note](036-strict-client-collection.md).
 - Full supported-type and `coerce_types=False` parity is now executed by one
   shared matrix (see "Transport parity matrix" below). Async actor support
   remains a rejection (V017). Uploads travel their own channel and are not

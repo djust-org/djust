@@ -3482,10 +3482,20 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         new_template
                     )
 
-                # Re-render the view to get patches (track time)
+                # Re-render the view to get patches (track time). The reloaded
+                # code may change handler contracts (HVR swaps classes), so the
+                # same operation captures the tree's public contracts (ADR-036).
+                from ._background_render import direct_render_contract_fields
+
+                hot_view, hot_runtime = self.view_instance, getattr(self, "_runtime", None)
+
+                def _render_hot() -> Any:
+                    rendered = hot_view.render_with_diff()
+                    return rendered, direct_render_contract_fields(hot_view, hot_runtime)
+
                 render_start = time.time()
-                html, patches, version = await database_sync_to_async(
-                    self.view_instance.render_with_diff
+                (html, patches, version), contract_fields = await database_sync_to_async(
+                    _render_hot
                 )()
                 render_time = (time.time() - render_start) * 1000  # Convert to ms
 
@@ -3500,8 +3510,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         "Slow patch generation: %.2fms for %s", render_time, file_path
                     )
 
-                # Handle case where no patches are generated
-                if not patches:
+                # Handle case where no patches are generated, or the reloaded
+                # declarations cannot produce valid contracts: reload the page.
+                if not patches or contract_fields is None:
                     hotreload_logger.info("No patches generated, sending full reload")
                     await self.send_json(
                         {
@@ -3573,6 +3584,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         version=self._next_version_armed(html),
                         hotreload=True,
                         file_path=file_path,
+                        **contract_fields,
                     )
 
                 total_time = (time.time() - start_time) * 1000

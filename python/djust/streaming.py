@@ -292,7 +292,22 @@ class StreamingMixin:
         # both frames MUST stamp the consumer-owned monotonic counter
         # (#1788, HIDDEN #2). Stamping the Rust version here would desync the
         # client against every other send path.
-        html, patches, _version = await sync_to_async(self.render_with_diff)()
+        # ADR-036: the rendered tree's public contracts travel with the frame
+        # (captured in the same operation); a strict client invalidates its
+        # scope on a DOM frame without them. Discovery failure withholds it.
+        from ._background_render import direct_render_contract_fields
+
+        runtime = getattr(self._ws_consumer, "_runtime", None)
+
+        def render() -> Any:
+            rendered = self.render_with_diff()
+            return rendered, direct_render_contract_fields(self, runtime)
+
+        (html, patches, _version), contract_fields = await sync_to_async(render)()
+        if contract_fields is None:
+            logger.warning("push_state() withheld: render parameter contracts unavailable")
+            return
+        snapshot = contract_fields.get("parameter_contract_snapshot") or {}
 
         if patches is not None:
             patch_list = json.loads(patches) if patches else []
@@ -301,6 +316,7 @@ class StreamingMixin:
                     "type": "patch",
                     "patches": patch_list,
                     "version": self._ws_consumer._next_version(),
+                    **snapshot,
                 }
             )
         else:
@@ -311,6 +327,7 @@ class StreamingMixin:
                     "type": "html_update",
                     "html": html,
                     "version": self._ws_consumer._next_version(),
+                    **snapshot,
                 }
             )
         await self._ws_consumer._flush_push_events()

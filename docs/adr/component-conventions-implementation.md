@@ -1651,7 +1651,7 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
   duplicate/extra/missing values; framework-versus-application arguments;
   registration checks. Remaining ADR-036 work is P2's open producer items,
   P3 acceptance and PR.
-- [ ] **P2 — wire/dispatch parity.** Route real DOM extraction and every server
+- [x] **P2 — wire/dispatch parity.** Route real DOM extraction and every server
   dispatch path through that contract. Verify forms' open payloads,
   keyword-only arguments, forged component injection, `coerce_types=False` and
   unchanged legacy behavior. Invalid input must never invoke application code.
@@ -1896,13 +1896,37 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
     declared-strict warning, other handlers staying strict, the manifest,
     and the legacy project unchanged. Full Python suite from a frozen
     worktree: 33,776 passed and 949 skipped, plus the 2 known tag failures.
-  - Remaining P2 items:
-    - render-producer coverage for child/component creation, removal and
-      replacement;
-    - deferred, hot-reload and cached-DOM producers;
-    - a strict `dj-auto-recover` convention (a naming decision);
-    - `dj-model`, which is unchanged;
-    - the known same-path double-root limitation.
+  Producer coverage (the last P2 item):
+  - An audit of every DOM-carrying frame type found two producers without a
+    contract snapshot: the hot-reload patch and `StreamingMixin.push_state`.
+    On a strict page each made the client invalidate its scope, and a reload
+    could also advertise stale declarations.
+  - Both now capture the snapshot with the render through the shared
+    `render_contract_fields`. A strict session whose discovery fails reloads
+    the page (hot reload) or withholds the frame (`push_state`); legacy
+    sessions keep their frame shape.
+  - The remaining producers were already covered, or change no owners.
+  - Cached `@cache` hits leave the current snapshot authoritative.
+  - Evidence: 6 real-WebSocket cases in `test_producer_parameter_contracts.py`
+    (hot reload strict/legacy/failure, `push_state` strict/legacy, component
+    creation → replacement → removal with dispatch after each). 3 of them
+    fail before the fix. Existing hot-reload, streaming and #1788 suites
+    pass (603 tests).
+
+  **P2 closed (2026-09-25).**
+  - Real DOM extraction and every server dispatch path go through the
+    contract: sub-slices (a)–(d) and the producer coverage above.
+  - Verified: forms' open payloads, keyword-only arguments, forged component
+    injection, `coerce_types=False`, legacy behaviour unchanged, and invalid
+    input never invoking application code. Evidence: the 43-row eight-path
+    matrix, the browser matrix, and the forged-key suites.
+  - Recorded, not open work:
+    - `dj-auto-recover` stays legacy (R1);
+    - `dj-model` sends the fixed `field`/`value` its framework handler
+      declares;
+    - uploads are not event arguments;
+    - two root mounts of the same view path on one page are a known
+      limitation (N3).
 - [ ] **P3 — acceptance.** Execute documented examples under their stated policy;
   verify redacted diagnostics and the ADR's complete conversion/parity matrix.
 - [ ] **PR — retirement.** Delete the superseded coercion path per
