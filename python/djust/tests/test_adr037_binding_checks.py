@@ -554,3 +554,39 @@ def test_text_output_prints_the_coverage_summary(fixture):
     out = StringIO()
     call_command("djust_check", stdout=out)
     assert "Event bindings: " in out.getvalue()
+
+
+# -- The directive table against the client ---------------------------------------
+
+
+def _client_sources() -> str:
+    from pathlib import Path
+
+    import djust
+
+    src = Path(djust.__file__).parent / "static" / "djust" / "src"
+    return "\n".join(p.read_text(encoding="utf-8") for p in sorted(src.glob("*.js")))
+
+
+def test_every_attribute_the_client_reads_is_classified():
+    import re
+
+    from djust._template_bindings import DIRECTIVES, NON_EVENT_ATTRIBUTES
+
+    source = _client_sources()
+    read = set(re.findall(r"""(?:get|has)Attribute\(\s*['"](dj-[a-z-]+)['"]""", source))
+    read |= set(re.findall(r"\[(dj-[a-z-]+)\]", source))
+    unclassified = sorted(read - set(DIRECTIVES) - NON_EVENT_ATTRIBUTES)
+    assert unclassified == [], "classify these client attributes: %s" % unclassified
+    assert not set(DIRECTIVES) & NON_EVENT_ATTRIBUTES
+
+
+def test_every_directive_is_one_the_client_binds():
+    from djust._template_bindings import DIRECTIVES
+
+    source = _client_sources()
+    for name in DIRECTIVES:
+        family = name.rsplit("-", 1)[0] + "-"
+        assert name in source or (family in ("dj-window-", "dj-document-") and family in source), (
+            name
+        )
