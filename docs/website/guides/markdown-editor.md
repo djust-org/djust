@@ -52,15 +52,17 @@ use native `as_live_field()` rendering in the template layout.
 The usual deferred client or framework-injected client works:
 
 ```django
-{% load static %}
+{% load static djust_assets %}
 <link rel="stylesheet" href="{% static 'djust_components/markdown-editor.css' %}">
-<script src="{% static 'djust_components/markdown-visual.js' %}"></script>
+{% djust_asset "markdown-visual" %}
 <script src="{% static 'djust_components/markdown-editor.js' %}"></script>
 ```
 
-Omit `markdown-visual.js` for a lightweight Markdown-only editor. If the visual
-asset is unavailable, the original textarea remains usable. The assets are
-shipped prebuilt: application users do not need Node, npm or a bundler.
+Omit the `markdown-visual` asset for a lightweight Markdown-only editor;
+`{% djust_asset %}` adds its integrity hash, and its bundled package versions
+are listed in djust's SBOM (see [Scanning a djust app](scanning.md)). If the
+visual asset is unavailable, the original textarea remains usable. The assets
+are shipped prebuilt: application users do not need Node, npm or a bundler.
 
 ## Existing component
 
