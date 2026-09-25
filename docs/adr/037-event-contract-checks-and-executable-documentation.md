@@ -275,8 +275,7 @@ saving: every `RETIRE` row below moves onto one shared discovery in
 Each retirement is its own commit on the ADR branch, and the branch's PR is the
 deletion PR at merge.
 
-Rows 1–8 are owner decisions. Rows 9–17 and V020, Q004 and S013 are
-**proposed** until the owner answers.
+All rows are owner decisions (2026-09-25).
 
 | # | Location at `2553ae410` | What it derives | Decision | Reason |
 | --- | --- | --- | --- | --- |
@@ -288,23 +287,39 @@ Rows 1–8 are owner decisions. Rows 9–17 and V020, Q004 and S013 are
 | 6 | `python/djust/checks/parameters.py:38–63` `_declared_handlers` | A class-level mirror of the runtime's `_event_methods` | RETIRE | The runtime and the checks call one function. |
 | 7 | `python/djust/audit_ast.py:524`, `python/djust/checks/security.py:584` | Event-handler decorators in source ASTs | KEEP | Security audits read source without importing it, by design. |
 | 8 | `python/djust/validation.py` legacy coercion | Legacy parameter handling | — | Cross-reference only: ADR-036's PR gate. |
-| 9 | `python/djust/mixins/handlers.py:30–80` | Runtime handler metadata through `dir(self)`, with its own strict-contract override | RETIRE (proposed) | Onto the shared discovery and one shared `handler_metadata()`. |
-| 10 | `python/djust/mixins/post_processing.py:105–135` | Debug-panel handler list through `dir()` and the legacy signature derivation | RETIRE (proposed) | It shows the wrong parameters for strict handlers. |
-| 11 | `python/djust/api/registry.py:30–60`, `:170–195` | Exposed handlers and server functions through `dir()` | RETIRE (proposed) | Onto the shared discovery. |
-| 12 | `python/djust/hot_view_replacement.py:112–127` `_list_event_handlers` | A class's own handlers | RETIRE (proposed) | Onto the shared discovery limited to that class. |
-| 13 | `python/djust/mcp/server.py:356–470` `find_handlers_for_template` | Its own `dj-*` regex and basename template matching | RETIRE (proposed) | Onto the D1 binding extractor and template-owner resolution. |
-| 14 | `python/djust/theming/gallery/catalogue.py:454–466` `component_events` | A `dj-*` regex over rendered HTML | RETIRE (proposed) | Onto the D1 binding extractor. |
-| 15 | `scripts/generate-interactive-reference.py:113` | Handler decorators on interactive classes | RETIRE (proposed) | Onto the shared discovery. |
-| 16 | `python/djust/checks/templates.py:118`, `:260` (T012, T002) | Whether any event directive is present | KEEP (proposed) | They never resolve a name. |
-| 17 | `python/djust/websocket.py:4997` | The server-push gate for one resolved name | KEEP (proposed) | A security rule on an already-resolved handler, not discovery. |
-| V020 | `python/djust/checks/components.py:1665` | Interactive declarations on actor views | KEEP (proposed) | It reads the runtime's own declarations and enforces ADR-034 decision Q5. |
-| Q004 | `python/djust/checks/quality.py:213` | Imports of both `DropdownMenu` classes | KEEP (proposed) | Import hygiene; no handler names, parameters or ownership. |
-| S013 | `python/djust/checks/security.py:979` | Edit views with no row scoping or object permission | KEEP (proposed) | An authorization policy the binding checks cannot express. |
+| 9 | `python/djust/mixins/handlers.py:30–80` | Runtime handler metadata through `dir(self)`, with its own strict-contract override | RETIRE | Onto the shared discovery and one shared `handler_metadata()`. |
+| 10 | `python/djust/mixins/post_processing.py:105–135` | Debug-panel handler list through `dir()` and the legacy signature derivation | RETIRE | It shows the wrong parameters for strict handlers. |
+| 11 | `python/djust/api/registry.py:30–60`, `:170–195` | Exposed handlers and server functions through `dir()` | RETIRE | Onto the shared discovery. |
+| 12 | `python/djust/hot_view_replacement.py:112–127` `_list_event_handlers` | A class's own handlers | RETIRE | Onto the shared discovery limited to that class. |
+| 13 | `python/djust/mcp/server.py:356–470` `find_handlers_for_template` | Its own `dj-*` regex and basename template matching | RETIRE | Onto the D1 binding extractor and template-owner resolution. |
+| 14 | `python/djust/theming/gallery/catalogue.py:454–466` `component_events` | A `dj-*` regex over rendered HTML | RETIRE | Onto the D1 binding extractor. |
+| 15 | `scripts/generate-interactive-reference.py:113` | Handler decorators on interactive classes | RETIRE | Onto the shared discovery. |
+| 16 | `python/djust/checks/templates.py:118`, `:260` (T012, T002) | Whether any event directive is present | KEEP | They never resolve a name. |
+| 17 | `python/djust/websocket.py:4997` | The server-push gate for one resolved name | KEEP | A security rule on an already-resolved handler, not discovery. |
+| V020 | `python/djust/checks/components.py:1665` | Interactive declarations on actor views | KEEP | It reads the runtime's own declarations and enforces ADR-034 decision Q5. |
+| Q004 | `python/djust/checks/quality.py:213` | Imports of both `DropdownMenu` classes | KEEP | Import hygiene; no handler names, parameters or ownership. |
+| S013 | `python/djust/checks/security.py:979` | Edit views with no row scoping or object permission | KEEP | An authorization policy the binding checks cannot express. |
 
-Examined and not rows: code that reads the metadata of one already-resolved
-handler (`validation.py`, `rate_limit.py`, `auth/core.py`, `api/dispatch.py`,
-`websocket_utils.py`, `mixins/request.py`, `runtime.py`, `time_travel.py`). It
-consumes the runtime contract rather than deriving it.
+Row 4's terms: `_get_handlers` keeps its name as a thin adapter over the shared
+discovery. Undecorated methods stop being fuzzed, since dispatch refuses them.
+Strict handlers fuzz with their contract metadata. Components and server
+functions stay excluded, as before.
+
+Row 13's output (N1): `find_handlers_for_template` keeps its JSON keys, computed
+from the D1 extractor and real loader resolution (includes and parents). It gains
+a `coverage` object and a per-binding `status`.
+
+Examined and not rows: these read the metadata of one already-resolved handler.
+They consume the runtime contract rather than deriving it:
+
+- `python/djust/validation.py` (policy, coercion and signature of the handler being called)
+- `python/djust/rate_limit.py` (`@rate_limit` settings of the called handler)
+- `python/djust/auth/core.py` (`@permission_required` of the called handler)
+- `python/djust/api/dispatch.py` (`expose_api` / `@server_function` metadata of the routed handler)
+- `python/djust/websocket_utils.py` (event security and coercion of the resolved handler)
+- `python/djust/mixins/request.py` (the HTTP fallback's resolved handler)
+- `python/djust/runtime.py` (`@cache` and decorator metadata of the dispatched method)
+- `python/djust/time_travel.py` (whether a replayed handler is an event handler)
 
 ## D1 decisions (2026-09-25)
 
