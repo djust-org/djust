@@ -14,7 +14,7 @@ from djust import LiveView
 from djust.decorators import event_handler
 
 BLOCK = re.compile(
-    r'<script type="application/json" id="djust-parameter-contracts">(.*?)</script>', re.S
+    r'<script type="application/json" data-djust-parameter-contracts>(.*?)</script>', re.S
 )
 
 
@@ -94,7 +94,7 @@ def test_initial_page_carries_root_contracts_outside_the_live_root():
     assert '"default"' not in blocks[0]
     root_start = html.index("<div dj-root")
     root_end = html.index("</div>", root_start)
-    assert html.index('id="djust-parameter-contracts"') > root_end
+    assert html.index("data-djust-parameter-contracts") > root_end
 
 
 @pytest.mark.django_db

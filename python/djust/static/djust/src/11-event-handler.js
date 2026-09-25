@@ -18,7 +18,7 @@ for (const event of ['djust:before-navigate', 'turbo:before-visit', 'pagehide'])
 }
 
 // ADR-036: the page's own (HTTP) contract scope. get() renders the root
-// mount's owner contracts into #djust-parameter-contracts, outside dj-root;
+// mount's owner contracts into script[data-djust-parameter-contracts], outside dj-root;
 // HTTP fallback responses refresh them like WS/SSE render frames. A page whose
 // data block names another view (a socket live_redirect replaced the root)
 // leaves the scope unknown rather than applying a stale mount's rules.
@@ -29,7 +29,7 @@ function _installPageParameterContracts() {
     _localEventTransport._parameterContracts = new Map();
     _localEventTransport._parameterContractApplied = new Map();
     if (!path) return;
-    const block = document.getElementById('djust-parameter-contracts');
+    const block = document.querySelector('script[data-djust-parameter-contracts]');
     let manifest = null;
     if (block) {
         let payload = null;
@@ -58,15 +58,34 @@ function _eventContractTransport() {
     return _localEventTransport;
 }
 
-// Resolve the public contract a native binding would dispatch under. The
-// owner address matches server routing: an embedded child's view_id wins over
-// a component inside it. Returns {policy: 'legacy'|'strict'|'unknown', ...}.
-// 'unknown' (no record for this mount, owner or handler) cannot be strict: the
-// server validates it. An invalid strict scope throws, so callers fail closed.
+// A socket mount of the page's root also refreshes the page scope, so an HTTP
+// fallback after a socket live_redirect uses the current mount's contracts.
+function _mirrorPageParameterContracts(manifest, viewPath) {
+    if (typeof viewPath !== 'string' || !viewPath) return;
+    _localEventTransport.primaryViewPath = viewPath;
+    try {
+        _installParameterContracts(_localEventTransport, manifest, viewPath, true, 0);
+    } catch {
+        // Recorded as invalid; strict lookups fail closed.
+    }
+}
+
+// Resolve the public contract a native binding would dispatch under. The mount
+// is the element's nearest non-embedded dj-view root (normally the page root).
+// The owner address matches server routing: an embedded child's view_id wins
+// over a component inside it. Returns {policy: 'legacy'|'strict'|'unknown'}.
+// 'unknown' covers a mount this transport holds no record for (never delivered
+// a contract: an unmounted, lazy or bare root) and an owner or handler a known
+// mount does not list; neither can be strict, since strict contracts are always
+// delivered and every strict handler is listed. Binders keep legacy collection
+// and the server stays authoritative. A mount whose strict snapshot is invalid
+// or missing (recorded as invalid on receipt) throws: callers fail closed
+// rather than guess (ADR-036 Q1).
 function _resolveParameterContract(element, eventName) {
     const transport = _eventContractTransport();
-    const root = findPageViewContainer();
-    const path = root ? root.getAttribute('dj-view') : null;
+    const container = (element && element.closest &&
+        element.closest('[dj-view]:not([data-djust-embedded])')) || findPageViewContainer();
+    const path = container ? container.getAttribute('dj-view') : null;
     const mounts = transport._parameterContracts;
     if (!path || !mounts || !mounts.has(path)) return {policy: 'unknown', transport};
     const owners = mounts.get(path);
@@ -78,6 +97,90 @@ function _resolveParameterContract(element, eventName) {
     if (!handlers || !handlers.has(eventName)) return {policy: 'unknown', transport};
     const contract = handlers.get(eventName);
     return {policy: contract.policy, contract, transport, viewId, componentId};
+}
+
+// Wire hints a declared type accepts (ADR-036 D3): a conflicting explicit hint
+// is rejected rather than converted twice. Unhinted text is always accepted.
+const _WIRE_HINT_TYPES = {
+    int: ['int', 'float', 'Decimal'], integer: ['int', 'float', 'Decimal'],
+    float: ['float'], number: ['float'],
+    bool: ['bool'], boolean: ['bool'],
+    json: null, array: ['list'], list: ['list'], object: [],
+};
+
+function _hintAccepted(hint, label) {
+    let type = label;
+    const optional = /^Optional\[(.*)\]$/.exec(type);
+    if (optional) type = optional[1];
+    if (type === 'Any') return true;
+    const base = type.startsWith('list[') ? 'list' : type;
+    // eslint-disable-next-line security/detect-object-injection
+    const accepted = _WIRE_HINT_TYPES[hint];
+    return accepted === null || (accepted !== undefined && accepted.includes(base));
+}
+
+// ADR-036 strict collection for a native binding. Returns null when the
+// binding is not strict: the caller keeps its unchanged legacy params. For a
+// strict handler it returns the application payload: dj-value-* arguments
+// (strict literals) plus only the generated values the handler declares, or
+// all of them for a ** catch-all (Q1). _target is never generated (Q2).
+// Throws, with a value-free message, when the arguments are rejected.
+function _strictEventParams(element, eventName, generated = {}, positional = []) {
+    const resolved = _resolveParameterContract(element, eventName);
+    if (resolved.policy !== 'strict') return null;
+    const parameters = resolved.contract.parameters;
+    const named = new Map(parameters
+        .filter(p => p.kind === 'positional_or_keyword' || p.kind === 'keyword_only')
+        .map(p => [p.name, p]));
+    const openPayload = parameters.find(p => p.kind === 'var_keyword');
+    const reject = () => { throw new Error('Invalid strict event arguments'); };
+    const explicit = new Map();
+    for (const attr of element.attributes) {
+        if (!attr.name.startsWith('dj-value-')) continue;
+        const parts = attr.name.slice(9).split(':');
+        explicit.set(parts[0].replace(/-/g, '_'), parts[1]);
+    }
+    const sent = Object.create(null);
+    for (const key of Object.keys(generated)) {
+        if (explicit.has(key)) reject();
+        if (named.has(key) || openPayload) {
+            // eslint-disable-next-line security/detect-object-injection
+            sent[key] = generated[key];
+        }
+    }
+    for (const [key, hint] of explicit) {
+        if (!hint) continue;
+        const parameter = named.get(key) || openPayload;
+        if (parameter && !_hintAccepted(hint, parameter.type)) reject();
+    }
+    const values = _collectStrictEventParams(element, sent, positional);
+    // A value supplied both positionally and by name is an error, not a choice.
+    const leading = parameters
+        .filter(p => p.kind === 'positional_only' || p.kind === 'positional_or_keyword')
+        .slice(0, positional.length);
+    if (leading.some(p => Object.hasOwn(values, p.name))) reject();
+    return values;
+}
+
+// Value-free, before any disable/optimistic/loading effect (ADR-036 N1).
+function _reportStrictRejection(eventName) {
+    console.error('[LiveView] Event arguments rejected by the handler contract:', eventName);
+    window.dispatchEvent(new CustomEvent('djust:error', {detail: {
+        error: 'Invalid event arguments for this handler.',
+        traceback: null, event: eventName, validation_details: null,
+    }}));
+}
+
+// Binder entry point. Returns strict params, null for a legacy/unknown binding
+// (keep the legacy params), or false when a strict binding was rejected and
+// reported: the caller must return before any effect.
+function _strictBinding(element, eventName, generated, positional) {
+    try {
+        return _strictEventParams(element, eventName, generated, positional);
+    } catch {
+        _reportStrictRejection(eventName);
+        return false;
+    }
 }
 
 // Main Event Handler
@@ -355,3 +458,6 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
 }
 window.djust.handleEvent = handleEvent;
 window.djust._installPageParameterContracts = _installPageParameterContracts;
+window.djust._mirrorPageParameterContracts = _mirrorPageParameterContracts;
+window.djust._strictBinding = _strictBinding;
+window.djust._resolveParameterContract = _resolveParameterContract;

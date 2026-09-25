@@ -567,6 +567,9 @@ class LiveViewWebSocket {
             case 'mount': {
                 _installParameterContracts(this, data.parameter_contracts, data.view, true,
                     this._parameterContractFrames.get(data));
+                if (data.view === this.primaryViewPath) {
+                    globalThis.djust._mirrorPageParameterContracts?.(data.parameter_contracts, data.view);
+                }
                 const formRecoverySnapshot = window.djust._isReconnect
                     && data.view === this.primaryViewPath
                     && typeof window.djust._captureFormRecovery === 'function'

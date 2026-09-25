@@ -17,7 +17,7 @@ const manifest = () => ({version: 1, owners: [
     {view_id: 'child', component_id: null, handlers: {choose: strict}},
 ]});
 const block = contracts =>
-    `<script type="application/json" id="djust-parameter-contracts">${JSON.stringify(contracts)}</script>`;
+    `<script type="application/json" data-djust-parameter-contracts>${JSON.stringify(contracts)}</script>`;
 const page = `<div dj-root dj-view="app.Page">
     <button id="root" dj-click="choose"></button>
     <div data-component-id="menu"><button id="component" dj-click="choose"></button>
@@ -82,7 +82,7 @@ describe('initial page contract scope', () => {
     it.each([
         ['discovery failure', block({view: 'app.Page', contracts: false})],
         ['malformed manifest', block({view: 'app.Page', contracts: {version: 9, owners: []}})],
-        ['unparseable block', '<script type="application/json" id="djust-parameter-contracts">{</script>'],
+        ['unparseable block', '<script type="application/json" data-djust-parameter-contracts>{</script>'],
     ])('fails closed on %s', (_label, html) => {
         const {dom, resolve} = setup(html);
         try {

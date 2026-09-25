@@ -198,6 +198,21 @@ scoped components, and deliberately exposed API handlers. Preserve each path's
 authentication and transport protections. New ADR-034 typed subscriptions use
 strict contracts, with trusted source injection outside the client payload.
 
+## Completion decisions (2026-09-24)
+
+P2 left the strict-collection conventions open. These are decided. Q1 and Q2
+are owner decisions. N1–N3 are implementation choices the owner accepted. A
+later change to any of them changes its implementation and tests, not just
+this table.
+
+| # | Question | Decision | Reason |
+| --- | --- | --- | --- |
+| Q1 | Which generated event values (`value`, `field`, `key`, `code`, form fields, paste/copy text) does a strict native binding send? | Contract-aware. A generated key is sent only if the handler declares a parameter with that name, or has a `**` catch-all. `dj-value-*` arguments are always sent, and one that collides with a generated key is rejected. A missing or invalid contract manifest fails closed rather than guessing. The server stays authoritative and still rejects hand-crafted extra keys. | Owner decision. A closed signature is the encouraged contract (D1). A fixed per-directive set would force every strict handler to declare names it doesn't use, such as `field` on every input handler. The client already holds the owner-scoped public contract, so it can send exactly what the handler asks for. |
+| Q2 | `_target` (the triggering field or submitter name) under strict | Not sent. Use `field` or an explicit `dj-value-*`. Legacy bindings are unchanged and keep sending `_target`. | Owner decision. `_`-prefixed names are framework-reserved and cannot be declared by a strict handler (D5). Renaming it would add public API that `field` and `dj-value-*` already cover. |
+| N1 | How is a client-side strict rejection shown? | The existing error path: a fixed, value-free `console.error` and the `djust:error` event (dev overlay, application toasts). It happens before `dj-disable-with`, optimistic and loading effects. | No new UI or API, and nothing is applied that would then have to be rolled back. |
+| N2 | How do HTTP-only pages and the HTTP fallback get contracts? | The initial page renders a framework-internal JSON block (`<script type="application/json" data-djust-parameter-contracts>`) outside the live root. HTTP-fallback render responses carry the additive `parameter_contracts` / `parameter_contract_view` fields that socket frames already use. | Additive, and it keeps the server's VDOM baseline free of framework markup. |
+| N3 | Server-issued owner generation tokens | Not added unless the parity matrix shows a concrete stale-owner failure. Two root mounts of the same view path on one page remain a known limitation. | Manifests are whole-tree snapshots applied atomically with the DOM they describe, in receipt order. |
+
 ## Alternatives considered
 
 | Alternative | Assessment |

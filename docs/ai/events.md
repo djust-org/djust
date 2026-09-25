@@ -2,6 +2,8 @@
 
 All handlers require `@event_handler()` decorator and `**kwargs`.
 
+Strict policy (staged, `@event_handler(parameter_policy="strict")`, ADR-036): closed signatures are the contract, and `**kwargs` is not required. The browser sends a generated value (`value`/`field` for input/change, form fields for submit, `key`/`code` for keyboard) only when the handler declares that parameter name or a `**` catch-all. `dj-value-*` is always sent, and one colliding with a generated name is rejected. `_target` is never sent: use `field` or `dj-value-*`. Legacy handlers are unchanged.
+
 ```python
 from djust.decorators import event_handler, debounce, throttle
 

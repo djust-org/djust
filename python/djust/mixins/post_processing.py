@@ -444,7 +444,7 @@ class PostProcessingMixin:
         initial_contracts = self.__dict__.pop("_initial_parameter_contracts", None)
         if initial_contracts:
             full_script = (
-                '<script type="application/json" id="djust-parameter-contracts">'
+                '<script type="application/json" data-djust-parameter-contracts>'
                 f"{initial_contracts}</script>" + full_script
             )
 

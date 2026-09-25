@@ -210,6 +210,9 @@ class LiveViewSSE {
                 if (typeof data.view === 'string') this.primaryViewPath = data.view;
                 _installParameterContracts(this, data.parameter_contracts, data.view, true,
                     this._parameterContractFrames.get(data));
+                if (data.view === this.primaryViewPath) {
+                    globalThis.djust._mirrorPageParameterContracts?.(data.parameter_contracts, data.view);
+                }
                 if (globalThis.djustDebug) console.log('[SSE] View mounted:', data.view);
 
                 // Remove dj-cloak from all elements (FOUC prevention)

@@ -46,6 +46,8 @@ class TodoView(LiveView):
 
 That's it. `dj-submit` prevents the default submit, collects all form fields via `FormData`, and sends them to your handler as keyword arguments. The view re-renders automatically.
 
+> **Strict parameter policy (staged).** Under the staged strict parameter policy (`@event_handler(parameter_policy="strict")`, ADR-036), the browser sends a generated value only if the handler declares a parameter with that name, or has a `**` catch-all. Generated values are `value` and `field` for `dj-input`/`dj-change`, the form fields for `dj-submit`, and `key`/`code` for keyboard events. `dj-value-*` arguments are always sent, and one that reuses a generated name is rejected. `_target` is never sent: use `field` or a `dj-value-*` argument. Legacy handlers (the default) receive every value as before. A strict `dj-submit` handler therefore gets only the fields it names, or all of them through `**form_data`.
+
 
 ## HTTP fallback does not require a second view
 

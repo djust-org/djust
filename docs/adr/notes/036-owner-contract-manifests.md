@@ -273,7 +273,7 @@ routes strict arguments through the canonical binder before restoration.
 ## Initial page and HTTP fallback delivery
 
 `get()` renders the root mount's manifest into a JSON data block,
-`<script type="application/json" id="djust-parameter-contracts">`, after the
+`<script type="application/json" data-djust-parameter-contracts>`, after the
 live root and outside it, so the server's VDOM baseline never contains it.
 The payload is `{"view": <mount path>, "contracts": <manifest>}`: the same
 public fields as the mount frame, escaped for script context. All-legacy pages

@@ -77,6 +77,7 @@ def save(self, **form_data):
 ```
 
 Rules:
+- Strict policy (staged, ADR-036): a strict `dj-submit` handler receives only the form fields it declares, or all of them through `**form_data`, and never `_target`
 - Set `_model_instance` BEFORE calling `super().mount()` for edit forms
 - FormMixin provides `submit_form` handler automatically
 - `form_valid`/`form_invalid` are called after validation
