@@ -14,6 +14,7 @@ while four things hold, and each is pinned here:
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -68,7 +69,12 @@ def test_djust_imports_and_serialises_without_orjson():
         capture_output=True,
         text=True,
         cwd=str(ROOT),
-        env={"PYTHONPATH": str(ROOT / "python"), "PATH": ""},
+        env={
+            "PYTHONPATH": str(ROOT / "python"),
+            "PATH": "",
+            # Windows needs SYSTEMROOT to start Python at all.
+            **({"SYSTEMROOT": os.environ["SYSTEMROOT"]} if "SYSTEMROOT" in os.environ else {}),
+        },
         timeout=120,
     )
     assert out.returncode == 0, out.stderr[-2000:]
@@ -77,7 +83,9 @@ def test_djust_imports_and_serialises_without_orjson():
 
 def test_the_release_workflow_builds_and_verifies_cp314t_wheels():
     wf = (ROOT / ".github" / "workflows" / "release.yml").read_text()
-    oses = re.findall(r"-\s*os:\s*(\S+)\s*\n\s*python-version:\s*'3\.14t'", wf)
+    oses = re.findall(
+        r"-\s*os:\s*['\"]?([\w.-]+)['\"]?\s*\n\s*python-version:\s*['\"]?3\.14t['\"]?", wf
+    )
     assert {"ubuntu-latest", "windows-latest"} <= set(oses)
     assert any(o.startswith("macos") for o in oses)
     assert "if: matrix.python-version == '3.14t'" in wf
@@ -86,6 +94,9 @@ def test_the_release_workflow_builds_and_verifies_cp314t_wheels():
 
 @pytest.mark.skipif(not _free_threaded_build(), reason="needs a free-threaded (3.13t/3.14t) build")
 def test_the_gil_is_off_while_djust_runs():
+    # Under PYTHON_GIL=0 (the CI subset step) this cannot fail; the real
+    # gate is CI's import check without that override. It still catches a
+    # free-threaded run that forgot the override and got the GIL back.
     import djust._rust  # noqa: F401
     import djust.websocket  # noqa: F401
 

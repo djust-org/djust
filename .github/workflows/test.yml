@@ -398,8 +398,9 @@ jobs:
   # GIL-releasing render, the worker pool, scoped push, event-loop offload,
   # the in-memory layer and the thread-safety fixes — where their races are
   # real (no GIL to serialise them), and asserts the GIL stays off.
-  # Blocking since #3074 (it had soaked green since #1534); still NOT wired
-  # into the test-summary aggregate gate.
+  # No longer continue-on-error since #3074 (it had soaked green since #1534),
+  # so a failure shows red; it is still NOT wired into the test-summary
+  # aggregate gate, so it does not by itself block a merge.
   python-free-threaded:
     runs-on: ubuntu-latest
     name: python-tests (py3.14t free-threaded)

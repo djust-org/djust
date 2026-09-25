@@ -74,6 +74,12 @@ jobs:
     needs: [verify]
     name: Build wheels on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    # A 3.14t cell must not stop the release (#3074): the verify step installs
+    # djust's dependencies on the free-threaded interpreter, and some of them
+    # (autobahn via channels[daphne]; cbor2 on macOS x86_64) have no cp314t
+    # wheels and build from source. A failed 3.14t cell shows red and ships no
+    # cp314t wheel for that platform; every other wheel still publishes.
+    continue-on-error: ${{ matrix.python-version == '3.14t' }}
     strategy:
       fail-fast: false  # Continue building other platforms if one fails
       matrix:
@@ -106,6 +112,8 @@ jobs:
           # Free-threaded CPython 3.14t (#3074): cp314-cp314t wheels. The
           # extension declares `gil_used = false`, so importing djust keeps
           # the GIL off; the verify step below fails the build if it doesn't.
+          # Four more wheels (~8 MB each) per release: mind PyPI's 10 GB
+          # per-project cap, past which uploads land only partially.
           - os: ubuntu-latest
             python-version: '3.14t'
           - os: macos-15
@@ -133,7 +141,10 @@ jobs:
         run: pip install maturin
 
       - name: Build wheel
-        run: maturin build --release --out dist
+        # `-i python`: build for the interpreter setup-python put first on
+        # PATH (for 3.14t, the free-threaded one) rather than whatever
+        # maturin discovers.
+        run: maturin build --release --out dist -i python
 
       # A free-threaded wheel must import without CPython re-enabling the GIL
       # (#3074): that is what `#[pymodule(gil_used = false)]` promises, and
