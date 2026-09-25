@@ -228,10 +228,13 @@ blocking (the side effects then still happen). A process-wide lock
 serializes dry-runs.
 
 **`find_handlers_for_template(template_path)`** — Cross-references a
-template file against every view that uses it. Returns the `dj-*`
-handlers wired in the template AND the diff against the view's
+template file against every view or component that uses it: its own
+template is the file, or includes or extends it. Returns the `dj-*`
+handlers wired in the template AND the diff against each owner's
 handler methods, so you can catch dead bindings (template uses
-`dj-click="missing"`) at author time.
+`dj-click="missing"`) at author time. Each binding also has a `status`
+(checked, dynamic or unsupported) and the `djust.T019`–`T022` findings
+`manage.py check` reports for it, and a `coverage` object summarizes them.
 
 **`seed_fixtures(fixture_paths)`** — Subprocess wrapper around
 `manage.py loaddata` for regression-fixture DB setup before a

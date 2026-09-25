@@ -82,6 +82,8 @@ class OwnerReport:
     results: list[BindingResult] = field(default_factory=list)
     gaps: list[Any] = field(default_factory=list)
     error: str = ""
+    #: Every template file the scan read: the template, its includes and parents.
+    files: tuple[str, ...] = ()
 
     @property
     def label(self) -> str:
@@ -210,7 +212,7 @@ def scan_owner(cls: type, kind: str, engine: Any, cache: dict[Any, Any]) -> Owne
     scan = cache[key]
     if isinstance(scan, str):
         return OwnerReport(cls, label, "", error="the template cannot be compiled (%s)" % scan)
-    report = OwnerReport(cls, label, scan.file, gaps=list(scan.gaps))
+    report = OwnerReport(cls, label, scan.file, gaps=list(scan.gaps), files=tuple(scan.files))
     context = _OwnerContext(cls, kind, scan)
     report.results = [context.check(binding) for binding in scan.bindings]
     return report
@@ -822,6 +824,11 @@ def binding_reports() -> list[OwnerReport]:
         return []
     cache: dict[Any, Any] = {}
     return [scan_owner(cls, kind, engine, cache) for cls, kind in _owners()]
+
+
+def owner_kinds() -> dict[type, str]:
+    """``{owner class: "view" | "component"}`` for every checked owner."""
+    return dict(_owners())
 
 
 def coverage(reports: list[OwnerReport]) -> dict[str, Any]:
