@@ -1776,6 +1776,31 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
     passes 1,176 files. Guards: init-order, cross-IIFE, bundle ESLint and the
     doc size claims. The shipped gzip grew by 219 bytes, and the #2632
     call-site pin now counts 2 contract helpers in `11-event-handler.js`.
+  Sub-slice (b), [strict native collection](notes/036-strict-client-collection.md#native-binder-activation-p2-sub-slice-b),
+  commit 09c5f5ab8:
+  - Implements the owner decisions Q1 (contract-aware generated values) and
+    Q2 (no `_target` under strict), recorded with N1–N3 in ADR-036's
+    completion decisions.
+  - Every native binder resolves its owner-scoped contract before any lock,
+    confirmation, disable-with, optimistic or loading effect.
+  - A strict binding sends only `dj-value-*` plus the declared generated
+    values. The client rejects generated-name collisions, conflicting wire
+    hints and positional/named duplicates, through the value-free
+    `djust:error` path.
+  - Legacy and unlisted handlers keep their payloads. An invalid scope fails
+    closed.
+  - `dj-model`, hook `pushEvent` and `dj-auto-recover` are unchanged, and
+    are recorded as open.
+  - Evidence: 18 bundle cases in `strict_native_binding.test.js`. The full
+    JavaScript suite passes (2,293 tests in 205 files). Full Python from a
+    frozen worktree: 33,759 passed and 949 skipped, plus the 2 known
+    tag-reachability failures. One more failure, the client-size manifest
+    pin on a size figure in the new changelog fragment, was fixed afterwards
+    and its module passes (24 tests). The full suite was not repeated for
+    that one-line fragment edit.
+  - The shipped gzip grew 2,275 bytes, to 70.3 KB. The repository's `~67 KB`
+    claims (33 lines) now read `~70 KB`, and the unminified claim reads
+    `~230 KB`, per the size manifest.
 - [ ] **P3 — acceptance.** Execute documented examples under their stated policy;
   verify redacted diagnostics and the ADR's complete conversion/parity matrix.
 - [ ] **PR — retirement.** Delete the superseded coercion path per

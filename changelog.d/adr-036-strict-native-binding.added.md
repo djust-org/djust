@@ -10,4 +10,3 @@
   positionally and by name is rejected in the browser. That happens before
   any lock, disable-with, optimistic or loading effect, through the existing
   value-free `djust:error` path. Legacy handlers keep their exact payloads.
-  The shipped client grows to ~70 KB gzipped.
