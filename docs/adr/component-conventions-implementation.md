@@ -1617,6 +1617,27 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
   injection, ADR-034 subscriptions) and client/transport acceptance. The
   legacy-code migration inventory and ADR-037 template-binding checks are also
   not done.
+  [Trusted dispatch context](notes/036-trusted-dispatch-context.md) closes the
+  server half of D5's argument separation. `FRAMEWORK_ARGUMENT_NAMES` and
+  `TRANSPORT_METADATA_KEYS` are applied once in the shared strict validator:
+  transport bookkeeping (`_cacheRequestId`, `_activity`) is dropped on every
+  path, and an unconsumed `view_id`/`component_id` fails closed. Strict flat
+  HTTP bodies reject unknown `_` keys instead of discarding them. Contracts can
+  declare trusted parameters, bound only from server values. Staged ADR-034
+  output callbacks bind their payload through that contract with the source
+  `component` trusted, and V016 checks those payload contracts. Legacy mapping
+  is unchanged. Evidence: 68 cases in `test_trusted_dispatch_context.py` (a
+  forged/metadata matrix on the shared runtime, both HTTP shapes, exposed
+  API, server functions, test client, replay, actor bridge, and real WS
+  normal/actor and SSE sessions; legacy controls; forged ADR-034 source).
+  25 of them fail against the previous code. The expanded focused set passes
+  885 tests; mypy passes 1,175 files. Full suite from a frozen worktree at
+  bf17b7d6e (four workers, 347.74 s): 33,750 passed, 949 skipped, and the same
+  2 tag-reachability failures in `tests/test_changelog_tagged_sections.py`.
+  Still open in P1: client/transport acceptance (strict native binders and
+  browser verification). Also recorded there: the actor path fails closed on
+  a root `view_id`, and the legacy descriptor alias takes `component_id` from
+  the client.
 - [ ] **P2 — wire/dispatch parity.** Route real DOM extraction and every server
   dispatch path through that contract. Verify forms' open payloads,
   keyword-only arguments, forged component injection, `coerce_types=False` and
