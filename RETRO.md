@@ -407,6 +407,8 @@ issue or be explicitly closed with a reason.
 | 365 | dj-root vs dj-view root precedence differs between Python (dj-root first) and the Rust VDOM (first of either) | PR #3053 | #3031 | Open | pattern: parallel-path-drift. 1.3. Aligning to Python moved a dj-view-only parent's VDOM root into an embedded dj-root child (reverted in review); needs a rule that skips embedded/sticky child roots |
 | 366 | Root locators diverge from the HTML tokenizer on malformed markup (unquoted value with a quote, bogus comments, unterminated tags, quoted `</tag>` in the close walk) | PR #3053 | #3054 | Open | pattern: parallel-path-drift. Pre-existing; needs markup rendered with the `safe` filter or `mark_safe` to reach |
 | 367 | The `v1.3.0rc1` tag is not reachable from main (squash-merged release), so two changelog-pin tests fail in any local checkout with the tag, and the pin cannot see a deleted `[1.3.0rc1]` section | PR #3070 | #3072 | Open | Release process or gate rule: tag the main squash commit / merge the release branch back, or count a tag whose section exists on the branch. CI skips the tests (no tags) |
+| 368 | Registry `register_*`/`unregister_*` drop the replaced `Py` under the write lock; an attached reader blocked on a registry `RwLock` cannot join a 3.14t stop-the-world | PR #3087 | #3088 | Open | Pre-existing; found by the #3074 GIL-release review. Drop after unlocking; take locks detached or copy-on-write |
+| 369 | `PerformanceTracker`'s current tracker is a thread-local on the shared event-loop thread, so concurrent sessions' event turns overwrite each other's (debug timing only) | PR #3074 2/7 audit | #3089 | Open | Pre-existing, unchanged by the worker pool; make it a ContextVar |
 
 ## Retro backfill — 14 un-retro'd drain buckets (v1.1.0-9 … v1.2.0-5)
 
@@ -882,6 +884,32 @@ None in this bucket.
 ### Open Items
 - [ ] Not traced: with the fix, live malloc at the cycle low points still creeps by about 1 MB per four cycles (noted on #3080).
 - [ ] 1.2.2 backport candidate still on main: #3070 (the #3061 half). Its #3068 half is ADR-039 accounts and applies to 1.3 only.
+
+## v1.3.0-3 — multi-core rendering (#3074)
+
+**Scope**: The #3074 experiment productionised as seven PRs, one per ROADMAP row. Each PR has its own entry below as it merges; the bucket summary is written when the last one lands.
+
+### PR 1/7 — release the GIL in `render_with_diff` (PR #3087)
+
+**Date**: 2026-09-25. Squash-merged as `ec33346c0`. Retro: https://github.com/djust-org/djust/pull/3087 (retrospective comment).
+
+**Tests at close**:
+- 3 Python cases in `python/djust/tests/test_render_with_diff_gil_3074.py`. Against main's extension, the spinner test fails 3 times out of 3.
+- 2 Rust tests in `render_with_diff_detaches_3074`. The waiting-thread test fails when the one-line detach is reverted.
+- The registry churn case hangs 3 times out of 3 when built with the old lock order.
+- CI: 22 checks passed, 0 failed.
+
+**What we learned**
+1. **Releasing the GIL around a body that re-attaches creates a lock-order inversion wherever a Rust lock is held across `Python::attach`.**
+   - Eleven registry lookups took a read guard and then attached to `clone_ref` a handler. Detached, that thread holds the read lock while it waits for the GIL.
+   - Meanwhile `register_*` holds the GIL while it waits for the write lock.
+   - The rule is now "attach, then lock" (documented on `TAG_HANDLERS`). Any future detach should start with a grep for guards that live across an attach.
+2. **A concurrency test on a GIL build must be run against the baseline extension, not just the new one.** The spinner test passed without the detach, because CPython hands the GIL to a waiting thread right after a C call returns. Review caught it. The fix was a 30 s switch interval plus voluntary `sleep(0)` yields. This is the `tautological-test` class.
+3. **Moving a Rust function body breaks the Python source-pin tests that name it** (`test_panic_boundary_2343`, `test_render_env_per_view_2741`). Grep the tests for the function name before moving a body.
+
+**Review stats**: 0 🔴, 2 🟡 (the tautological spinner test; the changelog left out the same-instance "Already borrowed" change), 4 🟢. All were fixed, except the pre-existing registry and stop-the-world items, filed as #3088.
+
+**Process note**: The pre-push hook fails the two #3072 tests in any checkout that has the `v1.3.0rc1` tag. This batch pushes from private `--no-tags` clones, which match CI. The first such push ran no hook, because the clone lacked the repo-local `core.hooksPath`. That was disclosed on the PR, and the full pre-push stage was then run by hand.
 
 ## v1.2.1-7 — state and rendering batch: v1.2.1-7, -8 and -9 (PR #3042)
 
