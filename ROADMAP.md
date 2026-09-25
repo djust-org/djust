@@ -53,6 +53,16 @@ Two name shapes appear in this roadmap, with distinct meanings:
 | ~~**P1**~~ | ~~#3061 — Full-template render and HTTP POST fallback send context-processor values (`messages`, `perms`, `request`, `user`) through the state normalizer: a "non-serializable value" warning on every page (also on 1.2.1: backport candidate for 1.2.2)~~ ✅ (#3070) | v1.3.0 |
 | ~~**P2**~~ | ~~#3068 — Accounts check A102 ignores `ALLAUTH_TRUSTED_CLIENT_IP_HEADER` (ADR-039)~~ ✅ (#3070) | v1.3.0 |
 
+### v1.3.0-2 — thread race + memory growth (drain bucket)
+
+*Kind:* thread safety, unbounded memory, per-event waste. All three are on 1.2.1 too: backport to `1.2` for 1.2.2.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| **P1** | #3079 — `presence.tenant_scoped_presence_key` reads a partially initialised `djust.tenants.mixin` while another thread is importing it (`AttributeError`); take the class with a normal import, which waits on the module's import lock | v1.3.0 |
+| **P1** | #3080 — Process RSS grows under WebSocket load and is never released. Root cause: `InMemoryStateBackend` never applied its TTL at runtime (only `djust clear` did), so every session's view state stayed for the life of the process. Expire on `get()`, sweep from `set()` at most once per `min(ttl, 60)` s; document the per-session cost and allocator retention | v1.3.0 |
+| **P3** | `performance.MemoryTracker` retries `import psutil` on every event (about 42 µs when psutil is absent); probe once at module import | v1.3.0 |
+
 ## Next: v1.2.1 — non-breaking fixes (drain)
 
 > Planned 2026-09-24 from a triage of every open issue. **Policy:** non-breaking bug fixes ship in 1.2.1; anything breaking, new features, and parser/dependency upgrades go to 1.3. Issues split into a 1.2.1 part and a 1.3 part are marked. The ADR-034–038 stack (#2944, #2954) merges after 1.2.1 is cut. Already shipped toward 1.2.1 on `main`: #3009 (inline whitespace, #2999/#3010), the CSRF resolver (#2978), SerializerCache removal (#2992), the audit gate (#2989).

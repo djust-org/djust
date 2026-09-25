@@ -49,6 +49,28 @@ DJUST_CONFIG = {
 
 Single server only. State lost on restart.
 
+**Memory and `SESSION_TTL`.** The in-memory backend keeps one entry per
+(session, page): the page's compiled `RustLiveView` with its last render, which
+the WebSocket mount reuses instead of compiling and rendering from scratch.
+In a snake-arena load test this was about 270 KB of live heap per session.
+An entry is written when the page is served and when the WebSocket mounts, not
+on events. It expires once it has not been written for `SESSION_TTL` seconds
+(default 3600). Reading an expired entry is a miss, so the mount builds a fresh
+one. Writes sweep expired entries at most once every `min(SESSION_TTL, 60)`
+seconds. `SESSION_TTL = 0` means never expire. So the backend holds roughly *new
+sessions per second × `SESSION_TTL`* entries. At 5 new sessions a second with
+the default hour, that is 18,000 entries (about 5 GB at 270 KB each). Lower
+`SESSION_TTL` to the reconnect window you actually need, or use Redis.
+
+Before 1.2.2 and 1.3 the TTL was applied only by `djust clear` and
+`cleanup_expired_sessions()`, so entries stayed until the process exited
+(#3080).
+
+Expect process RSS to level off, not fall, when sessions expire. The allocator
+keeps freed pages and reuses them for new sessions. Measure growth with the
+entry count (`get_backend().get_stats()["total_sessions"]`) or the allocator's
+in-use figure, not with RSS alone.
+
 ### Redis (Production)
 
 ```python
