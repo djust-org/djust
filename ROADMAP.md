@@ -83,7 +83,7 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 | Priority | Task | Milestone |
 |---|---|---|
-| **P1** | #3114 — `djust.worker_pool.PooledHTTP` (opt-in): HTTP requests run on a bounded pool of threads instead of one new thread each; pool threads start from an empty context; scaling guide "Memory under overload" (RSS per client, allocator retention, bounded queues) | v1.3.0 |
+| ~~**P1**~~ | ~~#3114 — `djust.worker_pool.PooledHTTP` (opt-in): HTTP requests run on a bounded pool of threads instead of one new thread each; pool threads start from an empty context; scaling guide "Memory under overload" (RSS per client, allocator retention, bounded queues)~~ ✅ (#3118) | v1.3.0 |
 | **P2** | #3116 — The diagnostic owner-slot ContextVar holds strong refs to the consumer and runtime; context copies (tasks started in a turn, threads on 3.14t) pin disconnected sessions. Store weak refs (ADR-038 code) | v1.3.0 |
 
 ### v1.3.0-5 — event-loop ceiling (#3095)

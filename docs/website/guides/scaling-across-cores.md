@@ -170,12 +170,14 @@ Django's ASGI handler runs every HTTP request in its own new thread, through asg
 
 Measured in the snake-arena process, on 3.14t with `worker_threads=5` (#3114):
 
-| page GETs (concurrent × rounds) | peak threads | RSS after | live Python heap |
+| page GETs (concurrent × rounds) | peak threads | RSS after the burst (also its peak) | live Python heap after |
 |---|---|---|---|
-| 256 × 1 | 259 | 81 → 1263 MB | 89 MB |
+| 256 × 1 | 259 | 81 → 1263 MB | 89 MB (RSS 1340 MB)† |
 | 64 × 12 | 66 | 81 → 867 MB | – |
 | 8 × 96 | 10 | 81 → 468 MB | – |
 | 256 × 3 with `PooledHTTP` | 7 | 81 → 406 MB | – |
+
+† From a separate run with `tracemalloc` on.
 
 - **Each concurrent request thread left about 4 MB resident.** The live heap was a small fraction of that.
 - **Nothing gave the memory back:** neither mimalloc's purge options nor a cyclic `gc.collect()`.
@@ -191,6 +193,7 @@ application = ProtocolTypeRouter({
 })
 ```
 
+- **Which thread.** A request goes to the thread with the fewest requests bound to it. That count is not how busy the thread is: a request whose client disconnects mid-view releases its slot while its sync code finishes, and an async streaming response keeps its slot while using no thread.
 - **Pool size.** `threads=None`, the default, uses the size of the WebSocket pool (`LIVEVIEW_CONFIG["worker_threads"]`). While that setting is off, every request passes through unchanged. An integer sets the size, and `0` passes through. Wrapped apps of the same size share one pool.
 - **Separate threads.** The HTTP pool's threads are named `djust-http-N` and are separate from the WebSocket sessions' threads, so a burst of page loads does not queue behind game frames.
 - **What changes under a burst.** At most `threads` requests run sync code at once, and the rest wait on the event loop as coroutines, not threads. That is the thread model of a WSGI server, with the same caveats:
@@ -214,7 +217,7 @@ The snake-arena process was stepped 64 → 192 → 256 clients, 60 s each, then 
 
 The timings come from a shared 12-core machine: load average 5–24 for the first run and 4–7 for the second. The memory numbers are much less sensitive to that.
 
-- **Sessions.** Expect about **2–3 MB of RSS per connected client** on 3.14t with a pinned pool (2.1 MB at 64 clients above). That covers the view, its Rust render state and the Django session.
+- **Sessions.** Expect about **2–3 MB of RSS per connected client** on 3.14t with a pinned pool (252 MB at 64 clients above, up from 116 MB idle: 2.1 MB each). That covers the view, its Rust render state and the Django session.
 - **The state backend.** `InMemoryStateBackend` keeps about 270 KB per session for `SESSION_TTL` (see [Deployment](deployment.md#in-memory-development-only)).
 - **RSS levels off; it does not fall.** Freed memory stays with the allocator, both CPython's mimalloc heaps and the C allocator used by the Rust engine, and is reused for the next load. Size the container for the peak.
   - On Linux, glibc also creates an arena per thread, which is one more reason to bound threads. `MALLOC_ARENA_MAX=2` caps it.
