@@ -84,9 +84,18 @@ def tenant_scoped_presence_key(view: Any, key: str) -> str:
     """
     import sys
 
-    # A view can only be a TenantMixin if the module defining it was imported.
-    tenant_module = sys.modules.get("djust.tenants.mixin")
-    if tenant_module is None or not isinstance(view, tenant_module.TenantMixin):
+    # A view can only be a TenantMixin if the module defining it was imported,
+    # so apps without tenants never pay for importing it.
+    if "djust.tenants.mixin" not in sys.modules:
+        return key
+    # Take the class with a normal import, never off the sys.modules entry
+    # (#3079): while another thread is still running the module's first
+    # import, that entry is a partially initialised module with no
+    # ``TenantMixin`` yet. A normal import waits on the module's import lock
+    # until the other thread has finished.
+    from djust.tenants.mixin import TenantMixin
+
+    if not isinstance(view, TenantMixin):
         return key
     tenant = getattr(view, "_tenant", None)
     if tenant is None:
