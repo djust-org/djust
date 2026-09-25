@@ -503,3 +503,58 @@ def test_the_near_miss_warning_still_fires_once_with_the_fast_key_path(caplog):
         for _ in range(3):
             validation.validate_handler_params(_V().handler, {"fieldname": "x"}, "handler")
     assert caplog.text.count("similarly-named 'field_name'") == 1
+
+
+# ---------------------------------------------------------------------------
+# djust.layers group_send: no task per member
+# ---------------------------------------------------------------------------
+
+
+def test_group_send_creates_no_tasks_and_delivers_like_channels(monkeypatch):
+    from channels.layers import InMemoryChannelLayer as ChannelsLayer
+
+    from djust.layers import InMemoryChannelLayer
+
+    async def scenario(layer):
+        chans = [await layer.new_channel() for _ in range(3)]
+        full = await layer.new_channel()
+        for c in chans + [full]:
+            await layer.group_add("room", c)
+        for _ in range(layer.get_capacity(full)):
+            await layer.send(full, {"type": "filler"})
+        await layer.group_send("room", {"type": "hello", "n": 1})
+        await layer.group_send("empty", {"type": "nobody"})
+        got = [await layer.receive(c) for c in chans]
+        return got, layer.channels[full].qsize()
+
+    created = []
+    real_create_task = asyncio.create_task
+
+    def spy(coro, *a, **k):
+        created.append(coro)
+        return real_create_task(coro, *a, **k)
+
+    stock = asyncio.run(scenario(ChannelsLayer()))
+    monkeypatch.setattr(asyncio, "create_task", spy)
+    ours = asyncio.run(scenario(InMemoryChannelLayer()))
+    assert ours == stock
+    assert ours[0] == [{"type": "hello", "n": 1}] * 3
+    assert created == [], "group_send created a task per member"
+
+
+def test_group_send_copies_the_message_per_member():
+    from djust.layers import InMemoryChannelLayer
+
+    async def scenario():
+        layer = InMemoryChannelLayer()
+        a, b = await layer.new_channel(), await layer.new_channel()
+        await layer.group_add("g", a)
+        await layer.group_add("g", b)
+        msg = {"type": "x", "payload": {"k": [1]}}
+        await layer.group_send("g", msg)
+        ra, rb = await layer.receive(a), await layer.receive(b)
+        ra["payload"]["k"].append(2)
+        return msg, rb
+
+    msg, rb = asyncio.run(scenario())
+    assert msg["payload"]["k"] == [1] and rb["payload"]["k"] == [1]

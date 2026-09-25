@@ -38,6 +38,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from channels.exceptions import ChannelFull
 from channels.layers import InMemoryChannelLayer as _ChannelsInMemoryChannelLayer
 
 __all__ = ["InMemoryChannelLayer"]
@@ -79,6 +80,28 @@ class InMemoryChannelLayer(_ChannelsInMemoryChannelLayer):
             return
         self._next_clean = now + self.clean_interval
         super()._clean_expired()
+
+    async def group_send(self, group: str, message: dict) -> None:
+        """Channels' ``group_send`` without a task per member (#3095).
+
+        Channels wraps each member's ``send()`` in ``asyncio.create_task`` and
+        gathers them with ``as_completed``. ``send()`` on this layer never
+        suspends (it puts on the member's queue or raises ``ChannelFull``),
+        so awaiting each in turn delivers the same messages, in the same
+        order, before this returns, without creating and scheduling a task
+        per session on the event loop. A full channel is skipped, as before.
+        """
+        assert isinstance(message, dict), "Message is not a dict"
+        self.require_valid_group_name(group)
+        self._clean_expired()
+        members = self.groups.get(group)
+        if not members:
+            return
+        for channel in list(members):
+            try:
+                await self.send(channel, message)
+            except ChannelFull:
+                pass
 
     async def flush(self) -> None:
         await super().flush()
