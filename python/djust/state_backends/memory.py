@@ -24,10 +24,20 @@ class InMemoryStateBackend(StateBackend):
     - State size monitoring and warnings
     - Automatic memory statistics tracking
 
+    Expiry (#3080):
+    - An entry not written for ``default_ttl`` seconds is expired: ``get()``
+      treats it as a miss and drops it, and ``set()`` sweeps every expired
+      entry at most once per ``min(default_ttl, 60)`` seconds. Before this,
+      the TTL applied only when something called ``cleanup_expired()``, which
+      nothing did at runtime, so every session's state stayed in memory for
+      the life of the process.
+    - ``default_ttl <= 0`` means "never expire" (no sweep, no expiry on get).
+
     Limitations:
     - Does not scale horizontally (single server only)
     - Data lost on server restart
-    - Potential memory growth without cleanup
+    - Memory grows with the number of sessions seen within one TTL: each
+      holds its view's full render state (hundreds of KB for a large page).
 
     Suitable for:
     - Development environments
@@ -55,6 +65,10 @@ class InMemoryStateBackend(StateBackend):
         self._state_size_warning_kb = state_size_warning_kb
         self._lock = RLock()  # Reentrant lock for thread safety
         self._observations: Dict[str, Tuple[int, float]] = {}
+        # Amortised expiry sweep from set() (#3080): at most once per
+        # interval, so a busy server pays one O(entries) pass a minute.
+        self._sweep_interval = min(default_ttl, 60) if default_ttl > 0 else 0
+        self._next_sweep = time.monotonic() + self._sweep_interval
         logger.info(
             f"InMemoryStateBackend initialized with TTL={default_ttl}s, "
             f"state_size_warning={state_size_warning_kb}KB"
@@ -138,6 +152,12 @@ class InMemoryStateBackend(StateBackend):
                 if cached is None:
                     return None
                 view, timestamp = cached
+                if self._default_ttl > 0 and timestamp < time.time() - self._default_ttl:
+                    # Expired (#3080): a miss, and the entry goes now rather
+                    # than waiting for the next sweep.
+                    del self._cache[key]
+                    self._state_sizes.pop(key, None)
+                    return None
 
             # Round-trip outside the lock: serialize/deserialize is
             # purely CPU work on independent bytes; holding the cache
@@ -223,6 +243,20 @@ class InMemoryStateBackend(StateBackend):
                 self._cache[key] = (view, timestamp)
                 if state_size > 0:
                     self._state_sizes[key] = state_size
+        self._maybe_sweep()
+
+    def _maybe_sweep(self) -> None:
+        """Drop expired entries, at most once per sweep interval (#3080)."""
+        if self._sweep_interval <= 0:
+            return
+        now = time.monotonic()
+        with self._lock:
+            if now < self._next_sweep:
+                return
+            self._next_sweep = now + self._sweep_interval
+        removed = self._remove_expired(self._default_ttl)
+        if removed:
+            logger.debug("Expired %s in-memory sessions older than %ss", removed, self._default_ttl)
 
     def delete(self, key: str) -> bool:
         """
@@ -261,20 +295,21 @@ class InMemoryStateBackend(StateBackend):
         if ttl <= 0:
             return 0
 
-        cutoff = time.time() - ttl
+        removed = self._remove_expired(ttl)
+        if removed:
+            logger.info("Cleaned up %s expired sessions from memory", removed)
+        return removed
 
+    def _remove_expired(self, ttl: int) -> int:
+        """Delete entries not written for ``ttl`` seconds; return how many."""
+        cutoff = time.time() - ttl
         with self._lock:
             expired_keys = [
                 key for key, (_, timestamp) in self._cache.items() if timestamp < cutoff
             ]
-
             for key in expired_keys:
                 del self._cache[key]
                 self._state_sizes.pop(key, None)
-
-        if expired_keys:
-            logger.info("Cleaned up %s expired sessions from memory", len(expired_keys))
-
         return len(expired_keys)
 
     def delete_all(self) -> int:
