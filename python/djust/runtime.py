@@ -2131,9 +2131,10 @@ def _context_changed_besides(view: Any, context: Dict[str, Any], name: str) -> O
     # The same keys the sync leaves untracked or never diffs: context-
     # processor values, the request handle (re-assigned per event) and the
     # framework keys (``csrf_token``, the settings-constant date formats …).
-    skip = set(getattr(view, "_context_processor_keys", ()))
+    from .mixins.context import _request_scoped_keys
+
+    skip = _request_scoped_keys(view)
     skip.update(_FRAMEWORK_KEYS)
-    skip.add("request")
     skip.add(name)
     for key, value in context.items():
         if key in skip:

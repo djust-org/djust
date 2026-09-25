@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
 from ..template_libraries import library_render_scope
 from ..utils import get_template_dirs
+from .context import _drop_request_scoped_values
 
 if TYPE_CHECKING:  # pragma: no cover — imported only for type hints
     from django.http import HttpRequest
@@ -1270,7 +1271,13 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 from ..serialization import normalize_django_value
                 from ..mixins.rust_bridge import _collect_safe_keys
 
-                json_compatible_context = normalize_django_value(serialized_context)
+                # #3061: the HTTP GET passes the context WITH processor output
+                # applied. Keep the non-serializable request-scoped values
+                # out of the normalizer, as ``_sync_state_to_rust`` does for
+                # the dj-root (#1786); they reach the shell via the sidecar.
+                json_compatible_context = normalize_django_value(
+                    _drop_request_scoped_values(self, serialized_context)
+                )
                 for key, value in json_compatible_context.items():
                     safe_keys.extend(_collect_safe_keys(value, key))
             else:
@@ -1306,7 +1313,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 # does on the dj-root / WS render.
                 rendered_context = {
                     key: value
-                    for key, value in context.items()
+                    for key, value in _drop_request_scoped_values(self, context).items()
                     if not isinstance(value, HttpRequest)
                 }
                 context_for_sidecar = context
