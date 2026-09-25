@@ -914,6 +914,23 @@ function _warnDeadScripts(root) {
     }
 }
 
+// #2948: service-worker cache metadata carried on mount frames. The identity
+// marker is compared before anything from this mount is cached, so a changed
+// or vanished identity (logout) clears the previous identity's caches first.
+function applyServiceWorkerMountMetadata(data) {
+    if (!data || data.type !== 'mount') return;
+    if (typeof data.state_snapshot_max_age === 'number' && data.state_snapshot_max_age > 0) {
+        window.djust._stateSnapshotMaxAge = data.state_snapshot_max_age;
+    }
+    try {
+        if (window.djust._sw && typeof window.djust._sw.syncIdentity === 'function') {
+            window.djust._sw.syncIdentity(data.sw_identity);
+        }
+    } catch (_e) {
+        if (globalThis.djustDebug) console.log('[LiveView] service-worker identity sync failed:', _e);
+    }
+}
+
 class LiveViewWebSocket {
     constructor() {
         this.ws = null;
@@ -1226,6 +1243,7 @@ class LiveViewWebSocket {
 
     async _handleMessageImpl(data) {
         if (globalThis.djustDebug) console.log('[LiveView] Received: %s %o', String(data.type), data);
+        applyServiceWorkerMountMetadata(data);
 
         switch (data.type) {
             case 'connect':
@@ -2607,6 +2625,8 @@ class LiveViewSSE {
      */
     async _handleMessageImpl(data) {
         if (globalThis.djustDebug) console.log('[SSE] Received:', data.type, data);
+        // Defined in 03-websocket.js; guarded for module-isolated loads.
+        if (typeof applyServiceWorkerMountMetadata === 'function') applyServiceWorkerMountMetadata(data);
 
         switch (data.type) {
 
@@ -16076,6 +16096,49 @@ window.djust.bindModelElements = bindModelElements;
         return navigator.serviceWorker.controller;
     }
 
+    // #2948: the server's value-free identity marker (an HMAC digest of the
+    // session/user binding; never a raw id) arrives on each mount frame. When
+    // it differs from the stored one, or disappears (logout), every worker
+    // cache written under the previous identity is cleared.
+    const IDENTITY_STORAGE_KEY = 'djust:sw-identity';
+
+    function clearCaches() {
+        const ctrl = _swController();
+        if (!ctrl) return false;
+        ctrl.postMessage({ type: 'DJUST_CLEAR_STATE_CACHE' });
+        ctrl.postMessage({ type: 'DJUST_CLEAR_VDOM_CACHE' });
+        ctrl.postMessage({ type: 'DJUST_CLEAR_SHELL' });
+        return true;
+    }
+
+    function syncIdentity(marker) {
+        const current = typeof marker === 'string' && marker ? marker : null;
+        let stored;
+        try {
+            stored = window.localStorage.getItem(IDENTITY_STORAGE_KEY);
+        } catch (_e) {
+            // Unreadable storage cannot prove the identity is unchanged.
+            stored = undefined;
+        }
+        if (stored === current) return;
+        // Without a controller there is nothing to clear yet; keep the old
+        // marker so the comparison happens once a worker controls the page.
+        if (!clearCaches()) return;
+        try {
+            if (current === null) window.localStorage.removeItem(IDENTITY_STORAGE_KEY);
+            else window.localStorage.setItem(IDENTITY_STORAGE_KEY, current);
+        } catch (_e) {
+            // Storage unavailable: the next mount clears again (fails closed).
+        }
+    }
+
+    // #2948: the server's snapshot max age (seconds), learned from the mount
+    // frame; the worker falls back to its documented 3600s default.
+    function _stateMaxAge() {
+        const value = globalThis.djust && globalThis.djust._stateSnapshotMaxAge;
+        return typeof value === 'number' && value > 0 ? value : undefined;
+    }
+
     function initVdomCache() {
         if (!_swAvailable()) return;
         if (!navigator.serviceWorker) return;
@@ -16196,6 +16259,7 @@ window.djust.bindModelElements = bindModelElements;
                 type: 'STATE_SNAPSHOT_LOOKUP',
                 requestId: rid,
                 url: url,
+                max_age_seconds: _stateMaxAge(),
             });
             setTimeout(function () {
                 // eslint-disable-next-line security/detect-object-injection
@@ -16287,6 +16351,8 @@ window.djust.bindModelElements = bindModelElements;
         lookupVdom: lookupVdom,
         captureState: captureState,
         lookupState: lookupState,
+        syncIdentity: syncIdentity,
+        clearCaches: clearCaches,
     };
 })();
 

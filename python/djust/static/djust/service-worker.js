@@ -20,6 +20,12 @@
 // 4. State snapshot cache (v0.6.0) — per-URL JSON snapshots of public
 //    LiveView state, posted on before-navigate and restored on popstate.
 //    Opt-in per-view via `enable_state_snapshot = True` on the server.
+//    Entries older than the snapshot max age (the server's
+//    DJUST_STATE_SNAPSHOT_MAX_AGE, sent by the client on lookup; default
+//    3600s) are never returned and are deleted on read (#2948).
+//
+// #2948: the client clears the state, VDOM and shell caches when the server's
+// value-free identity marker changes or disappears (logout).
 //
 // Opt-in only: this file is NOT auto-registered. Users call
 // `djust.registerServiceWorker({ instantShell, reconnectionBridge, vdomCache, stateSnapshot })`
@@ -39,6 +45,10 @@ const STATE_LRU = new Map();
 let VDOM_TTL_MS = 1800 * 1000; // 30 minutes
 let VDOM_MAX_ENTRIES = 50;
 const STATE_MAX_ENTRIES = 50;
+// #2948: default state-entry lifetime, matching the server's DEFAULT_MAX_AGE
+// in python/djust/security/state_snapshot.py. The client forwards the
+// server's configured value on each lookup when it knows it.
+const STATE_DEFAULT_MAX_AGE_S = 3600;
 // Size cap for client-submitted state_json (defense in depth).
 const STATE_JSON_MAX_BYTES = 256 * 1024;
 
@@ -289,7 +299,23 @@ self.addEventListener('message', (event) => {
     }
 
     if (msg.type === 'STATE_SNAPSHOT_LOOKUP') {
-        lookupCached(STATE_CACHE, msg.url).then((entry) => {
+        const maxAgeS = typeof msg.max_age_seconds === 'number' && msg.max_age_seconds > 0
+            ? msg.max_age_seconds
+            : STATE_DEFAULT_MAX_AGE_S;
+        lookupCached(STATE_CACHE, msg.url).then(async (found) => {
+            let entry = found;
+            // #2948: an entry past the max age (or without a usable
+            // timestamp) is never returned and is removed from disk.
+            if (entry && (typeof entry.ts !== 'number' || Date.now() - entry.ts > maxAgeS * 1000)) {
+                entry = null;
+                STATE_LRU.delete(msg.url);
+                try {
+                    const cache = await caches.open(STATE_CACHE);
+                    await cache.delete(msg.url);
+                } catch (_e) {
+                    // Best-effort; the entry is still not returned.
+                }
+            }
             const reply = {
                 type: 'STATE_SNAPSHOT_REPLY',
                 requestId: msg.requestId,
