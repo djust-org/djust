@@ -445,7 +445,7 @@ class DjangoJSONEncoder(json.JSONEncoder, metaclass=_EncoderDepthMeta):
         return _encoder_depth()
 
     @_depth.setter
-    def _depth(self, value: int) -> None:
+    def _depth(self, value: int) -> None:  # noqa: dead-method-allowed (subclass compat)
         _ENCODER_DEPTH.value = value
 
     # Cache @property names per model class to avoid repeated MRO walks
