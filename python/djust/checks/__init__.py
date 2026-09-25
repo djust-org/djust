@@ -37,6 +37,7 @@ from . import (  # noqa: F401  (imported for @register side effects + re-export)
     parameters,
     bindings,
     assets,
+    sbom,
 )
 
 _pkg = _sys.modules[__name__]
@@ -55,6 +56,7 @@ for _mod in (
     parameters,
     bindings,
     assets,
+    sbom,
 ):
     for _name in dir(_mod):
         # Skip dunders and the per-submodule ``import djust.checks as

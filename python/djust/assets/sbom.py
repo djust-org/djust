@@ -227,6 +227,48 @@ def write_distribution_sbom(repo_root: Path) -> Path:
     return out
 
 
+def app_document() -> dict:
+    from django.conf import settings
+
+    from .registry import get_registry
+
+    registry = get_registry()
+    name = getattr(settings, "DJUST_SBOM_NAME", None) or str(settings.ROOT_URLCONF).split(".")[0]
+    return to_cyclonedx(
+        registry.assets.values(), root_name=name, root_version=None, digest=registry.digest()
+    )
+
+
+def served_directory_containing(path: Path) -> Path | None:
+    from django.conf import settings
+
+    candidates = [getattr(settings, "STATIC_ROOT", None), getattr(settings, "MEDIA_ROOT", None)]
+    for entry in getattr(settings, "STATICFILES_DIRS", []):
+        candidates.append(entry[1] if isinstance(entry, (tuple, list)) else entry)
+    target = Path(path).resolve()
+    for candidate in candidates:
+        if not candidate:
+            continue
+        root = Path(candidate).resolve()
+        if target == root or root in target.parents:
+            return root
+    return None
+
+
+def write_app_sbom(path: Path) -> None:
+    from django.core.management import CommandError
+
+    served = served_directory_containing(path)
+    if served is not None:
+        raise CommandError(
+            f"Refusing to write the SBOM to {path}: it is inside {served}, which is served "
+            "to browsers. Set DJUST_SBOM_PATH outside every static and media directory (djust.B012)."
+        )
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(dumps(app_document()), encoding="utf-8")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m djust.assets.sbom")
     parser.add_argument(
