@@ -83,7 +83,7 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 | Priority | Task | Milestone |
 |---|---|---|
-| **P1** | #3095 — `PresenceMixin` presence broadcasts respect `push_scope`: a join or leave wakes only the sessions sharing the presence key, not every room (`presence_broadcast_scoped` to choose) | v1.3.0 |
+| ~~**P1**~~ | ~~#3095 — `PresenceMixin` presence broadcasts respect `push_scope`: a join or leave wakes only the sessions sharing the presence key, not every room (`presence_broadcast_scoped` to choose)~~ ✅ (#3115; snake-arena #16) | v1.3.0 |
 | **P1** | #3095 — Profile the loop thread at 160–192 players (SIGALRM sampler) and move the CPU-heavy per-frame work into the worker pool, keeping per-session order | v1.3.0 |
 | **P3** | #3095 — Evaluate several event loops per process on 3.14t (design note) | v1.3.0 |
 
