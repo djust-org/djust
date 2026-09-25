@@ -94,9 +94,7 @@ class ParityView(LiveView):
 
     @strict()
     def t_form(self, **fields: str):
-        # Sorted: the actor bridge passes keys through a Rust map, so their
-        # order is not the payload's order (recorded in the ADR-036 notes).
-        self._done("t_form", dict(sorted(fields.items())))
+        self._done("t_form", dict(fields))
 
 
 class ActorParityView(ParityView):
@@ -326,3 +324,35 @@ async def test_real_sse():
         finally:
             _sse_sessions.pop(sid, None)
     _check(outcomes)
+
+
+@pytest.mark.asyncio
+async def test_actor_bridge_keeps_open_payload_key_order():
+    """The actor path once carried event params in a Rust HashMap, reordering a
+    ``**`` payload. 64 keys in a shuffled order, repeated: a hash map passes
+    this by chance with negligible probability."""
+    import random
+
+    from djust._rust import create_session_actor
+
+    received = []
+
+    class View:
+        def get_context_data(self):
+            return {}
+
+        @event_handler(parameter_policy="strict")
+        def collect(self, **fields: str):
+            received.append(list(fields))
+
+    keys = ["k%02d" % i for i in range(64)]
+    view = View()
+    actor = await create_session_actor("strict-order-actor")
+    try:
+        await actor.mount("tests.StrictOrderView", {}, view)
+        for seed in range(10):
+            random.Random(seed).shuffle(keys)
+            await actor.event("collect", {key: "v" for key in keys})
+            assert received[-1] == keys
+    finally:
+        await actor.shutdown()

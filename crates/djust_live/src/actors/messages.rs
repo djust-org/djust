@@ -11,6 +11,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tokio::sync::oneshot;
 
+/// Event arguments crossing the actor boundary. Ordered: Python delivers a
+/// `**kwargs` payload in the client's key order on every other transport, so
+/// the actor path must not reorder it through a hash map (ADR-036 parity).
+pub type EventParams = indexmap::IndexMap<String, Value>;
+
 // ============================================================================
 // Session-level messages
 // ============================================================================
@@ -21,7 +26,7 @@ pub enum SessionMsg {
     /// Mount a new view (Phase 5: Now includes Python view instance)
     Mount {
         view_path: String,
-        params: HashMap<String, Value>,
+        params: EventParams,
         python_view: Option<Py<PyAny>>,
         /// The view's template source (#2599). `None` mounts the actor on an
         /// EMPTY template — the pre-#2599 shape, kept for pure-Rust tests.
@@ -40,7 +45,7 @@ pub enum SessionMsg {
     /// Handle an event from the client
     Event {
         event_name: String,
-        params: HashMap<String, Value>,
+        params: EventParams,
         view_id: Option<String>, // Phase 6: Route to specific view by UUID
         reply: oneshot::Sender<Result<PatchResponse>>,
     },
@@ -67,7 +72,7 @@ pub enum SessionMsg {
         view_id: String,
         component_id: String,
         event_name: String,
-        params: HashMap<String, Value>,
+        params: EventParams,
         reply: oneshot::Sender<Result<String>>, // Returns rendered HTML
     },
 
@@ -181,7 +186,7 @@ pub enum ViewMsg {
     /// Handle an event by calling Python event handler (Phase 5)
     Event {
         event_name: String,
-        params: HashMap<String, Value>,
+        params: EventParams,
         reply: oneshot::Sender<Result<RenderResult>>,
     },
 
@@ -198,7 +203,7 @@ pub enum ViewMsg {
     ComponentEvent {
         component_id: String,
         event_name: String,
-        params: HashMap<String, Value>,
+        params: EventParams,
         reply: oneshot::Sender<Result<String>>, // Returns rendered HTML
     },
 

@@ -5,6 +5,7 @@
 //! has its own SessionActor.
 
 use super::error::ActorError;
+use super::messages::EventParams;
 use super::messages::{MountResponse, PatchResponse, SessionMsg};
 use super::view::{ViewActor, ViewActorHandle};
 use djust_core::{RenderEnv, Value};
@@ -240,7 +241,7 @@ impl SessionActor {
     async fn handle_mount(
         &mut self,
         view_path: String,
-        params: HashMap<String, Value>,
+        params: EventParams,
         python_view: Option<pyo3::Py<pyo3::PyAny>>,
         template: Option<String>,
         template_dirs: Vec<String>,
@@ -291,7 +292,9 @@ impl SessionActor {
                     .set_python_view_with_contracts(python_view, parameter_contract_module)
                     .await?;
             }
-            view_handle.update_state(params).await?;
+            view_handle
+                .update_state(params.into_iter().collect())
+                .await?;
             view_handle.render_with_diff().await
         }
         .await;
@@ -317,7 +320,7 @@ impl SessionActor {
     async fn handle_event(
         &mut self,
         event_name: String,
-        params: HashMap<String, Value>,
+        params: EventParams,
         view_id: Option<String>,
     ) -> Result<PatchResponse, ActorError> {
         // Phase 6: Route by view_id
@@ -405,7 +408,7 @@ impl SessionActor {
         view_id: String,
         component_id: String,
         event_name: String,
-        params: HashMap<String, Value>,
+        params: EventParams,
     ) -> Result<String, ActorError> {
         let view_handle = self
             .views
@@ -486,7 +489,7 @@ impl SessionActorHandle {
     pub async fn mount(
         &self,
         view_path: String,
-        params: HashMap<String, Value>,
+        params: EventParams,
         python_view: Option<pyo3::Py<pyo3::PyAny>>,
     ) -> Result<MountResponse, ActorError> {
         self.mount_with_template(view_path, params, python_view, None, Vec::new(), None)
@@ -501,7 +504,7 @@ impl SessionActorHandle {
     pub async fn mount_with_template(
         &self,
         view_path: String,
-        params: HashMap<String, Value>,
+        params: EventParams,
         python_view: Option<pyo3::Py<pyo3::PyAny>>,
         template: Option<String>,
         template_dirs: Vec<String>,
@@ -545,7 +548,7 @@ impl SessionActorHandle {
     pub async fn event(
         &self,
         event_name: String,
-        params: HashMap<String, Value>,
+        params: EventParams,
         view_id: Option<String>,
     ) -> Result<PatchResponse, ActorError> {
         let (tx, rx) = tokio::sync::oneshot::channel();
@@ -660,7 +663,7 @@ impl SessionActorHandle {
         view_id: String,
         component_id: String,
         event_name: String,
-        params: HashMap<String, Value>,
+        params: EventParams,
     ) -> Result<String, ActorError> {
         let (tx, rx) = tokio::sync::oneshot::channel();
 
@@ -838,7 +841,7 @@ mod tests {
             let with = handle
                 .mount_with_template(
                     "t2741.V".to_string(),
-                    state.clone(),
+                    state.clone().into_iter().collect(),
                     None,
                     Some(PROBE.to_string()),
                     Vec::new(),
@@ -851,7 +854,7 @@ mod tests {
             let without = handle
                 .mount_with_template(
                     "t2741.V".to_string(),
-                    state,
+                    state.into_iter().collect(),
                     None,
                     Some(PROBE.to_string()),
                     Vec::new(),
@@ -903,7 +906,7 @@ mod tests {
         tokio::spawn(actor.run());
 
         let result = handle
-            .mount("test.view".to_string(), HashMap::new(), None)
+            .mount("test.view".to_string(), EventParams::new(), None)
             .await;
 
         assert!(result.is_ok());
@@ -923,7 +926,7 @@ mod tests {
 
         // Try to send event before mounting any view
         let result = handle
-            .event("click".to_string(), HashMap::new(), None)
+            .event("click".to_string(), EventParams::new(), None)
             .await;
 
         // Should fail with ViewNotFound error
@@ -944,13 +947,13 @@ mod tests {
 
         // Mount view first
         handle
-            .mount("test.view".to_string(), HashMap::new(), None)
+            .mount("test.view".to_string(), EventParams::new(), None)
             .await
             .unwrap();
 
         // Now send event (backward compat: no view_id)
         let result = handle
-            .event("click".to_string(), HashMap::new(), None)
+            .event("click".to_string(), EventParams::new(), None)
             .await;
 
         assert!(result.is_ok());
@@ -965,11 +968,11 @@ mod tests {
 
         // Mount multiple views
         let view1 = handle
-            .mount("view1".to_string(), HashMap::new(), None)
+            .mount("view1".to_string(), EventParams::new(), None)
             .await
             .unwrap();
         let _view2 = handle
-            .mount("view2".to_string(), HashMap::new(), None)
+            .mount("view2".to_string(), EventParams::new(), None)
             .await
             .unwrap();
 
@@ -977,7 +980,7 @@ mod tests {
         let result = handle
             .event(
                 "click".to_string(),
-                HashMap::new(),
+                EventParams::new(),
                 Some(view1.view_id.clone()),
             )
             .await;
@@ -985,7 +988,7 @@ mod tests {
 
         // Event without view_id routes to first view (backward compat)
         let result = handle
-            .event("click".to_string(), HashMap::new(), None)
+            .event("click".to_string(), EventParams::new(), None)
             .await;
         assert!(result.is_ok());
 
@@ -1014,7 +1017,7 @@ mod tests {
 
         // Mount a view
         handle
-            .mount("test.view".to_string(), HashMap::new(), None)
+            .mount("test.view".to_string(), EventParams::new(), None)
             .await
             .unwrap();
 
@@ -1046,11 +1049,11 @@ mod tests {
 
         // Mount two views
         let view1 = handle
-            .mount("view1".to_string(), HashMap::new(), None)
+            .mount("view1".to_string(), EventParams::new(), None)
             .await
             .unwrap();
         let view2 = handle
-            .mount("view2".to_string(), HashMap::new(), None)
+            .mount("view2".to_string(), EventParams::new(), None)
             .await
             .unwrap();
 
@@ -1062,7 +1065,7 @@ mod tests {
         let result = handle
             .event(
                 "click".to_string(),
-                HashMap::new(),
+                EventParams::new(),
                 Some(view1.view_id.clone()),
             )
             .await;
@@ -1072,7 +1075,7 @@ mod tests {
         let result = handle
             .event(
                 "click".to_string(),
-                HashMap::new(),
+                EventParams::new(),
                 Some(view2.view_id.clone()),
             )
             .await;

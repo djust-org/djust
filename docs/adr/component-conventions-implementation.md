@@ -1854,13 +1854,14 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
     because of `field`/`_target`/extra fields.
   - Full Python suite from a frozen worktree at 3724f4857: 33,767 passed and
     949 skipped, plus the 2 known tag-reachability failures and one real
-    finding. The actor bridge delivers a `**` payload's keys in a Rust
-    map's order, not the payload's. The matrix now compares open payloads
-    order-independently, and the difference is recorded in the
-    server-integration note. The WebSocket parity tests then passed 5
-    consecutive runs; the full suite was not repeated.
+    finding. The actor bridge delivered a `**` payload's keys in a Rust
+    HashMap's order, not the payload's.
+  - Fixed at the source: actor event params are an ordered `EventParams`
+    (`IndexMap`) end to end. The parity matrix asserts exact order again. A
+    64-key shuffled regression fails on the previous build and passes on the
+    new one. `cargo test -p djust_live --no-default-features` passes 93
+    tests, and clippy with `-D warnings` is clean.
   - Remaining P2 items:
-    - actor `**` payload key order (above);
     - render-producer coverage for child/component creation, removal and
       replacement;
     - deferred, hot-reload and cached-DOM producers;
