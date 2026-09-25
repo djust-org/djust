@@ -169,6 +169,19 @@ async def sync_push_scope_groups(consumer: Any, view: Any) -> None:
     consumer._push_scope_groups = current
 
 
+def _presence_probe(view: Any, need_key: bool, need_count: bool) -> tuple:
+    """Runs on the session's thread: the view's presence key (application code
+    that may touch the database) and whether its ``online_count`` is stale."""
+    key = view.get_presence_key() if need_key else None
+    stale = False
+    if need_count:
+        try:
+            stale = len(view.list_presences()) != view.online_count
+        except Exception:  # noqa: BLE001 - a backend error must not break the turn
+            stale = False
+    return key, stale
+
+
 async def _sync_presence_scope_group(
     consumer: Any, view: Any, view_path: str, channel_layer: Any
 ) -> None:
@@ -177,36 +190,54 @@ async def _sync_presence_scope_group(
     Every WebSocket session of a ``PresenceMixin`` view joins, whether or not
     it tracks its own presence (a read-only viewer still shows
     ``online_count``), unless the view sets ``presence_broadcast_scoped =
-    False``. The key is ``view._presence_scope_key``: ``track_presence``
-    records it, and for a session that never tracks it is computed once here,
-    on the session's own thread (``get_presence_key`` is application code and
-    may touch the database). A failed join is logged and retried on the next
+    False``. While the view tracks, the key is the one ``track_presence``
+    recorded (``view._presence_scope_key``). Otherwise it is computed on the
+    session's own thread, once per view and ``push_scope`` value, so a viewer
+    that moves rooms follows. A failed join is logged and retried on the next
     turn.
+
+    When the join is new and the view broadcasts scoped, a peer may have joined
+    or left between mount and this join (the view-wide group is joined before
+    mount; this one only now). If ``online_count`` no longer matches the
+    backend, the session sends itself one ``_on_presence_change``.
     """
+    from .presence import PresenceMixin
+
     current = getattr(consumer, "_presence_scope_group", None)
     wanted: Optional[str] = None
+    key: Any = None
     if (
         view is not None
         and view_path
-        and callable(getattr(view, "get_presence_key", None))
+        and isinstance(view, PresenceMixin)
         and getattr(view, "presence_broadcast_scoped", None) is not False
     ):
-        key = getattr(view, "_presence_scope_key", None)
-        if key is None and getattr(consumer, "_presence_scope_failed_view", None) is not view:
-            from asgiref.sync import sync_to_async
-
+        if getattr(view, "_presence_tracked", False):
+            key = getattr(view, "_presence_scope_key", None)
+        if key is None:
             try:
-                key = await sync_to_async(view.get_presence_key)()
-            except Exception:  # noqa: BLE001 - app code; the view-wide broadcast still works
-                # Once per view instance: this runs after every turn.
-                logger.warning(
-                    "%s.get_presence_key() failed; the session gets no scoped presence broadcasts",
-                    type(view).__name__,
-                )
-                consumer._presence_scope_failed_view = view
-                key = None
-            if isinstance(key, str):
-                view._presence_scope_key = key
+                basis: Any = view_push_scopes(view)
+            except (TypeError, ValueError):
+                basis = None
+            auto = getattr(consumer, "_presence_scope_auto", None)
+            if auto is not None and auto[0] == id(view) and auto[1] == basis:
+                key = auto[2]
+            else:
+                from asgiref.sync import sync_to_async
+
+                try:
+                    key, _ = await sync_to_async(_presence_probe)(view, True, False)
+                except Exception:  # noqa: BLE001 - app code; the view-wide broadcast still works
+                    key = None
+                if not isinstance(key, str):
+                    # Once per view and push_scope value: this runs after every turn.
+                    logger.warning(
+                        "%s.get_presence_key() failed or returned a non-string; the "
+                        "session gets no scoped presence broadcasts",
+                        type(view).__name__,
+                    )
+                    key = None
+                consumer._presence_scope_auto = (id(view), basis, key)
         if isinstance(key, str):
             wanted = presence_scope_group_name(view_path, key)
     if wanted == current:
@@ -218,13 +249,30 @@ async def _sync_presence_scope_group(
             logger.warning("Error leaving the presence-scope group of %s", view_path)
             return
         consumer._presence_scope_group = None
-    if wanted:
-        try:
-            await channel_layer.group_add(wanted, consumer.channel_name)
-        except Exception:  # noqa: BLE001 - retried on the next turn
-            logger.warning("Error joining the presence-scope group of %s", view_path)
-            return
-        consumer._presence_scope_group = wanted
+    if not wanted:
+        return
+    try:
+        await channel_layer.group_add(wanted, consumer.channel_name)
+    except Exception:  # noqa: BLE001 - retried on the next turn
+        logger.warning("Error joining the presence-scope group of %s", view_path)
+        return
+    consumer._presence_scope_group = wanted
+    if hasattr(view, "online_count") and view._presence_broadcast_is_scoped():
+        from asgiref.sync import sync_to_async
+
+        _, stale = await sync_to_async(_presence_probe)(view, False, True)
+        if stale:
+            # sender_channel None: never skipped as this session's own push.
+            await channel_layer.send(
+                consumer.channel_name,
+                {
+                    "type": "server_push",
+                    "state": None,
+                    "handler": "_on_presence_change",
+                    "payload": {},
+                    "sender_channel": None,
+                },
+            )
 
 
 async def leave_push_scope_groups(consumer: Any) -> None:

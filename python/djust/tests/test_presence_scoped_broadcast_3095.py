@@ -365,12 +365,16 @@ async def test_a_leave_wakes_the_room_and_disconnect_leaves_the_group(_fresh_pre
 class _Layer:
     def __init__(self):
         self.groups: dict = {}
+        self.sent: list = []
 
     async def group_add(self, group, channel):
         self.groups.setdefault(group, set()).add(channel)
 
     async def group_discard(self, group, channel):
         self.groups.get(group, set()).discard(channel)
+
+    async def send(self, channel, message):
+        self.sent.append((channel, message))
 
 
 class _Consumer:
@@ -380,20 +384,24 @@ class _Consumer:
         self._view_path = view_path
 
 
-class _KeyView:
-    push_scope = None
-    presence_broadcast_scoped = None
+class _KeyView(PresenceMixin):
+    """A presence view whose key follows ``room``; never tracks by default."""
 
-    def __init__(self, key="k1", fail=False):
-        self.key = key
+    push_scope = None
+
+    def __init__(self, room="k1", fail=False):
+        super().__init__()
+        self.room = room
         self.fail = fail
         self.calls = 0
 
     def get_presence_key(self):
         self.calls += 1
+        if self.fail == "type":
+            return 42
         if self.fail:
             raise RuntimeError("no key")
-        return self.key
+        return self.room
 
 
 VIEW_PATH = f"{MOD}._KeyView"
@@ -403,17 +411,24 @@ def _members(consumer, key):
     return consumer.channel_layer.groups.get(presence_scope_group_name(VIEW_PATH, key), set())
 
 
-def test_sync_joins_the_key_group_once_and_follows_a_new_tracked_key():
-    from djust.push import leave_push_scope_groups, sync_push_scope_groups
+def _sync(consumer, view):
+    from djust.push import sync_push_scope_groups
+
+    asyncio.run(sync_push_scope_groups(consumer, view))
+
+
+def test_sync_computes_the_key_once_and_follows_the_tracked_key():
+    from djust.push import leave_push_scope_groups
 
     consumer, view = _Consumer(VIEW_PATH), _KeyView()
     for _ in range(3):  # e.g. three ticks
-        asyncio.run(sync_push_scope_groups(consumer, view))
+        _sync(consumer, view)
     assert view.calls == 1, "get_presence_key must be computed once, then cached"
     assert _members(consumer, "k1") == {"chan-1"}
 
-    view._presence_scope_key = "k2"  # track_presence under a new key
-    asyncio.run(sync_push_scope_groups(consumer, view))
+    view._presence_tracked = True  # track_presence under a new key
+    view._presence_scope_key = "k2"
+    _sync(consumer, view)
     assert _members(consumer, "k1") == set()
     assert _members(consumer, "k2") == {"chan-1"}
 
@@ -422,36 +437,73 @@ def test_sync_joins_the_key_group_once_and_follows_a_new_tracked_key():
     assert consumer._presence_scope_group is None
 
 
-def test_opting_out_leaves_and_joins_nothing():
-    from djust.push import sync_push_scope_groups
+def test_a_viewer_that_changes_push_scope_follows_its_new_key():
+    consumer, view = _Consumer(VIEW_PATH), _KeyView(room="r1")
+    view.push_scope = "r1"
+    _sync(consumer, view)
+    assert _members(consumer, "r1") == {"chan-1"}
+    view.room = "r2"
+    view.push_scope = "r2"  # moves rooms without tracking
+    _sync(consumer, view)
+    assert _members(consumer, "r1") == set()
+    assert _members(consumer, "r2") == {"chan-1"}
+    assert view.calls == 2
 
+
+def test_opting_out_leaves_and_joins_nothing():
     consumer, view = _Consumer(VIEW_PATH), _KeyView()
-    asyncio.run(sync_push_scope_groups(consumer, view))
+    _sync(consumer, view)
     assert _members(consumer, "k1") == {"chan-1"}
     view.presence_broadcast_scoped = False
-    asyncio.run(sync_push_scope_groups(consumer, view))
+    _sync(consumer, view)
     assert _members(consumer, "k1") == set()
 
 
-def test_a_view_without_presence_joins_nothing():
-    from djust.push import sync_push_scope_groups
+def test_a_view_that_is_not_a_presence_view_joins_nothing():
+    class _TenantLike:
+        """Has get_presence_key (as TenantMixin does) but no PresenceMixin."""
 
-    class _Plain:
         push_scope = None
 
+        def get_presence_key(self):
+            raise AssertionError("must not be called")
+
     consumer = _Consumer(VIEW_PATH)
-    asyncio.run(sync_push_scope_groups(consumer, _Plain()))
+    _sync(consumer, _TenantLike())
     assert consumer.channel_layer.groups == {}
     assert getattr(consumer, "_presence_scope_group", None) is None
 
 
-def test_a_failing_get_presence_key_warns_once_per_view(caplog):
-    from djust.push import sync_push_scope_groups
-
-    consumer, view = _Consumer(VIEW_PATH), _KeyView(fail=True)
+@pytest.mark.parametrize("fail", [True, "type"])
+def test_a_failing_get_presence_key_warns_once(caplog, fail):
+    consumer, view = _Consumer(VIEW_PATH), _KeyView(fail=fail)
     with caplog.at_level("WARNING", logger="djust.push"):
         for _ in range(5):
-            asyncio.run(sync_push_scope_groups(consumer, view))
+            _sync(consumer, view)
     assert caplog.text.count("get_presence_key() failed") == 1
     assert view.calls == 1
     assert consumer.channel_layer.groups == {}
+
+
+def test_a_join_missed_before_the_group_join_is_caught_up():
+    """A peer that joined between mount and the group join: the count the
+    view shows is stale, so the session sends itself one refresh."""
+    consumer, view = _Consumer(VIEW_PATH), _KeyView(room="r1")
+    view.push_scope = "r1"
+    view.online_count = 0
+    view.list_presences = lambda: [{"id": "peer"}]
+    _sync(consumer, view)
+    assert [(c, m["handler"], m["sender_channel"]) for c, m in consumer.channel_layer.sent] == [
+        ("chan-1", "_on_presence_change", None)
+    ]
+    _sync(consumer, view)  # already joined: no second check
+    assert len(consumer.channel_layer.sent) == 1
+
+
+def test_an_up_to_date_count_sends_nothing():
+    consumer, view = _Consumer(VIEW_PATH), _KeyView(room="r1")
+    view.push_scope = "r1"
+    view.online_count = 1
+    view.list_presences = lambda: [{"id": "me"}]
+    _sync(consumer, view)
+    assert consumer.channel_layer.sent == []
