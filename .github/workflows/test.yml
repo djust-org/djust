@@ -392,14 +392,16 @@ jobs:
         if: matrix.group == 1
         run: .venv/bin/python scripts/check-lockfile-versions.py
 
-  # Free-threaded (no-GIL) smoke leg - #1534 / follow-up to #1432.
+  # Free-threaded (no-GIL) leg - #1534 / #1432, extended for #3074.
   # Targeted, NOT a full suite run: a 3.14t runner can hit unrelated
-  # free-threaded-ecosystem gaps. continue-on-error keeps it non-blocking
-  # until it has soaked; promote to blocking in a follow-up once green.
-  # NOT wired into the test-summary aggregate gate.
+  # free-threaded-ecosystem gaps. It runs the multi-core core subset — the
+  # GIL-releasing render, the worker pool, scoped push, event-loop offload,
+  # the in-memory layer and the thread-safety fixes — where their races are
+  # real (no GIL to serialise them), and asserts the GIL stays off.
+  # Blocking since #3074 (it had soaked green since #1534); still NOT wired
+  # into the test-summary aggregate gate.
   python-free-threaded:
     runs-on: ubuntu-latest
-    continue-on-error: true
     name: python-tests (py3.14t free-threaded)
     # No CARGO_PROFILE_* override, for the same reason as python-tests above.
     # Measured either way: 86s before, 85s with it — no signal, and this job is
@@ -430,14 +432,35 @@ jobs:
           # directly instead.
           uv venv --python 3.14t
           source .venv/bin/activate
-          uv pip install maturin pytest pytest-asyncio
+          uv pip install maturin pytest pytest-asyncio pytest-django django-allauth
           maturin develop --release
 
-      - name: Free-threaded smoke test (no-GIL assertion)
+      - name: Importing djust keeps the GIL off (no PYTHON_GIL override)
         run: |
           source .venv/bin/activate
-          python -m pytest \
-            python/djust/tests/test_rust_module_thread_safety.py -v
+          # Without PYTHON_GIL=0, so this is the real test of
+          # `#[pymodule(gil_used = false)]` and of every extension djust's
+          # core imports pull in. orjson must be absent: it has no
+          # free-threaded build and djust must not need it.
+          python -c "import importlib.util, sys, django; import djust, djust._rust, djust.websocket, djust.live_view; assert importlib.util.find_spec('orjson') is None, 'orjson installed'; assert not sys._is_gil_enabled(), 'importing djust re-enabled the GIL'; print('GIL off after importing djust')"
+
+      - name: Free-threaded core subset (GIL off, asserted)
+        env:
+          PYTHON_GIL: "0"
+        run: |
+          source .venv/bin/activate
+          python -c "import sys; assert not sys._is_gil_enabled(); print('GIL off')"
+          python -m pytest -p no:cacheprovider \
+            python/djust/tests/test_rust_module_thread_safety.py \
+            python/djust/tests/test_render_with_diff_gil_3074.py \
+            python/djust/tests/test_worker_pool_3074.py \
+            python/djust/tests/test_worker_pool_thread_safety_3074.py \
+            python/djust/tests/test_scoped_push_3004.py \
+            python/djust/tests/test_event_loop_offload_3074.py \
+            python/djust/tests/test_inmemory_layer_3074.py \
+            python/djust/tests/test_free_threaded_contract_3074.py \
+            python/djust/tests/test_ws_send_version_1788.py \
+            python/djust/tests/test_server_push_deferred_3001.py
 
   # JavaScript tests - runs in parallel
   javascript-tests:

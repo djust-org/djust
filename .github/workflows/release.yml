@@ -103,6 +103,17 @@ jobs:
             python-version: '3.13'
           - os: macos-15
             python-version: '3.14'
+          # Free-threaded CPython 3.14t (#3074): cp314-cp314t wheels. The
+          # extension declares `gil_used = false`, so importing djust keeps
+          # the GIL off; the verify step below fails the build if it doesn't.
+          - os: ubuntu-latest
+            python-version: '3.14t'
+          - os: macos-15
+            python-version: '3.14t'
+          - os: macos-15-intel
+            python-version: '3.14t'
+          - os: windows-latest
+            python-version: '3.14t'
 
     steps:
       - uses: actions/checkout@v7
@@ -123,6 +134,18 @@ jobs:
 
       - name: Build wheel
         run: maturin build --release --out dist
+
+      # A free-threaded wheel must import without CPython re-enabling the GIL
+      # (#3074): that is what `#[pymodule(gil_used = false)]` promises, and
+      # the reason to publish the wheel at all. orjson has no free-threaded
+      # build; djust must not need it (it is only in the `performance` and
+      # `dev` extras).
+      - name: Verify the free-threaded wheel keeps the GIL off
+        if: matrix.python-version == '3.14t'
+        shell: bash
+        run: |
+          python -m pip install dist/*cp314t*.whl
+          python -c "import importlib.util, sys; import djust, djust._rust, djust.websocket; assert importlib.util.find_spec('orjson') is None, 'orjson was installed'; assert not sys._is_gil_enabled(), 'importing djust re-enabled the GIL'; print('GIL off:', not sys._is_gil_enabled())"
 
       - name: Upload wheels
         uses: actions/upload-artifact@v7
