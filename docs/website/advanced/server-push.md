@@ -145,8 +145,9 @@ class RoomView(LiveView):
 push_to_view("games.views.RoomView", handler="handle_refresh", scope="room-42")
 ```
 
-- `push_scope` is a `str` or an `int`, a list of them (a session can be in several scopes), or `None`, the default, which means view-wide pushes only.
-- Set it in `mount()`. **Reassigning it in a handler moves the session.** djust joins the new scopes and leaves the dropped ones at the end of the turn, and after each server-push turn.
+- `push_scope` is a `str` or an `int`, a list, tuple or set of them (a session can be in up to 64 scopes), or `None`, the default, which means view-wide pushes only.
+- Set it in `mount()`. **Reassigning it moves the session.** djust joins the new scopes and leaves the dropped ones at the end of the turn that changed it: an event handler, a server-push hook, `handle_tick` or `handle_info`.
+- `push_scope` is ordinary view state. It is restored with the session on reconnect, and a template can read it.
 - `scope=` takes one `str` or `int`. `push_to_view` and `apush_to_view` both accept it.
 - **A push without `scope` is unchanged**: it still reaches every session of the view, including sessions that set a `push_scope`.
 - Scopes belong to one view path. `scope="room-42"` for `RoomView` does not reach another view class whose sessions use the same scope; push to each view path.
@@ -203,7 +204,7 @@ Async version of `push_to_view`. Same parameters.
 
 ### `LiveView.push_scope`
 
-The scope or scopes this session receives scoped pushes for: a `str`, an `int`, an iterable of them, or `None` (the default). Usually set in `mount()`; reassigning it in a handler moves the session.
+The scope or scopes this session receives scoped pushes for: a `str`, an `int`, a list, tuple or set of them (at most 64), or `None` (the default). Usually set in `mount()`; reassigning it in a handler, push hook, `handle_tick` or `handle_info` moves the session.
 
 ### `LiveView.tick_interval`
 
