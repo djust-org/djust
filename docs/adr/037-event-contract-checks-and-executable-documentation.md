@@ -267,6 +267,62 @@ names those files or records that there were none.
 **Exit conditions.** The D1 table above, filled in, with every `RETIRE` row
 carrying a merged deletion PR before D3 acceptance.
 
+### D1 retirement table (2026-09-25)
+
+**Answer: consolidation.** The enumeration is not empty, so this ADR claims a
+saving: every `RETIRE` row below moves onto one shared discovery in
+`python/djust/_parameter_metadata.py`, which the runtime and the checks both use.
+Each retirement is its own commit on the ADR branch, and the branch's PR is the
+deletion PR at merge.
+
+Rows 1–8 are owner decisions. Rows 9–17 and V020, Q004 and S013 are
+**proposed** until the owner answers.
+
+| # | Location at `2553ae410` | What it derives | Decision | Reason |
+| --- | --- | --- | --- | --- |
+| 1 | `python/djust/checks/components.py:474–510` (V007) | Handler signatures, recommending `**kwargs` on each | RETIRE | D3: a closed signature is encouraged. `djust.V007` is retired and never reused. |
+| 2 | `python/djust/checks/components.py:378–405` (V004) | Undecorated methods whose names look like handlers | KEEP | It finds methods no template references, which the binding checks cannot see. Info level. |
+| 3 | `scripts/check-handler-contracts.py` | Framework tag event defaults against handler names (hardcoded `_APP_LEVEL_EVENTS`) | KEEP | It checks framework-internal tag markup, which needs declared tag metadata (D2) that does not exist yet. It retires once tags declare their events. |
+| 4 | `python/djust/testing.py:1451–1523` `_get_handlers` | Handler names and parameters through `inspect.signature`, including undecorated methods | RETIRE | Onto the shared discovery and contract metadata. Its consumers are checked for a public-contract break first. |
+| 5 | `python/djust/management/commands/djust_audit.py:58–93` `_get_handler_metadata` (also used by `schema.py:1619`) | Handler names through `dir()` and `getattr` | RETIRE | Onto the shared discovery. |
+| 6 | `python/djust/checks/parameters.py:38–63` `_declared_handlers` | A class-level mirror of the runtime's `_event_methods` | RETIRE | The runtime and the checks call one function. |
+| 7 | `python/djust/audit_ast.py:524`, `python/djust/checks/security.py:584` | Event-handler decorators in source ASTs | KEEP | Security audits read source without importing it, by design. |
+| 8 | `python/djust/validation.py` legacy coercion | Legacy parameter handling | — | Cross-reference only: ADR-036's PR gate. |
+| 9 | `python/djust/mixins/handlers.py:30–80` | Runtime handler metadata through `dir(self)`, with its own strict-contract override | RETIRE (proposed) | Onto the shared discovery and one shared `handler_metadata()`. |
+| 10 | `python/djust/mixins/post_processing.py:105–135` | Debug-panel handler list through `dir()` and the legacy signature derivation | RETIRE (proposed) | It shows the wrong parameters for strict handlers. |
+| 11 | `python/djust/api/registry.py:30–60`, `:170–195` | Exposed handlers and server functions through `dir()` | RETIRE (proposed) | Onto the shared discovery. |
+| 12 | `python/djust/hot_view_replacement.py:112–127` `_list_event_handlers` | A class's own handlers | RETIRE (proposed) | Onto the shared discovery limited to that class. |
+| 13 | `python/djust/mcp/server.py:356–470` `find_handlers_for_template` | Its own `dj-*` regex and basename template matching | RETIRE (proposed) | Onto the D1 binding extractor and template-owner resolution. |
+| 14 | `python/djust/theming/gallery/catalogue.py:454–466` `component_events` | A `dj-*` regex over rendered HTML | RETIRE (proposed) | Onto the D1 binding extractor. |
+| 15 | `scripts/generate-interactive-reference.py:113` | Handler decorators on interactive classes | RETIRE (proposed) | Onto the shared discovery. |
+| 16 | `python/djust/checks/templates.py:118`, `:260` (T012, T002) | Whether any event directive is present | KEEP (proposed) | They never resolve a name. |
+| 17 | `python/djust/websocket.py:4997` | The server-push gate for one resolved name | KEEP (proposed) | A security rule on an already-resolved handler, not discovery. |
+| V020 | `python/djust/checks/components.py:1665` | Interactive declarations on actor views | KEEP (proposed) | It reads the runtime's own declarations and enforces ADR-034 decision Q5. |
+| Q004 | `python/djust/checks/quality.py:213` | Imports of both `DropdownMenu` classes | KEEP (proposed) | Import hygiene; no handler names, parameters or ownership. |
+| S013 | `python/djust/checks/security.py:979` | Edit views with no row scoping or object permission | KEEP (proposed) | An authorization policy the binding checks cannot express. |
+
+Examined and not rows: code that reads the metadata of one already-resolved
+handler (`validation.py`, `rate_limit.py`, `auth/core.py`, `api/dispatch.py`,
+`websocket_utils.py`, `mixins/request.py`, `runtime.py`, `time_travel.py`). It
+consumes the runtime contract rather than deriving it.
+
+## D1 decisions (2026-09-25)
+
+Owner decisions on the public output and markers this ADR left open.
+
+| # | Question | Decision |
+| --- | --- | --- |
+| Q1 | Binding check IDs | `djust.T019` (a binding names no handler on its owner, or names a component output or subscription callback), `T020` (missing, unexpected or duplicate argument), `T021` (invalid literal or wire-type conflict), `T022` (a payload supplies a trusted framework argument). All Warnings in 1.3. |
+| Q2 | Coverage | `djust_check --format json` gains a top-level `coverage` object: totals and per-template entries with file, line and binding status. Text output prints one summary line. |
+| Q3 | Finding fields | `--format json` findings gain optional `owner`, `binding`, `expected` and `supplied`. The legacy `--json` output is unchanged. |
+| Q4 | Suppression | The new IDs require a reason: `{# noqa: T019 -- <reason> #}` (Python: `# noqa: T019 -- <reason>`). A bare `noqa` does not suppress them, and the diagnostic says why. Existing IDs keep their behavior. |
+| Q5 | Documentation blocks | `<!-- doc-snippet-check: fragment of=<path>#<heading> -->` and `<!-- doc-snippet-check: proposed -->` join `skip` and `anti-pattern`. Unmarked examples are executed. A drift report counts unexecuted blocks; it does not fail in 1.3. |
+| Q6 | AI schema | `schema.py` teaches `ModelFormMixin[Model]` for edits and `FormMixin` with a `ModelForm` for creates, lists `ModelFormMixin` in `OPTIONAL_MIXINS`, and adds an interactive `DropdownMenu` pattern. Each example is executed by a test. |
+| Q7 | MCP scaffold | A separate `edit` feature for `scaffold_view` generates a `ModelFormMixin[Model]` view. Existing features are unchanged. The output is executed by a test. |
+| Q8 | Catalogue entry | A new `"view"` entry kind backed by `components/gallery/live_views.py`; its usage snippet is generated from the class. |
+| Q9 | Form field checks | Only against a static `form_class`'s `base_fields`. A dynamic `get_form_class()` is reported as dynamic. |
+| DD | djust-docs symbol check | Public `djust.components.interactive.outputs_of(cls) -> tuple[str, ...]` in djust, with typing-proof coverage and docs. djust-docs learns `@<name>.on.<output>` on a separate branch that merges after the djust release shipping `outputs_of`. |
+
 ## Consequences and non-goals
 
 The framework becomes easier for developers and AI agents to learn because one

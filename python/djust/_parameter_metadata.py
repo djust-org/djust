@@ -1,5 +1,9 @@
 """Versioned public parameter contracts addressed by native dispatch owner.
 
+This module is also the one discovery of the handlers a class declares
+(ADR-037 D1): dispatch's ``_event_methods`` and every check, audit and tool
+that lists handlers resolve names through ``declared_handlers``.
+
 Only declarations are inspected. No template context, defaults, properties,
 mounts or event handlers are evaluated. This manifest is advisory client input,
 never an authorization decision or a replacement for server validation.
@@ -8,10 +12,11 @@ never an authorization decision or a replacement for server validation.
 import inspect
 import json
 import types
-from typing import Any
+from collections.abc import Callable, Iterator
+from typing import Any, NamedTuple
 
 from ._parameter_contract import ContractError
-from .decorators import is_event_handler
+from .decorators import is_event_handler, is_server_function
 from .validation import (
     get_handler_coercion,
     get_handler_parameter_policy,
@@ -30,20 +35,76 @@ def _instance_dict(owner: Any) -> dict[str, Any]:
     return descriptor.__get__(owner, type(owner))
 
 
+_METHOD_TYPES = (types.FunctionType, staticmethod, classmethod)
+
+
+class DeclaredHandler(NamedTuple):
+    """One handler a class exposes, as its declaration resolves it."""
+
+    name: str
+    member: Any  # The class attribute: a function, staticmethod or classmethod.
+    function: types.FunctionType
+    owner: type  # The class in the MRO whose attribute resolves the name.
+
+
+def view_stop(klass: type) -> bool:
+    """Views resolve handlers through their whole MRO."""
+    return False
+
+
+def component_stop(klass: type) -> bool:
+    """Component handlers stop at the framework component bases."""
+    from .components.base import LiveComponent
+
+    return klass is LiveComponent or bool(klass.__dict__.get("_djust_framework_component_base"))
+
+
+def _class_members(cls: type, stop: Callable[[type], bool]) -> dict[str, tuple[Any, type]]:
+    """Every attribute ``cls`` declares up to ``stop``, nearest class first."""
+    members: dict[str, tuple[Any, type]] = {}
+    for klass in cls.__mro__:
+        if stop(klass):
+            break
+        for name, member in klass.__dict__.items():
+            members.setdefault(name, (member, klass))
+    return members
+
+
+def _function(member: Any) -> Any:
+    return member.__func__ if type(member) in (staticmethod, classmethod) else member
+
+
+def declared_handlers(
+    cls: type,
+    stop: Callable[[type], bool] = view_stop,
+    *,
+    server_functions: bool = False,
+) -> Iterator[DeclaredHandler]:
+    """The public event handlers ``cls`` declares, nearest first, in MRO order.
+
+    The same resolution dispatch uses, over the class alone: a nearer attribute
+    shadows a farther one even when it is not a handler, and only Python's own
+    method types count. Nothing is instantiated and no descriptor is called.
+    ``server_functions`` also yields ``@server_function`` methods.
+    """
+    for name, (member, owner) in _class_members(cls, stop).items():
+        if name.startswith("_") or type(member) not in _METHOD_TYPES:
+            continue
+        function = _function(member)
+        if is_event_handler(function) or (server_functions and is_server_function(function)):
+            yield DeclaredHandler(name, member, function, owner)
+
+
 def _event_methods(owner: Any) -> dict[str, Any]:
-    from .components.base import BoundComponent, LiveComponent
+    from .components.base import BoundComponent
 
     bound_component = isinstance(owner, BoundComponent)
     storage = _instance_dict(owner)
     declaration = storage["_descriptor"] if bound_component else owner
-    members: dict[str, Any] = {}
-    for cls in type(declaration).__mro__:
-        if bound_component and (
-            cls is LiveComponent or cls.__dict__.get("_djust_framework_component_base")
-        ):
-            break
-        for name, member in cls.__dict__.items():
-            members.setdefault(name, member)
+    stop = component_stop if bound_component else view_stop
+    members = {
+        name: member for name, (member, _) in _class_members(type(declaration), stop).items()
+    }
     for name, member in storage.items():
         members.setdefault(name, member)
 
@@ -56,8 +117,8 @@ def _event_methods(owner: Any) -> dict[str, Any]:
         wrapper_member = inspect.getattr_static(owner, name, _ABSENT)
         member = members[name] if wrapper_member is _ABSENT else wrapper_member
         binding_class = type(declaration) if wrapper_member is _ABSENT else type(owner)
-        if type(member) in (types.FunctionType, staticmethod, classmethod):
-            function = member.__func__ if type(member) in (staticmethod, classmethod) else member
+        if type(member) in _METHOD_TYPES:
+            function = _function(member)
             if not is_event_handler(function):
                 continue
             # Only Python's known method descriptors are executed, never an

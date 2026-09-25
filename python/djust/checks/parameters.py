@@ -8,7 +8,9 @@ contract and cannot disagree. Legacy-policy handlers are never reported:
 legacy is the default and its behavior is unchanged. The project-level policy
 value is ``djust.C021`` in ``configuration.py``. V016 also covers ADR-034
 output-subscription callbacks, whose payload is bound by the same strict
-contract with the source component as trusted framework context.
+contract with the source component as trusted framework context. Handlers
+are found by ``_parameter_metadata.declared_handlers``, the discovery dispatch
+uses (ADR-037 D1).
 
 No view, component or handler is constructed, mounted or invoked.
 """
@@ -33,35 +35,6 @@ from djust.checks.utils import (
 # Stands in for a view instance when binding a method: compilation reads only
 # the declaration, and a bound method shares the runtime's cache entry.
 _DECLARATION_OWNER = object()
-
-
-def _declared_handlers(
-    cls: type, stop: Callable[[type], bool]
-) -> Iterator[tuple[str, Any, types.FunctionType]]:
-    """Public event handlers and server functions ``cls`` exposes, nearest first.
-
-    Mirrors ``_parameter_metadata._event_methods`` over class declarations only:
-    it resolves the same MRO shadowing without an instance or a descriptor call.
-    """
-    from djust.decorators import is_event_handler, is_server_function
-
-    seen: set[str] = set()
-    for klass in cls.__mro__:
-        if stop(klass):
-            break
-        for name, member in vars(klass).items():
-            if name in seen:
-                continue
-            seen.add(name)
-            if name.startswith("_"):
-                continue
-            function = (
-                member.__func__ if isinstance(member, (staticmethod, classmethod)) else member
-            )
-            if isinstance(function, types.FunctionType) and (
-                is_event_handler(function) or is_server_function(function)
-            ):
-                yield name, member, function
 
 
 def _bound(member: Any, function: types.FunctionType, cls: type) -> Callable[..., Any]:
@@ -222,6 +195,8 @@ def _recovery_target(cls: type, name: str) -> bool:
 
 def _owner_classes() -> Iterator[tuple[type, Callable[[type], bool], bool]]:
     """User LiveViews and LiveComponents, deterministic, each with its MRO stop."""
+    from djust._parameter_metadata import component_stop, view_stop
+
     try:
         from djust.components.base import LiveComponent
         from djust.live_view import LiveView
@@ -240,10 +215,7 @@ def _owner_classes() -> Iterator[tuple[type, Callable[[type], bool], bool]]:
 
     for cls in sorted(views, key=by_name):
         if not _is_framework_internal_class(cls) and cls.__dict__.get("abstract") is not True:
-            yield cls, lambda klass: klass is object, getattr(cls, "use_actors", False) is True
-
-    def component_stop(klass: type) -> bool:
-        return klass is LiveComponent or bool(klass.__dict__.get("_djust_framework_component_base"))
+            yield cls, view_stop, getattr(cls, "use_actors", False) is True
 
     for cls in sorted(components, key=by_name):
         if not _is_framework_internal_class(cls) and cls.__dict__.get("abstract") is not True:
@@ -254,6 +226,7 @@ def _owner_classes() -> Iterator[tuple[type, Callable[[type], bool], bool]]:
 def check_event_parameter_contracts(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     """``djust.V016``-``V019``: strict-policy handler declarations (ADR-036)."""
     from djust._parameter_contract import ContractError
+    from djust._parameter_metadata import declared_handlers
     from djust.validation import get_project_parameter_policy
 
     try:
@@ -265,7 +238,7 @@ def check_event_parameter_contracts(app_configs: Any, **kwargs: Any) -> list[Che
     entries = [
         (cls, name, member, function, actor_owner)
         for cls, stop, actor_owner in _owner_classes()
-        for name, member, function in _declared_handlers(cls, stop)
+        for name, member, function, _owner in declared_handlers(cls, stop, server_functions=True)
     ]
     # A declaration problem is reported once, under the class that declares the
     # handler when that class is itself checked, else under its first user.
