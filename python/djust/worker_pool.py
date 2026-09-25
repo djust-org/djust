@@ -207,3 +207,18 @@ def pool_stats() -> List[dict]:
     """Per-thread session counts, for diagnostics and tests."""
     with _lock:
         return [{"index": s.index, "sessions": s.sessions} for s in _pool]
+
+
+def offload_enabled() -> bool:
+    """Whether the calling session is pinned to a pool thread (#3074).
+
+    True inside a WebSocket consumer (and every task it spawned) that
+    :func:`bind_session` bound. djust then also moves per-frame work off the
+    asyncio event loop onto the session's thread: the pre-event assigns
+    snapshot runs in the handler's hop, and a server-push turn runs as one
+    hop. Off (stock behaviour) everywhere else: with the one shared thread,
+    moving work there would only load the thread that is already the
+    bottleneck.
+    """
+    var = _thread_sensitive_context()
+    return var is not None and isinstance(var.get(None), _Slot)
