@@ -2669,10 +2669,8 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
         try:
             child_context = dict(get_ctx())
         except Exception:  # noqa: BLE001 — fall back to empty context on error
-            if explicit_child:
-                # ADR-038: as in _render_sticky_child_html — no fallback render
-                # and no exception text for an explicit child.
-                raise ExposureError("Explicit child rendering context unavailable") from None
+            # Legacy children only: an explicit child returned above through
+            # _render_sticky_child_html, which never falls back (ADR-038).
             logger.exception(
                 "live_render: child %s.get_context_data raised; rendering with empty context",
                 child_cls.__name__,

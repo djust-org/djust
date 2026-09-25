@@ -1002,23 +1002,6 @@ function storeSignedSnapshot(data, primaryViewPath) {
     }
 }
 
-// ADR-038 D-n: service-worker cache metadata carried on mount frames. The
-// identity marker is compared before anything from this mount is cached, so a
-// changed or vanished identity clears the previous identity's caches first.
-function applyServiceWorkerMountMetadata(data) {
-    if (!data || data.type !== 'mount') return;
-    if (typeof data.state_snapshot_max_age === 'number' && data.state_snapshot_max_age > 0) {
-        window.djust._stateSnapshotMaxAge = data.state_snapshot_max_age;
-    }
-    try {
-        if (window.djust._sw && typeof window.djust._sw.syncIdentity === 'function') {
-            window.djust._sw.syncIdentity(data.sw_identity);
-        }
-    } catch (_e) {
-        if (globalThis.djustDebug) console.log('[LiveView] service-worker identity sync failed:', _e);
-    }
-}
-
 // #1610: morph the HTTP-prerendered DOM against a mount frame's HTML, so
 // mount-context state (per-connection values, and ADR-034's per-instance
 // component identities) reaches the page. Shared by the WebSocket and SSE
@@ -1351,7 +1334,8 @@ class LiveViewWebSocket {
 
     async _handleMessageImpl(data) {
         if (globalThis.djustDebug) console.log('[LiveView] Received: %s %o', String(data.type), data);
-        applyServiceWorkerMountMetadata(data);
+        // ADR-038 D-n: compared before anything from this mount is cached.
+        if (window.djust._sw) window.djust._sw.applyMountMetadata(data);
         storeSignedSnapshot(data, this.primaryViewPath);
 
         switch (data.type) {
@@ -2629,8 +2613,8 @@ class LiveViewSSE {
      */
     async _handleMessageImpl(data) {
         if (globalThis.djustDebug) console.log('[SSE] Received:', data.type, data);
-        // Defined in 03-websocket.js; guarded for module-isolated loads.
-        if (typeof applyServiceWorkerMountMetadata === 'function') applyServiceWorkerMountMetadata(data);
+        // ADR-038 D-n: compared before anything from this mount is cached.
+        if (window.djust._sw) window.djust._sw.applyMountMetadata(data);
         storeSignedSnapshot(data, this.primaryViewPath);
 
         switch (data.type) {
@@ -17086,6 +17070,22 @@ window.djust.bindModelElements = bindModelElements;
 
     // ADR-038 D-n: the server's snapshot max age (seconds), learned from the
     // mount frame; the worker falls back to its documented 3600s default.
+    // ADR-038 D-n: service-worker cache metadata carried on mount frames. The
+    // identity marker is compared before anything from this mount is cached,
+    // so a changed or vanished identity clears the previous identity's caches
+    // first. Both transports call this for every frame.
+    function applyMountMetadata(data) {
+        if (!data || data.type !== 'mount') return;
+        if (typeof data.state_snapshot_max_age === 'number' && data.state_snapshot_max_age > 0) {
+            globalThis.djust._stateSnapshotMaxAge = data.state_snapshot_max_age;
+        }
+        try {
+            syncIdentity(data.sw_identity);
+        } catch (_e) {
+            if (globalThis.djustDebug) console.log('[LiveView] service-worker identity sync failed:', _e);
+        }
+    }
+
     function _stateMaxAge() {
         const value = globalThis.djust && globalThis.djust._stateSnapshotMaxAge;
         return typeof value === 'number' && value > 0 ? value : undefined;
@@ -17311,6 +17311,7 @@ window.djust.bindModelElements = bindModelElements;
         lookupState: lookupState,
         cacheKey: cacheKey,
         syncIdentity: syncIdentity,
+        applyMountMetadata: applyMountMetadata,
         clearCaches: clearCaches,
     };
 })();

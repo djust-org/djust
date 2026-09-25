@@ -583,7 +583,6 @@ def usage_with_events(
     if others:
         if "from djust.decorators import event_handler" not in lines:
             lines.insert(2, "from djust.decorators import event_handler")
-        example = example or {}
         stubs = {e: (demo_stubs or {}).get(e) or [] for e in others}
         # Every kwarg some event drives, with the value it starts from.
         initial: dict = {}

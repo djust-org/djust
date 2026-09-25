@@ -257,7 +257,7 @@ def _validate_strict_handler_params(
         # an error envelope. Declared names and fixed type labels are sufficient.
         return {
             "valid": False,
-            "error": str(exc),
+            "error": exc.public_message,
             "expected": expected,
             "provided": [],
             "type_errors": None,

@@ -1205,6 +1205,7 @@ __all__ = [
     "rate_limit",
     "reactive",
     "state",
+    "StateProperty",
     "computed",
     "debounce",
     "throttle",
