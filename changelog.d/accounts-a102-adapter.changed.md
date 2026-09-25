@@ -1,0 +1,1 @@
+- **Check `djust.A102` no longer warns when your allauth adapter overrides `get_client_ip`.** allauth's rate limits ask the adapter for the client IP, so an override (for example `X-Real-IP` with a fallback, which keeps working where the header can be missing) is a complete configuration. The hint, the accounts guide and the error-code reference mention it.

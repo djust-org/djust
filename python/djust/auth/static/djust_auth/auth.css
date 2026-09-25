@@ -52,4 +52,5 @@
 @media (max-width: 480px) {
   .dj-auth-card { border-radius: 0; border-left: 0; border-right: 0; padding: 24px 20px; }
   .dj-auth-main { padding: 8px 0 32px; }
+  .dj-auth-flash { width: calc(100% - 32px); margin: 0 16px; }
 }

@@ -130,3 +130,21 @@ def test_code_page_confirm_is_the_primary_button():
     html = c.get(r["Location"]).content.decode()
     button = re.search(r"<button([^>]*)>\s*Confirm\s*</button>", html)
     assert button and 'class="dj-auth-submit"' in button.group(1)
+
+
+def test_project_layout_head_reaches_allauth_pages(settings, tmp_path):
+    # A project overriding the kit layout's head block (the guide's documented
+    # way to add a stylesheet) must see it on allauth pages too; the skin used
+    # to replace the block with allauth's extra_head.
+    layout = tmp_path / "djust_auth" / "layouts" / "auth.html"
+    layout.parent.mkdir(parents=True)
+    layout.write_text(
+        '{% extends "djust_auth/layouts/auth.html" %}'
+        '{% block head %}<link rel="stylesheet" href="/static/project-auth.css">{% endblock %}'
+    )
+    settings.TEMPLATES = [
+        {**settings.TEMPLATES[0], "DIRS": [str(tmp_path), *settings.TEMPLATES[0].get("DIRS", [])]}
+    ]
+    html = Client().get(reverse("account_login")).content.decode()
+    head = html.split("</head>", 1)[0]
+    assert "/static/project-auth.css" in head
