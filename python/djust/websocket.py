@@ -5091,6 +5091,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 dispatch_work = applied
                 if self.view_instance is not view or not applied:
                     return
+                # A hook that changed ``push_scope`` moves the session's
+                # scoped-push groups now, under the render lock (#3004).
+                from .push import sync_push_scope_groups
+
+                await sync_push_scope_groups(self, view)
+                if self.view_instance is not view:
+                    return
                 if not render:
                     await self._flush_all_pending()
                     await self._send_noop()

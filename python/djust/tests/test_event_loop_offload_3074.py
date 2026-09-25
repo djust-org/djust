@@ -56,6 +56,10 @@ class _OffloadView(LiveView):
         _note("hook")
         self.label = label
 
+    def handle_join(self, room: str = "", **kwargs):
+        self.label = room
+        self.push_scope = room
+
     def _sync_state_to_rust(self, *args, **kwargs):
         _note("render")
         return super()._sync_state_to_rust(*args, **kwargs)
@@ -229,3 +233,19 @@ async def test_offloaded_push_frame_matches_the_stock_frame(monkeypatch):
             finally:
                 await comm.disconnect()
     assert frames["pool"] == frames["stock"]
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_a_push_hook_that_changes_push_scope_moves_the_session(pool):
+    """Both push-turn paths sync the scopes a hook changed (#3004)."""
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
+        comm = await _connect()
+        try:
+            await apush_to_view(VIEW, handler="handle_join", payload={"room": "z1"})
+            await _receive_until(comm, "patch")
+            await apush_to_view(VIEW, handler="handle_push", payload={"label": "in-z1"}, scope="z1")
+            frame = await _receive_until(comm, "patch")
+            assert "in-z1" in json.dumps(frame["patches"])
+        finally:
+            await comm.disconnect()
