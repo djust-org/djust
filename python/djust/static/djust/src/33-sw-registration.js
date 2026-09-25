@@ -257,6 +257,49 @@
         return navigator.serviceWorker.controller;
     }
 
+    // #2948: the server's value-free identity marker (an HMAC digest of the
+    // session/user binding; never a raw id) arrives on each mount frame. When
+    // it differs from the stored one, or disappears (logout), every worker
+    // cache written under the previous identity is cleared.
+    const IDENTITY_STORAGE_KEY = 'djust:sw-identity';
+
+    function clearCaches() {
+        const ctrl = _swController();
+        if (!ctrl) return false;
+        ctrl.postMessage({ type: 'DJUST_CLEAR_STATE_CACHE' });
+        ctrl.postMessage({ type: 'DJUST_CLEAR_VDOM_CACHE' });
+        ctrl.postMessage({ type: 'DJUST_CLEAR_SHELL' });
+        return true;
+    }
+
+    function syncIdentity(marker) {
+        const current = typeof marker === 'string' && marker ? marker : null;
+        let stored;
+        try {
+            stored = window.localStorage.getItem(IDENTITY_STORAGE_KEY);
+        } catch (_e) {
+            // Unreadable storage cannot prove the identity is unchanged.
+            stored = undefined;
+        }
+        if (stored === current) return;
+        // Without a controller there is nothing to clear yet; keep the old
+        // marker so the comparison happens once a worker controls the page.
+        if (!clearCaches()) return;
+        try {
+            if (current === null) window.localStorage.removeItem(IDENTITY_STORAGE_KEY);
+            else window.localStorage.setItem(IDENTITY_STORAGE_KEY, current);
+        } catch (_e) {
+            // Storage unavailable: the next mount clears again (fails closed).
+        }
+    }
+
+    // #2948: the server's snapshot max age (seconds), learned from the mount
+    // frame; the worker falls back to its documented 3600s default.
+    function _stateMaxAge() {
+        const value = globalThis.djust && globalThis.djust._stateSnapshotMaxAge;
+        return typeof value === 'number' && value > 0 ? value : undefined;
+    }
+
     function initVdomCache() {
         if (!_swAvailable()) return;
         if (!navigator.serviceWorker) return;
@@ -377,6 +420,7 @@
                 type: 'STATE_SNAPSHOT_LOOKUP',
                 requestId: rid,
                 url: url,
+                max_age_seconds: _stateMaxAge(),
             });
             setTimeout(function () {
                 // eslint-disable-next-line security/detect-object-injection
@@ -468,5 +512,7 @@
         lookupVdom: lookupVdom,
         captureState: captureState,
         lookupState: lookupState,
+        syncIdentity: syncIdentity,
+        clearCaches: clearCaches,
     };
 })();
