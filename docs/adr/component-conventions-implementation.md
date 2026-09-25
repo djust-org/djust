@@ -119,7 +119,17 @@ docs were published only after it passed.
 - **Signed Back navigation:** session and signed paths (C4).
 
 **Final-revision runs.**
-- The full-suite result is recorded below.
+- Full Python suite at `868df85b4`, from a frozen detached worktree: 33,921
+  passed, 949 skipped, 2 failed. Both failures are the known tag-reachability
+  failures in `tests/test_changelog_tagged_sections.py` (they fail alone too).
+- Full vitest: 2,305 passed across 209 files.
+- Typing gate: mypy and Pyright 1.1.408 reject 31 negative locations.
+- Browser matrices, on pinned WebSocket, SSE and HTTP-only, all pass:
+  - dropdown;
+  - collection;
+  - acceptance;
+  - navigation (WebSocket and SSE);
+  - ADR-035's and ADR-036's.
 
 ## ADR-035 acceptance review — F2
 
