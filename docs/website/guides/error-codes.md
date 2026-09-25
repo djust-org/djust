@@ -1409,12 +1409,13 @@ Recognized packages: `axes`, `defender`, `brutebuster`, `ratelimit`, `django_rat
 
 **Severity**: Warning
 
-**What causes it**: The `allauth` backend is configured, Django is set up to run behind a proxy (`USE_X_FORWARDED_HOST` or `SECURE_PROXY_SSL_HEADER`), and allauth has no way to find the real client IP: `DJUST_TRUSTED_PROXY_COUNT` and `ALLAUTH_TRUSTED_PROXY_COUNT` are 0 and `ALLAUTH_TRUSTED_CLIENT_IP_HEADER` is not set. Every visitor then shares the proxy's IP, so one client's failed logins rate-limit everyone.
+**What causes it**: The `allauth` backend is configured, Django is set up to run behind a proxy (`USE_X_FORWARDED_HOST` or `SECURE_PROXY_SSL_HEADER`), and allauth has no way to find the real client IP: `DJUST_TRUSTED_PROXY_COUNT` and `ALLAUTH_TRUSTED_PROXY_COUNT` are 0, `ALLAUTH_TRUSTED_CLIENT_IP_HEADER` is not set, and your allauth adapter doesn't override `get_client_ip`. Every visitor then shares the proxy's IP, so one client's failed logins rate-limit everyone.
 
 **Fix**: Do one of these:
 
 - Set `DJUST_TRUSTED_PROXY_COUNT` to the number of reverse proxies in front of Django (for example `1` behind ingress-nginx). djust passes it to allauth as `ALLAUTH_TRUSTED_PROXY_COUNT`.
 - If your proxy puts the client IP in a header of its own, set `ALLAUTH_TRUSTED_CLIENT_IP_HEADER` to that header's name (for example `"X-Real-IP"`, which ingress-nginx sets; allauth 65.14.2 or later). allauth reads the IP from it. Only name a header that your proxy always sets and that clients can't set themselves. The header covers allauth's rate limits only: djust's own WebSocket, SSE and API rate limits still read `DJUST_TRUSTED_PROXY_COUNT`.
+- Override `get_client_ip` on your allauth adapter, a subclass of `djust.auth.accounts.backends.allauth_integration.DjustAccountAdapter` (check A107). allauth's rate limits ask the adapter for the IP, so this also works when the header can be missing, as in local development, tests and health probes, where `ALLAUTH_TRUSTED_CLIENT_IP_HEADER` makes allauth refuse the request.
 
 ### A103: Email verification off in production
 

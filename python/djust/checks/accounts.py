@@ -129,6 +129,24 @@ def _a101(spec: Any) -> list[CheckMessage]:
     ]
 
 
+def _adapter_supplies_client_ip() -> bool:
+    """True when the configured allauth adapter overrides ``get_client_ip``.
+
+    allauth's rate limits ask the adapter for the client IP, so an override
+    (e.g. one reading ``X-Real-IP`` with a fallback) is a complete answer to
+    A102. An adapter that can't be imported is reported by A107, not here.
+    """
+    try:
+        from allauth.account.adapter import DefaultAccountAdapter
+        from django.utils.module_loading import import_string
+
+        adapter = import_string(getattr(settings, "ACCOUNT_ADAPTER", ""))
+    except Exception:  # noqa: BLE001 - unimportable/unset: not a configuration
+        return False
+    method = getattr(adapter, "get_client_ip", None)
+    return method is not None and method is not DefaultAccountAdapter.get_client_ip
+
+
 def _a102(spec: Any) -> list[CheckMessage]:
     if not _is_allauth(spec):
         return []
@@ -147,14 +165,16 @@ def _a102(spec: Any) -> list[CheckMessage]:
         and _trusted_proxy_count() == 0
         and not getattr(settings, "ALLAUTH_TRUSTED_PROXY_COUNT", 0)
         and not has_client_ip_header
+        and not _adapter_supplies_client_ip()
     ):
         return [
             Warning(
                 "Django is configured to run behind a proxy, but DJUST_TRUSTED_PROXY_COUNT is 0: every visitor "
                 "shares the proxy's IP, so one client's failed logins rate-limit everyone.",
                 hint="Set DJUST_TRUSTED_PROXY_COUNT to the number of reverse proxies in front of Django "
-                "(e.g. 1 behind ingress-nginx), or ALLAUTH_TRUSTED_CLIENT_IP_HEADER to the header your "
-                'proxy sets with the real client IP (e.g. "X-Real-IP").',
+                "(e.g. 1 behind ingress-nginx), set ALLAUTH_TRUSTED_CLIENT_IP_HEADER to the header your "
+                'proxy sets with the real client IP (e.g. "X-Real-IP"), or override get_client_ip on '
+                "your allauth adapter.",
                 id="djust.A102",
             )
         ]

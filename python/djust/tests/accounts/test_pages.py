@@ -73,3 +73,14 @@ def test_kit_styles_the_theme_toggle_in_its_header():
     # header must not show a browser-default box.
     css = (AUTH_DIR / "static/djust_auth/auth.css").read_text()
     assert re.search(r"\.dj-auth-mode \.theme-mode-toggle\s*\{[^}]*border-radius", css)
+
+
+def test_flash_keeps_a_side_gutter_on_phones():
+    # On phones the card goes full-bleed (.dj-auth-main loses its side padding),
+    # so the flash needs its own 16px gutter or its border touches the screen edge.
+    css = (AUTH_DIR / "static/djust_auth/auth.css").read_text()
+    phone = css.split("@media (max-width: 480px)", 1)[1]
+    rule = re.search(r"\.dj-auth-flash\s*\{([^}]*)\}", phone)
+    assert rule and "margin: 0 16px" in rule.group(1)
+    # .dj-auth-main centres its children, so width: auto would shrink a short message.
+    assert "width: calc(100% - 32px)" in rule.group(1)

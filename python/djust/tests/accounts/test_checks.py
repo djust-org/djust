@@ -68,6 +68,25 @@ def test_a102_trusted_client_ip_header_counts_as_configured(settings):
         assert "djust.A102" in ids()
 
 
+def test_a102_adapter_that_supplies_the_client_ip_counts_as_configured(settings):
+    # A project adapter overriding get_client_ip (e.g. reading X-Real-IP with a
+    # fallback, so requests without the header still work) is a complete
+    # configuration; allauth's rate limits call it.
+    pytest.importorskip("allauth")
+    settings.DJUST_CONFIG = {"ACCOUNTS": {"BACKEND": "allauth"}}
+    settings.USE_X_FORWARDED_HOST = True
+    settings.DJUST_TRUSTED_PROXY_COUNT = 0
+    settings.ALLAUTH_TRUSTED_PROXY_COUNT = 0
+    settings.ACCOUNT_ADAPTER = "djust.tests.accounts.adapters.ClientIpAdapter"
+    assert "djust.A102" not in ids()
+    # Subclassing without overriding get_client_ip is not a configuration.
+    settings.ACCOUNT_ADAPTER = "djust.tests.accounts.adapters.PlainAdapter"
+    assert "djust.A102" in ids()
+    # An adapter that can't be imported is A107's problem; A102 still warns.
+    settings.ACCOUNT_ADAPTER = "djust.tests.accounts.adapters.Missing"
+    assert "djust.A102" in ids()
+
+
 def test_a103_no_verification_in_production(settings):
     pytest.importorskip("allauth")
     settings.DJUST_CONFIG = {"ACCOUNTS": {"BACKEND": "allauth"}}
