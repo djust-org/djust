@@ -90,9 +90,16 @@ class InMemoryChannelLayer(_ChannelsInMemoryChannelLayer):
         so awaiting each in turn delivers the same messages, in the same
         order, before this returns, without creating and scheduling a task
         per session on the event loop. A full channel is skipped, as before.
+        Unlike Channels' version it does not yield to the loop between
+        members, which only matters to a caller that group-sends in a loop
+        with no other ``await``.
         """
         assert isinstance(message, dict), "Message is not a dict"
-        self.require_valid_group_name(group)
+        require = getattr(self, "require_valid_group_name", None)
+        if require is not None:
+            require(group)
+        else:  # Channels < 4.2
+            assert self.valid_group_name(group), "Group name not valid"
         self._clean_expired()
         members = self.groups.get(group)
         if not members:

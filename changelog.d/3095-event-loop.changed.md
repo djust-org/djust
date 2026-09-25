@@ -15,5 +15,5 @@
   With the worker pool on only: Channels' per-frame `close_old_connections`
   hop is replaced by a check the session's pool thread runs before its next
   task, and a tick's change-detection snapshots run in the `handle_tick` hop.
-  18 regression tests in
+  20 regression tests in
   `python/djust/tests/test_event_loop_ceiling_3095.py`.

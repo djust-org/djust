@@ -558,3 +558,54 @@ def test_group_send_copies_the_message_per_member():
 
     msg, rb = asyncio.run(scenario())
     assert msg["payload"]["k"] == [1] and rb["payload"]["k"] == [1]
+
+
+def test_mark_db_check_due_falls_back_when_the_executor_is_not_ours():
+    """A slot whose executor asgiref created itself does not run the
+    deferred check, so the consumer keeps Channels' hop."""
+    from asgiref.sync import SyncToAsync
+
+    from djust import worker_pool
+
+    var = SyncToAsync.thread_sensitive_context
+    slot = worker_pool._Slot(97)
+    token = var.set(slot)
+    try:
+        assert worker_pool.mark_db_check_due() is False
+        slot.checks_on_run = True
+        assert worker_pool.mark_db_check_due() is True
+        assert slot.db_check_due is True
+    finally:
+        var.reset(token)
+
+
+class _AlternatingTickView(LiveView):
+    """Skips the render on odd ticks and changes state on even ones."""
+
+    template = f'<div dj-root dj-view="{MOD}._AlternatingTickView"><b>{{{{ count }}}}</b></div>'
+    tick_interval = 30
+
+    def mount(self, request, **kwargs):
+        self.count = 0
+        self.ticks = 0
+
+    def handle_tick(self):
+        self.ticks += 1
+        if self.ticks % 2:
+            self._skip_render = True
+        else:
+            self.count += 1
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_a_tick_skip_does_not_leak_into_the_next_tick(pool):
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[MOD]):
+        comm = await _connect("_AlternatingTickView")
+        try:
+            first = await _receive_until(comm, "patch")
+            second = await _receive_until(comm, "patch")
+        finally:
+            await comm.disconnect()
+    assert first.get("source") == second.get("source") == "tick"
+    assert "1" in json.dumps(first["patches"]) and "2" in json.dumps(second["patches"])

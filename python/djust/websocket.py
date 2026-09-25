@@ -5664,7 +5664,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # handle_tick, instead of on the event loop around it. The render
             # lock is held across the hop, so nothing else changes the view
             # between the snapshots and the call. ``offloaded`` is None with
-            # the pool off, else (skip_render, unchanged).
+            # the pool off, else (skip_render, unchanged). The decision is
+            # taken before sync_push_scope_groups below rather than after it,
+            # which is the same: that sync only joins and leaves groups.
             offloaded: Optional[Tuple[bool, bool]] = None
             if offload_enabled():
                 tick_view = self.view_instance
