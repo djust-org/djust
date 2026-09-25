@@ -1798,9 +1798,28 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
     pin on a size figure in the new changelog fragment, was fixed afterwards
     and its module passes (24 tests). The full suite was not repeated for
     that one-line fragment edit.
-  - The shipped gzip grew 2,275 bytes, to 70.3 KB. The repository's `~67 KB`
-    claims (33 lines) now read `~70 KB`, and the unminified claim reads
-    `~230 KB`, per the size manifest.
+  - The shipped gzip grew 2,275 bytes. The repository's 33 client-size claim
+    lines, including the unminified one, were moved to the measured figures
+    in `client-sizes.json`.
+  Sub-slice (c), [transport parity matrix](notes/036-strict-server-integration.md#transport-parity-matrix),
+  commit 0afd54252:
+  - A 43-row strict matrix runs identically through the shared runtime,
+    real WebSocket (normal and actor mode), real SSE, both HTTP-fallback
+    shapes, the exposed API and the test client.
+  - Rows cover every supported type and its edge cases,
+    `coerce_types=False`, positional-only and keyword-only binding, an open
+    `**fields` form, extras and a forged source.
+  - All paths agree on every row, and invalid rows never invoke the handler.
+  - The strict collector now refuses `_`-prefixed `dj-value-*` names; forged
+    `dj-value-component-id` and `dj-value-view-id` are covered.
+  - Full Python suite from a frozen worktree: 33,767 passed and 949 skipped,
+    plus the 2 known tag-reachability failures and one size-manifest pin.
+    That pin was on a figure quoted in this ledger's (b) entry; it was
+    reworded, and the module passes (24 tests). Full JavaScript suite: 2,296
+    tests in 205 files passed.
+  - Uploads are not event arguments: a file field sent to a strict `**`
+    form handler is rejected in the browser. Async actor handlers remain a
+    V017 rejection.
 - [ ] **P3 — acceptance.** Execute documented examples under their stated policy;
   verify redacted diagnostics and the ADR's complete conversion/parity matrix.
 - [ ] **PR — retirement.** Delete the superseded coercion path per

@@ -136,6 +136,5 @@ Evidence: `tests/js/strict_native_binding.test.js` has 18 bundle cases:
 - collision rejection, a checkbox boolean, and keyboard;
 - dj-submit field filtering, `**form_data`, and legacy `_target`.
 
-The full JavaScript suite passes. The shipped gzip grew 2,275 bytes, to
-70.3 KB, and the repository's size claims were updated to the measured
-figures.
+The full JavaScript suite passes. The shipped gzip grew 2,275 bytes, and the repository's size claims
+were updated to the measured figures.
