@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-09-25
+
+A bug-fix release for 1.2. There are no API, default or wire-format changes. Upgrading is recommended for long-running servers that use the in-memory state backend (#3080): session state was never expired while the process ran.
+
+### Fixed
+
+- **A LiveView page no longer logs "non-serializable value: FallbackStorage" (or `PermWrapper`, `WSGIRequest`, `AnonymousUser`) on every render (#3061).** The page-shell render (`render_full_template`) sent the context-processor values of the HTTP GET through the state normalizer, and the HTTP POST fallback hid its injected processor values from the #1786 filter. Both paths now drop non-serializable request-scoped values before normalizing, the same way the dj-root and WebSocket render already did. The values still reach the template, so `{% for m in messages %}` works inside and outside the LiveView root. A non-serializable attribute of the view itself still warns. 7 regression cases in `python/tests/test_full_template_context_processors_3061.py`.
+- **Presence could raise `AttributeError: partially initialized module
+  'djust.tenants.mixin'` when two threads first used it together (#3079).**
+  `tenant_scoped_presence_key` read `TenantMixin` straight off the
+  `sys.modules` entry, which is a half-built module while another thread is
+  still importing it (HTTP worker threads and the channels sync thread, for
+  example). It now takes the class with a normal import, which waits on the
+  module's import lock. Apps without tenants still never import the module.
+  3 regression cases in `tests/unit/test_presence_tenant_import_race_3079.py`,
+  including a slow-import shim that holds the module half-imported while a
+  second thread asks for a presence key.
+- **The in-memory state backend never expired anything, so memory grew with
+  every new session for the life of the process (#3080).** `SESSION_TTL`
+  (default 3600 s) was applied only by `djust clear` and
+  `cleanup_expired_sessions()`, which nothing called at runtime. Each entry
+  holds its view's full render state: about 270 KB of live heap per session in
+  a snake-arena load test, where `SESSION_TTL = 60` still left 65, then 129,
+  193 and 257 entries across 64-client cycles. An entry not written for the
+  TTL is now a miss on `get()` and is dropped, and `set()` sweeps expired
+  entries at most once per `min(SESSION_TTL, 60)` seconds. `SESSION_TTL = 0`
+  still means never expire. The deployment guide now gives the per-session
+  cost and explains why RSS levels off rather than falls. 9 regression cases in
+  `python/tests/test_memory_state_backend_ttl_3080.py`.
+- **`MemoryTracker` retried `import psutil` on every event.** With psutil not
+  installed, each failed import re-scanned `sys.path`: about 42 µs per event
+  on the event-loop thread. Whether psutil is installed is now checked once, at
+  module import. 4 regression cases in
+  `python/tests/test_memory_tracker_psutil_probe.py`.
+
 ## [1.2.1] - 2026-09-24
 
 A bug-fix release for 1.2. The code is identical to 1.2.1rc2; see the `1.2.1rc2` and `1.2.1rc1` sections below for every change since 1.2.0. There are no API removals, and no default or wire-format changes. 1.1.5 carries the security fix for the 1.1 line.
