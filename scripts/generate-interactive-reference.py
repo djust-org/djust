@@ -32,7 +32,9 @@ from typing import Any, get_type_hints
 
 REPO = Path(__file__).resolve().parents[1]
 DEFAULT_DOC = REPO / "docs" / "website" / "api-reference" / "components.md"
-BEGIN = "<!-- BEGIN GENERATED: interactive components (scripts/generate-interactive-reference.py) -->"
+BEGIN = (
+    "<!-- BEGIN GENERATED: interactive components (scripts/generate-interactive-reference.py) -->"
+)
 END = "<!-- END GENERATED: interactive components -->"
 
 
@@ -84,7 +86,11 @@ def render_block() -> str:
         hints = get_type_hints(item)
         keys = [
             "`%s: %s`%s"
-            % (key, _escape(_type_name(hint)), "" if key in item.__required_keys__ else " (optional)")
+            % (
+                key,
+                _escape(_type_name(hint)),
+                "" if key in item.__required_keys__ else " (optional)",
+            )
             for key, hint in hints.items()
         ]
         lines.append("| `%s` | %s |" % (item.__name__, ", ".join(keys)))
@@ -98,7 +104,13 @@ def render_block() -> str:
             % (name, _escape(_type_name(returns)), _escape(_summary(prop) or _summary(prop.fget)))
         )
 
-    lines += ["", "### Outputs", "", "| Subscription | Callback payload | When |", "| --- | --- | --- |"]
+    lines += [
+        "",
+        "### Outputs",
+        "",
+        "| Subscription | Callback payload | When |",
+        "| --- | --- | --- |",
+    ]
     probe = DropdownMenu(label="reference", items=[])
     for output in probe.outputs:
         payload = ", ".join("%s: %s" % (name, kind.__name__) for name, kind in output.payload)
@@ -108,16 +120,27 @@ def render_block() -> str:
             % (output.name, payload, _escape(description))
         )
 
-    lines += ["", "### Local actions", "", "| Action | Parameters | What it does |", "| --- | --- | --- |"]
-    for name, member in sorted(vars(DropdownMenu).items()):
-        if not getattr(member, "_djust_decorators", {}).get("event_handler"):
-            continue
+    lines += [
+        "",
+        "### Local actions",
+        "",
+        "| Action | Parameters | What it does |",
+        "| --- | --- | --- |",
+    ]
+    from djust._parameter_metadata import component_stop, declared_handlers
+
+    # The component's actions, as dispatch discovers them (ADR-037 D1).
+    for handler in sorted(declared_handlers(DropdownMenu, component_stop), key=lambda h: h.name):
+        name, member = handler.name, handler.function
         params = ", ".join(
             "%s: %s" % (p.name, _type_name(p.annotation))
             for p in inspect.signature(member).parameters.values()
             if p.name != "self"
         )
-        lines.append("| `%s` | %s | %s |" % (name, "`%s`" % params if params else "none", _escape(_summary(member))))
+        lines.append(
+            "| `%s` | %s | %s |"
+            % (name, "`%s`" % params if params else "none", _escape(_summary(member)))
+        )
 
     lines += [
         "",
