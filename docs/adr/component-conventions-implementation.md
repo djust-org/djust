@@ -106,7 +106,13 @@ migration recipe after the lifecycle gates).**
   djust bump at release.
 
 **Final-revision runs.**
-- The full-suite result is recorded below.
+- ADR-035 suites: 64 Python tests (lifecycle 31, acceptance 30, documented
+  examples 3). The browser matrix passes on all three transports.
+- Full Python suite at `9dd6a4421`, run from a frozen detached worktree:
+  33,855 passed, 949 skipped, 2 failed. Both failures are in
+  `tests/test_changelog_tagged_sections.py` and fail alone too: release tags
+  are reachable from this branch, so they are not caused by this change.
+- No client JavaScript changed in ADR-035's slices.
 
 ## ADR-036 acceptance review — P3
 
