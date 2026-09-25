@@ -522,6 +522,14 @@ class TestLogoutCommand:
 
 
 class TestStatusCommand:
+    @pytest.fixture(autouse=True)
+    def _token_is_valid(self, requests_mock):
+        # `status` validates the saved token against /me/ first (#3112).
+        requests_mock.get(
+            "https://djustlive.com/api/v1/me/",
+            json={"username": "u", "email": "u@e.com", "is_staff": False},
+        )
+
     def test_status_no_project_calls_endpoint(self, runner, creds_dir, saved_creds, requests_mock):
         requests_mock.get(
             "https://djustlive.com/api/v1/deployments/status/",
@@ -1130,6 +1138,181 @@ class TestGuidedDeploy:
         # rotated value from a refresh attempt that never succeeded.
         sent_auth = deploy_adapter.last_request.headers.get("Authorization", "")
         assert "Bearer post-fallback-access" in sent_auth, sent_auth
+
+
+def _write_bearer_creds(creds_dir, access="expired-access", refresh="valid-refresh"):
+    cred_file = creds_dir / "credentials"
+    cred_file.write_text(
+        json.dumps(
+            {
+                "auth_scheme": "bearer",
+                "access_token": access,
+                "refresh_token": refresh,
+                "expires_at": 0,
+                "email": "u@e.com",
+                "server_url": "https://djustlive.com",
+            }
+        )
+    )
+    cred_file.chmod(0o600)
+    return cred_file
+
+
+class TestNoTtyProjectCreation:
+    """#3112: without a TTY, the create-project confirm read EOF and click
+    aborted with a bare ``Error:``. It must fail with a message naming
+    --yes instead. CliRunner's stdin is not a TTY, which is the real
+    condition — only the TTY-present case patches ``_stdin_is_tty``."""
+
+    @staticmethod
+    def _mock_missing_project(requests_mock, slug="new-app"):
+        requests_mock.get(
+            "https://djustlive.com/api/v1/me/",
+            json={"username": "u", "email": "u@e.com", "is_staff": False},
+        )
+        requests_mock.get(
+            f"https://djustlive.com/api/v1/projects/{slug}/",
+            json={"detail": "Not found."},
+            status_code=404,
+        )
+        return requests_mock.post(
+            "https://djustlive.com/api/v1/projects/",
+            json={"slug": slug, "owner_email": "u@e.com"},
+            status_code=201,
+        )
+
+    def test_deploy_without_tty_names_the_yes_flag(
+        self, runner, creds_dir, saved_creds, requests_mock
+    ):
+        create_adapter = self._mock_missing_project(requests_mock)
+        with patch("djust.deploy_cli._check_git_clean"):
+            result = runner.invoke(cli, ["deploy", "new-app"])
+        assert result.exit_code == 1, result.output
+        assert "no TTY" in result.output, result.output
+        assert "--yes" in result.output, result.output
+        assert not create_adapter.called
+        # The old failure: confirm prompt printed, then a bare "Error:".
+        assert "Create it now?" not in result.output, result.output
+
+    def test_deploy_dir_without_tty_names_the_yes_flag(
+        self, runner, creds_dir, saved_creds, requests_mock, tmp_path
+    ):
+        create_adapter = self._mock_missing_project(requests_mock)
+        result = runner.invoke(cli, ["deploy-dir", "new-app", "--dir", str(tmp_path)])
+        assert result.exit_code == 1, result.output
+        assert "no TTY" in result.output, result.output
+        assert "--yes" in result.output, result.output
+        assert not create_adapter.called
+
+    def test_tty_still_prompts_and_creates_on_yes_answer(
+        self, runner, creds_dir, saved_creds, requests_mock
+    ):
+        create_adapter = self._mock_missing_project(requests_mock)
+        deploy_adapter = requests_mock.post(
+            "https://djustlive.com/api/v1/projects/new-app/environments/production/deploy/",
+            text="ok\n",
+        )
+        with (
+            patch("djust.deploy_cli._check_git_clean"),
+            patch("djust.deploy_cli._stdin_is_tty", return_value=True),
+        ):
+            result = runner.invoke(cli, ["deploy", "new-app"], input="y\n")
+        assert result.exit_code == 0, result.output
+        assert "Create it now?" in result.output
+        assert create_adapter.called
+        assert deploy_adapter.called
+
+    def test_slug_prompt_without_tty_fails_with_a_message(self, tmp_path):
+        """The slug prompt is the same shape: no arg, no pyproject, no TTY."""
+        from djust.deploy_cli import _resolve_project_slug
+
+        with patch("djust.deploy_cli._stdin_is_tty", return_value=False):
+            with pytest.raises(click.ClickException, match="positional argument"):
+                _resolve_project_slug(None, tmp_path, interactive=True)
+
+    class _ClosedStdin:
+        def isatty(self):
+            raise ValueError("I/O operation on closed file")
+
+    @pytest.mark.parametrize("stdin", [object(), _ClosedStdin()], ids=["no-isatty", "closed"])
+    def test_stdin_is_tty_is_false_for_unusable_stdin(self, monkeypatch, stdin):
+        from djust.deploy_cli import _stdin_is_tty
+
+        monkeypatch.setattr("djust.deploy_cli.sys.stdin", stdin)
+        assert _stdin_is_tty() is False
+
+
+class TestStatusTokenRefresh:
+    """#3112: `status` read credentials directly and sent an expired
+    access token as-is (raw 401). It now resolves credentials through
+    `_ensure_logged_in`, non-interactively."""
+
+    def test_expired_token_is_refreshed_before_the_status_call(
+        self, runner, creds_dir, requests_mock
+    ):
+        cred_file = _write_bearer_creds(creds_dir)
+        requests_mock.get("https://djustlive.com/api/v1/me/", status_code=401)
+        refresh_adapter = requests_mock.post(
+            "https://djustlive.com/o/token/",
+            json={
+                "access_token": "refreshed-access",
+                "refresh_token": "rotated-refresh",
+                "expires_in": 3600,
+                "token_type": "Bearer",
+            },
+        )
+
+        def _status(request, ctx):
+            if request.headers.get("Authorization") != "Bearer refreshed-access":
+                ctx.status_code = 401
+                return {"detail": "token expired"}
+            return {"deployments": []}
+
+        status_adapter = requests_mock.get(
+            "https://djustlive.com/api/v1/deployments/status/", json=_status
+        )
+        result = runner.invoke(cli, ["status"])
+        assert result.exit_code == 0, result.output
+        assert refresh_adapter.called
+        assert status_adapter.last_request.headers["Authorization"] == "Bearer refreshed-access"
+        saved = json.loads(cred_file.read_text())
+        assert saved["access_token"] == "refreshed-access"
+        assert saved["refresh_token"] == "rotated-refresh"
+
+    def test_dead_refresh_token_fails_without_opening_a_browser(
+        self, runner, creds_dir, requests_mock
+    ):
+        _write_bearer_creds(creds_dir, refresh="dead-refresh")
+        requests_mock.get("https://djustlive.com/api/v1/me/", status_code=401)
+        requests_mock.post(
+            "https://djustlive.com/o/token/",
+            json={"error": "invalid_grant"},
+            status_code=400,
+        )
+        status_adapter = requests_mock.get(
+            "https://djustlive.com/api/v1/deployments/status/", json={}
+        )
+        with patch("djust.deploy_cli.webbrowser.open") as mock_open:
+            result = runner.invoke(cli, ["status"])
+        assert result.exit_code == 1, result.output
+        assert "djust deploy login" in result.output, result.output
+        assert not mock_open.called
+        assert not status_adapter.called
+
+    def test_valid_token_is_used_as_is(self, runner, creds_dir, requests_mock):
+        _write_bearer_creds(creds_dir, access="live-access")
+        requests_mock.get(
+            "https://djustlive.com/api/v1/me/",
+            json={"username": "u", "email": "u@e.com", "is_staff": False},
+        )
+        refresh_adapter = requests_mock.post("https://djustlive.com/o/token/", json={})
+        status_adapter = requests_mock.get(
+            "https://djustlive.com/api/v1/deployments/status/", json={}
+        )
+        result = runner.invoke(cli, ["status"])
+        assert result.exit_code == 0, result.output
+        assert not refresh_adapter.called
+        assert status_adapter.last_request.headers["Authorization"] == "Bearer live-access"
 
 
 class TestCreateTarball:
