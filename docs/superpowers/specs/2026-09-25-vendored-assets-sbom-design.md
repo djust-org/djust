@@ -345,3 +345,38 @@ version list; it does not make bundles unidentifiable.
 - Python dependency SBOMs.
 - #3107/#3108 (table actions, bubble menu); they change the bundle's
   package list, which this design then tracks automatically.
+
+## Scanner probe results (Task 0)
+
+Probe method: two minimal CycloneDX 1.6 SBOMs, differing only in where the
+`lodash@4.17.20` (`pkg:npm/lodash@4.17.20`) component lives — nested inside
+`probe-bundle`'s own `components[]` array vs. flat at the top level with a
+`dependencies` edge from `probe-bundle` to it. Each scanner run was checked
+for whether it surfaces `lodash@4.17.20`'s known vulnerability
+CVE-2021-23337 (aliased as GHSA-35jh-r3h4-6jhm / GHSA-r5fr-rjxr-66jc in the
+OSV/GHSA databases the scanners query).
+
+Versions: `trivy 0.74.0`, `syft 1.52.0`, `osv-scanner 2.6.0`
+(osv-scalibr 0.5.2), `grype 0.119.0` — all installed via `brew install
+trivy syft osv-scanner grype` (approved by the controller).
+
+| Scanner (version) | nested | flat |
+|---|---|---|
+| trivy sbom (0.74.0) | no — `trivy sbom --quiet nested.cdx.json` reports "Report Summary: Target - / Type - / Vulnerabilities -" (not scanned, 0 matches for CVE-2021-23337) | yes — same command on `flat.cdx.json` reports `Node.js (node-pkg)`, 5 vulnerabilities, including `CVE-2021-23337` (HIGH) |
+| trivy fs (0.74.0) | no — `trivy fs --quiet fs-nested/` (dir containing only `nested.cdx.json`) logs `WARN Supported files for scanner(s) not found. scanners=[vuln]`, 0 matches | no — identical result on `fs-flat/`; `trivy fs` does not treat a loose `*.cdx.json` file as an SBOM to parse in this version (no `--sbom-sources` support for local files), so this row is uninformative rather than a shape signal, but note it is not a "yes" for either shape |
+| syft +sbom-cataloger (1.52.0) | yes — `syft dir:fs-nested --select-catalogers +sbom-cataloger -o json \| grep -c '"pkg:npm/lodash@4.17.20"'` → `1` | yes — same command on `fs-flat` → `1` |
+| grype (0.119.0) | yes — `grype sbom:nested.cdx.json` lists `lodash 4.17.20` with 5 GHSA advisories (incl. GHSA-35jh-r3h4-6jhm / CVE-2021-23337), exit 0 | yes — `grype sbom:flat.cdx.json` produces the identical 5-row table |
+| osv-scanner (`osv-scanner scan source -L nested.cdx.json`) | yes — found 1 package, "Total 1 package affected by 3 known vulnerabilities", table includes `https://osv.dev/GHSA-35jh-r3h4-6jhm` (= CVE-2021-23337 per `--format json` aliases), exit=1 | yes — `osv-scanner scan source -L flat.cdx.json` produces the identical result, exit=1 |
+
+The brief's suggested `-L`/`--lockfile` flag worked as-is against both
+`.cdx.json` files in osv-scanner 2.6.0 (no need to fall back to the
+deprecated `-S`/`--sbom` flag); no flag substitution was required.
+
+Decision: **SBOM_SHAPE = flat**. `trivy sbom` — a scanner djust explicitly
+targets in the "End-to-end" testing section above — gives a definite "no"
+on the nested shape (0 findings, package invisible) while finding the same
+component instantly when it is flattened to top-level `components[]` with
+a `dependencies` edge. Per the decision rule (any "no" in the nested column
+forces flat), the generator must emit vendored packages as top-level
+`components` entries linked via `dependencies`, not nested inside the
+`probe-bundle`/asset component's own `components[]`.
