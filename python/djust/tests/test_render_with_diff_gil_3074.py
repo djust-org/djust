@@ -58,7 +58,18 @@ def test_a_python_thread_runs_while_render_with_diff_renders():
         started.set()
         while not stop.is_set():
             counter[0] += 1
+            # Give the GIL up voluntarily each iteration: with the long switch
+            # interval below, this is the ONLY way the spinner lets the main
+            # thread run, so the main thread never waits on the spinner.
+            time.sleep(0)
 
+    # A long switch interval stops CPython from handing the GIL to the
+    # spinner at the eval-breaker check right after the Rust call returns
+    # (with the default 5 ms, the spinner would then run before `during` is
+    # read, and the test would pass without the detach). Now the spinner can
+    # only count while this thread is detached inside render_with_diff.
+    old_interval = sys.getswitchinterval()
+    sys.setswitchinterval(30)
     t = threading.Thread(target=spin, daemon=True)
     t.start()
     started.wait(5)
@@ -74,6 +85,7 @@ def test_a_python_thread_runs_while_render_with_diff_renders():
     finally:
         stop.set()
         t.join(5)
+        sys.setswitchinterval(old_interval)
     # Without the detach the spinner cannot run at all while this thread is
     # inside the Rust call (it never reaches a bytecode boundary to drop the
     # GIL), so `during` would be 0.
@@ -90,7 +102,7 @@ def test_concurrent_renders_match_serial_renders():
         for i in range(iters):
             view.update_state(_rows(40 + (i % 5), tag=f"t{idx}-{i}"))
             html, patches, version = view.render_with_diff()
-            out.append((html, patches is None, version))
+            out.append((html, patches and _strip_ids(patches), version))
         return out
 
     expected = {idx: script(idx) for idx in range(n_threads)}
@@ -113,7 +125,7 @@ def test_concurrent_renders_match_serial_renders():
     assert not errors, errors
     for idx in range(n_threads):
         got = results[idx]
-        # HTML is compared with new-node dj-ids stripped: ids for inserted
+        # HTML and patches are compared with dj-ids stripped: ids for inserted
         # nodes come from a process-wide counter, so they depend on how the
         # threads interleave. Everything else must match the serial run.
         assert [_strip_ids(h) for h, _, _ in got] == [_strip_ids(h) for h, _, _ in expected[idx]]
@@ -124,7 +136,9 @@ def test_concurrent_renders_match_serial_renders():
 def _strip_ids(html: str) -> str:
     import re
 
-    return re.sub(r' dj-id="[^"]*"', "", html)
+    # Markup (` dj-id="…"`) and patch JSON (`"dj-id":"…"`, `"djust_id":"…"`).
+    html = re.sub(r' dj-id="[^"]*"', "", html)
+    return re.sub(r'"(?:dj-id|djust_id)":"[^"]*"', '"id":"#"', html)
 
 
 def test_tag_handler_renders_survive_concurrent_registration():

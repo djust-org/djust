@@ -6566,11 +6566,16 @@ mod render_with_diff_detaches_3074 {
         let rendered = Arc::new(AtomicBool::new(false));
         Python::attach(|py| {
             let flag = Arc::clone(&rendered);
-            let waiter =
-                std::thread::spawn(move || Python::attach(|_py| flag.load(Ordering::SeqCst)));
-            // Hold the GIL long enough for the waiter to block on it (and,
-            // on CPython, to post its drop request, which makes the next
-            // release hand the GIL over instead of racing for it).
+            let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+            let waiter = std::thread::spawn(move || {
+                ready_tx.send(()).expect("signal");
+                Python::attach(|_py| flag.load(Ordering::SeqCst))
+            });
+            // The waiter is running and about to wait for the GIL. Hold it a
+            // while longer so the waiter blocks on it and, on CPython, posts
+            // its drop request (after 5 ms), which makes the next release
+            // hand the GIL over instead of racing for it.
+            ready_rx.recv().expect("waiter started");
             std::thread::sleep(Duration::from_millis(100));
             let (html, _patches, _version) = view.render_with_diff(py).expect("render");
             rendered.store(true, Ordering::SeqCst);
