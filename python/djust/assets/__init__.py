@@ -18,5 +18,7 @@ def on_setting_changed(*, setting: str, **kwargs: object) -> None:
     if setting not in RESET_ON:
         return
     from .registry import reset_registry
+    from .tags import clear_integrity_cache
 
     reset_registry()
+    clear_integrity_cache()
