@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 
+import pytest
 from django.test import override_settings
 
 from djust.checks.assets import (
@@ -24,6 +26,16 @@ def _with(tmp_path, *manifests, static_dirs=(), **extra):
         STATICFILES_DIRS=[str(d) for d in static_dirs],
         **extra,
     )
+
+
+def _templates(tpl_dir):
+    return [
+        {
+            "BACKEND": "django.template.backends.django.DjangoTemplates",
+            "DIRS": [str(tpl_dir)],
+            "APP_DIRS": False,
+        }
+    ]
 
 
 def test_clean_project_has_no_asset_messages(tmp_path):
@@ -66,6 +78,23 @@ def test_b003_missing_file_and_b004_hash_mismatch(tmp_path):
     with _with(tmp_path, manifest, static_dirs=[static_dir]):
         (b004,) = [m for m in check_asset_files(None) if m.id == "djust.B004"]
     assert "testlib/lib.js" in b004.msg and "make vendor" in b004.hint
+
+
+def test_b004_unreadable_vendored_file_is_reported_not_raised(tmp_path, monkeypatch):
+    static_dir, manifest = write_asset(tmp_path)
+    real_open = open
+
+    def fake_open(file, *args, **kwargs):
+        path = os.fspath(file) if hasattr(file, "__fspath__") else file
+        if isinstance(path, str) and path.endswith(os.path.join("testlib", "lib.js")):
+            raise PermissionError("Permission denied")
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", fake_open)
+    with _with(tmp_path, manifest, static_dirs=[static_dir]):
+        (b004,) = [m for m in check_asset_files(None) if m.id == "djust.B004"]
+    assert "could not be read" in b004.msg
+    assert "testlib/lib.js" in b004.msg
 
 
 def test_b005_external_needs_opt_in(tmp_path):
@@ -129,14 +158,57 @@ def test_b010_undeclared_cdn_in_project_template(tmp_path):
         '<script src="https://cdn.other.example/x.js"></script>\n'
         '<script src="https://cdn.ok.example/y.js"></script> {# noqa: B010 #}\n'
     )
-    templates = [
-        {
-            "BACKEND": "django.template.backends.django.DjangoTemplates",
-            "DIRS": [str(tpl)],
-            "APP_DIRS": False,
-        }
-    ]
-    with override_settings(TEMPLATES=templates):
+    with override_settings(TEMPLATES=_templates(tpl)):
         found = check_undeclared_origins(None)
     assert [m.id for m in found] == ["djust.B010"]
     assert "cdn.other.example" in found[0].msg and "page.html:1" in found[0].msg
+
+
+def test_b010_unreadable_template_is_skipped_not_raised(tmp_path):
+    tpl = tmp_path / "templates"
+    tpl.mkdir()
+    page = tpl / "page.html"
+    page.write_text('<script src="https://cdn.other.example/x.js"></script>\n')
+    page.chmod(0)
+    try:
+        with override_settings(TEMPLATES=_templates(tpl)):
+            found = check_undeclared_origins(None)
+    finally:
+        page.chmod(0o644)
+    assert found == []
+
+
+@pytest.mark.parametrize(
+    "snippet",
+    [
+        # single-quoted attribute
+        "<script src='https://cdn.other.example/x.js'></script>",
+        # protocol-relative //
+        '<script src="//cdn.other.example/x.js"></script>',
+        # another attribute precedes src=
+        '<script type="text/javascript" src="https://cdn.other.example/x.js"></script>',
+        # uppercase tag/attribute
+        '<SCRIPT SRC="https://cdn.other.example/x.js"></SCRIPT>',
+    ],
+    ids=["single-quote", "protocol-relative", "attr-before-src", "uppercase"],
+)
+def test_b010_positive_variants_still_match(tmp_path, snippet):
+    tpl = tmp_path / "templates"
+    tpl.mkdir()
+    (tpl / "page.html").write_text(snippet + "\n")
+    with override_settings(TEMPLATES=_templates(tpl)):
+        found = check_undeclared_origins(None)
+    assert [m.id for m in found] == ["djust.B010"]
+    assert "cdn.other.example" in found[0].msg
+
+
+def test_b010_ignores_data_src_and_data_href(tmp_path):
+    tpl = tmp_path / "templates"
+    tpl.mkdir()
+    (tpl / "page.html").write_text(
+        '<script data-src="https://cdn.other.example/x.js" type="text/plain"></script>\n'
+        '<link data-href="https://cdn.other.example/y.css">\n'
+    )
+    with override_settings(TEMPLATES=_templates(tpl)):
+        found = check_undeclared_origins(None)
+    assert found == []

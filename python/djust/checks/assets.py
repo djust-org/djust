@@ -17,7 +17,7 @@ from .utils import _get_template_dirs, _is_check_suppressed, _iter_template_file
 
 _SBOM_SUFFIXES = (".cdx.json", ".spdx.json", ".bom.json")
 _EXTERNAL_REF = re.compile(
-    r"<(?:script|link)\b[^>]*?\b(?:src|href)\s*=\s*[\"']((?:https?:)?//[^\"'/]+)", re.I
+    r"<(?:script|link)\b[^>]*?\s(?:src|href)\s*=\s*[\"']((?:https?:)?//[^\"'/]+)", re.I
 )
 _REBUILD = "Rebuild with `make vendor` (djust) or regenerate your manifest's integrity."
 
@@ -89,8 +89,19 @@ def check_asset_files(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                 )
                 continue
             alg = file.integrity.split("-", 1)[0]
-            with open(found, "rb") as handle:
-                actual = sri(handle.read(), alg)
+            try:
+                with open(found, "rb") as handle:
+                    actual = sri(handle.read(), alg)
+            except OSError as exc:
+                messages.append(
+                    Error(
+                        f"Asset {asset.name!r}: {file.path!r} could not be read to verify its "
+                        f"integrity ({asset.source}): {exc}.",
+                        hint="Check the file's permissions.",
+                        id="djust.B004",
+                    )
+                )
+                continue
             if actual != file.integrity:
                 messages.append(
                     Error(
@@ -157,7 +168,11 @@ def check_undeclared_origins(app_configs: Any, **kwargs: Any) -> list[CheckMessa
     }
     messages: list[CheckMessage] = []
     for template_path in _iter_template_files(_get_template_dirs()):
-        lines = Path(template_path).read_text(encoding="utf-8", errors="replace").splitlines()
+        try:
+            content = Path(template_path).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        lines = content.splitlines()
         for lineno, line in enumerate(lines, start=1):
             if "noqa: B010" in line:
                 continue
