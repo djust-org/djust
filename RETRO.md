@@ -972,6 +972,24 @@ On 3.12 frames did not change; the GIL caps the process.
 
 **Review stats**: 0 🔴, 2 🟡 (the render-error dispatch and the lock leak), 3 🟢, and 1 re-review nit (scope sync before a render error). All were fixed. Filed: #3099 (the hot-reload frame leak in tests).
 
+### PR 5/7 — `djust.layers.InMemoryChannelLayer` (PR #3101)
+
+**Date**: 2026-09-25. Squash-merged as `c164a0b24`. Retro: https://github.com/djust-org/djust/pull/3101 (retrospective comment). The upstream draft for django/channels is at https://github.com/djust-org/djust/issues/3074#issuecomment-5838187207.
+
+**Tests at close**:
+- 8 cases in `python/djust/tests/test_inmemory_layer_3074.py`: one sweep per interval against 1,020 on the stock layer, parity when the interval is 0, expiry still applied, flush, and config selection.
+- CI: 22 checks passed, 0 failed.
+
+**Measured**:
+- Micro-benchmark: 2×, 3×, 4× and 8× less time per broadcast round at 64, 128, 224 and 512 sessions.
+- Snake load test on 3.14t: the event-loop thread drops from 0.73–0.77 to 0.60–0.62 at 192 clients. At 256 clients the process gets 6.7–6.9 fps on 6.0–6.6 cores, against 6.3–6.5 fps without the layer.
+
+**What we learned**
+1. **"It exists" claims need a link when they are written** (`unverified-claim`). The PR body cited a draft that existed only in a local file.
+2. **A flake that blocks pushes three times is a bug to fix, not to retry.** Two template-writing fixtures now use `tmp_path`. The watcher still starts under pytest, and that stays on #3099.
+
+**Review stats**: 0 🔴, 1 🟡 (the unlinked upstream draft) and 4 🟢 (delivery semantics in the docs, clock-patching tests, a deny test that does not need its template, rounds wording). All were addressed or explained.
+
 ## v1.2.1-7 — state and rendering batch: v1.2.1-7, -8 and -9 (PR #3042)
 
 **Date**: 2026-09-24
