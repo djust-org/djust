@@ -47,7 +47,9 @@ under the ``"meta"`` key — access it as ``p.meta.name`` / ``p["meta"]["name"]`
 never ``p.name``.
 """
 
+import contextlib
 import logging
+import threading
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from channels.layers import get_channel_layer
@@ -546,6 +548,25 @@ class PresenceMixin:
 
 
 # Cursor tracking for live cursors (bonus feature)
+# Guards the cache get -> modify -> set sequences below within this process
+# (#3074): with ``LIVEVIEW_CONFIG["worker_threads"]`` two sessions' cursor
+# updates can run at the same time, and one would overwrite the other's.
+# Only for the in-process (local-memory) cache: a shared cache (Redis,
+# memcached) is last-writer-wins across processes anyway, and holding a
+# process-wide lock across its network round trips would queue every cursor
+# update in the process behind one another.
+_CURSOR_LOCK = threading.Lock()
+
+
+def _cursor_lock() -> Any:
+    from django.core.cache import DEFAULT_CACHE_ALIAS, caches
+    from django.core.cache.backends.locmem import LocMemCache
+
+    if isinstance(caches[DEFAULT_CACHE_ALIAS], LocMemCache):
+        return _CURSOR_LOCK
+    return contextlib.nullcontext()
+
+
 class CursorTracker:
     """Manages live cursor positions for collaborative features."""
 
@@ -563,34 +584,34 @@ class CursorTracker:
     ) -> None:
         """Update cursor position for a user."""
         cache_key = cls.cursor_cache_key(presence_key)
-        cursors = cache.get(cache_key, {})
-
-        cursors[user_id] = {
-            "x": x,
-            "y": y,
-            "timestamp": time.time(),
-            "meta": meta or {},
-        }
-
-        cache.set(cache_key, cursors, timeout=cls.CURSOR_TIMEOUT + 5)
+        with _cursor_lock():
+            cursors = cache.get(cache_key, {})
+            cursors[user_id] = {
+                "x": x,
+                "y": y,
+                "timestamp": time.time(),
+                "meta": meta or {},
+            }
+            cache.set(cache_key, cursors, timeout=cls.CURSOR_TIMEOUT + 5)
 
     @classmethod
     def get_cursors(cls, presence_key: str) -> Dict[str, Dict[str, Any]]:
         """Get all active cursor positions."""
         cache_key = cls.cursor_cache_key(presence_key)
-        cursors = cache.get(cache_key, {})
+        with _cursor_lock():
+            cursors = cache.get(cache_key, {})
 
-        # Clean up stale cursors
-        now = time.time()
-        active_cursors = {}
+            # Clean up stale cursors
+            now = time.time()
+            active_cursors = {}
 
-        for user_id, cursor_data in cursors.items():
-            if (now - cursor_data["timestamp"]) < cls.CURSOR_TIMEOUT:
-                active_cursors[user_id] = cursor_data
+            for user_id, cursor_data in cursors.items():
+                if (now - cursor_data["timestamp"]) < cls.CURSOR_TIMEOUT:
+                    active_cursors[user_id] = cursor_data
 
-        # Update cache if we cleaned up stale cursors
-        if len(active_cursors) != len(cursors):
-            cache.set(cache_key, active_cursors, timeout=cls.CURSOR_TIMEOUT + 5)
+            # Update cache if we cleaned up stale cursors
+            if len(active_cursors) != len(cursors):
+                cache.set(cache_key, active_cursors, timeout=cls.CURSOR_TIMEOUT + 5)
 
         return active_cursors
 
@@ -598,11 +619,11 @@ class CursorTracker:
     def remove_cursor(cls, presence_key: str, user_id: str) -> None:
         """Remove cursor for a user."""
         cache_key = cls.cursor_cache_key(presence_key)
-        cursors = cache.get(cache_key, {})
-
-        if user_id in cursors:
-            del cursors[user_id]
-            cache.set(cache_key, cursors, timeout=cls.CURSOR_TIMEOUT + 5)
+        with _cursor_lock():
+            cursors = cache.get(cache_key, {})
+            if user_id in cursors:
+                del cursors[user_id]
+                cache.set(cache_key, cursors, timeout=cls.CURSOR_TIMEOUT + 5)
 
 
 class LiveCursorMixin(PresenceMixin):

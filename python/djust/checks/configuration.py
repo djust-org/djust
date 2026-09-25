@@ -521,6 +521,38 @@ def _check_server_state_max_age(errors: list[CheckMessage]) -> None:
     )
 
 
+def _check_worker_threads(errors: list[CheckMessage]) -> None:
+    """C021 — ``LIVEVIEW_CONFIG['worker_threads']`` must be a documented value.
+
+    ``None`` / ``False`` / ``0`` (stock), ``True`` / ``"auto"`` (one thread per
+    CPU) or an ``int`` thread count (#3074). Anything else is treated as "off"
+    at runtime, so a typo would silently keep the single shared thread.
+    """
+    from ..config import config
+    from ..worker_pool import resolve_pool_size
+
+    if _is_check_suppressed("djust.C021"):
+        return
+    try:
+        resolve_pool_size(config.get("worker_threads", None))
+    except ValueError as exc:
+        errors.append(
+            DjustError(
+                str(exc),
+                hint=(
+                    "worker_threads pins each WebSocket session to one thread of a pool. "
+                    "With an invalid value djust keeps the default: one thread shared by "
+                    "every session."
+                ),
+                id="djust.C021",
+                fix_hint=(
+                    "Set `LIVEVIEW_CONFIG['worker_threads']` to `True` (one thread per CPU), "
+                    "an integer thread count, or remove it."
+                ),
+            )
+        )
+
+
 def _check_unknown_extensions(errors: list) -> None:
     """C015 -- unknown adapter name in ``DJUST_CONFIG['extensions']`` (#2063).
 
@@ -955,6 +987,9 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
     # S006 -- DJUST_TENANTS['STRICT_MODE']=False disables fail-closed tenancy
     _check_tenant_strict_mode_disabled(errors)
+
+    # C021 -- LIVEVIEW_CONFIG['worker_threads'] has an undocumented value (#3074)
+    _check_worker_threads(errors)
 
     # C020 -- DJUST_SERVER_STATE_MAX_AGE out of range (ADR-038 E2-9)
     _check_server_state_max_age(errors)
