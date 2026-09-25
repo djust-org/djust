@@ -49,6 +49,26 @@ DJUST_CONFIG = {
 
 Single server only. State lost on restart.
 
+**Memory and `SESSION_TTL`.** The in-memory backend keeps one entry per
+(session, page) so a reconnecting client gets its view back. Each entry holds
+that view's full render state, not only its assigns. In a snake-arena load test
+this was about 270 KB of live heap per session. An entry expires once it has
+not been written for `SESSION_TTL` seconds (default 3600): reading an expired
+entry is a miss, and writes sweep expired entries at most once a minute.
+`SESSION_TTL = 0` means never expire. So the backend holds roughly *new
+sessions per second × `SESSION_TTL`* entries. At 5 new sessions a second with
+the default hour, that is 18,000 entries (about 5 GB at 270 KB each). Lower
+`SESSION_TTL` to the reconnect window you actually need, or use Redis.
+
+Before 1.2.2 and 1.3 the TTL was applied only by `djust clear` and
+`cleanup_expired_sessions()`, so entries stayed until the process exited
+(#3080).
+
+Expect process RSS to level off, not fall, when sessions expire. The allocator
+keeps freed pages and reuses them for new sessions. Measure growth with the
+entry count (`get_backend().get_stats()["total_sessions"]`) or the allocator's
+in-use figure, not with RSS alone.
+
 ### Redis (Production)
 
 ```python
