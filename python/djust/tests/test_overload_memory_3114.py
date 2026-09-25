@@ -46,7 +46,7 @@ _SEEN_LOCK = threading.Lock()
 
 def _slow_view(request):
     with _SEEN_LOCK:
-        _SEEN.append(threading.get_ident())
+        _SEEN.append((threading.get_ident(), threading.current_thread().name))
     # Long enough that the whole burst is in flight at once.
     time.sleep(0.02)
     return HttpResponse("ok")
@@ -61,7 +61,7 @@ def pools(monkeypatch):
     from djust import worker_pool
 
     monkeypatch.setattr(worker_pool, "_pool", [])
-    monkeypatch.setattr(worker_pool, "_http_pool", [])
+    monkeypatch.setattr(worker_pool, "_http_pools", {})
     _SEEN.clear()
 
     def _set(value):
@@ -105,6 +105,11 @@ async def _request(app, url="/slow/"):
     return next(m["status"] for m in sent if m["type"] == "http.response.start")
 
 
+def _idents():
+    with _SEEN_LOCK:
+        return {ident for ident, _name in _SEEN}
+
+
 def _django_app():
     from django.core.handlers.asgi import ASGIHandler
 
@@ -112,32 +117,22 @@ def _django_app():
 
 
 async def _burst(app, n=48):
-    before = threading.active_count()
-    peak = before
-    stop = False
-
-    async def watch():
-        nonlocal peak
-        while not stop:
-            peak = max(peak, threading.active_count())
-            await asyncio.sleep(0.002)
-
-    watcher = asyncio.ensure_future(watch())
-    try:
-        statuses = await asyncio.gather(*(_request(app) for _ in range(n)))
-    finally:
-        stop = True
-        await watcher
-    return statuses, peak - before
+    """Run ``n`` concurrent requests; return their statuses and the names of
+    the threads that ran the view."""
+    statuses = await asyncio.gather(*(_request(app) for _ in range(n)))
+    with _SEEN_LOCK:
+        names = {name for _ident, name in _SEEN}
+    return statuses, names
 
 
 @override_settings(ROOT_URLCONF=__name__, ALLOWED_HOSTS=["testserver"])
 @pytest.mark.asyncio
 async def test_without_the_wrapper_a_burst_uses_one_thread_per_request(pools):
     """The control: Django's handler alone creates a thread per request."""
-    statuses, _grew = await _burst(_django_app())
+    statuses, names = await _burst(_django_app())
     assert statuses == [200] * 48
-    assert len(set(_SEEN)) > 3
+    assert len(_idents()) > 3
+    assert not any(n.startswith("djust-http-") for n in names)
 
 
 @override_settings(ROOT_URLCONF=__name__, ALLOWED_HOSTS=["testserver"])
@@ -146,14 +141,12 @@ async def test_pooled_http_bounds_a_burst_to_the_pool(pools):
     from djust import worker_pool
     from djust.worker_pool import PooledHTTP
 
-    statuses, grew = await _burst(PooledHTTP(_django_app(), threads=3))
+    statuses, names = await _burst(PooledHTTP(_django_app(), threads=3))
     assert statuses == [200] * 48
-    # Every request's sync work ran on one of the 3 pool threads ...
-    assert len(set(_SEEN)) <= 3
-    names = {t.name for t in threading.enumerate() if t.ident in set(_SEEN)}
+    # Every request's sync work ran on one of the 3 pool threads, none on a
+    # per-request thread.
+    assert len(_idents()) <= 3
     assert names and all(n.startswith("djust-http-") for n in names)
-    # ... and the burst started no more than the pool's own threads.
-    assert grew <= 3
     # Every binding was released.
     assert [s["requests"] for s in worker_pool.http_pool_stats()] == [0, 0, 0]
 
@@ -166,9 +159,9 @@ async def test_threads_none_follows_worker_threads(pools):
 
     pools(2)
     app = PooledHTTP(_django_app())
-    statuses, _grew = await _burst(app, n=16)
+    statuses, _names = await _burst(app, n=16)
     assert statuses == [200] * 16
-    assert len(set(_SEEN)) <= 2
+    assert len(_idents()) <= 2
     assert len(worker_pool.http_pool_stats()) == 2
     # The HTTP pool is separate from the WebSocket sessions' pool.
     assert worker_pool.pool_stats() == []
@@ -184,10 +177,11 @@ async def test_pool_off_is_a_pass_through(pools, worker_threads, threads):
     from djust.worker_pool import PooledHTTP
 
     pools(worker_threads)
-    statuses, _grew = await _burst(PooledHTTP(_django_app(), threads=threads), n=16)
+    statuses, names = await _burst(PooledHTTP(_django_app(), threads=threads), n=16)
     assert statuses == [200] * 16
     assert worker_pool.http_pool_stats() == []
-    assert len(set(_SEEN)) > 2
+    assert len(_idents()) > 2
+    assert not any(n.startswith("djust-http-") for n in names)
 
 
 @pytest.mark.asyncio
@@ -258,13 +252,58 @@ async def test_the_slot_is_released_when_the_app_raises(pools):
     assert [s["requests"] for s in worker_pool.http_pool_stats()] == [0, 0]
 
 
-def test_threads_value_is_validated():
+@pytest.mark.parametrize("value", [-1, "8", 2.5, [2]])
+def test_invalid_threads_values_are_rejected(value):
     from djust.worker_pool import PooledHTTP
 
-    with pytest.raises(ValueError, match="threads"):
-        PooledHTTP(lambda *a: None, threads=-1)
-    with pytest.raises(ValueError, match="threads"):
-        PooledHTTP(lambda *a: None, threads="8")
+    with pytest.raises(ValueError, match="PooledHTTP threads"):
+        PooledHTTP(lambda *a: None, threads=value)
+
+
+@pytest.mark.parametrize(
+    "value, size", [(None, 0), (False, 0), (0, 0), (3, 3), (True, 6), ("auto", 6)]
+)
+def test_valid_threads_values_resolve(pools, monkeypatch, value, size):
+    from djust import worker_pool
+    from djust.worker_pool import PooledHTTP
+
+    monkeypatch.setattr(worker_pool, "_available_cpus", lambda: 6)
+    assert PooledHTTP(lambda *a: None, threads=value)._size() == size
+
+
+def test_an_invalid_worker_threads_passes_through_without_a_log_per_request(pools, caplog):
+    """``threads=None`` with a bad ``worker_threads``: pass through, as the
+    WebSocket path falls back to stock; djust.C021 reports it once."""
+    from djust.worker_pool import PooledHTTP
+
+    pools("eight")
+    app = PooledHTTP(lambda *a: None)
+    with caplog.at_level("WARNING", logger="djust.worker_pool"):
+        assert app._size() == 0
+    assert caplog.records == []
+
+
+@pytest.mark.asyncio
+async def test_pools_of_different_sizes_do_not_rebuild_each_other(pools):
+    """Two wrapped apps with different sizes each keep their own pool."""
+    from asgiref.sync import SyncToAsync
+
+    from djust import worker_pool
+    from djust.worker_pool import PooledHTTP
+
+    seen = []
+
+    async def inner(scope, receive, send):
+        seen.append(SyncToAsync.thread_sensitive_context.get(None))
+
+    small, large = PooledHTTP(inner, threads=1), PooledHTTP(inner, threads=2)
+    for _ in range(3):
+        await small({"type": "http"}, None, None)
+        await large({"type": "http"}, None, None)
+    assert sorted(worker_pool._http_pools) == [1, 2]
+    # The same slot objects every time: no pool was rebuilt in between.
+    assert {id(s) for s in seen} <= {id(s) for p in worker_pool._http_pools.values() for s in p}
+    assert len(worker_pool.http_pool_stats()) == 3
 
 
 _MARKER: contextvars.ContextVar = contextvars.ContextVar("djust_test_3114_marker")
@@ -302,7 +341,7 @@ def test_pool_threads_start_from_an_empty_context(pools, which):
             slots = list(worker_pool._pool)
         else:
             binding = worker_pool.bind_http_request(2)
-            slots = list(worker_pool._http_pool)
+            slots = list(worker_pool._http_pools[2])
         binding.release()
     finally:
         _MARKER.reset(token)

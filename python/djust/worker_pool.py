@@ -43,7 +43,7 @@ import logging
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +90,9 @@ class _HTTPSlot:
 
 _lock = threading.Lock()
 _pool: List[_Slot] = []
-_http_pool: List[_HTTPSlot] = []
+# HTTP pools by size: every ``PooledHTTP`` of one size shares a pool, and
+# instances of different sizes never rebuild each other's.
+_http_pools: Dict[int, List[_HTTPSlot]] = {}
 
 
 def _available_cpus() -> int:
@@ -200,11 +202,11 @@ def _ensure_pool(size: int) -> List[_Slot]:
 
 
 def _ensure_http_pool(size: int) -> List[_HTTPSlot]:
-    """:func:`_ensure_pool` for the HTTP pool (#3114)."""
-    global _http_pool
-    if len(_http_pool) != size:
-        _http_pool = _build_slots(_HTTPSlot, size, "djust-http")
-    return _http_pool
+    """The HTTP pool of ``size`` threads (#3114), created on first use."""
+    pool = _http_pools.get(size)
+    if pool is None:
+        pool = _http_pools[size] = _build_slots(_HTTPSlot, size, "djust-http")
+    return pool
 
 
 class SessionBinding:
@@ -270,9 +272,14 @@ def pool_stats() -> List[dict]:
 
 
 def http_pool_stats() -> List[dict]:
-    """Per-thread counts of bound HTTP requests (:class:`PooledHTTP`)."""
+    """Per-thread counts of bound HTTP requests (:class:`PooledHTTP`), for
+    every HTTP pool, smallest pool first."""
     with _lock:
-        return [{"index": s.index, "requests": s.sessions} for s in _http_pool]
+        return [
+            {"index": s.index, "requests": s.sessions}
+            for size in sorted(_http_pools)
+            for s in _http_pools[size]
+        ]
 
 
 def bind_http_request(size: int) -> Optional[SessionBinding]:
@@ -318,34 +325,53 @@ class PooledHTTP:
     ``threads=None`` (the default) uses the size of the WebSocket pool,
     ``LIVEVIEW_CONFIG["worker_threads"]``, and passes every request through
     unchanged while that setting is off. An int sets the size (``0`` = pass
-    through); ``True`` / ``"auto"`` mean one thread per CPU, as for
-    ``worker_threads``. The HTTP pool's threads are separate from the
-    WebSocket sessions' (``djust-http-N``).
+    through); ``True`` / ``"auto"`` mean one thread per CPU, at most 32, as
+    for ``worker_threads``. The HTTP pool's threads are separate from the
+    WebSocket sessions' (``djust-http-N``); instances of the same size share
+    one pool.
 
     Under a burst, at most ``threads`` requests run sync code at once; the
     rest wait on the event loop, which costs a coroutine each rather than a
-    thread. That is the thread count of a WSGI server, and the same caveat
-    applies: a sync view that blocks until another request's sync code has
-    run can wait forever when both are on one thread. Each pool thread keeps
-    its own database connection between requests, as WSGI threads do.
+    thread. That is the thread model of a WSGI server, with its caveats:
+
+    * a sync view (or a sync streaming iterator) that blocks for a long time
+      holds its thread, and requests bound to that thread wait behind it;
+    * a sync view that blocks until another request's sync code has run can
+      wait forever when both are on one thread;
+    * state kept on the thread outlives the request: each pool thread keeps
+      its database connection between requests (Django's
+      ``close_old_connections`` still runs at each request's start and end),
+      and a ``threading.local`` that code sets without clearing is seen by
+      the thread's next request.
 
     Scopes other than ``http`` (``websocket``, ``lifespan``) pass through, and
     a request whose context already chose an executor keeps it.
     """
 
-    def __init__(self, app: Any, threads: Any = None) -> None:
+    def __init__(self, app: Any, threads: Union[None, bool, int, str] = None) -> None:
         self.app = app
         if threads is not None:
             try:
                 resolve_pool_size(threads)
-            except ValueError as exc:
-                raise ValueError(f"PooledHTTP threads: {exc}") from None
+            except ValueError:
+                raise ValueError(
+                    "PooledHTTP threads must be None, False, True, 'auto' or an integer "
+                    f">= 0; got {threads!r}"
+                ) from None
         self.threads = threads
 
     def _size(self) -> int:
-        if self.threads is None:
-            return configured_pool_size()
-        return resolve_pool_size(self.threads)
+        if self.threads is not None:
+            return resolve_pool_size(self.threads)
+        from .config import config
+
+        try:
+            return resolve_pool_size(config.get("worker_threads", None))
+        except ValueError:
+            # Invalid worker_threads: pass through, as the WebSocket path falls
+            # back to stock. The system check (djust.C021) reports it, and the
+            # WebSocket path logs it; logging here would repeat it per request.
+            return 0
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> Any:
         if scope.get("type") != "http":
