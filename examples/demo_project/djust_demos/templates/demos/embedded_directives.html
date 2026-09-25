@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% load live_tags %}
+
+{% comment %}
+ADR-037 row 20 live surface (tests/playwright/test_embedded_directives.py).
+{% endcomment %}
+
+{% block title %}Embedded child directives (djust){% endblock %}
+
+{% block content %}
+<div dj-root dj-view="djust_demos.views.embedded_directives_demo.EmbeddedDirectivesView" style="padding: 6rem 2rem 2rem; max-width: 720px; margin: 0 auto;">
+    <h1>Embedded child directives</h1>
+    <p>Parent received: <span id="parent-received">{{ received }}</span></p>
+    <p id="outside" style="padding:1rem">outside the child</p>
+    {% live_render "djust_demos.views.embedded_directives_demo.EmbeddedDirectivesChild" %}
+</div>
+{% endblock %}

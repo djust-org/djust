@@ -12,6 +12,7 @@ from .interactive_dropdown_demo import InteractiveDropdownView
 from .interactive_collection_demo import InteractiveCollectionView
 from .interactive_nav_demo import InteractiveNavView, forget_saved_state
 from .interactive_acceptance_demo import InteractiveAcceptanceView
+from .embedded_directives_demo import EmbeddedDirectivesView
 from .table_select_demo import TableSelectView
 from .demos import (
     TodoView,
@@ -65,6 +66,7 @@ __all__ = [
     "InteractiveNavView",
     "forget_saved_state",
     "InteractiveAcceptanceView",
+    "EmbeddedDirectivesView",
     "TableSelectView",
     "TodoView",
     "ChatView",

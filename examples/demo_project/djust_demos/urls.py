@@ -40,6 +40,8 @@ urlpatterns = [
     path("interactive-nav/", InteractiveNavView.as_view(), name="interactive-nav"),
     path("interactive-acceptance/", InteractiveAcceptanceView.as_view(), name="interactive-acceptance"),
     path("interactive-nav/forget/", forget_saved_state, name="interactive-nav-forget"),
+    # ADR-037 row 20 live surface (tests/playwright/test_embedded_directives.py).
+    path("embedded-directives/", EmbeddedDirectivesView.as_view(), name="embedded-directives"),
     path(
         "interactive-collection/",
         InteractiveCollectionView.as_view(),

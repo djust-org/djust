@@ -94,7 +94,11 @@ DIRECTIVES: dict[str, Directive] = {
     "dj-input": Directive("call", "field", _FIELD, ("_target",)),
     "dj-blur": Directive("call", "field", _FIELD),
     "dj-focus": Directive("call", "field", _FIELD),
-    "dj-paste": Directive("call", "fixed", ("text", "html", "has_files", "files")),
+    # The client attaches no owner context to dj-paste (09-event-binding.js;
+    # tests/playwright/test_embedded_directives.py), so it reaches the root.
+    "dj-paste": Directive(
+        "call", "fixed", ("text", "html", "has_files", "files"), owner_context=False
+    ),
     "dj-window-keydown": Directive("call", "element", ("key", "code")),
     "dj-window-keyup": Directive("call", "element", ("key", "code")),
     "dj-window-click": Directive("call", "element", ("clientX", "clientY")),
