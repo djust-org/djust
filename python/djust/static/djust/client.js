@@ -4602,7 +4602,8 @@ function _collectStrictEventParams(element, generated = {}, positional = []) {
         return value;
     };
     const put = (key, value) => {
-        if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key) || reserved.has(key) || Object.hasOwn(values, key)) reject();
+        // "_" names are framework-reserved on the server too (ADR-036 D5).
+        if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(key) || reserved.has(key) || Object.hasOwn(values, key)) reject();
         // eslint-disable-next-line security/detect-object-injection
         values[key] = value;
     };

@@ -107,6 +107,20 @@ describe('strict dj-click', () => {
         } finally { dom.window.close(); }
     });
 
+    it.each([
+        ['component-id', 'another component'],
+        ['view-id', 'another child view'],
+        ['-forged', 'a framework-reserved "_" name'],
+    ])('rejects dj-value-%s, which would forge %s', async (name) => {
+        const {dom, $, settle, sent, errors} = setup(`<button dj-click="pick" dj-value-${name}="x">Go</button>`);
+        try {
+            click(dom, $('button'));
+            await settle();
+            expect(sent()).toEqual([]);
+            expect(errors()).toHaveLength(1);
+        } finally { dom.window.close(); }
+    });
+
     it('resolves a component owner and attaches its routing context', async () => {
         const {dom, $, settle, sent} = setup(
             '<div data-component-id="menu"><button dj-click="pick" dj-value-item-id:int="5">Go</button></div>');
