@@ -1,7 +1,7 @@
 - **Startup checks for the staged ADR-036 strict parameter policy.** A
   strict-policy declaration that strict dispatch would reject is now reported
   by `manage.py check`, naming the view, the handler and the parameter:
-  `djust.C021` for an invalid `event_parameter_policy`, `djust.V016` for an
+  `djust.C022` for an invalid `event_parameter_policy`, `djust.V016` for an
   unresolvable or unsupported annotation, a missing annotation or a reserved
   argument name, `djust.V017` for an async strict handler on an actor view, and
   `djust.V018` when `params=` disagrees with a strict signature. The checks

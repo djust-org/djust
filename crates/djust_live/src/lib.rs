@@ -772,503 +772,25 @@ impl RustLiveViewBackend {
 
     /// Render and compute diff from last render
     /// Returns a tuple of (html, patches_json, version)
-    fn render_with_diff(&mut self) -> PyResult<(String, Option<String>, u64)> {
+    ///
+    /// The whole template render, HTML parse and VDOM diff run with this
+    /// thread DETACHED from the interpreter (#3074), so on a GIL build other
+    /// Python threads — other sessions' handlers, the event loop — run while
+    /// this one renders. The body is [`Self::render_with_diff_detached`]: it
+    /// holds no `Python<'py>` token, so every Python touch inside (the
+    /// `raw_py_values` sidecar clone, `getattr` fallbacks, bridged tags and
+    /// filters, `{% load %}`) re-attaches through `Python::attach`, and the
+    /// compiler rejects anything `!Send` (`Bound`, `Python`) crossing the
+    /// detach. The registry lookups those callbacks make take their locks
+    /// only while attached (see `registry.rs` "Lock order"), so a detached
+    /// render never waits for the GIL while holding a registry lock.
+    ///
+    /// The body carries its own `guard_panic` (it is also the actor path's
+    /// entry); this one is the Python entry point's boundary, so a panic in
+    /// the detach itself still surfaces as a containable exception.
+    fn render_with_diff(&mut self, py: Python<'_>) -> PyResult<(String, Option<String>, u64)> {
         guard_panic("render_with_diff", move || {
-            use std::time::Instant;
-
-            let t_start = Instant::now();
-
-            // Get template from cache or parse and cache it (#2669: the ONE
-            // generation-gated entry into `TEMPLATE_CACHE`).
-            let template_arc = cached_template(&self.template_source)?;
-
-            // ADR-029: install this view's render environment into the
-            // thread-local cells for the duration of this render, restoring
-            // the previous values on drop — applied beside `set_auto_call`
-            // at ALL THREE render entries so the paths cannot drift (#1646).
-            let _render_env = self.render_env.as_ref().map(RenderEnvGuard::install);
-
-            let _bridge_memo = djust_core::context::BridgeFrameCacheGuard;
-            let mut context = Context::from_shared(self.state.clone());
-            for key in &self.safe_keys {
-                context.mark_safe(key.clone());
-            }
-            // #2686: namespace this instance's dj-if marker ids. No-op (empty)
-            // for every render that did not opt in. Applied at ALL THREE render
-            // entries, not just the component one, so the paths cannot drift.
-            context.set_dj_if_id_namespace(self.dj_if_id_namespace.as_str());
-            // Attach Py<PyAny> sidecar so `{{ model.attr }}` falls back
-            // to `getattr` when `attr` isn't in the JSON-serialized state.
-            if let Some(raw) = &self.raw_py_values {
-                let cloned: HashMap<String, Py<PyAny>> = Python::attach(|py| {
-                    raw.iter()
-                        .map(|(k, v)| (k.clone(), v.clone_ref(py)))
-                        .collect()
-                });
-                context.set_raw_py_objects(cloned);
-                // ADR-024: stamp the auto-call kill-switch onto this render's
-                // context (only meaningful when a sidecar is attached).
-                context.set_auto_call(self.template_auto_call);
-            }
-
-            // Phase 1: Template render (partial if cache available)
-            let t_render_start = Instant::now();
-            let loader = FilesystemTemplateLoader::new(self.template_dirs.clone());
-
-            // Resolve {% extends %} inheritance once (cached on Template via OnceLock)
-            if template_arc.uses_extends() {
-                template_arc.resolve_inheritance(&loader)?;
-            }
-
-            // Track old fragments for text-fast-path comparison
-            let old_node_cache = self.node_html_cache.clone();
-
-            // Install the persistent per-item loop render cache (#1967) for the
-            // duration of this render. We `mem::take` it out of `self` to a local
-            // so the `LoopCacheGuard` holds a stable `&mut` independent of the
-            // other `self`-field borrows the render path uses, then put it back.
-            // When the cache is disabled the guard + thread-local lookups are
-            // effectively inert (the For-node path checks `is_enabled` and skips),
-            // so this is byte-identical to the pre-#1967 path.
-            let mut loop_cache = std::mem::take(&mut self.loop_render_cache);
-            loop_cache.begin_render();
-            let render_result: Result<(String, Vec<usize>), _> = {
-                let _loop_guard = LoopCacheGuard::install(&mut loop_cache);
-                if !self.node_html_cache.is_empty() && self.changed_keys.is_some() {
-                    // Partial render: only re-render nodes whose deps changed
-                    let changed = self.changed_keys.take().unwrap_or_default();
-                    template_arc
-                        .render_with_loader_partial(
-                            &context,
-                            &loader,
-                            &changed,
-                            &self.node_html_cache,
-                        )
-                        .map(|(html, fragments, changed_indices)| {
-                            self.node_html_cache = fragments;
-                            (html, changed_indices)
-                        })
-                } else {
-                    // Full render: first render or no change info
-                    self.changed_keys = None;
-                    template_arc
-                        .render_with_loader_collecting(&context, &loader)
-                        .map(|(html, fragments)| {
-                            self.node_html_cache = fragments;
-                            (html, vec![])
-                        })
-                }
-            };
-            // Prune stale entries (keep only hashes seen this render). NOTE: we do
-            // NOT put `loop_cache` back on `self` yet — the parse phase below
-            // consumes the #1970 per-render manifest and may populate the parse
-            // cache (`insert_parsed`) for freshly-parsed items, so `loop_cache`
-            // stays a live local through the parse phase and is restored afterwards.
-            loop_cache.prune();
-            // Take the per-render item manifest (#1970). Empty unless the loop
-            // render cache is enabled AND the loop body is cacheable AND items were
-            // foster-safe. Consumed by the parse-cache splice in the full-parse
-            // block below. Taken UNCONDITIONALLY here so a stale manifest can never
-            // leak into the next render regardless of which parse path fires.
-            let loop_parse_manifest = loop_cache.take_manifest();
-            let (reduced_html, changed_indices) = match render_result {
-                Ok(v) => v,
-                Err(e) => {
-                    // Restore the cache before propagating so `self` is never left
-                    // without its loop cache.
-                    self.loop_render_cache = loop_cache;
-                    return Err(e.into());
-                }
-            };
-            let render_ms = t_render_start.elapsed().as_secs_f64() * 1000.0;
-
-            // #1970: when the parse cache emitted `<dj-pc>` placeholders for
-            // cache-HIT items, `reduced_html` is the SHORT form html5ever will
-            // parse cheaply. Reconstruct the FULL html (placeholders expanded to
-            // their item HTML, from the manifest) for every existing consumer
-            // (`last_html`, the fast paths, the full-parse fallback, `html_len`).
-            // When there were no placeholders this is a cheap identity (the reduced
-            // html IS the full html). The parse-cache splice path below is the ONLY
-            // consumer of `reduced_html`.
-            let has_loop_placeholders = loop_parse_manifest.iter().any(|m| m.placeholder);
-            let html = if has_loop_placeholders {
-                // Match ONLY this render's nonce-bearing sentinel tag (#1970).
-                let sentinel_tag = djust_templates::loop_cache::placeholder_tag(loop_cache.nonce());
-                // The per-node fragment cache holds this render's REDUCED
-                // fragments; expand them too. A later PARTIAL render reuses
-                // cached fragments verbatim but has no manifest for them, so a
-                // placeholder left in the cache reached a full parse as a real
-                // `<dj-pc-…>` element (and it skewed the fragment text map's
-                // byte offsets, which assume fragments concatenate to the full
-                // html). Fragments concatenate to `reduced_html`, so their
-                // placeholders are the manifest's, in order.
-                let open = format!("<{sentinel_tag} ");
-                let mut ph_iter = loop_parse_manifest.iter().filter(|m| m.placeholder);
-                for frag in self.node_html_cache.iter_mut() {
-                    if frag.contains(&open) {
-                        *frag = Self::expand_loop_placeholders(frag, &mut ph_iter, &sentinel_tag);
-                    }
-                }
-                Self::reconstruct_full_loop_html(&reduced_html, &loop_parse_manifest, &sentinel_tag)
-            } else {
-                reduced_html.clone()
-            };
-
-            // Phase 2: HTML parse to VDOM
-            // Text-fast-path: if ALL changed fragments are plain text (no HTML tags),
-            // skip html5ever + diff entirely and produce SetText patches directly.
-            let t_parse_start = Instant::now();
-            let text_fast_path = if !changed_indices.is_empty() && self.last_vdom.is_some() {
-                // Check if all changed fragments are plain text
-                let mut all_text = true;
-                let mut text_changes: Vec<(usize, String, String)> = Vec::new();
-                for &idx in &changed_indices {
-                    let old_frag = old_node_cache.get(idx).map(|s| s.as_str()).unwrap_or("");
-                    let new_frag = self
-                        .node_html_cache
-                        .get(idx)
-                        .map(|s| s.as_str())
-                        .unwrap_or("");
-                    if old_frag != new_frag {
-                        // Check if both fragments are plain text (no HTML tags)
-                        if old_frag.contains('<') || new_frag.contains('<') {
-                            all_text = false;
-                            break;
-                        }
-                        text_changes.push((idx, old_frag.to_string(), new_frag.to_string()));
-                    }
-                }
-                if all_text && !text_changes.is_empty() {
-                    // Build the fragment→text-node map lazily (#3013): only a
-                    // text fast path needs it, so it is built here, from the
-                    // PREVIOUS render's fragments and tree, rather than after
-                    // every full parse. `old_node_cache` is exactly the
-                    // fragment list the eager build used to see (it concatenates
-                    // to `last_html`, which `last_vdom` was parsed from), so
-                    // the map is the one the eager build produced.
-                    if self.fragment_text_map.is_none() && !old_node_cache.is_empty() {
-                        if let (Some(ref vdom), Some(ref full_html)) =
-                            (&self.last_vdom, &self.last_html)
-                        {
-                            self.fragment_text_map =
-                                Some(build_fragment_text_map(&old_node_cache, vdom, full_html));
-                        }
-                    }
-                    // Use the fragment text map to produce patches directly.
-                    // First verify all fragments have mappings, then apply.
-                    if let Some(ref frag_map) = self.fragment_text_map {
-                        // #2999: a text node that would become — or was —
-                        // whitespace-only is dropped or collapsed to `" "` by
-                        // a full parse depending on its neighbours, so its
-                        // node may not exist (or may not be where the map
-                        // says); let the full parse handle it. And never emit
-                        // a SetText whose target isn't a text node in the
-                        // current VDOM: the map could be stale, and a patch
-                        // the server's own tree didn't take would leave the
-                        // server rendering old content forever.
-                        //
-                        // A fragment is raw HTML, while the VDOM text node
-                        // (and the client's `textContent`) holds DECODED
-                        // text: `&amp;` must reach the patch as `&` (#2898).
-                        // `text_node_value` decodes (or not, inside
-                        // script/style) and returns None for anything it
-                        // can't decode exactly as the parser would.
-                        let decoded: Option<Vec<String>> = text_changes
-                            .iter()
-                            .map(|(idx, old_raw, new_raw)| {
-                                let (path, _) = frag_map.get(idx)?;
-                                let vdom = self.last_vdom.as_ref()?;
-                                let node = get_vdom_node(vdom, path)?;
-                                if !node.is_text() {
-                                    return None;
-                                }
-                                let old_text = text_node_value(vdom, path, old_raw)?;
-                                let new_text = text_node_value(vdom, path, new_raw)?;
-                                if is_html_whitespace_only(&old_text)
-                                    || is_html_whitespace_only(&new_text)
-                                    || node.text.as_deref() != Some(old_text.as_str())
-                                {
-                                    return None;
-                                }
-                                Some(new_text)
-                            })
-                            .collect();
-                        if let Some(decoded) = decoded {
-                            let mut vdom = self.last_vdom.take().unwrap();
-                            let mut patches = Vec::new();
-                            for ((idx, _old_raw, _new_raw), new_text) in
-                                text_changes.iter().zip(decoded.iter())
-                            {
-                                let (path, djust_id) = frag_map.get(idx).unwrap();
-                                if let Some(node) = get_vdom_node_mut(&mut vdom, path) {
-                                    node.text = Some(new_text.clone());
-                                    node.cached_html = None;
-                                }
-                                let d = if djust_id.is_empty() {
-                                    None
-                                } else {
-                                    Some(djust_id.clone())
-                                };
-                                patches.push(djust_vdom::Patch::SetText {
-                                    path: path.clone(),
-                                    d,
-                                    text: new_text.clone(),
-                                });
-                            }
-                            Some((vdom, patches))
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-
-            // Text-region fast path: if text-fast-path can't fire (because
-            // changed fragments contain tags), maybe the diff between the
-            // FULL old and new HTML is still a single text span. Common for
-            // a value change inside a `{% for %}` loop body — the whole
-            // loop re-renders, but the actual byte diff is tiny.
-            // Borrow-split trick: take the index out so we can pass it mutably
-            // while also borrowing self.last_vdom / self.last_html. Replaced
-            // at the end of this block regardless of hit/miss.
-            let text_region_fast_path: Option<(VNode, Vec<djust_vdom::Patch>)> = if text_fast_path
-                .is_none()
-            {
-                if let (Some(old_vdom), Some(old_html), Some(mut index)) = (
-                    self.last_vdom.as_ref(),
-                    self.last_html.as_ref(),
-                    self.text_node_index.take(),
-                ) {
-                    let result = try_text_region_fast_path(old_html, &html, old_vdom, &mut index);
-                    self.text_node_index = Some(index);
-                    result
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-
-            let mut took_full_parse = false;
-            // Which parse-skipping path fired, for `RenderTiming::fast_path` (#2532).
-            let fast_path: f64;
-            let (mut new_vdom, patches, parse_ms, diff_ms) = if let Some((vdom, text_patches)) =
-                text_fast_path
-            {
-                fast_path = FAST_PATH_FRAGMENT;
-                let parse_ms = t_parse_start.elapsed().as_secs_f64() * 1000.0;
-                let patches_json = if text_patches.is_empty() {
-                    Some("[]".to_string())
-                } else {
-                    Some(serde_json::to_string(&text_patches).map_err(|e| {
-                        PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
-                    })?)
-                };
-                // The original text-fast-path mutates VDOM text nodes but
-                // doesn't know about our byte-position index — invalidate
-                // it so the NEXT render rebuilds rather than silently
-                // relying on the content-equality safety net in
-                // try_text_region_fast_path to catch stale offsets.
-                self.text_node_index = None;
-                (vdom, patches_json, parse_ms, 0.0)
-            } else if let Some((vdom, text_patches)) = text_region_fast_path {
-                fast_path = FAST_PATH_TEXT_REGION;
-                let parse_ms = t_parse_start.elapsed().as_secs_f64() * 1000.0;
-                let patches_json = if text_patches.is_empty() {
-                    Some("[]".to_string())
-                } else {
-                    Some(serde_json::to_string(&text_patches).map_err(|e| {
-                        PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
-                    })?)
-                };
-                (vdom, patches_json, parse_ms, 0.0)
-            } else {
-                took_full_parse = true;
-                fast_path = FAST_PATH_NONE;
-                // dj-id collision defense (#1550 / #1552). Before
-                // `parse_html_continue` generates fresh ids for the new
-                // tree, advance the thread-local id counter past the
-                // highest id present in `last_vdom`. Without this, when
-                // the view's `last_vdom` was generated on a different
-                // thread (worker-pool handoff) OR was restored from a
-                // msgpack roundtrip on a thread whose counter is at a
-                // lower value than the saved tree's ids, the new tree's
-                // freshly-generated ids overlap with surviving old-tree
-                // ids. The resulting `InsertSubtree.html` then carries
-                // dj-ids that collide with siblings the diff plans to
-                // remove via `RemoveChild(child_d=...)`, and the
-                // client's `:scope > [dj-id=N]` querySelector returns
-                // the wrong (newer) element — the subtree-doubling
-                // symptom reported in #1552 (and the simpler "branch
-                // doesn't swap" symptom in #1550 when ids 1..k overlap
-                // with sibling counts).
-                if let Some(ref old_vdom) = self.last_vdom {
-                    if let Some(max_id) = djust_vdom::max_djust_id_in(old_vdom) {
-                        djust_vdom::ensure_id_counter_at_least(max_id + 1);
-                    }
-                }
-                // The id-counter base the FULL parse would assign from: 0 for
-                // an initial `parse_html` (which resets), or the current counter
-                // value for a continuing `parse_html_continue` (already advanced
-                // past the old tree's max ids by the #1550/#1552 bump above).
-                // The #1970 splice re-walks the assembled tree from this base so
-                // its dj-ids are byte-identical to the full parse.
-                let is_continue = self.last_vdom.is_some();
-                let counter_base = if is_continue {
-                    djust_vdom::get_id_counter()
-                } else {
-                    0
-                };
-
-                // #1970 parse-cache splice: when the render emitted `<dj-pc>`
-                // placeholders for cache-HIT items, parse the SHORT reduced html
-                // (cheap), then splice the cached parsed subtrees back in and
-                // re-walk dj-ids. A reorder of unchanged items reduces almost
-                // the entire item markup to tiny placeholders, so html5ever
-                // parses a fraction of the bytes. Any anomaly (a cache miss for
-                // a placeholder hash, foster-parenting having relocated a
-                // placeholder so the found-count disagrees, or a residual
-                // placeholder) makes `try_parse_cache_splice` return None and we
-                // fall back to a full parse of the (full) html — always correct.
-                let mut new_vdom = if has_loop_placeholders {
-                    match Self::try_parse_cache_splice(
-                        &reduced_html,
-                        &loop_parse_manifest,
-                        &mut loop_cache,
-                        counter_base,
-                    ) {
-                        Some(v) => v,
-                        None => {
-                            // Fallback: full parse of the full html (correct,
-                            // no parse win for this render). Re-establish the
-                            // counter base the full parse expects.
-                            if is_continue {
-                                djust_vdom::set_id_counter(counter_base);
-                                parse_html_continue(&html).map_err(|e| {
-                                    PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
-                                })?
-                            } else {
-                                parse_html(&html).map_err(|e| {
-                                    PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
-                                })?
-                            }
-                        }
-                    }
-                } else {
-                    // No placeholders → ordinary full parse (byte-identical to
-                    // pre-#1970). Still populate the parse cache for eligible
-                    // items recorded in the manifest (all parse-MISSes on this
-                    // render) so a FUTURE reorder can hit. Population parses each
-                    // miss item's fragment once (the changed items only).
-                    let v = if is_continue {
-                        parse_html_continue(&html).map_err(|e| {
-                            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
-                        })?
-                    } else {
-                        parse_html(&html).map_err(|e| {
-                            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
-                        })?
-                    };
-                    Self::populate_parse_cache_from_manifest(&loop_parse_manifest, &mut loop_cache);
-                    v
-                };
-                let parse_ms = t_parse_start.elapsed().as_secs_f64() * 1000.0;
-
-                // Splice ignore subtrees
-                if let Some(old_vdom) = &self.last_vdom {
-                    splice_ignore_subtrees(old_vdom, &mut new_vdom);
-                }
-
-                // VDOM diff
-                let t_diff_start = Instant::now();
-                let patches = if let Some(old_vdom) = &self.last_vdom {
-                    let patches = diff(old_vdom, &new_vdom);
-                    sync_ids(old_vdom, &mut new_vdom);
-                    if !patches.is_empty() {
-                        Some(serde_json::to_string(&patches).map_err(|e| {
-                            PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
-                        })?)
-                    } else {
-                        Some("[]".to_string())
-                    }
-                } else {
-                    None
-                };
-                let diff_ms = t_diff_start.elapsed().as_secs_f64() * 1000.0;
-                (new_vdom, patches, parse_ms, diff_ms)
-            };
-
-            // #1970: restore the loop render+parse cache to `self` so it persists to
-            // the next render (persistence is what gives a reorder its O(changed)
-            // win). The parse phase above used `loop_cache` as a live local to read
-            // the parse cache (splice) and populate it (miss items); put it back now.
-            self.loop_render_cache = loop_cache;
-
-            // Phase 4: HTML serialization
-            let t_serial_start = Instant::now();
-            let hydrated_html = new_vdom.to_html();
-            let serialize_ms = t_serial_start.elapsed().as_secs_f64() * 1000.0;
-
-            let total_ms = t_start.elapsed().as_secs_f64() * 1000.0;
-
-            // Store timing for Python to read
-            self.last_render_timing = Some(RenderTiming {
-                render_ms,
-                parse_ms,
-                diff_ms,
-                serialize_ms,
-                total_ms,
-                html_len: html.len(),
-                fast_path,
-            });
-
-            // Cache HTML for dj-update="ignore" subtrees so subsequent
-            // to_html() calls skip serialization for those sections.
-            cache_ignore_subtree_html(&mut new_vdom);
-
-            // Cache the rendered HTML for text-only fast path on next render
-            self.last_html = Some(html);
-
-            self.last_vdom = Some(new_vdom);
-            self.version += 1;
-
-            // Fragment→VDOM text node map for the text fast path on later renders.
-            // Each plain-text fragment is matched to a VDOM text node by BYTE
-            // POSITION in the assembled HTML (#1617 — content equality is
-            // insufficient when a variable is adjacent to literal template text).
-            //
-            // #2999: a full parse can change structure (a text node that went
-            // whitespace-only disappears), so the map built against the old
-            // tree is stale — drop it. Before this reset, a fragment that
-            // emptied and refilled kept being patched at a path that no
-            // longer existed.
-            //
-            // #3013: it is NOT rebuilt here. Building it after every full parse
-            // cost ~13% of render_with_diff on a large block list whose renders
-            // never take the text fast path; the fast path builds it on demand.
-            if took_full_parse {
-                self.fragment_text_map = None;
-            }
-
-            // Rebuild the text-region fast-path index whenever we just went
-            // through the full html5ever parse (structure may have changed)
-            // or no index exists yet. Fast-path renders only change text
-            // CONTENT — positions and count stay stable — so the old index
-            // remains valid and we skip the rebuild.
-            if took_full_parse || self.text_node_index.is_none() {
-                if let (Some(ref html_str), Some(ref vdom)) = (&self.last_html, &self.last_vdom) {
-                    let index = build_text_node_index(html_str, vdom);
-                    self.text_node_index = if index.is_empty() { None } else { Some(index) };
-                }
-            }
-
-            Ok((hydrated_html, patches, self.version))
+            py.detach(|| self.render_with_diff_detached())
         })
     }
 
@@ -1824,6 +1346,509 @@ impl RustLiveViewBackend {
 
 // Public Rust API (for use by other Rust crates like djust_actors)
 impl RustLiveViewBackend {
+    /// Body of [`render_with_diff`](Self::render_with_diff), callable with
+    /// or without the interpreter attached (the actor path and the Rust
+    /// tests call it directly). Returns (html, patches_json, version).
+    fn render_with_diff_detached(&mut self) -> PyResult<(String, Option<String>, u64)> {
+        guard_panic("render_with_diff", move || {
+            use std::time::Instant;
+
+            let t_start = Instant::now();
+
+            // Get template from cache or parse and cache it (#2669: the ONE
+            // generation-gated entry into `TEMPLATE_CACHE`).
+            let template_arc = cached_template(&self.template_source)?;
+
+            // ADR-029: install this view's render environment into the
+            // thread-local cells for the duration of this render, restoring
+            // the previous values on drop — applied beside `set_auto_call`
+            // at ALL THREE render entries so the paths cannot drift (#1646).
+            let _render_env = self.render_env.as_ref().map(RenderEnvGuard::install);
+
+            let _bridge_memo = djust_core::context::BridgeFrameCacheGuard;
+            let mut context = Context::from_shared(self.state.clone());
+            for key in &self.safe_keys {
+                context.mark_safe(key.clone());
+            }
+            // #2686: namespace this instance's dj-if marker ids. No-op (empty)
+            // for every render that did not opt in. Applied at ALL THREE render
+            // entries, not just the component one, so the paths cannot drift.
+            context.set_dj_if_id_namespace(self.dj_if_id_namespace.as_str());
+            // Attach Py<PyAny> sidecar so `{{ model.attr }}` falls back
+            // to `getattr` when `attr` isn't in the JSON-serialized state.
+            if let Some(raw) = &self.raw_py_values {
+                let cloned: HashMap<String, Py<PyAny>> = Python::attach(|py| {
+                    raw.iter()
+                        .map(|(k, v)| (k.clone(), v.clone_ref(py)))
+                        .collect()
+                });
+                context.set_raw_py_objects(cloned);
+                // ADR-024: stamp the auto-call kill-switch onto this render's
+                // context (only meaningful when a sidecar is attached).
+                context.set_auto_call(self.template_auto_call);
+            }
+
+            // Phase 1: Template render (partial if cache available)
+            let t_render_start = Instant::now();
+            let loader = FilesystemTemplateLoader::new(self.template_dirs.clone());
+
+            // Resolve {% extends %} inheritance once (cached on Template via OnceLock)
+            if template_arc.uses_extends() {
+                template_arc.resolve_inheritance(&loader)?;
+            }
+
+            // Track old fragments for text-fast-path comparison
+            let old_node_cache = self.node_html_cache.clone();
+
+            // Install the persistent per-item loop render cache (#1967) for the
+            // duration of this render. We `mem::take` it out of `self` to a local
+            // so the `LoopCacheGuard` holds a stable `&mut` independent of the
+            // other `self`-field borrows the render path uses, then put it back.
+            // When the cache is disabled the guard + thread-local lookups are
+            // effectively inert (the For-node path checks `is_enabled` and skips),
+            // so this is byte-identical to the pre-#1967 path.
+            let mut loop_cache = std::mem::take(&mut self.loop_render_cache);
+            loop_cache.begin_render();
+            let render_result: Result<(String, Vec<usize>), _> = {
+                let _loop_guard = LoopCacheGuard::install(&mut loop_cache);
+                if !self.node_html_cache.is_empty() && self.changed_keys.is_some() {
+                    // Partial render: only re-render nodes whose deps changed
+                    let changed = self.changed_keys.take().unwrap_or_default();
+                    template_arc
+                        .render_with_loader_partial(
+                            &context,
+                            &loader,
+                            &changed,
+                            &self.node_html_cache,
+                        )
+                        .map(|(html, fragments, changed_indices)| {
+                            self.node_html_cache = fragments;
+                            (html, changed_indices)
+                        })
+                } else {
+                    // Full render: first render or no change info
+                    self.changed_keys = None;
+                    template_arc
+                        .render_with_loader_collecting(&context, &loader)
+                        .map(|(html, fragments)| {
+                            self.node_html_cache = fragments;
+                            (html, vec![])
+                        })
+                }
+            };
+            // Prune stale entries (keep only hashes seen this render). NOTE: we do
+            // NOT put `loop_cache` back on `self` yet — the parse phase below
+            // consumes the #1970 per-render manifest and may populate the parse
+            // cache (`insert_parsed`) for freshly-parsed items, so `loop_cache`
+            // stays a live local through the parse phase and is restored afterwards.
+            loop_cache.prune();
+            // Take the per-render item manifest (#1970). Empty unless the loop
+            // render cache is enabled AND the loop body is cacheable AND items were
+            // foster-safe. Consumed by the parse-cache splice in the full-parse
+            // block below. Taken UNCONDITIONALLY here so a stale manifest can never
+            // leak into the next render regardless of which parse path fires.
+            let loop_parse_manifest = loop_cache.take_manifest();
+            let (reduced_html, changed_indices) = match render_result {
+                Ok(v) => v,
+                Err(e) => {
+                    // Restore the cache before propagating so `self` is never left
+                    // without its loop cache.
+                    self.loop_render_cache = loop_cache;
+                    return Err(e.into());
+                }
+            };
+            let render_ms = t_render_start.elapsed().as_secs_f64() * 1000.0;
+
+            // #1970: when the parse cache emitted `<dj-pc>` placeholders for
+            // cache-HIT items, `reduced_html` is the SHORT form html5ever will
+            // parse cheaply. Reconstruct the FULL html (placeholders expanded to
+            // their item HTML, from the manifest) for every existing consumer
+            // (`last_html`, the fast paths, the full-parse fallback, `html_len`).
+            // When there were no placeholders this is a cheap identity (the reduced
+            // html IS the full html). The parse-cache splice path below is the ONLY
+            // consumer of `reduced_html`.
+            let has_loop_placeholders = loop_parse_manifest.iter().any(|m| m.placeholder);
+            let html = if has_loop_placeholders {
+                // Match ONLY this render's nonce-bearing sentinel tag (#1970).
+                let sentinel_tag = djust_templates::loop_cache::placeholder_tag(loop_cache.nonce());
+                // The per-node fragment cache holds this render's REDUCED
+                // fragments; expand them too. A later PARTIAL render reuses
+                // cached fragments verbatim but has no manifest for them, so a
+                // placeholder left in the cache reached a full parse as a real
+                // `<dj-pc-…>` element (and it skewed the fragment text map's
+                // byte offsets, which assume fragments concatenate to the full
+                // html). Fragments concatenate to `reduced_html`, so their
+                // placeholders are the manifest's, in order.
+                let open = format!("<{sentinel_tag} ");
+                let mut ph_iter = loop_parse_manifest.iter().filter(|m| m.placeholder);
+                for frag in self.node_html_cache.iter_mut() {
+                    if frag.contains(&open) {
+                        *frag = Self::expand_loop_placeholders(frag, &mut ph_iter, &sentinel_tag);
+                    }
+                }
+                Self::reconstruct_full_loop_html(&reduced_html, &loop_parse_manifest, &sentinel_tag)
+            } else {
+                reduced_html.clone()
+            };
+
+            // Phase 2: HTML parse to VDOM
+            // Text-fast-path: if ALL changed fragments are plain text (no HTML tags),
+            // skip html5ever + diff entirely and produce SetText patches directly.
+            let t_parse_start = Instant::now();
+            let text_fast_path = if !changed_indices.is_empty() && self.last_vdom.is_some() {
+                // Check if all changed fragments are plain text
+                let mut all_text = true;
+                let mut text_changes: Vec<(usize, String, String)> = Vec::new();
+                for &idx in &changed_indices {
+                    let old_frag = old_node_cache.get(idx).map(|s| s.as_str()).unwrap_or("");
+                    let new_frag = self
+                        .node_html_cache
+                        .get(idx)
+                        .map(|s| s.as_str())
+                        .unwrap_or("");
+                    if old_frag != new_frag {
+                        // Check if both fragments are plain text (no HTML tags)
+                        if old_frag.contains('<') || new_frag.contains('<') {
+                            all_text = false;
+                            break;
+                        }
+                        text_changes.push((idx, old_frag.to_string(), new_frag.to_string()));
+                    }
+                }
+                if all_text && !text_changes.is_empty() {
+                    // Build the fragment→text-node map lazily (#3013): only a
+                    // text fast path needs it, so it is built here, from the
+                    // PREVIOUS render's fragments and tree, rather than after
+                    // every full parse. `old_node_cache` is exactly the
+                    // fragment list the eager build used to see (it concatenates
+                    // to `last_html`, which `last_vdom` was parsed from), so
+                    // the map is the one the eager build produced.
+                    if self.fragment_text_map.is_none() && !old_node_cache.is_empty() {
+                        if let (Some(ref vdom), Some(ref full_html)) =
+                            (&self.last_vdom, &self.last_html)
+                        {
+                            self.fragment_text_map =
+                                Some(build_fragment_text_map(&old_node_cache, vdom, full_html));
+                        }
+                    }
+                    // Use the fragment text map to produce patches directly.
+                    // First verify all fragments have mappings, then apply.
+                    if let Some(ref frag_map) = self.fragment_text_map {
+                        // #2999: a text node that would become — or was —
+                        // whitespace-only is dropped or collapsed to `" "` by
+                        // a full parse depending on its neighbours, so its
+                        // node may not exist (or may not be where the map
+                        // says); let the full parse handle it. And never emit
+                        // a SetText whose target isn't a text node in the
+                        // current VDOM: the map could be stale, and a patch
+                        // the server's own tree didn't take would leave the
+                        // server rendering old content forever.
+                        //
+                        // A fragment is raw HTML, while the VDOM text node
+                        // (and the client's `textContent`) holds DECODED
+                        // text: `&amp;` must reach the patch as `&` (#2898).
+                        // `text_node_value` decodes (or not, inside
+                        // script/style) and returns None for anything it
+                        // can't decode exactly as the parser would.
+                        let decoded: Option<Vec<String>> = text_changes
+                            .iter()
+                            .map(|(idx, old_raw, new_raw)| {
+                                let (path, _) = frag_map.get(idx)?;
+                                let vdom = self.last_vdom.as_ref()?;
+                                let node = get_vdom_node(vdom, path)?;
+                                if !node.is_text() {
+                                    return None;
+                                }
+                                let old_text = text_node_value(vdom, path, old_raw)?;
+                                let new_text = text_node_value(vdom, path, new_raw)?;
+                                if is_html_whitespace_only(&old_text)
+                                    || is_html_whitespace_only(&new_text)
+                                    || node.text.as_deref() != Some(old_text.as_str())
+                                {
+                                    return None;
+                                }
+                                Some(new_text)
+                            })
+                            .collect();
+                        if let Some(decoded) = decoded {
+                            let mut vdom = self.last_vdom.take().unwrap();
+                            let mut patches = Vec::new();
+                            for ((idx, _old_raw, _new_raw), new_text) in
+                                text_changes.iter().zip(decoded.iter())
+                            {
+                                let (path, djust_id) = frag_map.get(idx).unwrap();
+                                if let Some(node) = get_vdom_node_mut(&mut vdom, path) {
+                                    node.text = Some(new_text.clone());
+                                    node.cached_html = None;
+                                }
+                                let d = if djust_id.is_empty() {
+                                    None
+                                } else {
+                                    Some(djust_id.clone())
+                                };
+                                patches.push(djust_vdom::Patch::SetText {
+                                    path: path.clone(),
+                                    d,
+                                    text: new_text.clone(),
+                                });
+                            }
+                            Some((vdom, patches))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            // Text-region fast path: if text-fast-path can't fire (because
+            // changed fragments contain tags), maybe the diff between the
+            // FULL old and new HTML is still a single text span. Common for
+            // a value change inside a `{% for %}` loop body — the whole
+            // loop re-renders, but the actual byte diff is tiny.
+            // Borrow-split trick: take the index out so we can pass it mutably
+            // while also borrowing self.last_vdom / self.last_html. Replaced
+            // at the end of this block regardless of hit/miss.
+            let text_region_fast_path: Option<(VNode, Vec<djust_vdom::Patch>)> = if text_fast_path
+                .is_none()
+            {
+                if let (Some(old_vdom), Some(old_html), Some(mut index)) = (
+                    self.last_vdom.as_ref(),
+                    self.last_html.as_ref(),
+                    self.text_node_index.take(),
+                ) {
+                    let result = try_text_region_fast_path(old_html, &html, old_vdom, &mut index);
+                    self.text_node_index = Some(index);
+                    result
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let mut took_full_parse = false;
+            // Which parse-skipping path fired, for `RenderTiming::fast_path` (#2532).
+            let fast_path: f64;
+            let (mut new_vdom, patches, parse_ms, diff_ms) = if let Some((vdom, text_patches)) =
+                text_fast_path
+            {
+                fast_path = FAST_PATH_FRAGMENT;
+                let parse_ms = t_parse_start.elapsed().as_secs_f64() * 1000.0;
+                let patches_json = if text_patches.is_empty() {
+                    Some("[]".to_string())
+                } else {
+                    Some(serde_json::to_string(&text_patches).map_err(|e| {
+                        PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
+                    })?)
+                };
+                // The original text-fast-path mutates VDOM text nodes but
+                // doesn't know about our byte-position index — invalidate
+                // it so the NEXT render rebuilds rather than silently
+                // relying on the content-equality safety net in
+                // try_text_region_fast_path to catch stale offsets.
+                self.text_node_index = None;
+                (vdom, patches_json, parse_ms, 0.0)
+            } else if let Some((vdom, text_patches)) = text_region_fast_path {
+                fast_path = FAST_PATH_TEXT_REGION;
+                let parse_ms = t_parse_start.elapsed().as_secs_f64() * 1000.0;
+                let patches_json = if text_patches.is_empty() {
+                    Some("[]".to_string())
+                } else {
+                    Some(serde_json::to_string(&text_patches).map_err(|e| {
+                        PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
+                    })?)
+                };
+                (vdom, patches_json, parse_ms, 0.0)
+            } else {
+                took_full_parse = true;
+                fast_path = FAST_PATH_NONE;
+                // dj-id collision defense (#1550 / #1552). Before
+                // `parse_html_continue` generates fresh ids for the new
+                // tree, advance the thread-local id counter past the
+                // highest id present in `last_vdom`. Without this, when
+                // the view's `last_vdom` was generated on a different
+                // thread (worker-pool handoff) OR was restored from a
+                // msgpack roundtrip on a thread whose counter is at a
+                // lower value than the saved tree's ids, the new tree's
+                // freshly-generated ids overlap with surviving old-tree
+                // ids. The resulting `InsertSubtree.html` then carries
+                // dj-ids that collide with siblings the diff plans to
+                // remove via `RemoveChild(child_d=...)`, and the
+                // client's `:scope > [dj-id=N]` querySelector returns
+                // the wrong (newer) element — the subtree-doubling
+                // symptom reported in #1552 (and the simpler "branch
+                // doesn't swap" symptom in #1550 when ids 1..k overlap
+                // with sibling counts).
+                if let Some(ref old_vdom) = self.last_vdom {
+                    if let Some(max_id) = djust_vdom::max_djust_id_in(old_vdom) {
+                        djust_vdom::ensure_id_counter_at_least(max_id + 1);
+                    }
+                }
+                // The id-counter base the FULL parse would assign from: 0 for
+                // an initial `parse_html` (which resets), or the current counter
+                // value for a continuing `parse_html_continue` (already advanced
+                // past the old tree's max ids by the #1550/#1552 bump above).
+                // The #1970 splice re-walks the assembled tree from this base so
+                // its dj-ids are byte-identical to the full parse.
+                let is_continue = self.last_vdom.is_some();
+                let counter_base = if is_continue {
+                    djust_vdom::get_id_counter()
+                } else {
+                    0
+                };
+
+                // #1970 parse-cache splice: when the render emitted `<dj-pc>`
+                // placeholders for cache-HIT items, parse the SHORT reduced html
+                // (cheap), then splice the cached parsed subtrees back in and
+                // re-walk dj-ids. A reorder of unchanged items reduces almost
+                // the entire item markup to tiny placeholders, so html5ever
+                // parses a fraction of the bytes. Any anomaly (a cache miss for
+                // a placeholder hash, foster-parenting having relocated a
+                // placeholder so the found-count disagrees, or a residual
+                // placeholder) makes `try_parse_cache_splice` return None and we
+                // fall back to a full parse of the (full) html — always correct.
+                let mut new_vdom = if has_loop_placeholders {
+                    match Self::try_parse_cache_splice(
+                        &reduced_html,
+                        &loop_parse_manifest,
+                        &mut loop_cache,
+                        counter_base,
+                    ) {
+                        Some(v) => v,
+                        None => {
+                            // Fallback: full parse of the full html (correct,
+                            // no parse win for this render). Re-establish the
+                            // counter base the full parse expects.
+                            if is_continue {
+                                djust_vdom::set_id_counter(counter_base);
+                                parse_html_continue(&html).map_err(|e| {
+                                    PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
+                                })?
+                            } else {
+                                parse_html(&html).map_err(|e| {
+                                    PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
+                                })?
+                            }
+                        }
+                    }
+                } else {
+                    // No placeholders → ordinary full parse (byte-identical to
+                    // pre-#1970). Still populate the parse cache for eligible
+                    // items recorded in the manifest (all parse-MISSes on this
+                    // render) so a FUTURE reorder can hit. Population parses each
+                    // miss item's fragment once (the changed items only).
+                    let v = if is_continue {
+                        parse_html_continue(&html).map_err(|e| {
+                            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
+                        })?
+                    } else {
+                        parse_html(&html).map_err(|e| {
+                            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
+                        })?
+                    };
+                    Self::populate_parse_cache_from_manifest(&loop_parse_manifest, &mut loop_cache);
+                    v
+                };
+                let parse_ms = t_parse_start.elapsed().as_secs_f64() * 1000.0;
+
+                // Splice ignore subtrees
+                if let Some(old_vdom) = &self.last_vdom {
+                    splice_ignore_subtrees(old_vdom, &mut new_vdom);
+                }
+
+                // VDOM diff
+                let t_diff_start = Instant::now();
+                let patches = if let Some(old_vdom) = &self.last_vdom {
+                    let patches = diff(old_vdom, &new_vdom);
+                    sync_ids(old_vdom, &mut new_vdom);
+                    if !patches.is_empty() {
+                        Some(serde_json::to_string(&patches).map_err(|e| {
+                            PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
+                        })?)
+                    } else {
+                        Some("[]".to_string())
+                    }
+                } else {
+                    None
+                };
+                let diff_ms = t_diff_start.elapsed().as_secs_f64() * 1000.0;
+                (new_vdom, patches, parse_ms, diff_ms)
+            };
+
+            // #1970: restore the loop render+parse cache to `self` so it persists to
+            // the next render (persistence is what gives a reorder its O(changed)
+            // win). The parse phase above used `loop_cache` as a live local to read
+            // the parse cache (splice) and populate it (miss items); put it back now.
+            self.loop_render_cache = loop_cache;
+
+            // Phase 4: HTML serialization
+            let t_serial_start = Instant::now();
+            let hydrated_html = new_vdom.to_html();
+            let serialize_ms = t_serial_start.elapsed().as_secs_f64() * 1000.0;
+
+            let total_ms = t_start.elapsed().as_secs_f64() * 1000.0;
+
+            // Store timing for Python to read
+            self.last_render_timing = Some(RenderTiming {
+                render_ms,
+                parse_ms,
+                diff_ms,
+                serialize_ms,
+                total_ms,
+                html_len: html.len(),
+                fast_path,
+            });
+
+            // Cache HTML for dj-update="ignore" subtrees so subsequent
+            // to_html() calls skip serialization for those sections.
+            cache_ignore_subtree_html(&mut new_vdom);
+
+            // Cache the rendered HTML for text-only fast path on next render
+            self.last_html = Some(html);
+
+            self.last_vdom = Some(new_vdom);
+            self.version += 1;
+
+            // Fragment→VDOM text node map for the text fast path on later renders.
+            // Each plain-text fragment is matched to a VDOM text node by BYTE
+            // POSITION in the assembled HTML (#1617 — content equality is
+            // insufficient when a variable is adjacent to literal template text).
+            //
+            // #2999: a full parse can change structure (a text node that went
+            // whitespace-only disappears), so the map built against the old
+            // tree is stale — drop it. Before this reset, a fragment that
+            // emptied and refilled kept being patched at a path that no
+            // longer existed.
+            //
+            // #3013: it is NOT rebuilt here. Building it after every full parse
+            // cost ~13% of render_with_diff on a large block list whose renders
+            // never take the text fast path; the fast path builds it on demand.
+            if took_full_parse {
+                self.fragment_text_map = None;
+            }
+
+            // Rebuild the text-region fast-path index whenever we just went
+            // through the full html5ever parse (structure may have changed)
+            // or no index exists yet. Fast-path renders only change text
+            // CONTENT — positions and count stay stable — so the old index
+            // remains valid and we skip the rebuild.
+            if took_full_parse || self.text_node_index.is_none() {
+                if let (Some(ref html_str), Some(ref vdom)) = (&self.last_html, &self.last_vdom) {
+                    let index = build_text_node_index(html_str, vdom);
+                    self.text_node_index = if index.is_empty() { None } else { Some(index) };
+                }
+            }
+
+            Ok((hydrated_html, patches, self.version))
+        })
+    }
+
     /// Create a new RustLiveViewBackend (Rust API)
     pub fn new_rust(template_source: String) -> Self {
         Self::new(template_source, None)
@@ -1934,7 +1959,7 @@ impl RustLiveViewBackend {
         &mut self,
     ) -> Result<(String, Option<Vec<djust_vdom::Patch>>, u64), djust_core::DjangoRustError> {
         let (html, patches_json, version) = self
-            .render_with_diff()
+            .render_with_diff_detached()
             .map_err(|e| djust_core::DjangoRustError::TemplateError(e.to_string()))?;
 
         let patches = if let Some(json) = patches_json {
@@ -5854,7 +5879,7 @@ mod fast_path_flag_tests {
         Python::initialize();
         let mut view = RustLiveViewBackend::new_rust(TEMPLATE.to_string());
         view.update_state_rust(state("v0", 0, 107));
-        view.render_with_diff().expect("initial render");
+        view.render_with_diff_detached().expect("initial render");
         view
     }
 
@@ -5869,7 +5894,7 @@ mod fast_path_flag_tests {
         let mut view = mounted();
         view.update_state_rust(state("v1", 0, 107));
         view.set_changed_keys(vec!["label".to_string()]);
-        let (_html, patches, _v) = view.render_with_diff().expect("re-render");
+        let (_html, patches, _v) = view.render_with_diff_detached().expect("re-render");
         assert_eq!(timing(&view, "fast_path"), FAST_PATH_FRAGMENT);
         // The flag agrees with the pre-#2532 inference the benchmark cross-checks.
         assert_eq!(timing(&view, "diff_ms"), 0.0);
@@ -5885,7 +5910,7 @@ mod fast_path_flag_tests {
         let mut view = mounted();
         view.update_state_rust(state("a & <b>", 0, 107));
         view.set_changed_keys(vec!["label".to_string()]);
-        let (html, patches, _v) = view.render_with_diff().expect("re-render");
+        let (html, patches, _v) = view.render_with_diff_detached().expect("re-render");
         assert_eq!(timing(&view, "fast_path"), FAST_PATH_FRAGMENT);
         let patches = patches.expect("patches");
         assert!(
@@ -5901,7 +5926,7 @@ mod fast_path_flag_tests {
         let mut s = HashMap::new();
         s.insert("x".to_string(), Value::String(x.to_string()));
         view.update_state_rust(s);
-        view.render_with_diff().expect("initial render");
+        view.render_with_diff_detached().expect("initial render");
         view
     }
 
@@ -5910,7 +5935,7 @@ mod fast_path_flag_tests {
         s.insert("x".to_string(), Value::String(x.to_string()));
         view.update_state_rust(s);
         view.set_changed_keys(vec!["x".to_string()]);
-        let (_html, patches, _v) = view.render_with_diff().expect("re-render");
+        let (_html, patches, _v) = view.render_with_diff_detached().expect("re-render");
         patches.expect("patches")
     }
 
@@ -6018,7 +6043,7 @@ mod fast_path_flag_tests {
         for h in [7, 3, 5] {
             view.update_state_rust(state("v0", h, 107));
             view.set_changed_keys(vec!["highlight_id".to_string()]);
-            view.render_with_diff().expect("re-render");
+            view.render_with_diff_detached().expect("re-render");
             assert_eq!(timing(&view, "fast_path"), FAST_PATH_NONE);
             assert!(
                 view.fragment_text_map.is_none(),
@@ -6032,7 +6057,7 @@ mod fast_path_flag_tests {
         let mut view = mounted();
         view.update_state_rust(state("v1", 0, 107));
         view.set_changed_keys(vec!["label".to_string()]);
-        let (html1, patches, _v) = view.render_with_diff().expect("re-render");
+        let (html1, patches, _v) = view.render_with_diff_detached().expect("re-render");
         assert_eq!(timing(&view, "fast_path"), FAST_PATH_FRAGMENT);
         assert!(patches.expect("patches").contains("SetText"));
         assert!(html1.contains("v1"));
@@ -6044,7 +6069,7 @@ mod fast_path_flag_tests {
         // A second text change reuses it and still patches the right node.
         view.update_state_rust(state("v2", 0, 107));
         view.set_changed_keys(vec!["label".to_string()]);
-        let (_html, patches, _v) = view.render_with_diff().expect("re-render");
+        let (_html, patches, _v) = view.render_with_diff_detached().expect("re-render");
         assert_eq!(timing(&view, "fast_path"), FAST_PATH_FRAGMENT);
         let patches = patches.expect("patches");
         assert!(patches.contains("\"v2\""), "patches: {patches}");
@@ -6058,21 +6083,21 @@ mod fast_path_flag_tests {
         let mut view = mounted();
         view.update_state_rust(state("v0", 7, 107));
         view.set_changed_keys(vec!["highlight_id".to_string()]);
-        view.render_with_diff().expect("full parse");
+        view.render_with_diff_detached().expect("full parse");
         view.update_state_rust(state("v9", 7, 107));
         view.set_changed_keys(vec!["label".to_string()]);
-        let (_html, fast, _v) = view.render_with_diff().expect("fast path");
+        let (_html, fast, _v) = view.render_with_diff_detached().expect("fast path");
         assert_eq!(timing(&view, "fast_path"), FAST_PATH_FRAGMENT);
 
         let mut slow = mounted();
         slow.update_state_rust(state("v0", 7, 107));
         slow.set_changed_keys(vec!["highlight_id".to_string()]);
-        slow.render_with_diff().expect("full parse");
+        slow.render_with_diff_detached().expect("full parse");
         slow.update_state_rust(state("v9", 7, 107));
         slow.set_changed_keys(vec!["label".to_string(), "highlight_id".to_string()]);
         slow.fragment_text_map = None;
         slow.node_html_cache = Vec::new(); // force a full render + diff
-        let (_html, full, _v) = slow.render_with_diff().expect("full diff");
+        let (_html, full, _v) = slow.render_with_diff_detached().expect("full diff");
         let (fast, full) = (fast.expect("patches"), full.expect("patches"));
         let path_of = |p: &str| -> String {
             let v: serde_json::Value = serde_json::from_str(p).expect("json patches");
@@ -6090,7 +6115,7 @@ mod fast_path_flag_tests {
         let mut view = mounted();
         view.update_state_rust(state("v0", 7, 107));
         view.set_changed_keys(vec!["highlight_id".to_string()]);
-        let (_html, patches, _v) = view.render_with_diff().expect("re-render");
+        let (_html, patches, _v) = view.render_with_diff_detached().expect("re-render");
         assert_eq!(timing(&view, "fast_path"), FAST_PATH_NONE);
         let patches = patches.expect("a diff render returns patches");
         assert!(patches.contains("SetAttr"), "patches: {patches}");
@@ -6104,7 +6129,7 @@ mod fast_path_flag_tests {
         let mut view = mounted();
         view.update_state_rust(state("v0", 0, 108));
         view.set_changed_keys(vec!["rows".to_string()]);
-        let (_html, patches, _v) = view.render_with_diff().expect("re-render");
+        let (_html, patches, _v) = view.render_with_diff_detached().expect("re-render");
         assert_eq!(timing(&view, "fast_path"), FAST_PATH_TEXT_REGION);
         assert_eq!(timing(&view, "diff_ms"), 0.0);
         let patches = patches.expect("a diff render returns patches");
@@ -6226,7 +6251,7 @@ mod retain_state_keys_rust_2592 {
         Python::initialize();
         let mut view = RustLiveViewBackend::new_rust(TEMPLATE.to_string());
         view.update_state_rust(state(0, true));
-        let (html, _, _) = view.render_with_diff().expect("initial render");
+        let (html, _, _) = view.render_with_diff_detached().expect("initial render");
         assert!(html.contains(SECRET), "premise: {html:?}");
         view
     }
@@ -6238,7 +6263,7 @@ mod retain_state_keys_rust_2592 {
         let removed = view.retain_state_keys_rust(vec!["n".to_string()]);
         assert_eq!(removed, vec!["secret".to_string()]);
         view.update_state_rust(state(1, false));
-        let (html, patches, _) = view.render_with_diff().expect("re-render");
+        let (html, patches, _) = view.render_with_diff_detached().expect("re-render");
         assert!(
             html.contains(">1</span>"),
             "premise: the other change rendered: {html:?}"
@@ -6265,7 +6290,7 @@ mod retain_state_keys_rust_2592 {
             "a changed set was created from nothing"
         );
         view.update_state_rust(state(1, false));
-        let (html, _, _) = view.render_with_diff().expect("re-render");
+        let (html, _, _) = view.render_with_diff_detached().expect("re-render");
         assert!(
             html.contains(">1</span>"),
             "the changed key was served stale: {html:?}"
@@ -6504,5 +6529,103 @@ mod state_is_shared_not_copied_2737 {
             "a round-tripped view aliases the original's state map"
         );
         assert!(matches!(clone.state.get("rows"), Some(Value::List(_))));
+    }
+}
+
+#[cfg(test)]
+mod render_with_diff_detaches_3074 {
+    //! `RustLiveView.render_with_diff` renders with the thread detached from
+    //! the interpreter (#3074), so another thread can take the GIL while a
+    //! render runs. Run with `cargo test -p djust_live --no-default-features`.
+    use super::RustLiveViewBackend;
+    use djust_core::Value;
+    use pyo3::prelude::*;
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    const TEMPLATE: &str =
+        "<div dj-root><ul>{% for r in rows %}<li class=\"row\">{{ r }}</li>{% endfor %}</ul></div>";
+
+    fn view(n: usize) -> RustLiveViewBackend {
+        let mut view = RustLiveViewBackend::new_rust(TEMPLATE.to_string());
+        let mut s = HashMap::new();
+        s.insert(
+            "rows".to_string(),
+            Value::List((0..n).map(|i| Value::String(format!("row {i}"))).collect()),
+        );
+        view.update_state_rust(s);
+        view
+    }
+
+    /// While one thread is inside `render_with_diff`, a second thread that
+    /// was already waiting for the GIL gets it — before the render returns.
+    /// On a GIL build without the detach, the waiter only runs after the
+    /// render (and this thread's whole `attach` scope) ends, so it would see
+    /// `rendered == true`. On a free-threaded build the waiter never blocks,
+    /// and the assertion holds trivially.
+    #[test]
+    fn a_waiting_thread_attaches_while_the_render_runs() {
+        Python::initialize();
+        let mut view = view(5_000);
+        let rendered = Arc::new(AtomicBool::new(false));
+        Python::attach(|py| {
+            let flag = Arc::clone(&rendered);
+            let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+            let waiter = std::thread::spawn(move || {
+                ready_tx.send(()).expect("signal");
+                Python::attach(|_py| flag.load(Ordering::SeqCst))
+            });
+            // The waiter is running and about to wait for the GIL. Hold it a
+            // while longer so the waiter blocks on it and, on CPython, posts
+            // its drop request (after 5 ms), which makes the next release
+            // hand the GIL over instead of racing for it.
+            ready_rx.recv().expect("waiter started");
+            std::thread::sleep(Duration::from_millis(100));
+            let (html, _patches, _version) = view.render_with_diff(py).expect("render");
+            rendered.store(true, Ordering::SeqCst);
+            assert!(html.contains("row 4999"));
+            let saw_rendered = py.detach(|| waiter.join().expect("waiter thread"));
+            assert!(
+                !saw_rendered,
+                "the waiting thread only got the GIL after render_with_diff returned: \
+                 the render did not detach"
+            );
+        });
+    }
+
+    /// The detached entry point renders exactly what the body renders when
+    /// called directly: same html, same patches, same version sequence.
+    #[test]
+    fn detached_render_matches_the_direct_body() {
+        Python::initialize();
+        let mut a = view(50);
+        let mut b = view(50);
+        let first_a = Python::attach(|py| a.render_with_diff(py)).expect("render a");
+        let first_b = b.render_with_diff_detached().expect("render b");
+        assert_eq!(first_a, first_b);
+        let mut s = HashMap::new();
+        s.insert(
+            "rows".to_string(),
+            Value::List((0..51).map(|i| Value::String(format!("row {i}"))).collect()),
+        );
+        a.update_state_rust(s.clone());
+        b.update_state_rust(s);
+        let second_a = Python::attach(|py| a.render_with_diff(py)).expect("re-render a");
+        let second_b = b.render_with_diff_detached().expect("re-render b");
+        // New nodes take ids from a process-wide counter, so the two views'
+        // inserted `<li>` differ only in its `dj-id`: compare the rest.
+        assert_eq!(second_a.2, second_b.2, "same wire version");
+        let (pa, pb) = (
+            second_a.1.expect("patches a"),
+            second_b.1.expect("patches b"),
+        );
+        for p in [&pa, &pb] {
+            assert_eq!(p.matches("\"type\":").count(), 1, "one patch: {p}");
+            assert!(p.contains("InsertChild") && p.contains("row 50"), "{p}");
+        }
+        assert!(second_a.0.ends_with("row 50</li></ul></div>"));
+        assert!(second_b.0.ends_with("row 50</li></ul></div>"));
     }
 }

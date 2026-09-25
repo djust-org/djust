@@ -775,7 +775,7 @@ parameter and expected type, never the submitted value.
 2. Replace `data-*` and `dj-params` arguments with `dj-value-*`, and
    `_target` with `field` or a `dj-value-*` argument.
 3. Add `parameter_policy="strict"`, drop `**kwargs` unless the handler
-   really takes an open payload, and run `manage.py check`: C021 and
+   really takes an open payload, and run `manage.py check`: C022 and
    V016–V019 report what strict dispatch would reject.
 
 ## Next Steps

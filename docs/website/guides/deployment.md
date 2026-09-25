@@ -49,6 +49,28 @@ DJUST_CONFIG = {
 
 Single server only. State lost on restart.
 
+**Memory and `SESSION_TTL`.** The in-memory backend keeps one entry per
+(session, page): the page's compiled `RustLiveView` with its last render, which
+the WebSocket mount reuses instead of compiling and rendering from scratch.
+In a snake-arena load test this was about 270 KB of live heap per session.
+An entry is written when the page is served and when the WebSocket mounts, not
+on events. It expires once it has not been written for `SESSION_TTL` seconds
+(default 3600). Reading an expired entry is a miss, so the mount builds a fresh
+one. Writes sweep expired entries at most once every `min(SESSION_TTL, 60)`
+seconds. `SESSION_TTL = 0` means never expire. So the backend holds roughly *new
+sessions per second × `SESSION_TTL`* entries. At 5 new sessions a second with
+the default hour, that is 18,000 entries (about 5 GB at 270 KB each). Lower
+`SESSION_TTL` to the reconnect window you actually need, or use Redis.
+
+Before 1.2.2 and 1.3 the TTL was applied only by `djust clear` and
+`cleanup_expired_sessions()`, so entries stayed until the process exited
+(#3080).
+
+Expect process RSS to level off, not fall, when sessions expire. The allocator
+keeps freed pages and reuses them for new sessions. Measure growth with the
+entry count (`get_backend().get_stats()["total_sessions"]`) or the allocator's
+in-use figure, not with RSS alone.
+
 ### Redis (Production)
 
 ```python
@@ -140,7 +162,26 @@ For small deployments, point `REDIS_URL` and `REDIS_CHANNEL_URL` at the same Red
 - You want to scale the channel layer independently (e.g., to a Redis cluster) without touching the state backend.
 - You're auditing for blast radius and want a Redis outage to fail one concern at a time.
 
-The `InMemoryChannelLayer` is **development-only** — it doesn't cross processes, so multi-worker / multi-server `push_to_view` silently no-ops.
+An in-memory channel layer doesn't cross processes, so with multiple workers or servers `push_to_view` silently no-ops. Use one only when **one process** serves every WebSocket, as in development. With free-threaded Python and `worker_threads`, that one process can use several cores (see [More than one core per process](#more-than-one-core-per-process-worker_threads)).
+
+For that single-process case, prefer djust's in-memory layer over Channels' own:
+
+```python
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "djust.layers.InMemoryChannelLayer",
+        # "CONFIG": {"clean_interval": 1.0},  # seconds between expiry sweeps; 0 = every message
+    },
+}
+```
+
+It behaves like `channels.layers.InMemoryChannelLayer`, with one difference.
+- **Channels' layer** sweeps every channel and group for expired entries on *every* `receive()` and `group_send()`. A broadcast round across N sessions therefore costs O(N²) on the event loop: 17.7 ms per round at 224 sessions in rooms of 4.
+- **djust's layer** sweeps at most once per `clean_interval`, which is 4.4 ms per round at 224 sessions.
+- The trade-off is timing: an expired message or group membership is removed up to `clean_interval` seconds later.
+  - Until then, an expired message may still be delivered to a consumer that finally reads its queue.
+  - A queue full of expired messages keeps refusing new ones for that long. `group_send` skips a full channel, as it always has.
+  - Messages expire after 60 s by default, so this only affects consumers that have not read for a minute.
 
 ## Redis Setup
 
@@ -237,6 +278,44 @@ When to use Uvicorn standalone (the previous section) vs Gunicorn+Uvicorn:
 Worker count formula:
 - For pure-async workloads (`-k uvicorn.workers.UvicornWorker`): `cpu_count` (e.g., `-w 2` on 1 vCPU, `-w 4` on 2 vCPU).
 - For sync workloads (`-k sync` — not used by djust): `(2 x cpu_count) + 1`.
+
+### More than one core per process: `worker_threads`
+
+For the whole picture, including free-threaded Python, scoped push, the in-process channel layer, measured numbers and the multi-process alternative, see [Scaling a djust Process Across Cores](scaling-across-cores.md).
+
+By default every WebSocket session's sync work — `mount`, event handlers, hooks, renders — runs on **one thread shared by all sessions** in the process (asgiref's `sync_to_async` default). One process then does LiveView work on at most about one core, and one session's slow handler or database query delays every other session's.
+
+`LIVEVIEW_CONFIG["worker_threads"]` (djust 1.3, opt-in) gives the WebSocket path a pool of threads instead:
+
+```python
+LIVEVIEW_CONFIG = {
+    "worker_threads": True,  # one thread per available CPU, max 32; or an int
+}
+```
+
+- Each session is assigned to the least-loaded pool thread when it connects, and **stays on that thread for its lifetime**. Thread-locals and the thread's Django database connection stay consistent for the session.
+- Different sessions' handlers run at the same time on different threads. A session's own events still run one at a time, in order.
+- HTTP requests and SSE streams are unchanged: Django already gives each HTTP request its own thread.
+- The default (`None`) keeps the single shared thread. An invalid value is reported by the system check `djust.C021`.
+- **With the pool on, djust also moves per-frame work off the asyncio event loop**, which becomes the next bottleneck once sessions render in parallel:
+  - the snapshot of the view's assigns taken before an event runs on the session's thread, in the same hop as a sync handler;
+  - a server push is one hop on the session's thread (Django's stale-connection check, the push hooks, the render and the diff), and the patch JSON goes into the frame without being parsed and re-serialised on the loop;
+  - Channels' separate `close_old_connections` hop before each `server_push` message is skipped, because the push turn runs that check itself before any hook can touch the database.
+
+  With the pool off these paths are unchanged.
+
+Things to know before you turn it on:
+
+- **Your sync handlers can now run concurrently with other sessions' handlers.** Module-level state that handlers mutate (a dict of rooms, a counter) needs a `threading.Lock`, exactly as it would under a multi-threaded WSGI server. State on the view instance (`self.…`) is per session and needs nothing.
+- **Each pool thread opens its own database connection**, so budget up to `worker_threads` extra connections per process (see [Database Connection Pooling](#database-connection-pooling)).
+- **Sessions that share a pool thread still wait on each other.** A slow handler, or a long `start_async` callback, holds up the other sessions pinned to its thread, though no longer the whole process. The [#3074](https://github.com/djust-org/djust/issues/3074) experiment measured about 80–120 ms more p95 latency at the load knee with a pool of 8–12 threads than with one thread per session, in exchange for about half the memory per session.
+- **On standard CPython (3.12, 3.13) the GIL still limits Python work to about one core.**
+  - What the pool can overlap there is waiting (database queries, HTTP calls) and djust's Rust render, which releases the GIL while it renders.
+  - For a CPU-bound app it measured no gain: the #3074 snake load test, with one thread per session on 3.12, saturated at the same 32–64 clients as stock.
+- **The multi-core gain needs free-threaded CPython 3.14t**, and more than the pool:
+  - 3.14t by itself moved the snake knee from 32–64 clients (stock, 3.12) to 64–96. Adding per-session threads left the knee there: they raised the cores in use from about 1.6 to 1.9, until the event loop saturated.
+  - The pool starts to pay off once the event loop is relieved. With scoped push added, per-session threads reached 192–224 clients, against 96–128 on the shared thread.
+  - With event-loop offload and a lighter in-process channel layer as well, one process used about 5 cores and served about 4–5× the clients of stock 3.12.
 
 ### WebSocket per-message compression (permessage-deflate)
 

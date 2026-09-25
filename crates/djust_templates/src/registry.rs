@@ -273,6 +273,19 @@ fn as_var_name_str<'py>(py: Python<'py>, text: &str) -> PyResult<Bound<'py, PyAn
 /// read-only and happens on every render, so concurrent renders share the
 /// read lock. Handlers must implement a `render(args, context)` method
 /// that returns a string.
+///
+/// # Lock order (#3074)
+///
+/// `RustLiveView.render_with_diff` renders with its thread DETACHED from the
+/// interpreter, and re-attaches (`Python::attach`) only to call into Python.
+/// So a registry lookup made during a render must take its read lock while
+/// already attached — `Python::attach(|py| { lock.read(); clone_ref(py) })` —
+/// never the other way round. Holding a read guard while waiting to attach
+/// deadlocks on a GIL build: a `register_*` call holds the GIL while it
+/// waits for the write lock, and the detached reader waits for the GIL while
+/// it holds the read lock. Every `Python::attach` that needs a registry entry
+/// in this module and in `filter_registry.rs` follows that order; reads that
+/// never attach (`*_exists`, `is_*`) may run detached.
 static TAG_HANDLERS: Lazy<crate::registry_scope::ScopedMap<TagHandlerEntry>> =
     Lazy::new(crate::registry_scope::ScopedMap::new);
 
@@ -512,23 +525,26 @@ fn read_named_parse_validator(
 /// Validate original argument tokens, outside the registry lock: a Django
 /// compile function may itself load/register another library.
 pub fn validate_tag_arguments(name: &str, args: &[String], block: bool) -> djust_core::Result<()> {
-    let validator = if block {
-        let registry = BLOCK_TAG_HANDLERS
-            .read()
-            .map_err(|e| DjangoRustError::TemplateError(e.to_string()))?;
-        registry
-            .get(name)
-            .and_then(|entry| entry.validator.as_ref())
-            .map(|method| Python::attach(|py| method.clone_ref(py)))
-    } else {
-        let registry = TAG_HANDLERS
-            .read()
-            .map_err(|e| DjangoRustError::TemplateError(e.to_string()))?;
-        registry
-            .get(name)
-            .and_then(|entry| entry.validator.as_ref())
-            .map(|method| Python::attach(|py| method.clone_ref(py)))
-    };
+    // Attach BEFORE taking the read lock (see "Lock order" above).
+    let validator = Python::attach(|py| -> djust_core::Result<Option<Py<PyAny>>> {
+        Ok(if block {
+            let registry = BLOCK_TAG_HANDLERS
+                .read()
+                .map_err(|e| DjangoRustError::TemplateError(e.to_string()))?;
+            registry
+                .get(name)
+                .and_then(|entry| entry.validator.as_ref())
+                .map(|method| method.clone_ref(py))
+        } else {
+            let registry = TAG_HANDLERS
+                .read()
+                .map_err(|e| DjangoRustError::TemplateError(e.to_string()))?;
+            registry
+                .get(name)
+                .and_then(|entry| entry.validator.as_ref())
+                .map(|method| method.clone_ref(py))
+        })
+    })?;
     if let Some(validator) = validator {
         Python::attach(|py| validator.call1(py, (args.to_vec(),)))
             .map_err(DjangoRustError::PythonException)?;
@@ -538,15 +554,16 @@ pub fn validate_tag_arguments(name: &str, args: &[String], block: bool) -> djust
 
 /// Run the optional second stage only after the block body parsed successfully.
 pub fn validate_block_after_body(name: &str, args: &[String]) -> djust_core::Result<()> {
-    let validator = {
+    // Attach BEFORE taking the read lock (see "Lock order" above).
+    let validator = Python::attach(|py| -> djust_core::Result<Option<Py<PyAny>>> {
         let registry = BLOCK_TAG_HANDLERS
             .read()
             .map_err(|e| DjangoRustError::TemplateError(e.to_string()))?;
-        registry
+        Ok(registry
             .get(name)
             .and_then(|entry| entry.body_validator.as_ref())
-            .map(|method| Python::attach(|py| method.clone_ref(py)))
-    };
+            .map(|method| method.clone_ref(py)))
+    })?;
     if let Some(validator) = validator {
         Python::attach(|py| validator.call1(py, (args.to_vec(),)))
             .map_err(DjangoRustError::PythonException)?;
@@ -910,7 +927,8 @@ pub fn call_block_handler_with_py_sidecar(
     raw_py_objects: Option<&HashMap<String, pyo3::Py<PyAny>>>,
     autoescape: bool,
 ) -> Result<String, DjangoRustError> {
-    let handler = {
+    // Attach BEFORE taking the read lock (see "Lock order" above).
+    let handler = Python::attach(|py| -> Result<_, DjangoRustError> {
         let registry = BLOCK_TAG_HANDLERS
             .read()
             .map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
@@ -919,8 +937,8 @@ pub fn call_block_handler_with_py_sidecar(
             DjangoRustError::TemplateError(format!("No block handler registered for tag: {name}"))
         })?;
 
-        Python::attach(|py| entry.handler.clone_ref(py))
-    };
+        Ok(entry.handler.clone_ref(py))
+    })?;
 
     Python::attach(|py| {
         let py_args = build_py_args(py, args).map_err(DjangoRustError::TemplateError)?;
@@ -1041,7 +1059,8 @@ pub fn call_handler_with_py_sidecar(
     autoescape: bool,
 ) -> Result<String, DjangoRustError> {
     // Get handler from registry
-    let handler = {
+    // Attach BEFORE taking the read lock (see "Lock order" above).
+    let handler = Python::attach(|py| -> Result<_, DjangoRustError> {
         let registry = TAG_HANDLERS
             .read()
             .map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
@@ -1051,8 +1070,8 @@ pub fn call_handler_with_py_sidecar(
             DjangoRustError::TemplateError(format!("No handler registered for tag: {name}"))
         })?;
 
-        Python::attach(|py| entry.handler.clone_ref(py))
-    };
+        Ok(entry.handler.clone_ref(py))
+    })?;
 
     // Acquire GIL and call Python handler
     Python::attach(|py| {
@@ -1367,13 +1386,16 @@ pub fn call_block_handler_after_body(
 /// `call_block_handler_with_bindings` additionally reads `wants_autoescape`
 /// under the same lock, so they are not all one helper today.
 fn clone_block_handler(name: &str) -> Result<Py<PyAny>, DjangoRustError> {
-    let registry = BLOCK_TAG_HANDLERS
-        .read()
-        .map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
-    let entry = registry.get(name).ok_or_else(|| {
-        DjangoRustError::TemplateError(format!("No block handler registered for tag: {name}"))
-    })?;
-    Ok(Python::attach(|py| entry.handler.clone_ref(py)))
+    // Attach BEFORE taking the read lock (see "Lock order" above).
+    Python::attach(|py| {
+        let registry = BLOCK_TAG_HANDLERS
+            .read()
+            .map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
+        let entry = registry.get(name).ok_or_else(|| {
+            DjangoRustError::TemplateError(format!("No block handler registered for tag: {name}"))
+        })?;
+        Ok(entry.handler.clone_ref(py))
+    })
 }
 
 // ============================================================================
@@ -1632,18 +1654,16 @@ pub fn call_handler_with_bindings(
     safe_paths: &[String],
     autoescape: bool,
 ) -> Result<(String, Vec<HandlerBinding>), DjangoRustError> {
-    let (handler, wants) = {
+    // Attach BEFORE taking the read lock (see "Lock order" above).
+    let (handler, wants) = Python::attach(|py| -> Result<_, DjangoRustError> {
         let registry = TAG_HANDLERS
             .read()
             .map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
         let entry = registry.get(name).ok_or_else(|| {
             DjangoRustError::TemplateError(format!("No handler registered for tag: {name}"))
         })?;
-        (
-            Python::attach(|py| entry.handler.clone_ref(py)),
-            entry.wants_autoescape,
-        )
-    };
+        Ok((entry.handler.clone_ref(py), entry.wants_autoescape))
+    })?;
     Python::attach(|py| {
         let py_args = build_py_args(py, args).map_err(DjangoRustError::TemplateError)?;
         let py_context = match source {
@@ -1676,18 +1696,16 @@ pub fn call_block_handler_with_bindings(
     safe_paths: &[String],
     autoescape: bool,
 ) -> Result<(String, Vec<HandlerBinding>), DjangoRustError> {
-    let (handler, wants) = {
+    // Attach BEFORE taking the read lock (see "Lock order" above).
+    let (handler, wants) = Python::attach(|py| -> Result<_, DjangoRustError> {
         let registry = BLOCK_TAG_HANDLERS
             .read()
             .map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
         let entry = registry.get(name).ok_or_else(|| {
             DjangoRustError::TemplateError(format!("No block handler registered for tag: {name}"))
         })?;
-        (
-            Python::attach(|py| entry.handler.clone_ref(py)),
-            entry.wants_autoescape,
-        )
-    };
+        Ok((entry.handler.clone_ref(py), entry.wants_autoescape))
+    })?;
     Python::attach(|py| {
         let py_args = build_py_args(py, args).map_err(DjangoRustError::TemplateError)?;
         let py_content = mark_safe_str(py, content).map_err(|e| {
@@ -1764,14 +1782,24 @@ pub fn has_library_loader() -> PyResult<bool> {
 /// loader runs, so its own `register_*` write-locks cannot deadlock against
 /// the parser's read-locks.
 pub fn call_library_loader(args: &[String]) -> Result<(), DjangoRustError> {
-    let loader = {
+    // No loader installed (Rust-only callers, tests): nothing to attach for.
+    // The guard is dropped before any attach.
+    if LIBRARY_LOADER
+        .read()
+        .map(|slot| slot.is_none())
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
+    // Attach BEFORE taking the read lock (see "Lock order" above).
+    let loader = Python::attach(|py| -> Result<Option<Py<PyAny>>, DjangoRustError> {
         let slot = LIBRARY_LOADER
             .read()
             .map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
-        match slot.as_ref() {
-            None => return Ok(()),
-            Some(callable) => Python::attach(|py| callable.clone_ref(py)),
-        }
+        Ok(slot.as_ref().map(|callable| callable.clone_ref(py)))
+    })?;
+    let Some(loader) = loader else {
+        return Ok(());
     };
     Python::attach(|py| {
         let py_args = pyo3::types::PyList::new(py, args.iter().map(|s| s.as_str()))
@@ -1837,15 +1865,16 @@ pub fn call_assign_handler_with_py_sidecar(
     context: &HashMap<String, djust_core::Value>,
     raw_py_objects: Option<&HashMap<String, pyo3::Py<PyAny>>>,
 ) -> Result<HashMap<String, djust_core::Value>, DjangoRustError> {
-    let handler = {
+    // Attach BEFORE taking the read lock (see "Lock order" above).
+    let handler = Python::attach(|py| -> Result<_, DjangoRustError> {
         let registry = ASSIGN_TAG_HANDLERS
             .read()
             .map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
         let entry = registry.get(name).ok_or_else(|| {
             DjangoRustError::TemplateError(format!("No assign handler registered for tag: {name}"))
         })?;
-        Python::attach(|py| entry.handler.clone_ref(py))
-    };
+        Ok(entry.handler.clone_ref(py))
+    })?;
 
     Python::attach(|py| {
         let py_args = build_py_args(py, args).map_err(DjangoRustError::TemplateError)?;
@@ -2059,7 +2088,8 @@ pub fn call_raw_block_handler_with_bindings(
     // node's own `Context` sees the policy — is NOT done here; see #2619.
     autoescape: bool,
 ) -> Result<(String, Vec<HandlerBinding>), DjangoRustError> {
-    let (handler, wants_autoescape) = {
+    // Attach BEFORE taking the read lock (see "Lock order" above).
+    let (handler, wants_autoescape) = Python::attach(|py| -> Result<_, DjangoRustError> {
         let registry = RAW_BLOCK_HANDLERS
             .read()
             .map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
@@ -2068,11 +2098,8 @@ pub fn call_raw_block_handler_with_bindings(
                 "No raw-block handler registered for tag: {name}"
             ))
         })?;
-        (
-            Python::attach(|py| entry.handler.clone_ref(py)),
-            entry.wants_autoescape,
-        )
-    };
+        Ok((entry.handler.clone_ref(py), entry.wants_autoescape))
+    })?;
     Python::attach(|py| {
         let py_args = build_py_args(py, args).map_err(DjangoRustError::TemplateError)?;
         let py_body = pyo3::types::PyString::new(py, body);

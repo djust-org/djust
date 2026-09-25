@@ -1,0 +1,1 @@
+- **The Discord link in the docs works again.** `discord.gg/djust` returned "Unknown Invite"; `CONTRIBUTING.md`, the docs home page and the state-management guides now link to the permanent invite `https://discord.gg/7sPKf3wtp9`.

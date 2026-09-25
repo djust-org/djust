@@ -407,6 +407,8 @@ issue or be explicitly closed with a reason.
 | 365 | dj-root vs dj-view root precedence differs between Python (dj-root first) and the Rust VDOM (first of either) | PR #3053 | #3031 | Open | pattern: parallel-path-drift. 1.3. Aligning to Python moved a dj-view-only parent's VDOM root into an embedded dj-root child (reverted in review); needs a rule that skips embedded/sticky child roots |
 | 366 | Root locators diverge from the HTML tokenizer on malformed markup (unquoted value with a quote, bogus comments, unterminated tags, quoted `</tag>` in the close walk) | PR #3053 | #3054 | Open | pattern: parallel-path-drift. Pre-existing; needs markup rendered with the `safe` filter or `mark_safe` to reach |
 | 367 | The `v1.3.0rc1` tag is not reachable from main (squash-merged release), so two changelog-pin tests fail in any local checkout with the tag, and the pin cannot see a deleted `[1.3.0rc1]` section | PR #3070 | #3072 | Open | Release process or gate rule: tag the main squash commit / merge the release branch back, or count a tag whose section exists on the branch. CI skips the tests (no tags) |
+| 368 | Registry `register_*`/`unregister_*` drop the replaced `Py` under the write lock; an attached reader blocked on a registry `RwLock` cannot join a 3.14t stop-the-world | PR #3087 | #3088 | Open | Pre-existing; found by the #3074 GIL-release review. Drop after unlocking; take locks detached or copy-on-write |
+| 369 | `PerformanceTracker`'s current tracker is a thread-local on the shared event-loop thread, so concurrent sessions' event turns overwrite each other's (debug timing only) | PR #3074 2/7 audit | #3089 | Open | Pre-existing, unchanged by the worker pool; make it a ContextVar |
 
 ## Retro backfill — 14 un-retro'd drain buckets (v1.1.0-9 … v1.2.0-5)
 
@@ -827,6 +829,222 @@ None in this bucket.
 ### Open Items
 - [ ] The `v1.3.0rc1` tag is not reachable from main. Tracked in Action Tracker #367 (GitHub #3072).
 - [ ] Backport #3061 to 1.2.2.
+
+## v1.3.0-2 — thread race + memory growth (PR #3083, 1.2 backport #3084)
+
+**Date**: 2026-09-25
+**Scope**:
+- #3079: `presence.tenant_scoped_presence_key` read `TenantMixin` off a partially initialised `djust.tenants.mixin` while another thread was importing it.
+- #3080: process RSS grew under WebSocket load and was never released. The root cause is that `InMemoryStateBackend` never applied `SESSION_TTL` at runtime.
+- `performance.MemoryTracker` retried `import psutil` on every event.
+
+Main PR #3083 was squash-merged as `f2bfd6c17`. The backport to `1.2` (for 1.2.2, not yet cut) is PR #3084, squash-merged as `fe26163d1`.
+
+**Tests at close**:
+- 3 cases in `tests/unit/test_presence_tenant_import_race_3079.py`. They use a slow-import shim, and fail without the fix with the exact `AttributeError`.
+- 9 in `python/tests/test_memory_state_backend_ttl_3080.py`. 5 fail without the fix.
+- 4 in `python/tests/test_memory_tracker_psutil_probe.py`. All 4 fail without the fix.
+- The pre-push selected pytest passed on every push.
+- PR CI: #3083 had 22 checks pass and 0 fail; #3084 had 21 pass and 0 fail.
+
+Retro: https://github.com/djust-org/djust/pull/3083#issuecomment-5834380455
+Investigation: https://github.com/djust-org/djust/issues/3080#issuecomment-5834086079
+
+### What We Learned
+
+**1. For an RSS report, measure the live heap separately from RSS before hunting a leak.** In a Python/Rust process, `tracemalloc` sees neither the Rust heap, where `RustLiveView` state lives, nor allocator retention. `malloc_zone_statistics` plus the backend's entry count was the decisive measurement:
+- about 270 KB of live heap per session was held forever;
+- all of it was released by `delete_all()`;
+- RSS stayed flat afterwards, because the allocator keeps freed pages.
+
+The 0.9 MB/s steady climb reported from #3074 did not reproduce on 3.12 stock. The issue comment says so, rather than claiming the fix covers it.
+
+**2. A fix that reads a setting at construction must accept every type the setting arrives as.** Code Review caught the case (`fix-reproduces-own-bug`): moving the TTL comparison into `__init__` made a string `SESSION_TTL` from the environment fail every mount. The fix is `_coerce_ttl`, with a parametrised type test.
+
+**3. A PR body's non-breaking claims need a caller trace, just like docs.** The first PR body said an expired entry makes `mount()` run again. In fact `mount()` is skipped based on the Django-session restore (`mounted_from_restore`); the backend entry is only the compiled `RustLiveView` and its diff baseline. This is the second `unverified-claim` in a row, after #3070. That points at the Code Review checklist, not more retro text.
+
+### Insights
+- A TTL that is documented but never enforced is a state-lifetime gap, and no test exercised it. Any backend that has a `cleanup_*()` method should be asked who calls it at runtime.
+- **Before a memory profile counts, check the load average and the client success rate.** The first `tracemalloc` run was made at load 47, and 124 of 128 clients failed.
+
+### Review Stats
+
+| Metric | #3083 |
+|---|---|
+| Tests added | 16 Python (3 files) |
+| 🔴 Findings | 0 |
+| 🟡 Findings | 1 (a non-int `SESSION_TTL` raised `TypeError` at construction), fixed before merge |
+| 🟢 Findings | 3 (the docs sweep interval and the meaning of "written"; the changelog count; the plan path), all fixed. One Re-Review nit (`float("inf")` raises `OverflowError`) is not fixed |
+| CI failures | 0 |
+| Findings by pattern class | `fix-reproduces-own-bug` ×1, `unverified-claim` ×1 (the PR body) |
+
+### Process Improvements Applied
+None in this bucket.
+
+### Open Items
+- [ ] Not traced: with the fix, live malloc at the cycle low points still creeps by about 1 MB per four cycles (noted on #3080).
+- [ ] 1.2.2 backport candidate still on main: #3070 (the #3061 half). Its #3068 half is ADR-039 accounts and applies to 1.3 only.
+
+## v1.3.0-3 — multi-core rendering (#3074)
+
+**Scope**: The #3074 experiment productionised as seven PRs, one per ROADMAP row, all merged on 2026-09-25: #3087 (GIL release), #3091 (worker pool), #3096 (scoped push, closes #3004), #3100 (event-loop offload), #3101 (`djust.layers.InMemoryChannelLayer`), #3102 (cp314t wheels and the 3.14t CI job), and #3105 (guide).
+
+### Bucket summary
+
+**Outcome.** Measured on the snake load test, one process, a shared 12-core Mac, interleaved rounds:
+
+| Setup | Load it carries |
+|---|---|
+| Stock 1.3 on CPython 3.12 | saturates at about 32 clients on one core |
+| The opt-in settings on 3.12 (`worker_threads`, scoped push) | about 64 clients |
+| Free-threaded 3.14t with the opt-in settings | 192–256 clients at full frame rate (6.3–7.3 fps) on 4–6.6 cores; at 256 clients the 6.6 cores need `djust.layers` (5.0 cores and a near-saturated loop without it) |
+
+The 3.14t result is about 6–8× stock 3.12 in one process. The defaults are unchanged:
+- every behaviour change is opt-in (`worker_threads`, `push_scope` / `scope=`, `djust.layers`);
+- the one unconditional change, the GIL release in `render_with_diff`, changes nothing but concurrency.
+
+**What the bucket learned**
+1. **"Opt-in or proven safe" needed both halves.**
+   - Opt-in: every new path is gated on `worker_threads`, and the offload is gated on the session being bound to a pool slot.
+   - Proven safe: the full suite was run with the pool forced on (twice, not committed). A read-only audit swept for thread-affine state, and turned up six real races that were fixed first.
+2. **Test the GIL claim against its baseline.** A tautological concurrency test reached review in PR 1. After that, every GIL or race test was run against the old code or extension before it was trusted.
+3. **Per-turn sync points must enumerate every turn type** (PR 3: tick and `handle_info` were missing). **Re-implemented turns must mirror every `try`/`finally` and early return** (PR 4). Both are `parallel-path-drift`.
+4. **Measurement tables come from all the rows, by script**, and every doc sentence citing the experiment quotes the row behind it. The `unverified-claim` findings in PRs 2, 4 and 5 were all about numbers or links written by hand.
+5. **Process: pushes came from private `--no-tags` clones**, to match CI's tag-less checkout (#3072). The first one lacked `core.hooksPath` and pushed with no hook run. That was disclosed on PR 1 and fixed in the clone script.
+
+**Open items**
+- #3072: the `v1.3.0rc1` tag is not reachable from main.
+- #3088: registry writers drop replaced `Py` handlers under the write lock, and 3.14t stop-the-world is blocked by readers waiting on a lock.
+- #3089: the `PerformanceTracker` thread-local lives on the event loop.
+- #3092: a signed-snapshot seconds-boundary flake.
+- #3095: presence broadcasts fan out to every room.
+- #3099: the dev watcher auto-starts under pytest. Two fixtures are fixed; the watcher is not.
+- Upstream Channels issue draft: https://github.com/djust-org/djust/issues/3074#issuecomment-5838187207 (not filed).
+- Not reproduced: one "Child state unavailable" failure in `test_exposure_child_reconnect` in a forced-pool full run. The same error appeared in stock tests at load average 132, so it looks load-sensitive rather than pool-related.
+
+### PR 1/7 — release the GIL in `render_with_diff` (PR #3087)
+
+**Date**: 2026-09-25. Squash-merged as `ec33346c0`. Retro: https://github.com/djust-org/djust/pull/3087 (retrospective comment).
+
+**Tests at close**:
+- 3 Python cases in `python/djust/tests/test_render_with_diff_gil_3074.py`. Against main's extension, the spinner test fails 3 times out of 3.
+- 2 Rust tests in `render_with_diff_detaches_3074`. The waiting-thread test fails when the one-line detach is reverted.
+- The registry churn case hangs 3 times out of 3 when built with the old lock order.
+- CI: 22 checks passed, 0 failed.
+
+**What we learned**
+1. **Releasing the GIL around a body that re-attaches creates a lock-order inversion wherever a Rust lock is held across `Python::attach`.**
+   - Eleven registry lookups took a read guard and then attached to `clone_ref` a handler. Detached, that thread holds the read lock while it waits for the GIL.
+   - Meanwhile `register_*` holds the GIL while it waits for the write lock.
+   - The rule is now "attach, then lock" (documented on `TAG_HANDLERS`). Any future detach should start with a grep for guards that live across an attach.
+2. **A concurrency test on a GIL build must be run against the baseline extension, not just the new one.** The spinner test passed without the detach, because CPython hands the GIL to a waiting thread right after a C call returns. Review caught it. The fix was a 30 s switch interval plus voluntary `sleep(0)` yields. This is the `tautological-test` class.
+3. **Moving a Rust function body breaks the Python source-pin tests that name it** (`test_panic_boundary_2343`, `test_render_env_per_view_2741`). Grep the tests for the function name before moving a body.
+
+**Review stats**: 0 🔴, 2 🟡 (the tautological spinner test; the changelog left out the same-instance "Already borrowed" change), 4 🟢. All were fixed, except the pre-existing registry and stop-the-world items, filed as #3088.
+
+**Process note**: The pre-push hook fails the two #3072 tests in any checkout that has the `v1.3.0rc1` tag. This batch pushes from private `--no-tags` clones, which match CI. The first such push ran no hook, because the clone lacked the repo-local `core.hooksPath`. That was disclosed on the PR, and the full pre-push stage was then run by hand.
+
+### PR 2/7 — opt-in pinned session worker pool (PR #3091)
+
+**Date**: 2026-09-25. Squash-merged as `1889b0d71`. Retro: https://github.com/djust-org/djust/pull/3091 (retrospective comment).
+
+**Tests at close**:
+- `python/djust/tests/test_worker_pool_3074.py`: 11 functions, 19 cases. These are real `WebsocketCommunicator` round trips covering overlap, pinning, isolation, ordering, the default path being unchanged, release (including on a crash), and an outer context.
+- `test_worker_pool_thread_safety_3074.py`: 7 cases. With a 1 µs switch interval, 3 or 4 of them fail on the old code on 3.12.
+- The full Python suite with the pool forced on (not committed) gave 33,845 passed.
+- CI: 22 checks passed. One flake, #3092, passed on re-run.
+
+**What we learned**
+1. **asgiref's `SyncToAsync.thread_sensitive_context` is the right hook for per-session threads.**
+   - Django's ASGI handler already uses it per HTTP request.
+   - Setting it in the consumer's `__call__` moves every thread-sensitive hop the session makes, including third-party ones, without replacing `sync_to_async` anywhere.
+2. **Thread-affinity audits need their negative claims checked.** The audit agent said nothing closes stale DB connections on the WebSocket path, but Channels' `AsyncConsumer.dispatch` does it for every message.
+3. **Doc sentences that cite an experiment must quote the row they come from.** Two review rounds were spent on claims that paraphrased #3074's conclusions past its data (`unverified-claim`).
+
+**Review stats**: 0 🔴. There were 3 🟡: instance `_depth` access, over-broad performance claims, and head-of-line blocking not documented. There were 6 🟢. Re-review then found 1 more 🟡: the knee attribution. All were fixed. Filed: #3089 (`PerformanceTracker` thread-local on the loop) and #3092 (flake).
+
+### PR 3/7 — scoped server push (PR #3096, closes #3004)
+
+**Date**: 2026-09-25. Squash-merged as `8b824d4f9`. Retro: https://github.com/djust-org/djust/pull/3096 (retrospective comment).
+
+**Tests at close**:
+- `python/djust/tests/test_scoped_push_3004.py`: 15 tests, 19 cases.
+  - End to end over real consumers and the in-memory layer: scoped vs unscoped delivery, and moving between scopes from a handler, a push hook, a tick or `handle_info`.
+  - Leaving on disconnect and on `live_redirect`, a retried leave, and warning once on an invalid value.
+- CI: 22 checks passed, 0 failed.
+
+**What we learned**
+1. **Per-turn state sync must cover every turn entry point.** The plan copied `listen()`'s three sync points (mount, event and push) and missed tick and `handle_info`. Review found it. The list to check: event, push, tick, `db_notify`, async completion, mount, restore and redirect. This is `parallel-path-drift` (#1646).
+2. **Anything that now runs per tick needs a log-rate check.** Syncing scopes on ticks turned one invalid `push_scope` into about 20 warnings a second per session. The fix is to warn once per consumer until the value is valid again.
+3. **Sanitised names can merge identities.** Group names are a digest of the view path and the scope, because `re.sub` sanitising would have put rooms `"room 1"` and `"room_1"` in one group.
+
+**Review stats**: 0 🔴, 4 🟡 (generator scopes, stale-view sync, tick/`handle_info` not syncing, two untested paths) and 4 🟢, all fixed. The re-review raised 3 follow-ups (the log flood, missing regression tests, stale strings), all fixed. Filed: #3095 (the presence broadcast fans out the same way).
+
+### PR 4/7 — event-loop offload with the worker pool on (PR #3100)
+
+**Date**: 2026-09-25. Squash-merged as `4de06d6a8`. Retro: https://github.com/djust-org/djust/pull/3100 (retrospective comment).
+
+**Tests at close**:
+- `python/djust/tests/test_event_loop_offload_3074.py`: 6 tests, 11 cases, each run with the pool on and off, over real WebSocket sessions. It covers where the snapshot runs, the one-hop push turn, the skipped Channels hop, version order, spliced vs stock frame equality, a push hook moving `push_scope`, and a render error still running the queued `start_async` work.
+- The #1817 armed-version pin is now 17.
+- The full suite with the pool forced on (not committed) gave 33,877 passed and 1 failed, `test_exposure_child_reconnect`. That failure did not reproduce in 15 targeted runs or in 5 runs of 1,602 tests each.
+- CI: green after a re-run for an unrelated flake (#3099 class).
+
+**Measured** (snake, one process, 4 interleaved rounds on 3.14t):
+
+| Clients | PRs 1–3 | With this PR |
+|---|---|---|
+| 192 | 3.8–6.7 fps | 7.05–7.28 fps |
+| 256 | 3.7–4.2 fps | 6.3–6.5 fps, up to 5.1 cores |
+
+On 3.12 frames did not change; the GIL caps the process.
+
+**What we learned**
+1. **Re-implementing a turn means walking the original's `try`/`finally` and every early return.** Two error-path divergences reached review: a render error dropped the queued work, and an `await` could leak the lock. A test for each error path belongs in the first commit.
+2. **Build PR measurement tables from every row, with a script.** A hand-picked table left out a run that narrowed the headline.
+
+**Review stats**: 0 🔴, 2 🟡 (the render-error dispatch and the lock leak), 3 🟢, and 1 re-review nit (scope sync before a render error). All were fixed. Filed: #3099 (the hot-reload frame leak in tests).
+
+### PR 5/7 — `djust.layers.InMemoryChannelLayer` (PR #3101)
+
+**Date**: 2026-09-25. Squash-merged as `c164a0b24`. Retro: https://github.com/djust-org/djust/pull/3101 (retrospective comment). The upstream draft for django/channels is at https://github.com/djust-org/djust/issues/3074#issuecomment-5838187207.
+
+**Tests at close**:
+- 8 cases in `python/djust/tests/test_inmemory_layer_3074.py`: one sweep per interval against 1,020 on the stock layer, parity when the interval is 0, expiry still applied, flush, and config selection.
+- CI: 22 checks passed, 0 failed.
+
+**Measured**:
+- Micro-benchmark: 2×, 3×, 4× and 8× less time per broadcast round at 64, 128, 224 and 512 sessions.
+- Snake load test on 3.14t: the event-loop thread drops from 0.73–0.77 to 0.60–0.62 at 192 clients. At 256 clients the process gets 6.7–6.9 fps on 6.0–6.6 cores, against 6.3–6.5 fps without the layer.
+
+**What we learned**
+1. **"It exists" claims need a link when they are written** (`unverified-claim`). The PR body cited a draft that existed only in a local file.
+2. **A flake that blocks pushes three times is a bug to fix, not to retry.** Two template-writing fixtures now use `tmp_path`. The watcher still starts under pytest, and that stays on #3099.
+
+**Review stats**: 0 🔴, 1 🟡 (the unlinked upstream draft) and 4 🟢 (delivery semantics in the docs, clock-patching tests, a deny test that does not need its template, rounds wording). All were addressed or explained.
+
+### PR 6/7 — cp314t wheels and the 3.14t CI job (PR #3102)
+
+**Date**: 2026-09-25. Squash-merged as `ac3484082`. Retro: https://github.com/djust-org/djust/pull/3102 (retrospective comment).
+
+**Tests at close**:
+- `python/djust/tests/test_free_threaded_contract_3074.py`: 5 tests. They cover `gil_used = false`, orjson staying out of the core dependencies, djust working without orjson, the 3.14t release matrix, and the GIL being off on free-threaded builds.
+- On GitHub's 3.14t runner, the job printed "GIL off after importing djust" with no override, then ran the multi-core subset: 93 passed, 1 skipped.
+- CI: 23 checks passed.
+
+**What we learned**
+1. **A new release-matrix dimension needs a failure policy.** The release workflow cannot be dry-run before a tag, and some 3.14t dependencies build from source. The 3.14t cells are therefore non-fatal until they have soaked. Otherwise one failed cell would block every wheel.
+2. **Test the GIL-off claim without the override.** `PYTHON_GIL=0` makes any GIL assertion pass trivially; only an import check without it tests `gil_used = false`.
+
+**Review stats**: 0 🔴, 2 🟡 (a 3.14t cell could block the release; the PyPI size cap) and 5 🟢, all addressed. The `release-workflow-reviewed` label was applied with a risk summary.
+
+### PR 7/7 — guide: scaling a djust process across cores (PR #3105)
+
+**Date**: 2026-09-25. Squash-merged as `0a81f7fac`. Retro: https://github.com/djust-org/djust/pull/3105 (retrospective comment).
+
+The new guide is `docs/website/guides/scaling-across-cores.md`. A truth review checked every API name, key, default and number, and every cell of its measured table, against the code, `results.jsonl` and PyPI. 1 🟡 (the summary overgeneralised the gated offload) and 3 🟢, all fixed.
+
+**Lesson:** a summary line about a gated optimisation must carry its gates.
 
 ## v1.2.1-7 — state and rendering batch: v1.2.1-7, -8 and -9 (PR #3042)
 

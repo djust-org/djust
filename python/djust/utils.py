@@ -3,6 +3,7 @@ Utility functions for djust.
 """
 
 import logging
+import threading
 from functools import lru_cache
 from typing import Any, Callable, Optional
 
@@ -158,6 +159,10 @@ class BackendRegistry:
         self._top_level_aliases = top_level_aliases or {}
         self._warn_on_default = warn_on_default
         self._backend: Optional[Any] = None
+        # Serialises first-use creation (#3074): two threads that both saw
+        # ``_backend is None`` would each build a backend, and whatever was
+        # stored in the one that lost would be dropped with it.
+        self._init_lock = threading.RLock()
 
     # URL schemes that should auto-resolve to ``backend_type="redis"``
     # when the user sets a top-level URL-shaped value via
@@ -220,10 +225,19 @@ class BackendRegistry:
         return merged
 
     def get(self) -> Any:
-        """Return the cached backend, creating it on first call."""
-        if self._backend is not None:
-            return self._backend
+        """Return the cached backend, creating it on first call.
 
+        Thread-safe: the first calls from several threads build ONE backend.
+        """
+        backend = self._backend
+        if backend is not None:
+            return backend
+        with self._init_lock:
+            if self._backend is not None:
+                return self._backend
+            return self._create()
+
+    def _create(self) -> Any:
         from .config import get_djust_config
 
         cfg = get_djust_config()

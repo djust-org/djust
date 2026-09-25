@@ -29,6 +29,19 @@ def _discard_baseline(view: Any) -> None:
     view._force_full_html = True
 
 
+async def render_background(view: Any, runtime: Any) -> BackgroundRender | None:
+    """Capture HTML, fallback content and contracts in one synchronous operation.
+
+    None is a redacted contract-discovery failure, not an application callback
+    failure. The caller must not deliver this render or invoke an error callback.
+    """
+    try:
+        return await settle_render_operation(sync_to_async(render_background_sync)(view, runtime))
+    except asyncio.CancelledError:
+        _discard_baseline(view)
+        raise
+
+
 def render_contract_fields(view: Any, runtime: Any) -> dict[str, Any] | None:
     """``_send_update`` fields carrying the just-rendered tree's public contracts.
 
@@ -73,32 +86,25 @@ def direct_render_contract_fields(view: Any, runtime: Any) -> dict[str, Any] | N
     return fields
 
 
-async def render_background(view: Any, runtime: Any) -> BackgroundRender | None:
-    """Capture HTML, fallback content and contracts in one synchronous operation.
+def render_background_sync(view: Any, runtime: Any) -> BackgroundRender | None:
+    """The synchronous body of :func:`render_background`.
 
-    None is a redacted contract-discovery failure, not an application callback
-    failure. The caller must not deliver this render or invoke an error callback.
+    Runs on the session's worker thread. The offloaded server-push turn
+    (#3074) calls it inside the same hop as the push hooks; the caller then
+    owns the ``settle_render_operation`` + ``_discard_baseline`` handling.
     """
-
-    def render() -> BackgroundRender | None:
-        if hasattr(view, "_sync_state_to_rust"):
-            view._sync_state_to_rust()
-        html, patches, _version = view.render_with_diff()
-        fields = render_contract_fields(view, runtime)
-        if fields is None:
-            _discard_baseline(view)
-            return None
-        content = None
-        if patches is None:
-            content = view._extract_liveview_content(view._strip_comments_and_whitespace(html))
-        # Consume a forced render once, including async success/error paths.
-        # Failure and cancellation re-arm it when discarding the unseen baseline.
-        if getattr(view, "_force_full_html", False):
-            view._force_full_html = False
-        return BackgroundRender(html, patches, content, fields)
-
-    try:
-        return await settle_render_operation(sync_to_async(render)())
-    except asyncio.CancelledError:
+    if hasattr(view, "_sync_state_to_rust"):
+        view._sync_state_to_rust()
+    html, patches, _version = view.render_with_diff()
+    fields = render_contract_fields(view, runtime)
+    if fields is None:  # invalid metadata must never accompany a DOM frame
         _discard_baseline(view)
-        raise
+        return None
+    content = None
+    if patches is None:
+        content = view._extract_liveview_content(view._strip_comments_and_whitespace(html))
+    # Consume a forced render once, including async success/error paths.
+    # Failure and cancellation re-arm it when discarding the unseen baseline.
+    if getattr(view, "_force_full_html", False):
+        view._force_full_html = False
+    return BackgroundRender(html, patches, content, fields)

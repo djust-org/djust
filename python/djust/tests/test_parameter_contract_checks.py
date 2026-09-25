@@ -395,13 +395,13 @@ def test_project_strict_policy_reports_inheriting_handlers_but_not_legacy_overri
 
 def test_invalid_project_policy_is_one_configuration_error(fixture_module):
     config.set("event_parameter_policy", "Strict")
-    c021 = [m for m in check_configuration(None) if m.id == "djust.C021"]
-    assert [m.msg for m in c021] == [
+    c022 = [m for m in check_configuration(None) if m.id == "djust.C022"]
+    assert [m.msg for m in c022] == [
         "LIVEVIEW_CONFIG['event_parameter_policy'] is 'Strict'; it must be 'legacy' or 'strict'."
     ]
-    assert c021[0].level == 40
+    assert c022[0].level == 40
     found = _messages(fixture_module)
-    # Handlers inheriting the invalid value are covered by C021, not repeated;
+    # Handlers inheriting the invalid value are covered by C022, not repeated;
     # explicitly strict declarations are still checked.
     assert _label("Invalid", "inherits_project_policy") not in found
     assert found[_label("Invalid", "unresolved")] == [EXPECTED_INVALID["unresolved"]]
@@ -412,7 +412,7 @@ def test_valid_project_policy_has_no_configuration_error(policy):
     old = config.get("event_parameter_policy", "legacy")
     try:
         config.set("event_parameter_policy", policy)
-        assert not [m for m in check_configuration(None) if m.id == "djust.C021"]
+        assert not [m for m in check_configuration(None) if m.id == "djust.C022"]
     finally:
         config.set("event_parameter_policy", old)
 

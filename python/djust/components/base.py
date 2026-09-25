@@ -8,6 +8,7 @@ reusable, reactive components with automatic performance optimization.
 import html as _html
 import json as _json
 import logging
+import threading
 import re
 import types
 from typing import Callable, Dict, Any, List, Optional, Tuple, Type, cast
@@ -208,6 +209,9 @@ def _declares_name(cls: type) -> bool:
     return cached
 
 
+_COMPONENT_COUNTER_LOCK = threading.Lock()
+
+
 class Component(TemplateMutatorGuard, ABC):
     """
     Base class for stateless presentation components with automatic performance optimization.
@@ -386,9 +390,14 @@ class Component(TemplateMutatorGuard, ABC):
         if _component_key is not None:
             self._component_key = _component_key
         else:
-            # Auto-generate key based on component type + counter
-            Component._component_counter += 1
-            self._component_key = f"{self.__class__.__name__}_{Component._component_counter}"
+            # Auto-generate key based on component type + counter. Locked
+            # (#3074): components are built in sync code, which can run on
+            # several threads at once, and an unlocked `+=` then re-read
+            # could hand two components the same key.
+            with _COMPONENT_COUNTER_LOCK:
+                Component._component_counter += 1
+                counter = Component._component_counter
+            self._component_key = f"{self.__class__.__name__}_{counter}"
 
         # Try to create Rust instance if implementation exists
         self._create_rust_instance(**kwargs)

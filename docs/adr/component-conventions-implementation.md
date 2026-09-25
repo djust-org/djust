@@ -1883,7 +1883,7 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
   predate the cache fix and are not final evidence. Browser acceptance remains open.
   [Registration checks](notes/036-registration-checks.md) now report strict
   declaration problems at startup through the runtime's own resolvers:
-  `djust.C021` (invalid project policy), `djust.V016` (unresolvable or
+  `djust.C022` (invalid project policy), `djust.V016` (unresolvable or
   unsupported annotation, missing annotation, reserved argument name, invalid
   handler policy), `djust.V017` (async strict handler on an actor view) and
   `djust.V018` (`params=` disagreeing with the signature). Contract compilation

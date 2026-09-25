@@ -337,7 +337,9 @@ push_to_view("myapp.views.DashboardView", state={"alert_count": 5})
 push_to_view("myapp.views.DashboardView", handler="handle_refresh", payload={"source": "celery"})
 ```
 
-The handler must start with `handle_` or be decorated with `@event_handler`. See [Server Push](../advanced/server-push.md).
+The handler must start with `handle_` or be decorated with `@event_handler`.
+
+To reach only some sessions (one room of a multi-room view), set `self.push_scope = room` in `mount()` and push with `scope=`: `push_to_view("games.views.RoomView", handler="handle_refresh", scope=room)`. A push without `scope` still reaches every session. See [Server Push](../advanced/server-push.md#scoped-push-one-room-not-every-room).
 
 ---
 

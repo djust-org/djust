@@ -10,10 +10,12 @@ These backends prefix all keys with tenant ID to prevent cross-tenant
 data leakage.
 """
 
+import functools
 import json
 import logging
+import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, TypeVar
 
 from ..backends.base import PresenceBackend
 
@@ -230,6 +232,24 @@ class TenantAwareRedisBackend(TenantAwareBackendMixin, PresenceBackend):
             }
 
 
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+# One lock for the class-level stores below (#3074). Sessions' sync code can
+# run on several threads (``LIVEVIEW_CONFIG["worker_threads"]``, or an HTTP
+# request thread beside the WebSocket one), and join/leave/cleanup are
+# read-modify-write sequences over shared dicts.
+_TENANT_MEMORY_LOCK = threading.RLock()
+
+
+def _tenant_memory_locked(fn: _F) -> _F:
+    @functools.wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        with _TENANT_MEMORY_LOCK:
+            return fn(*args, **kwargs)
+
+    return wrapper  # type: ignore[return-value]
+
+
 class TenantAwareMemoryBackend(TenantAwareBackendMixin, PresenceBackend):
     """
     Tenant-scoped in-memory backend for presence tracking.
@@ -248,6 +268,7 @@ class TenantAwareMemoryBackend(TenantAwareBackendMixin, PresenceBackend):
     _presences: Dict[str, Dict[str, Dict[str, Any]]] = {}
     _heartbeats: Dict[str, Dict[str, float]] = {}
 
+    @_tenant_memory_locked
     def __init__(self, tenant_id: str, timeout: int = PRESENCE_TIMEOUT) -> None:
         super().__init__(tenant_id=tenant_id)
         self._tenant_id = tenant_id
@@ -269,6 +290,7 @@ class TenantAwareMemoryBackend(TenantAwareBackendMixin, PresenceBackend):
             self._presences[self._tenant_id] = {}
         self._presences[self._tenant_id][presence_key] = data
 
+    @_tenant_memory_locked
     def join(self, presence_key: str, user_id: str, meta: Dict[str, Any]) -> Dict[str, Any]:
         """Join presence group."""
         now = time.time()
@@ -291,6 +313,7 @@ class TenantAwareMemoryBackend(TenantAwareBackendMixin, PresenceBackend):
         )
         return record
 
+    @_tenant_memory_locked
     def leave(self, presence_key: str, user_id: str) -> Optional[Dict[str, Any]]:
         """Leave presence group."""
         presences = self._get_tenant_presences(presence_key)
@@ -311,23 +334,27 @@ class TenantAwareMemoryBackend(TenantAwareBackendMixin, PresenceBackend):
             )
         return record
 
+    @_tenant_memory_locked
     def list(self, presence_key: str) -> List[Dict[str, Any]]:
         """List active presences."""
         self.cleanup_stale(presence_key)
         presences = self._get_tenant_presences(presence_key)
         return list(presences.values())
 
+    @_tenant_memory_locked
     def count(self, presence_key: str) -> int:
         """Count active users."""
         self.cleanup_stale(presence_key)
         presences = self._get_tenant_presences(presence_key)
         return len(presences)
 
+    @_tenant_memory_locked
     def heartbeat(self, presence_key: str, user_id: str) -> None:
         """Update heartbeat."""
         heartbeat_key = f"{presence_key}:{user_id}"
         self._heartbeats.setdefault(self._tenant_id, {})[heartbeat_key] = time.time()
 
+    @_tenant_memory_locked
     def cleanup_stale(self, presence_key: str) -> int:
         """Remove stale presences."""
         now = time.time()
@@ -358,6 +385,7 @@ class TenantAwareMemoryBackend(TenantAwareBackendMixin, PresenceBackend):
             )
         return len(stale_users)
 
+    @_tenant_memory_locked
     def health_check(self) -> Dict[str, Any]:
         """Check backend health."""
         return {
@@ -370,12 +398,14 @@ class TenantAwareMemoryBackend(TenantAwareBackendMixin, PresenceBackend):
         }
 
     @classmethod
+    @_tenant_memory_locked
     def clear_tenant(cls, tenant_id: str) -> None:
         """Clear all data for a tenant (useful for testing)."""
         cls._presences.pop(tenant_id, None)
         cls._heartbeats.pop(tenant_id, None)
 
     @classmethod
+    @_tenant_memory_locked
     def clear_all(cls) -> None:
         """Clear all tenant data (useful for testing)."""
         cls._presences.clear()
@@ -414,9 +444,18 @@ class TenantPresenceManager:
         Returns:
             Tenant-scoped PresenceBackend instance
         """
-        if tenant_id in cls._instances:
-            return cls._instances[tenant_id]
+        instance = cls._instances.get(tenant_id)
+        if instance is not None:
+            return instance
+        with _TENANT_MEMORY_LOCK:
+            instance = cls._instances.get(tenant_id)
+            if instance is not None:
+                return instance
+            return cls._create_for_tenant(tenant_id)
 
+    @classmethod
+    def _create_for_tenant(cls, tenant_id: str) -> PresenceBackend:
+        """Build and cache the tenant's backend; the caller holds the lock."""
         # Get backend configuration
         from ..config import get_djust_config
 

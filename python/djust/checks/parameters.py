@@ -6,7 +6,7 @@ on the first event. Each check calls the runtime's own resolvers
 same bound shape dispatch uses, so the check and the runtime share one cached
 contract and cannot disagree. Legacy-policy handlers are never reported:
 legacy is the default and its behavior is unchanged. The project-level policy
-value is ``djust.C021`` in ``configuration.py``. V016 also covers ADR-034
+value is ``djust.C022`` in ``configuration.py``. V016 also covers ADR-034
 output-subscription callbacks, whose payload is bound by the same strict
 contract with the source component as trusted framework context. Handlers
 are found by ``_parameter_metadata.declared_handlers``, the discovery dispatch
@@ -106,7 +106,7 @@ def _handler_messages(
             )
         return messages
     if own_policy is None and not project_policy_valid:
-        return messages  # djust.C021 reports the project value once.
+        return messages  # djust.C022 reports the project value once.
 
     try:
         policy = get_handler_parameter_policy(function)

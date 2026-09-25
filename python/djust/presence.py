@@ -47,7 +47,9 @@ under the ``"meta"`` key — access it as ``p.meta.name`` / ``p["meta"]["name"]`
 never ``p.name``.
 """
 
+import contextlib
 import logging
+import threading
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from channels.layers import get_channel_layer
@@ -56,7 +58,7 @@ from django.core.cache import cache
 
 from ._exposure import uses_legacy_exposure
 from .decorators import event_handler
-from .push import push_to_view
+from .push import push_to_presence_scope, push_to_view, view_push_scopes
 
 if TYPE_CHECKING:
     from .backends.base import PresenceBackend
@@ -84,9 +86,18 @@ def tenant_scoped_presence_key(view: Any, key: str) -> str:
     """
     import sys
 
-    # A view can only be a TenantMixin if the module defining it was imported.
-    tenant_module = sys.modules.get("djust.tenants.mixin")
-    if tenant_module is None or not isinstance(view, tenant_module.TenantMixin):
+    # A view can only be a TenantMixin if the module defining it was imported,
+    # so apps without tenants never pay for importing it.
+    if "djust.tenants.mixin" not in sys.modules:
+        return key
+    # Take the class with a normal import, never off the sys.modules entry
+    # (#3079): while another thread is still running the module's first
+    # import, that entry is a partially initialised module with no
+    # ``TenantMixin`` yet. A normal import waits on the module's import lock
+    # until the other thread has finished.
+    from djust.tenants.mixin import TenantMixin
+
+    if not isinstance(view, TenantMixin):
         return key
     tenant = getattr(view, "_tenant", None)
     if tenant is None:
@@ -188,8 +199,26 @@ class PresenceMixin:
     # presence. See issue #1613.
     presence_unique_per_connection: bool = False
 
+    # Who a join or leave wakes (#3095). The broadcast calls
+    # ``_on_presence_change`` on other sessions so they refresh
+    # ``online_count``; only the sessions that share this session's presence
+    # key can see a different count.
+    #
+    # - ``None`` (default): only those sessions when the view sets a
+    #   ``push_scope`` (it has opted in to scoped delivery), otherwise every
+    #   session of the view, as before.
+    # - ``True``: only the sessions that share the presence key.
+    # - ``False``: every session of the view in every room (the 1.2 behaviour,
+    #   for an ``_on_presence_change`` override that reacts to other keys).
+    presence_broadcast_scoped: Optional[bool] = None
+
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
+        # The presence key whose sessions a scoped broadcast reaches, and whose
+        # presence-scope group this session's WebSocket joins (#3095). Set by
+        # track_presence / _restore_presence; for a session that never tracks,
+        # the WebSocket transport fills it in once after mount.
+        self._presence_scope_key: Optional[str] = None
         self._presence_tracked = False
         self._presence_user_id: Optional[str] = None
         self._presence_meta: Optional[Dict[str, Any]] = None
@@ -210,9 +239,25 @@ class PresenceMixin:
             logger.debug("PresenceMixin._refresh_online_count: %s", exc)
             self.online_count = getattr(self, "online_count", 0)
 
+    def _presence_broadcast_is_scoped(self) -> bool:
+        """Whether a join or leave wakes only the sessions sharing the presence
+        key (#3095). See ``presence_broadcast_scoped``."""
+        flag = getattr(self, "presence_broadcast_scoped", None)
+        if flag is not None:
+            return bool(flag)
+        try:
+            return bool(view_push_scopes(self))
+        except (TypeError, ValueError):
+            # An invalid push_scope gets no scoped pushes (push.py logs it);
+            # keep the presence broadcast view-wide so nobody misses a change.
+            return False
+
     def _broadcast_presence_change(self) -> None:
-        """Fire ``push_to_view`` to ``_on_presence_change`` on every active session
-        of this view class.
+        """Push ``_on_presence_change`` to the peer sessions of this view.
+
+        Scoped (#3095, see ``presence_broadcast_scoped``): to the sessions
+        whose presence key is this session's key. Otherwise: to every active
+        session of this view class.
 
         Failures are swallowed (logged at debug) so a misconfigured channel
         layer, an invalid view-path regex (test-local class paths often fail
@@ -221,7 +266,13 @@ class PresenceMixin:
         """
         view_path = f"{self.__class__.__module__}.{self.__class__.__name__}"
         try:
-            push_to_view(view_path, handler="_on_presence_change", payload={})
+            if self._presence_broadcast_is_scoped():
+                key = getattr(self, "_presence_scope_key", None)
+                if key is None:
+                    key = self.get_presence_key()
+                push_to_presence_scope(view_path, key, handler="_on_presence_change", payload={})
+            else:
+                push_to_view(view_path, handler="_on_presence_change", payload={})
         except Exception as exc:  # noqa: BLE001 — broadcast must never kill track/untrack
             logger.debug("PresenceMixin._broadcast_presence_change: push_to_view failed: %s", exc)
 
@@ -357,6 +408,7 @@ class PresenceMixin:
 
         self._presence_user_id = user_id
         self._presence_meta = meta
+        self._presence_scope_key = presence_key
 
         # Join presence
         presence_data = PresenceManager.join_presence(presence_key, user_id, meta)
@@ -410,6 +462,7 @@ class PresenceMixin:
         try:
             presence_key = self.get_presence_key()
             PresenceManager.join_presence(presence_key, user_id, meta)
+            self._presence_scope_key = presence_key
             # #1611 / #1614 — also refresh local count and broadcast so the
             # reconnected session has online_count set for its first
             # post-restore patch, and peer sessions learn the user came back.
@@ -537,6 +590,25 @@ class PresenceMixin:
 
 
 # Cursor tracking for live cursors (bonus feature)
+# Guards the cache get -> modify -> set sequences below within this process
+# (#3074): with ``LIVEVIEW_CONFIG["worker_threads"]`` two sessions' cursor
+# updates can run at the same time, and one would overwrite the other's.
+# Only for the in-process (local-memory) cache: a shared cache (Redis,
+# memcached) is last-writer-wins across processes anyway, and holding a
+# process-wide lock across its network round trips would queue every cursor
+# update in the process behind one another.
+_CURSOR_LOCK = threading.Lock()
+
+
+def _cursor_lock() -> Any:
+    from django.core.cache import DEFAULT_CACHE_ALIAS, caches
+    from django.core.cache.backends.locmem import LocMemCache
+
+    if isinstance(caches[DEFAULT_CACHE_ALIAS], LocMemCache):
+        return _CURSOR_LOCK
+    return contextlib.nullcontext()
+
+
 class CursorTracker:
     """Manages live cursor positions for collaborative features."""
 
@@ -554,34 +626,34 @@ class CursorTracker:
     ) -> None:
         """Update cursor position for a user."""
         cache_key = cls.cursor_cache_key(presence_key)
-        cursors = cache.get(cache_key, {})
-
-        cursors[user_id] = {
-            "x": x,
-            "y": y,
-            "timestamp": time.time(),
-            "meta": meta or {},
-        }
-
-        cache.set(cache_key, cursors, timeout=cls.CURSOR_TIMEOUT + 5)
+        with _cursor_lock():
+            cursors = cache.get(cache_key, {})
+            cursors[user_id] = {
+                "x": x,
+                "y": y,
+                "timestamp": time.time(),
+                "meta": meta or {},
+            }
+            cache.set(cache_key, cursors, timeout=cls.CURSOR_TIMEOUT + 5)
 
     @classmethod
     def get_cursors(cls, presence_key: str) -> Dict[str, Dict[str, Any]]:
         """Get all active cursor positions."""
         cache_key = cls.cursor_cache_key(presence_key)
-        cursors = cache.get(cache_key, {})
+        with _cursor_lock():
+            cursors = cache.get(cache_key, {})
 
-        # Clean up stale cursors
-        now = time.time()
-        active_cursors = {}
+            # Clean up stale cursors
+            now = time.time()
+            active_cursors = {}
 
-        for user_id, cursor_data in cursors.items():
-            if (now - cursor_data["timestamp"]) < cls.CURSOR_TIMEOUT:
-                active_cursors[user_id] = cursor_data
+            for user_id, cursor_data in cursors.items():
+                if (now - cursor_data["timestamp"]) < cls.CURSOR_TIMEOUT:
+                    active_cursors[user_id] = cursor_data
 
-        # Update cache if we cleaned up stale cursors
-        if len(active_cursors) != len(cursors):
-            cache.set(cache_key, active_cursors, timeout=cls.CURSOR_TIMEOUT + 5)
+            # Update cache if we cleaned up stale cursors
+            if len(active_cursors) != len(cursors):
+                cache.set(cache_key, active_cursors, timeout=cls.CURSOR_TIMEOUT + 5)
 
         return active_cursors
 
@@ -589,11 +661,11 @@ class CursorTracker:
     def remove_cursor(cls, presence_key: str, user_id: str) -> None:
         """Remove cursor for a user."""
         cache_key = cls.cursor_cache_key(presence_key)
-        cursors = cache.get(cache_key, {})
-
-        if user_id in cursors:
-            del cursors[user_id]
-            cache.set(cache_key, cursors, timeout=cls.CURSOR_TIMEOUT + 5)
+        with _cursor_lock():
+            cursors = cache.get(cache_key, {})
+            if user_id in cursors:
+                del cursors[user_id]
+                cache.set(cache_key, cursors, timeout=cls.CURSOR_TIMEOUT + 5)
 
 
 class LiveCursorMixin(PresenceMixin):

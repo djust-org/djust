@@ -295,7 +295,7 @@ class _OwnerContext:
         try:
             policy = get_handler_parameter_policy(method)
         except ContractError:
-            return []  # djust.C021 / V016 report the invalid policy.
+            return []  # djust.C022 / V016 report the invalid policy.
         if binding.directive == "dj-auto-recover" or binding.name in self.recovery:
             policy = "legacy"
         payload = binding.payload

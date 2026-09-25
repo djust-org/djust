@@ -297,6 +297,11 @@ navigation:
         file: guides/deployment.md
         order: 13
         level: intermediate
+      - title: Scaling Across Cores
+        slug: scaling-across-cores
+        file: guides/scaling-across-cores.md
+        order: 13.5
+        level: advanced
       - title: MCP Server
         slug: mcp-server
         file: guides/mcp-server.md
