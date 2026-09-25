@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from djust.assets.manifest import AssetFile, Asset, Package, sri
-from djust.assets.sbom import digest_of, dumps, rust_components, to_cyclonedx
+from djust.assets.sbom import _project_version, digest_of, dumps, rust_components, to_cyclonedx
 
 GOLDEN = Path(__file__).parent / "fixtures" / "assets_sbom_golden.cdx.json"
 
@@ -94,3 +96,78 @@ def test_rust_components_are_registry_crates_only():
         p.startswith("pkg:cargo/djust") for p in purls
     )  # workspace crates are djust itself
     assert any(p.startswith("pkg:cargo/pyo3@") for p in purls)
+
+
+def test_multi_file_asset_has_no_hashes_and_per_file_integrity_properties():
+    asset = Asset(
+        name="two-file",
+        source="z",
+        files=(
+            AssetFile(integrity=sri(b"a"), type="script", path="djc/a.js"),
+            AssetFile(integrity=sri(b"b"), type="style", path="djc/a.css", variant="dark"),
+        ),
+        packages=(Package("pkg:npm/two-file@1.0.0", "MIT"),),
+    )
+    document = to_cyclonedx([asset], root_name="demo", root_version="1.0", digest="e" * 64)
+    component = next(c for c in document["components"] if c["name"] == "two-file")
+    assert "hashes" not in component
+    assert component["evidence"]["occurrences"] == [
+        {"location": "djc/a.js"},
+        {"location": "djc/a.css"},
+    ]
+    assert component["properties"] == [
+        {"name": "djust:integrity:djc/a.js", "value": asset.files[0].integrity},
+        {"name": "djust:integrity:djc/a.css", "value": asset.files[1].integrity},
+    ]
+    assert "externalReferences" not in component
+
+
+def test_multi_file_external_asset_has_integrity_properties_and_delivery_marker():
+    asset = Asset(
+        name="two-file-external",
+        source="z",
+        files=(
+            AssetFile(integrity=sri(b"c"), type="script", url="https://cdn.example.com/a.js"),
+            AssetFile(integrity=sri(b"d"), type="style", url="https://cdn.example.com/a.css"),
+        ),
+        packages=(Package("pkg:npm/two-file-external@1.0.0", "MIT"),),
+    )
+    document = to_cyclonedx([asset], root_name="demo", root_version="1.0", digest="f" * 64)
+    component = next(c for c in document["components"] if c["name"] == "two-file-external")
+    assert "hashes" not in component
+    assert component["properties"] == [
+        {
+            "name": "djust:integrity:https://cdn.example.com/a.js",
+            "value": asset.files[0].integrity,
+        },
+        {
+            "name": "djust:integrity:https://cdn.example.com/a.css",
+            "value": asset.files[1].integrity,
+        },
+        {"name": "djust:delivery", "value": "external"},
+    ]
+    assert component["externalReferences"] == [
+        {"type": "distribution", "url": "https://cdn.example.com/a.js"},
+        {"type": "distribution", "url": "https://cdn.example.com/a.css"},
+    ]
+
+
+def test_project_version_reads_the_project_table():
+    text = (
+        '[build-system]\nrequires = ["x"]\n\n'
+        '[project]\nname = "demo"\nversion = "1.2.3"\n\n'
+        '[tool.other]\nversion = "9.9.9"\n'
+    )
+    assert _project_version(text) == "1.2.3"
+
+
+def test_project_version_raises_when_no_project_section():
+    text = '[tool.other]\nversion = "9.9.9"\n'
+    with pytest.raises(SystemExit):
+        _project_version(text)
+
+
+def test_project_version_does_not_leak_into_a_later_table():
+    text = '[project]\nname = "demo"\n\n[tool.other]\nversion = "9.9.9"\n'
+    with pytest.raises(SystemExit):
+        _project_version(text)

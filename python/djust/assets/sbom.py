@@ -197,7 +197,11 @@ def _project_version(pyproject_text: str) -> str:
     project_start = pyproject_text.find("[project]")
     if project_start == -1:
         raise SystemExit("pyproject.toml has no [project] section")
-    match = re.search(r'^version = "([^"]+)"', pyproject_text[project_start:], re.M)
+    section_start = project_start + len("[project]")
+    next_table = re.search(r"^\[", pyproject_text[section_start:], re.M)
+    section_end = section_start + next_table.start() if next_table else len(pyproject_text)
+    section = pyproject_text[section_start:section_end]
+    match = re.search(r'^version = "([^"]+)"', section, re.M)
     if match is None:
         raise SystemExit('pyproject.toml [project] section has no version = "..." line')
     return match[1]
