@@ -288,6 +288,31 @@ class LiveViewTestClient:
                 "duration_ms": 0,
             }
 
+        # Run the consumer's authorization gates, so a test of a gated handler
+        # can fail (#3094): handler-level @permission_required, then the
+        # per-event object-permission re-check.
+        denial = self._authorization_denial(handler)
+        if denial is not None:
+            self.events.append(
+                {
+                    "type": "event",
+                    "name": event_name,
+                    "params": params,
+                    "timestamp": time.time(),
+                    "duration_ms": 0,
+                    "error": denial,
+                    "code": "permission_denied",
+                }
+            )
+            return {
+                "success": False,
+                "error": denial,
+                "code": "permission_denied",
+                "state_before": state_before,
+                "state_after": state_before,
+                "duration_ms": 0,
+            }
+
         # Apply type coercion if available
         from .validation import validate_handler_params
 
@@ -338,6 +363,35 @@ class LiveViewTestClient:
             "state_after": state_after,
             "duration_ms": duration_ms,
         }
+
+    def _authorization_denial(self, handler: Any) -> Optional[str]:
+        """The consumer's error message if it would refuse ``handler``, else None.
+
+        Mirrors ``websocket_utils._validate_event_security``: a handler with
+        ``@permission_required`` and no request is denied, a user without the
+        permission is denied, and a view that overrides ``get_object`` has its
+        object permission re-checked on every event, failing closed.
+        """
+        from django.core.exceptions import PermissionDenied
+
+        from .auth import check_handler_permission
+        from .auth.core import _has_custom_get_object, check_object_permission
+
+        view = self.view_instance
+        request = getattr(view, "request", None)
+        if getattr(handler, "_djust_decorators", {}).get("permission_required") and not request:
+            return "Permission denied"
+        if request and not check_handler_permission(handler, request):
+            return "Permission denied"
+        if request is None:
+            return "Access denied for this object." if _has_custom_get_object(view) else None
+        try:
+            check_object_permission(view, request)
+        except PermissionDenied:
+            return "Access denied for this object."
+        except Exception:  # noqa: BLE001 — fail closed, as the consumer does
+            return "Access denied for this object."
+        return None
 
     def get_state(self) -> Dict[str, Any]:
         """
