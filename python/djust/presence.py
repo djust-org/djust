@@ -47,6 +47,7 @@ under the ``"meta"`` key — access it as ``p.meta.name`` / ``p["meta"]["name"]`
 never ``p.name``.
 """
 
+import contextlib
 import logging
 import threading
 import time
@@ -550,8 +551,20 @@ class PresenceMixin:
 # Guards the cache get -> modify -> set sequences below within this process
 # (#3074): with ``LIVEVIEW_CONFIG["worker_threads"]`` two sessions' cursor
 # updates can run at the same time, and one would overwrite the other's.
-# Across processes a shared cache is still last-writer-wins, as before.
+# Only for the in-process (local-memory) cache: a shared cache (Redis,
+# memcached) is last-writer-wins across processes anyway, and holding a
+# process-wide lock across its network round trips would queue every cursor
+# update in the process behind one another.
 _CURSOR_LOCK = threading.Lock()
+
+
+def _cursor_lock() -> Any:
+    from django.core.cache import DEFAULT_CACHE_ALIAS, caches
+    from django.core.cache.backends.locmem import LocMemCache
+
+    if isinstance(caches[DEFAULT_CACHE_ALIAS], LocMemCache):
+        return _CURSOR_LOCK
+    return contextlib.nullcontext()
 
 
 class CursorTracker:
@@ -571,7 +584,7 @@ class CursorTracker:
     ) -> None:
         """Update cursor position for a user."""
         cache_key = cls.cursor_cache_key(presence_key)
-        with _CURSOR_LOCK:
+        with _cursor_lock():
             cursors = cache.get(cache_key, {})
             cursors[user_id] = {
                 "x": x,
@@ -585,7 +598,7 @@ class CursorTracker:
     def get_cursors(cls, presence_key: str) -> Dict[str, Dict[str, Any]]:
         """Get all active cursor positions."""
         cache_key = cls.cursor_cache_key(presence_key)
-        with _CURSOR_LOCK:
+        with _cursor_lock():
             cursors = cache.get(cache_key, {})
 
             # Clean up stale cursors
@@ -606,7 +619,7 @@ class CursorTracker:
     def remove_cursor(cls, presence_key: str, user_id: str) -> None:
         """Remove cursor for a user."""
         cache_key = cls.cursor_cache_key(presence_key)
-        with _CURSOR_LOCK:
+        with _cursor_lock():
             cursors = cache.get(cache_key, {})
             if user_id in cursors:
                 del cursors[user_id]

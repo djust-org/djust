@@ -9,7 +9,8 @@ Real ``WebsocketCommunicator`` round trips through ``LiveViewConsumer``:
 * with the setting absent (the default), every session shares asgiref's one
   thread and handlers never overlap — today's behaviour, unchanged;
 * disconnecting releases the session's slot, and the least-loaded slot is
-  picked next;
+  picked next; a consumer that crashes releases it too;
+* a connection whose context already chose a thread keeps it;
 * the setting's spellings, and the ``djust.C021`` system check for a bad one.
 """
 
@@ -52,7 +53,9 @@ class _PoolView(LiveView):
     @event_handler()
     def slow(self, **kwargs):
         _record(self, "start")
-        time.sleep(0.3)
+        # Long enough that both sessions' events are in flight at once even
+        # on a loaded CI runner.
+        time.sleep(0.6)
         self.count += 1
         _record(self, "end")
 
@@ -271,3 +274,46 @@ def test_system_check_c021_reports_an_invalid_value(worker_threads):
     worker_threads(4)
     _check_worker_threads(errors)
     assert errors == []
+
+
+@pytest.mark.asyncio
+async def test_a_crashing_consumer_still_releases_its_slot(worker_threads, monkeypatch):
+    """``__call__``'s ``finally`` releases the slot even when the dispatch
+    loop raises."""
+    from djust import worker_pool
+    from djust.websocket import LiveViewConsumer
+
+    worker_threads(2)
+
+    async def boom(self, scope, receive, send):
+        assert sorted(s["sessions"] for s in worker_pool.pool_stats()) == [0, 1]
+        raise RuntimeError("dispatch loop died")
+
+    from channels.generic.websocket import AsyncWebsocketConsumer
+
+    monkeypatch.setattr(AsyncWebsocketConsumer, "__call__", boom)
+    consumer = LiveViewConsumer()
+    consumer._disconnect_dispatched = True  # skip the disconnect() backstop
+    with pytest.raises(RuntimeError, match="dispatch loop died"):
+        await consumer({"type": "websocket"}, None, None)
+    assert [s["sessions"] for s in worker_pool.pool_stats()] == [0, 0]
+
+
+@pytest.mark.asyncio
+async def test_an_outer_thread_sensitive_context_is_kept(worker_threads):
+    """A connection that already runs inside asgiref's ThreadSensitiveContext
+    (an app wrapping the consumer) keeps that choice: no slot is taken."""
+    from asgiref.sync import ThreadSensitiveContext
+
+    from djust import worker_pool
+
+    worker_threads(2)
+    async with ThreadSensitiveContext():
+        assert worker_pool.bind_session() is None
+    assert worker_pool.pool_stats() == []
+    binding = worker_pool.bind_session()
+    try:
+        assert binding is not None
+        assert [s["sessions"] for s in worker_pool.pool_stats()] == [1, 0]
+    finally:
+        binding.release()

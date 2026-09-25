@@ -191,6 +191,10 @@ def bind_session() -> Optional[SessionBinding]:
         )
         return None
     if var.get(None) is not None:
+        logger.debug(
+            "djust worker pool: an outer context already chose a thread for this "
+            "connection; the session keeps it"
+        )
         return None
     with _lock:
         pool = _ensure_pool(size)
