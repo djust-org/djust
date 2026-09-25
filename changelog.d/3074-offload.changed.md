@@ -16,5 +16,5 @@
   With the pool off, nothing changes. The frames are the same JSON object on
   both paths.
 
-  5 regression tests (9 cases, each run with the pool on and off) in
+  6 regression tests (11 cases, each run with the pool on and off) in
   `python/djust/tests/test_event_loop_offload_3074.py`.

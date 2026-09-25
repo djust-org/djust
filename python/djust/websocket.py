@@ -4927,15 +4927,18 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             if view is not None and uses_legacy_exposure(view):
                 await self._run_server_push_turn_offloaded(view, events)
                 return
-            # This path's hooks hop to the worker one by one. ``dispatch``
-            # skipped Channels' per-message DB-connection check for this push
-            # (#3074), so run it here, once, before any hook touches the DB.
-            from channels.db import aclose_old_connections
-
-            await aclose_old_connections()
         try:
             dispatch_work = False
             try:
+                if offload_enabled():
+                    # This path's hooks hop to the worker one by one.
+                    # ``dispatch`` skipped Channels' per-message DB-connection
+                    # check for this push (#3074), so run it here, once,
+                    # before any hook touches the DB -- inside the ``try`` so
+                    # the render lock is released whatever it raises.
+                    from channels.db import aclose_old_connections
+
+                    await aclose_old_connections()
                 if view is None:
                     return
                 if self.view_instance is not view:
@@ -5053,13 +5056,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 runtime = getattr(self, "_runtime", None)
                 tenant = getattr(view, "_tenant", None)
 
-                def turn() -> Tuple[List[BaseException], bool, bool, Any]:
+                def turn() -> Tuple[List[BaseException], bool, bool, Any, Any]:
                     from django.db import close_old_connections
 
                     close_old_connections()
                     failures: List[BaseException] = []
                     applied = render = False
                     for event in events:
+                        if self.view_instance is not view:
+                            break
                         try:
                             hook = self._prepare_server_push(view, event)
                             if hook is not None:
@@ -5072,15 +5077,23 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         if not _resolve_skip_render(view):
                             render = True
                     rendered: Any = None
+                    render_error: Any = None
                     if applied and render and self.view_instance is view:
-                        with _tenant_context(tenant):
-                            rendered = render_background_sync(view, runtime) or False
-                    return failures, applied, render, rendered
+                        try:
+                            with _tenant_context(tenant):
+                                rendered = render_background_sync(view, runtime) or False
+                        except Exception as exc:  # noqa: BLE001 - re-raised on the loop
+                            render_error = exc
+                    return failures, applied, render, rendered, render_error
 
                 try:
-                    failures, applied, render, rendered = await settle_render_operation(
-                        sync_to_async(turn)()
-                    )
+                    (
+                        failures,
+                        applied,
+                        render,
+                        rendered,
+                        render_error,
+                    ) = await settle_render_operation(sync_to_async(turn)())
                 except asyncio.CancelledError:
                     _discard_baseline(view)
                     raise
@@ -5088,7 +5101,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     self._log_view_hook_failure(
                         view, exc, "Error in server_push: %s", exc, traceback=True
                     )
+                # Set before a render error surfaces, as the stock turn does:
+                # start_async work the hooks queued still runs (finally below).
                 dispatch_work = applied
+                if render_error is not None:
+                    raise render_error
                 if self.view_instance is not view or not applied:
                     return
                 # A hook that changed ``push_scope`` moves the session's

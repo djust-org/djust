@@ -56,12 +56,24 @@ class _OffloadView(LiveView):
         _note("hook")
         self.label = label
 
+    def handle_boom(self, **kwargs):
+        """Queue background work, then make the render fail."""
+        self._explode = True
+        self.label = "boom"
+        self.start_async(self._background)
+
+    def _background(self):
+        _note("background")
+
     def handle_join(self, room: str = "", **kwargs):
         self.label = room
         self.push_scope = room
 
     def _sync_state_to_rust(self, *args, **kwargs):
         _note("render")
+        if getattr(self, "_explode", False):
+            self._explode = False
+            raise RuntimeError("render exploded")
         return super()._sync_state_to_rust(*args, **kwargs)
 
 
@@ -249,3 +261,26 @@ async def test_a_push_hook_that_changes_push_scope_moves_the_session(pool):
             assert "in-z1" in json.dumps(frame["patches"])
         finally:
             await comm.disconnect()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_a_render_error_still_runs_the_hooks_queued_work(pool, caplog):
+    """As in the stock turn: the hook succeeded, so its start_async work runs
+    even though the render raised, and the error is logged."""
+    import asyncio
+
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
+        comm = await _connect()
+        try:
+            _SEEN.clear()
+            with caplog.at_level("ERROR"):
+                await apush_to_view(VIEW, handler="handle_boom")
+                for _ in range(100):
+                    if _SEEN.get("background"):
+                        break
+                    await asyncio.sleep(0.02)
+        finally:
+            await comm.disconnect()
+    assert _SEEN.get("background"), "the hook's start_async work never ran"
+    assert "render exploded" in caplog.text
