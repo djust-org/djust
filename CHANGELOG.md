@@ -7,6 +7,211 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0rc2] - 2026-09-25
+
+The second 1.3 release candidate. Its headline is multi-core rendering (#3074). On free-threaded CPython 3.14t, one process can now use many cores: with the opt-in settings below, a snake-arena load test held 192–256 clients at full frame rate on 4–6.6 cores, against about 32 on one core with stock 3.12. The work that made this possible is split between opt-in settings and changes that apply on every Python:
+
+- **Opt-in:** `LIVEVIEW_CONFIG["worker_threads"]` pins each WebSocket session to one pool thread. `push_to_view(..., scope=)` and a view's `push_scope` push to part of a view's sessions (#3004). djust also ships its own in-memory channel layer that sweeps expired messages at most once a second.
+- **Always on:** the Rust render and diff run without the GIL, which also speeds up renders on 3.12. There is also a fix for the 1.3.0rc1 per-render CPU regression (#3075).
+- **Builds:** this is the first release built with free-threaded `cp314t` wheels.
+- **Guide:** "Scaling a djust Process Across Cores".
+
+### Added
+
+- **Scoped server push: `push_to_view(..., scope=...)` and
+  `LiveView.push_scope` (#3004, #3074).** `push_to_view` reached every
+  session of a view class. For a view serving many rooms, that meant every
+  room's broadcast reached every session in every room, and each one ran the
+  handler, discarded the message and sent a no-op frame back. In the snake
+  load test that was 57,120 pushes for 3,727 real renders.
+  - A view now sets `self.push_scope = room` (a str, an int, or a list,
+    tuple or set of up to 64 of them), and `push_to_view` / `apush_to_view`
+    accept `scope=` to reach only those sessions.
+  - Reassigning `push_scope` in an event handler, a push hook, `handle_tick`
+    or `handle_info` moves the session at the end of that turn.
+  - Scoped groups are ordinary channel-layer groups, named from a digest of
+    the view path and the scope, so they work across processes.
+  - A push without `scope` is unchanged.
+
+  15 regression tests in `python/djust/tests/test_scoped_push_3004.py`.
+
+- **Free-threaded CPython 3.14t wheels (`cp314-cp314t`) (#3074).**
+  - **The wheels.** The release workflow builds them on Linux, macOS (arm64
+    and x86_64) and Windows. Each build fails unless importing the wheel
+    leaves `sys._is_gil_enabled()` False, which is what the extension's
+    `#[pymodule(gil_used = false)]` promises, with `orjson` absent. orjson
+    has no free-threaded build and stays in the optional `performance` and
+    `dev` extras only.
+  - **A failing 3.14t release cell does not stop the release.** Some
+    dependencies build from source on 3.14t, so if a 3.14t cell fails, that
+    platform just ships no cp314t wheel and every other wheel still
+    publishes.
+  - **CI.** The 3.14t job no longer has `continue-on-error`, so a failure
+    shows red. It checks that importing djust keeps the GIL off, then runs
+    the multi-core modules (the GIL-releasing
+    render, the worker pool, scoped push, event-loop offload, the in-memory
+    layer and the thread-safety fixes) with the GIL asserted off.
+  - **PyPI.** The project now carries the `Free Threading :: 2 - Beta`
+    classifier.
+
+  5 regression tests in `python/djust/tests/test_free_threaded_contract_3074.py`
+  (one of them runs only on a free-threaded build).
+
+- **`djust.layers.InMemoryChannelLayer`: an in-process channel layer whose
+  expiry sweep is rate-limited (#3074).**
+  - **The problem.** Channels' `InMemoryChannelLayer` walks every channel queue
+    and every group membership on each `receive()` and `group_send()`. A
+    broadcast round across N sessions therefore costs O(N²) on the event loop:
+    17.7 ms per round at 224 sessions in rooms of 4, and 78 ms at 512. In the
+    #3074 snake profile it was 11.9 % of the event-loop thread.
+  - **The fix.** djust's subclass sweeps at most once per `clean_interval`
+    (default 1 s; `0` restores Channels' behaviour): 4.4 ms and 10.3 ms per
+    round.
+  - **How to use it.** It is opt-in: set `"BACKEND":
+    "djust.layers.InMemoryChannelLayer"`. It is only for single-process
+    deployments, which with free-threaded Python and `worker_threads` can use
+    several cores. Multi-process deployments still need `channels_redis`.
+  - **What changes.** An expired message or membership is removed up to
+    `clean_interval` seconds later.
+
+  8 regression cases in `python/djust/tests/test_inmemory_layer_3074.py`.
+
+- **Opt-in pinned session worker pool: `LIVEVIEW_CONFIG["worker_threads"]`
+  (#3074).** By default every WebSocket session's sync work (mount, handlers,
+  hooks, renders) runs on asgiref's one thread shared by the whole process.
+  Set `worker_threads` to `True` (one thread per CPU, up to 32) or an integer,
+  and each session is pinned to one thread of a pool for its lifetime, while
+  different sessions run at the same time. The mechanism is asgiref's
+  `SyncToAsync.thread_sensitive_context`, so every thread-sensitive
+  `sync_to_async` a session makes, djust's, Channels' and the app's, lands on
+  its thread. HTTP and SSE are unchanged. The default (`None`) keeps today's
+  behaviour, and `djust.C021` reports an invalid value. See "More than one
+  core per process" in the deployment guide. 11 regression cases in
+  `python/djust/tests/test_worker_pool_3074.py`.
+
+### Changed
+
+- **`RustLiveView.render_with_diff` releases the GIL while it renders
+  (#3074).** The template render, HTML parse and VDOM diff run with the thread
+  detached from the interpreter, and re-attach only to call into Python (the
+  raw-object `getattr` fallback, bridged tags and filters, `{% load %}`). On a
+  GIL build another Python thread (another session's handler, the event loop)
+  now runs while one session renders; the multi-core experiment measured about
+  +15 % frames at the load knee on CPython 3.12, and no change on free-threaded
+  3.14t, which has no GIL to release. The template and tag registries now take
+  their read lock only while attached, so a render that calls a Python tag
+  cannot deadlock against a concurrent `register_*`. Rendered output is
+  unchanged. One behaviour does change: two threads calling into the SAME
+  `RustLiveView` used to queue on the GIL; now the second one gets PyO3's
+  "Already borrowed" `RuntimeError` while the first is rendering, as it
+  already did on free-threaded builds. djust itself never shares a
+  `RustLiveView` between threads (each session has its own, used under its
+  render lock).
+  3 regression cases in `python/djust/tests/test_render_with_diff_gil_3074.py`,
+  plus 2 Rust tests (`render_with_diff_detaches_3074` in
+  `crates/djust_live/src/lib.rs`).
+
+- **With `worker_threads` on, per-frame work moves off the asyncio event loop
+  (#3074).** Once sessions render on several threads, the event loop is the
+  next ceiling.
+  - The pre-event assigns snapshot runs in the same worker hop as a sync
+    handler.
+  - A server push on a legacy-exposure view is one hop: Django's
+    `close_old_connections`, every push's state and hook, the render and the
+    diff. Before, each hook took its own hop, the render took one, and so did
+    Channels' connection check.
+  - On the loop, the Rust patch JSON is spliced into the frame instead of being
+    parsed and re-serialised, unless the frame carries anything else: binary
+    mode, the DEBUG payload, parameter contracts or a signed snapshot.
+  - `dispatch` skips Channels' per-message `aclose_old_connections` hop for
+    `server_push`, because both push-turn paths run the check themselves.
+
+  With the pool off, nothing changes. The frames are the same JSON object on
+  both paths.
+
+  6 regression tests (11 cases, each run with the pool on and off) in
+  `python/djust/tests/test_event_loop_offload_3074.py`.
+
+- **Check `djust.A102` no longer warns when your allauth adapter overrides `get_client_ip`.** allauth's rate limits ask the adapter for the client IP, so an override (for example `X-Real-IP` with a fallback, which keeps working where the header can be missing) is a complete configuration. The hint, the accounts guide and the error-code reference mention it.
+
+### Fixed
+
+- **A LiveView page no longer logs "non-serializable value: FallbackStorage" (or `PermWrapper`, `WSGIRequest`, `AnonymousUser`) on every render (#3061).** The page-shell render (`render_full_template`) sent the context-processor values of the HTTP GET through the state normalizer, and the HTTP POST fallback hid its injected processor values from the #1786 filter. Both paths now drop non-serializable request-scoped values before normalizing, the same way the dj-root and WebSocket render already did. The values still reach the template, so `{% for m in messages %}` works inside and outside the LiveView root. A non-serializable attribute of the view itself still warns. 7 regression cases in `python/tests/test_full_template_context_processors_3061.py`.
+- **Check `djust.A102` no longer warns when `ALLAUTH_TRUSTED_CLIENT_IP_HEADER` is set (#3068).** allauth can read the client IP from a proxy header such as ingress-nginx's `X-Real-IP` without a proxy count, so a non-blank header now counts as configured. The check's hint and the A102 entry in the error-code reference mention the header.
+
+- **Shared state that sessions' sync code touches is now safe when two
+  threads use it at once (#3074).** This was reachable before (an HTTP
+  request thread beside the WebSocket thread) and is common with
+  `worker_threads`.
+  - `DjangoJSONEncoder`'s recursion depth was a single counter shared by
+    every thread, so one render's nesting could decide whether another's
+    related objects were serialised. It is now per thread.
+  - The state and presence backend registries could build two backends on
+    first use and drop one's data.
+  - The tenant-scoped in-memory presence backend, `CursorTracker`,
+    component auto-keys and the JIT variable cache now take a lock or do a
+    single lookup.
+
+  7 regression cases in
+  `python/djust/tests/test_worker_pool_thread_safety_3074.py`.
+
+- **1.3.0rc1 spent ~20% more server CPU per LiveView frame than 1.2.1
+  (#3075).** `parameter_contract_manifest` runs on every render and resolved
+  every public name on the view with `inspect.getattr_static` each time: ~1 ms
+  per frame on an ordinary view, longer than the render itself. The class half
+  of handler discovery is now resolved once per class and re-validated on
+  every call (both MROs, every class dict by key order and value identity, and
+  the resolved descriptors' classes), so a monkeypatched, added, deleted or
+  swapped attribute, a reassigned `__bases__` and a hot view replacement all
+  rebuild it; only the instance storage is re-read per render. The manifest
+  takes 0.08 ms instead of 1.0 ms, and Snake Arena's server CPU per delivered
+  frame is back at 1.2.1's level (2.97 ms vs 2.96 ms; main was 3.59 ms).
+  12 regression cases in `python/djust/tests/test_parameter_metadata_cache_3075.py`,
+  including an oracle comparison against the uncached discovery.
+- **Presence could raise `AttributeError: partially initialized module
+  'djust.tenants.mixin'` when two threads first used it together (#3079).**
+  `tenant_scoped_presence_key` read `TenantMixin` straight off the
+  `sys.modules` entry, which is a half-built module while another thread is
+  still importing it (HTTP worker threads and the channels sync thread, for
+  example). It now takes the class with a normal import, which waits on the
+  module's import lock. Apps without tenants still never import the module.
+  3 regression cases in `tests/unit/test_presence_tenant_import_race_3079.py`,
+  including a slow-import shim that holds the module half-imported while a
+  second thread asks for a presence key.
+- **The in-memory state backend never expired anything, so memory grew with
+  every new session for the life of the process (#3080).** `SESSION_TTL`
+  (default 3600 s) was applied only by `djust clear` and
+  `cleanup_expired_sessions()`, which nothing called at runtime. Each entry
+  holds its view's full render state: about 270 KB of live heap per session in
+  a snake-arena load test, where `SESSION_TTL = 60` still left 65, then 129,
+  193 and 257 entries across 64-client cycles. An entry not written for the
+  TTL is now a miss on `get()` and is dropped, and `set()` sweeps expired
+  entries at most once per `min(SESSION_TTL, 60)` seconds. `SESSION_TTL = 0`
+  still means never expire. The deployment guide now gives the per-session
+  cost and explains why RSS levels off rather than falls. 9 regression cases in
+  `python/tests/test_memory_state_backend_ttl_3080.py`.
+- **The account pages' flash message keeps a 16px side gutter on phones.** At 480px and narrower the card goes full-bleed and `.dj-auth-main` drops its side padding, so the flash's border touched the screen edges (`python/djust/auth/static/djust_auth/auth.css`).
+- **allauth pages now keep a project layout's `<head>` additions.** djust's allauth skin (`python/djust/auth/templates/allauth/layouts/base.html`) replaced the kit layout's `head` block with allauth's `extra_head`, so a stylesheet or meta tag a project added by overriding the kit layout (`python/djust/auth/templates/djust_auth/layouts/auth.html`; the accounts guide's documented way) was missing on every allauth page. The skin now renders the layout's head, then `extra_head`.
+- **`MemoryTracker` retried `import psutil` on every event.** With psutil not
+  installed, each failed import re-scanned `sys.path`: about 42 µs per event
+  on the event-loop thread. Whether psutil is installed is now checked once, at
+  module import. 4 regression cases in
+  `python/tests/test_memory_tracker_psutil_probe.py`.
+
+### Documentation
+
+- **New guide: "Scaling a djust Process Across Cores"
+  (`docs/website/guides/scaling-across-cores.md`, #3074).** It explains
+  why a stock process uses about one core, then covers the recipe:
+  free-threaded CPython 3.14t and the `cp314t` wheels,
+  `LIVEVIEW_CONFIG["worker_threads"]` and its event-loop offload, scoped push
+  (`push_scope` / `scope=`), `djust.layers.InMemoryChannelLayer` and the
+  GIL-releasing render. It includes the snake load test numbers (about 32
+  clients on one core for stock 3.12, 192–256 clients on 4–6.6 cores for
+  3.14t with the opt-in settings), the memory cost per session (2.2–2.7 MB
+  for a pinned pool against 5.4 MB for one thread per session), and the
+  Redis multi-process alternative with its trade-offs.
+
 ## [1.3.0rc1] - 2026-09-24
 
 The first release candidate for 1.3. It adds pluggable account backends (`djust.auth.accounts`, ADR-039) and makes the opt-in explicit state-exposure policy (`exposure_policy = "explicit"`, ADR-038) available; views that don't opt in keep legacy exposure. `djust.auth.social.social_auth_providers` is deprecated. See Security below for the fixes in this release.

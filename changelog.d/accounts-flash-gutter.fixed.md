@@ -1,1 +1,0 @@
-- **The account pages' flash message keeps a 16px side gutter on phones.** At 480px and narrower the card goes full-bleed and `.dj-auth-main` drops its side padding, so the flash's border touched the screen edges (`python/djust/auth/static/djust_auth/auth.css`).
