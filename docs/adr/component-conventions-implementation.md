@@ -2570,7 +2570,7 @@ Source: [decisions and acceptance](034-component-scoped-events-and-bindings.md).
     - Finding (pre-existing, not ADR-034): a legacy view's signed snapshot is
       issued with its mount frame only; events do not refresh it (explicit
       views do). So the signed path restores the mount-time state, while the
-      session path restores the latest.
+      session path restores the latest. Tracked as #3098.
     - The Service Worker's snapshot storage is replaced by an in-page store
       with the same bridge methods; capture, signing and restore are real.
   - Fix: the HTTP fallback reported a failed event only to the console. It
