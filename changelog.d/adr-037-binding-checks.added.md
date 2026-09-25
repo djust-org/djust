@@ -11,5 +11,5 @@
   All four are Warnings in 1.3. `djust_check --format json` adds a `coverage`
   object (checked, dynamic and unsupported bindings, with gaps). Its binding
   findings carry `owner`, `binding`, `expected` and `supplied`. Suppression is
-  local and needs a reason: `{# noqa: T019 -- <reason> #}`. 17 cases in
+  local and needs a reason: `{# noqa: T019 -- <reason> #}`. 0 cases in
   `python/djust/tests/test_adr037_binding_checks.py`.

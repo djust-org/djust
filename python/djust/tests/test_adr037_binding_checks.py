@@ -35,13 +35,67 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+import functools
+
 from django import forms
+from django.contrib.auth.models import User
 
 from djust import LiveView
 from djust.components.base import LiveComponent
 from djust.components.interactive import DropdownMenu
 from djust.decorators import event_handler
-from djust.forms import FormMixin
+from djust.forms import FormMixin, ModelFormMixin
+
+
+def audited(function):
+    @functools.wraps(function)
+    def wrapper(self, *args, **kwargs):
+        return function(self, *args, **kwargs)
+
+    return wrapper
+
+
+class Decorated(LiveView):
+    template = """<div dj-root><button dj-click="archive">x</button></div>"""
+
+    @event_handler
+    @audited
+    def archive(self, item_id: int):
+        pass
+
+
+class UserForm(forms.ModelForm):
+    class Meta:
+        model = User
+        fields = ["username"]
+
+
+class EditUser(ModelFormMixin[User], LiveView):
+    """A managed ``self.object``: the framework owns its persistence."""
+
+    model = User
+    form_class = UserForm
+    template = """<div dj-root><form dj-submit="submit_form">{% csrf_token %}
+<input name="username" dj-change="validate_field"></form>{{ object.username }}</div>"""
+
+    def get_queryset(self):
+        return User.objects.filter(pk=self.request.user.pk)
+
+
+class UserList(LiveView):
+    """Authorized ORM values rendered from the context, never persisted."""
+
+    template = """<div dj-root>{% for user in users %}
+<button dj-click="pick" data-user-id="{{ user.pk }}">{{ user.username }}</button>{% endfor %}</div>"""
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["users"] = User.objects.filter(is_active=True)
+        return context
+
+    @event_handler
+    def pick(self, user_id: int = 0, **kwargs):
+        pass
 
 
 class Handlers:
@@ -497,6 +551,33 @@ def test_form_fields_are_checked_against_a_static_form_class(fixture):
             _source_line(module, 'name="emial"'),
         )
     ]
+
+
+def test_decorated_handlers_are_checked_by_their_effective_signature(fixture):
+    module, _ = fixture
+    assert _found("Decorated") == [
+        (
+            "djust.T020",
+            "archive() requires 'item_id', which this binding never sends.",
+            _source_line(module, 'dj-click="archive"'),
+        )
+    ]
+
+
+def test_managed_objects_and_authorized_querysets_are_not_flagged(fixture):
+    """ADR-037 D5: rendering authorized ORM values is not a persistence risk."""
+    from django.core.checks import run_checks
+
+    for owner in ("EditUser", "UserList"):
+        label = "%s.%s" % (MODULE, owner)
+        flagged = [
+            m.id
+            for m in run_checks(tags=["djust"])
+            if label in str(m.msg) or label == getattr(m, "owner", "")
+        ]
+        # Only the fixture module's placement is reported: it is not in
+        # LIVEVIEW_ALLOWED_MODULES (V005), and EditUser declares no login (S005).
+        assert set(flagged) <= {"djust.V005", "djust.S005", "djust.V002"}, (owner, flagged)
 
 
 def test_checking_runs_no_mount_handler_property_or_queryset(fixture):
