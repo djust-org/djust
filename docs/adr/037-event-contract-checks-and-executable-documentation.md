@@ -318,10 +318,11 @@ keeps the walk as an oracle and pins equality on every framework and demo view.
 
 Row 20's verification (`tests/playwright/test_embedded_directives.py`, pinned
 transports): `dj-shortcut` and `dj-click-away` inside an embedded child reach the
-child through the stamped wrapper. Two defects the list does not decide:
-`dj-paste` attaches no owner context, so it reaches the root view on every
-transport, and over HTTP-only every event from an embedded child reaches the
-root view.
+child through the stamped wrapper. It found two defects the list does not decide:
+
+- `dj-paste` attached no owner context. Fixed on this branch (owner decision).
+- Over HTTP-only, every event from an embedded child reaches the root view:
+  #3104. The test holds those cases as strict expected failures.
 
 Row 13's output (N1): `find_handlers_for_template` keeps its JSON keys, computed
 from the D1 extractor and real loader resolution (includes and parents). It gains

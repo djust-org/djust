@@ -9,13 +9,14 @@ parent. ``{% live_render %}`` stamps ``data-djust-embedded`` on its wrapper
 and on event-bearing elements; this checks the directives the stamp list
 left out.
 
-At ``f3768bbc9`` + row 20 this fails, for reasons the stamp list does not
-decide (the child's wrapper is stamped, and the client looks up ancestors):
+It guards ADR-037 row 20 (the stamp list derived from the directive table)
+and the ``dj-paste`` owner-context fix, which it failed on before (the paste
+reached the parent on every transport).
 
-- ``dj-paste`` attaches no owner context, so over every transport it reaches
-  the parent;
-- over HTTP-only every event from the child reaches the parent, including a
-  stamped ``dj-click``.
+Over HTTP-only every event from an embedded child still reaches the parent,
+because the HTTP fallback does not route on ``view_id`` (#3104). Those cases
+are strict expected failures: a run where one reaches the child fails too, so
+the fix for #3104 must update this script.
 
 Standalone, like the other scripts here: exits 0 on success and non-zero
 with the list of failures. ``EMBEDDED_BASE`` (default
@@ -80,7 +81,14 @@ async def run(browser, transport, failures):
         await page.wait_for_timeout(300)
         await act()
         where = await landed(page, token)
-        if where != "child":
+        if transport == "http":
+            # Strict expected failure until #3104: the HTTP fallback ignores view_id.
+            if where != "parent":
+                failures.append(
+                    "http: %s reached %s; #3104 expected the parent. Update this "
+                    "script if #3104 is fixed." % (token, where)
+                )
+        elif where != "child":
             failures.append("%s: %s reached %s, not the child" % (transport, token, where))
     watch.check(transport, transport, failures)
     await context.close()
@@ -98,7 +106,10 @@ async def main():
         for failure in failures:
             print("  -", failure)
         return 1
-    print("OK: every directive inside the embedded child reached the child on all transports")
+    print(
+        "OK: every directive inside the embedded child reached the child over WebSocket "
+        "and SSE; over HTTP-only each reached the parent, as #3104 expects"
+    )
     return 0
 
 

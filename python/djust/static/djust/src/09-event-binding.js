@@ -1158,7 +1158,7 @@ async function _handleDjPaste(element, e) {
     let strictPaste = null;
     if (clipboard) {
         const early = parseEventHandler(element.getAttribute('dj-paste'));
-        strictPaste = _strictBinding(element, early.name, _pastePayload(clipboard), early.args);
+        strictPaste = _strictBinding(element, early.name, _pastePayload(clipboard), early.args, element);
         if (strictPaste === false) return;
     }
 
@@ -1201,8 +1201,11 @@ async function _handleDjPaste(element, e) {
     }
 
     const params = strictPaste || payload;
-    if (!strictPaste && parsedPaste.args.length > 0) {
-        params._args = parsedPaste.args;
+    if (!strictPaste) {
+        if (parsedPaste.args.length > 0) params._args = parsedPaste.args;
+        // Owner context, like every other binding: a paste inside a component or
+        // an embedded child reaches that owner, not the root view.
+        addEventContext(params, element);
     }
 
     // Suppress the default paste only when the element opts in

@@ -2653,9 +2653,12 @@ Source: [decisions and acceptance](037-event-contract-checks-and-executable-docu
   **Findings.**
   - The demo project's 85 T019 findings are all undecorated handlers on 33 views the
     URLconf does not route.
-  - Row 20's browser test found that `dj-paste` attaches no owner context, and that
-    over HTTP-only every embedded-child event reaches the root view. Neither is
-    decided by the stamp list.
+  - Row 20's browser test found two defects the stamp list does not decide:
+    - `dj-paste` attached no owner context. Fixed here (owner decision); it is back
+      in the directive table as an owner-context binding.
+    - Over HTTP-only, every embedded-child event reaches the root view: #3104,
+      not fixed here. The browser test holds those cases as strict expected
+      failures.
   - `get_debug_info()` crashes on a property that raises something other than
     `AttributeError`: tracked as #3103, not fixed here.
   - Under the legacy policy, `dj-input`, `dj-change` and `dj-submit` send `field`
