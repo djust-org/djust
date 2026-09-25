@@ -1905,6 +1905,8 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
       (actor renders, and a reconstructed HTTP instance before it renders)
       and for the V019 startup check.
     - Evidence: 5 new cases, 4 of which fail without it (12 in the file).
+      Full Python suite from a frozen worktree at 8f614755d: 33,787 passed
+      and 949 skipped, plus the 2 known tag failures.
   Producer coverage (the last P2 item):
   - An audit of every DOM-carrying frame type found two producers without a
     contract snapshot: the hot-reload patch and `StreamingMixin.push_state`.
