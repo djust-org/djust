@@ -9,6 +9,7 @@ timing breakdowns.
 import time
 import threading
 import functools
+import importlib.util
 from typing import Any, Callable, Dict, Iterator, List, Optional
 from dataclasses import dataclass, field
 from contextlib import contextmanager
@@ -153,6 +154,14 @@ class QueryTracker:
         return sql1_normalized == sql2_normalized
 
 
+# Whether psutil is installed, checked once at import. A MemoryTracker is built
+# for every event, and a failed ``import psutil`` re-scans sys.path each time
+# (about 42 us per event when psutil is absent). ``find_spec`` does not import
+# the package; the tracking methods import it when they first need it, and
+# turn themselves off if that import fails after all.
+_PSUTIL_AVAILABLE = importlib.util.find_spec("psutil") is not None
+
+
 class MemoryTracker:
     """Tracks memory usage during request execution."""
 
@@ -160,15 +169,8 @@ class MemoryTracker:
         self.initial_memory = None
         self.peak_memory = None
         self.final_memory = None
-        self.enabled = False
-
-        # Check if psutil is available
-        try:
-            import psutil as _psutil  # noqa: F401
-
-            self.enabled = True
-        except ImportError:
-            pass  # psutil not installed; memory tracking disabled
+        # psutil not installed: memory tracking disabled.
+        self.enabled = _PSUTIL_AVAILABLE
 
     def start_tracking(self) -> None:
         """Start tracking memory usage."""
