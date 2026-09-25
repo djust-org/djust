@@ -1594,6 +1594,29 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
   full runs on the final unchanged implementation each passed 30,550 tests with
   952 skipped (249.29, 246.81 and 239.29 seconds, four workers). Earlier runs
   predate the cache fix and are not final evidence. Browser acceptance remains open.
+  [Registration checks](notes/036-registration-checks.md) now report strict
+  declaration problems at startup through the runtime's own resolvers:
+  `djust.C021` (invalid project policy), `djust.V016` (unresolvable or
+  unsupported annotation, missing annotation, reserved argument name, invalid
+  handler policy), `djust.V017` (async strict handler on an actor view) and
+  `djust.V018` (`params=` disagreeing with the signature). Contract compilation
+  now resolves deferred annotations against the defining class body before
+  module globals, names the failing parameter, and rejects keyword parameters
+  named `view_id`/`component_id` or `_`-prefixed (D5). V007 skips strict
+  handlers; legacy handlers report nothing new. Evidence: 32 cases in
+  `test_parameter_contract_checks.py` (14 invalid declarations, each with its
+  exact ID and message; valid declarations bind and run through
+  `validate_handler_params`; every V016 case raises the same `ContractError` at
+  dispatch). 6 of them fail against the previous resolver. The expanded focused
+  set passes 596 tests; mypy passes 1,174 files. Full suite from a frozen
+  detached worktree at b52a487f1 (four workers, 401.94 s): 33,682 passed, 949
+  skipped, 2 failed. Both failures are in `tests/test_changelog_tagged_sections.py`
+  and fail alone too: the local `v1.3.0rc1` tag is not an ancestor of this
+  branch's base (fdfbc60ef), and the slice changes neither `CHANGELOG.md` nor
+  that script. Still open in P1: trusted argument separation (component source
+  injection, ADR-034 subscriptions) and client/transport acceptance. The
+  legacy-code migration inventory and ADR-037 template-binding checks are also
+  not done.
 - [ ] **P2 — wire/dispatch parity.** Route real DOM extraction and every server
   dispatch path through that contract. Verify forms' open payloads,
   keyword-only arguments, forged component injection, `coerce_types=False` and
