@@ -1878,6 +1878,12 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
     64-key shuffled regression fails on the previous build and passes on the
     new one. `cargo test -p djust_live --no-default-features` passes 93
     tests, and clippy with `-D warnings` is clean.
+    Mount state stays on its `HashMap` (commit 42e545a8d); only event and
+    component-event params are ordered. After the compaction and this fix,
+    the full Python suite from a frozen worktree at 42e545a8d passed 33,769
+    tests, with 949 skipped and only the 2 known tag-reachability failures.
+    The Playwright matrix passes again on the compacted client over all
+    three transports.
   - Remaining P2 items:
     - render-producer coverage for child/component creation, removal and
       replacement;
