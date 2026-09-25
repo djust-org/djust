@@ -55,6 +55,8 @@ uv venv --python 3.14t && uv pip install djust uvicorn   # cp314t wheels
 uvicorn myproject.asgi:application --ws websockets
 ```
 
+Some of djust's dependencies (autobahn, through `channels[daphne]`) have no free-threaded wheels yet on every platform. They build from source during install, so the install takes longer; it does not change anything else.
+
 Each piece removes one ceiling. The sections below explain them.
 
 ### 1. Free-threaded CPython (3.14t)
@@ -81,19 +83,19 @@ assert not sys._is_gil_enabled(), "something re-enabled the GIL"
 
 With the pool on, djust also moves per-frame work off the event loop:
 - the pre-event snapshot of the view's state runs on the session's thread;
-- a server push runs as a single hop on the session's thread;
-- the rendered patch goes into the frame without being re-encoded on the loop.
+- a server push to a view that doesn't use ADR-038 explicit exposure runs as a single hop on the session's thread;
+- when a push frame carries nothing but patches, the rendered patch goes into it without being re-encoded on the loop.
 
 What to know before turning it on (details in [Deployment](deployment.md#more-than-one-core-per-process-worker_threads)):
 
 - **Shared state needs locks.** Sync handlers now run concurrently with other sessions' handlers, so module-level state they mutate needs a `threading.Lock`.
 - **Database connections.** Each pool thread holds its own database connection.
 - **Sessions on one thread wait on each other**, though no longer on the whole process.
-- **Pool size.** Start at about the core count. A pool of 1–2× the cores costs 2.2–2.7 MB per session on 3.14t. One thread per session cost 5.4 MB and gave lower tail latency.
+- **Pool size.** Start at about the core count. On 3.14t, pools of 8–12 threads on a 12-core machine cost 2.2–2.7 MB per session. One thread per session cost 5.4 MB and gave lower tail latency.
 
 ### 3. Scoped push
 
-`push_to_view(view, ...)` reaches every session of the view. In a view with many rooms, every room's broadcast wakes every session in every room. In one profile that meant 57,120 push hooks for 3,727 real renders, and it pins the event loop long before the cores are busy.
+`push_to_view(view, ...)` reaches every session of the view. In a view with many rooms, every room's broadcast wakes every session in every room. In one profile that meant 57,120 `server_push` calls for 3,727 real renders, and it pins the event loop long before the cores are busy.
 
 Set `self.push_scope` and push with `scope=` so a broadcast reaches only its room; see [Scoped Push](../advanced/server-push.md#scoped-push-one-room-not-every-room).
 
@@ -135,7 +137,7 @@ The workload is the snake-arena game:
 
 What the numbers say:
 - **Stock djust on 3.12 saturates at about 32 clients on one core.**
-- **The opt-in settings on 3.12 double that, to about 64 clients.** Most of the gain is scoped push. The GIL still caps the process at about 1.3 cores.
+- **The opt-in settings on 3.12 double that, to about 64 clients.** The GIL still caps the process at about 1.3 cores. In the #3074 experiment, scoped push alone produced most of this gain on 3.12; per-session threads alone gave none.
 - **3.14t by itself doubles stock too,** to about 64 clients. Then the event loop pins at one core.
 - **3.14t with the opt-in settings serves 192–256 clients at full frame rate on 4–6.6 cores.** That is about 6–8× stock 3.12 in one process.
 - **Above about 224 clients the event loop is the limit again,** at 0.93–0.97 of a core. djust's in-memory layer takes it down to 0.6–0.9.
