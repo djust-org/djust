@@ -383,10 +383,13 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     const httpController = teardown ? null : new AbortController();
     if (httpController) _pendingHttpControllers.add(httpController);
     const httpOwner = document.querySelector('[dj-root]') || document.body;
-    const httpUrl = window.location.href;
+    // The fragment never reaches the server, so an in-page #anchor jump
+    // does not make this a different page (PR #3122 review).
+    const pageUrl = () => window.location.href.split('#')[0];
+    const httpUrl = pageUrl();
     const httpGeneration = _httpPageGeneration;
     const ownsHttpResponse = () => httpOwner === (document.querySelector('[dj-root]') || document.body)
-        && httpUrl === window.location.href && httpGeneration === _httpPageGeneration;
+        && httpUrl === pageUrl() && httpGeneration === _httpPageGeneration;
     // Keepalive teardown sends are not queued: they must leave with the page.
     const previousHttpEvent = teardown ? null : _httpEventChain;
     let releaseHttpEvent = null;
@@ -399,7 +402,17 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
         if (previousHttpEvent) {
             await previousHttpEvent;
             // Navigation while queued makes this event belong to a gone page.
-            if (!ownsHttpResponse()) return;
+            if (!ownsHttpResponse()) {
+                // Real navigation is quiet (the page is gone); a URL or root
+                // change without one drops an event the user sent, so say so.
+                if (httpGeneration === _httpPageGeneration) {
+                    window.dispatchEvent(new CustomEvent('djust:error', {detail: {
+                        error: `Event "${eventName}" was not sent: the page changed while it was queued.`,
+                        traceback: null,
+                    }}));
+                }
+                return;
+            }
         }
         // Input, configured-name cookie, then server meta tag (00-namespace.js).
         const csrfToken = window.djust.csrfToken();
