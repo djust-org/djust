@@ -25,6 +25,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C018 | Config | Warning | Deprecated LIVEVIEW_CONFIG key set that djust never reads (removed in 1.3) |
 | C019 | Config | Warning | Unknown DJUST_CONFIG['PRESENCE_BACKEND'] value (presence falls back to in-process memory) |
 | C020 | Config | Error | `DJUST_SERVER_STATE_MAX_AGE` is not an integer from 1 to 86400 |
+| C021 | Config | Error | `LIVEVIEW_CONFIG['worker_threads']` is not `None`, `False`, `True`, `"auto"` or an integer >= 0 |
 | V001 | LiveView | Warning | LiveView missing template_name attribute |
 | V002 | LiveView | Info | LiveView missing mount() method |
 | V003 | LiveView | Error | mount() has wrong signature |
@@ -158,6 +159,13 @@ console.log("debug info"); // noqa: Q003
 - **Method**: Settings inspection
 - **What it detects**: `DJUST_SERVER_STATE_MAX_AGE` is set but is not an `int` from 1 to 86400. The setting is the restore lifetime, in seconds, of ADR-038 explicit server-state envelopes (default 3600). With an invalid value, explicit views fail closed: they cannot load or save server state.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C020"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C020"]` (the runtime still fails closed)
+- **False positives**: None
+
+### C021 — Invalid `LIVEVIEW_CONFIG['worker_threads']`
+- **Severity**: Error
+- **Method**: Settings inspection
+- **What it detects**: `LIVEVIEW_CONFIG['worker_threads']` is set to something other than `None`, `False`, `True`, `"auto"` or an integer >= 0. The setting opts WebSocket sessions into a pinned worker pool (#3074). At runtime an invalid value is logged and treated as off, so every session keeps sharing one thread.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C021"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C021"]`
 - **False positives**: None
 
 ---

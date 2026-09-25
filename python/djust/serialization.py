@@ -7,6 +7,7 @@ Extracted from live_view.py for modularity.
 import importlib.util
 import json
 import logging
+import threading
 from datetime import datetime, date, time, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, Union, cast
@@ -389,7 +390,41 @@ def django_json_datetime(value: Union[datetime, date, time, timedelta]) -> str:
     return cast(str, _DJANGO_JSON_ENCODER.default(value))
 
 
-class DjangoJSONEncoder(json.JSONEncoder):
+_ENCODER_DEPTH = threading.local()
+
+
+def _encoder_depth() -> int:
+    """The calling thread's ``DjangoJSONEncoder`` recursion depth."""
+    return int(getattr(_ENCODER_DEPTH, "value", 0))
+
+
+def _add_encoder_depth(delta: int) -> None:
+    _ENCODER_DEPTH.value = _encoder_depth() + delta
+
+
+class _EncoderDepthMeta(type):
+    """Keeps ``DjangoJSONEncoder._depth`` per THREAD (#3074).
+
+    The recursion-depth counter used to be a plain class attribute, shared by
+    every thread. Two renders serialising models at the same time (a
+    ``worker_threads`` pool, or an HTTP request thread beside the WebSocket
+    thread) then read each other's depth: one session's nesting decided
+    whether another's related objects were serialised, and an interleaved
+    ``+=``/``-=`` could leave the counter off for the rest of the process.
+    The class-level spelling ``DjangoJSONEncoder._depth`` still reads and
+    writes the calling thread's value.
+    """
+
+    @property
+    def _depth(cls) -> int:
+        return _encoder_depth()
+
+    @_depth.setter
+    def _depth(cls, value: int) -> None:
+        _ENCODER_DEPTH.value = value
+
+
+class DjangoJSONEncoder(json.JSONEncoder, metaclass=_EncoderDepthMeta):
     """
     Custom JSON encoder that handles common Django and Python types.
 
@@ -402,8 +437,16 @@ class DjangoJSONEncoder(json.JSONEncoder):
     - QuerySets → list
     """
 
-    # Class variable to track recursion depth
-    _depth = 0
+    # Recursion depth: a per-thread counter behind a class-level property
+    # (``DjangoJSONEncoder._depth``), see ``_EncoderDepthMeta``. The instance
+    # spelling (``self._depth``) reads and writes the same per-thread value.
+    @property
+    def _depth(self) -> int:
+        return _encoder_depth()
+
+    @_depth.setter
+    def _depth(self, value: int) -> None:  # noqa: dead-method-allowed (subclass compat)
+        _ENCODER_DEPTH.value = value
 
     # Cache @property names per model class to avoid repeated MRO walks
     _property_cache: Dict[type, List[str]] = {}
@@ -417,11 +460,11 @@ class DjangoJSONEncoder(json.JSONEncoder):
 
     def default(self, obj: Any) -> Any:
         # Track recursion depth to prevent infinite loops
-        DjangoJSONEncoder._depth += 1
+        _add_encoder_depth(1)
         try:
             return self._default_impl(obj)
         finally:
-            DjangoJSONEncoder._depth -= 1
+            _add_encoder_depth(-1)
 
     def _default_impl(self, obj: Any) -> Any:
         # AsyncResult — emit dict so templates can read .loading/.ok/.failed/.result/.error.
@@ -614,7 +657,7 @@ class DjangoJSONEncoder(json.JSONEncoder):
                         )
                         related = None
 
-                    if related and DjangoJSONEncoder._depth < self._get_max_depth():
+                    if related and _encoder_depth() < self._get_max_depth():
                         result[field_name] = self._serialize_model_safely(related)
                     elif related:
                         # Past the depth limit: the identity map and no fields.
@@ -2120,11 +2163,11 @@ def normalize_django_value(value: Any, _depth: int = 0, *, state_roundtrip: bool
             return model_identity(value)
         # Increment DjangoJSONEncoder._depth so _serialize_model_safely
         # respects the depth limit for prefetched relations.
-        DjangoJSONEncoder._depth += 1
+        _add_encoder_depth(1)
         try:
             model_dict = _encoder._serialize_model_safely(value)
         finally:
-            DjangoJSONEncoder._depth -= 1
+            _add_encoder_depth(-1)
         return normalize_django_value(model_dict, _depth + 1, state_roundtrip=state_roundtrip)
 
     # Duck-typing fallback for file-like objects (must be after Model check)

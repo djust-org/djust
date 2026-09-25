@@ -260,6 +260,36 @@ Worker count formula:
 - For pure-async workloads (`-k uvicorn.workers.UvicornWorker`): `cpu_count` (e.g., `-w 2` on 1 vCPU, `-w 4` on 2 vCPU).
 - For sync workloads (`-k sync` — not used by djust): `(2 x cpu_count) + 1`.
 
+### More than one core per process: `worker_threads`
+
+By default every WebSocket session's sync work — `mount`, event handlers, hooks, renders — runs on **one thread shared by all sessions** in the process (asgiref's `sync_to_async` default). One process then does LiveView work on at most about one core, and one session's slow handler or database query delays every other session's.
+
+`LIVEVIEW_CONFIG["worker_threads"]` (djust 1.3, opt-in) gives the WebSocket path a pool of threads instead:
+
+```python
+LIVEVIEW_CONFIG = {
+    "worker_threads": True,  # one thread per available CPU, max 32; or an int
+}
+```
+
+- Each session is assigned to the least-loaded pool thread when it connects, and **stays on that thread for its lifetime**. Thread-locals and the thread's Django database connection stay consistent for the session.
+- Different sessions' handlers run at the same time on different threads. A session's own events still run one at a time, in order.
+- HTTP requests and SSE streams are unchanged: Django already gives each HTTP request its own thread.
+- The default (`None`) keeps the single shared thread. An invalid value is reported by the system check `djust.C021`.
+
+Things to know before you turn it on:
+
+- **Your sync handlers can now run concurrently with other sessions' handlers.** Module-level state that handlers mutate (a dict of rooms, a counter) needs a `threading.Lock`, exactly as it would under a multi-threaded WSGI server. State on the view instance (`self.…`) is per session and needs nothing.
+- **Each pool thread opens its own database connection**, so budget up to `worker_threads` extra connections per process (see [Database Connection Pooling](#database-connection-pooling)).
+- **Sessions that share a pool thread still wait on each other.** A slow handler, or a long `start_async` callback, holds up the other sessions pinned to its thread, though no longer the whole process. The [#3074](https://github.com/djust-org/djust/issues/3074) experiment measured about 80–120 ms more p95 latency at the load knee with a pool of 8–12 threads than with one thread per session, in exchange for about half the memory per session.
+- **On standard CPython (3.12, 3.13) the GIL still limits Python work to about one core.**
+  - What the pool can overlap there is waiting (database queries, HTTP calls) and djust's Rust render, which releases the GIL while it renders.
+  - For a CPU-bound app it measured no gain: the #3074 snake load test, with one thread per session on 3.12, saturated at the same 32–64 clients as stock.
+- **The multi-core gain needs free-threaded CPython 3.14t**, and more than the pool:
+  - 3.14t by itself moved the snake knee from 32–64 clients (stock, 3.12) to 64–96. Adding per-session threads left the knee there: they raised the cores in use from about 1.6 to 1.9, until the event loop saturated.
+  - The pool starts to pay off once the event loop is relieved. With scoped push added, per-session threads reached 192–224 clients, against 96–128 on the shared thread.
+  - With event-loop offload and a lighter in-process channel layer as well, one process used about 5 cores and served about 4–5× the clients of stock 3.12.
+
 ### WebSocket per-message compression (permessage-deflate)
 
 VDOM patches are highly compressible — typical gzip ratios of **60-80% reduction in wire size** for repetitive HTML fragments and JSON patch structures. Both Uvicorn (with the `websockets` library) and Daphne support the `permessage-deflate` WebSocket extension out of the box and negotiate it with any modern browser client.
