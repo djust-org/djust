@@ -105,8 +105,8 @@ def event_handler(
         coerce_types: Whether to coerce string params to expected types (default: True)
         parameter_policy: Override the server parameter policy with "strict" or
             "legacy"; None inherits LIVEVIEW_CONFIG['event_parameter_policy']
-            (default "legacy"). ADR-036's strict client collection and complete
-            migration/acceptance matrix are still staged.
+            (default "legacy"). Strict binds the Python signature exactly: see
+            "Typed event parameters" in docs/website/core-concepts/events.md.
         expose_api: Expose this handler as an HTTP API endpoint at
             ``POST /djust/api/<view_slug>/<handler_name>/`` with OpenAPI 3.1 schema.
             Default is False (WebSocket-only). When True, the same handler runs with

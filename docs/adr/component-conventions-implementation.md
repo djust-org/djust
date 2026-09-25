@@ -24,6 +24,81 @@ D6's wording changes to match.
 The diagnostics suites now assert the value-free contract under
 `DEBUG = False`, with `DEBUG = True` cases asserting that the details appear.
 
+## ADR-036 acceptance review — P3
+
+This is the review the ADR's "Scope and acceptance gates" require before
+strict mode is considered supported. Each gate is listed with its evidence at
+the final revision. P1 and P2 closure accounts are in the checklist below.
+
+**Freeze a valid/invalid conversion matrix.** The ADR lists: false-like
+booleans, blank numbers, partial numbers, bool-as-int, overflow/resource
+limits, date boundaries, nullable values, arrays and unsupported annotations.
+- `test_parameter_contract.py`: 144 core cases, covering every listed class
+  plus hostile conversion methods, cycles and subclass budgets.
+- `test_parameter_contract_checks.py`: unsupported and unresolvable
+  declarations are startup errors (V016).
+
+**Real DOM extraction through wire dispatch, parity across every dispatch
+path, `coerce_types=False`.**
+- `strict_native_binding.test.js` (21 cases) drives real DOM events through
+  the bundle.
+- `test_strict_transport_parity.py` runs one 43-row matrix identically
+  through eight paths. The paths are: the shared runtime, WebSocket normal
+  and actor mode, SSE, both HTTP-fallback shapes, the exposed API and the
+  test client. Its rows include `coerce_types=False` and exact `**` key order.
+- `tests/playwright/test_strict_parameters.py` checks outbound payloads and
+  handler results in Chromium over WebSocket, SSE and HTTP-only. Its canary
+  against the pre-activation client fails 24 checks.
+
+**Missing/extra/duplicate arguments, keyword-only signatures, forms' open
+payloads, client metadata separation, forged component injection.**
+- The parity matrix rows.
+- `test_trusted_dispatch_context.py` (68 cases, forged keys on every
+  transport).
+- The component lifecycle case in `test_producer_parameter_contracts.py`.
+
+**Legacy precedence and values unchanged.**
+- The legacy controls in the trusted-context, strict-binding and browser
+  suites.
+- The unchanged legacy suites in every full run.
+
+**Invalid input never invokes application code; diagnostics expose no
+sensitive payloads.**
+- Every rejection row asserts that the handler was not called, and that
+  `SECRET_INVALID` / forged values are absent from frames, responses and
+  errors.
+- Client rejections report only the handler name (browser matrix and the
+  bundle cases).
+
+**Execute the published examples under the intended policy.**
+- The events guide's new "Typed event parameters (strict policy)" section and
+  the AI events reference now carry strict examples.
+- `test_adr036_documented_examples.py` extracts their Python with the
+  doc-snippet checker's own extractor, executes it, and renders the paired
+  HTML through a real GET. It checks the advertised strict contracts, then
+  drives the documented valid and invalid payloads through the real HTTP
+  fallback.
+- `adr036_documented_examples.test.js` mounts the same HTML blocks in the
+  bundle under those contracts, and checks that the browser sends exactly
+  those payloads.
+
+**Published docs match.**
+- djust-docs' `docs_verify`, run with `DJUST_DOCS_SOURCE` pointed at this
+  branch's `docs/`: links, symbols (689) and a11y pass.
+- Its one nav finding (`guides/accounts.md` absent from `_config.yaml`)
+  pre-dates this branch.
+- `docs_generate --check` could not run: djust-docs imports the sibling
+  checkout's djust (1.2.0rc7), whose generated reference is stale and whose
+  components import recurses there. That is a djust-docs environment issue,
+  not content.
+- Website delivery follows the branch's merge and the docs submodule bump.
+
+**Final-revision runs.**
+- Focused ADR-036 Python suites: 542 passed.
+- Focused bundle suites: 130 passed.
+- Playwright matrix: passes on all three transports.
+- The full-suite result is recorded below.
+
 ## ADR-038 activation review — E6-5
 
 This is the review E6 requires before the guard is removed. It covers every
@@ -1941,14 +2016,18 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
     - uploads are not event arguments;
     - two root mounts of the same view path on one page are a known
       limitation (N3).
-- [ ] **P3 — acceptance.** Execute documented examples under their stated policy;
+- [x] **P3 — acceptance.** Execute documented examples under their stated policy;
   verify redacted diagnostics and the ADR's complete conversion/parity matrix.
+  Closed by the [acceptance review](#adr-036-acceptance-review--p3); ADR-036 is
+  Accepted.
 - [ ] **PR — retirement.** Delete the superseded coercion path per
   [ADR-036 Step R](036-typed-event-parameter-contracts.md): `coerce_parameter_types`
-  (`validation.py:137`), `_coerce_value` (`:219`), `_coerce_single_value` (`:249`),
-  with their tests. `validate_handler_params` (`:440`) is rewired, not removed.
+  (`validation.py:256`), `_coerce_value` (`:338`), `_coerce_single_value` (`:368`),
+  with their tests. `validate_handler_params` (`:559`) is rewired, not removed.
   Fires only once strict is the default, which this ADR does not yet approve.
-  Grep-verify that no second coercion implementation remains.
+  Grep-verify that no second coercion implementation remains. Open and not
+  triggered at acceptance: the targets serve every legacy-policy handler (see
+  the Step R status in the ADR).
 
 ### ADR-035 — Django-native form and object lifecycle
 

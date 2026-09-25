@@ -2,7 +2,42 @@
 
 All handlers require `@event_handler()` decorator and `**kwargs`.
 
-Strict policy (staged, `@event_handler(parameter_policy="strict")`, ADR-036): closed signatures are the contract, and `**kwargs` is not required. The browser sends a generated value (`value`/`field` for input/change, form fields for submit, `key`/`code` for keyboard) only when the handler declares that parameter name or a `**` catch-all. `dj-value-*` is always sent, and one colliding with a generated name is rejected. `_target` is never sent: use `field` or `dj-value-*`. Legacy handlers are unchanged.
+The rules below are the default legacy policy. For new code, prefer the strict
+policy (`@event_handler(parameter_policy="strict")`, or project-wide
+`LIVEVIEW_CONFIG = {"event_parameter_policy": "strict"}`; ADR-036):
+- Closed, annotated signatures are the contract; `**kwargs` is not required.
+- Pass arguments with `dj-value-*` only (never `data-*` or `dj-params`); no type suffix is needed.
+- The browser sends a generated value (`value`/`field` for input/change, form fields for submit, `key`/`code` for keyboard) only when the handler declares that parameter name or a `**` catch-all.
+- A `dj-value-*` name colliding with a generated name is rejected. `_target` is never sent: use `field` or `dj-value-*`.
+- Invalid input is rejected before the handler runs, so don't add defaults just to survive malformed events.
+
+```python
+from djust import LiveView
+from djust.decorators import event_handler
+
+
+class ItemView(LiveView):
+    template_name = "items/list.html"
+
+    def mount(self, request, **kwargs):
+        self.selected_id = 0
+        self.query = ""
+
+    @event_handler(parameter_policy="strict")
+    def select_item(self, item_id: int, active: bool = False) -> None:
+        self.selected_id = item_id  # still authorize the record before using it
+
+    @event_handler(parameter_policy="strict")
+    def search(self, value: str) -> None:
+        self.query = value
+```
+
+```html
+<button dj-click="select_item" dj-value-item-id="{{ item.id }}" dj-value-active="true">Select</button>
+<input name="q" dj-input="search" value="{{ query }}">
+```
+
+Legacy policy:
 
 ```python
 from djust.decorators import event_handler, debounce, throttle

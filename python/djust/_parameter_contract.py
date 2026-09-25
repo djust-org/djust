@@ -1,9 +1,9 @@
-"""Staged ADR-036 strict signature contract (not a dispatch-policy switch).
+"""ADR-036 strict signature contract (not a dispatch-policy switch).
 
 This module owns conversion, binding and value-free metadata together. Callers
 must supply an already-bound callable and extract trusted dispatch context first.
 It never invokes the callable, reads settings, logs payloads or resolves objects.
-Legacy validation remains in validation.py until transport parity is implemented.
+Legacy validation remains in validation.py for legacy-policy handlers (ADR-036 PR).
 """
 
 import inspect

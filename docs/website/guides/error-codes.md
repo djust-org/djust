@@ -295,7 +295,7 @@ In development, pages render without Tailwind utilities until you compile the CS
 
 **Severity**: Error
 
-**What causes it**: `LIVEVIEW_CONFIG['event_parameter_policy']` is set to something other than `'legacy'` or `'strict'`. Every event handler without its own `parameter_policy` inherits this value, and dispatch rejects each of their events until it is fixed. The strict policy (ADR-036) is a staged opt-in; `'legacy'` is the default.
+**What causes it**: `LIVEVIEW_CONFIG['event_parameter_policy']` is set to something other than `'legacy'` or `'strict'`. Every event handler without its own `parameter_policy` inherits this value, and dispatch rejects each of their events until it is fixed. The strict policy (ADR-036) is opt-in; `'legacy'` is the default.
 
 **Fix**: Set the key to `'legacy'` or `'strict'`, or remove it. Suppress with `DJUST_CONFIG = {"suppress_checks": ["C021"]}` (the runtime still rejects the events).
 
@@ -542,7 +542,7 @@ self.api_client = MySerializableClient()  # noqa: V006
 
 **Severity**: Warning
 
-**What causes it**: An `@event_handler` decorated method does not include `**kwargs` in its signature. Event handlers receive all event parameters from the client, and without `**kwargs`, extra parameters will cause errors. Handlers using the staged strict parameter policy (ADR-036) are not reported: their closed signature is the contract, and V016 checks it instead.
+**What causes it**: An `@event_handler` decorated method does not include `**kwargs` in its signature. Event handlers receive all event parameters from the client, and without `**kwargs`, extra parameters will cause errors. Handlers using the strict parameter policy (ADR-036) are not reported: their closed signature is the contract, and V016 checks it instead.
 
 **Fix**:
 
@@ -667,7 +667,7 @@ V008 is broader than V006 and will flag any custom class instantiation, not just
 
 **Severity**: Error
 
-**What causes it**: An event handler or server function uses the staged strict parameter policy (ADR-036), and strict dispatch would reject every call to it. Message: "<view>.<handler>(): strict event parameter contract is invalid: Parameter '<name>' ...". The causes are an annotation that cannot be resolved (a misspelled name, a `TYPE_CHECKING`-only import, a name from another class), an unsupported type (supported: `str`, `int`, `float`, `bool`, `Decimal`, `UUID`, `date`, `Optional[T]`, `list[T]`, explicit `Any`), a named parameter without an annotation, or a keyword parameter named `view_id`, `component_id` or starting with `_`, which the framework reserves for routing. Staged component output callbacks are checked the same way for their payload parameters.
+**What causes it**: An event handler or server function uses the strict parameter policy (ADR-036), and strict dispatch would reject every call to it. Message: "<view>.<handler>(): strict event parameter contract is invalid: Parameter '<name>' ...". The causes are an annotation that cannot be resolved (a misspelled name, a `TYPE_CHECKING`-only import, a name from another class), an unsupported type (supported: `str`, `int`, `float`, `bool`, `Decimal`, `UUID`, `date`, `Optional[T]`, `list[T]`, explicit `Any`), a named parameter without an annotation, or a keyword parameter named `view_id`, `component_id` or starting with `_`, which the framework reserves for routing. Staged component output callbacks are checked the same way for their payload parameters.
 
 **Fix**: Correct the named parameter's declaration, use `Any` for input you validate yourself, or keep the handler on `parameter_policy="legacy"`. Legacy handlers are never reported.
 

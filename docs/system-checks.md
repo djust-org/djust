@@ -168,7 +168,7 @@ console.log("debug info"); // noqa: Q003
 ### C021 — Invalid `event_parameter_policy`
 - **Severity**: Error
 - **Method**: Settings inspection, through the resolver dispatch uses (`djust.validation.get_project_parameter_policy`)
-- **What it detects**: `LIVEVIEW_CONFIG['event_parameter_policy']` (or the same key in `DJUST_CONFIG`) is set to something other than `'legacy'` or `'strict'`. Every handler without its own `parameter_policy` inherits the value, and dispatch rejects each of their events while it is invalid. An absent key is the `'legacy'` default and never reports. The ADR-036 strict policy is a staged opt-in, not yet a supported migration target.
+- **What it detects**: `LIVEVIEW_CONFIG['event_parameter_policy']` (or the same key in `DJUST_CONFIG`) is set to something other than `'legacy'` or `'strict'`. Every handler without its own `parameter_policy` inherits the value, and dispatch rejects each of their events while it is invalid. An absent key is the `'legacy'` default and never reports. The ADR-036 strict policy is opt-in; legacy remains the default.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C021"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C021"]` (the runtime still rejects the events)
 - **False positives**: None
 

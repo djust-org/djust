@@ -144,7 +144,7 @@ For views with complex state that cannot be inferred from form values alone (can
 ```
 
 A recovery handler always runs under the legacy parameter policy, even in a
-project using the staged strict policy (ADR-036).
+project using the strict parameter policy (ADR-036).
 
 On reconnect, djust fires the `restore_state` handler with two dict arguments
 (they are not flattened into separate kwargs):
