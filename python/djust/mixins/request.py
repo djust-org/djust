@@ -871,8 +871,11 @@ class RequestMixin:
                     coerce = event_meta.get("coerce_types", True)
 
                 if get_handler_parameter_policy(handler) == "strict" and "event" not in data:
-                    if "_args" in data:
-                        params["_args"] = data["_args"]
+                    # The flat body drops "_" keys for legacy handlers. Strict
+                    # validation owns that namespace on every transport: it
+                    # drops transport metadata, consumes _args and rejects the
+                    # rest, so an unknown key is not silently discarded here.
+                    params.update({k: v for k, v in data.items() if k.startswith("_")})
                 validation = validate_handler_params(handler, params, event_name, coerce=coerce)
                 if not validation["valid"]:
                     logger.error("Parameter validation failed: %s", validation["error"])

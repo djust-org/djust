@@ -24,25 +24,31 @@ from ._parameter_contract import ParameterContract
 
 logger = logging.getLogger(__name__)
 
-_STRICT_CONTRACTS: weakref.WeakKeyDictionary[Any, Dict[bool, ParameterContract]] = (
-    weakref.WeakKeyDictionary()
-)
+_STRICT_CONTRACTS: weakref.WeakKeyDictionary[
+    Any, Dict[tuple[bool, frozenset[str]], ParameterContract]
+] = weakref.WeakKeyDictionary()
 _STRICT_CONTRACT_LOCK = threading.RLock()
 _MISSING_POSITIONAL = object()
 _SIGNATURE_OWNER = object()
 
 
-def get_strict_handler_contract(handler: Callable) -> ParameterContract:
-    """Cache declarations, never bound methods or their live owner instances."""
-    bound = inspect.ismethod(handler)
+def get_strict_handler_contract(
+    handler: Callable, trusted: frozenset[str] = frozenset()
+) -> ParameterContract:
+    """Cache declarations, never bound methods or their live owner instances.
+
+    ``trusted`` names framework-injected parameters (ADR-036 D5); see
+    ``ParameterContract.compile``. Client-callable handlers use none.
+    """
+    key = (inspect.ismethod(handler), frozenset(trusted))
     function = handler.__func__ if inspect.ismethod(handler) else handler
     if not inspect.isfunction(function):
-        return ParameterContract.compile(handler)
+        return ParameterContract.compile(handler, key[1])
     with _STRICT_CONTRACT_LOCK:
         variants = _STRICT_CONTRACTS.setdefault(function, {})
-        if bound not in variants:
-            variants[bound] = ParameterContract.compile(handler)
-        return variants[bound]
+        if key not in variants:
+            variants[key] = ParameterContract.compile(handler, key[1])
+        return variants[key]
 
 
 def get_project_parameter_policy() -> str:
@@ -90,12 +96,22 @@ def validated_call_arguments(validation: Dict[str, Any]) -> tuple[tuple[Any, ...
 def _validate_strict_handler_params(
     handler: Callable, params: Dict[str, Any], coerce: bool, positional_args: Any
 ) -> Dict[str, Any]:
-    from ._parameter_contract import ParameterError
+    from ._parameter_contract import (
+        FRAMEWORK_ARGUMENT_NAMES,
+        TRANSPORT_METADATA_KEYS,
+        ParameterError,
+    )
 
     contract = get_strict_handler_contract(handler)
     expected = [item["name"] for item in contract.metadata()]
     positional = () if positional_args is _MISSING_POSITIONAL else positional_args
     try:
+        if type(params) is dict and any(key in TRANSPORT_METADATA_KEYS for key in params):
+            # D5: transport bookkeeping is dispatch context, never an argument.
+            params = {k: v for k, v in params.items() if k not in TRANSPORT_METADATA_KEYS}
+        if type(params) is dict and any(key in FRAMEWORK_ARGUMENT_NAMES for key in params):
+            # The route that received this event did not consume its target.
+            raise ParameterError("The event's routing target is not handled by this route.")
         if type(params) is dict and "_args" in params:
             if positional_args is not _MISSING_POSITIONAL:
                 raise ParameterError("Positional arguments were supplied twice.")

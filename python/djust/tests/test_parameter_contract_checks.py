@@ -37,6 +37,7 @@ from datetime import date
 from typing import TYPE_CHECKING, Annotated, Any, Optional
 
 from djust import LiveView
+from djust.components._interactive import DropdownMenu
 from djust.components.base import LiveComponent
 from djust.decorators import event_handler, server_function
 
@@ -202,6 +203,20 @@ class ActorView(LiveView):
         pass
 
 
+class Subscribed(LiveView):
+    template = "<div dj-root>{{ menu }}</div>"
+    menu = DropdownMenu(label="Menu", items=[{"label": "Edit", "value": "edit"}])
+    other = DropdownMenu(label="Other", items=[{"label": "Edit", "value": "edit"}])
+
+    @menu.on.selected
+    def picked(self, component: DropdownMenu, value: str) -> None:
+        pass
+
+    @other.on.selected
+    def loose(self, component: DropdownMenu, value: object) -> None:
+        pass
+
+
 class Widget(LiveComponent):
     template = "<div></div>"
 
@@ -326,6 +341,14 @@ def test_invalid_matrix_reports_exactly_one_expected_message_each(fixture_module
         )
     ]
     assert found.pop(_label("Widget", "pick")) == [("djust.V016", EXPECTED_INVALID["mapping"][1])]
+    assert found.pop(_label("Subscribed", "loose")) == [
+        (
+            "djust.V016",
+            "other.selected output callback contract is invalid: Parameter 'value': "
+            "Unsupported annotation; use str, int, float, bool, Decimal, UUID, date, "
+            "Optional[T], list[T] or explicit Any.",
+        )
+    ]
     found.pop(
         "%s (declared as %s.StrictMixin.mixin_invalid)"
         % (_label("UsesMixin", "mixin_invalid"), MODULE)

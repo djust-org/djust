@@ -322,7 +322,8 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
   - an unsupported type or shape (`dict`, unions other than `Optional[T]`, bare `list`, `Annotated`, `set`, ...). Supported: `str`, `int`, `float`, `bool`, `Decimal`, `UUID`, `date`, `Optional[T]`, `list[T]` and explicit `Any`;
   - a named parameter without an annotation (use `Any` for unchecked input; unannotated `*args` / `**kwargs` are an intentional open contract);
   - a keyword-capable parameter named `view_id` or `component_id`, or starting with `_`. Transports strip those routing keys before validation, so the parameter could never receive an application value (ADR-036 D5). Positional-only parameters may use any name;
-  - a handler whose own `parameter_policy` metadata is not `'legacy'` or `'strict'`.
+  - a handler whose own `parameter_policy` metadata is not `'legacy'` or `'strict'`;
+  - an ADR-034 output-subscription callback (staged) whose payload annotation the strict contract does not support. The source `component` is framework-supplied and not checked as a payload parameter.
 - **Reporting**: one message per declaration, under the declaring class when it is itself checked, otherwise under its first user with `(declared as ...)`. Handlers that inherit an invalid project policy are covered by C021 instead.
 - **Legacy handlers**: never reported. Legacy remains the default.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V016"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V016"]` (dispatch still rejects the events)

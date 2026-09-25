@@ -17,7 +17,12 @@ from uuid import uuid4
 
 from django.utils.html import format_html, format_html_join
 
-from djust._component_subscriptions import ComponentDeclaration, OutputContract, subscribe
+from djust._component_subscriptions import (
+    SOURCE_PARAMETER,
+    ComponentDeclaration,
+    OutputContract,
+    subscribe,
+)
 from djust.decorators import event_handler
 from djust.live_view import LiveView
 from .base import LiveComponent
@@ -53,6 +58,7 @@ Toggled = TypeVar("Toggled", bound=ToggledCallback)
 D = TypeVar("D", bound="DropdownMenu")
 _SELECTED = OutputContract("selected", (("value", str),))
 _TOGGLED = OutputContract("toggled", (("open", bool),))
+_SOURCE = frozenset({SOURCE_PARAMETER})
 
 
 def _binding_values(state: object) -> tuple[str, bool, str]:
@@ -252,6 +258,7 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
         return owner
 
     async def _emit(self, output: OutputContract, payload: dict[str, object]) -> None:
+        from djust.validation import get_strict_handler_contract
         from djust.websocket_utils import _call_handler
         from djust._component_subscriptions import compile_subscriptions, is_component_subscription
 
@@ -276,7 +283,12 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
             ):
                 raise RuntimeError("Output callback no longer matches its validated declaration")
             callback = definition.__get__(owner, type(owner))
-            result = await _call_handler(callback, {"component": self, **payload})
+            # ADR-036 D5/D6: the callback's strict contract binds only the
+            # declared output payload; the source component is framework context.
+            bound = get_strict_handler_contract(callback, _SOURCE).bind(
+                dict(payload), coerce=False, trusted={SOURCE_PARAMETER: self}
+            )
+            result = await _call_handler(callback, bound.kwargs, positional_args=bound.args)
             if inspect.isawaitable(result):
                 result = await result
             if result is not None:

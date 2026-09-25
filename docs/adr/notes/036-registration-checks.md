@@ -36,7 +36,7 @@ parameter. The return annotation is still never evaluated.
 | ID | Severity | Condition |
 | --- | --- | --- |
 | `djust.C021` | Error | `event_parameter_policy` is not `'legacy'` or `'strict'`. Reported once; handlers inheriting it are not repeated. |
-| `djust.V016` | Error | A strict handler's contract fails to compile. Causes: an unresolvable annotation (misspelled, `TYPE_CHECKING`-only, or another class's name), an unsupported type or shape, a named parameter without an annotation, a reserved argument name, or invalid per-handler policy metadata. |
+| `djust.V016` | Error | A strict handler's contract, or an ADR-034 output callback's payload contract ([trusted source](036-trusted-dispatch-context.md)), fails to compile. Causes: an unresolvable annotation (misspelled, `TYPE_CHECKING`-only, or another class's name), an unsupported type or shape, a named parameter without an annotation, a reserved argument name, or invalid per-handler policy metadata. |
 | `djust.V017` | Error | A strict `async def` event handler on a `use_actors = True` view. The actor bridge rejects it. |
 | `djust.V018` | Warning | `@event_handler(params=[...])` names a different set from the strict signature. |
 

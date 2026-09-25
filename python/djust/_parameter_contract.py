@@ -36,6 +36,10 @@ _SERVER_DEFAULT = object()
 # bodies also drop "_"-prefixed keys, and the strict client collector refuses
 # both, so a keyword-capable application parameter can never receive them.
 FRAMEWORK_ARGUMENT_NAMES = frozenset({"view_id", "component_id"})
+# Per-event client bookkeeping read by the transport (the @cache round-trip id,
+# the dj_activity gate). Strict validation drops them on every path, so the
+# application payload is identical whichever transport delivered it.
+TRANSPORT_METADATA_KEYS = frozenset({"_cacheRequestId", "_activity"})
 
 
 class ContractError(ValueError):
@@ -259,18 +263,36 @@ class ParameterContract:
 
     signature: inspect.Signature
     types: tuple[tuple[str, _Type], ...]
+    trusted: frozenset[str] = frozenset()
 
     @classmethod
-    def compile(cls, handler: Callable[..., Any]) -> "ParameterContract":
+    def compile(
+        cls, handler: Callable[..., Any], trusted: frozenset[str] = frozenset()
+    ) -> "ParameterContract":
+        """Compile ``handler``; ``trusted`` names framework-injected parameters.
+
+        A trusted parameter is bound only from server-owned values passed to
+        ``bind(trusted=...)``: never from a client key or a positional value,
+        never converted, and absent from the public metadata. Its type is the
+        injecting framework code's responsibility (ADR-036 D5).
+        """
         try:
             signature = inspect.signature(handler)
         except (TypeError, ValueError):
             raise ContractError("Cannot inspect the handler's signature.") from None
         if len(signature.parameters) > MAX_COLLECTION:
             raise ContractError("Handler declares too many parameters.")
+        for name in trusted:
+            param = signature.parameters.get(name)
+            if param is None or param.kind not in (param.POSITIONAL_OR_KEYWORD, param.KEYWORD_ONLY):
+                raise ContractError(
+                    f"Framework-supplied parameter '{name}' must be a named keyword parameter."
+                )
         globalns, localns = declaration_namespaces(handler)
         compiled = []
         for name, param in signature.parameters.items():
+            if name in trusted:
+                continue
             if param.kind in (param.POSITIONAL_OR_KEYWORD, param.KEYWORD_ONLY) and (
                 name in FRAMEWORK_ARGUMENT_NAMES or name.startswith("_")
             ):
@@ -309,7 +331,7 @@ class ParameterContract:
             ],
             return_annotation=inspect.Signature.empty,
         )
-        return cls(binding_signature, tuple(compiled))
+        return cls(binding_signature, tuple(compiled), frozenset(trusted))
 
     def metadata(self) -> tuple[dict[str, Any], ...]:
         """Value-free public contract; defaults stay exclusively on the server."""
@@ -332,14 +354,23 @@ class ParameterContract:
         positional: list[Any] | tuple[Any, ...] = (),
         *,
         coerce: bool = True,
+        trusted: dict[str, Any] | None = None,
     ) -> inspect.BoundArguments:
+        trusted = {} if trusted is None else trusted
+        if set(trusted) != self.trusted:
+            # A dispatcher bug, not client input: never bind a partial context.
+            raise ContractError("Framework-supplied arguments do not match the contract.")
         if type(params) is not dict or type(positional) not in (list, tuple):
             raise ParameterError("Supply a parameter object and positional array.")
         _check_budget(params, positional)
         if any(type(key) is not str for key in params):
             raise ParameterError("Parameter names must be strings.")
+        if any(key in self.trusted for key in params):
+            raise ParameterError("A framework-supplied argument cannot be sent with the event.")
         try:
-            bound = self.signature.bind(*positional, **params)
+            # A positional value that reaches a trusted slot collides with the
+            # trusted keyword below and fails as a duplicate.
+            bound = self.signature.bind(*positional, **params, **trusted)
         except TypeError:
             # inspect's message can include an arbitrary client-supplied key.
             raise ParameterError(

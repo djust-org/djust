@@ -6,7 +6,9 @@ on the first event. Each check calls the runtime's own resolvers
 same bound shape dispatch uses, so the check and the runtime share one cached
 contract and cannot disagree. Legacy-policy handlers are never reported:
 legacy is the default and its behavior is unchanged. The project-level policy
-value is ``djust.C021`` in ``configuration.py``.
+value is ``djust.C021`` in ``configuration.py``. V016 also covers ADR-034
+output-subscription callbacks, whose payload is bound by the same strict
+contract with the source component as trusted framework context.
 
 No view, component or handler is constructed, mounted or invoked.
 """
@@ -128,18 +130,14 @@ def _handler_messages(
     except ContractError as exc:
         if first_report and not _is_check_suppressed("djust.V016"):
             messages.append(
-                DjustError(
+                _v016(
                     "%s: strict event parameter contract is invalid: %s" % (label, exc),
-                    hint=(
-                        "Strict dispatch rejects every call to this handler until its "
-                        "declaration is fixed. Supported inputs are str, int, float, bool, "
-                        "Decimal, UUID, date, Optional[T] and list[T]; use explicit Any "
-                        "for unchecked input, or parameter_policy='legacy' to opt out."
-                    ),
-                    id="djust.V016",
-                    fix_hint="Fix the parameter declaration of `%s`." % label,
-                    file_path=file_path,
-                    line_number=line_number,
+                    "Strict dispatch rejects every call to this handler until its "
+                    "declaration is fixed. Supported inputs are str, int, float, bool, "
+                    "Decimal, UUID, date, Optional[T] and list[T]; use explicit Any "
+                    "for unchecked input, or parameter_policy='legacy' to opt out.",
+                    label,
+                    function,
                 )
             )
         return messages
@@ -264,4 +262,69 @@ def check_event_parameter_contracts(app_configs: Any, **kwargs: Any) -> list[Che
                 primary[function] is cls,
             )
         )
+    checked: set[Any] = set()
+    for cls, _stop, _actor in _owner_classes():
+        messages.extend(_subscription_messages(cls, checked))
     return messages
+
+
+def _subscription_messages(cls: type, checked: set[Any]) -> list[CheckMessage]:
+    """V016 for ADR-034 output callbacks, whose payload is bound strictly.
+
+    The originating component is trusted framework context, not a payload
+    parameter; ``_interactive._emit`` compiles the same cached contract.
+    """
+    from djust._component_subscriptions import (
+        SOURCE_PARAMETER,
+        compile_subscriptions,
+        is_component_subscription,
+    )
+    from djust._parameter_contract import ContractError
+    from djust.validation import get_strict_handler_contract
+
+    try:
+        bindings = compile_subscriptions(cls)
+    except TypeError:
+        return []  # Class construction already rejected these declarations.
+    messages: list[CheckMessage] = []
+    for binding in bindings:
+        function = inspect.getattr_static(cls, binding.callback, None)
+        if not isinstance(function, types.FunctionType) or function in checked:
+            continue
+        checked.add(function)
+        if not is_component_subscription(function):
+            continue
+        try:
+            get_strict_handler_contract(
+                types.MethodType(function, _DECLARATION_OWNER), frozenset({SOURCE_PARAMETER})
+            )
+        except ContractError as exc:
+            if _is_check_suppressed("djust.V016"):
+                continue
+            label = _label(cls, binding.callback, function)
+            messages.append(
+                _v016(
+                    "%s: %s.%s output callback contract is invalid: %s"
+                    % (label, binding.component, binding.output, exc),
+                    "Output payloads are bound with the strict contract; the source "
+                    "component is supplied by the framework. Annotate each payload "
+                    "parameter with a supported type (str, int, float, bool, Decimal, "
+                    "UUID, date, Optional[T], list[T]) or explicit Any.",
+                    label,
+                    function,
+                )
+            )
+    return messages
+
+
+def _v016(message: str, hint: str, label: str, function: Any) -> CheckMessage:
+    """The one constructor of ``djust.V016`` (one check ID, one emitter)."""
+    file_path, line_number = _location(function)
+    return DjustError(
+        message,
+        hint=hint,
+        id="djust.V016",
+        fix_hint="Fix the parameter declaration of `%s`." % label,
+        file_path=file_path,
+        line_number=line_number,
+    )
