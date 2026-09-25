@@ -47,6 +47,16 @@ class RoomView(LiveView):
 push_to_view("games.views.RoomView", handler="handle_refresh", scope=room)
 ```
 
+```python
+# asgi.py: HTTP requests share a bounded pool of threads too (#3114)
+from djust.worker_pool import PooledHTTP
+
+application = ProtocolTypeRouter({
+    "http": PooledHTTP(get_asgi_application()),
+    "websocket": DjustMiddlewareStack(URLRouter(websocket_urlpatterns)),
+})
+```
+
 Then run on free-threaded CPython:
 
 ```bash
@@ -79,7 +89,7 @@ assert not sys._is_gil_enabled(), "something re-enabled the GIL"
 - **What it does.** Each WebSocket session is pinned to one thread of a pool for its lifetime, so thread-locals and the thread's database connection stay consistent. Different sessions run at the same time.
 - **Settings.** `True` means one thread per CPU; an integer sets the count. The default, `None`, keeps the single shared thread.
 - **Concurrency.** A session's own events still run in order.
-- **Other transports.** HTTP and SSE are unchanged.
+- **Other transports.** HTTP and SSE are unchanged unless you wrap the HTTP app in `PooledHTTP` (see [Memory under overload](#memory-under-overload)).
 
 With the pool on, djust also moves per-frame work off the event loop:
 - the pre-event snapshot of the view's state runs on the session's thread;
@@ -149,6 +159,74 @@ What the numbers say:
   - the shared thread used 1.6 MB, and stock 3.12 1.1 MB.
 
   The extra cost comes from free-threaded CPython's per-thread allocator heaps, which is why djust uses a bounded pool rather than a thread per session.
+
+## Memory under overload
+
+On free-threaded CPython, every OS thread that allocates gets its own allocator heap, and the memory stays resident after the thread exits. What decides a process's RSS under overload is therefore **how many threads it has had at once**, as well as how many sessions it holds.
+
+### Where the threads come from: one per HTTP request
+
+Django's ASGI handler runs every HTTP request in its own new thread, through asgiref's `ThreadSensitiveContext`. Normally only a few requests are in flight. Under overload the event loop falls behind and requests take seconds, so hundreds are in flight at once, and that means hundreds of threads.
+
+Measured in the snake-arena process, on 3.14t with `worker_threads=5` (#3114):
+
+| page GETs (concurrent × rounds) | peak threads | RSS after the burst (also its peak) | live Python heap after |
+|---|---|---|---|
+| 256 × 1 | 259 | 81 → 1263 MB | 89 MB (RSS 1340 MB)† |
+| 64 × 12 | 66 | 81 → 867 MB | – |
+| 8 × 96 | 10 | 81 → 468 MB | – |
+| 256 × 3 with `PooledHTTP` | 7 | 81 → 406 MB | – |
+
+† From a separate run with `tracemalloc` on.
+
+- **Each concurrent request thread left about 4 MB resident.** The live heap was a small fraction of that.
+- **Nothing gave the memory back:** neither mimalloc's purge options nor a cyclic `gc.collect()`.
+
+`djust.worker_pool.PooledHTTP` fixes this. It binds each HTTP request to one thread of a small pool before Django's handler runs, and because `ThreadSensitiveContext` keeps an outer choice, the handler reuses that thread:
+
+```python
+from djust.worker_pool import PooledHTTP
+
+application = ProtocolTypeRouter({
+    "http": PooledHTTP(get_asgi_application()),
+    "websocket": ...,
+})
+```
+
+- **Which thread.** A request goes to the thread with the fewest requests bound to it. That count is not how busy the thread is: a request whose client disconnects mid-view releases its slot while its sync code finishes, and an async streaming response keeps its slot while using no thread.
+- **Pool size.** `threads=None`, the default, uses the size of the WebSocket pool (`LIVEVIEW_CONFIG["worker_threads"]`). While that setting is off, every request passes through unchanged. An integer sets the size, and `0` passes through. Wrapped apps of the same size share one pool.
+- **Separate threads.** The HTTP pool's threads are named `djust-http-N` and are separate from the WebSocket sessions' threads, so a burst of page loads does not queue behind game frames.
+- **What changes under a burst.** At most `threads` requests run sync code at once, and the rest wait on the event loop as coroutines, not threads. That is the thread model of a WSGI server, with the same caveats:
+  - a sync view, or a sync streaming iterator, that blocks for a long time holds its thread, and the requests bound to that thread wait behind it;
+  - a sync view that blocks until another request's sync code has run can wait forever if both land on one thread;
+  - state kept on a thread outlives the request. Each pool thread keeps its database connection between requests (Django still runs `close_old_connections` at each request's start and end), and a `threading.local` that code sets without clearing is seen by that thread's next request.
+- **What does not change.** WebSocket and lifespan scopes pass through. SSE and streaming responses keep their slot while they stream, but only their sync work runs on it.
+
+### What else holds memory
+
+The snake-arena process was stepped 64 → 192 → 256 clients, 60 s each, then left idle for 120 s. Settings: 3.14t, `worker_threads=5`, scoped push, `djust.layers.InMemoryChannelLayer`.
+
+| | without `PooledHTTP` | with `PooledHTTP` |
+|---|---|---|
+| RSS at 64 clients | 277 MB | 252 MB |
+| peak RSS (256 clients) | 2030 MB | 936 MB |
+| RSS after the clients left and 120 s idle | 2030 MB | 936 MB |
+| p95 event round trip at 256 clients | 6.7–7.2 s | 0.32–0.33 s |
+| frames per client per second at 256 | 3.5–3.7 | 4.1–4.7 |
+| p95 gap between frames at 256 | 680–707 ms | 340–353 ms |
+
+The timings come from a shared 12-core machine: load average 5–24 for the first run and 4–7 for the second. The memory numbers are much less sensitive to that.
+
+- **Sessions.** Expect about **2–3 MB of RSS per connected client** on 3.14t with a pinned pool (252 MB at 64 clients above, up from 116 MB idle: 2.1 MB each). That covers the view, its Rust render state and the Django session.
+- **The state backend.** `InMemoryStateBackend` keeps about 270 KB per session for `SESSION_TTL` (see [Deployment](deployment.md#in-memory-development-only)).
+- **RSS levels off; it does not fall.** Freed memory stays with the allocator, both CPython's mimalloc heaps and the C allocator used by the Rust engine, and is reused for the next load. Size the container for the peak.
+  - On Linux, glibc also creates an arena per thread, which is one more reason to bound threads. `MALLOC_ARENA_MAX=2` caps it.
+- **Disconnected sessions wait for the cyclic collector.** A consumer and its view reference each other, so they are freed by `gc`, not the moment the socket closes. Free-threaded CPython runs the collector when allocation grows, so on a server that goes idle after a burst, dead sessions can stay alive until traffic returns. That memory is reused, not leaked.
+- **Queues stay bounded.** In the overloaded runs:
+  - deferred server pushes stayed at 0, because pushes that arrive while a session is busy coalesce into one render and are capped at 64;
+  - the in-memory channel layer held at most 53 messages per channel, against its `capacity` of 100, after which Channels drops new messages;
+  - transport write buffers stayed empty;
+  - the websockets inbound queue stayed at its limit of 32 per connection or less.
 
 ## The multi-process alternative: Redis
 

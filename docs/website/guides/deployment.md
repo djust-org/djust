@@ -295,7 +295,7 @@ LIVEVIEW_CONFIG = {
 
 - Each session is assigned to the least-loaded pool thread when it connects, and **stays on that thread for its lifetime**. Thread-locals and the thread's Django database connection stay consistent for the session.
 - Different sessions' handlers run at the same time on different threads. A session's own events still run one at a time, in order.
-- HTTP requests and SSE streams are unchanged: Django already gives each HTTP request its own thread.
+- HTTP requests and SSE streams are unchanged: Django gives each HTTP request its own new thread. On free-threaded CPython that is costly under overload, because each thread's allocator heap stays resident after the thread exits: a burst of 256 concurrent page loads cost about 1.2 GB in #3114. Wrap the HTTP app in `djust.worker_pool.PooledHTTP` to run requests on a bounded pool instead. See [Memory under overload](scaling-across-cores.md#memory-under-overload).
 - The default (`None`) keeps the single shared thread. An invalid value is reported by the system check `djust.C021`.
 - **With the pool on, djust also moves per-frame work off the asyncio event loop**, which becomes the next bottleneck once sessions render in parallel:
   - the snapshot of the view's assigns taken before an event runs on the session's thread, in the same hop as a sync handler;

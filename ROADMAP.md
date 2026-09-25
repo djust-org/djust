@@ -77,6 +77,15 @@ Two name shapes appear in this roadmap, with distinct meanings:
 | ~~**P2**~~ | ~~#3074 (6/7) — Free-threaded `cp314t` wheels, and a CI job that runs a core subset on 3.14t with the GIL off~~ ✅ (#3102) | v1.3.0 |
 | ~~**P2**~~ | ~~#3074 (7/7) — Guide: scaling a djust process across cores~~ ✅ (#3105) | v1.3.0 |
 
+### v1.3.0-4 — overload behaviour (#3114)
+
+*Kind:* memory under overload. snake-arena on 3.14t with `worker_threads=5` went from 134 MB to 1.3–1.5 GB of RSS under 192–256 clients and never gave it back. The dominant cause was Django's thread per HTTP request: each of hundreds of concurrent request threads left about 4 MB of free-threaded allocator heap resident. Push and channel-layer queues were measured bounded and are unchanged.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| ~~**P1**~~ | ~~#3114 — `djust.worker_pool.PooledHTTP` (opt-in): HTTP requests run on a bounded pool of threads instead of one new thread each; pool threads start from an empty context; scaling guide "Memory under overload" (RSS per client, allocator retention, bounded queues)~~ ✅ (#3118) | v1.3.0 |
+| **P2** | #3116 — The diagnostic owner-slot ContextVar holds strong refs to the consumer and runtime; context copies (tasks started in a turn, threads on 3.14t) pin disconnected sessions. Store weak refs (ADR-038 code) | v1.3.0 |
+
 ### v1.3.0-5 — event-loop ceiling (#3095)
 
 *Kind:* performance / scalability. On free-threaded 3.14t with `worker_threads` and scoped push, snake-arena in production saturates at about 160 players with the asyncio event-loop thread at 0.87–0.97 of a core while the pool threads use about 3 cores. These rows take per-message work off the loop thread. Every behaviour change is opt-in or proven safe.
