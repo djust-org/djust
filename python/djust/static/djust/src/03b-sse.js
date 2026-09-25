@@ -173,6 +173,8 @@ class LiveViewSSE {
      */
     async _handleMessageImpl(data) {
         if (globalThis.djustDebug) console.log('[SSE] Received:', data.type, data);
+        // Defined in 03-websocket.js; guarded for module-isolated loads.
+        if (typeof applyServiceWorkerMountMetadata === 'function') applyServiceWorkerMountMetadata(data);
 
         switch (data.type) {
 

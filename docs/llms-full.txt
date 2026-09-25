@@ -1,6 +1,6 @@
 # djust
 
-djust is a Python/Rust framework that brings Phoenix LiveView-style reactive server-side rendering to Django. Views update in real-time over WebSockets with ~61 KB gzipped client JS, no build step.
+djust is a Python/Rust framework that brings Phoenix LiveView-style reactive server-side rendering to Django. Views update in real-time over WebSockets with ~64 KB gzipped client JS, no build step.
 
 ## Application conventions for AI agents
 
