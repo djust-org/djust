@@ -344,6 +344,11 @@ class PooledHTTP:
       and a ``threading.local`` that code sets without clearing is seen by
       the thread's next request.
 
+    A request goes to the thread with the fewest requests bound to it. That
+    count is not how busy the thread is: a request cancelled mid-view (its
+    client went away) releases its slot while its sync code finishes, and an
+    async streaming response keeps its slot while using no thread.
+
     Scopes other than ``http`` (``websocket``, ``lifespan``) pass through, and
     a request whose context already chose an executor keeps it.
     """
