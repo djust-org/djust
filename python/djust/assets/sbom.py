@@ -131,7 +131,17 @@ def dumps(document: dict) -> str:
 
 
 def digest_of(document: dict) -> str | None:
-    for prop in document.get("metadata", {}).get("properties", []):
+    if not isinstance(document, dict):
+        return None
+    metadata = document.get("metadata", {})
+    if not isinstance(metadata, dict):
+        return None
+    properties = metadata.get("properties", [])
+    if not isinstance(properties, list):
+        return None
+    for prop in properties:
+        if not isinstance(prop, dict):
+            continue
         if prop.get("name") == DIGEST_PROPERTY:
             return prop.get("value")
     return None

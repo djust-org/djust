@@ -107,6 +107,13 @@ def test_b014_missing_or_stale(tmp_path):
         assert ids(check_sbom_current(None)) == ["djust.B014"]
 
 
+def test_b014_non_object_json_does_not_raise(tmp_path):
+    out = tmp_path / "a.cdx.json"
+    out.write_text("[1, 2]")
+    with override_settings(DJUST_SBOM_PATH=str(out)):
+        assert ids(check_sbom_current(None)) == ["djust.B014"]
+
+
 def test_djust_sbom_command_prints_the_document(capsys):
     call_command("djust_sbom")
     assert json.loads(capsys.readouterr().out)["bomFormat"] == "CycloneDX"

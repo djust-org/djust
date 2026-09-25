@@ -76,6 +76,14 @@ def test_digest_round_trips():
     assert digest_of({"metadata": {}}) is None
 
 
+def test_digest_of_tolerates_malformed_documents():
+    assert digest_of([]) is None
+    assert digest_of(None) is None
+    assert digest_of("x") is None
+    assert digest_of({"metadata": []}) is None
+    assert digest_of({"metadata": {"properties": "x"}}) is None
+
+
 def test_external_asset_is_marked():
     chart = next(c for c in _doc()["components"] if c["name"] == "chart.js")
     assert {"name": "djust:delivery", "value": "external"} in chart["properties"]
