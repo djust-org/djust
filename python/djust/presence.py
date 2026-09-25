@@ -58,7 +58,7 @@ from django.core.cache import cache
 
 from ._exposure import uses_legacy_exposure
 from .decorators import event_handler
-from .push import push_to_view
+from .push import push_to_presence_scope, push_to_view, view_push_scopes
 
 if TYPE_CHECKING:
     from .backends.base import PresenceBackend
@@ -199,8 +199,26 @@ class PresenceMixin:
     # presence. See issue #1613.
     presence_unique_per_connection: bool = False
 
+    # Who a join or leave wakes (#3095). The broadcast calls
+    # ``_on_presence_change`` on other sessions so they refresh
+    # ``online_count``; only the sessions that share this session's presence
+    # key can see a different count.
+    #
+    # - ``None`` (default): only those sessions when the view sets a
+    #   ``push_scope`` (it has opted in to scoped delivery), otherwise every
+    #   session of the view, as before.
+    # - ``True``: only the sessions that share the presence key.
+    # - ``False``: every session of the view in every room (the 1.2 behaviour,
+    #   for an ``_on_presence_change`` override that reacts to other keys).
+    presence_broadcast_scoped: Optional[bool] = None
+
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
+        # The presence key whose sessions a scoped broadcast reaches, and whose
+        # presence-scope group this session's WebSocket joins (#3095). Set by
+        # track_presence / _restore_presence; for a session that never tracks,
+        # the WebSocket transport fills it in once after mount.
+        self._presence_scope_key: Optional[str] = None
         self._presence_tracked = False
         self._presence_user_id: Optional[str] = None
         self._presence_meta: Optional[Dict[str, Any]] = None
@@ -221,9 +239,25 @@ class PresenceMixin:
             logger.debug("PresenceMixin._refresh_online_count: %s", exc)
             self.online_count = getattr(self, "online_count", 0)
 
+    def _presence_broadcast_is_scoped(self) -> bool:
+        """Whether a join or leave wakes only the sessions sharing the presence
+        key (#3095). See ``presence_broadcast_scoped``."""
+        flag = getattr(self, "presence_broadcast_scoped", None)
+        if flag is not None:
+            return bool(flag)
+        try:
+            return bool(view_push_scopes(self))
+        except (TypeError, ValueError):
+            # An invalid push_scope gets no scoped pushes (push.py logs it);
+            # keep the presence broadcast view-wide so nobody misses a change.
+            return False
+
     def _broadcast_presence_change(self) -> None:
-        """Fire ``push_to_view`` to ``_on_presence_change`` on every active session
-        of this view class.
+        """Push ``_on_presence_change`` to the peer sessions of this view.
+
+        Scoped (#3095, see ``presence_broadcast_scoped``): to the sessions
+        whose presence key is this session's key. Otherwise: to every active
+        session of this view class.
 
         Failures are swallowed (logged at debug) so a misconfigured channel
         layer, an invalid view-path regex (test-local class paths often fail
@@ -232,7 +266,13 @@ class PresenceMixin:
         """
         view_path = f"{self.__class__.__module__}.{self.__class__.__name__}"
         try:
-            push_to_view(view_path, handler="_on_presence_change", payload={})
+            if self._presence_broadcast_is_scoped():
+                key = getattr(self, "_presence_scope_key", None)
+                if key is None:
+                    key = self.get_presence_key()
+                push_to_presence_scope(view_path, key, handler="_on_presence_change", payload={})
+            else:
+                push_to_view(view_path, handler="_on_presence_change", payload={})
         except Exception as exc:  # noqa: BLE001 — broadcast must never kill track/untrack
             logger.debug("PresenceMixin._broadcast_presence_change: push_to_view failed: %s", exc)
 
@@ -368,6 +408,7 @@ class PresenceMixin:
 
         self._presence_user_id = user_id
         self._presence_meta = meta
+        self._presence_scope_key = presence_key
 
         # Join presence
         presence_data = PresenceManager.join_presence(presence_key, user_id, meta)
@@ -421,6 +462,7 @@ class PresenceMixin:
         try:
             presence_key = self.get_presence_key()
             PresenceManager.join_presence(presence_key, user_id, meta)
+            self._presence_scope_key = presence_key
             # #1611 / #1614 — also refresh local count and broadcast so the
             # reconnected session has online_count set for its first
             # post-restore patch, and peer sessions learn the user came back.
