@@ -15,8 +15,65 @@ the public hooks. Do not call `_create_form()` from `get_form()` overrides:
 that would recurse. Uploaded files must come from the authorized upload
 lifecycle, not arbitrary JSON parameters.
 
-The proposed `ModelFormMixin` and managed `self.object` lifecycle are **not yet
-available**. These hooks do not change legacy model authorization or exposure.
+These hooks do not change legacy model authorization or exposure.
+
+## ModelFormMixin: edit one record (djust 1.3+)
+
+**Available from djust 1.3** (not in the 1.3.0rc1 pre-release). Use it for
+single-record edit views instead of `_model_instance`:
+
+```python
+from django import forms
+from djust import LiveView
+from djust.forms import ModelFormMixin
+from .models import Article
+
+class ArticleForm(forms.ModelForm):
+    class Meta:
+        model = Article
+        fields = ["title", "body"]  # never ownership fields such as author
+
+class ArticleEditView(ModelFormMixin[Article], LiveView):
+    template_name = "article_edit.html"
+    model = Article
+    form_class = ArticleForm
+    login_required = True
+
+    def get_queryset(self):
+        return super().get_queryset().filter(author=self.request.user)
+
+    def form_valid(self, form):
+        self.object = form.save()
+        self.success_message = "Saved!"
+```
+
+```html
+<div dj-root>
+    <h1>{{ object.title }}</h1>
+    <form dj-submit="submit_form">
+        {% csrf_token %}
+        <input name="title" value="{{ form_data.title }}" dj-change="validate_field">
+        <textarea name="body">{{ form_data.body }}</textarea>
+        <button type="submit">Save</button>
+    </form>
+    <p>{{ success_message }}</p>
+</div>
+```
+
+Rules:
+- Route with `<int:pk>` (or `<slug:slug>`). The record comes only from the
+  route (`self.kwargs`), never from client parameters. Do not write `mount()`
+  to load it.
+- `get_queryset()` scopes the records; `has_object_permission(request, obj)`
+  authorizes each one. Override at least one (check `djust.S013`).
+- Missing, filtered-out and forbidden records get the same denial, and no form
+  or hook runs. Every event looks the record up and checks it again.
+- `self.object` renders as `object` (plus `context_object_name` if set) and is
+  never persisted. Only `self.object = form.save()` (the same record) may be
+  assigned; anything else raises `ValueError`.
+- `form_valid()` decides whether to save; djust never saves by itself.
+- Create forms stay on `FormMixin` with a `ModelForm`. Never combine
+  `ModelFormMixin` with `_model_instance`.
 
 ## FormMixin Pattern
 

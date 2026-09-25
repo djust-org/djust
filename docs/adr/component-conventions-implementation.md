@@ -24,6 +24,90 @@ D6's wording changes to match.
 The diagnostics suites now assert the value-free contract under
 `DEBUG = False`, with `DEBUG = True` cases asserting that the details appear.
 
+## ADR-035 acceptance review — F2
+
+This review maps each item in the ADR's "Scope and verification" list to its
+evidence at the final revision. F1 and F2 closure accounts are in the
+checklist below. Owner decisions Q1–Q6 and implementation choices N1–N6 are
+recorded in the ADR.
+
+**A no-custom-`mount()` edit example, a create form, a non-model form, and
+hooks overridden independently and through inherited views.**
+- `test_model_form_acceptance_adr035.py`: edit, create and non-model views,
+  and the hooks declared on a view and inherited by a subclass.
+- The demo `/demos/model-form/<pk>/` has no `mount()`.
+
+**Binding for empty submission, initial values, prefixes, choices, related
+fields and supported uploads; no double save or divergent validation paths.**
+- The acceptance suite covers each of these. Every write is counted in SQL:
+  one UPDATE per valid save, none when `form_valid` does not save, one INSERT
+  for a create.
+- `validate_field`, `submit_form` and restore all build the form through
+  `get_form()`, the path the F1 order tests observe.
+
+**Unauthorized/missing target, tampered identity, access revoked between
+events, failing permission callbacks: no form mutation or data disclosure.**
+- `test_model_form_lifecycle_adr035.py` covers HTTP, the shared runtime,
+  WebSocket in normal and actor mode, SSE and restore. Every denial is
+  asserted to show the same response or frame, with no form, no hook, no
+  write and no record name.
+- The acceptance suite adds deletion and membership removal between events,
+  tampered payload ids, and callbacks raising, on HTTP and on WebSocket
+  mount and event.
+- The browser matrix covers forged ids and identical 403s.
+
+**Real HTTP, WebSocket, reconnect and back-navigation tests; input and errors
+kept as specified, while ORM objects and permission caches are not
+persisted.**
+- A WebSocket reconnect restored from the session skips `mount()` but still
+  resolves and authorizes the object. Typed input survives, and is validated
+  again before any save.
+- Reconnecting after deletion or revocation is denied.
+- Session contents are asserted free of `object`, `kwargs`, the
+  configuration names, `_object` and the mount verdict.
+- The browser matrix's Back navigation leaves a working form on all three
+  transports.
+
+**An authorization-order test that fails if form construction or validation
+comes before authorization; a query-count test for within-dispatch reuse.**
+- The lifecycle suite records lookup → permission → form on every transport.
+- It counts object-lookup SQL: one per mount, one per event.
+- Gate-offs: required-object off fails 8 tests, verdict reuse off fails 4,
+  the legacy session filter off fails 4, and binding the mount parameters
+  instead of the route fails 2.
+
+**Django and Rust rendering, typing, legacy override compatibility and
+browser-visible validation/save feedback.**
+- `object` and `form_data` render identically in both engines under both
+  policies.
+- A mypy consumer test types `self.object` as `Optional[Group]`.
+- Legacy `FormMixin`/`_create_form` behavior keeps its existing suites
+  (`test_form_hooks_adr035.py` and the form suites) unchanged.
+- `tests/playwright/test_model_form.py` checks the field error, the save
+  message and the reloaded values in Chromium. Its canary fails 18 checks.
+
+**Documentation (Compatibility and migration: guide, AI reference and
+migration recipe after the lifecycle gates).**
+- The form guide gains "Editing one record with `ModelFormMixin`" and a
+  migration recipe from `_model_instance`. `docs/ai/forms.md` gains the
+  adapter section. Both are marked "Available from djust 1.3" (not in the
+  1.3.0rc1 pre-release).
+- The existing `_model_instance` examples are unchanged, because the ADR
+  says not to change current-release examples.
+- `test_adr035_documented_examples.py` extracts both documents' Python with
+  the doc-snippet checker's own extractor and executes it. It uses the
+  guide's route block and the paired HTML, then checks author, other user
+  and missing record over GET and the HTTP fallback.
+- djust-docs' `docs_verify`, pointed at this branch's `docs/` and djust:
+  links, symbols (693) and a11y pass. The nav finding (`guides/accounts.md`)
+  pre-dates this branch.
+- Against the sibling checkout's older djust, the symbols check reports that
+  `ModelFormMixin` is not exported. That clears with the docs submodule and
+  djust bump at release.
+
+**Final-revision runs.**
+- The full-suite result is recorded below.
+
 ## ADR-036 acceptance review — P3
 
 This is the review the ADR's "Scope and acceptance gates" require before
@@ -2070,7 +2154,9 @@ Source: [decisions and acceptance](035-django-native-form-and-object-lifecycle.m
   empty submission, validation and exactly-once save. Cover missing/tampered/
   revoked targets, callback failures, HTTP/WS reconnect/back navigation,
   Django/Rust rendering, typing and browser-visible input/errors/save feedback.
-  Done 2026-09-25. `test_model_form_acceptance_adr035.py` (30 tests) counts every
+  Done 2026-09-25; acceptance review above
+  ([ADR-035 acceptance review — F2](#adr-035-acceptance-review--f2)).
+  `test_model_form_acceptance_adr035.py` (30 tests) counts every
   write in SQL and covers:
   - an edit view with no `mount()` saves exactly once;
   - a `form_valid` that doesn't save writes nothing (D5);
@@ -2110,7 +2196,9 @@ Source: [decisions and acceptance](035-django-native-form-and-object-lifecycle.m
   It passes on all three transports, against the worktree's demo server on
   port 18437. Canary: with the adapter's `instance` binding removed it fails
   18 checks, 6 per transport.
-- [ ] **FR — retirement.** Delete the pre-hook object plumbing per
+- [ ] **FR — retirement.** (Open, not triggered: see the ADR's status at
+  acceptance. It fires once a `_model_instance` deprecation is announced in a
+  release and its window has passed.) Delete the pre-hook object plumbing per
   [ADR-035 Step R](035-django-native-form-and-object-lifecycle.md):
   the `_model_instance` attribute (`forms.py:228`, used at `:342-344`,
   `:527-531`, plus the adapter's conflict guards at `:996` and `:1105`),

@@ -1,6 +1,6 @@
 # ADR-035: Django-native form hooks and an authorized object lifecycle
 
-**Status**: Proposed
+**Status**: Accepted: gates F1–F2 closed on `feat/adr-034-037`, with evidence in the [acceptance review](component-conventions-implementation.md#adr-035-acceptance-review--f2); acceptance is confirmed at that branch's review. `ModelFormMixin` is available from djust 1.3. FR (Step R) stays open by this ADR's own rule: its targets serve only legacy `FormMixin` views, and removing legacy support needs an explicit deprecation window.
 **Date**: 2026-09-19
 **Deciders**: Project maintainers
 **Evidence baseline**: `0d1aeb882` on `feat/components-catalogue`.
@@ -24,9 +24,10 @@ Keep `FormMixin` for ordinary forms and create forms. Add an opt-in
 The public object is an authorized, request/event-local framework object, not an
 ordinary persisted reactive attribute. The existing object-permission lifecycle
 remains the authority. The public form-construction hooks are implemented on this
-branch, and so is F1's authorized object lifecycle (see
-[Lifecycle decisions](#lifecycle-decisions-2026-09-25)); F2's form acceptance is
-pending. The example `ModelFormMixin` import below is not in a released version.
+branch, and so are F1's authorized object lifecycle (see
+[Lifecycle decisions](#lifecycle-decisions-2026-09-25)) and F2's form
+acceptance. `ModelFormMixin` is available from djust 1.3; it is not in the
+1.3.0rc1 pre-release.
 
 ## Context
 
@@ -82,12 +83,12 @@ own authorized lifecycle. JavaScript-disabled HTML POST support remains separate
 
 ### D2. Use an opt-in model-form adapter for editing
 
-The proposed `ModelFormMixin` extends djust's `FormMixin`; it is not Django's
+`ModelFormMixin` extends djust's `FormMixin`; it is not Django's
 same-named class imported under an alias. It supplies the single-object editing
 contract and is declared before `LiveView` in the MRO:
 
 ```python
-# ModelFormMixin is not in a released version yet.
+# Available from djust 1.3 (not in the 1.3.0rc1 pre-release).
 from djust import LiveView
 from djust.forms import ModelFormMixin
 from .forms import ProjectForm
@@ -300,6 +301,17 @@ as a saving this ADR delivers.
 **Exit conditions.** A deletion PR removing the attribute, the re-hydration
 method and their tests together; a grep showing no `_model_instance` reference
 outside history; and a recorded account of anything retained.
+
+**Status at acceptance (2026-09-25): open, not triggered.** F2 is closed, and
+for views adopting `ModelFormMixin` the targets are already unreachable:
+`_model_instance` on such a view is a configuration error, `self.object` is
+never re-hydrated from a stored pk, and their tests pin both. The targets
+themselves still serve every legacy `FormMixin` edit view, which is the
+current release's documented pattern. Deleting them removes that support,
+and [Compatibility and migration](#compatibility-and-migration) requires an
+explicit deprecation window for any removal. The gate fires once that
+deprecation is announced in a release and its window has passed. Citations
+above were refreshed at F1.
 
 ## Consequences and non-goals
 
