@@ -101,17 +101,27 @@ class PostProcessingMixin:
                 "template": None,
                 "config": {"maxHistory": config.get("debug_panel_max_history", 50)},
             }
+        from .._parameter_metadata import _event_methods
         from ..validation import get_handler_signature_info
-        from ..decorators import is_event_handler
 
         handlers = {}
         variables = {}
 
-        # Match the runtime event_security policy: only @event_handler-decorated
-        # methods are callable.
+        # Exactly the handlers dispatch resolves (ADR-037 D1), never a second
+        # discovery: only @event_handler-decorated methods are callable.
+        decorators = self._extract_handler_metadata()
+        for name, method in sorted(_event_methods(self).items()):
+            sig_info = get_handler_signature_info(method)
+            handlers[name] = {
+                "name": name,
+                "params": sig_info["params"],
+                "description": sig_info["description"],
+                "accepts_kwargs": sig_info["accepts_kwargs"],
+                "decorators": decorators.get(name, {}),
+            }
 
         for name in dir(self):
-            if name.startswith("_"):
+            if name.startswith("_") or name in handlers:
                 continue
 
             try:
@@ -120,17 +130,7 @@ class PostProcessingMixin:
                 continue
 
             if callable(attr) and hasattr(attr, "__func__"):
-                # Show only handlers that would pass _check_event_security at runtime
-                if is_event_handler(attr):
-                    sig_info = get_handler_signature_info(attr)
-
-                    handlers[name] = {
-                        "name": name,
-                        "params": sig_info["params"],
-                        "description": sig_info["description"],
-                        "accepts_kwargs": sig_info["accepts_kwargs"],
-                        "decorators": self._extract_handler_metadata().get(name, {}),
-                    }
+                continue  # A method, not a state variable.
 
             elif (
                 not callable(attr)
