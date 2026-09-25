@@ -2432,6 +2432,50 @@ Source: [decisions and acceptance](034-component-scoped-events-and-bindings.md).
   async/error behavior, duplicate/reordered observations and stale identities.
   Publish runnable examples, generated reference, website navigation and AI
   guidance together through D2 below; preserve legacy plain handlers.
+  **Acceptance progress (2026-09-25; publication is still open).** Browser
+  runs, each on pinned and checked transports:
+  - `tests/playwright/test_interactive_acceptance.py` on
+    `/demos/interactive-acceptance/`, over WebSocket, SSE and HTTP-only. It
+    checks:
+    - an async output callback is awaited;
+    - a callback that raises reports `djust:error` on every transport;
+    - on a socket the component's own change stays and the callback ran
+      once, while a failed HTTP turn saves nothing (below);
+    - the `close` action;
+    - a duplicate report (same lifetime and sequence) and an old-lifetime
+      report never reach the observer;
+    - Enter opens a client popover, Escape closes it, and focus returns to
+      the trigger;
+    - a legacy plain `DropdownMenu` still works through its view handlers;
+    - on the WebSocket run, a second browser context is isolated from the
+      first.
+    Three consecutive passes. One earlier WebSocket run, right after a server
+    restart, failed its step 2 once; it did not recur in five later runs.
+  - `tests/playwright/test_interactive_navigation.py`: C1's browser half of
+    signed navigation, over WebSocket and SSE, in two paths:
+    - **Session path.** Back restores the latest state from the server
+      session: same identity, still open, selection and view state kept.
+    - **Signed path.** The demo drops the page's server-saved state, so the
+      restore uses the server-signed snapshot. The same identity comes back,
+      no output fires, and the next selection works.
+    - Canary: with the signed binding restore disabled, the signed path fails
+      (the identity changes on a fresh mount).
+    - Finding (pre-existing, not ADR-034): a legacy view's signed snapshot is
+      issued with its mount frame only; events do not refresh it (explicit
+      views do). So the signed path restores the mount-time state, while the
+      session path restores the latest.
+    - The Service Worker's snapshot storage is replaced by an in-page store
+      with the same bridge methods; capture, signing and restore are real.
+  - Fix: the HTTP fallback reported a failed event only to the console. It
+    now dispatches `djust:error` with the server's error body, as a socket
+    error frame does (#1646). Test: `tests/js/http-fallback-error-event.test.js`
+    (3 cases).
+  - Transport semantics recorded: a failed HTTP turn answers 500 and saves no
+    session state, so the next request sees the state from before it. A
+    socket keeps the in-memory changes made before the exception. This is the
+    existing "no force-save on a 500" behavior, not new.
+  - The C2 and C3 matrices, and ADR-035's and ADR-036's, still pass on all
+    three transports after the client change.
 - [ ] **CR — retirement (expected empty).** [ADR-034 Step R](034-component-scoped-events-and-bindings.md)
   records that this ADR retires **no** existing code: `event=` is kept per ADR-033 D5,
   the string-routed alternative was rejected rather than shipped, and the existing

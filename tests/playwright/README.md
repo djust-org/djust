@@ -25,6 +25,8 @@ python tests/playwright/test_draft_mode.py
 ## Available Tests
 
 - **test_loading_attribute.py** - Tests @loading HTML attributes (disable, class, show, hide)
+- **test_interactive_acceptance.py** - ADR-034 C4 acceptance: async and failing callbacks, `close`, duplicate/stale observations, keyboard focus, legacy plain `DropdownMenu`, two-browser isolation (`ACCEPTANCE_BASE`, default `http://localhost:18438`; standalone)
+- **test_interactive_navigation.py** - ADR-034 fixed dropdown across Back navigation: session-restore and signed-snapshot paths (`NAVIGATION_BASE`, default `http://localhost:18438`; standalone)
 - **test_interactive_collection.py** - ADR-034 keyed `DropdownMenu.collection()`: independent rows, reorder, removal from the member's own callback, stale identities refused, re-add, keyed observations (`COLLECTION_BASE`, default `http://localhost:18438`; standalone)
 - **test_interactive_dropdown.py** - ADR-034 interactive `DropdownMenu`: two same-type server menus, forged selections, client-owned popover observations (click/Escape/outside/keyboard), no-op observers, reconnect reporting (`DROPDOWN_BASE`, default `http://localhost:18438`; standalone)
 - **test_model_form.py** - ADR-035 managed edit object (`ModelFormMixin`) over WebSocket, SSE and HTTP-only: render, field error, save, Back navigation, forged identity, identical denials (`MODEL_FORM_BASE`, default `http://localhost:18437`; standalone, exits non-zero on failure)

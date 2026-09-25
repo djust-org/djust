@@ -420,6 +420,18 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
         });
 
         if (!response.ok) {
+            // Report the failure like a socket error frame does (#1646
+            // parity): the server's error body when it sent one.
+            if (!teardown && ownsHttpResponse()) {
+                let detail = {error: `HTTP error! status: ${response.status}`, traceback: null};
+                try {
+                    const body = await response.json();
+                    if (body && typeof body.error === 'string') {
+                        detail = {error: body.error, traceback: body.traceback || null};
+                    }
+                } catch (_e) { /* a non-JSON error body keeps the status message */ }
+                window.dispatchEvent(new CustomEvent('djust:error', {detail}));
+            }
             throw new Error(`HTTP error! status: ${response.status}`);
         }
 

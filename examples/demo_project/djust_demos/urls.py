@@ -36,6 +36,10 @@ urlpatterns = [
     # ADR-034 C2 live surface (tests/playwright/test_interactive_dropdown.py).
     path("interactive-dropdown/", InteractiveDropdownView.as_view(), name="interactive-dropdown"),
     # ADR-034 C3 live surface (tests/playwright/test_interactive_collection.py).
+    # ADR-034 C4 live surface (tests/playwright/test_interactive_navigation.py).
+    path("interactive-nav/", InteractiveNavView.as_view(), name="interactive-nav"),
+    path("interactive-acceptance/", InteractiveAcceptanceView.as_view(), name="interactive-acceptance"),
+    path("interactive-nav/forget/", forget_saved_state, name="interactive-nav-forget"),
     path(
         "interactive-collection/",
         InteractiveCollectionView.as_view(),
