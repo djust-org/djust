@@ -281,7 +281,13 @@ Things to know before you turn it on:
 
 - **Your sync handlers can now run concurrently with other sessions' handlers.** Module-level state that handlers mutate (a dict of rooms, a counter) needs a `threading.Lock`, exactly as it would under a multi-threaded WSGI server. State on the view instance (`self.…`) is per session and needs nothing.
 - **Each pool thread opens its own database connection**, so budget up to `worker_threads` extra connections per process (see [Database Connection Pooling](#database-connection-pooling)).
-- **On standard CPython (3.12, 3.13) the GIL still limits pure-Python work to about one core.** The pool still helps: database and network waits overlap, and djust's Rust render releases the GIL while it renders. The full multi-core gain needs free-threaded CPython 3.14t. The [#3074](https://github.com/djust-org/djust/issues/3074) experiment measured one 3.14t process serving about 4–5× the clients of stock djust on 3.12.
+- **Sessions that share a pool thread still wait on each other.** A slow handler, or a long `start_async` callback, holds up the other sessions pinned to its thread, though no longer the whole process. The [#3074](https://github.com/djust-org/djust/issues/3074) experiment measured about 80–120 ms more p95 latency at the load knee with a pool of 8–12 threads than with one thread per session, in exchange for about half the memory per session.
+- **On standard CPython (3.12, 3.13) the GIL still limits Python work to about one core.**
+  - What the pool can overlap there is waiting (database queries, HTTP calls) and djust's Rust render, which releases the GIL while it renders.
+  - For a CPU-bound app it measured no gain: the #3074 snake load test, with one thread per session on 3.12, saturated at the same 32–64 clients as stock.
+- **The multi-core gain needs free-threaded CPython 3.14t**, and more than the pool:
+  - On 3.14t, per-session threads alone moved the snake knee from 32–64 clients (stock, 3.12) to 64–96.
+  - Scoped push, event-loop offload and a lighter in-process channel layer were also needed to reach about 4–5× the clients per process.
 
 ### WebSocket per-message compression (permessage-deflate)
 
