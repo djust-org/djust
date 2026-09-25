@@ -11,5 +11,5 @@
     component auto-keys and the JIT variable cache now take a lock or do a
     single lookup.
 
-  6 regression cases in
+  7 regression cases in
   `python/djust/tests/test_worker_pool_thread_safety_3074.py`.

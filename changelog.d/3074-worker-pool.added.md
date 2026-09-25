@@ -8,5 +8,5 @@
   `sync_to_async` a session makes, djust's, Channels' and the app's, lands on
   its thread. HTTP and SSE are unchanged. The default (`None`) keeps today's
   behaviour, and `djust.C021` reports an invalid value. See "More than one
-  core per process" in the deployment guide. 9 regression cases in
+  core per process" in the deployment guide. 11 regression cases in
   `python/djust/tests/test_worker_pool_3074.py`.

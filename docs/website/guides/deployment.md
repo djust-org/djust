@@ -286,8 +286,9 @@ Things to know before you turn it on:
   - What the pool can overlap there is waiting (database queries, HTTP calls) and djust's Rust render, which releases the GIL while it renders.
   - For a CPU-bound app it measured no gain: the #3074 snake load test, with one thread per session on 3.12, saturated at the same 32–64 clients as stock.
 - **The multi-core gain needs free-threaded CPython 3.14t**, and more than the pool:
-  - On 3.14t, per-session threads alone moved the snake knee from 32–64 clients (stock, 3.12) to 64–96.
-  - Scoped push, event-loop offload and a lighter in-process channel layer were also needed to reach about 4–5× the clients per process.
+  - 3.14t by itself moved the snake knee from 32–64 clients (stock, 3.12) to 64–96. Adding per-session threads left the knee there: they raised the cores in use from about 1.6 to 1.9, until the event loop saturated.
+  - The pool starts to pay off once the event loop is relieved. With scoped push added, per-session threads reached 192–224 clients, against 96–128 on the shared thread.
+  - With event-loop offload and a lighter in-process channel layer as well, one process used about 5 cores and served about 4–5× the clients of stock 3.12.
 
 ### WebSocket per-message compression (permessage-deflate)
 
