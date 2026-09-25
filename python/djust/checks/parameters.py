@@ -32,18 +32,13 @@ from djust.checks.utils import (
     _walk_subclasses,
 )
 
-# Stands in for a view instance when binding a method: compilation reads only
-# the declaration, and a bound method shares the runtime's cache entry.
-_DECLARATION_OWNER = object()
-
 
 def _bound(member: Any, function: types.FunctionType, cls: type) -> Callable[..., Any]:
-    """The callable shape dispatch compiles: bound unless a staticmethod."""
-    if isinstance(member, staticmethod):
-        return function
-    if isinstance(member, classmethod):
-        return types.MethodType(function, cls)
-    return types.MethodType(function, _DECLARATION_OWNER)
+    """The callable shape dispatch compiles (``declaration_method``), imported
+    lazily: django.setup() must not load the contract modules (#2559)."""
+    from djust._parameter_metadata import declaration_method
+
+    return declaration_method(member, function, cls)
 
 
 def _location(function: Any) -> tuple[str, Optional[int]]:
@@ -279,6 +274,7 @@ def _subscription_messages(cls: type, checked: set[Any]) -> list[CheckMessage]:
         compile_subscriptions,
         is_component_subscription,
     )
+    from djust._parameter_metadata import DECLARATION_OWNER
     from djust._parameter_contract import ContractError
     from djust.validation import get_strict_handler_contract
 
@@ -296,7 +292,7 @@ def _subscription_messages(cls: type, checked: set[Any]) -> list[CheckMessage]:
             continue
         try:
             get_strict_handler_contract(
-                types.MethodType(function, _DECLARATION_OWNER), frozenset({SOURCE_PARAMETER})
+                types.MethodType(function, DECLARATION_OWNER), frozenset({SOURCE_PARAMETER})
             )
         except ContractError as exc:
             if _is_check_suppressed("djust.V016"):

@@ -47,6 +47,21 @@ class DeclaredHandler(NamedTuple):
     owner: type  # The class in the MRO whose attribute resolves the name.
 
 
+# Stands in for a view instance when binding a method: compilation reads only
+# the declaration, and a bound method shares the runtime's cache entry.
+DECLARATION_OWNER = object()
+
+
+def declaration_method(member: Any, function: Any, cls: type) -> Any:
+    """The callable shape dispatch compiles for a declaration: bound unless a
+    staticmethod, never to a constructed view."""
+    if isinstance(member, staticmethod):
+        return function
+    if isinstance(member, classmethod):
+        return types.MethodType(function, cls)
+    return types.MethodType(function, DECLARATION_OWNER)
+
+
 def view_stop(klass: type) -> bool:
     """Views resolve handlers through their whole MRO."""
     return False

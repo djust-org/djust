@@ -20,7 +20,8 @@ import pytest
 
 from djust._parameter_contract import ContractError
 from djust.checks.configuration import check_configuration
-from djust.checks.parameters import _DECLARATION_OWNER, check_event_parameter_contracts
+from djust._parameter_metadata import DECLARATION_OWNER as _DECLARATION_OWNER
+from djust.checks.parameters import check_event_parameter_contracts
 from djust.config import config
 from djust.validation import (
     get_strict_handler_contract,
