@@ -628,6 +628,32 @@ class LiveViewConfig:
 # Global configuration instance
 config = LiveViewConfig()
 
+#: The settings the singleton is loaded from (``_load_from_settings``).
+_CONFIG_SETTINGS = frozenset({"LIVEVIEW_CONFIG", "DJUST_CONFIG"})
+
+
+def _reload_on_setting_change(*, setting: str, **kwargs: Any) -> None:
+    """Follow ``override_settings`` for the settings the config reads (#3217).
+
+    The singleton reads ``LIVEVIEW_CONFIG`` once and caches it. An
+    ``override_settings(LIVEVIEW_CONFIG=...)`` therefore did not take effect
+    until something called ``config.reset()``. Worse, a reset done inside the
+    override outlived it: ``reauth_on_event=True`` leaked into every later
+    test on the worker. ``setting_changed`` fires on both entry and exit, so
+    reloading here keeps the cache equal to the settings in force, the way
+    djust's other setting-derived caches already do.
+    """
+    if setting in _CONFIG_SETTINGS:
+        config.reset()
+
+
+try:
+    from django.core.signals import setting_changed
+
+    setting_changed.connect(_reload_on_setting_change, dispatch_uid="djust.config")
+except ImportError:  # pragma: no cover - Django is a hard dependency
+    logger.debug("[djust] django unavailable; config will not follow override_settings")
+
 
 def get_config() -> LiveViewConfig:
     """Get the global configuration instance"""

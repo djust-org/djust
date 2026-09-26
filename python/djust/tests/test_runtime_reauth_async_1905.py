@@ -109,21 +109,11 @@ class _CounterSSEView(LiveView):
         return {"count": self.count}
 
 
-@pytest.fixture(autouse=True)
-def _reload_config_after_override():
-    """Reload djust's config once ``@override_settings`` has exited.
-
-    Each test's own ``finally: config.reset()`` runs while its
-    ``LIVEVIEW_CONFIG={"reauth_on_event": True}`` override is still active, so
-    it re-read that override into the process-wide config and left
-    ``reauth_on_event`` on for every later test in the worker: a
-    ``login_required`` WebSocket event then re-resolved the user from an empty
-    session and was closed with 4403 (seen as ``websocket.close`` in the ADR-035
-    model-form tests, PR #3159). A fixture's teardown runs after the decorator
-    has restored the real settings.
-    """
-    yield
-    config.reset()
+# PR #3159 had an autouse fixture here that reset djust's config after each
+# test's ``override_settings`` exited: the tests' own ``config.reset()`` ran
+# inside the override and leaked ``reauth_on_event=True``. The config now
+# reloads itself on every ``LIVEVIEW_CONFIG`` change, exit included
+# (``djust.config._reload_on_setting_change``, #3217), so the fixture went.
 
 
 def _register(view_cls):
