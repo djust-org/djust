@@ -27,6 +27,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C020 | Config | Error | `DJUST_SERVER_STATE_MAX_AGE` is not an integer from 1 to 86400 |
 | C021 | Config | Error | `LIVEVIEW_CONFIG['worker_threads']` is not `None`, `False`, `True`, `"auto"` or an integer >= 0 |
 | C022 | Config | Error | `LIVEVIEW_CONFIG['event_parameter_policy']` is not `'legacy'` or `'strict'` (ADR-036) |
+| C023 | Config | Warning | A `channels_redis` core `RedisChannelLayer` host keeps redis-py 8's 5 s `socket_timeout`, which drops idle WebSockets (#3199) |
 | V001 | LiveView | Warning | LiveView missing template_name attribute |
 | V002 | LiveView | Info | LiveView missing mount() method |
 | V003 | LiveView | Error | mount() has wrong signature |
@@ -200,6 +201,13 @@ console.log("debug info"); // noqa: Q003
 - **What it detects**: `LIVEVIEW_CONFIG['event_parameter_policy']` (or the same key in `DJUST_CONFIG`) is set to something other than `'legacy'` or `'strict'`. Every handler without its own `parameter_policy` inherits the value, and dispatch rejects each of their events while it is invalid. An absent key is the `'legacy'` default and never reports. The ADR-036 strict policy is opt-in; legacy remains the default.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C022"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C022"]` (the runtime still rejects the events)
 - **False positives**: None
+
+### C023 — channels_redis socket timeout at redis-py 8's default
+- **Severity**: Warning
+- **Method**: Settings inspection plus the installed `redis` distribution's version (read from package metadata; nothing is imported)
+- **What it detects**: a `CHANNEL_LAYERS` entry uses `channels_redis.core.RedisChannelLayer`, redis-py 8 or later is installed, and at least one host does not set `socket_timeout` above 5 s (or `None`). redis-py 8 lowered the default `socket_timeout` to 5 s, the same as the layer's `BZPOPMIN` timeout, so an idle consumer's read times out and its WebSocket closes every few seconds (django/channels_redis#422). URL and `(host, port)` hosts and an omitted `hosts` all count as the default; a URL can carry `?socket_timeout=10`. The pub/sub layer is not checked.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C023"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C023"]`
+- **False positives**: None known; pinning `redis<8` also silences it
 
 ---
 

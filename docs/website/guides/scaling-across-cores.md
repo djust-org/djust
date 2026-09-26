@@ -343,9 +343,11 @@ uvicorn myproject.asgi:application --workers 8
 
 ```python
 CHANNEL_LAYERS = {"default": {"BACKEND": "channels_redis.core.RedisChannelLayer",
-                              "CONFIG": {"hosts": [REDIS_URL]}}}
+                              "CONFIG": {"hosts": [{"address": REDIS_URL, "socket_timeout": 10}]}}}
 DJUST_CONFIG = {"STATE_BACKEND": "redis", "PRESENCE_BACKEND": "redis", "REDIS_URL": REDIS_URL}
 ```
+
+The channel-layer host sets `socket_timeout` above 5 s on purpose: redis-py 8 lowered its default `socket_timeout` to 5 s, the same as channels_redis' blocking read, so without a longer timeout idle WebSockets drop every few seconds (django/channels_redis#422).
 
 This scales about linearly with workers. The #3074 estimate was roughly 40 clients per core per process for the snake game on 3.12. It costs:
 
