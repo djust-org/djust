@@ -98,6 +98,37 @@ def test_b010_allowlist_default_is_empty(tmp_path):
         assert [m.id for m in check_undeclared_origins(None)] == ["djust.B010"]
 
 
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "",
+        "https://",
+        "js.stripe.com:443",
+        "https://user@js.stripe.com",
+        "https://js.stripe.com/v3/",
+        "js.stripe.com/v3",
+        "js.stripe.com?x=1",
+    ],
+    ids=["empty", "scheme-only", "port", "userinfo", "path", "bare-path", "query"],
+)
+def test_b010_warns_about_an_allowlist_entry_that_is_not_a_bare_host(tmp_path, entry):
+    """Such an entry is reported and ignored, not silently accepted."""
+    templates = _b010_page(tmp_path, '<script src="https://js.stripe.com/v3/"></script>')
+    allowed = ["challenges.cloudflare.com", entry]
+    with override_settings(TEMPLATES=templates, DJUST_ALLOWED_EXTERNAL_ORIGINS=allowed):
+        found = check_undeclared_origins(None)
+    setting = [m for m in found if "DJUST_ALLOWED_EXTERNAL_ORIGINS" in m.msg]
+    assert len(setting) == 1 and repr(entry) in setting[0].msg
+    assert len([m for m in found if "loads from js.stripe.com" in m.msg]) == 1
+
+
+def test_b010_allowlist_accepts_a_bare_origin_with_a_trailing_slash(tmp_path):
+    templates = _b010_page(tmp_path, '<script src="https://js.stripe.com/v3/"></script>')
+    allowed = ["https://js.stripe.com/"]
+    with override_settings(TEMPLATES=templates, DJUST_ALLOWED_EXTERNAL_ORIGINS=allowed):
+        assert check_undeclared_origins(None) == []
+
+
 @pytest.mark.parametrize("value", ["js.stripe.com", 42, ["js.stripe.com", 7]])
 def test_b010_malformed_allowlist_is_reported_and_allows_nothing(tmp_path, value):
     """A bare string would otherwise be iterated character by character."""
@@ -132,25 +163,53 @@ class _RecordingFinder(BaseFinder):
 _FINDER = f"{__name__}._RecordingFinder"
 
 
-def test_b008_does_not_walk_static_files_on_ordinary_check_runs():
-    """runserver, migrate and a plain `check` run the non-deploy checks: none
-    of them may list every static file."""
+def _collectstatic_owner(monkeypatch, owner):
+    """Which app's collectstatic Django resolves, as B013 asks it."""
+    from django.core import management
+
+    commands = {**management.get_commands(), "collectstatic": owner}
+    monkeypatch.setattr(management, "get_commands", lambda: commands)
+
+
+def _b008(messages):
+    return [m.id for m in messages if "vendor.cdx.json" in m.msg]
+
+
+def test_b008_does_not_walk_static_files_on_ordinary_check_runs(monkeypatch):
+    """djust listed above staticfiles: runserver, migrate and a plain `check`
+    run the non-deploy checks, and none of them may list every static file."""
     from django.core.checks import run_checks
 
+    _collectstatic_owner(monkeypatch, "djust")
     _RecordingFinder.calls = []
     with override_settings(STATICFILES_FINDERS=[_FINDER]):
         messages = run_checks()
     assert _RecordingFinder.calls == []
-    assert "djust.B008" not in {m.id for m in messages}
+    assert _b008(messages) == []
 
 
-def test_b008_still_runs_under_deploy_checks():
+def test_b008_runs_under_deploy_checks_when_djust_owns_collectstatic(monkeypatch):
     from django.core.checks import run_checks
 
-    _RecordingFinder.calls = []
+    _collectstatic_owner(monkeypatch, "djust")
     with override_settings(STATICFILES_FINDERS=[_FINDER]):
         messages = run_checks(include_deployment_checks=True)
-    assert [m.id for m in messages if "vendor.cdx.json" in m.msg] == ["djust.B008"]
+    assert _b008(messages) == ["djust.B008"]
+
+
+@pytest.mark.parametrize("deploy", [False, True], ids=["check", "check-deploy"])
+def test_b008_keeps_running_on_every_check_when_djust_does_not_own_collectstatic(
+    monkeypatch, deploy
+):
+    """djust listed after staticfiles: Django's collectstatic wins and never
+    runs B008, so the ordinary check pass keeps it, as before #3144, and a
+    deploy run reports it once, not twice."""
+    from django.core.checks import run_checks
+
+    _collectstatic_owner(monkeypatch, "django.contrib.staticfiles")
+    with override_settings(STATICFILES_FINDERS=[_FINDER]):
+        messages = run_checks(include_deployment_checks=deploy)
+    assert _b008(messages) == ["djust.B008"]
 
 
 def test_b008_stops_djusts_collectstatic_before_it_publishes(tmp_path):

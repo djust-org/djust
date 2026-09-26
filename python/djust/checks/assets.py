@@ -156,12 +156,20 @@ def check_required_assets(app_configs: Any, **kwargs: Any) -> list[CheckMessage]
     return messages
 
 
-# A deploy check (#3144): it lists every static file, which runserver,
-# autoreload and migrate should not pay for on every start. It still runs
-# under `check --deploy` and, through COLLECTSTATIC_TAG, before djust's
-# collectstatic publishes anything.
-@register("djust", COLLECTSTATIC_TAG, deploy=True)
+def _djust_owns_collectstatic() -> bool:
+    """Whether ``collectstatic`` resolves to djust's override, asked the way
+    B013 asks it (a third app overriding the command counts as "not djust")."""
+    from django.core.management import get_commands
+
+    return get_commands().get("collectstatic") == "djust"
+
+
 def check_sbom_not_served(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    """B008: an SBOM file some staticfiles finder would hand to collectstatic.
+
+    Lists every static file, so it is not registered directly; the two
+    registered checks below decide when that walk is paid for (#3144).
+    """
     from django.contrib.staticfiles import finders
 
     messages: list[CheckMessage] = []
@@ -176,6 +184,27 @@ def check_sbom_not_served(app_configs: Any, **kwargs: Any) -> list[CheckMessage]
                     )
                 )
     return messages
+
+
+# When djust's collectstatic is the active one, B008 is a deploy check: it
+# runs under `check --deploy` and, through COLLECTSTATIC_TAG, before djust's
+# collectstatic publishes anything, so runserver, autoreload and migrate don't
+# walk every static file on each start.
+@register("djust", COLLECTSTATIC_TAG, deploy=True)
+def check_sbom_not_served_before_collect(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    if not _djust_owns_collectstatic():
+        return []  # check_sbom_not_served_every_run covers it
+    return check_sbom_not_served(app_configs, **kwargs)
+
+
+# Otherwise (djust listed after staticfiles, or another app's override) no
+# djust code runs at collectstatic time, so B008 stays in the ordinary check
+# pass, as it was before #3144.
+@register("djust")
+def check_sbom_not_served_every_run(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    if _djust_owns_collectstatic():
+        return []  # check_sbom_not_served_before_collect covers it
+    return check_sbom_not_served(app_configs, **kwargs)
 
 
 def _external_loads(line: str) -> list[str]:
@@ -196,27 +225,53 @@ def _external_loads(line: str) -> list[str]:
     return refs
 
 
-def _host(entry: str) -> str:
-    """``js.stripe.com`` from ``js.stripe.com``, ``https://js.stripe.com`` or
-    ``//js.stripe.com/v3/``, lower-cased."""
+def _host(entry: str) -> str | None:
+    """The lower-cased host an allowlist entry names, or None when it isn't a
+    bare host: ``js.stripe.com`` and ``https://js.stripe.com/`` name one (the
+    scheme is ignored); an empty host, a port, userinfo, a path, a query or a
+    fragment don't."""
     entry = entry.strip()
-    return urlsplit(entry if "//" in entry else "//" + entry).netloc.lower()
+    parts = urlsplit(entry if "//" in entry else "//" + entry)
+    try:
+        port = parts.port
+    except ValueError:
+        return None
+    if (
+        not parts.hostname
+        or port is not None
+        or "@" in parts.netloc
+        or parts.path not in ("", "/")
+        or parts.query
+        or parts.fragment
+    ):
+        return None
+    return parts.netloc.lower()
 
 
 def _allowed_origins() -> tuple[frozenset[str], str | None]:
-    """``DJUST_ALLOWED_EXTERNAL_ORIGINS`` as hosts, or no hosts plus the
-    reason when the setting isn't a list of strings."""
+    """``DJUST_ALLOWED_EXTERNAL_ORIGINS`` as hosts, plus the reason when the
+    setting, or any entry in it, is ignored."""
     value = getattr(settings, "DJUST_ALLOWED_EXTERNAL_ORIGINS", None)
     if value is None:
         return frozenset(), None
-    if isinstance(value, (list, tuple, set, frozenset)) and all(
-        isinstance(entry, str) for entry in value
+    if not (
+        isinstance(value, (list, tuple, set, frozenset))
+        and all(isinstance(entry, str) for entry in value)
     ):
-        return frozenset(_host(entry) for entry in value), None
-    return frozenset(), (
-        "DJUST_ALLOWED_EXTERNAL_ORIGINS must be a list of hostnames such as "
-        f'["js.stripe.com"], not {type(value).__name__} ({value!r}); it is ignored.'
-    )
+        return frozenset(), (
+            "DJUST_ALLOWED_EXTERNAL_ORIGINS must be a list of hostnames such as "
+            f'["js.stripe.com"], not {type(value).__name__} ({value!r}); it is ignored.'
+        )
+    hosts = {entry: _host(entry) for entry in value}
+    bad = sorted(entry for entry, host in hosts.items() if host is None)
+    problem = None
+    if bad:
+        listed = ", ".join(repr(entry) for entry in bad)
+        problem = (
+            f"DJUST_ALLOWED_EXTERNAL_ORIGINS entries {listed} are not bare hosts "
+            "(an empty host, a port, userinfo, a path or a query); they are ignored."
+        )
+    return frozenset(host for host in hosts.values() if host is not None), problem
 
 
 @register("djust")
@@ -243,7 +298,8 @@ def check_undeclared_origins(app_configs: Any, **kwargs: Any) -> list[CheckMessa
         messages.append(
             Warning(
                 problem,
-                hint="List each origin that can't be vendored or pinned, one string per host.",
+                hint="List each origin that can't be vendored or pinned as a bare host, "
+                'one string per host, such as "js.stripe.com".',
                 id="djust.B010",
             )
         )
