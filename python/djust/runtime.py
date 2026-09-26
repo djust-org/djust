@@ -43,6 +43,7 @@ import inspect
 import json
 import logging
 import re
+import sys
 import time
 from functools import wraps
 from typing import (
@@ -545,8 +546,9 @@ class Transport(Protocol):
         transport can attach its own back-references the way the legacy bespoke
         mount paths did. SSE stamps ``_sse_session_id`` / ``_sse_session`` (used
         for introspection + limits) and the real query string. WS performs the
-        WS-only post-mount channel-layer wiring (server-push view group, presence
-        group, db_notify groups), the periodic ``_tick_task`` start, the
+        WS-only post-mount channel-layer wiring (server-push view group,
+        db_notify groups; the presence group is joined later, after mount(), by
+        ``on_mount_render_ready`` — #3202), the periodic ``_tick_task`` start, the
         ``use_actors`` flag, and the real-scope path/query-string stamps (ADR-022
         Iter 3 Phase 3.3b, Finding B residual). Async because the WS impl awaits
         ``channel_layer.group_add(...)``. Behavior-preserving extension hook — the
@@ -990,6 +992,33 @@ class Transport(Protocol):
         return False
 
 
+def _joins_presence_group(view: Any) -> bool:
+    """Whether a mounted view joins a presence group (#3202).
+
+    Any view with a ``get_presence_key`` does, except one whose only source of
+    it is ``TenantMixin`` (tenant-scoped, but with no presence to broadcast):
+    reading its key would cost a thread hop per mount for a group nothing
+    sends to.
+    """
+    if not hasattr(view, "get_presence_key"):
+        return False
+    from .presence import PresenceMixin
+
+    if isinstance(view, PresenceMixin):
+        return True
+    tenant_mixin_module = sys.modules.get("djust.tenants.mixin")
+    tenant_mixin = getattr(tenant_mixin_module, "TenantMixin", None)
+    if tenant_mixin is not None and isinstance(view, tenant_mixin):
+        # Join if any class other than TenantMixin defines get_presence_key,
+        # wherever it sits in the MRO (TenantMixin's own calls super()).
+        return any(
+            "get_presence_key" in vars(klass)
+            for klass in type(view).__mro__
+            if klass is not tenant_mixin
+        )
+    return True
+
+
 class WSConsumerTransport:
     """Transport adapter wrapping ``LiveViewConsumer``.
 
@@ -1062,8 +1091,9 @@ class WSConsumerTransport:
             the handshake ``scope`` values, so overwrite them here for parity;
           * server-push view group join (``view_group_name`` + ``group_add``,
             websocket.py:2172-2174);
-          * presence group join when the view supports presence
-            (websocket.py:2177-2184);
+          * NOT the presence group: a templated ``presence_key`` reads
+            attributes mount() sets, so ``on_mount_render_ready`` joins it
+            after mount() / restore (#3202);
           * db_notify group joins for the class-level ``_listen_channels``
             (websocket.py:2190-2200). This runs PRE-mount(), so channels
             ``listen()`` adds in mount() are joined later, by
@@ -1116,22 +1146,12 @@ class WSConsumerTransport:
         consumer._view_group = view_group_name(dotted)
         await consumer.channel_layer.group_add(consumer._view_group, consumer.channel_name)
 
-        # Join presence group if the view supports presence tracking
-        # (websocket.py:2176-2184).
-        consumer._presence_group = None
-        if hasattr(view_instance, "get_presence_key"):
-            try:
-                from .presence import PresenceManager
-
-                presence_key = view_instance.get_presence_key()
-                consumer._presence_group = PresenceManager.presence_group_name(presence_key)
-                await consumer.channel_layer.group_add(
-                    consumer._presence_group, consumer.channel_name
-                )
-            except Exception as e:  # noqa: BLE001
-                from ._exposure_diagnostics import log_failure
-
-                log_failure(logger, e, "Error setting up presence group: %s", e, level="warning")
+        # The presence group is joined AFTER mount() / session restore, by
+        # ``_join_presence_group`` from ``on_mount_render_ready`` (#3202): a
+        # templated ``presence_key`` ("chat:{room}") interpolates attributes
+        # mount() sets, so reading it here joined the unformatted group. The
+        # groups a previous view joined were left by its teardown
+        # (disconnect / live_redirect), so nothing is reset here.
 
         # Join db_notify groups for every channel the view subscribed to via
         # NotificationMixin.listen() (websocket.py:2186-2200). Addressed
@@ -1180,6 +1200,43 @@ class WSConsumerTransport:
                 joined.add(ch)
             except Exception as e:  # noqa: BLE001
                 logger.warning("Error joining db_notify group for %s: %s", ch, e)
+
+    async def _join_presence_group(self, view: Any) -> None:
+        """Join the presence group of the view's FORMATTED presence key (#3202).
+
+        Called from ``on_mount_render_ready``, once mount() (or a session
+        restore) has set the attributes a templated ``presence_key``
+        interpolates. ``broadcast_to_presence`` sends to the group of
+        ``get_presence_key()``, so this must read the key after mount() too.
+        The group is recorded in ``consumer._presence_groups`` (a
+        ``mount_batch`` can join several; ``_presence_group`` is the latest),
+        and ``leave_presence_groups`` discards every one of them on
+        disconnect and on a ``live_redirect`` teardown.
+
+        ``get_presence_key`` is application code that may touch the database,
+        so it runs on the session's thread. A failure is logged and the
+        session joins no presence group.
+        """
+        from .presence import PresenceManager
+
+        if not _joins_presence_group(view):
+            return
+        consumer = self._consumer
+        try:
+            presence_key = await sync_to_async(view.get_presence_key)()
+            group = PresenceManager.presence_group_name(presence_key)
+            joined = getattr(consumer, "_presence_groups", None)
+            if not isinstance(joined, set):
+                joined = set()
+                consumer._presence_groups = joined
+            if group not in joined:
+                await consumer.channel_layer.group_add(group, consumer.channel_name)
+                joined.add(group)
+            consumer._presence_group = group
+        except Exception as e:  # noqa: BLE001
+            from ._exposure_diagnostics import log_failure
+
+            log_failure(logger, e, "Error setting up presence group: %s", e, level="warning")
 
     async def _sync_push_scopes(self, view: Any) -> None:
         """Match the consumer's scoped-push groups to ``view.push_scope`` (#3004).
@@ -1921,8 +1978,9 @@ class WSConsumerTransport:
         re-registered, so we don't double-register them.
 
         It first joins the NOTIFY groups for channels ``listen()`` added in
-        mount() or a session restore (#2962): this is the first transport hook
-        after mount() on every admitted mount.
+        mount() or a session restore (#2962), and the presence group of the
+        view's formatted ``presence_key`` (#3202): this is the first transport
+        hook after mount() on every admitted mount.
 
         Returns ``html`` unchanged: sticky preservation adjusts child
         registration + emits a frame, it does not rewrite the mount HTML. No-op
@@ -1937,6 +1995,7 @@ class WSConsumerTransport:
         # the scoped-push groups for the view's ``push_scope`` (#3004).
         await self._join_listen_channels(view)
         await self._sync_push_scopes(view)
+        await self._join_presence_group(view)
         sticky_preserved = getattr(consumer, "_sticky_preserved", None)
         if not sticky_preserved:
             return html
@@ -2079,14 +2138,19 @@ class WSConsumerTransport:
             consumer._tick_task = None
 
     async def _leave_view_groups(self) -> None:
-        """Leave the view / presence / db_notify groups ``on_view_mounted`` joined.
+        """Leave the view / presence / db_notify groups the mount joined.
 
         Resets the consumer's group attributes so ``disconnect`` does not
         discard them a second time. Discard failures are logged, never raised.
         """
         consumer = self._consumer
         groups: List[str] = []
-        for attr in ("_view_group", "_presence_group", "_presence_scope_group"):
+        from .presence import presence_groups_of
+
+        groups.extend(presence_groups_of(consumer))
+        consumer._presence_groups = set()
+        consumer._presence_group = None
+        for attr in ("_view_group", "_presence_scope_group"):
             group = getattr(consumer, attr, None)
             if isinstance(group, str) and group:
                 groups.append(group)
