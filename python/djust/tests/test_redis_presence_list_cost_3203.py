@@ -1,4 +1,4 @@
-"""``RedisPresenceBackend.list()`` costs a fixed number of Redis commands (#3203).
+"""Redis presence ``list()`` costs a fixed number of Redis commands (#3203).
 
 ``list()`` runs on every render of a presence view (``list_presences()`` in
 ``get_context_data``, ``online_count``). It used to cost 2 + N commands: a
@@ -7,8 +7,10 @@ anything was stale), a second ``ZRANGEBYSCORE``, and one ``HGET`` per member.
 
 Now a read is one ``ZRANGEBYSCORE`` and one ``HGETALL``, pipelined, whatever
 the member count. ``cleanup_stale`` runs at most once per ``cleanup_interval``
-per key per process, and a stale member is excluded from the list by its score
-even when no cleanup ran.
+per key per process (on the monotonic clock), and a stale member is excluded
+from the list by its score even when no cleanup ran. Both Redis backends share
+this read: ``RedisPresenceBackend`` and ``djust.tenants``'
+``TenantAwareRedisBackend``.
 
 Commands are counted where fakeredis receives them, so pipelined commands and
 MULTI/EXEC are each counted, as a Redis server would see them.
@@ -26,15 +28,40 @@ import pytest
 fakeredis = pytest.importorskip("fakeredis")
 from fakeredis._basefakesocket import BaseFakeSocket  # noqa: E402
 
-from djust.backends.redis import RedisPresenceBackend  # noqa: E402
+from djust.backends import redis as redis_backends  # noqa: E402
+from djust.backends.redis import (  # noqa: E402
+    CleanupThrottle,
+    RedisPresenceBackend,
+    presence_cleanup_interval,
+)
+from djust.tenants.backends import TenantAwareRedisBackend  # noqa: E402
+
+INTERVAL = 30.0
 
 
-@pytest.fixture
-def backend():
-    server = fakeredis.FakeServer()
-    client = fakeredis.FakeRedis(server=server, decode_responses=True)
+def _make(kind: str):
+    client = fakeredis.FakeRedis(server=fakeredis.FakeServer(), decode_responses=True)
     with patch("redis.from_url", return_value=client):
-        yield RedisPresenceBackend(redis_url="redis://fake:6379/0", timeout=60)
+        if kind == "plain":
+            return RedisPresenceBackend(redis_url="redis://fake:6379/0", timeout=60)
+        return TenantAwareRedisBackend(tenant_id="acme", redis_url="redis://fake:6379/0")
+
+
+@pytest.fixture(params=["plain", "tenant"])
+def backend(request):
+    return _make(request.param)
+
+
+@contextmanager
+def _clock(start: float = 10_000.0):
+    """One controllable clock for both the scores (time) and the throttle (monotonic)."""
+    now = [start]
+    with (
+        patch("djust.backends.redis.time.time", side_effect=lambda: now[0]),
+        patch("djust.backends.redis.time.monotonic", side_effect=lambda: now[0]),
+        patch("djust.tenants.backends.time.time", side_effect=lambda: now[0]),
+    ):
+        yield now
 
 
 @contextmanager
@@ -70,11 +97,11 @@ def test_list_costs_two_commands_whatever_the_member_count(backend, members):
 
 
 def test_list_returns_the_joined_records_in_heartbeat_order(backend):
-    with patch("djust.backends.redis.time.time", return_value=1000.0):
+    with _clock() as now:
         backend.join("room:a", "alice", {"c": "red"})
-    with patch("djust.backends.redis.time.time", return_value=1001.0):
+        now[0] += 1
         backend.join("room:a", "bob", {"c": "blue"})
-    with patch("djust.backends.redis.time.time", return_value=1002.0):
+        now[0] += 1
         listed = backend.list("room:a")
     assert [p["id"] for p in listed] == ["alice", "bob"]
     assert listed[0]["meta"] == {"c": "red"}
@@ -83,8 +110,7 @@ def test_list_returns_the_joined_records_in_heartbeat_order(backend):
 def test_cleanup_runs_at_most_once_per_interval_per_key(backend):
     _join_many(backend, "room:a", 3)
     _join_many(backend, "room:b", 3)
-    clock = [10_000.0]
-    with patch("djust.backends.redis.time.time", side_effect=lambda: clock[0]):
+    with _clock() as now:
         with _count_commands() as seen:
             for _ in range(20):
                 backend.list("room:a")
@@ -92,7 +118,7 @@ def test_cleanup_runs_at_most_once_per_interval_per_key(backend):
         # One cleanup probe per key, not one per read.
         assert seen["ZRANGEBYSCORE"] == 40 + 2
 
-        clock[0] += backend._cleanup_interval + 1
+        now[0] += INTERVAL + 1
         with _count_commands() as seen:
             backend.list("room:a")
             backend.list("room:a")
@@ -100,17 +126,15 @@ def test_cleanup_runs_at_most_once_per_interval_per_key(backend):
 
 
 def test_a_stale_member_is_excluded_even_when_no_cleanup_runs(backend):
-    clock = [10_000.0]
-    with patch("djust.backends.redis.time.time", side_effect=lambda: clock[0]):
+    with _clock() as now:
         backend.join("room:a", "alice", {})
         backend.join("room:a", "bob", {})
 
-        clock[0] += 40
+        now[0] += 40
         backend.heartbeat("room:a", "bob")
         backend.list("room:a")  # runs this interval's cleanup; alice not stale yet
-        clock[0] += 21  # alice's heartbeat is now 61 s old; bob's 21 s
+        now[0] += 21  # alice's heartbeat is now 61 s old; bob's 21 s
 
-        assert clock[0] - backend._last_cleanup["room:a"] < backend._cleanup_interval
         with _count_commands() as seen:
             listed = backend.list("room:a")
         assert "ZREMRANGEBYSCORE" not in seen  # no cleanup ran
@@ -119,14 +143,53 @@ def test_a_stale_member_is_excluded_even_when_no_cleanup_runs(backend):
 
 
 def test_stale_members_are_still_removed_once_the_interval_passes(backend):
-    clock = [10_000.0]
-    with patch("djust.backends.redis.time.time", side_effect=lambda: clock[0]):
+    with _clock() as now:
         backend.join("room:a", "alice", {})
         backend.list("room:a")
-        clock[0] += backend._cleanup_interval + 61
+        now[0] += INTERVAL + 61
         backend.list("room:a")
     assert backend._client.zcard(backend._zset_key("room:a")) == 0
     assert backend._client.hlen(backend._meta_key("room:a")) == 0
+
+
+def test_a_wall_clock_step_back_does_not_suppress_cleanup():
+    """The throttle runs on the monotonic clock, not the wall clock."""
+    throttle = CleanupThrottle(INTERVAL)
+    with (
+        patch("djust.backends.redis.time.monotonic", side_effect=[100.0, 100.0 + INTERVAL + 1]),
+        patch("djust.backends.redis.time.time", side_effect=AssertionError("wall clock read")),
+    ):
+        assert throttle.due("k") is True
+        assert throttle.due("k") is True
+
+
+def test_the_throttle_map_is_pruned_but_not_rescanned_on_every_insert():
+    throttle = CleanupThrottle(INTERVAL)
+    now = [0.0]
+    scans = []
+    real_items = dict.items
+
+    class _Spy(dict):
+        def items(self):
+            scans.append(len(self))
+            return real_items(self)
+
+    throttle._last = _Spy()
+    with (
+        patch.object(redis_backends, "_CLEANUP_MAP_PRUNE_AT", 5),
+        patch("djust.backends.redis.time.monotonic", side_effect=lambda: now[0]),
+    ):
+        throttle._prune_at = 5
+        for i in range(20):  # every key is fresh, so nothing is expired
+            throttle.due(f"k{i}")
+    # Pruned at 6, then at 13 (> 2 * 6), not on every insert past 5.
+    assert scans == [6, 13]
+
+    now[0] += INTERVAL + 1
+    with patch("djust.backends.redis.time.monotonic", side_effect=lambda: now[0]):
+        for i in range(20, 27):
+            throttle.due(f"k{i}")
+    assert len(throttle._last) < 20  # the expired keys were dropped
 
 
 def test_a_malformed_record_is_skipped(backend):
@@ -146,3 +209,37 @@ def test_a_member_without_a_record_is_skipped(backend):
 
 def test_empty_group_lists_nothing(backend):
     assert backend.list("room:none") == []
+
+
+def test_cleanup_interval_comes_from_config():
+    assert presence_cleanup_interval({}) == INTERVAL
+    assert presence_cleanup_interval({"PRESENCE_CLEANUP_INTERVAL": 5}) == 5.0
+    assert presence_cleanup_interval({"PRESENCE_CLEANUP_INTERVAL": "nope"}) == INTERVAL
+    assert presence_cleanup_interval({"PRESENCE_CLEANUP_INTERVAL": -1}) == INTERVAL
+
+    from djust.backends.registry import _create_presence_backend
+
+    client = fakeredis.FakeRedis(server=fakeredis.FakeServer(), decode_responses=True)
+    with patch("redis.from_url", return_value=client):
+        backend = _create_presence_backend("redis", {"PRESENCE_CLEANUP_INTERVAL": 7})
+    assert backend._cleanup_throttle.interval == 7.0
+
+
+def test_tenant_manager_passes_the_configured_interval():
+    from djust.tenants.backends import TenantPresenceManager
+
+    client = fakeredis.FakeRedis(server=fakeredis.FakeServer(), decode_responses=True)
+    TenantPresenceManager.clear_cache()
+    try:
+        with (
+            patch("redis.from_url", return_value=client),
+            patch(
+                "djust.config.get_djust_config",
+                return_value={"PRESENCE_BACKEND": "tenant_redis", "PRESENCE_CLEANUP_INTERVAL": 9},
+            ),
+        ):
+            backend = TenantPresenceManager.for_tenant("acme")
+        assert isinstance(backend, TenantAwareRedisBackend)
+        assert backend._cleanup_throttle.interval == 9.0
+    finally:
+        TenantPresenceManager.clear_cache()

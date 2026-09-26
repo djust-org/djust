@@ -976,8 +976,9 @@ class WSConsumerTransport:
         # The presence group is joined AFTER mount() / session restore, by
         # ``_join_presence_group`` from ``on_mount_render_ready`` (#3202): a
         # templated ``presence_key`` ("chat:{room}") interpolates attributes
-        # mount() sets, so reading it here joined the unformatted group.
-        consumer._presence_group = None
+        # mount() sets, so reading it here joined the unformatted group. The
+        # groups a previous view joined were left by its teardown
+        # (disconnect / live_redirect), so nothing is reset here.
 
         # Join db_notify groups for every channel the view subscribed to via
         # NotificationMixin.listen() (websocket.py:2186-2200). Addressed
@@ -1034,28 +1035,32 @@ class WSConsumerTransport:
         restore) has set the attributes a templated ``presence_key``
         interpolates. ``broadcast_to_presence`` sends to the group of
         ``get_presence_key()``, so this must read the key after mount() too.
-        ``disconnect`` / ``_leave_view_groups`` discard the group recorded in
-        ``consumer._presence_group``, i.e. the same formatted name.
+        The group is recorded in ``consumer._presence_groups`` (a
+        ``mount_batch`` can join several; ``_presence_group`` is the latest),
+        and ``leave_presence_groups`` discards every one of them on
+        disconnect and on a ``live_redirect`` teardown.
 
         ``get_presence_key`` is application code that may touch the database,
         so it runs on the session's thread. A failure is logged and the
         session joins no presence group.
         """
-        if not hasattr(view, "get_presence_key"):
+        from .presence import PresenceManager, PresenceMixin
+
+        # Only presence views: TenantMixin defines get_presence_key too, and a
+        # view without PresenceMixin never broadcasts to a presence group.
+        if not isinstance(view, PresenceMixin):
             return
         consumer = self._consumer
         try:
-            from .presence import PresenceManager
-
             presence_key = await sync_to_async(view.get_presence_key)()
             group = PresenceManager.presence_group_name(presence_key)
-            previous = getattr(consumer, "_presence_group", None)
-            if previous == group:
-                return
-            if isinstance(previous, str) and previous:
-                await consumer.channel_layer.group_discard(previous, consumer.channel_name)
-                consumer._presence_group = None
-            await consumer.channel_layer.group_add(group, consumer.channel_name)
+            joined = getattr(consumer, "_presence_groups", None)
+            if not isinstance(joined, set):
+                joined = set()
+                consumer._presence_groups = joined
+            if group not in joined:
+                await consumer.channel_layer.group_add(group, consumer.channel_name)
+                joined.add(group)
             consumer._presence_group = group
         except Exception as e:  # noqa: BLE001
             from ._exposure_diagnostics import log_failure
@@ -1969,7 +1974,12 @@ class WSConsumerTransport:
         """
         consumer = self._consumer
         groups: List[str] = []
-        for attr in ("_view_group", "_presence_group", "_presence_scope_group"):
+        from .presence import presence_groups_of
+
+        groups.extend(presence_groups_of(consumer))
+        consumer._presence_groups = set()
+        consumer._presence_group = None
+        for attr in ("_view_group", "_presence_scope_group"):
             group = getattr(consumer, attr, None)
             if isinstance(group, str) and group:
                 groups.append(group)

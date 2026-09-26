@@ -8,7 +8,9 @@ fell back to the unformatted key, every room shared the group
 mount, to ``djust_presence_chat:w1``) reached nobody.
 
 The join now happens after mount() / session restore, in
-``on_mount_render_ready``, and ``disconnect`` leaves the same formatted group.
+``on_mount_render_ready``. The consumer records every presence group it joined
+(a ``mount_batch`` can join several), and both ``disconnect`` and a
+``live_redirect`` teardown leave all of them.
 """
 
 from __future__ import annotations
@@ -137,3 +139,96 @@ async def test_disconnect_leaves_the_formatted_group():
         assert len(_members(_group("chat:leave-room"))) == 1
         await _close(a)
         assert _members(_group("chat:leave-room")) == []
+
+
+class _OtherRoomChatView(_RoomChatView):
+    """A second presence view with the same templated key, for redirects and batches."""
+
+
+def _other_path() -> str:
+    return f"{__name__}.{_OtherRoomChatView.__name__}"
+
+
+@pytest.mark.asyncio
+async def test_live_redirect_leaves_the_old_rooms_group():
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
+        a = await _mount("r1")
+        peer = None
+        try:
+            await a.send_json_to(
+                {
+                    "type": "live_redirect_mount",
+                    "view": _other_path(),
+                    "url": "/chat/r2/",
+                    "params": {"room": "r2"},
+                }
+            )
+            for _ in range(8):
+                if (await a.receive_json_from(timeout=3)).get("type") == "mount":
+                    break
+            await _drain(a)
+            assert _members(_group("chat:r1")) == []
+            assert len(_members(_group("chat:r2"))) == 1
+
+            peer = await _mount("r1")
+            await _drain(a)
+            await _drain(peer)
+            await peer.send_json_to({"type": "event", "event": "wave", "params": {}, "ref": 1})
+            got = [f for f in await _drain(a) if f.get("type") == "presence_event"]
+            assert got == [], "the session that moved to r2 still gets r1's broadcasts"
+        finally:
+            await _close(a)
+            if peer is not None:
+                await _close(peer)
+        assert _members(_group("chat:r1")) == []
+        assert _members(_group("chat:r2")) == []
+
+
+@pytest.mark.asyncio
+async def test_mount_batch_with_two_presence_views_leaves_both_groups():
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
+        a = await _connect()
+        try:
+            await a.send_json_to(
+                {
+                    "type": "mount_batch",
+                    "views": [
+                        {
+                            "view": _path(),
+                            "url": "/c/b1/",
+                            "params": {"room": "b1"},
+                            "target_id": "t1",
+                        },
+                        {
+                            "view": _other_path(),
+                            "url": "/c/b2/",
+                            "params": {"room": "b2"},
+                            "target_id": "t2",
+                        },
+                    ],
+                }
+            )
+            await _drain(a)
+            assert len(_members(_group("chat:b1"))) == 1
+            assert len(_members(_group("chat:b2"))) == 1
+        finally:
+            await _close(a)
+        assert _members(_group("chat:b1")) == []
+        assert _members(_group("chat:b2")) == []
+
+
+@pytest.mark.asyncio
+async def test_a_view_without_presence_joins_no_presence_group():
+    """TenantMixin defines get_presence_key too; only PresenceMixin views join."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from djust.runtime import WSConsumerTransport
+
+    class _TenantOnly:
+        def get_presence_key(self):
+            raise AssertionError("read the presence key of a view without presence")
+
+    consumer = MagicMock()
+    consumer.channel_layer.group_add = AsyncMock()
+    await WSConsumerTransport(consumer)._join_presence_group(_TenantOnly())
+    consumer.channel_layer.group_add.assert_not_awaited()

@@ -29,9 +29,86 @@ PRESENCE_TIMEOUT = 60  # seconds
 # its heartbeat score, so the cleanup only reclaims space.
 CLEANUP_INTERVAL = 30  # seconds
 
-# Past this many tracked keys, entries older than the interval are dropped so
-# the per-key throttle map stays bounded in a process that sees many rooms.
+# The per-key throttle map is pruned of expired entries once it grows past
+# this size, and after that only when it has doubled since the last prune, so
+# the O(n) scan is amortised over at least n insertions.
 _CLEANUP_MAP_PRUNE_AT = 10_000
+
+
+def presence_cleanup_interval(config: Dict[str, Any]) -> float:
+    """``DJUST_CONFIG['PRESENCE_CLEANUP_INTERVAL']`` in seconds, or the default.
+
+    A value that is not a non-negative number is logged and ignored.
+    """
+    raw = config.get("PRESENCE_CLEANUP_INTERVAL", CLEANUP_INTERVAL)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = -1.0
+    if value < 0:
+        logger.warning(
+            "PRESENCE_CLEANUP_INTERVAL must be a non-negative number of seconds, got %r; using %s",
+            raw,
+            CLEANUP_INTERVAL,
+        )
+        return float(CLEANUP_INTERVAL)
+    return value
+
+
+class CleanupThrottle:
+    """At most one ``cleanup_stale`` per presence key per ``interval`` seconds (#3203).
+
+    Per process and thread-safe. Uses ``time.monotonic()``, so a wall-clock
+    step cannot suppress cleanups; presence scores stay on ``time.time()``.
+    """
+
+    def __init__(self, interval: float) -> None:
+        self.interval = float(interval)
+        self._last: Dict[str, float] = {}
+        self._lock = threading.Lock()
+        self._prune_at = _CLEANUP_MAP_PRUNE_AT
+
+    def due(self, presence_key: str) -> bool:
+        """Whether a cleanup should run now; records it when it should."""
+        now = time.monotonic()
+        with self._lock:
+            last = self._last.get(presence_key)
+            if last is not None and now - last < self.interval:
+                return False
+            self._last[presence_key] = now
+            if len(self._last) > self._prune_at:
+                horizon = now - self.interval
+                for key in [k for k, t in self._last.items() if t < horizon]:
+                    del self._last[key]
+                self._prune_at = max(_CLEANUP_MAP_PRUNE_AT, 2 * len(self._last))
+            return True
+
+
+def read_presences(
+    client: Any, zset_key: str, meta_key: str, cutoff: float
+) -> List[Dict[str, Any]]:
+    """The records of the members whose heartbeat is at or after ``cutoff`` (#3203).
+
+    Two commands in one non-transactional round trip: ``ZRANGEBYSCORE`` and
+    ``HGETALL``. Ordered by heartbeat, oldest first. A member without a
+    record, or with a malformed one, is skipped.
+    """
+    pipe = client.pipeline(transaction=False)
+    pipe.zrangebyscore(zset_key, min=cutoff, max="+inf")
+    pipe.hgetall(meta_key)
+    members, records = pipe.execute()
+    if not members:
+        return []
+    presences = []
+    for uid in members:
+        raw = records.get(uid) if records else None
+        if not raw:
+            continue
+        try:
+            presences.append(json.loads(raw))
+        except (json.JSONDecodeError, TypeError):
+            logger.debug("Skipping a malformed presence record in %s", meta_key)
+    return presences
 
 
 class RedisPresenceBackend(PresenceBackend):
@@ -66,10 +143,7 @@ class RedisPresenceBackend(PresenceBackend):
         self._client = redis_lib.from_url(redis_url, decode_responses=True)
         self._prefix = key_prefix
         self._timeout = timeout
-        self._cleanup_interval = cleanup_interval
-        # presence_key -> time.time() of the last cleanup ``list()`` ran.
-        self._last_cleanup: Dict[str, float] = {}
-        self._cleanup_lock = threading.Lock()
+        self._cleanup_throttle = CleanupThrottle(cleanup_interval)
 
         # Verify connection
         try:
@@ -128,39 +202,14 @@ class RedisPresenceBackend(PresenceBackend):
         entries were deleted yet; ``cleanup_stale`` runs at most once per
         ``cleanup_interval`` per key in this process.
         """
-        now = time.time()
-        self._maybe_cleanup_stale(presence_key, now)
-
-        pipe = self._client.pipeline(transaction=False)
-        pipe.zrangebyscore(self._zset_key(presence_key), min=now - self._timeout, max="+inf")
-        pipe.hgetall(self._meta_key(presence_key))
-        members, records = pipe.execute()
-        if not members:
-            return []
-
-        presences = []
-        for uid in members:
-            raw = records.get(uid) if records else None
-            if not raw:
-                continue
-            try:
-                presences.append(json.loads(raw))
-            except (json.JSONDecodeError, TypeError):
-                logger.debug("Skipping a malformed presence record in %s", presence_key)
-        return presences
-
-    def _maybe_cleanup_stale(self, presence_key: str, now: float) -> None:
-        """Run ``cleanup_stale`` if this process has not for ``cleanup_interval``."""
-        with self._cleanup_lock:
-            last = self._last_cleanup.get(presence_key)
-            if last is not None and now - last < self._cleanup_interval:
-                return
-            self._last_cleanup[presence_key] = now
-            if len(self._last_cleanup) > _CLEANUP_MAP_PRUNE_AT:
-                horizon = now - self._cleanup_interval
-                for key in [k for k, t in self._last_cleanup.items() if t < horizon]:
-                    del self._last_cleanup[key]
-        self.cleanup_stale(presence_key)
+        if self._cleanup_throttle.due(presence_key):
+            self.cleanup_stale(presence_key)
+        return read_presences(
+            self._client,
+            self._zset_key(presence_key),
+            self._meta_key(presence_key),
+            time.time() - self._timeout,
+        )
 
     def count(self, presence_key: str) -> int:
         cutoff = time.time() - self._timeout
