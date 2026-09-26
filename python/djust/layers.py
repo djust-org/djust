@@ -403,7 +403,9 @@ class MultiLoopInMemoryChannelLayer(InMemoryChannelLayer):
                     if joined and joined < timeout:
                         members.pop(name, None)
 
-    def _remove_from_groups(self, channel: str) -> None:
+    def _remove_from_groups(self, channel: str) -> None:  # noqa: dead-method-allowed
+        # Overrides Channels' hook so a caller outside the sweep (the sweep
+        # inlines it under the lock it already holds) stays lock-safe.
         with self._lock:
             for members in self.groups.values():
                 members.pop(channel, None)
