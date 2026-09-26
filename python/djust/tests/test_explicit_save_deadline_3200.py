@@ -342,3 +342,178 @@ def test_explicit_save_timeout_system_check_is_silent_when_unset_or_suppressed()
     ):
         _check_explicit_state_save_timeout(errors)
     assert errors == []
+
+
+async def test_sustained_slow_storage_catches_up_once_and_stops(staged):
+    """Review B-a of #3206: the catch-up must not become a write loop.
+
+    Every save takes 120 ms against a 50 ms deadline, and ONE user event is
+    sent. The turn is deferred once; the catch-up saves with the 10 s cap, so
+    its save completes, and it sends one full-HTML frame. It never schedules
+    another catch-up, so the writes and frames stop there.
+    """
+    request = await sync_to_async(make_request)()
+    runtime, transport = await mount(request)
+    transport.sent.clear()
+    original = SessionStore.save
+    saves = []
+
+    def slow(self, *args, **kwargs):
+        saves.append(True)
+        time.sleep(0.12)
+        return original(self, *args, **kwargs)
+
+    with override_settings(DJUST_EXPLICIT_STATE_SAVE_TIMEOUT=0.05, DEBUG=False):
+        SessionStore.save = slow
+        try:
+            await runtime.dispatch_event({"type": "event", "event": "increment", "params": {}})
+            await asyncio.wait_for(runtime._explicit_catch_up, timeout=10)
+            settled = (len(saves), len(transport.sent))
+            # Give a loop, if there were one, room to show itself.
+            await asyncio.sleep(0.5)
+            await sync_to_async(lambda: None)()
+        finally:
+            SessionStore.save = original
+
+    assert (len(saves), len(transport.sent)) == settled, "writes or frames kept coming"
+    # The abandoned save, then the catch-up's commit: nothing else.
+    assert saves == [True, True], saves
+    assert [e.get("transient") for e in transport.errors] == [True]
+    assert [f["type"] for f in transport.sent if f.get("source") == "async"] == ["html_update"]
+    assert await _stored_count(request.session.session_key) == 6
+
+
+async def test_a_hung_store_escalates_to_the_reload_error(staged, monkeypatch):
+    """Review I-a of #3206: a save that never finishes must not defer forever.
+
+    The first save blocks until the end of the test. It runs in its own
+    thread-sensitive context (as an SSE POST does), so the hung thread does not
+    also block the later turns' handlers. Every later turn waits for the hung
+    save, misses its deadline and is deferred; the third consecutive deferral
+    is reported as the terminal reload error, as before #3200.
+    """
+    from asgiref.sync import SyncToAsync, ThreadSensitiveContext
+
+    request = await sync_to_async(make_request)()
+    runtime, transport = await mount(request)
+    transport.sent.clear()
+    release = threading.Event()
+    original = SessionStore.save
+    calls = []
+
+    def hung_then_real(self, *args, **kwargs):
+        calls.append(True)
+        if len(calls) == 1:
+            release.wait(timeout=30)
+        return original(self, *args, **kwargs)
+
+    event = {"type": "event", "event": "increment", "params": {}}
+    with override_settings(DJUST_EXPLICIT_STATE_SAVE_TIMEOUT=0.05, DEBUG=False):
+        SessionStore.save = hung_then_real
+        try:
+            var = SyncToAsync.thread_sensitive_context
+            hung_context = ThreadSensitiveContext()
+            token = var.set(hung_context)
+            first = asyncio.ensure_future(runtime.dispatch_event(dict(event)))
+            var.reset(token)
+            await _until(lambda: transport.errors or first.done(), "the first deferral")
+            await asyncio.wait_for(first, 10)
+            await runtime.dispatch_event(dict(event))
+            await runtime.dispatch_event(dict(event))
+            assert [bool(e.get("transient")) for e in transport.errors] == [True, True, False]
+            assert "reload" in transport.errors[-1]["error"].lower()
+            assert transport.errors[-1]["state_snapshot_signed"] is None
+        finally:
+            release.set()
+            SessionStore.save = original
+        await asyncio.wait_for(runtime._explicit_catch_up, timeout=10)
+        await hung_context.__aexit__(None, None, None)
+    assert runtime.view_instance.count == 8
+
+
+async def test_a_catch_up_that_cannot_send_withdraws_the_promise(staged, monkeypatch):
+    """Review B-b of #3206: if the catch-up cannot deliver, say reload.
+
+    Here its authorization is refused (the SSE failure mode the matrix hit).
+    The transient message promised an update; the catch-up must not leave the
+    user waiting for it, so it sends the terminal reload error instead.
+    """
+    request = await sync_to_async(make_request)()
+    runtime, transport = await mount(request)
+    transport.sent.clear()
+    release = threading.Event()
+    original = SessionStore.save
+    calls = []
+
+    def slow_first(self, *args, **kwargs):
+        calls.append(True)
+        if len(calls) == 1:
+            release.wait(timeout=30)
+        return original(self, *args, **kwargs)
+
+    async def refused(view):
+        raise RuntimeError("AUTH_SENTINEL")
+
+    with override_settings(DJUST_EXPLICIT_STATE_SAVE_TIMEOUT=0.05, DEBUG=False):
+        SessionStore.save = slow_first
+        try:
+            dispatch = asyncio.ensure_future(
+                runtime.dispatch_event({"type": "event", "event": "increment", "params": {}})
+            )
+            try:
+                await _until(lambda: transport.errors or dispatch.done(), "the deferral")
+            finally:
+                monkeypatch.setattr(runtime, "authorize_explicit_turn", refused)
+                release.set()
+            await asyncio.wait_for(dispatch, 10)
+            await asyncio.wait_for(runtime._explicit_catch_up, timeout=10)
+        finally:
+            SessionStore.save = original
+
+    assert [bool(e.get("transient")) for e in transport.errors] == [True, False]
+    assert transport.errors[-1]["error"] == "State unavailable. Please reload the page."
+    assert not [f for f in transport.sent if f.get("type") in {"patch", "html_update"}]
+    assert "AUTH_SENTINEL" not in json.dumps(transport.sent)
+
+
+async def test_a_save_running_past_the_cap_escalates_at_once(staged, monkeypatch):
+    """Review I-a, the wall-time arm: a pending save older than the cap means
+    storage is not recovering, so the next deferral is already terminal."""
+    from asgiref.sync import SyncToAsync, ThreadSensitiveContext
+
+    import djust._exposure_sessions as sessions
+
+    request = await sync_to_async(make_request)()
+    runtime, transport = await mount(request)
+    transport.sent.clear()
+    release = threading.Event()
+    original = SessionStore.save
+    calls = []
+
+    def hung_then_real(self, *args, **kwargs):
+        calls.append(True)
+        if len(calls) == 1:
+            release.wait(timeout=30)
+        return original(self, *args, **kwargs)
+
+    event = {"type": "event", "event": "increment", "params": {}}
+    with override_settings(DJUST_EXPLICIT_STATE_SAVE_TIMEOUT=0.05, DEBUG=False):
+        SessionStore.save = hung_then_real
+        var = SyncToAsync.thread_sensitive_context
+        hung_context = ThreadSensitiveContext()
+        try:
+            token = var.set(hung_context)
+            first = asyncio.ensure_future(runtime.dispatch_event(dict(event)))
+            var.reset(token)
+            await _until(lambda: transport.errors or first.done(), "the first deferral")
+            await asyncio.wait_for(first, 10)
+            # The hung save is now older than the (lowered) cap.
+            monkeypatch.setattr(sessions, "MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S", 0.0)
+            await runtime.dispatch_event(dict(event))
+            assert [bool(e.get("transient")) for e in transport.errors] == [True, False]
+        finally:
+            monkeypatch.setattr(sessions, "MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S", 10.0)
+            release.set()
+            SessionStore.save = original
+        await asyncio.wait_for(runtime._explicit_catch_up, timeout=10)
+        await hung_context.__aexit__(None, None, None)

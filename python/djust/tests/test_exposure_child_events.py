@@ -407,7 +407,10 @@ async def test_child_save_timeout_is_withheld_and_lands_late(monkeypatch):
     assert not any(frame.get("type") == "embedded_update" for frame in transport.sent)
     # The abandoned save still runs, and the catch-up turn follows it.
     await asyncio.wait_for(runtime._explicit_catch_up, timeout=10)
-    assert saved[:1] == [True], "the abandoned save must still land"
+    # Exactly two writes: the abandoned save landing late, then the ONE
+    # catch-up turn's commit (it re-commits so it covers whichever half of the
+    # turn was deferred). A catch-up loop would add more (#3206 review B-a).
+    assert saved == [True, True], saved
     assert any(
         f.get("type") == "html_update" and f.get("source") == "async" for f in transport.sent
     ), "the catch-up turn must send full HTML"
