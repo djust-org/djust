@@ -1063,15 +1063,31 @@ def scan_class_template(
     return "", None
 
 
-def recovery_targets(cls: type) -> frozenset[str]:
-    """Handlers a literal ``dj-auto-recover`` in the class's template targets,
-    including its includes and parents (ADR-037 row 18)."""
+def recovery_scan(cls: type) -> tuple[frozenset[str], bool]:
+    """The literal ``dj-auto-recover`` targets of the class's template, including
+    its includes and parents (ADR-037 row 18), and whether they are all of them.
+
+    The flag is False when the scan cannot see every target the page may
+    render: no Django engine, no declared template, a template that did not
+    load, markup the scan cannot follow (a dynamic include or extends, a tag
+    that renders markup), or a computed ``dj-auto-recover`` value. Only then
+    do the targets of each render count too (#3127).
+    """
     engine = django_engine()
     if engine is None:
-        return frozenset()
+        return frozenset(), False
     cache: dict[Any, Any] = {}
     _label, key = scan_class_template(cls, engine, cache)
     scan = cache.get(key) if key is not None else None
     if not isinstance(scan, TemplateScan):
-        return frozenset()
-    return frozenset(b.name for b in scan.bindings if b.directive == "dj-auto-recover" and b.name)
+        return frozenset(), False
+    recover = [b for b in scan.bindings if b.directive == "dj-auto-recover"]
+    names = frozenset(b.name for b in recover if b.name)
+    complete = not scan.gaps and scan.error is None and all(b.name for b in recover)
+    return names, complete
+
+
+def recovery_targets(cls: type) -> frozenset[str]:
+    """Handlers a literal ``dj-auto-recover`` in the class's template targets,
+    including its includes and parents (ADR-037 row 18)."""
+    return recovery_scan(cls)[0]

@@ -62,7 +62,25 @@ def get_project_parameter_policy() -> str:
     return str(policy)
 
 
-_RECOVERY_HANDLERS: "weakref.WeakKeyDictionary[type, frozenset[str]]" = weakref.WeakKeyDictionary()
+_RECOVERY_HANDLERS: "weakref.WeakKeyDictionary[type, tuple[frozenset[str], bool]]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _recovery_scan(view_class: type) -> tuple[frozenset[str], bool]:
+    """``_template_bindings.recovery_scan``, once per class."""
+    cached = _RECOVERY_HANDLERS.get(view_class)
+    if cached is None:
+        from ._template_bindings import recovery_scan
+        from .mixins.template import TemplateMixin
+
+        names, complete = recovery_scan(view_class)
+        # A view that chooses its own template is not described by the scan.
+        if getattr(view_class, "get_template", None) is not TemplateMixin.get_template:
+            complete = False
+        cached = (names, complete)
+        _RECOVERY_HANDLERS[view_class] = cached
+    return cached
 
 
 def recovery_handler_names(view_class: type) -> frozenset[str]:
@@ -72,19 +90,13 @@ def recovery_handler_names(view_class: type) -> frozenset[str]:
     because their ``_form_values`` / ``_data_attrs`` envelope cannot be a strict
     signature. The template is server-owned, so a client cannot claim this.
     Read once per class by the template binding scan (ADR-037 row 18), which
-    follows ``{% include %}`` and ``{% extends %}``; dynamic values are not
-    seen, so dispatch also uses the targets of each render
-    (``note_rendered_recovery_targets``). This scan serves the V019 startup
-    check and renders Python does not see (actors, an HTTP instance before it
-    renders).
+    follows ``{% include %}`` and ``{% extends %}``. Where the scan cannot see
+    every target (a computed value, markup it cannot follow), dispatch also
+    uses the targets of each render (``note_rendered_recovery_targets``). This
+    scan serves the V019 startup check and renders Python does not see
+    (actors, an HTTP instance before it renders).
     """
-    cached = _RECOVERY_HANDLERS.get(view_class)
-    if cached is None:
-        from ._template_bindings import recovery_targets
-
-        cached = recovery_targets(view_class)
-        _RECOVERY_HANDLERS[view_class] = cached
-    return cached
+    return _recovery_scan(view_class)[0]
 
 
 _RENDERED_RECOVERY: "weakref.WeakKeyDictionary[Any, frozenset[str]]" = weakref.WeakKeyDictionary()
@@ -123,17 +135,25 @@ def _strict_possible(view: Any) -> bool:
 def note_rendered_recovery_targets(view: Any, html: str) -> None:
     """Record the recovery targets in the HTML the server just rendered for ``view``.
 
-    This follows ``{% include %}``, ``{% extends %}``, conditional blocks and
-    dynamic attribute values, which the class-level template scan cannot. Only
-    real ``dj-auto-recover`` attributes of parsed elements count; escaped text
-    that merely spells one does not. The render is server output, so a client
-    payload cannot add a target.
+    Used only where the class-level template scan cannot see every target: a
+    computed ``dj-auto-recover`` value, markup the scan cannot follow (a
+    dynamic include, a tag that renders markup), or a view that picks its own
+    template. Elsewhere a render adds nothing, because rendered HTML also
+    carries user content: ``|safe`` HTML from a sanitizer that keeps unknown
+    attributes could otherwise name a strict handler and downgrade it (#3127).
+    Where the render is used, such a sanitizer must drop ``dj-*`` attributes.
+    Only real ``dj-auto-recover`` attributes of parsed elements count; escaped
+    text that merely spells one does not.
     """
     try:
         names: frozenset[str] = frozenset()
         # R1 only downgrades strict handlers: a legacy-only view never needs the
         # parse (it cost ~3 ms per 20 KB render, PR #3122 review).
-        if "dj-auto-recover" in html and _strict_possible(view):
+        if (
+            "dj-auto-recover" in html
+            and _strict_possible(view)
+            and not _recovery_scan(type(view))[1]
+        ):
             from html.parser import HTMLParser
 
             found: set[str] = set()

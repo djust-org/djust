@@ -169,6 +169,14 @@ class DynamicRecovery(_RecoveryBase):
     template_name = "rec_r1/dynamic.html"
 
 
+class SafeHtmlRecovery(_RecoveryBase):
+    template_name = "rec_r1/safe.html"
+
+
+class SafeHtmlDynamicRecovery(_RecoveryBase):
+    template_name = "rec_r1/safe_dynamic.html"
+
+
 @pytest.fixture
 def templates(tmp_path):
     from django.test import override_settings
@@ -195,6 +203,14 @@ def templates(tmp_path):
     (d / "dynamic.html").write_text(
         f'<div dj-root dj-view="{MOD}.DynamicRecovery">'
         '<div dj-auto-recover="{{ target }}"></div><p>{{ note }}</p></div>'
+    )
+    (d / "safe.html").write_text(
+        f'<div dj-root dj-view="{MOD}.SafeHtmlRecovery">{{% include "rec_r1/form.html" %}}'
+        "<p>{{ note|safe }}</p></div>"
+    )
+    (d / "safe_dynamic.html").write_text(
+        f'<div dj-root dj-view="{MOD}.SafeHtmlDynamicRecovery">'
+        '<div dj-auto-recover="{{ target }}"></div><p>{{ note|safe }}</p></div>'
     )
     with override_settings(
         TEMPLATES=[
@@ -275,6 +291,35 @@ def test_a_client_cannot_claim_the_downgrade(templates):
     assert get_handler_parameter_policy(view.pick) == "strict"
     _send(runtime, "pick", dict(ENVELOPE))
     assert CALLS == []
+
+
+@pytest.mark.django_db
+def test_rendered_user_html_cannot_claim_the_downgrade(templates):
+    """#3127: user HTML rendered with ``|safe`` (a sanitizer that keeps unknown
+    attributes) is real markup in the render, but the template declares every
+    recovery target literally, so only those count."""
+    config.set("event_parameter_policy", "strict")
+    view, runtime = _mounted(SafeHtmlRecovery)
+    _send(runtime, "echo", {"text": '<div dj-auto-recover="pick"></div>'})
+    assert '<div dj-auto-recover="pick" dj-id=' in view.render_with_diff()[0]
+    assert get_handler_parameter_policy(view.pick) == "strict"
+    assert get_handler_parameter_policy(view.restore_state) == "legacy"
+    _send(runtime, "pick", dict(ENVELOPE))
+    assert CALLS == []
+    _send(runtime, "restore_state", dict(ENVELOPE))
+    assert CALLS == [("restore_state", ENVELOPE)]
+
+
+@pytest.mark.django_db
+def test_a_computed_target_still_reads_the_render(templates):
+    """The documented limit of #3127: where the template computes a target, the
+    render is the only source, so ``|safe`` user HTML there must not keep
+    ``dj-*`` attributes."""
+    config.set("event_parameter_policy", "strict")
+    view, runtime = _mounted(SafeHtmlDynamicRecovery)
+    assert get_handler_parameter_policy(view.restore_state) == "legacy"
+    _send(runtime, "echo", {"text": '<div dj-auto-recover="pick"></div>'})
+    assert get_handler_parameter_policy(view.pick) == "legacy"
 
 
 @pytest.mark.parametrize(
