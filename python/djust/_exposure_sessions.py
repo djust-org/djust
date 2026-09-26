@@ -18,7 +18,7 @@ import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeGuard
 from uuid import UUID
 
 from django.contrib.sessions.backends.base import SessionBase
@@ -51,6 +51,22 @@ def server_state_max_age() -> int:
     if type(value) is not int or not 0 < value <= 86400:
         raise ExposureError("DJUST_SERVER_STATE_MAX_AGE must be an integer from 1 to 86400")
     return value
+
+
+#: Upper bound for ``DJUST_EXPLICIT_STATE_SAVE_TIMEOUT``. An explicit turn waits
+#: this long for its save before answering, so a larger value is a stall.
+MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S = 10.0
+
+
+def valid_explicit_state_save_timeout(value: Any) -> "TypeGuard[int | float]":
+    """True for a finite number of seconds in ``(0, 10]`` (bools rejected)."""
+    import math
+
+    return (
+        type(value) in (int, float)
+        and math.isfinite(value)
+        and 0 < value <= MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S
+    )
 
 
 def _migration_hook(view: Any) -> StateMigration | None:
