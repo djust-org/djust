@@ -25,3 +25,14 @@ def test_committed_distribution_sbom_matches_the_manifests():
     registry = build_registry(PKG.parent / rel for rel in DISTRIBUTION_MANIFESTS)
     document = json.loads((PKG / "djust.cdx.json").read_text())
     assert digest_of(document) == registry.digest()
+
+
+def test_make_version_regenerates_the_distribution_sbom():
+    # The SBOM's root component version comes from pyproject.toml, so a bump
+    # that skipped regeneration would ship a stale djust.cdx.json.
+    makefile = (PKG.parents[1] / "Makefile").read_text()
+    recipe = makefile.split("\nversion:", 1)[1].split("\n.PHONY:", 1)[0]
+    bump = recipe.index("pyproject.toml.tmp")
+    regen = recipe.index("-m djust.assets.sbom --distribution")
+    assert regen > bump
+    assert "djust.cdx.json" in recipe.splitlines()[0]  # the help text says so

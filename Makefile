@@ -714,7 +714,7 @@ info: ## Show project information
 ##@ Versioning & Releases
 
 .PHONY: version
-version: ## Bump version (usage: make version VERSION=0.2.0a1)
+version: ## Bump version and regenerate python/djust/djust.cdx.json (usage: make version VERSION=0.2.0a1)
 ifndef VERSION
 	@echo "$(RED)ERROR: VERSION not specified$(NC)"
 	@echo "Usage: make version VERSION=0.2.0a1"
@@ -738,8 +738,11 @@ endif
 	@echo "$(GREEN)Refreshing lockfile self-entries...$(NC)"
 	@uv lock
 	@cargo update --workspace --offline 2>/dev/null || cargo update --workspace
+	@# The distribution SBOM's root version comes from pyproject.toml (ADR-040).
+	@echo "$(GREEN)Regenerating python/djust/djust.cdx.json...$(NC)"
+	@PYTHONPATH=python $(PYTHON) -m djust.assets.sbom --distribution
 	@echo "$(YELLOW)Don't forget to update CHANGELOG.md!$(NC)"
-	@echo "$(YELLOW)Commit uv.lock + Cargo.lock alongside the manifest bump.$(NC)"
+	@echo "$(YELLOW)Commit uv.lock + Cargo.lock + python/djust/djust.cdx.json alongside the manifest bump.$(NC)"
 
 .PHONY: version-check
 version-check: ## Check current version in all files
