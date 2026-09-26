@@ -8,6 +8,7 @@ import math
 import re
 from dataclasses import dataclass
 from itertools import islice
+from threading import Lock
 from types import MappingProxyType
 from typing import Mapping, TypedDict
 from urllib.parse import urlsplit
@@ -23,6 +24,11 @@ __all__ = ["Sound", "SoundBank", "SoundEvent", "AudioMixin"]
 _NAME = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 #: ADR-038 E2-1: the client audio manifest key, render-only.
 AUDIO_PROVIDER = ProviderContract("djust.audio", rendered=frozenset({"djust_audio_manifest"}))
+#: Serialise manifest builds (a cache miss) so one view builds its manifest
+#: once under concurrency. Striped by view, so first renders of different
+#: sessions (a reconnect burst on free-threaded Python) still build in
+#: parallel. Never taken on the cache-hit path.
+_MANIFEST_BUILD_LOCKS = tuple(Lock() for _ in range(64))
 
 
 class SoundEvent(TypedDict):
@@ -81,6 +87,14 @@ class SoundBank:
         object.__setattr__(self, "sounds", MappingProxyType(dict(self.sounds)))
 
 
+def _sound_bank(value, name=None):
+    if name is not None:
+        _name(name)
+    if not isinstance(value, SoundBank):
+        raise TypeError("audio_banks values must be SoundBank instances")
+    return value
+
+
 class AudioMixin:
     """Declare ``audio_banks`` and use ``{% djust_audio %}`` inside the view root.
 
@@ -99,10 +113,7 @@ class AudioMixin:
         _name(bank)
         if bank not in self.audio_banks:
             raise ValueError(f"Unknown audio bank: {bank}")
-        value = self.audio_banks[bank]
-        if not isinstance(value, SoundBank):
-            raise TypeError("audio_banks values must be SoundBank instances")
-        return value
+        return _sound_bank(self.audio_banks[bank])
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -125,31 +136,47 @@ class AudioMixin:
         rebuilt only when an input changes: the scope, the banks (reassigned
         or swapped for another ``SoundBank``; banks themselves are immutable),
         or the allowed static origins.
+
+        Thread safety (free-threaded 3.14t, ``worker_threads``, several event
+        loops): a session's render lock already serialises its view's renders,
+        but the cache does not rely on it. The hit path is one read of an
+        attribute holding an immutable tuple. A miss builds under the view's
+        stripe of ``_MANIFEST_BUILD_LOCKS`` and re-checks first, so concurrent first
+        renders of one view build it once. The entry keeps the bank objects
+        alive, so the ``id()`` in its key cannot be reused by a new bank.
         """
+        # One snapshot of the inputs: the key and the build must agree even if
+        # ``audio_banks`` is reassigned meanwhile.
+        items = tuple(self.audio_banks.items())
         origins = list(getattr(settings, "DJUST_AUDIO_STATIC_ORIGINS", []))
         key = (
             self._audio_scope,
-            tuple((name, id(bank)) for name, bank in self.audio_banks.items()),
+            tuple((name, id(bank)) for name, bank in items),
             tuple(origins),
         )
         cached = getattr(self, "_audio_manifest_cache", None)
         if cached is not None and cached[0] == key:
             return cached[1]
-        banks = {}
-        for name in self.audio_banks:
-            bank = self._audio_bank(name)
-            banks[name] = {
-                "maxVoices": bank.max_voices,
-                "sounds": {
-                    sound_name: {"url": static(sound.path), "volume": sound.volume}
-                    for sound_name, sound in bank.sounds.items()
-                },
-            }
-        manifest = json.dumps(
-            {"version": 1, "scope": self._audio_scope, "banks": banks, "origins": origins}
-        )
-        self._audio_manifest_cache = (key, manifest)
-        return manifest
+        with _MANIFEST_BUILD_LOCKS[(id(self) >> 4) % len(_MANIFEST_BUILD_LOCKS)]:
+            cached = getattr(self, "_audio_manifest_cache", None)
+            if cached is not None and cached[0] == key:
+                return cached[1]
+            banks = {}
+            for name, value in items:
+                bank = _sound_bank(value, name)
+                banks[name] = {
+                    "maxVoices": bank.max_voices,
+                    "sounds": {
+                        sound_name: {"url": static(sound.path), "volume": sound.volume}
+                        for sound_name, sound in bank.sounds.items()
+                    },
+                }
+            manifest = json.dumps(
+                {"version": 1, "scope": self._audio_scope, "banks": banks, "origins": origins}
+            )
+            # (key, manifest, banks): the third element pins the banks' ids.
+            self._audio_manifest_cache = (key, manifest, tuple(bank for _, bank in items))
+            return manifest
 
     def play_sound(self, bank, sound, *, event_id=None):
         self.play_sounds(
