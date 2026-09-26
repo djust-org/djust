@@ -288,7 +288,8 @@ sensitive payloads.**
   doc-snippet checker's own extractor, executes it, and renders the paired
   HTML through a real GET. It checks the advertised strict contracts, then
   drives the documented valid and invalid payloads through the real HTTP
-  fallback.
+  fallback. Since ADR-037 D2 this runs as
+  `python/djust/tests/test_doc_examples.py` (`doc_scenarios/adr036.py`).
 - `adr036_documented_examples.test.js` mounts the same HTML blocks in the
   bundle under those contracts, and checks that the browser sends exactly
   those payloads.

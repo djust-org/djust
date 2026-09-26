@@ -2,7 +2,7 @@
  * ADR-036 P3: the events guide's strict examples, driven through the real
  * bundle. Each documented HTML block is mounted under the contract its
  * documented Python signature produces, and the payload the browser sends is
- * the one python/djust/tests/test_adr036_documented_examples.py then
+ * the one python/djust/tests/doc_scenarios/adr036.py (strict-policy) then
  * dispatches to the documented handler.
  */
 import { describe, expect, it, vi } from 'vitest';

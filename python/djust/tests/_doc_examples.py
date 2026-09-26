@@ -80,6 +80,12 @@ COVERED: Tuple[Section, ...] = (
         "## ModelFormMixin: edit one record (djust 1.3+)",
         "## FormMixin Pattern",
     ),
+    Section(
+        "docs/website/core-concepts/events.md",
+        "## Typed event parameters (strict policy)",
+        "## Next Steps",
+    ),
+    Section("docs/ai/events.md"),
 )
 
 

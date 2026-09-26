@@ -23,5 +23,6 @@ def scenario(name: str) -> Callable:
 def load_all() -> Dict[str, Callable]:
     from . import adr034  # noqa: F401  (registers on import)
     from . import adr035  # noqa: F401
+    from . import adr036  # noqa: F401
 
     return SCENARIOS
