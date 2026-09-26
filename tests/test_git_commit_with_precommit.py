@@ -16,9 +16,32 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from tests.git_env import isolated_git_env
+
+
+@pytest.fixture(autouse=True)
+def _no_inherited_git_env(monkeypatch):
+    """This module runs git, directly or through a script that does. Under a
+    git hook an inherited GIT_DIR / GIT_INDEX_FILE would aim those commands at
+    the real repository (#2608, #3179)."""
+    from tests.git_env import GIT_EXECUTION_VARS
+
+    for var in GIT_EXECUTION_VARS:
+        monkeypatch.delenv(var, raising=False)
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WRAPPER = REPO_ROOT / "scripts" / "git-commit-with-precommit.sh"
+
+
+def _isolated_env() -> dict[str, str]:
+    """`os.environ` minus git's execution variables, host git config ignored.
+
+    Under a git hook ``GIT_DIR`` names the REAL repository. Inheriting it made
+    ``_make_repo`` re-initialise that repository and write ``user.name = Test``,
+    ``user.email`` and ``commit.gpgsign = false`` into its config (#3179).
+    """
+    return isolated_git_env(GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_SYSTEM="/dev/null")
 
 
 def _git(
@@ -30,7 +53,7 @@ def _git(
         capture_output=True,
         text=True,
         check=False,
-        env=env,
+        env=env if env is not None else _isolated_env(),
     )
 
 
@@ -42,10 +65,9 @@ def _make_repo(tmp: Path) -> dict[str, str]:
     _git(tmp, "config", "commit.gpgsign", "false").check_returncode()
     # Empty initial commit so HEAD exists and POST_HEAD comparison works.
     _git(tmp, "commit", "-q", "--allow-empty", "-m", "initial").check_returncode()
-    env = os.environ.copy()
-    # Don't let the host user's global pre-commit/hooks config leak in.
-    env["GIT_CONFIG_GLOBAL"] = "/dev/null"
-    return env
+    # Don't let the host user's global pre-commit/hooks config leak in, and
+    # never hand the wrapper (which runs git) an inherited GIT_DIR (#3179).
+    return _isolated_env()
 
 
 def _install_reformatter_hook(shim_dir: Path) -> None:
@@ -252,8 +274,7 @@ def test_wrapper_preserves_unstaged_hunks(repo: tuple[Path, dict[str, str]]) -> 
 
 def test_wrapper_outside_git_repo(tmp_path: Path) -> None:
     """Invocation outside a git repo gives a clean exit-1 instead of git's raw usage."""
-    env = os.environ.copy()
-    env["GIT_CONFIG_GLOBAL"] = "/dev/null"
+    env = _isolated_env()
     bare = tmp_path / "not-a-repo"
     bare.mkdir()
     result = subprocess.run(

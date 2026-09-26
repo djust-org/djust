@@ -62,6 +62,18 @@ from scripts.lib.django_template_suite.report import (
     summarize,
 )
 
+
+@pytest.fixture(autouse=True)
+def _no_inherited_git_env(monkeypatch):
+    """This module runs git, directly or through a script that does. Under a
+    git hook an inherited GIT_DIR / GIT_INDEX_FILE would aim those commands at
+    the real repository (#2608, #3179)."""
+    from tests.git_env import GIT_EXECUTION_VARS
+
+    for var in GIT_EXECUTION_VARS:
+        monkeypatch.delenv(var, raising=False)
+
+
 REPO = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "run-django-template-suite.py"
 BASELINE = REPO / "scripts" / "django-template-suite-baseline.json"

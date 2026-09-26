@@ -11,9 +11,10 @@ These tests build a throwaway main-repo + linked-worktree (the bug's exact
 topology) IN AN ISOLATED tmp dir, simulate the leak in the throwaway repo's
 shared config, and assert the script detects it and ``--fix`` recovers it.
 Every git operation runs against ``tmp_path`` with ``GIT_CONFIG_GLOBAL``/
-``GIT_CONFIG_SYSTEM`` pointed at ``/dev/null`` — the real repo's config is
-NEVER touched. The script itself NEVER writes ``core.bare true``; its only
-write is the recovery ``core.bare false`` behind ``--fix``.
+``GIT_CONFIG_SYSTEM`` pointed at ``/dev/null`` and git's execution variables
+(``GIT_DIR`` & co.) stripped — the real repo's config is NEVER touched (#3179).
+The script itself NEVER writes ``core.bare true``; its only write is
+the recovery ``core.bare false`` behind ``--fix``.
 """
 
 from __future__ import annotations
@@ -23,38 +24,53 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from tests.git_env import isolated_git_env
+
+
+@pytest.fixture(autouse=True)
+def _no_inherited_git_env(monkeypatch):
+    """This module runs git, directly or through a script that does. Under a
+    git hook an inherited GIT_DIR / GIT_INDEX_FILE would aim those commands at
+    the real repository (#2608, #3179)."""
+    from tests.git_env import GIT_EXECUTION_VARS
+
+    for var in GIT_EXECUTION_VARS:
+        monkeypatch.delenv(var, raising=False)
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CHECKER = REPO_ROOT / "scripts" / "check-shared-git-config.sh"
 
 
-def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    env = os.environ.copy()
+def _isolated_env() -> dict[str, str]:
     # Isolate from the host user's global/system git config so a real-repo
-    # setting can never influence (or be influenced by) these throwaway repos.
-    env["GIT_CONFIG_GLOBAL"] = "/dev/null"
-    env["GIT_CONFIG_SYSTEM"] = "/dev/null"
+    # setting can never influence (or be influenced by) these throwaway repos,
+    # and never inherit git's execution variables: under a hook GIT_DIR names
+    # the REAL repository, and `git init` + `git config user.name Test` here
+    # would rewrite its config (#2608, #3179).
+    return isolated_git_env(GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_SYSTEM="/dev/null")
+
+
+def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", *args],
         cwd=cwd,
         capture_output=True,
         text=True,
         check=False,
-        env=env,
+        env=_isolated_env(),
     )
 
 
 def _run_checker(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    env = os.environ.copy()
-    env["GIT_CONFIG_GLOBAL"] = "/dev/null"
-    env["GIT_CONFIG_SYSTEM"] = "/dev/null"
+    # The checker runs git itself, so it gets the same isolation as `_git`.
     return subprocess.run(
         ["bash", str(CHECKER), *args],
         cwd=cwd,
         capture_output=True,
         text=True,
         check=False,
-        env=env,
+        env=_isolated_env(),
     )
 
 
