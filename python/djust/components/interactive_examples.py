@@ -12,6 +12,7 @@ from djust.components.interactive import DropdownMenu
 
 class DropdownMenuExample(LiveView):
     template_name = "djust_theming/catalogue/examples/interactive_dropdown_menu_page.html"
+    login_required = False  # a public demo: it holds no user data
 
     project_menu = DropdownMenu(
         label="Project",
