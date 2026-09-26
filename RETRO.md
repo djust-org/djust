@@ -1087,6 +1087,42 @@ The new guide is `docs/website/guides/scaling-across-cores.md`. A truth review c
 - Code Review: 1 🟡 (stripe-test tautology), fixed; 1 🟢 (`str()` vs `to_string()` for a non-string manifest), left.
 - Re-Review: passed, with 1 🟢 filed as #3178.
 
+## v1.3.0-8 — free-threaded first-use class caches (#3151)
+
+**Scope**: One djust PR (#3176), which fixed #3151. On snake-arena (3.14t, `PooledHTTP(threads=3)`), the first simultaneous page loads after a start returned 500 with `RuntimeError: dictionary changed size during iteration` in `_descriptor_fields()`. The PR also swept every request-path walk of a class namespace for the same race.
+
+### Bucket summary
+
+**Outcome.**
+- Every render, mount and dispatch walk of a class namespace now iterates a snapshot. The new private `djust._class_snapshot` provides `namespace()` and `attribute_names()`, a `dir()` equivalent. No lock was added, and caches still publish with one `setattr`.
+- The Rust `bit in dir(current)` probe (#2506) now answers by membership over `__dict__` and the MRO.
+- An AST gate blocks new live walks.
+- The regression test runs in the 3.14t CI job.
+
+**What the bucket learned**
+1. **Measure atomicity before choosing a primitive.** On 3.14t with the GIL off, only `mappingproxy.copy()` and `list(mappingproxy.items())` are atomic. `dict(vars(C))`, `list(vars(C))`, `set.update(vars(C))` and `dir()` all race.
+2. **A class used as a cache is shared mutable state.** The `setattr(cls, ...)` caches predate free-threading and were harmless under the GIL, so earlier free-threaded audits never looked at them. This is the first free-threaded bug found in production traffic rather than in a designed test.
+3. **A hammer can throttle itself.** With a fresh leaf class per call, every `setattr(base)` had to invalidate a growing subclass list, and one walk never raced. Reusing one leaf per reader, with its caches reset, made all cases fail 3/3 on the old code, even on 3.12 with a 1 µs switch interval. The reader must also record every exception, not only the expected one.
+4. **Classify each sweep site by its callers, not by its name.** The plan called `compile_subscriptions` class-creation-only, but its `_validate_callback` runs per request. Code Review caught it (🔴).
+5. **`except Exception` hides races.** `_extract_handler_config` swallowed the error and shipped a mount frame without the client rate-limit config.
+
+**Open items**
+- #3177: `daphne.E001` leaks into `test_b008_*`, an order-dependent CI flake that predates this PR.
+- #3181: the namespace gate misses `f(**vars(X))` and aliases. It also raises moving first-use caches off the class.
+- Candidate pattern page: `free-threaded-class-namespace-iteration`.
+
+### PR 1 — snapshot class namespaces before walking them (PR #3176)
+
+**Date**: 2026-09-26. Squash-merged as `00955729e`. Retro: https://github.com/djust-org/djust/pull/3176#issuecomment-5847312387 (Quality 4/5).
+
+**Tests at close**
+- `python/djust/tests/test_free_threaded_class_caches_3151.py`: 20 tests, run in the 3.14t CI job. Before the fix they failed 18/18 on both 3.12 and 3.14t; the Rust-probe case failed 3/3 against the old extension.
+- The targeted run gave 4492 passed. The full suite ran in the pre-push hook, and CI was green, including 3.14t.
+
+**Review stats**
+- Code Review: 1 🔴 (`{**vars(owner)}` in `_validate_callback`), fixed; 2 🟡 (gate false negatives, and the Rust `dir()` probe race), both fixed in the PR; 2 🟢 (thread join, which was fixed, and the `fresh()` copy cost of +2.5 µs per event, which was accepted).
+- Re-Review: approved; 1 🟢 filed as #3181.
+
 ## v1.3.0-6 — multiple event loops (#3128)
 
 **Scope**: One djust PR (#3162) for the three #3128 rows: the loop-aware in-memory layer and the `djust serve --loops N` launcher, the audit of loop-bound state, and measured guidance on N. The fourth row, the snake-arena room clock, is an app PR that follows the merge.
