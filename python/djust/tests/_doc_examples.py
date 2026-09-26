@@ -70,6 +70,16 @@ COVERED: Tuple[Section, ...] = (
         "## Interactive components (djust 1.3+)",
         "## Common Patterns",
     ),
+    Section(
+        "docs/website/guides/forms.md",
+        "## Editing one record with `ModelFormMixin`",
+        "## Form Reset",
+    ),
+    Section(
+        "docs/ai/forms.md",
+        "## ModelFormMixin: edit one record (djust 1.3+)",
+        "## FormMixin Pattern",
+    ),
 )
 
 

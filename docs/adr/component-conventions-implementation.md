@@ -215,7 +215,8 @@ migration recipe after the lifecycle gates).**
 - `test_adr035_documented_examples.py` extracts both documents' Python with
   the doc-snippet checker's own extractor and executes it. It uses the
   guide's route block and the paired HTML, then checks author, other user
-  and missing record over GET and the HTTP fallback.
+  and missing record over GET and the HTTP fallback. Since ADR-037 D2 this
+  runs as `python/djust/tests/test_doc_examples.py` (`doc_scenarios/adr035.py`).
 - djust-docs' `docs_verify`, pointed at this branch's `docs/` and djust:
   links, symbols (693) and a11y pass. The nav finding (`guides/accounts.md`)
   pre-dates this branch.

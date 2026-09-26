@@ -273,6 +273,7 @@ override. The URL route supplies the record's `pk` (or `slug`). djust looks
 the record up and checks access before it builds the form, and checks again
 on every event:
 
+<!-- djust-example: article-edit scenario=model-form-edit -->
 ```python
 from django import forms
 from djust import LiveView
@@ -301,6 +302,7 @@ class ArticleEditView(ModelFormMixin[Article], LiveView):
 
 Route it with the record's id:
 
+<!-- djust-example: skip -- the URL route for article-edit; its scenario reads it from the section -->
 ```python
 # urls.py
 path("articles/<int:pk>/edit/", ArticleEditView.as_view())
