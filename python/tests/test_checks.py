@@ -3497,6 +3497,63 @@ class TestT012EventDirectivesWithoutView:
         t012 = [e for e in errors if e.id == "djust.T012"]
         assert len(t012) == 0
 
+    def test_t012_passes_with_root(self, tmp_path, settings):
+        """#3171: T012 should not fire when dj-root is present.
+
+        The documented LiveView pattern writes dj-root on the root element
+        and lets djust stamp dj-view server-side.
+        """
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "has_root.html").write_text(
+            textwrap.dedent(
+                """\
+                <div dj-root>
+                    <button dj-click="increment">+1</button>
+                </div>
+                """
+            )
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t012 = [e for e in errors if e.id == "djust.T012"]
+        assert len(t012) == 0
+
+    def test_t012_hint_recommends_dj_root(self, tmp_path, settings):
+        """#3171: T012 hint should recommend adding dj-root."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "no_root_no_view.html").write_text(
+            textwrap.dedent(
+                """\
+                <div>
+                    <input dj-input="search" name="q" />
+                </div>
+                """
+            )
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t012 = [e for e in errors if e.id == "djust.T012"]
+        assert len(t012) == 1
+        assert "dj-root" in t012[0].hint
+
     def test_t012_passes_for_component_template(self, tmp_path, settings):
         """T012 should not fire for component templates (dj-component present)."""
         tpl_dir = tmp_path / "templates"

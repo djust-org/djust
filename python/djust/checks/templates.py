@@ -344,11 +344,12 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
         # T011 -- unsupported Django template tags (not implemented in Rust renderer)
         _check_unsupported_tags(content, relpath, filepath, errors)
 
-        # T012 -- template uses dj-* event directives but missing dj-view
+        # T012 -- template uses dj-* event directives but missing dj-root or dj-view (#3171)
         if (
             _DJ_EVENT_DIRECTIVES_RE.search(content)
             and not _DJ_VIEW_RE.search(content)
-            # Component templates (dj-component) don't need dj-view
+            and not _DJ_ROOT_RE.search(content)
+            # Component templates (dj-component) don't need dj-view / dj-root
             and not _DJ_COMPONENT_RE.search(content)
             # #1096: partial-template opt-out marker
             and not _DJ_PARTIAL_MARKER_RE.search(content)
@@ -357,10 +358,10 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
         ):
             errors.append(
                 DjustWarning(
-                    "%s -- template uses dj-* event directives but has no dj-view attribute."
+                    "%s -- template uses dj-* event directives but has no dj-root or dj-view attribute."
                     % relpath,
                     hint=(
-                        'Add dj-view="yourapp.views.YourView" to the root element, '
+                        'Add dj-root to the root element (e.g. <div dj-root>), '
                         "or this template won't be connected to a LiveView. "
                         "If this template is an intentional fragment included from "
                         "a parent LiveView root, add a `{# djust:partial #}` "
