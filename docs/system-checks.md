@@ -27,6 +27,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C020 | Config | Error | `DJUST_SERVER_STATE_MAX_AGE` is not an integer from 1 to 86400 |
 | C021 | Config | Error | `LIVEVIEW_CONFIG['worker_threads']` is not `None`, `False`, `True`, `"auto"` or an integer >= 0 |
 | C022 | Config | Error | `LIVEVIEW_CONFIG['event_parameter_policy']` is not `'legacy'` or `'strict'` (ADR-036) |
+| C023 | Config | Warning | A `channels_redis` core `RedisChannelLayer` host keeps redis-py 8's 5 s `socket_timeout`, which drops idle WebSockets (#3199) |
 | V001 | LiveView | Warning | LiveView missing template_name attribute |
 | V002 | LiveView | Info | LiveView missing mount() method |
 | V003 | LiveView | Error | mount() has wrong signature |
@@ -61,7 +62,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | T005 | Templates | Warning | dj-view and dj-root on different elements |
 | T010 | Templates | Warning | dj-click used for navigation instead of dj-patch |
 | T011 | Templates | Warning | Unsupported Django template tags (silently ignored by Rust renderer) |
-| T012 | Templates | Warning | Template with dj-* directives but no dj-view |
+| T012 | Templates | Warning | Template with dj-* directives but no `dj-root` or `dj-view` (`dj-root` accepted since #3171) |
 | T013 | Templates | Warning | dj-view with empty or dynamic value |
 | T014 | Templates | Warning | Deprecated data-dj-id attribute |
 | T015 | Templates | Warning | Legacy data-djust-root / data-djust-view root attributes |
@@ -200,6 +201,13 @@ console.log("debug info"); // noqa: Q003
 - **What it detects**: `LIVEVIEW_CONFIG['event_parameter_policy']` (or the same key in `DJUST_CONFIG`) is set to something other than `'legacy'` or `'strict'`. Every handler without its own `parameter_policy` inherits the value, and dispatch rejects each of their events while it is invalid. An absent key is the `'legacy'` default and never reports. The ADR-036 strict policy is opt-in; legacy remains the default.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C022"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C022"]` (the runtime still rejects the events)
 - **False positives**: None
+
+### C023 — channels_redis socket timeout at redis-py 8's default
+- **Severity**: Warning
+- **Method**: Settings inspection plus the installed `redis` distribution's version (read from package metadata; redis is never imported). When a `BACKEND` is not the core layer's exact path, the check imports `channels_redis.core` and that backend's module to test for a subclass; an import failure means the layer is not checked
+- **What it detects**: a `CHANNEL_LAYERS` entry uses `channels_redis.core.RedisChannelLayer` (or a subclass of it), redis-py 8 or later is installed, and at least one host does not set `socket_timeout` above 5 s (or `None`). redis-py 8 lowered the default `socket_timeout` to 5 s, the same as the layer's `BZPOPMIN` timeout, so an idle consumer's read times out and its WebSocket closes every few seconds (django/channels_redis#422). The check reads the timeout the way `redis.ConnectionPool.from_url` does: a `?socket_timeout=` in the URL (a URL host or a dict's `address`) overrides the dict's `socket_timeout` key, and a bare URL, a `(host, port)` tuple or an omitted `hosts` get the 5 s default. 10 is recommended: anything just above 5 s leaves little headroom for network and event-loop latency. Settings shapes channels_redis itself rejects (a non-dict `CONFIG`, a non-list `hosts`) are skipped rather than reported. The pub/sub layer is not checked.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C023"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C023"]`
+- **False positives**: None known. A backend path that cannot be imported at check time is not checked, so a subclass in such a module is missed; pinning `redis<8` also silences the check
 
 ---
 
@@ -612,12 +620,12 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **False positives**: Base templates processed by Django's Python renderer rather than the Rust renderer
 - **Note**: `{% extends %}` and `{% block %}` are **fully supported** by the Rust renderer since template inheritance was implemented; T011 does not flag them
 
-### T012 — Template with dj-* directives but no dj-view
+### T012 — Template with dj-* directives but no dj-root or dj-view
 - **Severity**: Warning
 - **Method**: Regex (template scan)
-- **What it detects**: Template uses `dj-*` attributes but has no `dj-view` attribute to bind to a LiveView
+- **What it detects**: Template uses `dj-*` attributes but has neither a `dj-root` nor a `dj-view` attribute to bind to a LiveView. Before #3171 only `dj-view` satisfied the check, so a template written the documented way (`<div dj-root>`, with djust stamping `dj-view` server-side) was flagged
 - **Suppression**: `SILENCED_SYSTEM_CHECKS = ["djust.T012"]`
-- **False positives**: Partial templates that intentionally omit `dj-view` because the parent/wrapper template provides it
+- **False positives**: Partial templates that intentionally omit `dj-root` / `dj-view` because the parent/wrapper template provides it (mark them with `{# djust:partial #}`)
 
 ### T013 — dj-view with empty or dynamic value
 - **Severity**: Warning
@@ -639,7 +647,7 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **What it detects**: The pre-1.0 root attributes `data-djust-root` and
   `data-djust-view`, renamed in djust 1.0 to `dj-root` / `dj-view` (the
   `data-` prefix is no longer required). The generic T012 ("dj-* directives
-  but no dj-view") doesn't recognise that a view IS declared when it uses the
+  but no dj-root or dj-view") doesn't recognise that a view IS declared when it uses the
   deprecated spelling, so the path from symptom (the LiveView never connects
   over WebSocket) to fix is non-obvious — T015 names the rename explicitly.
 - **Suppression**: Fix the templates (`data-djust-view` → `dj-view`,

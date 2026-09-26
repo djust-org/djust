@@ -32,14 +32,15 @@ class Toast(Component):
         {{ saved|safe }}
         {{ toast|safe }}
 
-    CSS Custom Properties::
+    CSS Custom Properties (read by ``djust_components/components.css``, which
+    ``{% theme_head %}`` links; each falls back to a theme token)::
 
-        --dj-toast-bg: background color
-        --dj-toast-fg: text color
-        --dj-toast-border: border color
-        --dj-toast-radius: border radius (default: 0.375rem)
+        --dj-toast-bg: background color (default: the theme's card)
+        --dj-toast-fg: text color (default: the theme's card foreground)
+        --dj-toast-border: border color (default: the type's tone at 40%)
+        --dj-toast-radius: border radius (default: --radius-lg, 0.5rem)
         --dj-toast-padding: internal padding (default: 0.75rem 1rem)
-        --dj-toast-shadow: box shadow
+        --dj-toast-shadow: box shadow (default: --shadow-lg)
 
         # Type-specific colors
         --dj-toast-info-bg, --dj-toast-info-fg, --dj-toast-info-border

@@ -707,6 +707,151 @@ def _check_presence_backend(errors: list) -> None:
     )
 
 
+_REDIS_CORE_LAYER = "channels_redis.core.RedisChannelLayer"
+# channels_redis' core layer blocks on BZPOPMIN for this many seconds
+# (``RedisChannelLayer.brpop_timeout``); redis-py 8's default socket_timeout
+# is the same 5 s, so a host must set a longer one (10 is recommended).
+_REDIS_BLOCKING_READ_SECONDS = 5
+
+
+def _installed_redis_version() -> "str | None":
+    """redis-py's installed version, read from metadata (never imports redis)."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("redis")
+    except PackageNotFoundError:
+        return None
+
+
+def _redis_major(version: "str | None") -> int:
+    try:
+        return int(version.split(".")[0]) if version else 0
+    except ValueError:
+        return 0
+
+
+def _url_socket_timeout(url: str) -> "tuple[bool, str | None]":
+    """``(present, value)`` for a ``socket_timeout`` query option in a redis URL."""
+    from urllib.parse import parse_qs, urlsplit
+
+    values = parse_qs(urlsplit(url).query).get("socket_timeout")
+    return (True, values[-1]) if values else (False, None)
+
+
+def _redis_host_timeout_is_safe(host: Any) -> "bool | None":
+    """Whether one channels_redis ``hosts`` entry reads with ``socket_timeout`` > 5 s.
+
+    Returns ``None`` for a shape this check does not recognise (channels_redis
+    reports those itself when it builds the layer). The precedence follows
+    ``redis.ConnectionPool.from_url``: a ``socket_timeout`` in the URL query
+    overrides the keyword, which overrides redis-py's default.
+    """
+    if isinstance(host, dict):
+        present, timeout = False, None
+        address = host.get("address")
+        if isinstance(address, str):
+            present, timeout = _url_socket_timeout(address)
+        if not present and "socket_timeout" in host:
+            present, timeout = True, host["socket_timeout"]
+        if not present:
+            return False
+    elif isinstance(host, str):
+        present, timeout = _url_socket_timeout(host)
+        if not present:
+            return False
+    elif isinstance(host, (list, tuple)):
+        # (host, port) tuples carry no connection options.
+        return False
+    else:
+        return None
+    if timeout is None:
+        return True
+    try:
+        return float(timeout) > _REDIS_BLOCKING_READ_SECONDS
+    except (TypeError, ValueError):
+        return None  # redis-py rejects it when it connects
+
+
+def _is_redis_core_layer(backend: Any) -> bool:
+    """The core layer, or a project subclass of it (the pub/sub layer never blocks)."""
+    if not isinstance(backend, str) or not backend:
+        return False
+    if backend == _REDIS_CORE_LAYER:
+        return True
+    if "." not in backend:
+        return False
+    try:
+        from django.utils.module_loading import import_string
+
+        core = import_string(_REDIS_CORE_LAYER)
+        cls = import_string(backend)
+    except Exception:  # noqa: BLE001 -- channels reports a bad BACKEND itself
+        logger.debug("C023: could not import %s to check for a RedisChannelLayer subclass", backend)
+        return False
+    return isinstance(cls, type) and issubclass(cls, core)
+
+
+def _check_redis_channel_layer_socket_timeout(errors: list) -> None:
+    """C023 -- channels_redis core layer left at redis-py 8's 5 s socket timeout (#3199).
+
+    redis-py 8 changed the default ``socket_timeout`` from ``None`` to 5 s,
+    equal to the core layer's ``BZPOPMIN`` timeout, so an idle consumer's read
+    times out and its WebSocket closes (django/channels_redis#422). Settings
+    shapes channels_redis itself would reject are skipped, never raised on.
+    """
+    from django.conf import settings
+
+    if _is_check_suppressed("djust.C023"):
+        return
+    redis_version = _installed_redis_version()
+    if _redis_major(redis_version) < 8:
+        return
+    layers = getattr(settings, "CHANNEL_LAYERS", None)
+    if not isinstance(layers, dict):
+        return
+    affected = []
+    for alias, layer in layers.items():
+        if not isinstance(layer, dict) or not _is_redis_core_layer(layer.get("BACKEND")):
+            continue
+        config = layer.get("CONFIG")
+        if config is None:
+            config = {}
+        if not isinstance(config, dict):
+            continue
+        hosts = config.get("hosts")
+        if not hosts:
+            # channels_redis defaults to localhost:6379 with no connection options.
+            affected.append(alias)
+            continue
+        if not isinstance(hosts, (list, tuple)):
+            continue  # channels_redis raises "You must pass a list of Redis hosts"
+        if any(_redis_host_timeout_is_safe(h) is False for h in hosts):
+            affected.append(alias)
+    if not affected:
+        return
+    errors.append(
+        DjustWarning(
+            "CHANNEL_LAYERS %s: channels_redis' RedisChannelLayer keeps redis-py %s's "
+            "default socket_timeout (5 s), which equals the layer's blocking-read "
+            "timeout, so idle WebSockets are dropped every few seconds."
+            % (", ".join(repr(a) for a in affected), redis_version),
+            hint=(
+                "Use the dict host form with a longer timeout (10 is recommended), e.g. "
+                '"hosts": [{"address": REDIS_URL, "socket_timeout": 10}] '
+                "(see django/channels_redis#422), or pin redis<8. Suppress with "
+                "DJUST_CONFIG = {'suppress_checks': ['C023']}."
+            ),
+            id="djust.C023",
+            fix_hint=(
+                "In CHANNEL_LAYERS, give every channels_redis host a socket_timeout "
+                'above 5 s (10 is recommended): "hosts": [{"address": REDIS_URL, '
+                '"socket_timeout": 10}].'
+            ),
+        )
+    )
+
+
 def _classify_templates_entries() -> list[tuple[bool, bool]]:
     """Return ``(is_djust, is_django)`` for each usable ``TEMPLATES`` entry.
 
@@ -1015,6 +1160,9 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
     # C019 -- Unknown DJUST_CONFIG['PRESENCE_BACKEND'] value (#2973)
     _check_presence_backend(errors)
+
+    # C023 -- channels_redis core layer at redis-py 8's 5 s socket timeout (#3199)
+    _check_redis_channel_layer_socket_timeout(errors)
 
     # S006 -- DJUST_TENANTS['STRICT_MODE']=False disables fail-closed tenancy
     _check_tenant_strict_mode_disabled(errors)

@@ -209,7 +209,11 @@ FormMixin initializes these in `mount()`, all available in your template:
 | `field_errors`  | `dict` | Per-field errors: `{field: [errors]}`      |
 | `form_errors`   | `dict \| ErrorList` | Non-field errors from `clean()`: an empty dict until an invalid submit, then a list |
 | `is_valid`      | `bool` | Result of last `submit_form()`             |
-| `form_instance` | `Form` | Current Django Form instance               |
+| `success_message` | `str` | Success message your view sets (empty by default) |
+| `error_message` | `str`  | Error message your view sets (empty by default) |
+| `form_choices`  | `dict` | `(value, label)` pairs per choice field, keyed by field name |
+
+The Django form instance is available in Python as `self.form_instance`; it is not in the template context.
 
 ## Displaying Errors
 
