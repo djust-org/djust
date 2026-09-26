@@ -341,6 +341,37 @@ def _find_root_close(html: str, match: "re.Match[str]") -> "tuple[int, int] | tu
     return TemplateMixin._find_closing_tag_pos(html, match.end(), _root_tag_name(html, match))
 
 
+# #3187: Django template comments in template SOURCE. ``{% comment %}`` blocks
+# and ``{# ... #}`` render nothing, so a ``<div dj-root>`` written inside one
+# (documentation of the view, say) is not the root. The root search treated it
+# as one: the child's VDOM template became the slice from the commented tag to
+# the real root's close, and the GET spliced a second full document into the
+# base's ``<main>``. ``{# #}`` cannot span lines, as in Django's lexer.
+_TEMPLATE_COMMENT_RE = re.compile(
+    r"\{%-?\s*comment\b.*?%\}.*?\{%-?\s*endcomment\s*-?%\}|\{#[^\n]*?#\}",
+    re.DOTALL,
+)
+
+
+def _mask_template_comments(template: str) -> str:
+    """``template`` with every Django template comment replaced by NULs of the
+    same length, so positions found in it index the original (#3187).
+
+    Only for template SOURCE: rendered HTML carries no template comments, and
+    literal ``{# #}`` text on a rendered page (a docs page showing template
+    syntax) must stay visible to the root search.
+    """
+    if "{#" not in template and "comment" not in template:
+        return template
+    return _TEMPLATE_COMMENT_RE.sub(lambda m: "\x00" * len(m.group(0)), template)
+
+
+def _search_template_root_open(template: str) -> "Optional[re.Match[str]]":
+    """:func:`_search_dj_root_open` for template SOURCE, ignoring Django
+    template comments (#3187). The match indexes ``template``."""
+    return _search_dj_root_open(_mask_template_comments(template), _DJ_ROOT_RE, _DJ_VIEW_RE)
+
+
 # ---------------------------------------------------------------------------
 # #2999: whitespace between inline-level siblings
 # ---------------------------------------------------------------------------
@@ -508,9 +539,7 @@ class TemplateMixin:
                 # nests the whole page (two <!DOCTYPE>/two <footer>). The regexes
                 # require a REAL ``<div ... dj-root/dj-view ...>`` tag (#1746).
                 vdom_source = (
-                    template_source
-                    if _search_dj_root_open(template_source, _DJ_ROOT_RE, _DJ_VIEW_RE)
-                    else resolved
+                    template_source if _search_template_root_open(template_source) else resolved
                 )
                 vdom_template = self._extract_liveview_root_with_wrapper(vdom_source)
 
@@ -1122,16 +1151,18 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         Extract the <div dj-root>...</div> section from a template (WITH the wrapper div).
 
         Falls back to [dj-view] if [dj-root] is not present, since dj-root
-        is auto-inferred from dj-view (see PR #297).
+        is auto-inferred from dj-view (see PR #297). A ``<div dj-root>``
+        inside a Django template comment is not the root (#3187).
         """
-        opening_match = _search_dj_root_open(template, _DJ_ROOT_RE, _DJ_VIEW_RE)
+        masked = _mask_template_comments(template)
+        opening_match = _search_dj_root_open(masked, _DJ_ROOT_RE, _DJ_VIEW_RE)
 
         if not opening_match:
             return template
 
         start_pos = opening_match.start()
 
-        result = _find_root_close(template, opening_match)
+        result = _find_root_close(masked, opening_match)
         if result[1] is not None:
             return template[start_pos : result[1]]
         return template
@@ -1140,16 +1171,18 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         """
         Extract the innerHTML of [dj-root] from a TEMPLATE (not rendered HTML).
 
-        Falls back to [dj-view] if [dj-root] is not present.
+        Falls back to [dj-view] if [dj-root] is not present. Django template
+        comments are skipped (#3187).
         """
-        opening_match = _search_dj_root_open(template, _DJ_ROOT_RE, _DJ_VIEW_RE)
+        masked = _mask_template_comments(template)
+        opening_match = _search_dj_root_open(masked, _DJ_ROOT_RE, _DJ_VIEW_RE)
 
         if not opening_match:
             return template
 
         start_pos = opening_match.end()
 
-        result = _find_root_close(template, opening_match)
+        result = _find_root_close(masked, opening_match)
         if result[0] is not None:
             return template[start_pos : result[0]]
         return template
