@@ -19,6 +19,7 @@ client, snapshot or debug projection reads the render context.
 from types import FunctionType
 from typing import Any, Dict, Iterable, Mapping, Optional
 
+from ._class_snapshot import namespace
 from ._exposure import (
     ExposureConfigurationError,
     ExposureError,
@@ -244,7 +245,7 @@ def actions_provider(view_class: type) -> ProviderContract:
     names: set[str] = set()
     seen: set[str] = set()
     for owner in view_class.__mro__:
-        for name, value in vars(owner).items():
+        for name, value in namespace(owner).items():  # #3151
             if name in seen:
                 continue
             seen.add(name)

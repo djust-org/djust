@@ -73,6 +73,9 @@ assert len(ALLOWLIST_PACKAGE) == 23
 
 ALLOWLIST_BACKEND = ALLOWLIST_PACKAGE | frozenset(
     {
+        # Stdlib-only namespace snapshots for free-threaded builds (#3151),
+        # imported by ``serialization`` / ``session_utils``.
+        "djust._class_snapshot",
         "djust.optimization",
         "djust.optimization.codegen",
         "djust.optimization.fingerprint",
@@ -86,7 +89,7 @@ ALLOWLIST_BACKEND = ALLOWLIST_PACKAGE | frozenset(
         "djust.template.serialization",
     }
 )
-assert len(ALLOWLIST_BACKEND) == 34
+assert len(ALLOWLIST_BACKEND) == 35
 
 
 # The compat shim (``djust/template_backend.py``) is one extra module.
@@ -131,7 +134,7 @@ ALLOWLIST_SETUP = ALLOWLIST_BACKEND | frozenset(
         "djust.template_filters",
     }
 )
-assert len(ALLOWLIST_SETUP) == 65
+assert len(ALLOWLIST_SETUP) == 66
 
 # ``DEBUG=True`` additionally auto-enables hot reload: the file watcher only.
 # ``djust.websocket`` (and ``channels``) are deferred to a change event (#2566).
