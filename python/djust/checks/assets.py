@@ -26,6 +26,9 @@ _EXTERNAL = re.compile(r"^((?:https?:)?//[^/?#]+)", re.I)
 # load code, so they are not B010's concern.
 _LOADING_RELS = frozenset({"stylesheet", "modulepreload", "preload", "prefetch"})
 _REBUILD = "Rebuild with `make vendor` (djust) or regenerate your manifest's integrity."
+# Checks djust's collectstatic runs, deploy checks included, before it
+# collects anything (see management/commands/collectstatic.py).
+COLLECTSTATIC_TAG = "djust_collectstatic"
 
 
 @register("djust")
@@ -153,8 +156,20 @@ def check_required_assets(app_configs: Any, **kwargs: Any) -> list[CheckMessage]
     return messages
 
 
-@register("djust")
+def _djust_owns_collectstatic() -> bool:
+    """Whether ``collectstatic`` resolves to djust's override, asked the way
+    B013 asks it (a third app overriding the command counts as "not djust")."""
+    from django.core.management import get_commands
+
+    return get_commands().get("collectstatic") == "djust"
+
+
 def check_sbom_not_served(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    """B008: an SBOM file some staticfiles finder would hand to collectstatic.
+
+    Lists every static file, so it is not registered directly; the two
+    registered checks below decide when that walk is paid for (#3144).
+    """
     from django.contrib.staticfiles import finders
 
     messages: list[CheckMessage] = []
@@ -169,6 +184,27 @@ def check_sbom_not_served(app_configs: Any, **kwargs: Any) -> list[CheckMessage]
                     )
                 )
     return messages
+
+
+# When djust's collectstatic is the active one, B008 is a deploy check: it
+# runs under `check --deploy` and, through COLLECTSTATIC_TAG, before djust's
+# collectstatic publishes anything, so runserver, autoreload and migrate don't
+# walk every static file on each start.
+@register("djust", COLLECTSTATIC_TAG, deploy=True)
+def check_sbom_not_served_before_collect(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    if not _djust_owns_collectstatic():
+        return []  # check_sbom_not_served_every_run covers it
+    return check_sbom_not_served(app_configs, **kwargs)
+
+
+# Otherwise (djust listed after staticfiles, or another app's override) no
+# djust code runs at collectstatic time, so B008 stays in the ordinary check
+# pass, as it was before #3144.
+@register("djust")
+def check_sbom_not_served_every_run(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    if _djust_owns_collectstatic():
+        return []  # check_sbom_not_served_before_collect covers it
+    return check_sbom_not_served(app_configs, **kwargs)
 
 
 def _external_loads(line: str) -> list[str]:
@@ -189,9 +225,59 @@ def _external_loads(line: str) -> list[str]:
     return refs
 
 
+def _host(entry: str) -> str | None:
+    """The lower-cased host an allowlist entry names, or None when it isn't a
+    bare host: ``js.stripe.com`` and ``https://js.stripe.com/`` name one (the
+    scheme is ignored); an empty host, a port, userinfo, a path, a query or a
+    fragment don't."""
+    entry = entry.strip()
+    parts = urlsplit(entry if "//" in entry else "//" + entry)
+    try:
+        port = parts.port
+    except ValueError:
+        return None
+    if (
+        not parts.hostname
+        or port is not None
+        or "@" in parts.netloc
+        or parts.path not in ("", "/")
+        or parts.query
+        or parts.fragment
+    ):
+        return None
+    return parts.netloc.lower()
+
+
+def _allowed_origins() -> tuple[frozenset[str], str | None]:
+    """``DJUST_ALLOWED_EXTERNAL_ORIGINS`` as hosts, plus the reason when the
+    setting, or any entry in it, is ignored."""
+    value = getattr(settings, "DJUST_ALLOWED_EXTERNAL_ORIGINS", None)
+    if value is None:
+        return frozenset(), None
+    if not (
+        isinstance(value, (list, tuple, set, frozenset))
+        and all(isinstance(entry, str) for entry in value)
+    ):
+        return frozenset(), (
+            "DJUST_ALLOWED_EXTERNAL_ORIGINS must be a list of hostnames such as "
+            f'["js.stripe.com"], not {type(value).__name__} ({value!r}); it is ignored.'
+        )
+    hosts = {entry: _host(entry) for entry in value}
+    bad = sorted(entry for entry, host in hosts.items() if host is None)
+    problem = None
+    if bad:
+        listed = ", ".join(repr(entry) for entry in bad)
+        problem = (
+            f"DJUST_ALLOWED_EXTERNAL_ORIGINS entries {listed} are not bare hosts "
+            "(an empty host, a port, userinfo, a path or a query); they are ignored."
+        )
+    return frozenset(host for host in hosts.values() if host is not None), problem
+
+
 @register("djust")
 def check_undeclared_origins(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
-    """B010: templates that load code from an origin no manifest declares.
+    """B010: templates that load code from an origin no manifest declares
+    and ``DJUST_ALLOWED_EXTERNAL_ORIGINS`` does not list.
 
     Scans line by line, so a ``<script>`` or ``<link>`` tag split across
     lines is not seen.
@@ -206,7 +292,17 @@ def check_undeclared_origins(app_configs: Any, **kwargs: Any) -> list[CheckMessa
         for f in asset.files
         if f.url
     }
+    allowed, problem = _allowed_origins()
     messages: list[CheckMessage] = []
+    if problem is not None:
+        messages.append(
+            Warning(
+                problem,
+                hint="List each origin that can't be vendored or pinned as a bare host, "
+                'one string per host, such as "js.stripe.com".',
+                id="djust.B010",
+            )
+        )
     for template_path in _iter_template_files(_get_template_dirs()):
         try:
             content = Path(template_path).read_text(encoding="utf-8", errors="replace")
@@ -218,12 +314,13 @@ def check_undeclared_origins(app_configs: Any, **kwargs: Any) -> list[CheckMessa
                 continue
             for ref in _external_loads(line):
                 origin = urlsplit(ref if ref.startswith("http") else "https:" + ref).netloc
-                if origin not in declared:
+                if origin not in declared and origin.lower() not in allowed:
                     messages.append(
                         Warning(
                             f"{template_path}:{lineno} loads from {origin}, which no manifest declares; "
                             "scanners will not see what it serves.",
                             hint="Vendor it and declare it, declare it as external with integrity, "
+                            "list an origin that can't be pinned in DJUST_ALLOWED_EXTERNAL_ORIGINS, "
                             "or add {# noqa: B010 #} to the line.",
                             id="djust.B010",
                         )

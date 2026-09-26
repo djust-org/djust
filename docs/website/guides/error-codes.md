@@ -23,7 +23,7 @@ djust uses structured error codes to help you diagnose problems quickly. This gu
 | T0xx | Templates | `manage.py check --tag djust` (startup) |
 | Q0xx | Code Quality | `manage.py check --tag djust` (startup) |
 | A0xx | Audit / Static Security Checks | `manage.py check --tag djust` (startup) |
-| B0xx | Vendored assets and SBOMs | `manage.py check --tag djust` (startup; B011/B013/B014 need `--deploy`) |
+| B0xx | Vendored assets and SBOMs | `manage.py check --tag djust` (startup; B011/B013/B014 need `--deploy`; B008 needs `--deploy` when `djust` is above `django.contrib.staticfiles`, see B008; B008 and B012 also run before djust's `collectstatic`) |
 | D0xx | Database notifications | `manage.py check --tag djust` (startup) |
 | U0xx | Update notice | `manage.py check --tag djust` (startup, DEBUG only) |
 | Y0xx | Accessibility | `manage.py check --tag djust` (startup) |
@@ -1631,6 +1631,11 @@ See [Vendoring third-party JS](vendored-assets.md) and [Scanning a djust app](sc
 
 **Severity**: Error
 
+**When it runs**: Finding such a file means listing every static file, so where B008 runs depends on which `collectstatic` is active (the same question `djust.B013` asks):
+
+- **`'djust'` above `'django.contrib.staticfiles'` in `INSTALLED_APPS`** (djust's `collectstatic` override is active): not on `runserver`, autoreload or `migrate`. It runs under `manage.py check --deploy`, and djust's `collectstatic` runs it before collecting, stopping the command before anything is published (unless `--skip-checks` is passed).
+- **Any other order, or another app overriding `collectstatic`**: no djust code runs at `collectstatic` time, so B008 stays in the ordinary check pass, on every `check`, `runserver` start and `migrate`, as it always has.
+
 **What causes it**: Staticfiles finders find a `*.cdx.json`, `*.spdx.json` or `*.bom.json` file — `collectstatic` would publish it, exposing an SBOM (or a stray one) to browsers.
 
 **Fix**: Move it outside every static directory. djust's own `djust.cdx.json` ships in the package/`.dist-info`, never under `static/`.
@@ -1647,9 +1652,9 @@ See [Vendoring third-party JS](vendored-assets.md) and [Scanning a djust app](sc
 
 **Severity**: Warning
 
-**What causes it**: A template has a literal `<script src="http…">` or a `<link>` whose `rel` loads a resource (`stylesheet`, `modulepreload`, `preload`, `prefetch`) with `href="http…"` pointing at an origin no manifest declares. Links that load nothing, such as `canonical` or `preconnect`, are ignored. Heuristic (regex over template source, line by line): a scanner will never see what that origin serves.
+**What causes it**: A template has a literal `<script src="http…">` or a `<link>` whose `rel` loads a resource (`stylesheet`, `modulepreload`, `preload`, `prefetch`) with `href="http…"` pointing at an origin no manifest declares and `DJUST_ALLOWED_EXTERNAL_ORIGINS` doesn't list. Links that load nothing, such as `canonical` or `preconnect`, are ignored. Heuristic (regex over template source, line by line): a scanner will never see what that origin serves. A template reachable through more than one template directory is reported once. B010 also warns when `DJUST_ALLOWED_EXTERNAL_ORIGINS` isn't a list of strings (then nothing is allowed), or when an entry isn't a bare host — an empty host, a port, userinfo, a path or a query (that entry is ignored).
 
-**Fix**: Vendor it and declare it, declare it as external with integrity, or add `{# noqa: B010 #}` on that line. Suppress everywhere with `DJUST_CONFIG = {"suppress_checks": ["B010"]}`.
+**Fix**: Vendor it and declare it, declare it as external with integrity, or add `{# noqa: B010 #}` on that line. For an SDK that must load from its own origin and can't be pinned (Stripe.js, Cloudflare Turnstile, Google Tag Manager), list its host in `DJUST_ALLOWED_EXTERNAL_ORIGINS` — see [Origins that can't be pinned](vendored-assets.md#origins-that-cant-be-pinned). Suppress everywhere with `DJUST_CONFIG = {"suppress_checks": ["B010"]}`.
 
 ### B011: `DJUST_SBOM_PATH` not set
 
@@ -1663,7 +1668,7 @@ See [Vendoring third-party JS](vendored-assets.md) and [Scanning a djust app](sc
 
 **Severity**: Error
 
-**What causes it**: `DJUST_SBOM_PATH` resolves inside `STATIC_ROOT`, `MEDIA_ROOT`, a `STATICFILES_DIRS` entry, or an installed app's `static/` directory — `collectstatic` would publish the SBOM to browsers, which djust refuses to do.
+**What causes it**: `DJUST_SBOM_PATH` resolves inside `STATIC_ROOT`, `MEDIA_ROOT`, a `STATICFILES_DIRS` entry, or an installed app's `static/` directory — `collectstatic` would publish the SBOM to browsers, which djust refuses to do — or it isn't a `str`/`os.PathLike` at all. B012 runs at startup and among `collectstatic`'s own checks; djust's `collectstatic` also rejects a non-path value with the same message before it collects anything.
 
 **Fix**: Move it outside `STATIC_ROOT`, `MEDIA_ROOT`, `STATICFILES_DIRS` and every app's `static/` directory.
 
