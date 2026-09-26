@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Verify lockfile self-entry versions match their manifests — closes #1498.
+Verify lockfile self-entry and SBOM versions match their manifests — closes #1498, #3184.
 
 Catches the drift class #1487 cited: `make version` bumps `pyproject.toml`
 and `Cargo.toml` but historically never re-ran `uv lock` / `cargo update`,
@@ -30,6 +30,14 @@ Two checks, each hard (sets exit 1 on failure):
     (the Cargo form, e.g. `1.0.0-rc.1`). Crate names are discovered
     dynamically — a new workspace crate is caught automatically.
 
+  SBOM check (#3184):
+    `python/djust/djust.cdx.json` is the CycloneDX SBOM shipped in the wheel
+    (ADR-040). Its root component (`metadata.component`, name `djust`)
+    carries djust's own version, which `make version` regenerates from
+    `pyproject.toml`. Assert it equals `pyproject.toml`'s `[project] version`
+    verbatim, so a release cannot ship an SBOM naming the previous version
+    (the 1.3.0rc4 cut needed a manual commit for exactly this).
+
 NOTE on version forms: `Cargo.toml`/`Cargo.lock` use the Cargo form
 (`1.0.0-rc.1`); `pyproject.toml`/`uv.lock` use the PEP 440 form
 (`1.0.0rc1`). This script compares each lockfile to its OWN manifest and
@@ -50,6 +58,7 @@ Exit code:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import tomllib
 from pathlib import Path
@@ -73,6 +82,19 @@ def _cargo_workspace_version(root: Path) -> str:
     """Return `[workspace.package] version` from Cargo.toml (Cargo form)."""
     data = _load_toml(root / "Cargo.toml")
     return str(data["workspace"]["package"]["version"])
+
+
+SBOM_PATH = Path("python") / "djust" / "djust.cdx.json"
+
+
+def _sbom_root_version(root: Path) -> str:
+    """Return the version of the SBOM's root `djust` component."""
+    with (root / SBOM_PATH).open(encoding="utf-8") as fh:
+        document = json.load(fh)
+    component = document.get("metadata", {}).get("component", {})
+    if component.get("name") != "djust":
+        raise KeyError(f"{SBOM_PATH} metadata.component is not djust: {component!r}")
+    return str(component.get("version", ""))
 
 
 def _uv_djust_self_entry(root: Path) -> str:
@@ -127,6 +149,7 @@ def run(root: Path, verbose: bool = False) -> tuple[int, str]:
         "Cargo.toml": root / "Cargo.toml",
         "uv.lock": root / "uv.lock",
         "Cargo.lock": root / "Cargo.lock",
+        str(SBOM_PATH): root / SBOM_PATH,
     }
     for label, path in required.items():
         if not path.is_file():
@@ -137,7 +160,8 @@ def run(root: Path, verbose: bool = False) -> tuple[int, str]:
         cargo_version = _cargo_workspace_version(root)
         uv_djust = _uv_djust_self_entry(root)
         cargo_crates = _cargo_lock_workspace_crates(root)
-    except (tomllib.TOMLDecodeError, KeyError) as exc:
+        sbom_version = _sbom_root_version(root)
+    except (tomllib.TOMLDecodeError, json.JSONDecodeError, KeyError) as exc:
         return 2, f"ERROR: failed to parse a manifest/lockfile: {exc}"
 
     if verbose:
@@ -146,6 +170,7 @@ def run(root: Path, verbose: bool = False) -> tuple[int, str]:
         lines.append(f"uv.lock djust self-entry:                {uv_djust}")
         for name in sorted(cargo_crates):
             lines.append(f"Cargo.lock {name}: {cargo_crates[name]}")
+        lines.append(f"{SBOM_PATH} root version: {sbom_version}")
 
     # --- uv.lock check ---
     if uv_djust != py_version:
@@ -169,6 +194,14 @@ def run(root: Path, verbose: bool = False) -> tuple[int, str]:
                 f"— run `cargo update --workspace`."
             )
 
+    # --- SBOM root-component check (#3184) ---
+    if sbom_version != py_version:
+        errors.append(
+            f"{SBOM_PATH} names djust {sbom_version}, expected {py_version} "
+            f"(matching pyproject.toml) — run `make version VERSION={py_version}`, "
+            f"which regenerates it."
+        )
+
     if errors:
         lines.append(
             f"Found {len(errors)} stale lockfile self-entr"
@@ -179,7 +212,7 @@ def run(root: Path, verbose: bool = False) -> tuple[int, str]:
         return 1, "\n".join(lines)
 
     lines.append(
-        f"OK — uv.lock + Cargo.lock self-entries in sync "
+        f"OK — uv.lock + Cargo.lock self-entries and the SBOM version in sync "
         f"({len(cargo_crates)} djust crate(s) checked)"
     )
     return 0, "\n".join(lines)

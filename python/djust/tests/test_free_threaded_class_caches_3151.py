@@ -363,53 +363,66 @@ def _namespace_receiver(node: ast.AST) -> str | None:
 
 
 def _live_namespace_walks() -> list[tuple[str, str, str, int]]:
-    """Syntactic only: an alias (``ns = vars(C)`` then ``for k in ns``) is not
-    followed, so the gate backs up review rather than replacing it."""
     found = []
     for path in sorted(_PKG.rglob("*.py")):
         rel = path.relative_to(_PKG)
         if set(rel.parts[:-1]) & _GATE_SKIP_DIRS or rel.name in _GATE_SKIP_FILES:
             continue
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        owner: dict[ast.AST, str] = {}
-        for fn in ast.walk(tree):
-            if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                for child in ast.walk(fn):
-                    owner[child] = fn.name  # innermost wins: walk order is outer-first
-        for node in ast.walk(tree):
-            receiver = None
-            line = getattr(node, "lineno", 0)
-            walks_mro = False  # dir()/getmembers() read every class dict, even for self
-            if isinstance(node, ast.Call):
-                func = node.func
-                if (isinstance(func, ast.Name) and func.id in ("dir", "getmembers")) or (
-                    isinstance(func, ast.Attribute)
-                    and func.attr == "getmembers"
-                    and isinstance(func.value, ast.Name)
-                    and func.value.id == "inspect"
-                ):
-                    receiver = ast.unparse(node.args[0]) if node.args else "<scope>"
-                    walks_mro = True
-            if isinstance(node, ast.Dict):  # {**vars(X), ...} unpacks by iterating
-                for key, value in zip(node.keys, node.values):
-                    if key is None and receiver is None:
-                        receiver = _namespace_receiver(value)
-            if isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
-                receiver = _namespace_receiver(node.iter)
-                line = node.iter.lineno
-            elif isinstance(node, ast.Call) and node.args:
-                func = node.func
-                name = getattr(func, "id", None) or getattr(func, "attr", None)
-                arg = node.args[0]
-                # ``list(ns.items())`` is atomic; ``list(ns)`` is not.
-                if name in _ITERATING_CALLS and not (name == "list" and isinstance(arg, ast.Call)):
-                    receiver = receiver or _namespace_receiver(arg)
-            # ``self.__dict__`` is the instance's own dict; ``dir(self)`` is not.
-            if receiver is None or (receiver == "self" and not walks_mro):
-                continue
-            key = (rel.as_posix(), owner.get(node, "<module>"), receiver)
-            if key not in _GATE_ALLOWED:
-                found.append((*key, line))
+        found += _namespace_walks_in(path.read_text(encoding="utf-8"), rel.as_posix())
+    return found
+
+
+def _namespace_walks_in(source: str, rel: str) -> list[tuple[str, str, str, int]]:
+    """Syntactic only: an alias (``ns = vars(C)`` then ``for k in ns``) is not
+    followed, so the gate backs up review rather than replacing it (#3181)."""
+    found = []
+    tree = ast.parse(source)
+    owner: dict[ast.AST, str] = {}
+    for fn in ast.walk(tree):
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for child in ast.walk(fn):
+                owner[child] = fn.name  # innermost wins: walk order is outer-first
+    for node in ast.walk(tree):
+        receiver = None
+        line = getattr(node, "lineno", 0)
+        walks_mro = False  # dir()/getmembers() read every class dict, even for self
+        if isinstance(node, ast.Call):
+            func = node.func
+            if (isinstance(func, ast.Name) and func.id in ("dir", "getmembers")) or (
+                isinstance(func, ast.Attribute)
+                and func.attr == "getmembers"
+                and isinstance(func.value, ast.Name)
+                and func.value.id == "inspect"
+            ):
+                receiver = ast.unparse(node.args[0]) if node.args else "<scope>"
+                walks_mro = True
+        if isinstance(node, ast.Dict):  # {**vars(X), ...} unpacks by iterating
+            for key, value in zip(node.keys, node.values):
+                if key is None and receiver is None:
+                    receiver = _namespace_receiver(value)
+        if isinstance(node, ast.Call):  # f(**vars(X)) / f(*vars(X)) iterate too (#3181)
+            for keyword in node.keywords:
+                if keyword.arg is None and receiver is None:
+                    receiver = _namespace_receiver(keyword.value)
+            for positional in node.args:
+                if isinstance(positional, ast.Starred) and receiver is None:
+                    receiver = _namespace_receiver(positional.value)
+        if isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
+            receiver = _namespace_receiver(node.iter)
+            line = node.iter.lineno
+        elif isinstance(node, ast.Call) and node.args:
+            func = node.func
+            name = getattr(func, "id", None) or getattr(func, "attr", None)
+            arg = node.args[0]
+            # ``list(ns.items())`` is atomic; ``list(ns)`` is not.
+            if name in _ITERATING_CALLS and not (name == "list" and isinstance(arg, ast.Call)):
+                receiver = receiver or _namespace_receiver(arg)
+        # ``self.__dict__`` is the instance's own dict; ``dir(self)`` is not.
+        if receiver is None or (receiver == "self" and not walks_mro):
+            continue
+        key = (rel, owner.get(node, "<module>"), receiver)
+        if key not in _GATE_ALLOWED:
+            found.append((*key, line))
     return found
 
 
@@ -419,3 +432,34 @@ def test_no_request_path_code_iterates_a_live_namespace():
     thread makes the live walk raise (#3151)."""
     offenders = _live_namespace_walks()
     assert not offenders, "\n".join(f"{f}:{line} {fn}() walks {r}" for f, fn, r, line in offenders)
+
+
+@pytest.mark.parametrize(
+    "source, receiver",
+    [
+        ("def f(C):\n    return g(**vars(C))\n", "C"),
+        ("def f(C):\n    return g(**C.__dict__)\n", "C"),
+        ("def f(C):\n    return g(1, **type(C).__dict__)\n", "type(C)"),
+        ("def f(C):\n    return g(*vars(C))\n", "C"),
+        ("def f(C):\n    return g(*C.__dict__.keys())\n", "C"),
+        # The shapes the gate already caught before #3181.
+        ("def f(C):\n    for k in vars(C):\n        pass\n", "C"),
+        ("def f(C):\n    return {**C.__dict__}\n", "C"),
+    ],
+)
+def test_gate_flags_unpacking_a_live_namespace(source, receiver):
+    """#3181: call-argument unpacking iterates the namespace like a ``for`` does."""
+    assert [(fn, r) for _, fn, r, _ in _namespace_walks_in(source, "x.py")] == [("f", receiver)]
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        # presence.py's shape: an instance's own dict, owned by one session.
+        "def f(self):\n    return self.fmt.format(**self.__dict__)\n",
+        "def f(C):\n    return g(**namespace(C))\n",
+        "def f(C):\n    return g(**kwargs)\n",
+    ],
+)
+def test_gate_leaves_safe_unpacking_alone(source):
+    assert _namespace_walks_in(source, "x.py") == []
