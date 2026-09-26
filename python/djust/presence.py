@@ -619,6 +619,39 @@ class PresenceMixin:
             async_to_sync(channel_layer.group_send)(group_name, message)
 
 
+def presence_groups_of(consumer: Any) -> List[str]:
+    """Every presence group ``consumer`` has joined (#3202).
+
+    A ``mount_batch`` can join several (one per presence view), so the
+    consumer keeps a set in ``_presence_groups``; ``_presence_group`` is the
+    most recent one, kept for code that reads the single attribute.
+    """
+    groups = set(getattr(consumer, "_presence_groups", None) or ())
+    single = getattr(consumer, "_presence_group", None)
+    if isinstance(single, str) and single:
+        groups.add(single)
+    return sorted(groups)
+
+
+async def leave_presence_groups(consumer: Any) -> None:
+    """Leave every presence group ``consumer`` joined and forget them (#3202).
+
+    Called on disconnect, on a ``live_redirect`` teardown and when a mount is
+    refused after it joined. A failed discard is logged, never raised.
+    """
+    groups = presence_groups_of(consumer)
+    consumer._presence_groups = set()
+    consumer._presence_group = None
+    channel_layer = getattr(consumer, "channel_layer", None)
+    if channel_layer is None:
+        return
+    for group in groups:
+        try:
+            await channel_layer.group_discard(group, consumer.channel_name)
+        except Exception:  # noqa: BLE001 - leaving is best effort
+            logger.warning("Error leaving presence group %s", group)
+
+
 # Cursor tracking for live cursors (bonus feature)
 # Guards the cache get -> modify -> set sequences below within this process
 # (#3074): with ``LIVEVIEW_CONFIG["worker_threads"]`` two sessions' cursor
