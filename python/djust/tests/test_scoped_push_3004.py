@@ -26,6 +26,8 @@ from djust.push import (
 
 pytest.importorskip("channels")
 
+from ._ws_frames import drain_extra, receive_type  # noqa: E402
+
 VIEW = f"{__name__}._RoomView"
 
 
@@ -230,15 +232,20 @@ async def _receive_until(communicator, wanted, *, tries=8, timeout=3):
 
 
 async def _pinged(communicator):
+    """The patch a push produced: waits for it, event-driven (#3130)."""
+    return (await receive_type(communicator, "patch"))[-1]
+
+
+async def _not_pinged(communicator):
     """The patch a push produced, or None when nothing arrives.
 
+    A trailing quiet window (#3130): on a slow machine it can miss a late
+    patch, never fail a run where the push correctly went elsewhere.
     ``receive_nothing`` waits without cancelling the application (a
     ``receive_json_from`` timeout would cancel it).
     """
-    if await communicator.receive_nothing(timeout=0.5, interval=0.02):
-        return None
-    frame = await _receive_until(communicator, "patch", tries=3, timeout=3)
-    return frame if frame.get("type") == "patch" else None
+    patches = [f for f in await drain_extra(communicator) if f.get("type") == "patch"]
+    return patches[0] if patches else None
 
 
 def _patch_text(frame):
@@ -256,7 +263,8 @@ async def test_scoped_push_reaches_only_the_sessions_in_that_scope():
         c = await _connect(VIEW, "r2")
         try:
             await apush_to_view(VIEW, handler="handle_ping", scope="r1")
-            fa, fb, fc = await asyncio.gather(_pinged(a), _pinged(b), _pinged(c))
+            fa, fb = await asyncio.gather(_pinged(a), _pinged(b))
+            fc = await _not_pinged(c)
             assert fa is not None and "r1:1" in _patch_text(fa)
             assert fb is not None and "r1:1" in _patch_text(fb)
             assert fc is None, f"a session in r2 got r1's push: {fc!r}"
@@ -284,7 +292,7 @@ async def test_a_handler_that_changes_push_scope_moves_the_session():
             assert "r9" in _patch_text(moved)
 
             await apush_to_view(VIEW, handler="handle_ping", scope="r1")
-            assert await _pinged(a) is None, "the session still got its old scope's push"
+            assert await _not_pinged(a) is None, "the session still got its old scope's push"
             await apush_to_view(VIEW, handler="handle_ping", scope="r9")
             frame = await _pinged(a)
             assert frame is not None and "r9:1" in _patch_text(frame)
@@ -327,7 +335,7 @@ async def test_a_push_hook_that_changes_push_scope_moves_the_session():
             await apush_to_view(VIEW, handler="handle_move", payload={"room": "r5"}, scope="r1")
             assert await _pinged(a) is not None
             await apush_to_view(VIEW, handler="handle_ping", scope="r1")
-            assert await _pinged(a) is None
+            assert await _not_pinged(a) is None
             await apush_to_view(VIEW, handler="handle_ping", scope="r5")
             frame = await _pinged(a)
             assert frame is not None and "r5:1" in _patch_text(frame)
@@ -373,7 +381,7 @@ async def test_a_tick_that_changes_push_scope_moves_the_session():
             frame = await _pinged(a)
             assert frame is not None and "t2:1" in _patch_text(frame)
             await apush_to_view(view, handler="handle_ping", scope="t1")
-            assert await _pinged(a) is None
+            assert await _not_pinged(a) is None
         finally:
             await a.disconnect()
 

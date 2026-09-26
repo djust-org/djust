@@ -276,17 +276,19 @@ class TestUploadFrameRateLimit:
 
             saw_close_4429 = False
             # upload_burst=5 + max_warnings=2 → ~7 frames trip disconnect.
-            # Send well past that and look for the close frame.
+            # Send well past that, then wait for the close frame (event-driven,
+            # #3130: a 1 s read per frame stopped at the first late answer).
+            from ._ws_frames import receive_until
+
             for _ in range(40):
                 await communicator.send_to(bytes_data=_cancel_frame())
-                try:
-                    out = await communicator.receive_output(timeout=1)
-                except Exception:
-                    break
-                if out["type"] == "websocket.close":
-                    assert out.get("code") == 4429, f"wrong close code: {out!r}"
-                    saw_close_4429 = True
-                    break
+            frames = await receive_until(
+                communicator, lambda frames: False, what="the flood-abuse close (4429)"
+            )
+            out = frames[-1]
+            if out["type"] == "websocket.close":
+                assert out.get("code") == 4429, f"wrong close code: {out!r}"
+                saw_close_4429 = True
 
             assert saw_close_4429, (
                 "F17: upload-frame flood did NOT trip the abuse-disconnect "

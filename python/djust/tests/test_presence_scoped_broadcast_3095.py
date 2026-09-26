@@ -24,6 +24,8 @@ from djust.push import presence_scope_group_name, push_scope_group_name
 
 pytest.importorskip("channels")
 
+from ._ws_frames import drain_extra, receive_until  # noqa: E402
+
 MOD = __name__
 
 
@@ -215,20 +217,29 @@ async def _receive_until(communicator, wanted, *, tries=8, timeout=3):
     return last
 
 
-async def _drain(communicator):
-    """Every frame that arrives within 0.5 s (patches from presence pushes)."""
+async def _drain(communicator, marker=None):
+    """Presence-push frames, event-driven (#3130).
+
+    With a ``marker``, waits until a patch carrying it arrives; then a trailing
+    quiet window collects anything else. Without one it is only that window:
+    a "room b was not woken" check can miss a late patch on a slow machine,
+    never fail a correct run.
+    """
     frames = []
-    while not await communicator.receive_nothing(timeout=0.5, interval=0.02):
-        frames.append(await communicator.receive_json_from(timeout=3))
-    return frames
+    if marker is not None:
+        frames = await receive_until(
+            communicator, lambda frames: marker in _text(frames), what=repr(marker)
+        )
+    return frames + await drain_extra(communicator)
 
 
 def _text(frames):
     return json.dumps([f.get("patches") for f in frames if f.get("type") == "patch"])
 
 
-async def _settle(*comms):
-    return await asyncio.gather(*(_drain(c) for c in comms))
+async def _settle(*comms, markers=None):
+    markers = markers or [None] * len(comms)
+    return await asyncio.gather(*(_drain(c, m) for c, m in zip(comms, markers)))
 
 
 @pytest.fixture
@@ -240,10 +251,13 @@ def _fresh_presence():
     registry.reset_presence_backend()
 
 
-async def _join_wakes(view, *, same_room_query, other_room_query, joiner_query):
+async def _join_wakes(
+    view, *, same_room_query, other_room_query, joiner_query, a_marker, b_marker=None
+):
     """Connect one session in room A and one in room B, then join room A.
 
-    Returns the frames (A, B) the join produced.
+    Returns the frames (A, B) the join produced: A's until ``a_marker``
+    arrives, B's until ``b_marker`` does (None: B must stay asleep).
     """
     a = await _connect(view, same_room_query)
     b = await _connect(view, other_room_query)
@@ -252,7 +266,7 @@ async def _join_wakes(view, *, same_room_query, other_room_query, joiner_query):
         await _settle(a, b)
         c = await _connect(view, joiner_query)
         comms.append(c)
-        fa, fb = await _settle(a, b)
+        fa, fb = await _settle(a, b, markers=[a_marker, b_marker])
         return fa, fb
     finally:
         for comm in comms:
@@ -268,6 +282,7 @@ async def test_a_join_wakes_only_the_room_that_shares_the_presence_key(_fresh_pr
             same_room_query="room=a",
             other_room_query="room=b",
             joiner_query="room=a",
+            a_marker="a:2:",
         )
     assert "a:2:" in _text(fa), f"room a did not see its count change: {fa!r}"
     assert not [f for f in fb if f.get("type") == "patch"], f"room b was woken: {fb!r}"
@@ -282,6 +297,8 @@ async def test_without_push_scope_every_room_is_woken_as_before(_fresh_presence)
             same_room_query="room=a",
             other_room_query="room=b",
             joiner_query="room=a",
+            a_marker="a:2:",
+            b_marker="b:1:",
         )
     assert "a:2:" in _text(fa)
     # Room b's handler ran (its change counter moved) although its count did not.
@@ -297,6 +314,8 @@ async def test_presence_broadcast_scoped_false_keeps_the_view_wide_broadcast(_fr
             same_room_query="room=a",
             other_room_query="room=b",
             joiner_query="room=a",
+            a_marker="a:2:",
+            b_marker="b:1:",
         )
     assert "a:2:" in _text(fa)
     assert "b:1:" in _text(fb), f"room b was not woken: {fb!r}"
@@ -311,6 +330,7 @@ async def test_a_viewer_that_does_not_track_still_sees_its_room_change(_fresh_pr
             same_room_query="room=a&watch=1",
             other_room_query="room=b&watch=1",
             joiner_query="room=a",
+            a_marker="a:1:1",
         )
     assert "a:1:1" in _text(fa), f"the watching session was not refreshed: {fa!r}"
     assert not [f for f in fb if f.get("type") == "patch"], f"room b was woken: {fb!r}"
@@ -329,6 +349,8 @@ async def test_a_presence_key_broader_than_push_scope_still_reaches_every_room(
             same_room_query="room=a",
             other_room_query="room=b",
             joiner_query="room=c",
+            a_marker="a:3:",
+            b_marker="b:3:",
         )
     assert "a:3:" in _text(fa), fa
     assert "b:3:" in _text(fb), fb
@@ -348,7 +370,7 @@ async def test_a_leave_wakes_the_room_and_disconnect_leaves_the_group(_fresh_pre
             await _settle(a, b)
             assert len(layer.groups.get(group, {})) == 2
             await b.disconnect()
-            (fa,) = await _settle(a)
+            (fa,) = await _settle(a, markers=["leave:1:"])
             assert "leave:1:" in _text(fa), f"the leave did not refresh the room: {fa!r}"
             assert len(layer.groups.get(group, {})) == 1
         finally:
