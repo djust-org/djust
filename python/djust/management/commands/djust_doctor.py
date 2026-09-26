@@ -226,6 +226,21 @@ def check_channel_layers() -> "_CheckResult":
     )
 
 
+def _redact_redis_url(url: str) -> str:
+    """Mask the password in a redis URL's userinfo for display."""
+    from urllib.parse import urlsplit, urlunsplit
+
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return "<unparseable redis URL>"
+    if parts.password is None:
+        return url
+    userinfo, _, hostinfo = parts.netloc.rpartition("@")
+    user = userinfo.split(":", 1)[0]
+    return urlunsplit(parts._replace(netloc="%s:***@%s" % (user, hostinfo)))
+
+
 def check_redis() -> "Optional[_CheckResult]":
     """If CHANNEL_LAYERS uses Redis, attempt a ping."""
     from django.conf import settings
@@ -238,16 +253,21 @@ def check_redis() -> "Optional[_CheckResult]":
     if "Redis" not in backend:
         return None  # Not using Redis; skip
 
-    hosts = default.get("CONFIG", {}).get("hosts", [("localhost", 6379)])
-    host = hosts[0] if hosts else None
+    # channels_redis falls back to localhost:6379 for a missing or empty list.
+    hosts = default.get("CONFIG", {}).get("hosts") or [("localhost", 6379)]
+    host = hosts[0]
     # The dict form ({"address": url, "socket_timeout": 10}) is what the
     # deployment guide recommends (#3199); probe the address it names.
     if isinstance(host, dict) and isinstance(host.get("address"), str):
-        host_label = host["address"]
+        host_label = _redact_redis_url(host["address"])
     elif isinstance(host, dict) and "host" in host:
         host_label = "%s:%s" % (host["host"], host.get("port", 6379))
+    elif isinstance(host, str):
+        host_label = _redact_redis_url(host)
+    elif isinstance(host, dict):
+        host_label = "dict host"  # never echo a dict that may hold a password
     else:
-        host_label = str(host) if host is not None else "unknown"
+        host_label = str(host)
 
     try:
         import redis as redis_lib
