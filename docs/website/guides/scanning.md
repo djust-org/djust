@@ -33,6 +33,8 @@ same way they already do for Python and OS packages. This is
    Unset (the default), nothing is written and `manage.py check --deploy`
    warns with `djust.B011`. Pointed inside a served directory, startup
    fails with `djust.B012` and `collectstatic` refuses to write it.
+   djust does not reject another file name, so check the suffix yourself:
+   the file must end in `.cdx.json` for scanners to find it.
 
 2. Make sure `"djust"` is listed **above** `"django.contrib.staticfiles"`
    in `INSTALLED_APPS`. The SBOM is written by a `collectstatic` command

@@ -202,3 +202,25 @@ def test_path_outside_static_raises_improperly_configured(tmp_path, debug):
     with _settings(tmp_path), override_settings(DEBUG=debug):
         with pytest.raises(ImproperlyConfigured, match=r"\.\./\.\./x\.js"):
             stored_integrity("../../x.js", "sha384")
+
+
+def test_documented_component_rendering_patterns(tmp_path):
+    """The vendored assets guide's two ways to render requires_assets: the
+    page template through the instance, and the component's own template
+    via self.asset_tags() from get_context_data."""
+    from djust.components.base import Component
+
+    class ChartWidget(Component):
+        requires_assets = ("test-lib",)
+        template = "<div>{{ asset_tags }}<canvas></canvas></div>"
+
+        def get_context_data(self):
+            return {"asset_tags": self.asset_tags()}
+
+    tag = f'<script src="/static/testlib/lib.js" integrity="{sri(CONTENT)}"></script>'
+    with _settings(tmp_path):
+        chart = ChartWidget()
+        page = Template("{{ chart.asset_tags }}").render(Context({"chart": chart}))
+        own = chart.render()
+    assert page == tag
+    assert own == f"<div>{tag}<canvas></canvas></div>"

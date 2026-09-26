@@ -145,6 +145,41 @@ class ChartWidget(Component):
 
 An undeclared name in `requires_assets` fails startup with `djust.B007`.
 
+### Rendering a component's assets
+
+`requires_assets` only declares and checks; it renders nothing by itself.
+Something has to output the tags, and you choose where.
+
+**In the page template**, through the variable holding the component
+instance — for a component the view exposes as `chart`:
+
+```html
+{{ chart.asset_tags }}
+```
+
+**In the component's own `template`** (or `_render_custom`), from Python
+with `self.asset_tags()`:
+
+```python
+class ChartWidget(Component):
+    requires_assets = ["chart.js"]
+    template = "<div>{{ asset_tags }}<canvas></canvas></div>"
+
+    def get_context_data(self):
+        return {"asset_tags": self.asset_tags()}
+```
+
+`asset_tags` is per instance: every instance that renders it emits its own
+tags. When several instances on one page share an asset, render the tags
+once in a page-level template (`{% djust_asset "chart.js" %}` in the base
+template, or one instance's `asset_tags`) instead of in each instance.
+
+`LiveComponent` does not inherit from `Component`, so it has neither the
+`asset_tags` helper nor the `djust.B007` check for `requires_assets`. Put
+`{% load djust_assets %}{% djust_asset "chart.js" %}` in its template
+instead — an unknown name there raises `ImproperlyConfigured` when it
+renders.
+
 ## Overriding a djust-bundled library for a security fix
 
 Because resolution follows `INSTALLED_APPS`/`DJUST_ASSET_MANIFESTS` order
@@ -152,6 +187,19 @@ and the first declaration of a name wins, you can ship a fixed version of a
 library djust bundles — for example `highlight.js` — before djust cuts a
 release with the fix: add your own `djust_assets.json` entry for the same
 asset name in a manifest that resolves before djust's.
+
+An override replaces djust's declaration whole — djust does not merge the
+two. Overriding `highlight.js` in particular means your entry must
+re-declare all thirteen theme files as `"variant"` entries (see
+[Supported highlight.js themes](#supported-highlightjs-themes)) alongside
+the script, or `{% code_block theme="…" %}` raises `ImproperlyConfigured`
+for every theme you left out.
+
+Keep the override under its own path, not djust's: a copy of a djust
+static file at djust's own path (for example an old
+`djust_components/vendor/highlight/highlight.js` in `STATICFILES_DIRS`)
+shadows the vendored file, no longer matches djust's manifest, and fails
+startup with `djust.B004`. Delete such a copy.
 
 The override is never silent: `djust.B009` (a warning, not an error) names
 both sources and both versions, so the fact that something is shadowing

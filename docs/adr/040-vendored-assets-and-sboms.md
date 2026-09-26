@@ -57,7 +57,14 @@ indefinitely with no scanner ever flagging it.
 4. **Rendering carries integrity.** `{% djust_asset "name" %}` renders
    `<script>`/`<link>` tags with `integrity=`, computed from the *stored*
    static file so `ManifestStaticFilesStorage` rewrites don't break it.
-   `Component.requires_assets` declares what a component needs.
+   `Component.requires_assets` declares what a component needs; it
+   renders nothing by itself. A component outputs its tags with
+   `{{ <instance>.asset_tags }}` in the page template or
+   `self.asset_tags()` in Python (for example from `get_context_data`).
+   The call is per instance, so when several instances share an asset
+   the tags go once in a page-level template. `LiveComponent`
+   does not inherit `Component`, so it has neither the helper nor the
+   `djust.B007` check; it uses `{% djust_asset %}` in its template.
 5. **System checks catch drift, `djust.B001`–`B010`.** Unparseable
    manifests, missing versions or licenses, missing or tampered files,
    undeclared `requires_assets`, an SBOM that would be served as a static
@@ -65,8 +72,9 @@ indefinitely with no scanner ever flagging it.
    in a template all fail (or warn) at `manage.py check --tag djust`.
 6. **Three SBOM outputs, one generator
    (`djust.assets.sbom.to_cyclonedx`).**
-   - The djust distribution's own SBOM, generated from
-     `python/djust/djust.cdx.json` in djust's own source tree, covering
+   - The djust distribution's own SBOM, `python/djust/djust.cdx.json` in
+     djust's own source tree (written by `make vendor` and `make version`
+     via `python -m djust.assets.sbom --distribution`), covering
      vendored JS and the Rust crates linked into the extension (from
      `cargo metadata`, not `cargo cyclonedx`). Once djust is installed, the
      same file ships as `djust/djust.cdx.json` inside the installed
@@ -118,7 +126,8 @@ indefinitely with no scanner ever flagging it.
   CLI output — is flat for this reason, recorded in the spec's "Scanner
   probe results" section.
 - **tailwindcss appears in the SBOM as a `library` component named
-  `admin-css` even though it is a build-time `devDependency`.** The
+  `tailwindcss`, under the `admin-css` asset, even though it is a
+  build-time `devDependency`.** The
   static `admin.css` build embeds Tailwind's MIT-licensed preflight CSS
   in its output, so `tailwindcss@3.4.19` is recorded as a package of the
   `admin-css` asset. `admin.css` itself keeps exactly one upstream
