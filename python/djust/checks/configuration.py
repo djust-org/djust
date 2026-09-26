@@ -95,12 +95,9 @@ def _check_tailwind_cdn_in_production(errors: list[CheckMessage]) -> None:
                         try:
                             with open(filepath, "r", encoding="utf-8") as f:
                                 content = f.read()
-                                # Scan template content for CDN reference (not URL validation).
-                                # Built from parts so djust's own source never contains the
-                                # literal CDN URL it warns users against (see C011 hint below
-                                # and the vendored-assets initiative that removed all CDN use).
+                                # Scan template content for CDN reference (not URL validation)
                                 # nosemgrep: python.lang.security.audit.dangerous-system-call.dangerous-system-call
-                                cdn_domain = "cdn." + "tailwindcss.com"
+                                cdn_domain = "cdn.tailwindcss.com"
                                 if cdn_domain in content:
                                     errors.append(
                                         DjustWarning(

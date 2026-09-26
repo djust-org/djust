@@ -30,11 +30,9 @@ def check_css_framework_config(errors: list[CheckMessage]) -> None:
                             try:
                                 with open(filepath, "r", encoding="utf-8") as f:
                                     content = f.read()
-                                    # Scan template content for CDN reference (not URL validation).
-                                    # Built from parts so djust's own source never contains the
-                                    # literal CDN URL it warns users against.
+                                    # Scan template content for CDN reference (not URL validation)
                                     # nosemgrep: python.lang.security.audit.dangerous-system-call.dangerous-system-call
-                                    cdn_domain = "cdn." + "tailwindcss.com"
+                                    cdn_domain = "cdn.tailwindcss.com"
                                     if cdn_domain in content:
                                         errors.append(
                                             Warning(
@@ -139,11 +137,9 @@ def check_tailwind_cdn_in_dev(errors: list[CheckMessage]) -> None:
                         try:
                             with open(filepath, "r", encoding="utf-8") as f:
                                 content = f.read()
-                                # Scan template content for CDN reference (not URL validation).
-                                # Built from parts so djust's own source never contains the
-                                # literal CDN URL it warns users against.
+                                # Scan template content for CDN reference (not URL validation)
                                 # nosemgrep: python.lang.security.audit.dangerous-system-call.dangerous-system-call
-                                cdn_domain = "cdn." + "tailwindcss.com"
+                                cdn_domain = "cdn.tailwindcss.com"
                                 if cdn_domain in content:
                                     cdn_found = True
                                     break
