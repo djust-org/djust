@@ -16,6 +16,8 @@ By default one djust process does its LiveView work on about **one CPU core**, h
 
 They combine: you can run several free-threaded processes.
 
+This guide is the in-depth reference for one process. To decide what to scale first, and for running several processes or pods (the settings they need, measured numbers, failover and rolling deploys), start with [Scaling djust](scaling.md).
+
 ## Why one process uses one core
 
 Three things cap a stock process:
