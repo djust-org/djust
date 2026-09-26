@@ -101,20 +101,19 @@ __all__ = [
     "LiveViewConsumer",
     "_check_event_security",
     "_ensure_handler_rate_limit",
+    # Optional PyO3 actor factory (None without the actor build); runtime.py
+    # imports it from here, and tests patch it here.
+    "create_session_actor",
 ]
 
 # Optional PyO3 actor surface (typed by _rust.pyi). When the compiled extension
-# lacks the actor build, both names fall back to None — annotate as Optional so
-# the import and the None fallback are type-compatible. (The runtime variable
-# shadows the _rust class name, so the annotation uses the structural
-# Callable/type rather than a self-referential forward ref.)
+# lacks the actor build, the name falls back to None — annotate as Optional so
+# the import and the None fallback are type-compatible.
 create_session_actor: Optional[Callable[[str], Awaitable[Any]]]
-SessionActorHandle: Optional[type]
 try:
-    from ._rust import create_session_actor, SessionActorHandle  # noqa: F811
+    from ._rust import create_session_actor  # noqa: F811
 except ImportError:
     create_session_actor = None
-    SessionActorHandle = None
 
 
 _IMMUTABLE_TYPES = (str, int, float, bool, type(None), bytes, tuple, frozenset)
@@ -708,9 +707,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.view_instance: Optional[Any] = None
-        # SessionActorHandle is an optional PyO3 type bound at module load (None
-        # when the actor build is absent); annotate the handle as Any since the
-        # name is a runtime variable, not usable as a static type.
+        # The handle is the optional PyO3 SessionActorHandle (absent without
+        # the actor build), so it is annotated as Any.
         self.actor_handle: Any = None
         self.session_id: Optional[str] = None
         self.use_binary = False  # Use JSON for now (MessagePack support TODO)

@@ -109,6 +109,8 @@ class InMemoryChannelLayer(_ChannelsInMemoryChannelLayer):
             try:
                 await self.send(channel, message)
             except ChannelFull:
+                # A full member drops this message, as Channels' own layers do;
+                # it is not a delivery error for the group.
                 pass
             except Exception as exc:  # noqa: BLE001 - raised after every member got it
                 # Channels' tasks still deliver to the other members when one
