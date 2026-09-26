@@ -715,6 +715,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         self.use_actors = False  # Will be set based on view class
         self._view_group: Optional[str] = None
         self._presence_group: Optional[str] = None
+        # Every presence group joined; a mount_batch can join several (#3202).
+        self._presence_groups: set = set()
         # The presence-scope group of the view's presence key (#3095).
         self._presence_scope_group: Optional[str] = None
         self._tick_task = None
@@ -947,15 +949,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             return
         from django.conf import settings as django_settings
         from django.template.exceptions import TemplateDoesNotExist
-        from django.template.loader import render_to_string
+
+        from .mixins.layout import render_pending_layout
 
         try:
-            context = (
-                self.view_instance.get_context_data()
-                if hasattr(self.view_instance, "get_context_data")
-                else {}
+            # #3178: context + render in one hop off the loop thread (the
+            # session's pinned worker with ``worker_threads``).
+            layout_html = await sync_to_async(render_pending_layout)(
+                self.view_instance, layout_path
             )
-            layout_html = render_to_string(layout_path, context)
         except TemplateDoesNotExist:
             logger.warning(
                 "set_layout(%r) — template not found; ignoring swap request",
@@ -2424,9 +2426,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if self._view_group:
             await self.channel_layer.group_discard(self._view_group, self.channel_name)
 
-        # Leave presence group and clean up presence
-        if self._presence_group:
-            await self.channel_layer.group_discard(self._presence_group, self.channel_name)
+        # Leave every presence group the mounts joined (#3202)
+        from .presence import leave_presence_groups
+
+        await leave_presence_groups(self)
 
         # Leave the scoped server-push groups of the view's push_scope (#3004)
         from .push import leave_push_scope_groups
@@ -3897,6 +3900,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         from .push import leave_push_scope_groups
 
         await leave_push_scope_groups(self)
+        # ... and its presence group, which the new view's presence key may
+        # not share (#3202).
+        from .presence import leave_presence_groups
+
+        await leave_presence_groups(self)
 
         # Cancel old tick task
         if self._tick_task:

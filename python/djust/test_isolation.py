@@ -132,7 +132,8 @@ Explicitly NOT reset (would be too aggressive / not a leak):
 - ``utils._get_template_dirs_cached`` — tests that mutate ``settings.TEMPLATES``
   manage this themselves; a blanket clear would add cost without fixing a known
   leak and could mask a test's own setup ordering.
-- ``template_filters._CUSTOM_FILTERS_BRIDGED`` — a one-shot idempotent bootstrap;
+- ``template_filters._CUSTOM_FILTERS_BRIDGED`` — an idempotent bootstrap that
+  re-bridges by itself when the Rust registry lost its filters (#3208);
   resetting it would needlessly re-bridge filters every test.
 - ``StickyChildRegistry._child_views`` — per-LiveView-instance state, not a
   process-global; a fresh view instance starts empty.

@@ -31,7 +31,9 @@ def test_redis_values_select_the_redis_backend(value):
     with patch("djust.backends.redis.RedisPresenceBackend") as redis_cls:
         backend = _create_presence_backend(value, {"PRESENCE_REDIS_URL": "redis://x:6379/1"})
     assert backend is redis_cls.return_value
-    redis_cls.assert_called_once_with(redis_url="redis://x:6379/1", key_prefix="djust:presence")
+    redis_cls.assert_called_once_with(
+        redis_url="redis://x:6379/1", key_prefix="djust:presence", cleanup_interval=30.0
+    )
 
 
 @pytest.mark.parametrize("value", ["memory", "tenant_memory"])

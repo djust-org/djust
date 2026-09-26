@@ -858,11 +858,68 @@ def test_the_event_save_is_still_bounded():
     assert {name: count for name, count in bounded_sites.items() if count} == {
         "_persist_state_after_event": 1,
         "_persist_sticky_child_after_event": 1,
-        "_persist_explicit_children_after_event": 1,
-        # ADR-038 E3: the explicit root commit shared by foreground events,
-        # root background work and server-originated turns.
-        "commit_explicit_turn": 1,
-    }, "Each legacy and explicit child save must retain its exact storage deadline"
+    }, "Each legacy save must retain its exact storage deadline"
+
+    # ADR-038 E3 explicit saves (the root commit shared by foreground events,
+    # root background work and server-originated turns, and the child tree)
+    # go through ONE bounded helper whose deadline starts when the save starts
+    # running on the Django thread, not when it is queued (#3200). Pin the
+    # helper's bound and that both explicit sites use it.
+    helper = next(
+        node
+        for node in ast.parse(src).body
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "_run_explicit_save"
+    )
+    # The deadline is read once from the configurable bound ...
+    deadline_reads = [
+        node
+        for node in ast.walk(helper)
+        if isinstance(node, ast.Assign)
+        and [t.id for t in node.targets if isinstance(t, ast.Name)] == ["deadline"]
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == "explicit_state_save_timeout"
+    ]
+    assert len(deadline_reads) == 1, "the explicit helper must read its configured deadline"
+    # ... and bounds both waits: the previous (ordered) save, then this one.
+    helper_bounds = [
+        node
+        for node in ast.walk(helper)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "wait_for"
+        and any(
+            keyword.arg == "timeout"
+            and isinstance(keyword.value, ast.Name)
+            and keyword.value.id == "deadline"
+            for keyword in node.keywords
+        )
+    ]
+    assert len(helper_bounds) == 2, "the explicit save helper must keep its deadlines"
+    explicit_callers = {
+        method.name
+        for method in runtime_class.body
+        if isinstance(method, ast.AsyncFunctionDef)
+        and any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_run_explicit_save"
+            for node in ast.walk(method)
+        )
+    }
+    assert explicit_callers == {
+        "commit_explicit_turn",
+        "_persist_explicit_children_after_event",
+    }, explicit_callers
+    # With no setting, the explicit deadline IS the pinned production bound.
+    from django.test import override_settings
+
+    with override_settings():
+        from django.conf import settings
+
+        if hasattr(settings, "DJUST_EXPLICIT_STATE_SAVE_TIMEOUT"):
+            del settings.DJUST_EXPLICIT_STATE_SAVE_TIMEOUT
+        assert runtime.explicit_state_save_timeout() == runtime.EVENT_STATE_SAVE_TIMEOUT_S
 
 
 def test_a_save_that_exceeds_the_bound_is_dropped_not_raised():
@@ -885,7 +942,10 @@ def test_a_save_that_exceeds_the_bound_is_dropped_not_raised():
 
     from djust import runtime
 
-    src = _inspect.getsource(runtime)
+    # The legacy best-effort helpers live on ViewRuntime. The module-level
+    # explicit helper (_run_explicit_save, #3200) re-raises a timeout on
+    # purpose: an explicit turn withholds its success frame instead.
+    src = _inspect.getsource(runtime.ViewRuntime)
     segments = src.split("except asyncio.TimeoutError:")[1:]
     assert len(segments) == 2, (
         f"expected exactly 2 bounded save sites, found {len(segments)}. If a "

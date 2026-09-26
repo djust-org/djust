@@ -520,6 +520,38 @@ def _check_server_state_max_age(errors: list[CheckMessage]) -> None:
     )
 
 
+def _check_explicit_state_save_timeout(errors: list[CheckMessage]) -> None:
+    """C024 — DJUST_EXPLICIT_STATE_SAVE_TIMEOUT must be seconds in (0, 10].
+
+    It bounds how long an ADR-038 explicit turn waits for its state save,
+    counted from when the save starts running (#3200). At runtime an invalid
+    value falls back to the 0.15 s default, so report it at startup instead
+    of letting the configured value be silently ignored.
+    """
+    from django.conf import settings
+
+    from .._exposure_sessions import valid_explicit_state_save_timeout
+
+    if _is_check_suppressed("djust.C024"):
+        return
+    if not hasattr(settings, "DJUST_EXPLICIT_STATE_SAVE_TIMEOUT"):
+        return
+    if valid_explicit_state_save_timeout(settings.DJUST_EXPLICIT_STATE_SAVE_TIMEOUT):
+        return
+    errors.append(
+        DjustError(
+            "DJUST_EXPLICIT_STATE_SAVE_TIMEOUT must be a number of seconds greater than 0 "
+            "and at most 10.",
+            hint=(
+                "It bounds how long an explicit view's turn waits for its state save. "
+                "With an invalid value the runtime uses the default of 0.15 seconds."
+            ),
+            id="djust.C024",
+            fix_hint="Set `DJUST_EXPLICIT_STATE_SAVE_TIMEOUT = 0.5` (or remove it) in your settings.",
+        )
+    )
+
+
 def _check_worker_threads(errors: list[CheckMessage]) -> None:
     """C021 — ``LIVEVIEW_CONFIG['worker_threads']`` must be a documented value.
 
@@ -581,6 +613,41 @@ def _check_event_parameter_policy(errors: list[CheckMessage]) -> None:
                 fix_hint="Set `LIVEVIEW_CONFIG['event_parameter_policy']` to `'legacy'` or `'strict'`.",
             )
         )
+
+
+def _check_ws_path(errors: list[CheckMessage]) -> None:
+    """C025 — ``DJUST_WS_PATH`` must be a path starting with a single ``/`` (#3186).
+
+    ``{% djust_client_config %}`` emits the setting verbatim as the WebSocket
+    path. The client honors only a root-relative path (so the socket always
+    targets the page's own host); any other value is ignored with a browser
+    ``console.warn`` and the socket goes to ``/ws/live/``, which is not what
+    the operator asked for.
+    """
+    from django.conf import settings
+
+    from ..templatetags.live_tags import ws_path_is_valid
+
+    if _is_check_suppressed("djust.C025"):
+        return
+    value = getattr(settings, "DJUST_WS_PATH", None)
+    if isinstance(value, str):
+        value = value.strip()  # the client trims the emitted value
+    # Falsy is unset, as in {% djust_client_config %} (``if pinned:``).
+    if not value or ws_path_is_valid(value):
+        return
+    errors.append(
+        DjustError(
+            "DJUST_WS_PATH is %s; it must be a path starting with a single '/'." % repr(value)[:80],
+            hint=(
+                "The client ignores any other value (an absolute URL, '//host/...', a "
+                "relative path) and connects to '/ws/live/' instead, so the socket never "
+                "uses the path you set."
+            ),
+            id="djust.C025",
+            fix_hint="Set `DJUST_WS_PATH` to a path such as `'/ws/live/'`, or remove it.",
+        )
+    )
 
 
 def _check_unknown_extensions(errors: list) -> None:
@@ -1025,8 +1092,14 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     # C020 -- DJUST_SERVER_STATE_MAX_AGE out of range (ADR-038 E2-9)
     _check_server_state_max_age(errors)
 
+    # C024 -- DJUST_EXPLICIT_STATE_SAVE_TIMEOUT out of range (#3200)
+    _check_explicit_state_save_timeout(errors)
+
     # C022 -- ADR-036 project event parameter policy
     _check_event_parameter_policy(errors)
+
+    # C025 -- DJUST_WS_PATH is not a root-relative path (#3186)
+    _check_ws_path(errors)
 
     # C005 -- WebSocket routes missing AuthMiddlewareStack
     # A001 -- WebSocket routes missing AllowedHostsOriginValidator (#659)

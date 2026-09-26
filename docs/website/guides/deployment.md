@@ -11,6 +11,8 @@ description: "Deploy djust with uvicorn, Redis state backend, and Nginx load bal
 
 This guide covers deploying djust applications to production with horizontal scaling, Redis state backend, and WebSocket-aware load balancing.
 
+Before running more than one process or pod, read [Scaling djust](scaling.md). It lists the settings a multi-pod deployment needs, with measured numbers and failover behaviour. In particular, the Redis state backend on its own does not bring a view's state back after a reconnect to another process: that takes `enable_state_snapshot` or `state(..., persist="server")` and a session store every process shares (see [Option B](scaling.md#option-b-redis-between-processes)).
+
 ## Architecture Overview
 
 ```
@@ -381,6 +383,59 @@ server {
     }
 }
 ```
+
+### Serving the app under a path prefix
+
+When the app lives under a prefix (`https://example.com/app/`, set with
+`FORCE_SCRIPT_NAME = "/app"` or passed by the server as `SCRIPT_NAME` /
+the ASGI `root_path`), the client has to open its socket under the same
+prefix. Put `{% djust_client_config %}` in the base template's `<head>`: it
+emits `<meta name="djust-ws-path" content="/app/ws/live/">` from the request's
+script prefix, and the client connects there. Without the tag the client
+connects to `/ws/live/` at the host root, which is some other app (or
+nothing) on a shared host.
+
+The server must then answer the WebSocket at `/app/ws/live/`. Pick one:
+
+- **The proxy strips the prefix** (`location /app/ { proxy_pass http://djust_backend/; }`,
+  with the trailing slash). The server sees `/ws/live/`, so the usual
+  `path("ws/live/", LiveViewConsumer.as_asgi())` route matches unchanged.
+  Keep `FORCE_SCRIPT_NAME = "/app"` so Django's URLs and the emitted
+  paths carry the prefix.
+- **The server knows its root path** (`uvicorn --root-path /app`, and the proxy
+  passes `/app/...` through). Channels' `URLRouter` removes `root_path` from
+  the path before matching, so the `ws/live/` route again matches unchanged.
+- **Neither**: route the prefixed path yourself,
+  `path("app/ws/live/", LiveViewConsumer.as_asgi())`.
+
+Whichever you choose, the nginx `location` for the WebSocket upgrade must
+cover the prefixed path (`location /app/ws/`), not only `/ws/`.
+
+To emit a different path, set `DJUST_WS_PATH` in settings; it is used
+verbatim in place of the script prefix plus `ws/live/`.
+
+**Upgrade note (#3186).** Before this change the client always connected to
+the host-root `/ws/live/`, so an existing prefixed deployment may route only
+that path (for example `location /ws/`) and not `/app/ws/live/`. After
+upgrading, the client connects to `/app/ws/live/` first. If that first
+handshake fails before the socket has ever opened, the client tries
+`/ws/live/` once and logs a `console.warn` naming the URL that failed. The
+root path is adopted for the rest of the page only if that socket opens; if it
+fails too, the normal reconnect backoff goes back to `/app/ws/live/`. So a
+deployment that routes only `/ws/live/` keeps its WebSocket, at the cost of
+one failed handshake per page load. To remove that cost, either route
+`<prefix>/ws/live/` to djust as above, or pin the old path with
+`DJUST_WS_PATH = "/ws/live/"` (system check C025 reports a value that is not a
+path starting with a single `/`).
+
+A correctly routed deployment also makes this one attempt whenever its first
+handshake fails for an ordinary reason, such as a restart or a rollout. On a
+shared host, where something else answers at `/ws/live/`, that attempt can
+open against the other app, and the page then stays there. Setting
+`DJUST_WS_PATH` to your own prefixed path does not avoid the attempt; routing
+nothing else at the host-root `/ws/live/` does. A per-site shim that rewrote
+the socket URL to add the prefix (djust-docs' `ws-prefix.js`, for example) is
+now redundant; it is harmless, because it rewrites only an exact `/ws/live/`.
 
 ## Database Connection Pooling
 

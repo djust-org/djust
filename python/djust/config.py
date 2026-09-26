@@ -9,10 +9,39 @@ Provides centralized configuration for:
 - Serialization behavior (strict mode, depth limits)
 """
 
+import copy
 import logging
-from typing import Any, ClassVar, Dict
+import os
+from typing import Any, ClassVar, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+#: Flat ``DJUST_*`` settings aliasing keys of the ``service_worker`` dict.
+_SERVICE_WORKER_ALIASES = (
+    ("DJUST_VDOM_CACHE_ENABLED", "vdom_cache_enabled", bool),
+    ("DJUST_VDOM_CACHE_TTL_SECONDS", "vdom_cache_ttl_seconds", int),
+    ("DJUST_VDOM_CACHE_MAX_ENTRIES", "vdom_cache_max_entries", int),
+    ("DJUST_STATE_SNAPSHOT_ENABLED", "state_snapshot_enabled", bool),
+)
+
+
+def _set_path(target: Dict[str, Any], key: str, value: Any) -> None:
+    """``target[a][b] = value`` for ``key == "a.b"``, creating dicts as needed."""
+    keys = key.split(".")
+    for k in keys[:-1]:
+        if not isinstance(target.get(k), dict):
+            target[k] = {}
+        target = target[k]
+    target[keys[-1]] = value
+
+
+def _overlapping(contrib: Dict[str, Any], key: str) -> Dict[str, Any]:
+    """The entries of a settings contribution that touch config path ``key``."""
+    return {
+        path: value
+        for path, value in contrib.items()
+        if path == key or key.startswith(path + ".") or path.startswith(key + ".")
+    }
 
 
 class LiveViewConfig:
@@ -360,7 +389,17 @@ class LiveViewConfig:
     }
 
     def __init__(self) -> None:
-        self._config: Dict[str, Any] = self._defaults.copy()
+        self._config: Dict[str, Any] = copy.deepcopy(self._defaults)
+        # Values written in code (``set`` / ``update``), in write order, each
+        # with the settings contribution in force when it was written (#3217).
+        # A reload from settings replays them, so reloading on
+        # ``override_settings`` never drops a project's ``AppConfig.ready()``
+        # configuration.
+        self._programmatic: Dict[str, Tuple[Any, Dict[str, Any]]] = {}
+        # What the settings contributed at the last load: ``{path: value}``.
+        self._contrib: Dict[str, Any] = {}
+        # Whether this object, not the environment, set ``DJUST_VDOM_TRACE``.
+        self._vdom_trace_set = False
         # #2164/#2166: Django settings can be UNREADABLE at the moment this
         # module is imported — a project whose ``asgi.py`` imports djust before
         # it sets ``DJANGO_SETTINGS_MODULE`` gets ``ImproperlyConfigured`` from
@@ -372,13 +411,28 @@ class LiveViewConfig:
         self._load_from_settings()
 
     def _load_from_settings(self) -> None:
-        """Load configuration from Django settings if available"""
+        """Load configuration from Django settings, in place, if available."""
+        loaded, contrib = self._apply_settings(self._config)
+        if loaded:
+            self._settings_loaded = True
+            self._contrib = contrib
+        self._validate_config(self._config)
+        self._sync_vdom_trace(self._config)
+
+    def _apply_settings(self, target: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
+        """Apply the Django settings the config reads onto ``target``.
+
+        Returns whether the settings could be read, and what they contributed
+        as ``{path: value}`` (dotted paths for the nested aliases).
+        """
+        contrib: Dict[str, Any] = {}
         try:
             from django.conf import settings
 
             live_cfg = getattr(settings, "LIVEVIEW_CONFIG", None) or {}
             if live_cfg:
-                self._config.update(live_cfg)
+                target.update(live_cfg)
+                contrib.update(live_cfg)
             # #1993: also honor LiveView runtime keys set in the similarly-named
             # ``DJUST_CONFIG`` dict as a fallback. The two dicts are defined in
             # the same module and easy to confuse — ``DJUST_CONFIG`` already
@@ -394,7 +448,8 @@ class LiveViewConfig:
             if isinstance(djust_cfg, dict):
                 for key, value in djust_cfg.items():
                     if key in self._defaults and key not in live_cfg:
-                        self._config[key] = value
+                        target[key] = value
+                        contrib[key] = value
                         logger.debug(
                             "djust: applied LiveView config key %r from "
                             "DJUST_CONFIG (its documented home is LIVEVIEW_CONFIG)",
@@ -405,24 +460,21 @@ class LiveViewConfig:
             # toggles. (The nested ``DJUST_CONFIG`` *dict* is handled just above,
             # #1993 — these are the separate flat scalars.)
             if hasattr(settings, "DJUST_WS_COMPRESSION"):
-                self._config["websocket_compression"] = bool(settings.DJUST_WS_COMPRESSION)
+                target["websocket_compression"] = bool(settings.DJUST_WS_COMPRESSION)
+                contrib["websocket_compression"] = target["websocket_compression"]
             # Service-worker advanced features (v0.6.0) — top-level aliases
             # for the ``service_worker`` nested dict. Modifying the nested
             # dict directly also works; these aliases exist for operator
             # discoverability and to match the
             # ``DJUST_{VDOM_CACHE,STATE_SNAPSHOT}_*`` naming seen in the
             # v0.6.0 release notes.
-            sw_cfg = self._config.setdefault("service_worker", {})
-            if hasattr(settings, "DJUST_VDOM_CACHE_ENABLED"):
-                sw_cfg["vdom_cache_enabled"] = bool(settings.DJUST_VDOM_CACHE_ENABLED)
-            if hasattr(settings, "DJUST_VDOM_CACHE_TTL_SECONDS"):
-                sw_cfg["vdom_cache_ttl_seconds"] = int(settings.DJUST_VDOM_CACHE_TTL_SECONDS)
-            if hasattr(settings, "DJUST_VDOM_CACHE_MAX_ENTRIES"):
-                sw_cfg["vdom_cache_max_entries"] = int(settings.DJUST_VDOM_CACHE_MAX_ENTRIES)
-            if hasattr(settings, "DJUST_STATE_SNAPSHOT_ENABLED"):
-                sw_cfg["state_snapshot_enabled"] = bool(settings.DJUST_STATE_SNAPSHOT_ENABLED)
+            sw_cfg = target.setdefault("service_worker", {})
+            for setting_name, key, cast in _SERVICE_WORKER_ALIASES:
+                if hasattr(settings, setting_name):
+                    sw_cfg[key] = cast(getattr(settings, setting_name))
+                    contrib["service_worker." + key] = sw_cfg[key]
             # Reached only if every settings read above succeeded.
-            self._settings_loaded = True
+            return True, contrib
         except ImportError:
             # Django not installed
             pass
@@ -431,31 +483,72 @@ class LiveViewConfig:
             # We catch Exception here because the ImproperlyConfigured import might
             # itself fail if Django is partially installed
             pass
+        return False, contrib
 
-        # --- Validate config values ---
-        self._validate_config()
+    def _sync_vdom_trace(self, target: Dict[str, Any]) -> None:
+        """Bridge ``debug_vdom`` to Rust VDOM tracing, so developers only need
+        one setting. Undo it only if this object set it (#3217): a reload that
+        turns ``debug_vdom`` off must not leave tracing on, and must not clear
+        a ``DJUST_VDOM_TRACE`` the environment set itself."""
+        if target.get("debug_vdom", False):
+            if "DJUST_VDOM_TRACE" not in os.environ:
+                os.environ["DJUST_VDOM_TRACE"] = "1"
+                self._vdom_trace_set = True
+        elif self._vdom_trace_set:
+            os.environ.pop("DJUST_VDOM_TRACE", None)
+            self._vdom_trace_set = False
 
-        # Bridge debug_vdom to Rust VDOM tracing so developers only need one setting
-        if self._config.get("debug_vdom", False):
-            import os
+    def _rebuild_from_settings(self, keep_programmatic: bool) -> None:
+        """Rebuild the whole config and swap it in with one assignment (#3217).
 
-            os.environ.setdefault("DJUST_VDOM_TRACE", "1")
+        Readers on other threads (the free-threaded build, a live-server
+        thread) see the old dict or the new one, never defaults partway
+        through a reload. Values written in code are replayed on top, unless
+        the settings now contribute a different value for that path than when
+        the value was written: an ``override_settings`` that sets a key wins
+        inside the override, and the code-set value returns when it exits.
+        """
+        new: Dict[str, Any] = copy.deepcopy(self._defaults)
+        loaded, contrib = self._apply_settings(new)
+        self._validate_config(new)
+        if keep_programmatic:
+            for key, (value, contrib_at_write) in self._programmatic.items():
+                now = _overlapping(contrib, key)
+                if now and now != _overlapping(contrib_at_write, key):
+                    continue  # the settings in force set this path themselves
+                _set_path(new, key, copy.deepcopy(value))
+        else:
+            self._programmatic = {}
+        self._config = new
+        self._settings_loaded = loaded
+        if loaded:
+            self._contrib = contrib
+        self._sync_vdom_trace(new)
 
-    def _validate_config(self) -> None:
-        """Validate security-critical config values on startup."""
+    def _record_programmatic(self, key: str, value: Any) -> None:
+        # Latest write last; a write to ``a`` supersedes earlier ``a.b`` writes.
+        for existing in [k for k in self._programmatic if k == key or k.startswith(key + ".")]:
+            del self._programmatic[existing]
+        self._programmatic[key] = (copy.deepcopy(value), dict(self._contrib))
+
+    def _validate_config(self, target: Optional[Dict[str, Any]] = None) -> None:
+        """Validate security-critical config values (the live config when
+        ``target`` is omitted)."""
+        if target is None:
+            target = self._config
         valid_modes = ("open", "warn", "strict")
-        mode = self._config.get("event_security")
+        mode = target.get("event_security")
         if mode not in valid_modes:
             logger.warning(
                 "Invalid event_security mode %r (must be one of %s). Falling back to 'strict'.",
                 mode,
                 valid_modes,
             )
-            self._config["event_security"] = "strict"
+            target["event_security"] = "strict"
 
         # Validate rate_limit values
         defaults = self._defaults["rate_limit"]
-        rl = self._config.get("rate_limit", {})
+        rl = target.get("rate_limit", {})
         if isinstance(rl, dict):
             for key in (
                 "rate",
@@ -485,12 +578,12 @@ class LiveViewConfig:
             debug = True
 
         if not debug:
-            if self._config.get("max_message_size") == 0:
+            if target.get("max_message_size") == 0:
                 logger.warning(
                     "max_message_size is 0 (no limit) with DEBUG=False. "
                     "Consider setting a message size limit in production."
                 )
-            if self._config.get("event_security") == "open":
+            if target.get("event_security") == "open":
                 logger.warning(
                     "event_security is 'open' with DEBUG=False. "
                     "Consider using 'warn' or 'strict' in production."
@@ -537,17 +630,8 @@ class LiveViewConfig:
             config.set('css_framework', 'tailwind')
             config.set('bootstrap5.field_class', 'custom-control')
         """
-        keys = key.split(".")
-
-        # Navigate to the nested dict
-        target = self._config
-        for k in keys[:-1]:
-            if k not in target:
-                target[k] = {}
-            target = target[k]
-
-        # Set the value
-        target[keys[-1]] = value
+        _set_path(self._config, key, value)
+        self._record_programmatic(key, value)
 
     def get_framework_class(self, class_type: str) -> str:
         """
@@ -600,10 +684,13 @@ class LiveViewConfig:
         return self._settings_loaded
 
     def reset(self) -> None:
-        """Reset configuration to defaults"""
-        self._config = self._defaults.copy()
-        self._settings_loaded = False
-        self._load_from_settings()
+        """Reset configuration to defaults plus settings, discarding values
+        written in code."""
+        self._rebuild_from_settings(keep_programmatic=False)
+
+    def reload_from_settings(self) -> None:
+        """Re-read the settings, keeping values written in code (#3217)."""
+        self._rebuild_from_settings(keep_programmatic=True)
 
     def update(self, config_dict: Dict[str, Any]) -> None:
         """
@@ -619,6 +706,8 @@ class LiveViewConfig:
             })
         """
         self._config.update(config_dict)
+        for key, value in config_dict.items():
+            self._record_programmatic(key, value)
 
     def as_dict(self) -> Dict[str, Any]:
         """Get the entire configuration as a dictionary"""
@@ -627,6 +716,37 @@ class LiveViewConfig:
 
 # Global configuration instance
 config = LiveViewConfig()
+
+#: Every Django setting ``_apply_settings`` reads. A change to any of them
+#: reloads the config; pinned against the source by
+#: ``test_config_follows_override_settings_3217``.
+_CONFIG_SETTINGS = frozenset(
+    {"LIVEVIEW_CONFIG", "DJUST_CONFIG", "DJUST_WS_COMPRESSION"}
+    | {setting_name for setting_name, _, _ in _SERVICE_WORKER_ALIASES}
+)
+
+
+def _reload_on_setting_change(*, setting: str, **kwargs: Any) -> None:
+    """Follow ``override_settings`` for the settings the config reads (#3217).
+
+    The singleton reads ``LIVEVIEW_CONFIG`` once and caches it. An
+    ``override_settings(LIVEVIEW_CONFIG=...)`` therefore did not take effect
+    until something called ``config.reset()``. Worse, a reset done inside the
+    override outlived it: ``reauth_on_event=True`` leaked into every later
+    test on the worker. ``setting_changed`` fires on both entry and exit, so
+    reloading here keeps the cache equal to the settings in force, the way
+    djust's other setting-derived caches already do.
+    """
+    if setting in _CONFIG_SETTINGS:
+        config.reload_from_settings()
+
+
+try:
+    from django.core.signals import setting_changed
+
+    setting_changed.connect(_reload_on_setting_change, dispatch_uid="djust.config")
+except ImportError:  # pragma: no cover - Django is a hard dependency
+    logger.debug("[djust] django unavailable; config will not follow override_settings")
 
 
 def get_config() -> LiveViewConfig:
