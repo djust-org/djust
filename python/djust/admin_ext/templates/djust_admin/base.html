@@ -1,3 +1,4 @@
+{% load djust_assets djust_admin_tags %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -5,8 +6,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}{{ title }} | {{ site_title }}{% endblock %}</title>
 
-    <!-- Tailwind CSS -->
-    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Tailwind CSS (vendored static build, see js/vendor/) -->
+    {% djust_asset "admin-css" %}
 
     <style>
         [x-cloak] { display: none !important; }
@@ -14,7 +15,9 @@
 
     {% block extra_head %}{% endblock %}
 </head>
-<body class="bg-gray-100 min-h-screen" data-djust-root>
+<body class="bg-gray-100 min-h-screen">
+{# LiveView root: a div, since the root search looks inside body; the server stamps the view path on it (#3140). #}
+<div dj-root>
     <!-- Sidebar -->
     <aside class="fixed inset-y-0 left-0 w-64 bg-gray-900 text-white overflow-y-auto">
         <!-- Header -->
@@ -100,6 +103,7 @@
             {% block content %}{% endblock %}
         </main>
     </div>
+</div>
 
     {% block extra_js %}{% endblock %}
 </body>

@@ -1,7 +1,7 @@
 # Development dependencies
 
 # Build tools
-maturin>=1.0,<2.0
+maturin>=1.12.1,<2.0
 
 # Django and related
 Django>=3.2

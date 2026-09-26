@@ -52,15 +52,17 @@ use native `as_live_field()` rendering in the template layout.
 The usual deferred client or framework-injected client works:
 
 ```django
-{% load static %}
+{% load static djust_assets %}
 <link rel="stylesheet" href="{% static 'djust_components/markdown-editor.css' %}">
-<script src="{% static 'djust_components/markdown-visual.js' %}"></script>
+{% djust_asset "markdown-visual" %}
 <script src="{% static 'djust_components/markdown-editor.js' %}"></script>
 ```
 
-Omit `markdown-visual.js` for a lightweight Markdown-only editor. If the visual
-asset is unavailable, the original textarea remains usable. The assets are
-shipped prebuilt: application users do not need Node, npm or a bundler.
+Omit the `markdown-visual` asset for a lightweight Markdown-only editor;
+`{% djust_asset %}` adds its integrity hash, and its bundled package versions
+are listed in djust's SBOM (see [Scanning a djust app](scanning.md)). If the
+visual asset is unavailable, the original textarea remains usable. The assets
+are shipped prebuilt: application users do not need Node, npm or a bundler.
 
 ## Existing component
 
@@ -156,11 +158,11 @@ rendering code.
 
 The optional visual bundle is approximately 155 KiB gzip and does not enter the
 core djust client. Its pinned MIT dependencies and license notices live with the
-standalone build in `js/markdown-editor/` and the generated static assets.
+vendored-asset build in `js/vendor/` and the generated static assets.
 
 ```shell
-make markdown-editor-build
-make test-markdown-editor
+make vendor
+make test-vendor
 npx vitest run tests/js/markdown_editor.test.js
 pytest python/tests/test_markdown_editor_preview.py
 ```

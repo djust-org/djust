@@ -22,6 +22,7 @@ These hooks do not change legacy model authorization or exposure.
 **Available from djust 1.3** (not in the 1.3.0rc1 pre-release). Use it for
 single-record edit views instead of `_model_instance`:
 
+<!-- djust-example: ai-article-edit scenario=model-form-edit -->
 ```python
 from django import forms
 from djust import LiveView

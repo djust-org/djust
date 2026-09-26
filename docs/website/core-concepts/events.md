@@ -50,8 +50,10 @@ class MyView(LiveView):
 **Rules** (the default, legacy parameter policy; for closed, typed signatures
 see [Typed event parameters](#typed-event-parameters-strict-policy)):
 
-- Always accept `**kwargs` — djust may pass extra metadata
-- Provide default values for all parameters (`value: str = ""`)
+- Declare the parameters the binding sends; `manage.py check` reports a binding
+  its handler would reject (`djust.T020`)
+- Under the legacy policy, `dj-input` and `dj-change` also send `field` and `_target`, and `dj-submit` sends `_target` with the form fields: keep `**kwargs` on those handlers, or declare the names
+- Give a parameter a default when a binding may omit it (`value: str = ""`)
 - Use type hints for automatic coercion (`item_id: int` converts `"5"` → `5`)
 - `value` is the magic parameter name for `dj-input` and `dj-change`
 
@@ -642,6 +644,7 @@ decide what an event may carry. Values are converted exactly, and an event
 that doesn't fit is rejected before your code runs. Legacy remains the
 default. Opt in per handler, or for the whole project:
 
+<!-- djust-example: skip -- settings fragment: the project-wide policy switch -->
 <!-- doc-snippet-check: skip -->
 ```python
 LIVEVIEW_CONFIG = {"event_parameter_policy": "strict"}
@@ -652,6 +655,7 @@ LIVEVIEW_CONFIG = {"event_parameter_policy": "strict"}
 
 ### Example: typed click arguments
 
+<!-- djust-example: item-selection scenario=strict-policy -->
 ```python
 from djust import LiveView
 from djust.decorators import event_handler
@@ -685,6 +689,7 @@ authorized object: look the record up and check permissions as usual.
 
 ### Example: inputs and forms
 
+<!-- djust-example: note-view scenario=strict-policy -->
 ```python
 from djust import LiveView
 from djust.decorators import event_handler

@@ -975,7 +975,6 @@ def create_server() -> "FastMCP":
 
         Checks for common issues:
         - Missing @event_handler decorators on handler-like methods
-        - Missing **kwargs in handler signatures
         - Public QuerySet attributes (should be _private)
         - Missing mount() method
         - Security issues (mark_safe with f-strings, etc.)
@@ -1068,26 +1067,6 @@ def create_server() -> "FastMCP":
                                 }
                             )
 
-                    # Check **kwargs on event handlers
-                    for dec in item.decorator_list:
-                        is_handler = False
-                        if isinstance(dec, _ast.Name) and dec.id == "event_handler":
-                            is_handler = True
-                        elif isinstance(dec, _ast.Call):
-                            func = dec.func
-                            if isinstance(func, _ast.Name) and func.id == "event_handler":
-                                is_handler = True
-                        if is_handler and not item.args.kwarg:
-                            issues.append(
-                                {
-                                    "severity": "warning",
-                                    "message": "Event handler '%s' should accept **kwargs"
-                                    % item.name,
-                                    "line": item.lineno,
-                                    "fix_hint": "Add **kwargs to the handler signature",
-                                }
-                            )
-
             if not has_template:
                 issues.append(
                     {
@@ -1168,7 +1147,6 @@ def create_server() -> "FastMCP":
 
         Checks for:
         - Service instance assignments (Issue #292)
-        - Missing **kwargs in event handlers
         - Public QuerySet attributes (should be private with _)
         - Missing @event_handler decorators on handler-like methods
 
@@ -1226,23 +1204,6 @@ def create_server() -> "FastMCP":
 
                 if is_decorated_handler:
                     decorated_handlers.add(item.name)
-
-                    # --- Check: missing **kwargs on decorated handlers ---
-                    if not item.args.kwarg:
-                        issues.append(
-                            {
-                                "type": "missing_kwargs",
-                                "severity": "warning",
-                                "message": (
-                                    "Event handler '%s' missing **kwargs parameter" % item.name
-                                ),
-                                "line": item.lineno,
-                                "fix": (
-                                    "Add **kwargs to the method signature:\n"
-                                    "def %s(self, ..., **kwargs):" % item.name
-                                ),
-                            }
-                        )
                 elif handler_pattern.match(item.name) and item.name != "mount":
                     issues.append(
                         {
@@ -1390,11 +1351,55 @@ def create_server() -> "FastMCP":
         Args:
             name: View class name (e.g., 'ProductListView')
             features: Comma-separated features: 'search', 'crud', 'pagination',
-                'form', 'presence', 'streaming', 'auth'
+                'form', 'form_edit', 'presence', 'streaming', 'auth'.
+                'form_edit' generates a ModelFormMixin view that edits one
+                record the signed-in user owns (combine with auth only).
 
         Returns complete Python code for a LiveView with the requested features.
         """
         feature_set = {f.strip().lower() for f in features.split(",") if f.strip()}
+
+        if "form_edit" in feature_set:
+            model = (
+                name[: -len("EditView")]
+                if name.endswith("EditView")
+                else (name[: -len("View")] if name.endswith("View") else name)
+            )
+            snake = "".join(
+                ("_" + c.lower()) if c.isupper() and i else c.lower() for i, c in enumerate(model)
+            )
+            edit_lines = [
+                "from django import forms",
+                "from djust import LiveView",
+                "from djust.forms import ModelFormMixin",
+                "from .models import %s" % model,
+                "",
+                "",
+                "class %sForm(forms.ModelForm):" % model,
+                "    class Meta:",
+                "        model = %s" % model,
+                "        # List exactly the fields the owner may edit: an allowlist, so a",
+                "        # field added to the model later is not editable by default.",
+                '        fields = ["title"]',
+                "",
+                "",
+                "class %s(ModelFormMixin[%s], LiveView):" % (name, model),
+                '    template_name = "myapp/%s_edit.html"' % snake,
+                "    model = %s" % model,
+                "    form_class = %sForm" % model,
+                "    login_required = True",
+                "",
+                "    def get_queryset(self):",
+                "        # Only records the signed-in user owns can be opened. Rename",
+                "        # `owner` to your model's owner field (djust.S013 explains why).",
+                "        return super().get_queryset().filter(owner=self.request.user)",
+                "",
+                "    def form_valid(self, form):",
+                "        self.object = form.save()",
+                '        self.success_message = "Saved!"',
+                "",
+            ]
+            return "\n".join(edit_lines)
 
         # Build imports
         imports = ["from djust import LiveView"]
