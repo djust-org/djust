@@ -66,6 +66,7 @@ if TYPE_CHECKING:
     from ._async_batch import AsyncBatch
     from ._exposure_children import ChildStateSession
 
+from ._class_snapshot import attribute_names
 from .rate_limit import ConnectionRateLimiter
 from .security import handle_exception, sanitize_for_log
 from .serialization import fast_json_loads
@@ -2414,7 +2415,7 @@ def _view_is_component_opaque(view: Any, name: str) -> bool:
     if verdict is None:
         verdict = _template_is_component_opaque(source, name)
         if verdict:
-            for attr in dir(cls):
+            for attr in attribute_names(cls):  # dir() races class writes (#3151)
                 prop = getattr(cls, attr, None)
                 deps = getattr(prop, "_computed_deps", None)
                 if deps and name in deps:
@@ -5641,7 +5642,9 @@ class ViewRuntime:
         """
         try:
             cache_config: Dict[str, Any] = {}
-            for attr_name in dir(type(view_instance)):
+            # dir() races a first-use class cache on a free-threaded build, and
+            # the ``except`` below would silently drop the config (#3151).
+            for attr_name in attribute_names(type(view_instance)):
                 if attr_name.startswith("_"):
                     continue
                 method = getattr(view_instance, attr_name, None)
@@ -5668,7 +5671,9 @@ class ViewRuntime:
         """
         try:
             handler_config: Dict[str, Any] = {}
-            for attr_name in dir(type(view_instance)):
+            # dir() races a first-use class cache on a free-threaded build, and
+            # the ``except`` below would silently drop the config (#3151).
+            for attr_name in attribute_names(type(view_instance)):
                 if attr_name.startswith("_"):
                     continue
                 method = getattr(view_instance, attr_name, None)

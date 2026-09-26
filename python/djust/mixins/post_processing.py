@@ -7,6 +7,7 @@ import logging
 import re
 import sys
 from typing import TYPE_CHECKING, Any, Dict, cast
+from .._class_snapshot import attribute_names
 
 logger = logging.getLogger(__name__)
 
@@ -170,7 +171,7 @@ class PostProcessingMixin:
                 "decorators": decorators.get(name, {}),
             }
 
-        for name in dir(self):
+        for name in attribute_names(self):  # dir() races class writes (#3151)
             if name.startswith("_") or name in handlers:
                 continue
 
@@ -282,7 +283,7 @@ class PostProcessingMixin:
 
         variables = {}
 
-        for name in dir(self):
+        for name in attribute_names(self):  # dir() races class writes (#3151)
             if name.startswith("_"):
                 continue
             if name in _FRAMEWORK_INTERNAL_ATTRS:

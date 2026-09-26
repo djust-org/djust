@@ -327,7 +327,7 @@ def available_liveview_names(view_path: str) -> Optional[list[str]]:
 
         names = [
             name
-            for name, obj in vars(module).items()
+            for name, obj in vars(module).copy().items()  # #3151
             if isinstance(obj, type) and issubclass(obj, LiveView) and obj is not LiveView
         ]
         return sorted(names) or None

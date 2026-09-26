@@ -398,8 +398,9 @@ jobs:
   # GIL-releasing render, the worker pool, scoped push, event-loop offload,
   # the in-memory layers (including the multi-loop layer, sessions on
   # several event loops and the `djust serve --loops` launcher, #3128) and
-  # the thread-safety fixes, including AudioMixin's per-view manifest
-  # cache — where their races are
+  # the thread-safety fixes, including AudioMixin's per-view manifest cache
+  # and class-namespace walks racing first-use class caches (#3151) — where
+  # their races are
   # real (no GIL to serialise them), and asserts the GIL stays off.
   # No longer continue-on-error since #3074 (it had soaked green since #1534),
   # so a failure shows red; it is still NOT wired into the test-summary
@@ -470,7 +471,8 @@ jobs:
             python/djust/tests/test_multiloop_layer_3128.py \
             python/djust/tests/test_multiloop_sessions_3128.py \
             python/djust/tests/test_multiloop_serve_3128.py \
-            python/djust/tests/test_audio_manifest_thread_safety.py
+            python/djust/tests/test_audio_manifest_thread_safety.py \
+            python/djust/tests/test_free_threaded_class_caches_3151.py
 
   # JavaScript tests - runs in parallel
   javascript-tests:

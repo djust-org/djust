@@ -27,6 +27,7 @@ from django.db import models
 from django.http import Http404
 from django.utils.safestring import SafeString
 
+from ._class_snapshot import namespace
 from ._deprecation import warn_deprecated
 from ._exposure import ExposureConfigurationError, ExposureError, ProviderContract
 from ._exposure_providers import provide_context_items
@@ -153,7 +154,7 @@ def _persisted_form_inputs(view_class: type) -> List[PersistedFormInput]:
     found: List[PersistedFormInput] = []
     seen: set = set()
     for owner in view_class.__mro__:
-        for name, declaration in vars(owner).items():
+        for name, declaration in namespace(owner).items():  # #3151
             if name in seen:
                 continue
             seen.add(name)
