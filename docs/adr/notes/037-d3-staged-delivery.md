@@ -51,5 +51,7 @@ pages. djust-docs#13 drops whole-line comments outside fenced code before
 rendering. With it, all 8 pages show **0** escaped markers, and their code-block
 counts are unchanged.
 
-Production is unchanged. The remaining gate is to bump docs.djust.org (djust-docs'
-`DJUST_VERSION`) with 1.3.0, after djust-docs#13 merges.
+Production is unchanged. djust-docs#13 is merged (`c7957ee`). The remaining gate is
+to bump docs.djust.org (djust-docs' `DJUST_VERSION`) with 1.3.0. That release carries
+this branch's docs; the docs published with 1.3.0rc3 still fail the nav gate as shown
+above.

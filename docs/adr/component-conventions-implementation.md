@@ -1789,8 +1789,9 @@ prerequisite. **ADR-038's gates E1–E6 and ER are closed on the completion bran
 (#2954): `exposure_policy="explicit"` is activated there, and ER is closed by
 the written account in D-z, with the deletions scheduled for the major release
 that makes `explicit` the default.
-ADRs 034–037 are accepted (2026-09-25): delivery was verified on staged 1.3
-docs; production docs.djust.org is bumped with 1.3.0 (see ADR-037 D3 below).**
+ADRs 034–037 are accepted (2026-09-25): delivery was verified on a local
+djust-docs build pinned to 1.3.0rc3 rendering the 1.3 branch's docs; production
+docs.djust.org follows 1.3.0 (see ADR-037 D3 below).**
 No completion percentage or delivery date is inferred from commit/test counts.
 
 ### Completion rules

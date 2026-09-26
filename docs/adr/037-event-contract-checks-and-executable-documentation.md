@@ -1,6 +1,6 @@
 # ADR-037: Shared event-contract checks and executable documentation
 
-**Status**: Accepted — delivery verified on staged 1.3 docs (djust-docs pinned to 1.3.0rc3, 2026-09-25; production docs.djust.org is bumped with 1.3.0). D1–D3 and Step R are closed, with evidence in the [implementation tracker](component-conventions-implementation.md#adr-037--checks-and-executable-documentation). Step R's deletion PRs are #3122 (rows 1–23) and the ADR-037 D3 PR (rows 24–26). The static-analysis limits at acceptance are recorded below.
+**Status**: Accepted — delivery verified on a local djust-docs build pinned to 1.3.0rc3 that renders the 1.3 branch's docs (2026-09-25; the docs published with 1.3.0rc3 failed djust-docs' nav gate on the unlisted accounts guide, fixed in #3138; production docs.djust.org follows 1.3.0). D1–D3 and Step R are closed, with evidence in the [implementation tracker](component-conventions-implementation.md#adr-037--checks-and-executable-documentation). Step R's deletion PRs are #3122 (rows 1–23) and the ADR-037 D3 PR (rows 24–26). The static-analysis limits at acceptance are recorded below.
 **Date**: 2026-09-19
 **Deciders**: Project maintainers
 **Evidence baseline**: `0d1aeb882` on `feat/components-catalogue`.
@@ -389,10 +389,21 @@ acceptance, a binding is left **unsupported** or **dynamic** (it is listed in
 - **An owner that resolves attributes dynamically** (`__getattr__`) — dynamic
   (`bindings.py:206`).
 
+Some owners are **not scanned at all**. Each is listed in the coverage report with
+its reason:
+
+- a view that overrides `get_template()` or `get_template_names()`: "the template is
+  chosen at runtime" (`python/djust/checks/bindings.py:140-144`);
+- an owner with no `template` or `template_name` (`bindings.py:146-147`);
+- an owner whose own template cannot be compiled (`bindings.py:149-150`).
+
 Whole templates or regions become **gaps**:
 
-- `{% extends %}` with a variable (`python/djust/_template_bindings.py:365`);
-- `{% include %}` with a variable (`_template_bindings.py:466`);
+- `{% extends %}` with a variable, or nested past `_MAX_DEPTH`
+  (`python/djust/_template_bindings.py:364-365`, reported as "names a dynamic
+  template");
+- `{% include %}` with a variable or filters, or nested past `_MAX_DEPTH`
+  (`_template_bindings.py:465-466`);
 - a template that fails to load or parse (`_template_bindings.py:378`).
 
 Only templates that belong to a `LiveView` or `LiveComponent` class are scanned. A

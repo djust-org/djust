@@ -1,6 +1,6 @@
 # ADR-036: Python-owned event parameters and canonical dj-value markup
 
-**Status**: Accepted — delivery verified on staged 1.3 docs (djust-docs pinned to 1.3.0rc3, 2026-09-25; production docs.djust.org is bumped with 1.3.0). Gates P1–P3 closed on `feat/adr-034-037`, with evidence in the [acceptance review](component-conventions-implementation.md#adr-036-acceptance-review--p3); acceptance is confirmed at that branch's review. The strict policy is a supported opt-in, and legacy remains the default. PR (Step R) stays open by this ADR's own rule: it fires only once strict is the default, which needs a separate compatibility decision.
+**Status**: Accepted — delivery verified on a local djust-docs build pinned to 1.3.0rc3 that renders the 1.3 branch's docs (2026-09-25; the docs published with 1.3.0rc3 failed djust-docs' nav gate on the unlisted accounts guide, fixed in #3138; production docs.djust.org follows 1.3.0). Gates P1–P3 closed on `feat/adr-034-037`, with evidence in the [acceptance review](component-conventions-implementation.md#adr-036-acceptance-review--p3); acceptance is confirmed at that branch's review. The strict policy is a supported opt-in, and legacy remains the default. PR (Step R) stays open by this ADR's own rule: it fires only once strict is the default, which needs a separate compatibility decision.
 **Date**: 2026-09-19
 **Deciders**: Project maintainers
 **Evidence baseline**: `0d1aeb882` on `feat/components-catalogue`.
