@@ -19,7 +19,7 @@ The CLI ships with djust. Its `click` and `requests` dependencies are base depen
 pip install djust
 ```
 
-`pip install djust[deploy]` still works as a no-op alias for older install scripts. Two entry points are available: `djust deploy ...` (recommended) and the standalone `djust-deploy ...`. `djust deploy login`, `djust deploy logout` and `djust deploy status` work as written; for deploying, see [Which deploy command runs](#which-deploy-command-runs). The examples below use the standalone `djust-deploy <command>` form, which exposes every command and option directly.
+`pip install djust[deploy]` still works as a no-op alias for older install scripts. Two entry points are available: `djust deploy ...` (recommended) and the standalone `djust-deploy ...`. `djust deploy login`, `djust deploy logout`, `djust deploy status` and `djust deploy logs` work as written; for deploying, see [Which deploy command runs](#which-deploy-command-runs). The examples below use the standalone `djust-deploy <command>` form, which exposes every command and option directly.
 
 ## Authentication
 
@@ -96,6 +96,30 @@ djust-deploy status <project-slug>
 ```
 
 Returns JSON with deployment details (state, timestamps, etc.).
+
+### `logs`
+
+Print the build/deploy log of a deployment: the clone, build and rollout lines the djustlive dashboard shows for it.
+
+```bash
+# The latest deployment of the project in pyproject.toml
+djust-deploy logs
+
+# The latest deployment of another project
+djust-deploy logs <project-slug>
+
+# A specific deployment
+djust-deploy logs [<project-slug>] --deployment <deployment-id>
+
+# Keep printing new lines until the deployment finishes
+djust-deploy logs <project-slug> --follow
+```
+
+- The slug resolves as for the deploy commands, except that the CLI never prompts for it: with no argument and no `[tool.djust.deploy].project`, it fails and asks for the slug.
+- `--deployment ID`: show that deployment instead of the most recent one. `status` lists deployment ids.
+- `--follow` / `-f`: poll until the deployment reaches a final status. Exits 1 if the deployment failed, so a script can run `djust deploy logs --follow` after a deploy.
+
+Log lines go to stdout as `<timestamp> <LEVEL> <message>`. The deployment's id, status and any error message go to stderr. These logs cover the build and the rollout, not the output of your running app.
 
 ## Credential Storage
 
