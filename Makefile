@@ -264,7 +264,7 @@ django-template-suite: ## Run Django's own template_tests against DjustTemplateB
 	@$(PYTHON) scripts/run-django-template-suite.py --parsed-output .django-src/last-run.txt --json .django-src/last-run.json $(if $(VERBOSE),,--quiet)
 
 .PHONY: check-lockfile-versions
-check-lockfile-versions: ## Verify Cargo.lock/uv.lock self-entries match manifests (closes #1498)
+check-lockfile-versions: ## Verify Cargo.lock/uv.lock self-entries and the SBOM version match manifests (#1498, #3184)
 	@$(PYTHON) scripts/check-lockfile-versions.py $(if $(VERBOSE),--verbose,)
 
 .PHONY: check-bundle-init-order
@@ -799,7 +799,7 @@ endif
 	fi
 	@# Verify lockfile self-entries are in sync (closes #1498)
 	@$(PYTHON) scripts/check-lockfile-versions.py || \
-		{ echo "$(RED)ERROR: lockfile self-entries stale — run 'make version VERSION=$(VERSION)'$(NC)"; exit 1; }
+		{ echo "$(RED)ERROR: lockfile self-entries or SBOM version stale — run 'make version VERSION=$(VERSION)'$(NC)"; exit 1; }
 	@# Verify this version hasn't already been released, locally or on origin (v1.1.0rc4 incident, retro v1.1.0rc5)
 	@if git rev-parse "v$(VERSION)" >/dev/null 2>&1; then \
 		echo "$(RED)ERROR: tag v$(VERSION) already exists LOCALLY — this version was likely already released. Verify branch/tag topology before proceeding.$(NC)"; \
