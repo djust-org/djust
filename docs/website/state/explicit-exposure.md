@@ -74,6 +74,10 @@ page = state(1, persist="client", client=True)   # restorable on back-navigation
 - **`DJUST_SERVER_STATE_MAX_AGE`.** The lifetime of a server envelope in
   seconds, from 1 to 86400. The default is 3600. System check `djust.C020`
   validates it.
+- **`DJUST_EXPLICIT_STATE_SAVE_TIMEOUT`.** How long a turn waits for its
+  state save, in seconds: greater than 0 and at most 10. The default is 0.15.
+  The time counts from when the save starts running, not from when it is
+  queued behind other sessions' work. System check `djust.C024` validates it.
 - **`DJUST_STATE_SNAPSHOT_MAX_AGE` / `DJUST_STATE_SNAPSHOT_ENABLED`.** The
   signed back-navigation snapshot's lifetime, and its master switch. The
   service worker also expires stored snapshots after this age.
@@ -88,9 +92,29 @@ page = state(1, persist="client", client=True)   # restorable on back-navigation
   ticks, `server_push` and `db_notify` turns reload the session and re-run
   authorization before your code runs. A revoked session gets an error and the
   socket closes with code 4403.
+- **A session that no longer exists mounts fresh.** When the browser's session
+  cookie names a session the store has lost (a cache flush or restart,
+  eviction, expiry), the mount runs `mount()` under a new, anonymous session,
+  as a page load would. Nothing is restored from the lost session. Over a
+  WebSocket the replacement never reaches the browser, so it expires after
+  `DJUST_SERVER_STATE_MAX_AGE`, and repeated mounts on one socket reuse it. Over
+  SSE the stream response issues it as a cookie with Django's normal lifetime,
+  as a page load does. A socket with no session cookie at all is still refused.
+  With `cache` sessions, Django treats a failed cache read as a missing
+  session, so a transient cache error on mount also takes this path: that
+  socket mounts anonymous while the real session survives.
 - **A failed state save is reported, not hidden.** The client gets a
-  `state_error` instead of an update, and its back-navigation snapshot is
-  revoked.
+  `state_error` instead of an update, and a failed root save revokes its
+  back-navigation snapshot. So the browser never shows a state that storage
+  does not have. Saves of one page are ordered: a save that is still running
+  delays the next one, so a late write never replaces a newer one.
+  A save that only ran out of time is marked `transient` and does not ask the
+  user to reload: the change is kept on the server, and once storage answers
+  one catch-up update saves it and sends full HTML. If the catch-up cannot do
+  that, storage keeps missing the deadline (three deferrals in a row), or a
+  save has been running for 10 seconds, the error is the reload error instead.
+  At mount there is no page to update yet, so a slow save there is also the
+  reload error.
 - **Errors follow Django.** With `DEBUG = True`, an explicit view's failure
   shows its exception and traceback, as Django's development output does: the
   technical 500 page, detailed error frames and dev overlay, and full log lines.

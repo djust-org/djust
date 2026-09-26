@@ -61,6 +61,11 @@ async def _execute(
     event_name: str | None,
     batch_token: str | None,
 ) -> None:
+    from .runtime import _detach_from_finished_request
+
+    # A child's background task also outlives the turn that queued it, and on
+    # SSE that turn's request executors die with the POST (#3097).
+    _detach_from_finished_request()
     try:
         async with runtime._explicit_event_lock, runtime.transport.event_context(root):
             await sync_to_async(_authorize)(runtime, root, child, generation)
