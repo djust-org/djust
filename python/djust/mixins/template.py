@@ -291,6 +291,8 @@ class TemplateMixin:
         _rust_render_timing: Any
         _sync_done_this_cycle: bool
 
+        def _observe_loop_render_cache(self) -> None: ...
+
         def get_context_data(self, **kwargs: Any) -> Dict[str, Any]: ...
 
         def _apply_context_processors(
@@ -1593,6 +1595,8 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
         # Capture per-phase Rust timing (render, parse, diff, serialize)
         self._rust_render_timing = self._rust_view.get_render_timing()
+        # #3071: stop caching loops whose items change on every render.
+        self._observe_loop_render_cache()
 
         logger.debug(
             "[LiveView] Rendered HTML length: %d chars, starts with: %s...",
