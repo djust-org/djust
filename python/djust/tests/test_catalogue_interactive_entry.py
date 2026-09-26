@@ -75,3 +75,18 @@ def test_the_index_page_carries_only_its_own_view():
     html = Client().get(reverse("djust_theming:components")).content.decode()
     assert "interactive_examples.DropdownMenuExample" not in html
     assert html.count("data-djust-parameter-contracts") <= 1
+
+
+def test_describe_component_agrees_with_the_detail_context():
+    # Review of #3134 (#1646): djust-docs builds reference pages from
+    # describe_component, which described the entry as empty.
+    from djust.theming.gallery.catalogue import build_catalogue_detail_context
+    from djust.theming.gallery.component_registry import describe_component
+
+    described = describe_component(ENTRY)
+    assert described["events"] == build_catalogue_detail_context(ENTRY)["events"] == ["selected"]
+    namespace: dict = {}
+    exec(described["import_line"], namespace)
+    assert namespace[described["class_name"]].__name__ == "DropdownMenu"
+    assert {"label", "items"} <= {p["name"] for p in described["params"]}
+    assert described["description"]

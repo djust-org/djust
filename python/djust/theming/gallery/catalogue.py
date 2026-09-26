@@ -319,6 +319,12 @@ INTERACTIVE_ENTRIES = {
     "interactive_dropdown_menu": "djust.components.interactive_examples.DropdownMenuExample",
 }
 
+#: The component each interactive entry documents, and the outputs a host
+#: subscribes to (``@<menu>.on.<output>``).
+INTERACTIVE_COMPONENTS = {
+    "interactive_dropdown_menu": ("djust.components.interactive", "DropdownMenu", ["selected"]),
+}
+
 
 def interactive_example_view(component_name: str) -> type:
     """The canonical example view an interactive entry serves (ADR-037 D2)."""
@@ -870,8 +876,12 @@ def build_catalogue_detail_context(component_name: str, *, render_examples: bool
 
         from .component_registry import get_component_category
 
+        from .component_registry import _default_source
+
         view_class = interactive_example_view(component_name)
         module = importlib.import_module(view_class.__module__)
+        component_module, class_name, outputs = INTERACTIVE_COMPONENTS[component_name]
+        component_class = getattr(importlib.import_module(component_module), class_name)
         markup = get_template(
             "djust_theming/catalogue/examples/%s.html" % component_name
         ).template.source
@@ -882,7 +892,22 @@ def build_catalogue_detail_context(component_name: str, *, render_examples: bool
             "component_type": "interactive",
             "description": component_description(component_name),
             "usage_parts": {"view": inspect.getsource(module), "template": markup},
-            "events": ["selected"],
+            "import_line": "from %s import %s" % (component_module, class_name),
+            "class_name": class_name,
+            "python_params": [
+                {
+                    "name": name,
+                    "kind": param.kind.name,
+                    "default": _default_source(param.default),
+                    "annotation": (
+                        str(param.annotation)
+                        if param.annotation is not inspect.Parameter.empty
+                        else ""
+                    ),
+                }
+                for name, param in inspect.signature(component_class).parameters.items()
+            ],
+            "events": list(outputs),
         }
 
     if component_name not in COMPONENT_CONTRACTS and component_name not in _COMPONENT_TO_CATEGORY:

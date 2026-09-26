@@ -1727,6 +1727,9 @@ def describe_component(component_name: str) -> dict:
     events = contract_events(
         [] if is_template else params, dict(examples[0]) if examples else {}, html
     )
+    if ctx.get("component_type") == "interactive":
+        # Its outputs are declared subscriptions, not markup the scan can see.
+        events = list(ctx.get("events") or [])
 
     style_paths = []
     if ctx.get("template_path"):
