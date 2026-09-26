@@ -2675,7 +2675,7 @@ In `docs/website/guides/markdown-editor.md`, replace the three-line asset snippe
 <script src="{% static 'djust_components/markdown-editor.js' %}"></script>
 ```
 
-Replace its next paragraph's first sentence with: "Omit the `markdown-visual` asset for a lightweight Markdown-only editor; `{% djust_asset %}` adds its integrity hash, and its bundled package versions are listed in djust's SBOM (see [Scanning a djust app](scanning.md))."
+Replace its next paragraph's first sentence with: "Omit the `markdown-visual` asset for a lightweight Markdown-only editor; `{% djust_asset %}` adds its integrity hash, and its bundled package versions are listed in djust's SBOM (see [Scanning a djust app](../../website/guides/scanning.md))."
 
 - [ ] **Step 6: Run the tests to verify they pass**
 
