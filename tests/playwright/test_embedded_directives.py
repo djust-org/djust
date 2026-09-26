@@ -13,10 +13,12 @@ It guards ADR-037 row 20 (the stamp list derived from the directive table)
 and the ``dj-paste`` owner-context fix, which it failed on before (the paste
 reached the parent on every transport).
 
-Over HTTP-only every event from an embedded child still reaches the parent,
-because the HTTP fallback does not route on ``view_id`` (#3104). Those cases
-are strict expected failures: a run where one reaches the child fails too, so
-the fix for #3104 must update this script.
+Over HTTP-only the fallback cannot route on ``view_id`` yet (#3104): an
+HTTP request registers its children only while it renders, under new ids. It
+refuses the event ("Embedded view not found") rather than running it on the
+parent, so each HTTP case must land nowhere. A run where one reaches the
+parent fails (the refusal regressed), and so does one where it reaches the
+child: routing it is #3104's remaining work, which must update this script.
 
 Standalone, like the other scripts here: exits 0 on success and non-zero
 with the list of failures. ``EMBEDDED_BASE`` (default
@@ -62,6 +64,14 @@ async def landed(page, token):
     return "nowhere"
 
 
+async def dismiss_overlay(page):
+    """Remove the DEBUG error overlay, if any, and return its text."""
+    return await page.evaluate(
+        "(() => { const o = document.getElementById('djust-error-overlay');"
+        " if (!o) return ''; const t = o.textContent; o.remove(); return t; })()"
+    )
+
+
 async def run(browser, transport, failures):
     context = await browser.new_context()
     await context.add_init_script(INIT[transport])
@@ -79,15 +89,20 @@ async def run(browser, transport, failures):
     for token, act in actions:
         await page.click("h1")  # Nothing focused, and a click-away already sent.
         await page.wait_for_timeout(300)
+        # Over HTTP that click-away is refused too; close its overlay first.
+        await dismiss_overlay(page)
         await act()
         where = await landed(page, token)
         if transport == "http":
-            # Strict expected failure until #3104: the HTTP fallback ignores view_id.
-            if where != "parent":
+            # The HTTP fallback refuses a child's event until #3104 routes it.
+            if where != "nowhere":
                 failures.append(
-                    "http: %s reached %s; #3104 expected the parent. Update this "
-                    "script if #3104 is fixed." % (token, where)
+                    "http: %s reached %s; the HTTP fallback should refuse it (#3104). "
+                    "Update this script if #3104 now routes it to the child." % (token, where)
                 )
+            # The refusal opens the DEBUG error overlay: it must name the refusal.
+            if "Embedded view not found" not in await dismiss_overlay(page):
+                failures.append("http: %s was not refused as an embedded event" % token)
         elif where != "child":
             failures.append("%s: %s reached %s, not the child" % (transport, token, where))
     watch.check(transport, transport, failures)
@@ -108,7 +123,7 @@ async def main():
         return 1
     print(
         "OK: every directive inside the embedded child reached the child over WebSocket "
-        "and SSE; over HTTP-only each reached the parent, as #3104 expects"
+        "and SSE; over HTTP-only each was refused, as #3104's partial fix expects"
     )
     return 0
 

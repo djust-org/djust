@@ -39,7 +39,7 @@ from ..validation import (
     validated_call_arguments,
     get_handler_parameter_policy,
 )
-from ..security import safe_setattr
+from ..security import safe_setattr, sanitize_for_log
 from ..security.event_guard import is_safe_event_name
 from ..decorators import is_event_handler
 from ..hooks import run_on_mount_hooks
@@ -906,6 +906,23 @@ class RequestMixin:
             # registered component, as ``runtime._dispatch_component_event``
             # does over WebSocket (#1646 — the HTTP fallback must not differ).
             owner: Any = self
+            # #3104: an event carrying another view's ``view_id`` belongs to an
+            # embedded ``{% live_render %}`` child. This request has no child to
+            # route to (children register during the render, after dispatch,
+            # under fresh ids), so the event is refused, as the socket runtime
+            # refuses an unknown ``view_id``. Running it on the parent would
+            # silently change the wrong view's state.
+            view_id = params.get("view_id") if isinstance(params, dict) else None
+            if view_id is not None:
+                if view_id != getattr(self, "_view_id", None):
+                    logger.warning(
+                        "HTTP POST refused event '%s' for embedded view %s on %s",
+                        event_name,
+                        sanitize_for_log(str(view_id)),
+                        type(self).__name__,
+                    )
+                    return JsonResponse({"error": "Embedded view not found"}, status=400)
+                params = {k: v for k, v in params.items() if k != "view_id"}
             component_id = params.get("component_id") if isinstance(params, dict) else None
             if component_id:
                 registry = getattr(self, "_components", None) or {}

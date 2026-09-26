@@ -336,8 +336,11 @@ transports): `dj-shortcut` and `dj-click-away` inside an embedded child reach th
 child through the stamped wrapper. It found two defects the list does not decide:
 
 - `dj-paste` attached no owner context. Fixed on this branch (owner decision).
-- Over HTTP-only, every event from an embedded child reaches the root view:
-  #3104. The test holds those cases as strict expected failures.
+- Over HTTP-only, every event from an embedded child reached the root view
+  (#3104). Since the #3104 follow-up the HTTP fallback refuses such an event
+  ("Embedded view not found"), as the socket runtime refuses an unknown
+  `view_id`, and the test expects the refusal. Routing it to the child over
+  HTTP is still open in #3104.
 
 Row 13's output (N1): `find_handlers_for_template` keeps its JSON keys, computed
 from the D1 extractor and real loader resolution (includes and parents). It gains
@@ -416,9 +419,12 @@ Two limits outside the checks, recorded at D2 and D3:
   665 Python blocks, 8 run as fixtures, 467 are parse- and import-checked
   (`scripts/check-doc-snippets.py` reads `guides/*.md` only), and 190 are not
   checked at all (`scripts/doc-examples-report.py`).
-- **Over HTTP-only, every embedded-child event reaches the root view** (#3104).
-  `tests/playwright/test_embedded_directives.py` holds those cases as expected
-  failures.
+- **Over HTTP-only, an embedded child's events do not reach the child** (#3104).
+  The HTTP fallback refuses them instead of running them on the root view: an
+  HTTP request registers its children only while it renders, after dispatch,
+  and under new process-wide `child_N` ids, so no child the client addressed
+  exists to route to. `tests/playwright/test_embedded_directives.py` expects
+  the refusal.
 
 ## Consequences and non-goals
 
