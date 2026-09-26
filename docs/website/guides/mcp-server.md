@@ -144,7 +144,7 @@ These tools inspect your live Django project. They only work when launched via `
 
 ### Code Generation (no Django required)
 
-**`scaffold_view(name, features="")`** — Generates a complete LiveView class. Features: `search`, `crud`, `pagination`, `form`, `presence`, `streaming`, `auth`.
+**`scaffold_view(name, features="")`** — Generates a complete LiveView class. Features: `search`, `crud`, `pagination`, `form`, `form_edit`, `presence`, `streaming`, `auth`. `form_edit` generates a `ModelFormMixin` view that edits one record the signed-in user owns (combine with `auth` only).
 
 **`scaffold_component(name, props="")`** — Generates a LiveComponent class with the specified props.
 

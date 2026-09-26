@@ -41,6 +41,7 @@ KNOWN_MIXINS = {
     "OfflineMixin",
     "SyncMixin",
     "FormMixin",
+    "ModelFormMixin",
 }
 
 # Decorator keys stored in _djust_decorators (besides 'event_handler')

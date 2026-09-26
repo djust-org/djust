@@ -43,6 +43,7 @@ COMPONENT_CATEGORIES: dict[str, list[str]] = {
         "collapsible",
         "dropdown",
         "dropdown_menu",
+        "interactive_dropdown_menu",
         "input",
         "kbd",
         "meter",
@@ -546,6 +547,8 @@ def get_all_components_with_metadata() -> list[dict]:
     """
     from djust.theming.contracts import COMPONENT_CONTRACTS
 
+    from .catalogue import INTERACTIVE_ENTRIES
+
     result = []
     seen = set()
 
@@ -554,7 +557,9 @@ def get_all_components_with_metadata() -> list[dict]:
             if name in seen:
                 continue
             seen.add(name)
-            if name in COMPONENT_CONTRACTS:
+            if name in INTERACTIVE_ENTRIES:
+                component_type = "interactive"
+            elif name in COMPONENT_CONTRACTS:
                 component_type = "template"
             else:
                 component_type = "python"
@@ -1722,6 +1727,9 @@ def describe_component(component_name: str) -> dict:
     events = contract_events(
         [] if is_template else params, dict(examples[0]) if examples else {}, html
     )
+    if ctx.get("component_type") == "interactive":
+        # Its outputs are declared subscriptions, not markup the scan can see.
+        events = list(ctx.get("events") or [])
 
     style_paths = []
     if ctx.get("template_path"):

@@ -16,6 +16,7 @@ checks that a selection is allowed, all by itself. It then tells your view
 what happened through a typed *output*, which the view subscribes to with a
 decorator:
 
+<!-- djust-example: project-menu scenario=project-menu -->
 ```python
 from djust import LiveView
 from djust.components.interactive import DropdownMenu
@@ -101,6 +102,7 @@ component's own code.
 Each declaration is independent, and so is every view instance: opening one
 menu never changes another menu, or another user's page.
 
+<!-- djust-example: toolbar scenario=toolbar -->
 ```python
 from djust import LiveView
 from djust.components.interactive import DropdownMenu
@@ -151,6 +153,7 @@ With `visibility="client"`, the browser opens and closes the menu as a native
 popover, with no server round trip. Python does not own `open` then (reading
 or setting it raises), but it can still *observe* the visibility:
 
+<!-- djust-example: help-menu scenario=help-observe -->
 ```python
 from djust import LiveView
 from djust.components.interactive import DropdownMenu
@@ -197,6 +200,7 @@ class HelpView(LiveView):
 For a row that only chooses an operation on a record, use no component per
 row. Pass the record id to an ordinary view handler:
 
+<!-- djust-example: row-actions scenario=row-actions -->
 ```python
 from django.core.exceptions import PermissionDenied
 from djust import LiveView, event_handler
@@ -242,6 +246,7 @@ When each row really owns component state (its own open menu, its own
 selection), declare a keyed collection. Its members come from `sync()`, as
 ordered `(key, DropdownMenu(...))` pairs:
 
+<!-- djust-example: project-list scenario=project-list -->
 ```python
 from django.core.exceptions import PermissionDenied
 from djust import LiveView

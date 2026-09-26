@@ -11,6 +11,7 @@ policy (`@event_handler(parameter_policy="strict")`, or project-wide
 - A `dj-value-*` name colliding with a generated name is rejected. `_target` is never sent: use `field` or `dj-value-*`.
 - Invalid input is rejected before the handler runs, so don't add defaults just to survive malformed events.
 
+<!-- djust-example: ai-item-view scenario=strict-policy -->
 ```python
 from djust import LiveView
 from djust.decorators import event_handler
@@ -39,6 +40,7 @@ class ItemView(LiveView):
 
 Legacy policy:
 
+<!-- djust-example: skip -- legacy-policy handler fragments with no view class; import-checked by scripts/check-doc-snippets.py -->
 ```python
 from djust.decorators import event_handler, debounce, throttle
 

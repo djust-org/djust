@@ -267,6 +267,16 @@ names those files or records that there were none.
 **Exit conditions.** The D1 table above, filled in, with every `RETIRE` row
 carrying a merged deletion PR before D3 acceptance.
 
+**Documentation fixtures (D2, 2026-09-25).** The fixtures retired three
+hand-maintained duplicates: `test_adr034_documented_examples.py`,
+`test_adr035_documented_examples.py` and `test_adr036_documented_examples.py`.
+Each re-implemented the same extractor, pairing, loader and page driver. They now
+run as scenarios in `python/djust/tests/doc_scenarios/` on one harness,
+`python/djust/tests/_doc_examples.py`. The catalogue's interactive `DropdownMenu`
+entry has no copy to retire: its usage section is the source of the canonical
+example module (`djust.components.interactive_examples`), which the harness
+executes.
+
 ### D1 retirement table (2026-09-25)
 
 **Answer: consolidation.** The enumeration is not empty, so this ADR claims a

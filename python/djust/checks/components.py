@@ -186,6 +186,7 @@ def check_liveviews(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
         return errors
 
     from django.conf import settings
+    from djust._component_subscriptions import is_component_subscription
     from djust.decorators import is_event_handler
 
     # Discover LiveViews from BOTH __subclasses__() (imported classes) AND the
@@ -365,6 +366,11 @@ def check_liveviews(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
             ):
                 continue
             if is_event_handler(method):
+                continue
+            # A ``@<component>.on.<output>`` callback is dispatched by its
+            # component, not the browser, and ``subscribe()`` refuses the
+            # ``@event_handler`` V004 would suggest (ADR-034; #3134).
+            if is_component_subscription(method):
                 continue
             # ``handle_*`` is also the server-push namespace: ``server_push``
             # calls an undecorated ``handle_*`` method by design, and leaving it

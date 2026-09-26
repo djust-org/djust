@@ -70,7 +70,9 @@ the collection API. The positive files and runtime assertions pass.
 - All marked "Available from djust 1.3" (not in the 1.3.0rc1 pre-release).
 - `test_adr034_documented_examples.py` extracts every documented view with the
   doc-snippet extractor and drives it through a real GET and the HTTP
-  fallback. That is six views across the guide and the AI reference.
+  fallback. That is six views across the guide and the AI reference. Since
+  ADR-037 D2 these run as `python/djust/tests/test_doc_examples.py`
+  (`doc_scenarios/adr034.py`).
 - djust-docs `docs_verify`, pointed at this branch's `docs/` and djust:
   - links, symbols (709) and a11y pass;
   - the nav finding (`guides/accounts.md`) pre-dates this branch;
@@ -213,7 +215,8 @@ migration recipe after the lifecycle gates).**
 - `test_adr035_documented_examples.py` extracts both documents' Python with
   the doc-snippet checker's own extractor and executes it. It uses the
   guide's route block and the paired HTML, then checks author, other user
-  and missing record over GET and the HTTP fallback.
+  and missing record over GET and the HTTP fallback. Since ADR-037 D2 this
+  runs as `python/djust/tests/test_doc_examples.py` (`doc_scenarios/adr035.py`).
 - djust-docs' `docs_verify`, pointed at this branch's `docs/` and djust:
   links, symbols (693) and a11y pass. The nav finding (`guides/accounts.md`)
   pre-dates this branch.
@@ -285,7 +288,8 @@ sensitive payloads.**
   doc-snippet checker's own extractor, executes it, and renders the paired
   HTML through a real GET. It checks the advertised strict contracts, then
   drives the documented valid and invalid payloads through the real HTTP
-  fallback.
+  fallback. Since ADR-037 D2 this runs as
+  `python/djust/tests/test_doc_examples.py` (`doc_scenarios/adr036.py`).
 - `adr036_documented_examples.test.js` mounts the same HTML blocks in the
   bundle under those contracts, and checks that the browser sends exactly
   those payloads.
@@ -2664,7 +2668,7 @@ Source: [decisions and acceptance](037-event-contract-checks-and-executable-docu
   - Under the legacy policy, `dj-input`, `dj-change` and `dj-submit` send `field`
     and `_target`, so a closed legacy handler for them fails at runtime. T020 now
     reports those bindings; V007 was the blanket guard.
-- [ ] **D2 — executable documentation and catalogue.** Make examples canonical
+- [x] **D2 — executable documentation and catalogue.** Make examples canonical
   fixtures and deliberately break each test layer to prove its gate fails.
   Verify website navigation and report skipped fixtures. Include the originally
   reported code-snippet whitespace, checkbox appearance, dropdown items and
@@ -2694,15 +2698,67 @@ Source: [decisions and acceptance](037-event-contract-checks-and-executable-docu
     only a `FormMixin` view, with no edit variant.
   - `djust_gen_live` generates no forms, so nothing to change there.
   Each needs an executed fixture, as D2 requires. They land with the D2
-  generator work, not as ADR-035 scope.
+  generator work, not as ADR-035 scope. **Done (D2):** the schema patterns,
+  `OPTIONAL_MIXINS` and MCP `form_edit` are executed fixtures.
 
   **Pending from ADR-034 (2026-09-25):**
   - A catalogue entry for the interactive `DropdownMenu`, including a keyed
     collection (owner decision C4-Q3). The catalogue's usage snippets are
     generated, so the entry comes from the D2 generator, not by hand.
+    **Done (D2):** the entry is its canonical example module rather than generated
+    usage (see Built below).
   - djust-docs' symbol check reports component-scoped decorators
     (`@<menu>.on.selected`) as advisory "not a known djust decorator". Teach
-    it the interactive subscription form.
+    it the interactive subscription form. **In progress:** a djust-docs PR, plan
+    Task 12.
+
+  **Built (2026-09-25, branch `feat/adr-037-d2-d3`).** Owner decisions: the scope is
+  the ADR surface plus drift, the harness uses Markdown markers, and delivery is
+  checked on staged 1.3 docs (see the spec,
+  `docs/superpowers/specs/2026-09-25-adr-037-d2-d3-design.md`).
+  - **Harness.** `python/djust/tests/_doc_examples.py` reads the
+    `<!-- djust-example: <id> scenario=<name> -->` or
+    `<!-- djust-example: skip -- <reason> -->` marker above each Python block. It
+    pairs each block with the next `html` block in its section and runs the named
+    scenario from `python/djust/tests/doc_scenarios/` (`adr034`, `adr035`,
+    `adr036` and `generated`). `COVERED` lists seven sections.
+  - **Drift.** `test_doc_example_drift.py` fails on:
+    - an unmarked block;
+    - an unknown scenario;
+    - a skip without a reason;
+    - a marker attached to no block;
+    - a duplicate id;
+    - a missing heading.
+  - **Report.** `scripts/doc-examples-report.py`:
+
+    ```text
+    covered file                                       executed  skipped unmarked
+    docs/ai/components.md                                     1        0        0
+    docs/ai/events.md                                         1        1        0
+    docs/ai/forms.md                                          1        0        0
+    docs/website/core-concepts/events.md                      2        1        0
+    docs/website/guides/error-codes.md                        0        0        0
+    docs/website/guides/forms.md                              1        1        0
+    docs/website/guides/interactive-components.md             5        0        0
+    docs/website: 665 Python blocks — 8 executed, 467 parse/import-checked (scripts/check-doc-snippets.py, guides/*.md), 190 unchecked
+    ```
+
+    Only `guides/*.md` is parse/import-checked (`scripts/check-doc-snippets.py`).
+    The spec assumed that check covered every `docs/website` block; the other 190
+    Python blocks, in core-concepts, forms, state and so on, have no check at all
+    (#3134 review).
+  - **Gate-offs.** Each layer (extractor, pairing, scenario driving and drift)
+    goes red when it is reverted: `docs/adr/notes/037-d2-gate-offs.md`, produced by
+    `scripts/doc-examples-gateoff.py`.
+  - **Generators.** Their output runs through the same scenarios:
+    - the `schema.py` forms patterns (a create form, plus the guide's
+      `ModelFormMixin` edit view, pinned equal to it);
+    - MCP `scaffold_view(features="form_edit")`;
+    - the catalogue entry's source.
+  - **Catalogue.** `/theme/components/interactive_dropdown_menu/` serves
+    `DropdownMenuExample` (one menu, plus a keyed collection) inside the catalogue
+    chrome. The browser pass is in `docs/adr/notes/037-d2-catalogue-browser.md`.
+    Two menus stay open at once there, as documented.
 - [ ] **D3 — final acceptance.** Run the ADR acceptance matrices at the final
   revision, complete migration/AI guidance, and verify actual website delivery
   rather than equating repository Markdown with publication. Record remaining

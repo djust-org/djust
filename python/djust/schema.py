@@ -1039,6 +1039,12 @@ OPTIONAL_MIXINS: List[Dict[str, Any]] = [
         "Validates on blur/change and shows inline errors.",
     },
     {
+        "name": "ModelFormMixin",
+        "import": "from djust.forms import ModelFormMixin",
+        "description": "Edit one existing record: the route supplies pk, djust "
+        "looks it up and checks access before building the form (ADR-035).",
+    },
+    {
         "name": "TenantMixin",
         "import": "from djust.tenants import TenantMixin",
         "description": "Multi-tenant support via Django Channels groups.",
@@ -1239,25 +1245,56 @@ BEST_PRACTICES = {
         ],
     },
     "forms": {
-        "description": "Use FormMixin for Django form integration with real-time validation",
+        "description": (
+            "FormMixin validates a Django form in real time. To edit one existing "
+            "record, use ModelFormMixin: the route supplies pk, and djust looks the "
+            "record up and checks access before it builds the form (ADR-035)."
+        ),
         "example": (
+            "from django import forms\n"
+            "from djust import LiveView\n"
             "from djust.forms import FormMixin\n"
             "\n"
-            "class MyFormView(FormMixin, LiveView):\n"
-            "    template_name = 'form.html'\n"
-            "    form_class = MyForm\n"
             "\n"
-            "    def mount(self, request, pk=None, **kwargs):\n"
-            "        if pk:\n"
-            "            self._model_instance = MyModel.objects.get(pk=pk)\n"
-            "        super().mount(request, **kwargs)  # AFTER setting _model_instance\n"
+            "class ContactForm(forms.Form):\n"
+            "    email = forms.EmailField()\n"
+            "    message = forms.CharField(widget=forms.Textarea)\n"
+            "\n"
+            "\n"
+            "class ContactView(FormMixin, LiveView):\n"
+            '    template_name = "contact.html"\n'
+            "    form_class = ContactForm\n"
             "\n"
             "    def form_valid(self, form):\n"
-            "        obj = form.save()\n"
-            "        self.success_message = 'Saved!'\n"
+            '        self.success_message = "Sent!"\n'
             "\n"
             "    def form_invalid(self, form):\n"
-            "        self.error_message = 'Please fix errors below'"
+            '        self.error_message = "Please fix the errors below"'
+        ),
+        "edit_example": (
+            "from django import forms\n"
+            "from djust import LiveView\n"
+            "from djust.forms import ModelFormMixin\n"
+            "from .models import Article\n"
+            "\n"
+            "class ArticleForm(forms.ModelForm):\n"
+            "    class Meta:\n"
+            "        model = Article\n"
+            '        fields = ["title", "body"]\n'
+            "\n"
+            "class ArticleEditView(ModelFormMixin[Article], LiveView):\n"
+            '    template_name = "article_edit.html"\n'
+            "    model = Article\n"
+            "    form_class = ArticleForm\n"
+            "    login_required = True\n"
+            "\n"
+            "    def get_queryset(self):\n"
+            "        # Only the signed-in user's articles can be opened.\n"
+            "        return super().get_queryset().filter(author=self.request.user)\n"
+            "\n"
+            "    def form_valid(self, form):\n"
+            "        self.object = form.save()\n"
+            '        self.success_message = "Saved!"'
         ),
     },
     "security": {
