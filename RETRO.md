@@ -1046,6 +1046,55 @@ The new guide is `docs/website/guides/scaling-across-cores.md`. A truth review c
 
 **Lesson:** a summary line about a gated optimisation must carry its gates.
 
+## v1.3.0-6 — multiple event loops (#3128)
+
+**Scope**: One djust PR (#3162) for the three #3128 rows: the loop-aware in-memory layer and the `djust serve --loops N` launcher, the audit of loop-bound state, and measured guidance on N. The fourth row, the snake-arena room clock, is an app PR that follows the merge.
+
+### Bucket summary
+
+**Outcome.** Measured with the snake load test on free-threaded 3.14t:
+- Setup: `worker_threads=8`, a shared 12-core Mac, seven interleaved rounds. Steps that started with a load average above 10 (1 min) or 12 (5 min) were excluded by rule: 57 kept, 27 excluded.
+- **One loop pins at 0.94–0.97 core from 512 clients.** At 640 and 768 clients only 469–476 and 641–649 clients connected.
+- **Two loops connected all 768**, each loop at 0.82–0.87 core. The process was then CPU-bound at about 9 cores, delivering about 6% more frames in total.
+- **Four loops did not beat two.** Total loop CPU at 384 clients was 0.74–0.82 core for one loop, 1.1–1.3 for two and 1.3–1.5 for four.
+
+**What the bucket learned**
+1. **The machine was the hardest part of the measurement.** Other agents' xdist suites and a VM pushed the load average to 50–340 for over an hour.
+   - A 1-minute load gate alone let steps through at the tail of a burst (1 min at 7.7, 5 min at 63), so the gate and the exclusion rule now check both averages.
+   - The gate also waits indefinitely and honours a PAUSE file, so our own pre-push suite doesn't land mid-step.
+   - The benchmark ran a **frozen copy** of the branch, so merges and review fixes during the rounds could not change the code under test.
+2. **A negative control is what made the session test real.** The first version drained frames every 10 ms, which woke the receiving loop, so it passed even with the loop-bound layer. Running one side at a time, with the receiver idle, made it fail on the old layer and pass on the new one.
+3. **Every review stage found something real.**
+   - Self-review: GIL check before uvloop import, UNIX socket cleanup, subclass refusal.
+   - Security check: diagnostics carry-back, SSE registry races.
+   - Code Review: untested forced exit.
+   - CI: a forced uvicorn shutdown stuck in `Server.wait_closed()` on Linux, which the macOS runs never showed. The fix for the review's subclass refusal broke the class-path helper, and the new test caught it within minutes.
+4. **"Opt-in" needs a switch in every changed path.** The SSE hop, the SSE put and the `db_notify` claim each check `is_multi_loop()`, so a single-loop server, and test harnesses that create a loop per request, behave exactly as before.
+
+**Open items**
+- snake-arena: the room-clock lock (a regression test fails without it). The PR goes after the merge and is not deployed.
+- #3164: the SSE session registry. A reused id replaces a live session, and the caps are check-then-register.
+- A cluster measurement of 2 loops once a djust release carries #3162. Production's loop saturates earlier (0.93 at 160–192 players), so the gain there should show sooner than on this Mac.
+- `SO_REUSEPORT` (one socket per loop, kernel-balanced) instead of one shared socket. Not measured.
+
+### PR 1 — several event loops per process (PR #3162)
+
+**Date**: 2026-09-26. Retro: https://github.com/djust-org/djust/pull/3162 (retrospective comment).
+
+**Tests at close**
+- `python/djust/tests/test_multiloop_{layer,sessions,serve}_3128.py`: 42 functions, 50 cases.
+- These run on the 3.14t CI job with the GIL off.
+- Targeted runs passed on 3.12 and 3.14t. The full suite ran in the pre-push hook, and CI was green.
+
+**Review stats**
+- Self-review: 3 🟡, all fixed: the guide section missing at review time, the GIL check before the loop factory, UNIX socket cleanup. Plus nits: subclass refusal, lock pre-check, run_on_loop close race.
+- Security: passed, with 3 🟡.
+  - Fixed: carry back `diagnostics_allowed()`.
+  - Fixed here: a snapshot for the session count.
+  - Filed as #3164: session-id overwrite and cap races.
+- Code Review: approved with 1 🟡 (forced exit and max-requests stop untested), fixed with two end-to-end tests. Also 🟢 items: uvloop `loop.time()` wording, SSL flags, and the per-loop limit in the guide.
+- Re-Review passed.
+
 ## v1.3.0-5 — event-loop ceiling (#3095)
 
 **Scope**: Three rows.

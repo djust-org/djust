@@ -396,7 +396,9 @@ jobs:
   # Targeted, NOT a full suite run: a 3.14t runner can hit unrelated
   # free-threaded-ecosystem gaps. It runs the multi-core core subset — the
   # GIL-releasing render, the worker pool, scoped push, event-loop offload,
-  # the in-memory layer and the thread-safety fixes — where their races are
+  # the in-memory layers (including the multi-loop layer, sessions on
+  # several event loops and the `djust serve --loops` launcher, #3128) and
+  # the thread-safety fixes — where their races are
   # real (no GIL to serialise them), and asserts the GIL stays off.
   # No longer continue-on-error since #3074 (it had soaked green since #1534),
   # so a failure shows red; it is still NOT wired into the test-summary
@@ -433,7 +435,8 @@ jobs:
           # directly instead.
           uv venv --python 3.14t
           source .venv/bin/activate
-          uv pip install maturin pytest pytest-asyncio pytest-django django-allauth
+          # uvicorn + websockets: the multi-loop launcher tests (#3128).
+          uv pip install maturin pytest pytest-asyncio pytest-django django-allauth uvicorn websockets
           maturin develop --release
 
       - name: Importing djust keeps the GIL off (no PYTHON_GIL override)
@@ -462,7 +465,10 @@ jobs:
             python/djust/tests/test_free_threaded_contract_3074.py \
             python/djust/tests/test_ws_send_version_1788.py \
             python/djust/tests/test_server_push_deferred_3001.py \
-            python/djust/tests/test_overload_memory_3114.py
+            python/djust/tests/test_overload_memory_3114.py \
+            python/djust/tests/test_multiloop_layer_3128.py \
+            python/djust/tests/test_multiloop_sessions_3128.py \
+            python/djust/tests/test_multiloop_serve_3128.py
 
   # JavaScript tests - runs in parallel
   javascript-tests:
