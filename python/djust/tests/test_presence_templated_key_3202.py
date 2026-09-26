@@ -234,7 +234,16 @@ def test_only_views_with_presence_join_a_presence_group():
         def get_presence_key(self):
             return "k"
 
+    class _CustomPresence:
+        def get_presence_key(self):
+            return "custom"
+
+    class _TenantFirstCustom(TenantMixin, _CustomPresence):
+        pass
+
     assert _joins_presence_group(object.__new__(_TenantOnly)) is False
+    # TenantMixin listed first still joins when a later class supplies the key.
+    assert _joins_presence_group(object.__new__(_TenantFirstCustom)) is True
     assert _joins_presence_group(object.__new__(_TenantPresence)) is True
     assert _joins_presence_group(_OwnKey()) is True
     assert _joins_presence_group(object()) is False

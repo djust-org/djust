@@ -864,8 +864,12 @@ def _joins_presence_group(view: Any) -> bool:
     tenant_mixin_module = sys.modules.get("djust.tenants.mixin")
     tenant_mixin = getattr(tenant_mixin_module, "TenantMixin", None)
     if tenant_mixin is not None and isinstance(view, tenant_mixin):
-        return getattr(type(view), "get_presence_key", None) is not getattr(
-            tenant_mixin, "get_presence_key", None
+        # Join if any class other than TenantMixin defines get_presence_key,
+        # wherever it sits in the MRO (TenantMixin's own calls super()).
+        return any(
+            "get_presence_key" in vars(klass)
+            for klass in type(view).__mro__
+            if klass is not tenant_mixin
         )
     return True
 

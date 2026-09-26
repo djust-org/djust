@@ -216,6 +216,8 @@ def test_cleanup_interval_comes_from_config():
     assert presence_cleanup_interval({"PRESENCE_CLEANUP_INTERVAL": 5}) == 5.0
     assert presence_cleanup_interval({"PRESENCE_CLEANUP_INTERVAL": "nope"}) == INTERVAL
     assert presence_cleanup_interval({"PRESENCE_CLEANUP_INTERVAL": -1}) == INTERVAL
+    for bad in (float("nan"), float("inf"), "inf", "-inf", "nan"):
+        assert presence_cleanup_interval({"PRESENCE_CLEANUP_INTERVAL": bad}) == INTERVAL
 
     from djust.backends.registry import _create_presence_backend
 

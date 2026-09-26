@@ -14,6 +14,7 @@ Requires: pip install redis (or channels_redis which includes it)
 
 import json
 import logging
+import math
 import threading
 import time
 from typing import Any, Dict, List, Optional
@@ -45,9 +46,9 @@ def presence_cleanup_interval(config: Dict[str, Any]) -> float:
         value = float(raw)
     except (TypeError, ValueError):
         value = -1.0
-    if value < 0:
+    if not math.isfinite(value) or value < 0:
         logger.warning(
-            "PRESENCE_CLEANUP_INTERVAL must be a non-negative number of seconds, got %r; using %s",
+            "PRESENCE_CLEANUP_INTERVAL must be a finite, non-negative number of seconds, got %r; using %s",
             raw,
             CLEANUP_INTERVAL,
         )
