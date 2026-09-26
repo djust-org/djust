@@ -1035,6 +1035,121 @@ def status(ctx: click.Context, project: Optional[str]) -> None:
     click.echo(json.dumps(data, indent=2))
 
 
+# Seconds between polls while ``logs --follow`` waits for new lines.
+_LOGS_POLL_SECONDS = 2.0
+
+
+def _format_log_line(line: dict) -> str:
+    """One build-log line as ``<timestamp> <LEVEL> <message>``."""
+    level = str(line.get("level", "info")).upper()
+    return f"{line.get('timestamp', '')} {level:<7} {line.get('message', '')}"
+
+
+@cli.command()
+@click.argument("project", required=False, default=None)
+@click.option(
+    "--deployment",
+    "deployment_id",
+    default=None,
+    help="Deployment ID to show (default: the project's latest deployment).",
+)
+@click.option(
+    "--follow",
+    "-f",
+    is_flag=True,
+    help="Keep printing new lines until the deployment finishes; exit 1 if it failed.",
+)
+@click.pass_context
+def logs(
+    ctx: click.Context,
+    project: Optional[str],
+    deployment_id: Optional[str],
+    follow: bool,
+) -> None:
+    """Show the build/deploy log of a deployment of PROJECT.
+
+    PROJECT defaults to ``[tool.djust.deploy].project`` in pyproject.toml.
+    Without ``--deployment``, shows the project's most recent deployment.
+    These are the platform's build and rollout lines (the ones the
+    dashboard shows), not your running app's own output.
+
+    Log lines go to stdout; the deployment's id, status and error message
+    go to stderr. With ``--follow``, polls until the deployment reaches a
+    final status.
+    """
+    server = ctx.obj["server"]
+    # Non-interactive: refresh an expired access token, but never open a
+    # browser login from a log query.
+    creds = _ensure_logged_in(server, interactive=False)
+
+    if deployment_id and not project:
+        url = f"{server}/api/v1/deployments/{deployment_id}/logs/"
+        target = f"deployment {deployment_id}"
+    else:
+        slug = _resolve_project_slug(project, Path.cwd(), interactive=False)
+        url = f"{server}/api/v1/projects/{slug}/deployments/{deployment_id or 'latest'}/logs/"
+        target = f"deployment {deployment_id}" if deployment_id else f"a deployment of '{slug}'"
+
+    cursor = 0
+    refreshed = False
+    header_shown = False
+    while True:
+        try:
+            resp = requests.get(
+                url,
+                headers=_api_headers(creds),
+                params={"since": cursor},
+                timeout=30,
+            )
+        except requests.RequestException as exc:
+            raise click.ClickException(f"Request failed: {exc}") from exc
+
+        if resp.status_code == 401 and not refreshed:
+            # The access token expired during a long --follow: refresh once.
+            refreshed = True
+            creds = _ensure_logged_in(server, interactive=False)
+            continue
+        if resp.status_code == 404:
+            raise click.ClickException(f"Could not find {target} (or you don't have access).")
+        if resp.status_code != 200:
+            raise click.ClickException(f"API error {resp.status_code}: {resp.text}")
+
+        data = resp.json()
+        if not header_shown:
+            header_shown = True
+            click.echo(
+                f"Deployment {data.get('deployment_id')} "
+                f"({data.get('project_slug')}, {data.get('environment')}): {data.get('status')}",
+                err=True,
+            )
+            # Pin the deployment: while following "latest", a newer deploy
+            # started meanwhile must not switch the stream to another log.
+            if data.get("deployment_id"):
+                url = f"{server}/api/v1/deployments/{data['deployment_id']}/logs/"
+
+        for line in data.get("lines", []):
+            click.echo(_format_log_line(line))
+        cursor = data.get("cursor", cursor)
+
+        if data.get("has_more"):
+            continue
+        if follow and not data.get("done", True):
+            time.sleep(_LOGS_POLL_SECONDS)
+            continue
+        break
+
+    final = data.get("status")
+    error = data.get("error_message")
+    if follow and final == "failed":
+        # A ClickException, not ctx.exit(1): `djust deploy` runs this group
+        # with standalone_mode=False and only turns exceptions into exit codes.
+        raise click.ClickException(f"Deployment failed: {error}" if error else "Deployment failed.")
+    if data.get("done"):
+        click.echo(f"Deployment {final}.", err=True)
+    if error:
+        click.echo(f"Error: {error}", err=True)
+
+
 # ---------------------------------------------------------------------------
 # Tarball helpers
 # ---------------------------------------------------------------------------

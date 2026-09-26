@@ -877,6 +877,7 @@ DEPLOY_HELP = """\
 Usage: djust deploy [<slug>] [--from-git] [--dir DIR]
        djust deploy login | logout
        djust deploy status [<slug>]
+       djust deploy logs [<slug>] [--deployment ID] [--follow]
 
 Deploy the current directory to djustlive.com.
 
@@ -884,6 +885,8 @@ Commands:
   djust deploy login          Log in to djustlive.com (stores token in ~/.djustlive/credentials)
   djust deploy logout         Remove stored credentials
   djust deploy status [slug]  Show deployment status (optionally for one project)
+  djust deploy logs [slug]    Show the build/deploy log of the latest deployment
+                              (--deployment ID for another one, --follow to stream)
   djust deploy <slug>         Deploy current directory to project <slug> (default action)
   djust deploy <slug> --from-git
                               Deploy the latest pushed commit instead of the local working tree
@@ -939,7 +942,7 @@ def cmd_deploy(rest: list[str]) -> int:
         argv = ["deploy-dir"]
     else:
         first = rest[0]
-        if first in ("login", "logout", "status"):
+        if first in ("login", "logout", "status", "logs"):
             argv = rest
         elif "--from-git" in rest:
             # `djust deploy --from-git <slug>` or `djust deploy <slug> --from-git`
