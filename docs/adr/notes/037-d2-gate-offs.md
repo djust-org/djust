@@ -1,6 +1,6 @@
 # ADR-037 D2: gate-offs for the documentation-example harness
 
-Date: 2026-09-25. Run at `ba561b174` (branch `feat/adr-037-d2-d3`).
+Date: 2026-09-25. Re-run after the review fixes at `2aad42b19` (branch `feat/adr-037-d2-d3`).
 
 Command: `.venv-wt/bin/python scripts/doc-examples-gateoff.py`
 
@@ -21,10 +21,10 @@ Result:
 
 | Layer | Outcome |
 |---|---|
-| extractor | RED: ========================= 1 failed, 1 skipped in 0.24s ========================= |
-| pairing | RED: ======================== 1 failed, 12 warnings in 0.59s ======================== |
-| scenario driving | RED: ======================== 1 failed, 12 warnings in 0.56s ======================== |
-| drift | RED: ================== 1 failed, 14 passed, 12 warnings in 1.09s =================== |
+| extractor | RED: ============= 1 failed, 5 passed, 1 skipped, 12 warnings in 0.94s ============== |
+| pairing | RED: ======================== 1 failed, 12 warnings in 0.85s ======================== |
+| scenario driving | RED: ======================== 1 failed, 12 warnings in 0.76s ======================== |
+| drift | RED: ================== 1 failed, 23 passed, 12 warnings in 1.49s =================== |
 
 The extractor row's failure is in the drift test: with no markers read,
 `RUNNABLE` is empty (the one skipped case) and the drift check reports every
