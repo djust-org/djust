@@ -5171,6 +5171,15 @@ class ViewRuntime:
         params = data.get("params", {})
         uri = data.get("uri", "")
 
+        # #3125: a view whose object the route selects (ADR-035) never runs
+        # handle_params for a URL naming another record; it remounts there, so
+        # the object is resolved and authorized for the URL the user sees.
+        route_changed = getattr(self.view_instance, "_djust_route_changed", None)
+        if callable(route_changed) and isinstance(uri, str) and route_changed(uri):
+            self.view_instance.live_redirect(uri, replace=True)
+            await self._flush_navigation()
+            return
+
         try:
             await sync_to_async(self.view_instance.handle_params)(params, uri)
 
@@ -5597,17 +5606,9 @@ class ViewRuntime:
         client names both the view and the URL, so a URL routed elsewhere must
         not select this view's object.
         """
-        try:
-            from urllib.parse import unquote
+        from .mixins.navigation import own_route_kwargs
 
-            from django.urls import resolve
-
-            match = resolve(unquote(page_url))
-        except Exception:  # noqa: BLE001 — unresolvable means no route kwargs
-            return None
-        if getattr(match.func, "view_class", None) is not type(view_instance):
-            return None
-        return dict(match.kwargs)
+        return own_route_kwargs(view_instance, page_url)
 
     def _extract_cache_config(self, view_instance: Any) -> Optional[Dict[str, Any]]:
         """Extract @cache decorator metadata from the view's handlers.

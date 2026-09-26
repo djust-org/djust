@@ -331,6 +331,9 @@ What happens:
   every transport.
   `pk_url_kwarg`, `slug_url_kwarg`, `slug_field` and `query_pk_and_slug`
   work as in Django's `UpdateView`.
+  Navigating to another record's URL without a page load (a `dj-patch`
+  link, back/forward, or `live_patch(path=...)`) remounts the view there, so
+  the form always edits the record in the address bar.
 - **Access is checked before the form exists.** A record missing from
   `get_queryset()` and one refused by `has_object_permission(request, obj)`
   get the same "Access denied" response: HTTP 403, or a `permission_denied`
