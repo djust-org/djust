@@ -56,18 +56,15 @@ class TestCodeBlockObserverBootstrap1625:
         assert "__djcHljsObserverInstalled" not in html
 
     def test_existing_lazy_loader_path_preserved(self):
-        """Regression backstop: the vendored highlight.js asset tag and the
-        async-fallback wait loop remain.
+        """Regression backstop: the once-per-page loader and the wait loop
+        remain.
 
-        highlight.js now loads from djust's vendored asset (ADR-040) rather
-        than a CDN. The emitted `<script src>` is parser-blocking, so
-        `window.hljs` is normally already set by the time the inline script
-        runs — but the `setInterval` wait loop still covers a highlight.js
-        `<script>` served `async` by a proxy.
+        highlight.js loads from djust's vendored asset (ADR-040). The first
+        block's inline script injects it once (guarded by
+        `__djcHljsLoading`); the `setInterval` wait loop covers the other
+        blocks that find the load already in progress.
         """
         html = code_block(code="print(1)", language="python")
-        assert (
-            'src="/static/djust_components/vendor/highlight/highlight.js" integrity="sha384-'
-            in html
-        )
+        assert '"/static/djust_components/vendor/highlight/highlight.js"' in html
+        assert "window.__djcHljsLoading" in html
         assert "setInterval" in html

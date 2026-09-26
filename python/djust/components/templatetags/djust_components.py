@@ -1905,10 +1905,32 @@ def code_block(
     highlight_html = ""
     loader = ""
     if highlight:
-        from djust.assets.tags import asset_tags
+        import json
 
-        # Raises ImproperlyConfigured naming the vendored themes for an unknown one.
-        loader = str(asset_tags("highlight.js", str(theme)))
+        from djust.assets.tags import asset_source, asset_tags
+
+        # Only the theme stylesheet is a tag: raises ImproperlyConfigured
+        # naming the vendored themes for an unknown one.
+        loader = str(asset_tags("highlight.js", str(theme), file_type="style"))
+        # The library itself is injected ONCE per page by the inline script
+        # below (guarded by __djcHljsLoading) instead of a <script src> per
+        # block, which made 30 blocks parse and execute it 30 times. Its URL,
+        # integrity and crossorigin come from djust.assets (settings and the
+        # vendored file, never user input) and are JSON-encoded, with <, >
+        # and & escaped so nothing can close the <script> element.
+        src, integrity, cross_origin = asset_source("highlight.js", file_type="script")
+        hljs_json = (
+            json.dumps(
+                {
+                    "src": src,
+                    "integrity": integrity,
+                    "crossOrigin": "anonymous" if cross_origin else None,
+                }
+            )
+            .replace("<", "\\u003c")
+            .replace(">", "\\u003e")
+            .replace("&", "\\u0026")
+        )
 
         # The per-instance inline <script> runs on initial HTTP page load and
         # highlights this code block. After hljs is loaded, we ALSO install a
@@ -1921,7 +1943,11 @@ def code_block(
             "(function(){"
             'var el=document.currentScript.previousElementSibling.querySelector("code");'
             "if(el.dataset.highlighted)return;"
-            'function doHL(){if(window.hljs){hljs.highlightElement(el);el.dataset.highlighted="true";}}'
+            'function doHL(){if(window.hljs&&!el.dataset.highlighted){hljs.highlightElement(el);el.dataset.highlighted="true";}}'
+            "function warn(){if(!window.__djcHljsWarned){window.__djcHljsWarned=true;"
+            "console.warn('[djust] highlight.js did not load; code blocks stay "
+            "unhighlighted. Check the browser console for an integrity (SRI) or "
+            "CSP error.');}}"
             # #1625: MutationObserver installer — idempotent via the
             # __djcHljsObserverInstalled flag. Watches the whole document
             # for added <pre><code class="language-*"> elements (typical
@@ -1942,26 +1968,33 @@ def code_block(
             "}).observe(document.body,{childList:true,subtree:true});"
             "}"
             "if(window.hljs){doHL();installObserver();return;}"
-            # Wait loop for a highlight.js <script> served async by a proxy
-            # (on a normal page load the vendored <script src> is
-            # parser-blocking, so window.hljs already exists above and this
-            # never runs). Bounded to 200 ticks (~10s, R14): an SRI mismatch,
-            # CSP block, or 404 must not poll forever.
+            # First block on the page: inject the vendored library once.
+            "if(!window.hljs&&!window.__djcHljsLoading){"
+            "window.__djcHljsLoading=true;"
+            f"var cfg={hljs_json};"
+            'var s=document.createElement("script");'
+            "s.src=cfg.src;s.integrity=cfg.integrity;"
+            "if(cfg.crossOrigin)s.crossOrigin=cfg.crossOrigin;"
+            "s.onload=function(){doHL();installObserver();};"
+            "s.onerror=warn;"
+            "document.head.appendChild(s);"
+            "return;}"
+            # Other blocks find the load in progress and wait for it.
+            # Bounded to 200 ticks (~10s, R14): an SRI mismatch, CSP block,
+            # or 404 must not poll forever.
             "var tries=0;"
             "var iv=setInterval(function(){"
             "if(window.hljs){clearInterval(iv);doHL();installObserver();return;}"
-            "if(++tries>=200){clearInterval(iv);"
-            "if(!window.__djcHljsWarned){window.__djcHljsWarned=true;"
-            "console.warn('[djust] highlight.js did not load; code blocks stay "
-            "unhighlighted. Check the browser console for an integrity (SRI) or "
-            "CSP error.');}}"
+            "if(++tries>=200){clearInterval(iv);warn();}"
             "},50);"
             "})();"
             "</script>"
         )
 
     # `loader` is format_html output from asset_tags (djust.assets.tags), so
-    # it is already-escaped, safe markup: embedding it verbatim is fine.
+    # it is already-escaped, safe markup: embedding it verbatim is fine. It
+    # sits before <pre> so the inline script's previousElementSibling is
+    # still the <pre>.
     return mark_safe(
         f'<div class="code-block" data-highlight="{e_theme if highlight else ""}">'
         f'<div class="code-block-header">'
