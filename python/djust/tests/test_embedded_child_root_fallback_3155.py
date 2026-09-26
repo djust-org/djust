@@ -164,3 +164,53 @@ class TestStampSkipsEmbeddedChildren:
         out = LiveView._stamp_dj_view(html, "app.Page")
         assert out.count('dj-view="app.Page"') == 1
         assert out.startswith('<div dj-root dj-view="app.Page">')
+
+
+class TestMaskingCost:
+    """Review of #3163 (I2): the embedded-child walk re-masked the whole page
+    once per wrapper (``_find_closing_tag_pos`` masks its input), so a page of
+    N children paid N full-document masks. Pinned by counting masking calls,
+    not by timing."""
+
+    @staticmethod
+    def _count_masks(monkeypatch):
+        import djust.mixins.template as mod
+
+        calls = {"n": 0}
+        for name in ("_mask_raw_text", "_mask_for_root_search"):
+            real = getattr(mod, name)
+
+            def counting(html, _real=real):
+                calls["n"] += 1
+                return _real(html)
+
+            monkeypatch.setattr(mod, name, counting)
+        return calls
+
+    @staticmethod
+    def _children(n, inner="<div><p>x</p></div>"):
+        return "".join(
+            '<div dj-view data-djust-embedded="c%d">%s</div>' % (i, inner) for i in range(n)
+        )
+
+    def test_the_root_search_masks_once_for_many_children(self, monkeypatch):
+        html = self._children(50) + '<div dj-root dj-view="app.Page"><p>page</p></div>'
+        calls = self._count_masks(monkeypatch)
+        m = _search_dj_root_open(html, _DJ_ROOT_RE, _DJ_VIEW_RE)
+        assert html[m.start() : m.end()] == '<div dj-root dj-view="app.Page">'
+        assert calls["n"] == 1, calls
+
+    def test_the_stamp_masks_at_most_twice_for_many_children(self, monkeypatch):
+        html = "<div dj-root><p>page</p></div>" + self._children(50, "<div dj-root>x</div>")
+        calls = self._count_masks(monkeypatch)
+        out = LiveView._stamp_dj_view(html, "app.Page")
+        assert out.count('dj-view="app.Page"') == 1
+        # The stamp's own raw-text mask, plus one root-search mask for the spans.
+        assert calls["n"] <= 2, calls
+
+    def test_a_page_without_children_pays_no_extra_mask(self, monkeypatch):
+        html = "<div dj-root><p>page</p></div>"
+        calls = self._count_masks(monkeypatch)
+        LiveView._stamp_dj_view(html, "app.Page")
+        # Only the stamp's own raw-text mask, as before #3155.
+        assert calls["n"] == 1, calls

@@ -276,10 +276,35 @@ def _embedded_child_spans(html: str, masked: str) -> "list[tuple[int, int]]":
         tag = html[m.start() : m.end()]
         if not any(tok.group(1) for tok in _EMBEDDED_ATTR_TOKEN_RE.finditer(tag)):
             continue
-        _close_start, close_end = _find_root_close(html, m)
+        close_end = _close_in_masked(masked, m.end(), _root_tag_name(html, m))
         covered = len(html) if close_end is None else close_end
         spans.append((m.start(), covered))
     return spans
+
+
+def _close_in_masked(masked: str, pos: int, tag: str) -> "Optional[int]":
+    """End of the close tag balancing the ``tag`` element opened just before
+    ``pos``, walked over an ALREADY-masked copy (review of #3163).
+
+    ``_find_closing_tag_pos`` masks its whole input on every call, so using it
+    once per embedded wrapper re-masked the document N times. Rendered HTML
+    carries no ``{% if %}`` branches, so the plain depth walk suffices here.
+    """
+    open_re, close_re = _open_close_res(tag)
+    depth = 1
+    while True:
+        close = close_re.search(masked, pos)
+        if close is None:
+            return None
+        opener = open_re.search(masked, pos, close.start())
+        if opener is not None:
+            depth += 1
+            pos = opener.end()
+            continue
+        depth -= 1
+        if depth == 0:
+            return close.end()
+        pos = close.end()
 
 
 def _span_containing(spans: "list[tuple[int, int]]", offset: int) -> "Optional[int]":
@@ -1467,7 +1492,11 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         # #3155: a dj-root inside an embedded {% live_render %} child is the
         # child's, not this view's — stamping this view's path there would
         # tell the client to mount the page a second time inside the child.
-        embedded = _embedded_child_spans(html, _mask_for_root_search(html))
+        embedded = (
+            _embedded_child_spans(html, _mask_for_root_search(html))
+            if "data-djust-embedded" in html
+            else []
+        )
         parts: list[str] = []
         last = 0
         for m in _DJ_ROOT_RE.finditer(masked):
