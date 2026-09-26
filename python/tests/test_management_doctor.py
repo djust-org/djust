@@ -159,6 +159,60 @@ class TestCheckRedis(SimpleTestCase):
             result = check_redis()
         self.assertEqual(result.status, _CheckResult.FAIL)
 
+    @override_settings(
+        CHANNEL_LAYERS={
+            "default": {
+                "BACKEND": "channels_redis.core.RedisChannelLayer",
+                "CONFIG": {
+                    "hosts": [{"address": "redis://prod.example:6380/1", "socket_timeout": 10}]
+                },
+            }
+        }
+    )
+    def test_dict_host_probes_its_address_not_localhost(self):
+        """The dict form the deployment guide recommends (#3199) is probed at
+        its own address and labelled with it (#3207 review)."""
+        mock_module = MagicMock()
+        with patch.dict("sys.modules", {"redis": mock_module}):
+            result = check_redis()
+        mock_module.from_url.assert_called_once()
+        self.assertEqual(mock_module.from_url.call_args.args[0], "redis://prod.example:6380/1")
+        mock_module.Redis.assert_not_called()
+        self.assertEqual(result.status, _CheckResult.OK)
+        self.assertEqual(result.message, "Redis connected (redis://prod.example:6380/1)")
+
+    @override_settings(
+        CHANNEL_LAYERS={
+            "default": {
+                "BACKEND": "channels_redis.core.RedisChannelLayer",
+                "CONFIG": {"hosts": [{"host": "cache", "port": 6390}]},
+            }
+        }
+    )
+    def test_dict_host_with_host_and_port(self):
+        mock_module = MagicMock()
+        with patch.dict("sys.modules", {"redis": mock_module}):
+            result = check_redis()
+        kwargs = mock_module.Redis.call_args.kwargs
+        self.assertEqual((kwargs["host"], kwargs["port"]), ("cache", 6390))
+        self.assertEqual(result.message, "Redis connected (cache:6390)")
+
+    @override_settings(
+        CHANNEL_LAYERS={
+            "default": {
+                "BACKEND": "channels_redis.core.RedisChannelLayer",
+                "CONFIG": {"hosts": [{"master_name": "m", "sentinels": [("s", 26379)]}]},
+            }
+        }
+    )
+    def test_unprobeable_dict_host_is_not_pinged_on_localhost(self):
+        mock_module = MagicMock()
+        with patch.dict("sys.modules", {"redis": mock_module}):
+            result = check_redis()
+        mock_module.Redis.assert_not_called()
+        mock_module.from_url.assert_not_called()
+        self.assertEqual(result.status, _CheckResult.WARN)
+
 
 class TestCheckTemplateDirs(SimpleTestCase):
     @override_settings(TEMPLATES=[{"DIRS": ["/nonexistent/path"]}])
