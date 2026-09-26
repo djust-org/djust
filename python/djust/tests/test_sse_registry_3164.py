@@ -17,13 +17,11 @@ The concurrency tests are deterministic: the first GET's mount blocks on an
 ``asyncio.Event`` the test controls, so the second GET always runs inside the
 first one's check-then-register window.
 
-Each test keeps the responses of the streams it treats as open in ``_open``:
-a stream response dropped before Django iterates it models a client that has
-already disconnected, and its session is unregistered.
+Each test keeps the responses of the streams it treats as open in ``_open``,
+as Django does while it serves them.
 """
 
 import asyncio
-import gc
 import logging
 import uuid
 from unittest.mock import MagicMock, patch
@@ -143,27 +141,33 @@ async def test_reused_id_with_the_same_owner_replaces():
 
 @override_settings(ALLOWED_HOSTS=["example.com"])
 @pytest.mark.asyncio
-async def test_owner_changed_reconnect_replaces_a_closing_session():
+async def test_owner_changed_reconnect_replaces_a_closing_session(monkeypatch):
     """Review finding 1: a tab's anonymous stream dropped; the user logged in in
     another tab; EventSource reconnects with the same id under the new owner.
     The old stream is closing (in its linger window), so the reconnect wins."""
+    monkeypatch.setattr(sse, "_SESSION_LINGER_S", 0.2)
     sid = str(uuid.uuid4())
     view = DjustSSEStreamView()
     with patch("djust.runtime.ViewRuntime.dispatch_mount", new=_fake_mount_ok):
         old_resp = await _open_stream(view, sid, _anon_user(), session_key="k" * 32)
         old = _sse_sessions[sid]
-        # The old stream starts, sends its ack, then the client drops: its
-        # ``finally`` runs, marks the session closing and lingers.
+        # The old stream starts and sends its ack; then the client drops. Its
+        # ``finally`` runs and lingers with the session still registered.
         agen = _stream(old_resp)
         await agen.__anext__()
-        old._stream_closed = True  # what the finally sets before the linger
+        closing = asyncio.ensure_future(agen.aclose())
+        for _ in range(50):
+            if old._stream_closed:
+                break
+            await asyncio.sleep(0.001)
+        assert _sse_sessions.get(sid) is old  # still registered, lingering
         resp = await _open_stream(view, sid, _auth_user(42))
 
     assert isinstance(resp, StreamingHttpResponse)
     new = _sse_sessions[sid]
     assert new is not old and new._owner_user_pk == 42
-    # The old stream's finally, when it ends, must not pop the new session.
-    await agen.aclose()
+    # The old stream's finally, when its linger ends, must not pop the new one.
+    await closing
     assert _sse_sessions.get(sid) is new
 
 
@@ -348,22 +352,13 @@ async def test_disconnect_before_the_first_ack_unregisters_on_close(monkeypatch)
     """The response is closed before Django ever iterates it (the client left
     while the view was running): the session must not stay registered.
 
-    The body object is held alive here so this pins ``close()`` itself, not
-    the finalizer that also fires when ``response.close()`` drops the last
-    reference to it."""
-    bodies = []
-    real_init = sse._SSEStream.__init__
-
-    def recording_init(self, *args, **kwargs):
-        real_init(self, *args, **kwargs)
-        bodies.append(self)
-
-    monkeypatch.setattr(sse._SSEStream, "__init__", recording_init)
+    The start deadline is pushed out of reach, so this pins ``close()``."""
+    monkeypatch.setattr(sse, "_STREAM_START_DEADLINE_S", 3600)
     sid = str(uuid.uuid4())
     view = DjustSSEStreamView()
     with patch("djust.runtime.ViewRuntime.dispatch_mount", new=_fake_mount_ok):
         resp = await _open_stream(view, sid, _auth_user(7))
-    assert sid in _sse_sessions and len(bodies) == 1
+    assert sid in _sse_sessions
     resp.close()
     assert sid not in _sse_sessions
     # A stream closed before it started yields nothing, not even the ack.
@@ -372,14 +367,36 @@ async def test_disconnect_before_the_first_ack_unregisters_on_close(monkeypatch)
 
 @override_settings(ALLOWED_HOSTS=["example.com"])
 @pytest.mark.asyncio
-async def test_disconnect_before_the_first_ack_unregisters_when_dropped():
-    """The ASGI handler cancelled before it could close the response: the
-    response is simply dropped, and the guard's finalizer unregisters."""
+async def test_stream_that_never_starts_is_dropped_at_the_start_deadline(monkeypatch):
+    """The ASGI handler was cancelled before it could close the response, so
+    neither the stream nor ``close()`` ever runs: the start deadline drops it."""
+    monkeypatch.setattr(sse, "_STREAM_START_DEADLINE_S", 0.01)
     sid = str(uuid.uuid4())
     view = DjustSSEStreamView()
     with patch("djust.runtime.ViewRuntime.dispatch_mount", new=_fake_mount_ok):
-        await view.get(_get(sid, _auth_user(7)), session_id=sid)
-    gc.collect()
+        resp = await _open_stream(view, sid, _auth_user(7))
+    assert sid in _sse_sessions
+    for _ in range(100):
+        if sid not in _sse_sessions:
+            break
+        await asyncio.sleep(0.01)
+    assert sid not in _sse_sessions
+    assert [c async for c in _stream(resp)] == []
+
+
+@override_settings(ALLOWED_HOSTS=["example.com"])
+@pytest.mark.asyncio
+async def test_start_deadline_leaves_a_started_stream_alone(monkeypatch):
+    monkeypatch.setattr(sse, "_STREAM_START_DEADLINE_S", 0.01)
+    sid = str(uuid.uuid4())
+    view = DjustSSEStreamView()
+    with patch("djust.runtime.ViewRuntime.dispatch_mount", new=_fake_mount_ok):
+        resp = await _open_stream(view, sid, _auth_user(7))
+    agen = _stream(resp)
+    await agen.__anext__()
+    await asyncio.sleep(0.05)
+    assert sid in _sse_sessions
+    await agen.aclose()
     assert sid not in _sse_sessions
 
 

@@ -48,7 +48,6 @@ import json
 import logging
 import threading
 import uuid
-import weakref
 from typing import Any, AsyncIterator, Dict, Optional, cast
 
 from asgiref.sync import sync_to_async
@@ -78,6 +77,12 @@ _sse_sessions: Dict[str, "SSESession"] = {}
 
 # SSE keepalive interval in seconds (sent as ":" comment lines)
 _KEEPALIVE_TIMEOUT = 25.0
+
+# How long a registered session may wait for Django to start streaming its
+# response before it is dropped as abandoned (#3164). Django starts iterating
+# right after the view returns, so this only fires when the client went away
+# first and the handler was cancelled before it could close the response.
+_STREAM_START_DEADLINE_S = 30.0
 
 # How long to retain a session after the stream closes, in seconds.
 # Allows in-flight event POSTs to still find the session briefly.
@@ -241,10 +246,16 @@ class _StreamGuard:
     A registered session is normally removed by its stream generator's
     ``finally``. If the client disconnects before Django starts iterating the
     response, the generator never runs, so that ``finally`` never runs either
-    and the session would count against the caps forever. Django calls the
-    response's ``close()`` (and the guard's finalizer is the backstop when the
-    handler is cancelled before it can), which drops the session only if the
-    stream had not started; a started stream cleans up after itself.
+    and the session would count against the caps forever. Two exits cover it,
+    and both drop the session only if the stream had not started (a started
+    stream cleans up after itself):
+
+    * Django calls the response's ``close()`` once it is done with it.
+    * When the ASGI handler is cancelled before it can close the response, a
+      start deadline (``_STREAM_START_DEADLINE_S``, scheduled on the loop by
+      the GET) abandons a stream that never began. Not a GC finalizer: the
+      response (or a middleware's replacement of it) may be dropped while the
+      stream is still being served.
     """
 
     def __init__(self, session_id: str, session: Optional["SSESession"]) -> None:
@@ -284,8 +295,6 @@ class _SSEStream:
     def __init__(self, agen: AsyncIterator[str], guard: _StreamGuard) -> None:
         self._agen = agen
         self._guard = guard
-        # Backstop for a handler cancelled before it closes the response.
-        weakref.finalize(self, guard.abandon)
 
     def __aiter__(self) -> AsyncIterator[str]:
         return self._agen
@@ -946,6 +955,8 @@ class DjustSSEStreamView(View):
                 _release_sse_slot(cap_key)
 
         guard = _StreamGuard(session_id, session if mounted else None)
+        if mounted:
+            asyncio.get_running_loop().call_later(_STREAM_START_DEADLINE_S, guard.abandon)
 
         async def event_stream() -> AsyncIterator[str]:
             # #3164: everything after registration, the ack included, is inside
