@@ -2403,7 +2403,7 @@
       "bom-ref": "root:djust",
       "name": "djust",
       "type": "application",
-      "version": "1.3.0rc2"
+      "version": "1.3.0rc3"
     },
     "properties": [
       {
