@@ -147,6 +147,12 @@ def digest_of(document: dict) -> str | None:
     return None
 
 
+def _spdx_license(cargo_license: str) -> str:
+    """Cargo still accepts the legacy ``MIT/Apache-2.0`` form, which is not
+    an SPDX expression; the slash means OR."""
+    return re.sub(r"\s*/\s*", " OR ", cargo_license.strip())
+
+
 def rust_components(manifest_path: Path) -> list[dict]:
     """Registry crates linked into the extension: normal dependencies
     reachable from the bindings crate. Workspace crates (no ``source``) are
@@ -195,7 +201,7 @@ def rust_components(manifest_path: Path) -> list[dict]:
             "bom-ref": f"rust:{purl}",
         }
         if package.get("license"):
-            component["licenses"] = [{"expression": package["license"]}]
+            component["licenses"] = [{"expression": _spdx_license(package["license"])}]
         components.append(component)
     return sorted(components, key=lambda c: c["purl"])
 

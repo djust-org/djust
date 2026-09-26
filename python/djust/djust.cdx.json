@@ -727,7 +727,7 @@
       "bom-ref": "rust:pkg:cargo/android_system_properties@0.1.5",
       "licenses": [
         {
-          "expression": "MIT/Apache-2.0"
+          "expression": "MIT OR Apache-2.0"
         }
       ],
       "name": "android_system_properties",
@@ -1087,7 +1087,7 @@
       "bom-ref": "rust:pkg:cargo/id-arena@2.3.0",
       "licenses": [
         {
-          "expression": "MIT/Apache-2.0"
+          "expression": "MIT OR Apache-2.0"
         }
       ],
       "name": "id-arena",
@@ -1675,7 +1675,7 @@
       "bom-ref": "rust:pkg:cargo/siphasher@1.0.2",
       "licenses": [
         {
-          "expression": "MIT/Apache-2.0"
+          "expression": "MIT OR Apache-2.0"
         }
       ],
       "name": "siphasher",

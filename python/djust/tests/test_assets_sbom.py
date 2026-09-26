@@ -179,3 +179,53 @@ def test_project_version_does_not_leak_into_a_later_table():
     text = '[project]\nname = "demo"\n\n[tool.other]\nversion = "9.9.9"\n'
     with pytest.raises(SystemExit):
         _project_version(text)
+
+
+def test_rust_components_normalise_legacy_slash_licenses(monkeypatch):
+    """Cargo accepts the legacy ``MIT/Apache-2.0`` form, which is not an SPDX
+    expression; scanners reject it, so it becomes ``MIT OR Apache-2.0``."""
+    import subprocess
+    import types
+
+    def pkg(name, license):
+        return {
+            "id": name,
+            "name": name,
+            "version": "1.0.0",
+            "source": "registry+https://github.com/rust-lang/crates.io-index",
+            "license": license,
+        }
+
+    metadata = {
+        "packages": [
+            {"id": "root", "name": "djust_live", "version": "0", "source": None},
+            pkg("a", "MIT/Apache-2.0"),
+            pkg("b", "Apache-2.0 / MIT"),
+            pkg("c", "MIT OR Apache-2.0"),
+            pkg("d", "Unlicense/MIT/Apache-2.0"),
+        ],
+        "resolve": {
+            "root": "root",
+            "nodes": [
+                {
+                    "id": "root",
+                    "deps": [{"pkg": p, "dep_kinds": [{"kind": None}]} for p in "abcd"],
+                },
+                *({"id": p, "deps": []} for p in "abcd"),
+            ],
+        },
+    }
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *a, **k: types.SimpleNamespace(stdout=json.dumps(metadata)),
+    )
+    licenses = {
+        c["name"]: c["licenses"][0]["expression"] for c in rust_components(Path("Cargo.toml"))
+    }
+    assert licenses == {
+        "a": "MIT OR Apache-2.0",
+        "b": "Apache-2.0 OR MIT",
+        "c": "MIT OR Apache-2.0",
+        "d": "Unlicense OR MIT OR Apache-2.0",
+    }
