@@ -172,6 +172,10 @@ class LiveViewConfig:
         # position-INDEPENDENT loop bodies that read nothing but the loop
         # variable; bodies using {% if %}/{% cycle %}/nested loops/forloop or
         # outer-context reads are auto-excluded (correct by construction).
+        # A view whose loop items change on almost every render turns the
+        # cache off for itself, for the rest of that view instance's lifetime,
+        # after a streak of low-hit renders (#3071; see
+        # RustBridgeMixin._LOOP_CACHE_BYPASS_AFTER).
         "loop_render_cache_enabled": True,
         # `[dj-virtual]` keyed splice ops in the VDOM differ (ADR-026, #2017
         # items 2-4). A windowed list holds off-window rows DETACHED, so the

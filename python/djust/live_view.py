@@ -187,6 +187,9 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         "_prev_context_fingerprints",
         "_dirty_baseline",
         "_rust_render_timing",
+        # Adaptive loop-cache bypass bookkeeping (#3071), written after a render.
+        "_loop_cache_miss_streak",
+        "_loop_cache_bypassed",
         "_djust_mount_kwargs",
         "_jit_serialized_keys",
         "_context_processor_keys",

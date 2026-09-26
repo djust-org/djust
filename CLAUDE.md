@@ -288,9 +288,11 @@ When investigating an issue with a code-location citation:
   installed. Downstream consumers do NOT need to add
   `enable_hot_reload()` to their own `AppConfig.ready()`. Existing
   explicit calls keep working (idempotent). Opt out via
-  `LIVEVIEW_CONFIG['hot_reload_auto_enable']: False`. Tests skip the
-  auto-enable via `PYTEST_CURRENT_TEST` so pytest sessions don't spawn
-  a watchdog thread per test. Don't wrap `uvicorn` in
+  `LIVEVIEW_CONFIG['hot_reload_auto_enable']: False`. A pytest process
+  skips the auto-enable (`djust.apps._running_under_pytest`: `pytest` is
+  imported, or `PYTEST_CURRENT_TEST` is set — the latter alone misses
+  pytest-django's `django.setup()`, #3157), so test sessions don't spawn
+  a watchdog thread. Don't wrap `uvicorn` in
   `watchfiles` / `--reload` for djust dev servers — that's process
   restart and drops view state; djust's HVR is strictly better
   (preserves form input, scroll position, counters).

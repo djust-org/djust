@@ -1036,7 +1036,12 @@ def client_state(keys: List[str]) -> Callable[[F], F]:
     return _make_metadata_decorator("client_state", {"keys": keys})
 
 
-def rate_limit(rate: float = 10, burst: int = 5) -> Callable[[F], F]:
+RATE_LIMIT_ON_EXCEED = ("disconnect", "drop")
+
+
+def rate_limit(
+    rate: float = 10, burst: int = 5, on_exceed: Literal["disconnect", "drop"] = "disconnect"
+) -> Callable[[F], F]:
     """
     Rate-limit a WebSocket event handler (server-side).
 
@@ -1044,23 +1049,30 @@ def rate_limit(rate: float = 10, burst: int = 5) -> Callable[[F], F]:
     is dropped and the client is warned ("Rate limit exceeded, event
     dropped").
 
-    **Rejections count toward the abuse disconnect.** Each rejected event
-    adds one warning to the connection's rate-limit counter, which never
-    goes down. When it reaches ``DJUST_CONFIG["rate_limit"]["max_warnings"]``
-    (default 3) djust closes the WebSocket with code 4429 and puts the client
-    IP on a reconnect cooldown (``reconnect_cooldown``, default 5 s). The
-    bucket is shared per caller (user, anonymous session or IP), not per tab,
-    so several tabs — or users behind one NAT without a session — share it.
+    **By default, rejections count toward the abuse disconnect**
+    (``on_exceed="disconnect"``). Each rejected event adds one warning to the
+    connection's rate-limit counter, which never goes down. When it reaches
+    ``DJUST_CONFIG["rate_limit"]["max_warnings"]`` (default 3) djust closes
+    the WebSocket with code 4429 and puts the client IP on a reconnect
+    cooldown (``reconnect_cooldown``, default 5 s). The bucket is shared per
+    caller (user, anonymous session or IP), not per tab, so several tabs — or
+    users behind one NAT without a session — share it. Use this for abuse
+    controls: OTP or email sends, expensive or brute-forceable actions.
 
-    This is deliberate: ``@rate_limit`` is an abuse control. Don't use it to
-    throttle a button an honest user may tap quickly (an emote, a "like");
-    an honest burst can disconnect them. Debounce or throttle on the client
-    instead (``@debounce`` / ``@throttle``, or ``dj-debounce`` /
-    ``dj-throttle``). A drop-only mode is planned for 1.3 (#3003).
+    ``on_exceed="drop"`` only drops the extra event and warns the client; it
+    never adds a warning, so it cannot disconnect anyone. Use it to cap a
+    button an honest user may tap quickly (an emote, a "like") (#3003). The
+    connection's global per-message limit still disconnects a flood either
+    way. For pure UI spam, client-side ``@debounce`` / ``@throttle`` (or
+    ``dj-debounce`` / ``dj-throttle``) also avoid the round trip.
 
     Args:
         rate: Tokens per second (sustained rate).
         burst: Maximum burst capacity.
+        on_exceed: ``"disconnect"`` (default) or ``"drop"``.
+
+    Raises:
+        ValueError: If ``on_exceed`` is not one of those values.
 
     Usage:
         class MyView(LiveView):
@@ -1068,8 +1080,23 @@ def rate_limit(rate: float = 10, burst: int = 5) -> Callable[[F], F]:
             @event_handler
             def expensive_operation(self, **kwargs):
                 ...
+
+            @rate_limit(rate=2, burst=4, on_exceed="drop")
+            @event_handler
+            def emote(self, **kwargs):
+                ...
     """
-    return _make_metadata_decorator("rate_limit", {"rate": rate, "burst": burst})
+    if on_exceed not in RATE_LIMIT_ON_EXCEED:
+        raise ValueError(
+            "@rate_limit(on_exceed=...) must be one of %s, got %r"
+            % (", ".join(repr(v) for v in RATE_LIMIT_ON_EXCEED), on_exceed)
+        )
+    settings: dict[str, Any] = {"rate": rate, "burst": burst}
+    if on_exceed != "disconnect":
+        # Only the non-default mode is recorded, so existing metadata (and
+        # the audit output built from it) is unchanged.
+        settings["on_exceed"] = on_exceed
+    return _make_metadata_decorator("rate_limit", settings)
 
 
 def permission_required(perm: Union[str, List[str]]) -> Callable[[F], F]:

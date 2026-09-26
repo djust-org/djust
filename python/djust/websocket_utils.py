@@ -214,13 +214,22 @@ async def _validate_event_security(
     # The per-connection ``ConnectionRateLimiter`` keeps owning the GLOBAL
     # per-message abuse-disconnect (#17, in websocket.py:receive). On a
     # per-handler rejection we still bump that connection's warning counter so a
-    # single-connection per-handler flood trips should_disconnect() → close.
+    # single-connection per-handler flood trips should_disconnect() → close --
+    # unless the handler opted into ``on_exceed="drop"`` (#3003), which only
+    # drops the event: a quick honest burst must not cost the connection.
     rl_settings = get_rate_limit_settings(handler)
     if rl_settings:
         client_ip = getattr(ws, "_client_ip", None)
         owner_request = getattr(owner_instance, "request", None)
         key = caller_key(owner_request, client_ip)
         if not handler_rate_check(key, event_name, rl_settings):
+            if rl_settings.get("on_exceed") == "drop":
+                logger.debug(
+                    "Per-handler rate limit exceeded for '%s' (dropped)",
+                    sanitize_for_log(event_name),
+                )
+                await ws.send_error("Rate limit exceeded, event dropped")
+                return None
             rate_limiter.warnings += 1
             logger.warning(
                 "Per-handler rate limit exceeded for '%s' (warning %d/%d)",
