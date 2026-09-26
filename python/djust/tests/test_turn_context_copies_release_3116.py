@@ -74,7 +74,10 @@ def _session():
 def _consumers():
     from djust.websocket import LiveViewConsumer
 
-    return [o for o in gc.get_objects() if isinstance(o, LiveViewConsumer)]
+    # ``type(o)``, not ``isinstance``: isinstance reads ``__class__``, which
+    # evaluates any Django ``SimpleLazyObject`` another test left in memory
+    # (a lazy ``request.user`` then queries the database from this loop).
+    return [o for o in gc.get_objects() if issubclass(type(o), LiveViewConsumer)]
 
 
 async def _run_turn_then_disconnect(event: str):
