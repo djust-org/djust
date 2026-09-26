@@ -96,12 +96,20 @@ page = state(1, persist="client", client=True)   # restorable on back-navigation
   cookie names a session the store has lost (a cache flush or restart,
   eviction, expiry), the socket mount runs `mount()` under a new, anonymous
   session, as a page load would. Nothing is restored from the lost session.
+  The replacement expires after `DJUST_SERVER_STATE_MAX_AGE`, and repeated
+  mounts on one socket reuse it. A socket with no session cookie at all is
+  still refused. With `cache` sessions, Django treats a failed cache read as a
+  missing session, so a transient cache error on mount also takes this path:
+  that socket mounts anonymous while the real session survives.
 - **A failed state save is reported, not hidden.** The client gets a
-  `state_error` instead of an update, and its back-navigation snapshot is
-  revoked. So the browser never shows a state that storage does not have.
-  A save that only ran out of time is marked `transient`: the change is kept
-  on the server, the next turn saves it and sends full HTML, and the message
-  does not ask the user to reload.
+  `state_error` instead of an update, and a failed root save revokes its
+  back-navigation snapshot. So the browser never shows a state that storage
+  does not have. Saves of one page are ordered: a save that is still running
+  delays the next one, so a late write never replaces a newer one.
+  A save that only ran out of time is marked `transient` and does not ask the
+  user to reload: the change is kept on the server and, once storage answers,
+  a catch-up update saves it and sends full HTML. At mount there is no page
+  to update yet, so a slow save there is still the reload error.
 - **Errors follow Django.** With `DEBUG = True`, an explicit view's failure
   shows its exception and traceback, as Django's development output does: the
   technical 500 page, detailed error frames and dev overlay, and full log lines.
