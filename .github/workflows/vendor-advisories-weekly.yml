@@ -28,7 +28,9 @@ jobs:
           fetch-depth: 0
       - name: Latest tag on the line
         id: tag
-        run: echo "tag=$(git tag -l 'v${{ matrix.line }}.*' --sort=-v:refname | head -1)" >> "$GITHUB_OUTPUT"
+        # versionsort.suffix=rc sorts v1.3.1rc2 below v1.3.1, so a final
+        # release wins over its own release candidates.
+        run: echo "tag=$(git -c versionsort.suffix=rc tag -l 'v${{ matrix.line }}.*' --sort=-v:refname | head -1)" >> "$GITHUB_OUTPUT"
       - name: Check out that release's SBOM
         id: sbom
         run: |
@@ -48,7 +50,7 @@ jobs:
       - name: Install osv-scanner
         if: steps.sbom.outputs.found == 'true'
         run: |
-          curl -sSLO "https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
+          curl -fsSLO "https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
           echo "${OSV_SCANNER_SHA256}  osv-scanner_linux_amd64" | sha256sum -c -
           chmod +x osv-scanner_linux_amd64
           sudo mv osv-scanner_linux_amd64 /usr/local/bin/osv-scanner
@@ -57,7 +59,9 @@ jobs:
         if: steps.sbom.outputs.found == 'true'
         run: |
           set +e
-          osv-scanner scan source --format json -L release.cdx.json > result.json
+          # The ignore policy comes from the default branch checked out here,
+          # not from the tag, so accepted advisories are not re-filed.
+          osv-scanner scan source --config osv-scanner.toml --format json -L release.cdx.json > result.json
           echo "code=$?" >> "$GITHUB_OUTPUT"
       - name: One issue per advisory and line
         if: steps.sbom.outputs.found == 'true' && steps.scan.outputs.code != '0'

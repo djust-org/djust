@@ -9,8 +9,10 @@ on:
       - 'python/djust/**/djust_assets.json'
       - 'python/djust/assets/**'
       - 'python/djust/components/static/djust_components/**'
-      - 'python/djust/admin_ext/static/**'
-      - 'python/djust/admin_ext/templates/**'
+      # Tailwind's content globs scan admin_ext/**/*.py as well as templates.
+      - 'python/djust/admin_ext/**'
+      # The SBOM's root component version comes from pyproject.toml.
+      - 'pyproject.toml'
       - 'osv-scanner.toml'
       - 'scripts/vendor_canary_sbom.py'
       - '.github/workflows/vendor.yml'
@@ -46,15 +48,22 @@ jobs:
         run: make test-vendor
       - name: Install osv-scanner
         run: |
-          curl -sSLO "https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
+          curl -fsSLO "https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
           echo "${OSV_SCANNER_SHA256}  osv-scanner_linux_amd64" | sha256sum -c -
           chmod +x osv-scanner_linux_amd64
           sudo mv osv-scanner_linux_amd64 /usr/local/bin/osv-scanner
       - name: Canary — the scanner must see a package inside our SBOM
         run: |
           python scripts/vendor_canary_sbom.py "$RUNNER_TEMP/canary/canary.cdx.json"
-          if osv-scanner scan source -L "$RUNNER_TEMP/canary/canary.cdx.json"; then
-            echo "osv-scanner found no advisory in the canary SBOM: it is not reading our SBOM shape."
+          # osv-scanner exits 1 only when it found an advisory. 127 (file
+          # missing) or 128 (no packages read) mean it did not read our SBOM
+          # shape, so anything but exactly 1 fails the canary.
+          set +e
+          osv-scanner scan source -L "$RUNNER_TEMP/canary/canary.cdx.json"
+          rc=$?
+          set -e
+          if [ "$rc" -ne 1 ]; then
+            echo "::error::canary expected exit 1 (advisory found), got $rc"
             exit 1
           fi
       - name: Scan djust's vendored packages for known advisories
