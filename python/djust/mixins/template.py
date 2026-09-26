@@ -266,20 +266,20 @@ def _embedded_child_spans(html: str, masked: str) -> "list[tuple[int, int]]":
     runs to the end of the document (refuse to guess inside it)."""
     if "data-djust-embedded" not in masked:
         return []
+    # ``masked`` is the caller's ``_mask_for_root_search`` copy, so this walk
+    # sees exactly the tags the root search does (#2663).
     spans: "list[tuple[int, int]]" = []
-    pos = 0
-    while True:
-        m = _DJ_VIEW_RE.search(masked, pos)
-        if m is None:
-            return spans
+    covered = 0
+    for m in _DJ_VIEW_RE.finditer(masked):
+        if m.start() < covered:
+            continue  # inside an embedded child already recorded
         tag = html[m.start() : m.end()]
         if not any(tok.group(1) for tok in _EMBEDDED_ATTR_TOKEN_RE.finditer(tag)):
-            pos = m.end()
             continue
         _close_start, close_end = _find_root_close(html, m)
-        end = len(html) if close_end is None else close_end
-        spans.append((m.start(), end))
-        pos = end
+        covered = len(html) if close_end is None else close_end
+        spans.append((m.start(), covered))
+    return spans
 
 
 def _span_containing(spans: "list[tuple[int, int]]", offset: int) -> "Optional[int]":
