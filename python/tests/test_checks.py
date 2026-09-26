@@ -5323,6 +5323,176 @@ class TestS009EventHandlerNeedsAuth:
         )
         assert s009 == [], "S009 must honor suppress_checks=['S009']: %r" % s009
 
+    # ---- #3093: judge the gate by what it binds to, not its local name ----
+    #
+    # ``LiveView.permission_required`` (the view-level class attribute) shadows
+    # the decorator inside the class body, so a view that uses both MUST alias
+    # the import or spell it dotted. S009 has to recognise those forms, and must
+    # not accept an unrelated decorator that merely shares the name.
+
+    def _gated(self, tmp_path, imports, deco):
+        source = (
+            "from djust import LiveView\n"
+            + imports
+            + "\n\n"
+            + "class CaptureBoardView(LiveView):\n"
+            + "    login_required = True\n"
+            + '    permission_required = "app.view_thing"\n'
+            + "\n"
+            + '    @%s("app.add_decision")\n' % deco
+            + "    @event_handler()\n"
+            + "    def decide(self, **kwargs):\n"
+            + "        pass\n"
+        )
+        return self._scan(tmp_path, source)
+
+    def test_silent_for_aliased_permission_required_3093(self, tmp_path):
+        s009 = self._gated(
+            tmp_path,
+            "from djust.decorators import event_handler\n"
+            "from djust.decorators import permission_required as require_permission",
+            "require_permission",
+        )
+        assert s009 == [], "aliased @permission_required is a gate: %r" % s009
+
+    def test_silent_for_aliased_top_level_import_3093(self, tmp_path):
+        s009 = self._gated(
+            tmp_path,
+            "from djust import event_handler, permission_required as need_perm",
+            "need_perm",
+        )
+        assert s009 == [], "`from djust import ... as` is a gate: %r" % s009
+
+    def test_silent_for_dotted_decorators_module_3093(self, tmp_path):
+        s009 = self._gated(
+            tmp_path,
+            "from djust import decorators\nfrom djust.decorators import event_handler",
+            "decorators.permission_required",
+        )
+        assert s009 == [], "decorators.permission_required is a gate: %r" % s009
+
+    def test_silent_for_aliased_decorators_module_3093(self, tmp_path):
+        s009 = self._gated(
+            tmp_path,
+            "import djust.decorators as dd\nfrom djust.decorators import event_handler",
+            "dd.permission_required",
+        )
+        assert s009 == [], "dd.permission_required is a gate: %r" % s009
+
+    def test_silent_for_fully_qualified_3093(self, tmp_path):
+        s009 = self._gated(
+            tmp_path,
+            "import djust.decorators\nfrom djust.decorators import event_handler",
+            "djust.decorators.permission_required",
+        )
+        assert s009 == [], "djust.decorators.permission_required is a gate: %r" % s009
+
+    def test_silent_for_top_level_package_attribute_3093(self, tmp_path):
+        s009 = self._gated(
+            tmp_path,
+            "import djust\nfrom djust.decorators import event_handler",
+            "djust.permission_required",
+        )
+        assert s009 == [], "djust.permission_required is a gate: %r" % s009
+
+    def test_silent_for_unaliased_import_3093(self, tmp_path):
+        """The plain form still counts (no view-level attr, so no shadowing)."""
+        s009 = self._scan(
+            tmp_path,
+            """\
+            from djust import LiveView
+            from djust.decorators import event_handler, permission_required
+
+            class AdminPanel(LiveView):
+                login_required = True
+
+                @permission_required("app.delete_user")
+                @event_handler()
+                def delete_user(self, **kwargs):
+                    pass
+            """,
+        )
+        assert s009 == [], "unaliased @permission_required is a gate: %r" % s009
+
+    def test_unresolvable_import_falls_back_to_the_name_3093(self, tmp_path):
+        """A relative import cannot be resolved from the file; keep the old match."""
+        s009 = self._scan(
+            tmp_path,
+            """\
+            from djust import LiveView
+            from djust.decorators import event_handler
+            from .perms import permission_required
+
+            class AdminPanel(LiveView):
+                login_required = True
+
+                @permission_required("app.delete_user")
+                @event_handler()
+                def delete_user(self, **kwargs):
+                    pass
+            """,
+        )
+        assert s009 == [], "an unresolvable name keeps the name match: %r" % s009
+
+    def test_fires_for_non_djust_permission_required_3093(self, tmp_path):
+        """Django's view decorator of the same name does not gate an event."""
+        s009 = self._scan(
+            tmp_path,
+            """\
+            from django.contrib.auth.decorators import permission_required
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class AdminPanel(LiveView):
+                login_required = True
+
+                @permission_required("app.delete_user")
+                @event_handler()
+                def delete_user(self, **kwargs):
+                    pass
+            """,
+        )
+        assert len(s009) == 1, "Django's permission_required is not a gate: %r" % s009
+
+    def test_fires_for_non_djust_dotted_permission_required_3093(self, tmp_path):
+        s009 = self._scan(
+            tmp_path,
+            """\
+            from django.contrib.auth import decorators
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class AdminPanel(LiveView):
+                login_required = True
+
+                @decorators.permission_required("app.delete_user")
+                @event_handler()
+                def delete_user(self, **kwargs):
+                    pass
+            """,
+        )
+        assert len(s009) == 1, "django decorators.permission_required is not a gate: %r" % s009
+
+    def test_fires_for_alias_of_a_different_djust_decorator_3093(self, tmp_path):
+        """A djust name aliased *to* ``permission_required`` is not the gate."""
+        s009 = self._scan(
+            tmp_path,
+            """\
+            from djust import LiveView
+            from djust.decorators import event_handler
+            from djust.decorators import debounce as permission_required
+
+            class AdminPanel(LiveView):
+                login_required = True
+
+                @permission_required(300)
+                @event_handler()
+                def delete_user(self, **kwargs):
+                    pass
+            """,
+        )
+        assert len(s009) == 1, "an alias of debounce is not a gate: %r" % s009
+
 
 # ---------------------------------------------------------------------------
 # S011 (#1854 / #1848) -- inline <script> in a LiveView template without CSP

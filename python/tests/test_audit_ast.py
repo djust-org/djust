@@ -146,6 +146,30 @@ class TestX002UnprotectedMutation:
         """)
         assert findings == []
 
+    def test_aliased_djust_permission_required_ok_3093(self) -> None:
+        findings = _scan("""
+            from djust.decorators import permission_required as require_permission
+
+            class FooView:
+                @require_permission("app.delete_thing")
+                @event_handler
+                def delete_thing(self, pk):
+                    Thing.objects.filter(pk=pk).delete()
+        """)
+        assert findings == []
+
+    def test_alias_of_unrelated_decorator_still_triggers_3093(self) -> None:
+        findings = _scan("""
+            from djust.decorators import debounce as gate
+
+            class FooView:
+                @gate(300)
+                @event_handler
+                def delete_thing(self, pk):
+                    Thing.objects.filter(pk=pk).delete()
+        """)
+        assert _codes(findings) == ["X002"]
+
     def test_non_mutating_handler_ok(self) -> None:
         findings = _scan("""
             class FooView:

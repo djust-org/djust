@@ -19,6 +19,7 @@ from typing import Any, Optional, Union
 from django.core.checks import CheckMessage, register
 
 import djust.checks as _root
+from djust._ast_bindings import binds_to, import_bindings
 from djust.checks.utils import (
     DjustError,
     DjustWarning,
@@ -52,6 +53,9 @@ def check_security(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
             continue
 
         relpath = os.path.relpath(filepath)
+        # #3093: what each imported name binds to, so S009 judges a decorator
+        # by its target rather than its local spelling.
+        bindings = import_bindings(tree)
 
         for node in ast.walk(tree):
             # S001 -- mark_safe(f'...') with interpolated values
@@ -236,7 +240,7 @@ def check_security(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                 # handler with no gate (no @permission_required on the handler,
                 # no class-level check_permissions/has_object_permission).
                 if not _is_check_suppressed("djust.S009"):
-                    for handler in _ungated_event_handlers(node):
+                    for handler in _ungated_event_handlers(node, bindings):
                         # Honor a "noqa S009" comment on the def line OR any of
                         # the handler's decorator lines (the author may annotate
                         # the @event_handler line rather than the def).
@@ -586,9 +590,22 @@ def _is_event_handler_decorator(deco: ast.expr) -> bool:
     return _decorator_callable_name(deco) in ("event_handler", "action")
 
 
-def _is_permission_required_decorator(deco: ast.expr) -> bool:
-    """True if ``deco`` is ``@permission_required(...)`` (the per-handler gate)."""
-    return _decorator_callable_name(deco) == "permission_required"
+def _is_permission_required_decorator(
+    deco: ast.expr, bindings: Optional[dict[str, Optional[str]]] = None
+) -> bool:
+    """True if ``deco`` is djust's ``@permission_required(...)`` per-handler gate.
+
+    Resolved by what the decorator binds to, not its local name (#3093): an
+    aliased import (``permission_required as require_permission``) or a dotted
+    ``decorators.permission_required`` is the gate -- and aliasing is forced
+    whenever the view also sets the ``permission_required`` class attribute,
+    which shadows the decorator in the class body. Django's
+    ``django.contrib.auth.decorators.permission_required`` is not the gate.
+    Names no import binds fall back to the local-name match.
+    """
+    from djust.decorators import permission_required
+
+    return binds_to(deco, bindings or {}, permission_required, "permission_required")
 
 
 def _class_attr_is_truthy(node: "ast.ClassDef", attr_name: str) -> bool:
@@ -675,6 +692,7 @@ def _class_gates_events(node: "ast.ClassDef") -> bool:
 
 def _ungated_event_handlers(
     node: "ast.ClassDef",
+    bindings: Optional[dict[str, Optional[str]]] = None,
 ) -> Iterator[Union[ast.FunctionDef, ast.AsyncFunctionDef]]:
     """Yield public ``@event_handler`` method nodes with no per-handler auth gate.
 
@@ -696,7 +714,7 @@ def _ungated_event_handlers(
         decos = item.decorator_list
         if not any(_is_event_handler_decorator(d) for d in decos):
             continue
-        if any(_is_permission_required_decorator(d) for d in decos):
+        if any(_is_permission_required_decorator(d, bindings) for d in decos):
             continue
         if item.name.startswith(_READ_ONLY_HANDLER_PREFIXES):
             continue

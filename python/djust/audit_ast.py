@@ -55,6 +55,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Set, Tuple
 
+from djust._ast_bindings import binds_to, import_bindings
+
 logger = logging.getLogger(__name__)
 
 
@@ -325,6 +327,8 @@ class _FileContext:
         self.source_lines = source_lines
         self.findings: List[ASTFinding] = []
         self.class_index: Dict[str, ast.ClassDef] = _module_class_index(tree)
+        # #3093: import targets, so a decorator is judged by what it binds to.
+        self.bindings: Dict[str, Optional[str]] = import_bindings(tree)
 
     def emit(
         self,
@@ -532,7 +536,10 @@ def _is_event_handler(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
 
 def _handler_has_permission_decorator(
     func: ast.FunctionDef | ast.AsyncFunctionDef,
+    bindings: Optional[Dict[str, Optional[str]]] = None,
 ) -> bool:
+    from djust.decorators import permission_required
+
     for dec in func.decorator_list:
         name = _decorator_name(dec)
         tail = name.rsplit(".", 1)[-1] if name else ""
@@ -543,6 +550,10 @@ def _handler_has_permission_decorator(
             "staff_member_required",
             "superuser_required",
         }:
+            return True
+        # #3093: djust's gate imported under an alias (forced when the view
+        # also sets the ``permission_required`` class attribute).
+        if bindings and binds_to(dec, bindings, permission_required, "permission_required"):
             return True
     return False
 
@@ -567,7 +578,7 @@ def _check_unprotected_mutating_handler(ctx: _FileContext) -> None:
                 continue
             if not _function_mutates_state(item):
                 continue
-            if class_has_auth or _handler_has_permission_decorator(item):
+            if class_has_auth or _handler_has_permission_decorator(item, ctx.bindings):
                 continue
             ctx.emit(
                 "X002",

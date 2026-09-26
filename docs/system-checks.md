@@ -465,6 +465,12 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **False positives**: Conservative by design — private (`_`-prefixed) handlers
   and read-only-looking handlers (`load_` / `get_` / `list_` / `search_` / …)
   are exempt, and a falsy `login_required = False` does not count as view auth.
+- **Decorator resolution** (#3093): the per-handler gate is recognised by what
+  it binds to, following the module's imports — `permission_required as
+  require_permission`, `decorators.permission_required(...)` and
+  `djust.decorators.permission_required(...)` all count. Django's
+  `permission_required` does not. A name no absolute import binds (a relative
+  import, a star import) falls back to matching the name `permission_required`.
 
 ### S011 — Inline `<script>` inside a `dj-root` without a CSP
 - **Severity**: Warning
