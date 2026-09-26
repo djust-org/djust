@@ -159,6 +159,9 @@ _APP = textwrap.dedent(
     import asyncio, os, threading, time
 
     STARTS = []
+    # The loops start concurrently on separate threads: the append and the
+    # count must be one step, or two loops can both see 3 and none fails (#3215).
+    _STARTS_LOCK = threading.Lock()
     FAIL_ON = int(os.environ.get("FAIL_STARTUP_ON", "0"))
 
     async def app(scope, receive, send):
@@ -166,9 +169,11 @@ _APP = textwrap.dedent(
             while True:
                 m = await receive()
                 if m["type"] == "lifespan.startup":
-                    STARTS.append(threading.current_thread().name)
+                    with _STARTS_LOCK:
+                        STARTS.append(threading.current_thread().name)
+                        n = len(STARTS)
                     print("startup on", threading.current_thread().name, flush=True)
-                    if FAIL_ON and len(STARTS) == FAIL_ON:
+                    if FAIL_ON and n == FAIL_ON:
                         await send({"type": "lifespan.startup.failed", "message": "no"})
                         return
                     await send({"type": "lifespan.startup.complete"})
@@ -341,6 +346,60 @@ def test_a_unix_socket_is_removed_on_exit_so_a_restart_can_bind(tmp_path):
         code, out = _stop(proc)
         assert code == 0, out
         assert not os.path.exists(uds), "the UNIX socket file was left behind"
+
+
+def test_the_test_app_fails_exactly_one_startup_under_concurrent_loops(monkeypatch):
+    """#3215: the test app itself must pick exactly one failing loop.
+
+    Three loops run lifespan startup at once. A barrier in ``print`` holds
+    all three threads after their append, the worst interleaving the race
+    allows. The counted startups must still fail exactly one of them.
+    Without the lock around append-plus-count, all three read 3 and none
+    fails, which is how the test below timed out in CI."""
+    import asyncio
+
+    monkeypatch.setenv("FAIL_STARTUP_ON", "2")
+    namespace: dict = {}
+    exec(compile(_APP, "mlapp.py", "exec"), namespace)
+    barrier = threading.Barrier(3, timeout=5)
+
+    def held_print(*args, **kwargs):
+        if args[:1] != ("startup on",):
+            return
+        try:
+            barrier.wait()
+        except threading.BrokenBarrierError:
+            pass
+
+    namespace["print"] = held_print
+    outcomes: list = []
+
+    def one_loop():
+        async def run():
+            messages = iter([{"type": "lifespan.startup"}, {"type": "lifespan.shutdown"}])
+
+            async def receive():
+                return next(messages)
+
+            async def send(message):
+                outcomes.append(message["type"])
+
+            await namespace["app"]({"type": "lifespan"}, receive, send)
+
+        asyncio.run(run())
+
+    threads = [threading.Thread(target=one_loop) for _ in range(3)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(10)
+    assert not any(t.is_alive() for t in threads), "a loop's lifespan startup hung"
+    startups = sorted(o for o in outcomes if o.startswith("lifespan.startup"))
+    assert startups == [
+        "lifespan.startup.complete",
+        "lifespan.startup.complete",
+        "lifespan.startup.failed",
+    ], outcomes
 
 
 def test_one_failed_startup_stops_every_loop_with_exit_code_3(tmp_path):
