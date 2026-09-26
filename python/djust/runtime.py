@@ -2772,6 +2772,18 @@ class ViewRuntime:
         # ---- Build request ----
         request = await self._build_request(page_url=page_url, params=params)
 
+        from ._exposure import uses_legacy_exposure
+
+        if not uses_legacy_exposure(view_instance):
+            # #3201: a cookie naming a vanished session (cache flush, expiry)
+            # mounts fresh under a replacement session, as the HTTP GET does,
+            # instead of failing the state binding on every reconnect. Runs
+            # before the pre-mount auth sequence so auth sees the re-derived
+            # (anonymous) user, not the connect-time one.
+            from ._exposure_auth import establish_mount_session
+
+            await sync_to_async(establish_mount_session)(request)
+
         try:
             view_instance.request = request
             # _django_session_key (ADR-022 Iter 3 Phase 3.1): the signed

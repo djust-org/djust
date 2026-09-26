@@ -12,6 +12,38 @@ from ._exposure import ExposureError
 from ._exposure_sessions import StateBinding, _SERVER_SESSION_TYPES, request_binding
 
 
+def establish_mount_session(request: Any) -> None:
+    """Give an explicit socket mount a live server session, as the HTTP GET does.
+
+    The browser can present a session cookie whose session no longer exists: a
+    cache flush or restart, eviction, expiry or ``clearsessions`` (#3201). The
+    first storage read clears such a key, and the mount's state binding then
+    has no session to bind to. The HTTP GET path (``mixins/request.py``) creates
+    a replacement in that case; this is the socket-mount equivalent.
+
+    Only a key the store does not know is replaced. A session that exists keeps
+    its identity, so this never rebinds a mount to a session the store knows,
+    whoever it belongs to. The replacement key is server-generated and never
+    sent to the browser, so it cannot be fixed by a client. The mount's user is
+    re-derived from the (now empty) session: a vanished session cannot vouch
+    for the user the socket authenticated as at connect time.
+
+    Unsupported or absent sessions are left alone; the explicit binding refuses
+    them later, exactly as before.
+    """
+    from django.contrib.auth import get_user
+
+    session = getattr(request, "session", None)
+    if type(session) not in _SERVER_SESSION_TYPES:
+        return
+    # Force the storage read. A missing/expired session clears its key here.
+    session.get("_auth_user_id")
+    if session.session_key:
+        return
+    session.create()
+    request.user = get_user(request)
+
+
 def fresh_socket_request(view: Any) -> Any:
     """Reload server session/auth instead of reusing socket-scope caches."""
     from django.contrib.auth import get_user
