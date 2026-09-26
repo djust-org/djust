@@ -55,6 +55,8 @@ djust deploy <project-slug>       # deploy-dir with an explicit slug
 djust deploy <slug> --from-git    # deploy: git-based deploy (the flag may come first)
 ```
 
+`login`, `logout`, `status` and `logs` are commands, not slugs: `djust deploy logs` shows a build log, and `djust deploy logs --from-git` is an error. To deploy a project whose slug is one of these words, name the command, as in `djust deploy deploy-dir logs` (or `djust-deploy deploy logs` for a git deploy).
+
 ### `deploy-dir`
 
 Deploy from a local directory (no git required). The CLI tarballs the directory, uploads it, and reports the deployment status:
@@ -117,7 +119,9 @@ djust-deploy logs <project-slug> --follow
 
 - The slug resolves as for the deploy commands, except that the CLI never prompts for it: with no argument and no `[tool.djust.deploy].project`, it fails and asks for the slug.
 - `--deployment ID`: show that deployment instead of the most recent one. `status` lists deployment ids.
-- `--follow` / `-f`: poll until the deployment reaches a final status. Exits 1 if the deployment failed, so a script can run `djust deploy logs --follow` after a deploy.
+- `--follow` / `-f`: poll until the deployment reaches a final status. Exits 1 if the deployment failed or was cancelled, and 0 if it is active or was superseded, so a script can run `djust deploy logs --follow` after a deploy.
+
+Connection errors, timeouts and 5xx responses are retried up to five times in a row with backoff, so a long `--follow` survives the server restarting. An expired login is refreshed each time it expires. Ctrl-C stops the command with exit status 130.
 
 Log lines go to stdout as `<timestamp> <LEVEL> <message>`. The deployment's id, status and any error message go to stderr. These logs cover the build and the rollout, not the output of your running app.
 

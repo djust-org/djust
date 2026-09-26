@@ -971,6 +971,11 @@ def cmd_deploy(rest: list[str]) -> int:
             if isinstance(e, click.ClickException):
                 e.show()
                 return e.exit_code
+            if isinstance(e, click.exceptions.Abort):
+                # Without standalone mode click re-raises Ctrl-C (and EOF on
+                # a prompt) as a bare Abort, which printed "Error: ".
+                print("Aborted.", file=sys.stderr)
+                return 130 if isinstance(e.__context__, KeyboardInterrupt) else 1
         except ImportError:
             # click isn't importable in this environment; fall through to
             # the generic error-print path below which handles `e` without
