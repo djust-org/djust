@@ -14,8 +14,9 @@ from .registry import get_registry
 
 logger = logging.getLogger("djust.assets")
 
-# (path, alg) -> hash of the stored file (DEBUG off, or DEBUG with no finder
-# match); (path, alg, mtime_ns) -> hash of the finder source file (DEBUG).
+# (path, alg) -> hash of the stored file (DEBUG off); (path, alg, mtime_ns)
+# -> hash of the finder source file (DEBUG); (path, alg, "stored", mtime) ->
+# hash of the stored file when DEBUG finds no source (#3145).
 _integrity_cache: dict[tuple, str] = {}
 
 
@@ -59,19 +60,42 @@ def _read_file(found: str) -> bytes:
         return handle.read()
 
 
+def _stored_name(path: str) -> str:
+    """The name static storage stores ``path`` under (hashed, once collected
+    into a manifest storage)."""
+    from django.contrib.staticfiles.storage import staticfiles_storage
+
+    stored_name = getattr(staticfiles_storage, "stored_name", None)
+    if stored_name is not None:
+        try:
+            return str(stored_name(path))
+        except ValueError:  # not in the manifest yet (not collected)
+            return path
+    return path
+
+
 def _read_storage(path: str) -> bytes:
     """The stored (post-processed) file static storage serves for ``path``."""
     from django.contrib.staticfiles.storage import staticfiles_storage
 
-    stored = path
-    stored_name = getattr(staticfiles_storage, "stored_name", None)
-    if stored_name is not None:
-        try:
-            stored = stored_name(path)
-        except ValueError:  # not in the manifest yet (not collected)
-            stored = path
-    with staticfiles_storage.open(stored) as handle:
+    with staticfiles_storage.open(_stored_name(path)) as handle:
         return handle.read()
+
+
+def _storage_mtime(path: str) -> float | None:
+    """The stored file's modified time, or None when the backend can't say
+    (then the DEBUG caller does not cache)."""
+    from django.contrib.staticfiles.storage import staticfiles_storage
+
+    try:
+        return staticfiles_storage.get_modified_time(_stored_name(path)).timestamp()
+    except Exception as exc:  # noqa: BLE001 - NotImplementedError, missing file, remote errors
+        logger.debug(
+            "static storage has no modified time for %r (%s); not caching its hash",
+            path,
+            type(exc).__name__,
+        )
+        return None
 
 
 def stored_integrity(path: str, alg: str) -> str:
@@ -84,7 +108,9 @@ def stored_integrity(path: str, alg: str) -> str:
     vendored file is rehashed. With ``DEBUG`` off the stored (post-processed)
     file is what is served, so static storage comes first and the finders are
     the fallback; only a hash read from storage is cached, since the fallback
-    (not collected yet) is not what the browser will get once it is.
+    (not collected yet) is not what the browser will get once it is. In
+    ``DEBUG`` a hash read from storage is cached under the stored file's
+    modified time, or not at all when the backend can't report one (#3145).
     """
     from django.conf import settings
 
@@ -95,20 +121,24 @@ def stored_integrity(path: str, alg: str) -> str:
             if key not in _integrity_cache:
                 _integrity_cache[key] = sri(_read_file(found), alg)
             return _integrity_cache[key]
-        key = (path, alg)
-        if key not in _integrity_cache:
-            try:
-                data = _read_storage(path)
-            except SuspiciousFileOperation as exc:
-                raise _outside_static(path, exc) from exc
-            except Exception as exc:  # noqa: BLE001 - any backend's "not stored here"
-                raise ImproperlyConfigured(
-                    f"djust asset file {path!r} is in neither any staticfiles finder nor "
-                    f"static storage (see check djust.B003); static storage raised "
-                    f"{type(exc).__name__}: {exc}."
-                ) from exc
-            _integrity_cache[key] = sri(data, alg)
-        return _integrity_cache[key]
+        mtime = _storage_mtime(path)
+        key = (path, alg, "stored", mtime)
+        if mtime is not None and key in _integrity_cache:
+            return _integrity_cache[key]
+        try:
+            data = _read_storage(path)
+        except SuspiciousFileOperation as exc:
+            raise _outside_static(path, exc) from exc
+        except Exception as exc:  # noqa: BLE001 - any backend's "not stored here"
+            raise ImproperlyConfigured(
+                f"djust asset file {path!r} is in neither any staticfiles finder nor "
+                f"static storage (see check djust.B003); static storage raised "
+                f"{type(exc).__name__}: {exc}."
+            ) from exc
+        integrity = sri(data, alg)
+        if mtime is not None:
+            _integrity_cache[key] = integrity
+        return integrity
 
     key = (path, alg)
     if key in _integrity_cache:

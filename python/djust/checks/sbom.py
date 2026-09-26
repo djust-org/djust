@@ -44,16 +44,17 @@ def check_sbom_configured(app_configs: Any, **kwargs: Any) -> list[CheckMessage]
     ]
 
 
-@register("djust")
+# Tags.staticfiles: collectstatic runs only those checks, and it is the
+# command that writes the SBOM (#3146).
+@register("djust", Tags.staticfiles)
 def check_sbom_path(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
-    from djust.assets.sbom import served_directory_containing
+    from djust.assets.sbom import sbom_setting_type_error, served_directory_containing
 
-    value = _sbom_setting()
-    if value and not isinstance(value, (str, os.PathLike)):
+    problem = sbom_setting_type_error(_sbom_setting())
+    if problem is not None:
         return [
             Error(
-                f"DJUST_SBOM_PATH must be a str or os.PathLike naming a file, "
-                f"not {type(value).__name__} ({value!r}).",
+                problem,
                 hint="Set it to a path outside STATIC_ROOT, MEDIA_ROOT and STATICFILES_DIRS.",
                 id="djust.B012",
             )

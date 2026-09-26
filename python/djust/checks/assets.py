@@ -26,6 +26,9 @@ _EXTERNAL = re.compile(r"^((?:https?:)?//[^/?#]+)", re.I)
 # load code, so they are not B010's concern.
 _LOADING_RELS = frozenset({"stylesheet", "modulepreload", "preload", "prefetch"})
 _REBUILD = "Rebuild with `make vendor` (djust) or regenerate your manifest's integrity."
+# Checks djust's collectstatic runs, deploy checks included, before it
+# collects anything (see management/commands/collectstatic.py).
+COLLECTSTATIC_TAG = "djust_collectstatic"
 
 
 @register("djust")
@@ -153,7 +156,11 @@ def check_required_assets(app_configs: Any, **kwargs: Any) -> list[CheckMessage]
     return messages
 
 
-@register("djust")
+# A deploy check (#3144): it lists every static file, which runserver,
+# autoreload and migrate should not pay for on every start. It still runs
+# under `check --deploy` and, through COLLECTSTATIC_TAG, before djust's
+# collectstatic publishes anything.
+@register("djust", COLLECTSTATIC_TAG, deploy=True)
 def check_sbom_not_served(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     from django.contrib.staticfiles import finders
 
@@ -189,9 +196,37 @@ def _external_loads(line: str) -> list[str]:
     return refs
 
 
+def _host(entry: str) -> str:
+    """``js.stripe.com`` from ``js.stripe.com``, ``https://js.stripe.com`` or
+    ``//js.stripe.com/v3/``, lower-cased."""
+    entry = entry.strip()
+    return urlsplit(entry if "//" in entry else "//" + entry).netloc.lower()
+
+
+def _allowed_origins() -> tuple[frozenset[str], list[CheckMessage]]:
+    """``DJUST_ALLOWED_EXTERNAL_ORIGINS`` as hosts, plus a B010 warning when
+    the setting isn't a list of strings (then nothing is allowed)."""
+    value = getattr(settings, "DJUST_ALLOWED_EXTERNAL_ORIGINS", None)
+    if value is None:
+        return frozenset(), []
+    if isinstance(value, (list, tuple, set, frozenset)) and all(
+        isinstance(entry, str) for entry in value
+    ):
+        return frozenset(_host(entry) for entry in value), []
+    return frozenset(), [
+        Warning(
+            "DJUST_ALLOWED_EXTERNAL_ORIGINS must be a list of hostnames such as "
+            f'["js.stripe.com"], not {type(value).__name__} ({value!r}); it is ignored.',
+            hint="List each origin that can't be vendored or pinned, one string per host.",
+            id="djust.B010",
+        )
+    ]
+
+
 @register("djust")
 def check_undeclared_origins(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
-    """B010: templates that load code from an origin no manifest declares.
+    """B010: templates that load code from an origin no manifest declares
+    and ``DJUST_ALLOWED_EXTERNAL_ORIGINS`` does not list.
 
     Scans line by line, so a ``<script>`` or ``<link>`` tag split across
     lines is not seen.
@@ -206,7 +241,7 @@ def check_undeclared_origins(app_configs: Any, **kwargs: Any) -> list[CheckMessa
         for f in asset.files
         if f.url
     }
-    messages: list[CheckMessage] = []
+    allowed, messages = _allowed_origins()
     for template_path in _iter_template_files(_get_template_dirs()):
         try:
             content = Path(template_path).read_text(encoding="utf-8", errors="replace")
@@ -218,12 +253,13 @@ def check_undeclared_origins(app_configs: Any, **kwargs: Any) -> list[CheckMessa
                 continue
             for ref in _external_loads(line):
                 origin = urlsplit(ref if ref.startswith("http") else "https:" + ref).netloc
-                if origin not in declared:
+                if origin not in declared and origin.lower() not in allowed:
                     messages.append(
                         Warning(
                             f"{template_path}:{lineno} loads from {origin}, which no manifest declares; "
                             "scanners will not see what it serves.",
                             hint="Vendor it and declare it, declare it as external with integrity, "
+                            "list an origin that can't be pinned in DJUST_ALLOWED_EXTERNAL_ORIGINS, "
                             "or add {# noqa: B010 #} to the line.",
                             id="djust.B010",
                         )
