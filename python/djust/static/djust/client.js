@@ -1357,6 +1357,11 @@ class LiveViewWebSocket {
                     ? window.djust._captureFormRecovery() : null;
                 this.viewMounted = true;
                 if (globalThis.djustDebug) console.log('[LiveView] View mounted: %s', String(data.view));
+                // #2966: the server's answer to a reconnect's track_static.
+                if (data.stale_static && data.view === this.primaryViewPath &&
+                    globalThis.djust.djTrackStatic) {
+                    globalThis.djust.djTrackStatic.applyStaleStatic(data.stale_static);
+                }
 
                 // Remove dj-cloak from all elements (FOUC prevention)
                 document.querySelectorAll('[dj-cloak]').forEach(el => el.removeAttribute('dj-cloak'));
@@ -2131,14 +2136,21 @@ class LiveViewWebSocket {
             console.warn('[LiveView] Could not detect browser timezone:', e);
         }
 
-        this.sendMessage({
+        const frame = {
             type: 'mount',
             view: viewPath,
             params: params,
             url: window.location.pathname,
             has_prerendered: this.skipMountHtml || false,  // Tell server we have pre-rendered content
             client_timezone: clientTimezone  // IANA timezone string (e.g. "America/New_York")
-        });
+        };
+        // #2966: a reconnecting page view asks whether its tracked assets
+        // are stale (dj-track-static). Shared with the SSE mount (#1646).
+        const trackStatic = globalThis.djust.djTrackStatic;
+        if (options.primary && trackStatic) {
+            Object.assign(frame, trackStatic.mountFields(Boolean(window.djust._isReconnect)));
+        }
+        this.sendMessage(frame);
         return true;
     }
 
@@ -2479,6 +2491,15 @@ class LiveViewSSE {
         const urlParams = new URLSearchParams(params);
         urlParams.set('view', viewPath);
         urlParams.set('_djust_url', window.location.pathname);
+        // #2966: dj-track-static. The stream GET is the mount, and an
+        // EventSource auto-reconnect re-requests this same URL, so the page's
+        // tracked asset URLs ride it (a POSTed mount frame would be a no-op).
+        const trackStatic = globalThis.djust.djTrackStatic;
+        if (trackStatic) {
+            trackStatic.streamParams().forEach((url) => {
+                urlParams.append('_djust_track_static', url);
+            });
+        }
         const streamUrl = `${this.sseBaseUrl}?${urlParams.toString()}`;
         const pageUrl = window.location.pathname + window.location.search;
 
@@ -2634,6 +2655,11 @@ class LiveViewSSE {
                     globalThis.djust._mirrorPageParameterContracts?.(data.parameter_contracts, data.view);
                 }
                 if (globalThis.djustDebug) console.log('[SSE] View mounted:', data.view);
+                // #2966: the server's answer to a reconnect's track_static.
+                if (data.stale_static && data.view === this.primaryViewPath &&
+                    globalThis.djust.djTrackStatic) {
+                    globalThis.djust.djTrackStatic.applyStaleStatic(data.stale_static);
+                }
 
                 // Remove dj-cloak from all elements (FOUC prevention)
                 document.querySelectorAll('[dj-cloak]').forEach(el => el.removeAttribute('dj-cloak'));
@@ -2923,6 +2949,7 @@ class LiveViewSSE {
     _sendMountFrame(viewPath, params = {}) {
         let tz = null;
         try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { /* noop */ }
+        // dj-track-static URLs ride the stream GET, not this frame (#2966).
         return this.sendMessage({
             type: 'mount',
             view: viewPath,
@@ -18132,6 +18159,85 @@ function _onWsReconnected() {
     }));
 }
 
+// #2966: the checks above compare the page's tracked URLs with themselves, so
+// a deploy that changes `<head>` asset URLs is never seen by them. A
+// reconnecting client therefore sends the URLs its page LOADED with its mount
+// frame (`track_static`), and the server answers with the ones its current
+// static manifest has replaced (`stale_static`). Same-origin URLs are sent as
+// paths; the list is capped like the server's.
+const _TRACK_STATIC_MAX = 64;
+
+function _sentUrl(url) {
+    try {
+        const parsed = new URL(url, window.location.href);
+        if (parsed.origin === window.location.origin) return parsed.pathname;
+    } catch (_e) { /* keep the attribute value as written */ }
+    return url;
+}
+
+function _trackedUrls() {
+    const urls = [];
+    // Before the page-load snapshot is seeded (a transport connecting ahead
+    // of this module's DOMContentLoaded listener) the live elements are the
+    // page-load ones.
+    const snap = _djTrackStaticSnapshot === null ? _snapshotAssets() : _djTrackStaticSnapshot;
+    snap.forEach(function (url) {
+        if (!url || urls.length >= _TRACK_STATIC_MAX) return;
+        const sent = _sentUrl(url);
+        if (urls.indexOf(sent) === -1) urls.push(sent);
+    });
+    return urls;
+}
+
+// Fields to merge into a mount frame. Only a reconnect asks: a first mount
+// follows a page load, whose assets are current by construction.
+function _mountFields(isReconnect) {
+    if (!isReconnect) return {};
+    const urls = _trackedUrls();
+    return urls.length ? { track_static: urls } : {};
+}
+
+// The SSE transport's form: the tracked URLs as stream-GET params. The GET is
+// the SSE mount and an EventSource auto-reconnect replays the same URL, so
+// they are sent on every stream open (a first open simply finds nothing
+// stale). Capped by length so the stream URL stays well under common URL
+// limits; URLs past the budget are not checked.
+const _TRACK_STATIC_URL_BUDGET = 4000;
+
+function _streamParams() {
+    const urls = [];
+    let used = 0;
+    _trackedUrls().forEach(function (url) {
+        const cost = encodeURIComponent(url).length + 21; // "&_djust_track_static="
+        if (used + cost > _TRACK_STATIC_URL_BUDGET) return;
+        used += cost;
+        urls.push(url);
+    });
+    return urls;
+}
+
+// A mount reply's `stale_static`: reload when a stale asset was tracked with
+// dj-track-static="reload", otherwise dispatch dj:stale-assets.
+function _applyStaleStatic(stale) {
+    if (!Array.isArray(stale) || _djTrackStaticSnapshot === null) return;
+    const reported = stale.filter(function (u) { return typeof u === 'string' && u; });
+    if (!reported.length) return;
+    let shouldReload = false;
+    _djTrackStaticSnapshot.forEach(function (url, el) {
+        if (reported.indexOf(_sentUrl(url)) !== -1 &&
+            (el.getAttribute('dj-track-static') || '').trim() === 'reload') {
+            shouldReload = true;
+        }
+    });
+    if (shouldReload) {
+        window.location.reload();
+        return;
+    }
+    document.dispatchEvent(new CustomEvent('dj:stale-assets', {
+        detail: { changed: reported },
+    }));
+}
+
 function _installDjTrackStatic() {
     // Seed snapshot on page load (the \"first connect\" for SSR / full page
     // load case). The subsequent djust:ws-reconnected events compare
@@ -18153,6 +18259,10 @@ globalThis.djust.djTrackStatic = {
     _snapshotAssets,
     _checkStale,
     _onWsReconnected,
+    _trackedUrls,
+    mountFields: _mountFields,
+    streamParams: _streamParams,
+    applyStaleStatic: _applyStaleStatic,
     _resetSnapshot: function () { _djTrackStaticSnapshot = null; },
 };
 

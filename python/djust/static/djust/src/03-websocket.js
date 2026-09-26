@@ -583,6 +583,11 @@ class LiveViewWebSocket {
                     ? window.djust._captureFormRecovery() : null;
                 this.viewMounted = true;
                 if (globalThis.djustDebug) console.log('[LiveView] View mounted: %s', String(data.view));
+                // #2966: the server's answer to a reconnect's track_static.
+                if (data.stale_static && data.view === this.primaryViewPath &&
+                    globalThis.djust.djTrackStatic) {
+                    globalThis.djust.djTrackStatic.applyStaleStatic(data.stale_static);
+                }
 
                 // Remove dj-cloak from all elements (FOUC prevention)
                 document.querySelectorAll('[dj-cloak]').forEach(el => el.removeAttribute('dj-cloak'));
@@ -1357,14 +1362,21 @@ class LiveViewWebSocket {
             console.warn('[LiveView] Could not detect browser timezone:', e);
         }
 
-        this.sendMessage({
+        const frame = {
             type: 'mount',
             view: viewPath,
             params: params,
             url: window.location.pathname,
             has_prerendered: this.skipMountHtml || false,  // Tell server we have pre-rendered content
             client_timezone: clientTimezone  // IANA timezone string (e.g. "America/New_York")
-        });
+        };
+        // #2966: a reconnecting page view asks whether its tracked assets
+        // are stale (dj-track-static). Shared with the SSE mount (#1646).
+        const trackStatic = globalThis.djust.djTrackStatic;
+        if (options.primary && trackStatic) {
+            Object.assign(frame, trackStatic.mountFields(Boolean(window.djust._isReconnect)));
+        }
+        this.sendMessage(frame);
         return true;
     }
 

@@ -185,6 +185,21 @@ def _drop_request_scoped_values(view: Any, context: Dict[str, Any]) -> Dict[str,
     }
 
 
+_LIVE_VIEW_MRO: "Optional[frozenset]" = None
+
+
+def _live_view_mro() -> frozenset:
+    """``LiveView``'s MRO: the framework-owned classes whose attributes are
+    configuration, never legacy template context (#2960). Cached; imported
+    lazily because ``live_view`` imports this module."""
+    global _LIVE_VIEW_MRO
+    if _LIVE_VIEW_MRO is None:
+        from ..live_view import LiveView
+
+        _LIVE_VIEW_MRO = frozenset(LiveView.__mro__)
+    return _LIVE_VIEW_MRO
+
+
 class ContextMixin:
     """Context methods: get_context_data, _get_context_processors, _apply_context_processors."""
 
@@ -275,15 +290,22 @@ class ContextMixin:
         # Build set of all candidate keys: instance attrs + user class attrs.
         # Walk MRO up to (but not including) ContextMixin and its bases —
         # these are framework classes whose attrs are never template context.
+        # #2960: ``LiveView`` and the mixins listed before ``ContextMixin`` in
+        # its bases come EARLIER in the MRO, so they are skipped too — their
+        # attributes are configuration defaults (``template``,
+        # ``login_required``, ``use_actors``, ``sticky``...), not view data.
+        # This is the boundary the ADR-038 inventory draws (``_user_bases``);
+        # classes the application declares are still walked.
         _seen = set()
-        _framework_bases = set()
-        for base in ContextMixin.__mro__:
-            _framework_bases.add(base)
+        _framework_bases = set(ContextMixin.__mro__)
+        _framework_owned = _live_view_mro()
 
         _all_items = list(self.__dict__.items())
         for cls in type(self).__mro__:
             if cls in _framework_bases:
                 break
+            if cls in _framework_owned:
+                continue
             for key, value in vars(cls).items():
                 if key not in _seen and key not in self.__dict__:
                     _seen.add(key)
