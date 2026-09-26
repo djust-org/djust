@@ -1072,7 +1072,7 @@ The new guide is `docs/website/guides/scaling-across-cores.md`. A truth review c
 4. **"Opt-in" needs a switch in every changed path.** The SSE hop, the SSE put and the `db_notify` claim each check `is_multi_loop()`, so a single-loop server, and test harnesses that create a loop per request, behave exactly as before.
 
 **Open items**
-- snake-arena: the room-clock lock (a regression test fails without it). The PR goes after the merge and is not deployed.
+- ~~snake-arena: the room-clock lock~~ Done in snake-arena #25 (not deployed). Its review found a second race, an idle stop decided outside the lock, so the guide's rule 2 now covers stops too.
 - #3164: the SSE session registry. A reused id replaces a live session, and the caps are check-then-register.
 - A cluster measurement of 2 loops once a djust release carries #3162. Production's loop saturates earlier (0.93 at 160–192 players), so the gain there should show sooner than on this Mac.
 - `SO_REUSEPORT` (one socket per loop, kernel-balanced) instead of one shared socket. Not measured.
