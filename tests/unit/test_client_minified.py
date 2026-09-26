@@ -20,6 +20,17 @@ from django.test import override_settings
 from djust.mixins.post_processing import PostProcessingMixin
 
 
+@pytest.fixture(autouse=True)
+def _no_inherited_git_env(monkeypatch):
+    """This module runs git, directly or through a script that does. Under a
+    git hook an inherited GIT_DIR / GIT_INDEX_FILE would aim those commands at
+    the real repository (#2608, #3179)."""
+    from tests.git_env import GIT_EXECUTION_VARS
+
+    for var in GIT_EXECUTION_VARS:
+        monkeypatch.delenv(var, raising=False)
+
+
 # ---------------------------------------------------------------------------
 # Static-file presence (contract of `make build-js`)
 # ---------------------------------------------------------------------------
