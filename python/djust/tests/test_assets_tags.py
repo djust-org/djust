@@ -155,3 +155,50 @@ def test_component_requires_assets_renders_its_tags(tmp_path):
 
     with _settings(tmp_path):
         assert "testlib/lib.js" in Uses().asset_tags()
+
+
+def test_debug_hashes_the_finder_file_not_a_stale_static_root(tmp_path):
+    """runserver serves finder files in DEBUG, so a previously collected (now
+    stale) STATIC_ROOT copy must not decide the integrity value — the browser
+    would block djust's own assets."""
+    root = tmp_path / "collected"
+    (root / "testlib").mkdir(parents=True)
+    (root / "testlib" / "lib.js").write_bytes(b"console.log('stale');\n")
+    with _settings(tmp_path), override_settings(DEBUG=True, STATIC_ROOT=str(root)):
+        html = asset_tags("test-lib")
+    assert f'integrity="{sri(CONTENT)}"' in html
+
+
+def test_production_still_hashes_the_stored_file(tmp_path):
+    served = b"console.log('collected');\n"
+    root = tmp_path / "collected"
+    (root / "testlib").mkdir(parents=True)
+    (root / "testlib" / "lib.js").write_bytes(served)
+    with _settings(tmp_path), override_settings(DEBUG=False, STATIC_ROOT=str(root)):
+        html = asset_tags("test-lib")
+    assert f'integrity="{sri(served)}"' in html
+
+
+@pytest.mark.parametrize("debug", [True, False])
+def test_unset_static_root_is_not_a_warning(tmp_path, caplog, debug):
+    """STATIC_ROOT unset (ImproperlyConfigured from the storage) is the normal
+    dev setup, like FileNotFoundError: DEBUG-level, never WARNING."""
+    with (
+        _settings(tmp_path),
+        override_settings(DEBUG=debug, STATIC_ROOT=None),
+        caplog.at_level(logging.DEBUG, logger="djust.assets"),
+    ):
+        html = asset_tags("test-lib")
+    assert f'integrity="{sri(CONTENT)}"' in html
+    assert not [
+        r for r in caplog.records if r.name == "djust.assets" and r.levelno >= logging.WARNING
+    ]
+
+
+@pytest.mark.parametrize("debug", [True, False])
+def test_path_outside_static_raises_improperly_configured(tmp_path, debug):
+    from djust.assets.tags import stored_integrity
+
+    with _settings(tmp_path), override_settings(DEBUG=debug):
+        with pytest.raises(ImproperlyConfigured, match=r"\.\./\.\./x\.js"):
+            stored_integrity("../../x.js", "sha384")

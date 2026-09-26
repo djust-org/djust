@@ -2,6 +2,7 @@
 
 RESET_ON = frozenset(
     {
+        "DEBUG",
         "DJUST_ASSET_MANIFESTS",
         "INSTALLED_APPS",
         "STATICFILES_DIRS",
