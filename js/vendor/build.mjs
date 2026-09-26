@@ -66,7 +66,7 @@ async function buildEsbuild(bundle) {
     const info = describe(packageDir(input));
     packages.set(info.name, info);
   }
-  const sorted = [...packages.values()].sort((a, b) => a.name.localeCompare(b.name));
+  const sorted = [...packages.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   const licenseRel = bundle.out.replace(/\.m?js$/, ".LICENSE.txt");
   // Names and license texts only: a served file must not publish the version list.
   writeFileSync(
@@ -110,6 +110,6 @@ for (const bundle of BUNDLES) {
     bundle.kind === "tailwind" ? buildTailwind(bundle) : await buildEsbuild(bundle);
 }
 for (const [app, assets] of Object.entries(manifests)) {
-  const sortedAssets = Object.fromEntries(Object.entries(assets).sort(([a], [b]) => a.localeCompare(b)));
+  const sortedAssets = Object.fromEntries(Object.entries(assets).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
   writeFileSync(join(APPS[app], "djust_assets.json"), JSON.stringify({ schema: 1, assets: sortedAssets }, null, 2) + "\n");
 }
