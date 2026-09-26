@@ -8,6 +8,7 @@ but may not be fully discoverable by static analysis tools.
 from typing import Any, Dict, Optional
 
 def own_route_kwargs(view_instance: Any, url: str) -> Optional[Dict[str, Any]]: ...
+def same_origin_target(url: str) -> str: ...
 
 class NavigationMixin:
     """Adds URL navigation capabilities to a LiveView."""

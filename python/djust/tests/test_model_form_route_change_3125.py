@@ -127,3 +127,40 @@ def test_server_live_patch_to_another_record_becomes_a_redirect():
         },
         {"type": "live_patch", "replace": False, "params": {"tab": "3"}},
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "javascript:alert(1)",
+        "//evil.example/edit/{t}/",
+        "http://evil.example/edit/{t}/?x=1",
+        "/\\evil.example/edit/{t}/",
+        "\\\\evil.example/x",
+    ],
+)
+async def test_the_redirect_never_echoes_a_scheme_or_host(uri):
+    """PR #3159 review: the redirect target is the URI's path and query only,
+    with no leading ``//`` or ``/\\`` a browser would read as another host."""
+    from urllib.parse import urlsplit
+
+    user, mine, other, _ = await sync_to_async(_two_of_mine)()
+    session = await sync_to_async(acc._session)()
+    with acc._allow():
+        socket = await acc._connect(user, session)
+        try:
+            assert (await acc._mount(socket, "ScopedEdit", "/edit/%s/" % mine.pk))[
+                "type"
+            ] == "mount"
+            frames = await _url_change(socket, uri.replace("{t}", str(other.pk)))
+        finally:
+            await socket.disconnect()
+    navigations = [f for f in frames if f.get("type") == "navigation"]
+    assert navigations, frames
+    path = navigations[0]["path"]
+    parts = urlsplit(path)
+    assert (parts.scheme, parts.netloc) == ("", ""), path
+    assert path.startswith("/") and path[1:2] not in ("/", "\\"), path
+    assert "javascript" not in path.lower()

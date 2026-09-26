@@ -5176,7 +5176,9 @@ class ViewRuntime:
         # the object is resolved and authorized for the URL the user sees.
         route_changed = getattr(self.view_instance, "_djust_route_changed", None)
         if callable(route_changed) and isinstance(uri, str) and uri and route_changed(uri):
-            self.view_instance.live_redirect(uri, replace=True)
+            from .mixins.navigation import same_origin_target
+
+            self.view_instance.live_redirect(same_origin_target(uri), replace=True)
             await self._flush_navigation()
             return
 
