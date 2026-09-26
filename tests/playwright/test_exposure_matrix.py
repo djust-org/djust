@@ -44,6 +44,8 @@ import urllib.request
 
 from playwright.async_api import async_playwright
 
+from _transports import INIT, TransportWatch
+
 BASE = os.environ.get("E5_BASE", "http://localhost:8002")
 SECOND = os.environ.get("E5_SECOND", "http://localhost:8003")
 SERVER_LOG = os.environ.get("E5_SERVER_LOG")
@@ -182,9 +184,12 @@ async def run_flow(browser, transport, policy, failures, notes):
     context = await browser.new_context()
     frames = []
     if transport == "sse":
-        await context.add_init_script("window.DJUST_USE_WEBSOCKET = false;")
-        await context.add_init_script(SSE_CAPTURE)
+        # Pin the transport: the page's own configuration script sets
+        # DJUST_USE_WEBSOCKET after a plain assignment in an init script, so
+        # every "SSE" run used to be a WebSocket run (#3097).
+        await context.add_init_script(INIT["sse"] + SSE_CAPTURE)
     page = await context.new_page()
+    watch = TransportWatch(page)
     page.on(
         "websocket",
         lambda ws: ws.on(
@@ -199,6 +204,27 @@ async def run_flow(browser, transport, policy, failures, notes):
             return frames + (await page.evaluate("() => window.__e5frames || []"))
         return frames
 
+    async def error_frames():
+        found = []
+        for raw in await received():
+            try:
+                frame = json.loads(raw)
+            except ValueError:
+                continue
+            if isinstance(frame, dict) and frame.get("type") == "error":
+                found.append(frame)
+        return found
+
+    async def wait_for_error_frame(timeout=10.0):
+        # Event-driven (#3137 shape): the failing turn's error frame, not a
+        # fixed 800 ms that a freshly started server can overrun.
+        deadline = asyncio.get_running_loop().time() + timeout
+        while not await error_frames():
+            if asyncio.get_running_loop().time() >= deadline:
+                failures.append(f"{label}: the failing handler sent no error frame")
+                return
+            await asyncio.sleep(0.1)
+
     await page.goto(BASE + path, timeout=60000)
     await wait_mounted(page)
     await wait_text(page, "#matrix-count", "0")
@@ -212,7 +238,7 @@ async def run_flow(browser, transport, policy, failures, notes):
     await page.click("#matrix-page2")
     await wait_text(page, "#matrix-page", "2")
     await page.click("#matrix-boom")
-    await page.wait_for_timeout(800)
+    await wait_for_error_frame()
     # The DEBUG dev overlay opens on the error; dismiss it like a developer.
     await page.evaluate("() => document.getElementById('djust-error-overlay')?.remove()")
 
@@ -310,6 +336,7 @@ async def run_flow(browser, transport, policy, failures, notes):
         if ERROR_SENTINEL not in log_tail(start):
             failures.append(f"{label}: control failed, legacy production log lacks the detail")
 
+    watch.check(transport, label, failures)
     await context.close()
 
 
