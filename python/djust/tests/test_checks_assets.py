@@ -97,6 +97,23 @@ def test_b004_unreadable_vendored_file_is_reported_not_raised(tmp_path, monkeypa
     assert "testlib/lib.js" in b004.msg
 
 
+def test_b003_path_the_finders_refuse_is_reported_not_raised(tmp_path, monkeypatch):
+    """SuspiciousFileOperation from finders.find() used to escape the check
+    and abort check/runserver/migrate; it is a B003 naming the reason."""
+    from django.core.exceptions import SuspiciousFileOperation
+
+    static_dir, manifest = write_asset(tmp_path)
+
+    def refuse(path, *args, **kwargs):
+        raise SuspiciousFileOperation("outside of the base path component")
+
+    monkeypatch.setattr("django.contrib.staticfiles.finders.find", refuse)
+    with _with(tmp_path, manifest, static_dirs=[static_dir]):
+        (b003,) = [m for m in check_asset_files(None) if "test-lib" in m.msg]
+    assert b003.id == "djust.B003"
+    assert "testlib/lib.js" in b003.msg and "outside of the base path" in b003.msg
+
+
 def test_b005_external_needs_opt_in(tmp_path):
     manifest = tmp_path / "ext.json"
     manifest.write_text(
@@ -164,6 +181,9 @@ def test_b010_undeclared_cdn_in_project_template(tmp_path):
     assert "cdn.other.example" in found[0].msg and "page.html:1" in found[0].msg
 
 
+@pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0, reason="root ignores file permissions"
+)
 def test_b010_unreadable_template_is_skipped_not_raised(tmp_path):
     tpl = tmp_path / "templates"
     tpl.mkdir()

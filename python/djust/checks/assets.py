@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 
 from django.conf import settings
 from django.core.checks import CheckMessage, Error, Warning, register
+from django.core.exceptions import SuspiciousFileOperation
 
 from .utils import _get_template_dirs, _is_check_suppressed, _iter_template_files, _walk_subclasses
 
@@ -78,7 +79,18 @@ def check_asset_files(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
         for file in asset.files:
             if file.path is None:
                 continue
-            found = finders.find(file.path)
+            try:
+                found = finders.find(file.path)
+            except SuspiciousFileOperation as exc:
+                messages.append(
+                    Error(
+                        f"Asset {asset.name!r}: {file.path!r} resolves outside the static "
+                        f"directories ({asset.source}): {exc}.",
+                        hint="Use a relative static path with no '..' segment.",
+                        id="djust.B003",
+                    )
+                )
+                continue
             if not found:
                 messages.append(
                     Error(

@@ -149,3 +149,25 @@ def test_load_manifest_reports_missing_and_invalid_json(tmp_path):
     good.write_text(json.dumps(_doc()))
     assets, problems = load_manifest(good)
     assert problems == [] and assets[0].source == str(good)
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["../../x.js", "/etc/hosts.js", "lib/../../x.js", "lib\\x.js", "C:\\x.js", "lib/..", ".."],
+)
+def test_paths_escaping_static_are_b001_naming_the_path(path):
+    """A path finders.find() would reject with SuspiciousFileOperation (which
+    escaped the check framework and aborted check/runserver/migrate) is a
+    manifest error instead."""
+    assets, problems = parse_manifest(
+        _doc(files=[{"path": path, "integrity": GOOD_SRI, "type": "script"}]), "m"
+    )
+    assert assets == [] and ids(problems) == ["djust.B001"]
+    assert repr(path) in problems[0].message
+
+
+def test_dotted_file_names_are_still_valid_paths():
+    assets, problems = parse_manifest(
+        _doc(files=[{"path": "lib/..hidden/a.min.js", "integrity": GOOD_SRI}]), "m"
+    )
+    assert problems == [] and assets[0].files[0].path == "lib/..hidden/a.min.js"

@@ -275,6 +275,11 @@ def write_app_sbom(path: Path) -> None:
             "to browsers. Set DJUST_SBOM_PATH outside every static and media directory (djust.B012)."
         )
     target = Path(path)
+    if target.is_dir():
+        raise CommandError(
+            f"Refusing to write the SBOM to {path}: it is a directory. Set "
+            "DJUST_SBOM_PATH to a file path such as /srv/app/sbom/djust-assets.cdx.json."
+        )
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(dumps(app_document()), encoding="utf-8")
 

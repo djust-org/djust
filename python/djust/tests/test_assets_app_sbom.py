@@ -84,6 +84,59 @@ def test_b012_path_inside_static_root(tmp_path):
         assert "djust.B012" in ids(check_sbom_path(None))
 
 
+def test_b012_hint_notes_the_cdx_json_suffix_only_when_missing(tmp_path):
+    with override_settings(STATIC_ROOT=str(tmp_path), DJUST_SBOM_PATH=str(tmp_path / "a.json")):
+        (b012,) = check_sbom_path(None)
+    assert ".cdx.json" in b012.hint
+    with override_settings(STATIC_ROOT=str(tmp_path), DJUST_SBOM_PATH=str(tmp_path / "a.cdx.json")):
+        (b012,) = check_sbom_path(None)
+    assert ".cdx.json" not in b012.hint
+
+
+@pytest.mark.parametrize("value", [42, ["a.cdx.json"], object()])
+def test_non_path_sbom_setting_is_a_b012_error_not_a_crash(value):
+    with override_settings(DJUST_SBOM_PATH=value):
+        (b012,) = check_sbom_path(None)
+        assert b012.id == "djust.B012" and "str or os.PathLike" in b012.msg
+        # The other SBOM checks leave it to B012 instead of raising TypeError.
+        assert check_sbom_configured(None) == []
+        assert check_sbom_collectstatic_order(None) == []
+        assert check_sbom_current(None) == []
+
+
+def test_directory_at_the_sbom_path_is_a_command_error(tmp_path):
+    target = tmp_path / "a.cdx.json"
+    target.mkdir()
+    with pytest.raises(CommandError, match="directory"):
+        write_app_sbom(target)
+
+
+def test_collectstatic_dry_run_writes_no_sbom(tmp_path):
+    out = tmp_path / "private" / "djust-assets.cdx.json"
+    with override_settings(
+        STATIC_ROOT=str(tmp_path / "collected"),
+        DJUST_SBOM_PATH=str(out),
+        INSTALLED_APPS=APPS_DJUST_FIRST,
+    ):
+        call_command("collectstatic", interactive=False, verbosity=0, dry_run=True)
+    assert not out.exists()
+
+
+def test_b013_follows_the_resolved_collectstatic_command(tmp_path, monkeypatch):
+    """B013 asks Django which app's collectstatic wins, not just where the
+    literal "djust" sits: a third app overriding it also skips the SBOM."""
+    out = str(tmp_path / "a.cdx.json")
+    with override_settings(INSTALLED_APPS=APPS_DJUST_FIRST, DJUST_SBOM_PATH=out):
+        assert check_sbom_collectstatic_order(None) == []
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                "django.core.management.get_commands",
+                lambda: {"collectstatic": "someapp.storage"},
+            )
+            (b013,) = check_sbom_collectstatic_order(None)
+    assert b013.id == "djust.B013" and "someapp.storage" in b013.msg
+
+
 def test_b013_only_when_sbom_path_is_set(tmp_path):
     apps_wrong = [
         "django.contrib.contenttypes",
@@ -94,7 +147,8 @@ def test_b013_only_when_sbom_path_is_set(tmp_path):
     with override_settings(INSTALLED_APPS=apps_wrong, DJUST_SBOM_PATH=None):
         assert check_sbom_collectstatic_order(None) == []
     with override_settings(INSTALLED_APPS=apps_wrong, DJUST_SBOM_PATH=str(tmp_path / "a.cdx.json")):
-        assert ids(check_sbom_collectstatic_order(None)) == ["djust.B013"]
+        (b013,) = check_sbom_collectstatic_order(None)
+    assert b013.id == "djust.B013" and "django.contrib.staticfiles" in b013.msg
 
 
 def test_b014_missing_or_stale(tmp_path):

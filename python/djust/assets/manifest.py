@@ -177,6 +177,14 @@ def _parse_file(raw: Any, where: str, fail: Fail) -> AssetFile | None:
     if not isinstance(location, str) or not location:
         fail(f"{where}: path/url must be a non-empty string")
         return None
+    if path is not None and (
+        path.startswith("/") or "\\" in path or ".." in path.split("/") or Path(path).is_absolute()
+    ):
+        fail(
+            f"{where}: path {path!r} must be a relative static path "
+            '(no leading "/", no backslash, no ".." segment)'
+        )
+        return None
     if url is not None and not url.startswith("https://"):
         fail(f"{where}: external url {url!r} must use https://")
         return None
