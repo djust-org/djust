@@ -178,6 +178,8 @@ _APP = textwrap.dedent(
                     return
         if scope["path"] == "/block":
             time.sleep(1.5)  # blocks THIS loop only
+        if scope["path"] == "/hang":
+            await asyncio.sleep(60)  # an in-flight request that never ends
         body = threading.current_thread().name.encode()
         await send({"type": "http.response.start", "status": 200,
                     "headers": [(b"content-type", b"text/plain")]})
@@ -192,7 +194,7 @@ def _free_port():
         return s.getsockname()[1]
 
 
-def _start(tmp_path, loops, extra_env=None):
+def _start(tmp_path, loops, extra_env=None, extra_args=()):
     (tmp_path / "mlapp.py").write_text(_APP)
     port = _free_port()
     env = {**os.environ, "PYTHONPATH": REPO_PYTHON, **(extra_env or {})}
@@ -215,6 +217,7 @@ def _start(tmp_path, loops, extra_env=None):
             "--log-level",
             "info",
             "--allow-gil",
+            *extra_args,
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -277,6 +280,40 @@ def test_two_loops_share_one_socket_run_lifespan_each_and_stop_gracefully(tmp_pa
     code, out = _stop(proc, sig)
     assert code == 0, out
     assert out.count("startup on djust-loop-") == 2, out
+    assert out.count("shutdown on djust-loop-") == 2, out
+
+
+def test_a_second_signal_forces_the_exit_while_a_request_hangs(tmp_path):
+    proc, port = _start(tmp_path, 2)
+    _wait_up(proc, port)
+
+    def hang():
+        try:
+            _get(port, "/hang", timeout=70)
+        except OSError:
+            pass
+
+    threading.Thread(target=hang, daemon=True).start()
+    time.sleep(0.5)
+    proc.send_signal(signal.SIGTERM)
+    time.sleep(1.5)
+    assert proc.poll() is None, "the first signal did not wait for the in-flight request"
+    code, out = _stop(proc, signal.SIGTERM, timeout=15)
+    assert code == 0, out
+    assert "Waiting for connections to close" in out, out
+
+
+def test_one_loop_reaching_limit_max_requests_stops_the_process(tmp_path):
+    proc, port = _start(tmp_path, 2, extra_args=("--limit-max-requests", "1"))
+    _wait_up(proc, port)  # one request: its loop reaches the limit
+    try:
+        out, _ = proc.communicate(timeout=20)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        out, _ = proc.communicate()
+        raise AssertionError(f"the other loop kept the process running:\n{out}")
+    assert proc.returncode == 0, out
+    assert "Maximum request limit" in out, out
     assert out.count("shutdown on djust-loop-") == 2, out
 
 

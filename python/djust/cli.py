@@ -1042,6 +1042,16 @@ def add_serve_parser(subparsers: Any) -> argparse.ArgumentParser:
         help="Max concurrent connections and tasks, per event loop",
     )
     p.add_argument(
+        "--limit-max-requests",
+        dest="limit_max_requests",
+        type=int,
+        default=None,
+        help="Stop after this many requests on any one event loop (stops the process)",
+    )
+    p.add_argument("--ssl-keyfile", dest="ssl_keyfile", default=None)
+    p.add_argument("--ssl-certfile", dest="ssl_certfile", default=None)
+    p.add_argument("--ssl-keyfile-password", dest="ssl_keyfile_password", default=None)
+    p.add_argument(
         "--allow-gil",
         dest="allow_gil",
         action="store_true",
@@ -1073,6 +1083,10 @@ def cmd_serve(args: argparse.Namespace) -> int:
         "timeout_keep_alive": args.timeout_keep_alive,
         "timeout_graceful_shutdown": args.timeout_graceful_shutdown,
         "limit_concurrency": args.limit_concurrency,
+        "limit_max_requests": args.limit_max_requests,
+        "ssl_keyfile": args.ssl_keyfile,
+        "ssl_certfile": args.ssl_certfile,
+        "ssl_keyfile_password": args.ssl_keyfile_password,
     }
     if args.log_level:
         kwargs["log_level"] = args.log_level
