@@ -375,6 +375,7 @@ Rate-limit a handler on the server with a per-handler token bucket. When the lim
 
 - `rate` (`float`) — Tokens per second (sustained rate). Default `10`.
 - `burst` (`int`) — Maximum burst capacity. Default `5`.
+- `on_exceed` (`"disconnect"` or `"drop"`) — What a rejection costs the connection. Default `"disconnect"`: each rejection counts toward the connection's warning budget (`DJUST_CONFIG["rate_limit"]["max_warnings"]`, default 3), and at the limit djust closes the WebSocket with code 4429 and puts the client IP on a reconnect cooldown. `"drop"` only drops the event and warns the client, so a quick honest burst never disconnects anyone. The connection's global per-message limit still disconnects a flood in either mode.
 
 **Usage:**
 
@@ -382,6 +383,11 @@ Rate-limit a handler on the server with a per-handler token bucket. When the lim
 @rate_limit(rate=5, burst=3)
 @event_handler()
 def expensive_operation(self, **kwargs):
+    ...
+
+@rate_limit(rate=2, burst=4, on_exceed="drop")
+@event_handler()
+def emote(self, **kwargs):
     ...
 ```
 

@@ -307,7 +307,7 @@ All rows are owner decisions (2026-09-25).
 | 16 | `python/djust/checks/templates.py:118`, `:260` (T012, T002) | Whether any event directive is present | KEEP | They never resolve a name. |
 | 17 | `python/djust/websocket.py:4997` | The server-push gate for one resolved name | KEEP | A security rule on an already-resolved handler, not discovery. |
 | 18 | `python/djust/validation.py:66–101` `recovery_handler_names` | `dj-auto-recover` targets by a regex over the view's own template source | RETIRE | Onto the template scan, which follows includes and parents and keeps every `{% if %}` branch. More handlers are legacy-forced from mount. |
-| 19 | `python/djust/validation.py:103` `note_rendered_recovery_targets` | `dj-auto-recover` targets in each render's HTML | KEEP | Different input (the render, including computed targets) on the hot path. A test pins it to the binding parser. |
+| 19 | `python/djust/validation.py:103` `note_rendered_recovery_targets` | `dj-auto-recover` targets in each render's HTML | KEEP | Different input (the render, including computed targets) on the hot path. A test pins it to the binding parser. Since #3127 it runs only for a view whose template the row-18 scan cannot fully see, so user HTML in a fully scanned template cannot add a target. |
 | 20 | `python/djust/templatetags/live_tags.py:1375` `_LIVE_RENDER_EVENT_ATTRS` | A hand-written list of event directives for the embedded-child stamp | RETIRE | Derived from `DIRECTIVES` (directives whose client binding attaches owner context) plus `dj-hook`. |
 | 21 | `python/djust/schema.py:21` `DIRECTIVES` | The AI schema's directive table | KEEP | Prose for AI guidance. A test pins its event-directive names and generated parameters to `_template_bindings.DIRECTIVES`. |
 | 22 | `python/djust/checks/templates.py:985–1000` (T010) | `dj-click` with navigation data attributes | KEEP | A heuristic, not name resolution. |
@@ -336,8 +336,11 @@ transports): `dj-shortcut` and `dj-click-away` inside an embedded child reach th
 child through the stamped wrapper. It found two defects the list does not decide:
 
 - `dj-paste` attached no owner context. Fixed on this branch (owner decision).
-- Over HTTP-only, every event from an embedded child reaches the root view:
-  #3104. The test holds those cases as strict expected failures.
+- Over HTTP-only, every event from an embedded child reached the root view
+  (#3104). Since the #3104 follow-up the HTTP fallback refuses such an event
+  ("Embedded view not found"), as the socket runtime refuses an unknown
+  `view_id`, and the test expects the refusal. Routing it to the child over
+  HTTP is still open in #3104.
 
 Row 13's output (N1): `find_handlers_for_template` keeps its JSON keys, computed
 from the D1 extractor and real loader resolution (includes and parents). It gains
@@ -416,9 +419,12 @@ Two limits outside the checks, recorded at D2 and D3:
   665 Python blocks, 8 run as fixtures, 467 are parse- and import-checked
   (`scripts/check-doc-snippets.py` reads `guides/*.md` only), and 190 are not
   checked at all (`scripts/doc-examples-report.py`).
-- **Over HTTP-only, every embedded-child event reaches the root view** (#3104).
-  `tests/playwright/test_embedded_directives.py` holds those cases as expected
-  failures.
+- **Over HTTP-only, an embedded child's events do not reach the child** (#3104).
+  The HTTP fallback refuses them instead of running them on the root view: an
+  HTTP request registers its children only while it renders, after dispatch,
+  and under new process-wide `child_N` ids, so no child the client addressed
+  exists to route to. `tests/playwright/test_embedded_directives.py` expects
+  the refusal.
 
 ## Consequences and non-goals
 

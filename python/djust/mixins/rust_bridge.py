@@ -4,7 +4,7 @@ RustBridgeMixin - Rust backend integration for LiveView.
 
 import hashlib
 import logging
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Set, Union
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, Iterable, List, Optional, Set, Union
 from urllib.parse import parse_qs, urlencode
 
 from django.utils.datastructures import MultiValueDict
@@ -268,6 +268,17 @@ class RustBridgeMixin:
     # runtime change.
     _djust_template_hash_slot: str
 
+    #: Adaptive loop-cache bypass (#3071). After this many consecutive
+    #: renders whose loop-cache hit rate is below
+    #: ``_LOOP_CACHE_MIN_HIT_RATIO``, the view turns the loop render cache off
+    #: for the rest of that view instance's lifetime: loop items that change on
+    #: almost every render make the cache hash and track every item for no
+    #: reuse (+20-30% render time measured). It is never re-probed; a new
+    #: instance (a reconnect, another page load) starts with the cache on and
+    #: measures again. ``0`` disables the bypass for a view class.
+    _LOOP_CACHE_BYPASS_AFTER: ClassVar[int] = 8
+    _LOOP_CACHE_MIN_HIT_RATIO: ClassVar[float] = 0.2
+
     def _apply_loop_render_cache_flag(self) -> None:
         """Wire ``LIVEVIEW_CONFIG['loop_render_cache_enabled']`` → Rust (#1967).
 
@@ -277,7 +288,8 @@ class RustBridgeMixin:
         cheap (a single bool set on the Rust side). Called on every
         ``_rust_view`` (re)initialization — including cache HITs, where the
         flag is not part of the serialized view state. A no-op if the Rust
-        build predates the setter (defensive ``hasattr`` guard).
+        build predates the setter (defensive ``hasattr`` guard). A view that
+        the adaptive bypass (#3071) switched off stays off.
         """
         rust_view = getattr(self, "_rust_view", None)
         if rust_view is None or not hasattr(rust_view, "set_loop_render_cache_enabled"):
@@ -289,7 +301,48 @@ class RustBridgeMixin:
         except Exception:  # pragma: no cover - config access is defensive
             logger.debug("[LiveView] loop_render_cache flag read failed; defaulting OFF")
             enabled = False
+        if getattr(self, "_loop_cache_bypassed", False):
+            enabled = False
         rust_view.set_loop_render_cache_enabled(enabled)
+
+    def _observe_loop_render_cache(self) -> None:
+        """Count low-hit renders and switch the loop cache off after a streak (#3071).
+
+        Reads the Rust cache's per-render counters after a full render. A
+        render with no cacheable loop work (no hits, no misses) neither
+        extends nor breaks the streak; a render at or above
+        ``_LOOP_CACHE_MIN_HIT_RATIO`` resets it. Turning the cache off is safe
+        at any render: this view renders the same output with the cache on or
+        off (the cache only reuses fragments it would otherwise re-render), so
+        the next diff is unaffected. The switch lasts for this instance.
+        """
+        rust_view = getattr(self, "_rust_view", None)
+        limit = self._LOOP_CACHE_BYPASS_AFTER
+        if (
+            rust_view is None
+            or limit <= 0
+            or getattr(self, "_loop_cache_bypassed", False)
+            or not hasattr(rust_view, "loop_render_cache_hits")
+            or not rust_view.loop_render_cache_enabled()
+        ):
+            return
+        hits = rust_view.loop_render_cache_hits()
+        misses = rust_view.loop_render_cache_misses()
+        if hits + misses == 0:
+            return
+        if hits / (hits + misses) >= self._LOOP_CACHE_MIN_HIT_RATIO:
+            self._loop_cache_miss_streak = 0
+            return
+        streak = getattr(self, "_loop_cache_miss_streak", 0) + 1
+        self._loop_cache_miss_streak = streak
+        if streak >= limit:
+            self._loop_cache_bypassed = True
+            rust_view.set_loop_render_cache_enabled(False)
+            logger.debug(
+                "[LiveView] %s: loop render cache off after %d low-hit renders",
+                type(self).__name__,
+                streak,
+            )
 
     def _apply_template_auto_call_flag(self) -> None:
         """Wire ``LIVEVIEW_CONFIG['template_auto_call']`` → Rust (ADR-024).

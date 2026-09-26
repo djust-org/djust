@@ -9,8 +9,6 @@ passed it, but ``db_notify`` drains through the consumer's
 ``_dispatch_single_event`` with no authorized turn at all.
 """
 
-import json
-
 import pytest
 from asgiref.sync import sync_to_async
 from channels.layers import get_channel_layer
@@ -21,6 +19,7 @@ from djust import LiveView, event_handler
 from djust.decorators import state
 from djust.websocket import LiveViewConsumer
 
+from ._ws_frames import drain_extra, has_type, receive_until
 from .test_exposure_runtime import make_request
 
 BUMPS = []
@@ -47,16 +46,22 @@ class ActivityNotifyView(LiveView):
         self.set_activity_visible("panel", True)
 
 
-async def _collect(socket, quiet=0.8):
-    """Frames until the socket goes quiet or closes; returns (frames, close)."""
-    frames, closed = [], None
-    while not await socket.receive_nothing(timeout=quiet):
-        out = await socket.receive_output(timeout=3)
-        if out["type"] == "websocket.close":
-            closed = out
-            break
-        frames.append(json.loads(out["text"]))
-    return frames, closed
+def _closed(frames):
+    return bool(frames) and frames[-1].get("type") == "websocket.close"
+
+
+async def _collect(socket, until):
+    """Frames and the close, if any; returns (frames, close).
+
+    Event-driven (#3130): waits until ``until(frames)`` holds, then a trailing
+    quiet window collects anything else. The window can only miss a late
+    extra frame, never cut the expected one short.
+    """
+    frames = await receive_until(socket, until)
+    if not _closed(frames):
+        frames += await drain_extra(socket)
+    closes = [f for f in frames if f.get("type") == "websocket.close"]
+    return [f for f in frames if f not in closes], (closes[0] if closes else None)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -83,7 +88,7 @@ async def test_notify_released_activity_event_requires_fresh_authorization(monke
             await socket.send_json_to(
                 {"type": "event", "event": "bump", "params": {"_activity": "panel"}}
             )
-            await _collect(socket, quiet=0.4)
+            await _collect(socket, has_type("noop"))  # the queued event's ack
             assert BUMPS == [], "the event must be queued, not dispatched"
 
             if session == "deleted":
@@ -93,7 +98,10 @@ async def test_notify_released_activity_event_requires_fresh_authorization(monke
                 "djust_db_notify_exposure_activity_auth",
                 {"type": "db_notify", "channel": "exposure_activity_auth", "payload": {}},
             )
-            frames, closed = await _collect(socket)
+            if session == "intact":
+                frames, closed = await _collect(socket, lambda frames: bool(BUMPS) and frames)
+            else:
+                frames, closed = await _collect(socket, _closed)
 
             if session == "intact":
                 # Control: the NOTIFY releases the queued event.
@@ -176,7 +184,6 @@ async def test_notify_released_event_failures_log_value_free_for_explicit_views(
     exception with its traceback for any policy. Under ``DEBUG=False`` an
     explicit view's log is value-free; under ``DEBUG=True`` it carries the
     exception like a legacy view's (ADR-038 D-a, revised 2026-09-22)."""
-    import asyncio
     import logging
 
     RAN.clear()
@@ -198,7 +205,7 @@ async def test_notify_released_event_failures_log_value_free_for_explicit_views(
             await socket.send_json_to(
                 {"type": "event", "event": event, "params": {"_activity": "panel"}}
             )
-            await _collect(socket, quiet=0.4)
+            await _collect(socket, has_type("noop"))  # the queued event's ack
             assert RAN == [], "the event must be queued, not dispatched"
             caplog.clear()
             with caplog.at_level(logging.DEBUG):
@@ -206,11 +213,12 @@ async def test_notify_released_event_failures_log_value_free_for_explicit_views(
                     "djust_db_notify_exposure_activity_fail",
                     {"type": "db_notify", "channel": "exposure_activity_fail", "payload": {}},
                 )
-                await _collect(socket)
-                for _ in range(40):
-                    if ran in RAN and (sentinel in caplog.text or "Protected" in caplog.text):
-                        break
-                    await asyncio.sleep(0.05)
+                await _collect(
+                    socket,
+                    lambda frames: (
+                        ran in RAN and (sentinel in caplog.text or "Protected" in caplog.text)
+                    ),
+                )
             assert ran in RAN, f"{ran} never ran; the test would be vacuous"
             if policy == "legacy" or debug:
                 assert sentinel in caplog.text

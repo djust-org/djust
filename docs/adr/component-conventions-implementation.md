@@ -2664,9 +2664,11 @@ Source: [decisions and acceptance](037-event-contract-checks-and-executable-docu
       in the directive table as an owner-context binding.
     - Over HTTP-only, every embedded-child event reaches the root view: #3104,
       not fixed here. The browser test holds those cases as strict expected
-      failures.
+      failures. (Follow-up, drain/adr-followups: the HTTP fallback now refuses
+      those events instead; routing them to the child remains open in #3104.)
   - `get_debug_info()` crashes on a property that raises something other than
-    `AttributeError`: tracked as #3103, not fixed here.
+    `AttributeError`: tracked as #3103, not fixed here. (Fixed in the
+    drain/adr-followups follow-up: properties are listed without being run.)
   - Under the legacy policy, `dj-input`, `dj-change` and `dj-submit` send `field`
     and `_target`, so a closed legacy handler for them fails at runtime. T020 now
     reports those bindings; V007 was the blanket guard.
@@ -2781,7 +2783,8 @@ Source: [decisions and acceptance](037-event-contract-checks-and-executable-docu
     - `test_interactive_navigation` passes on WebSocket and SSE, with session
       and signed state.
     - `test_embedded_directives` passes. Over HTTP-only, every embedded-child
-      directive reaches the parent, as #3104 records.
+      directive reaches the parent, as #3104 records. (Since the
+      drain/adr-followups follow-up the HTTP fallback refuses them instead.)
     - `test_interactive_acceptance` failed once in three runs, on WebSocket only
       (stage 2, a fixed 800 ms wait), and passed on all three transports in the
       next two runs. Tracked as #3137, the same class as #3130.

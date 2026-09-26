@@ -12,14 +12,12 @@ class Progress(Component):
 
     Displays a horizontal bar indicating completion percentage.
 
-    **Styling is yours.** No stylesheet djust ships has a rule for the markup
-    this class renders (``dj-progress``, ``dj-progress-<variant>``,
-    ``dj-progress-<size>``, ``dj-progress-label``, ``dj-progress-track``,
-    ``dj-progress-bar``, ``dj-progress-value``). The bar's inline
-    ``width`` is its only styling, so the track is invisible until you style
-    it. For a styled bar, use the ``{% theme_progress %}`` tag from
-    ``djust.theming`` (``{% load theme_components %}``), which follows the
-    active theme. See "Unstyled Python components" in the components guide.
+    Styled by ``djust_components/components.css``, which ``{% theme_head %}``
+    links (#2993), on the active theme's tokens: a ``--muted`` track and a
+    ``--primary`` bar (or the variant's colour). The classes it renders are
+    ``dj-progress``, ``dj-progress-<variant>``, ``dj-progress-<size>``,
+    ``dj-progress-label``, ``dj-progress-track``, ``dj-progress-bar`` and
+    ``dj-progress-value``.
 
     Usage in a LiveView::
 
@@ -43,8 +41,8 @@ class Progress(Component):
         {{ upload|safe }}
         {{ build|safe }}
 
-    CSS custom properties — the names to use in your own stylesheet. Nothing
-    djust ships reads them::
+    CSS custom properties the stylesheet reads before the theme tokens, to
+    restyle progress bars without touching the theme::
 
         --dj-progress-bg: track background color
         --dj-progress-bar-bg: filled bar color

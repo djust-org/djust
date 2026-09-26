@@ -9,9 +9,6 @@ twin already dispatches unconditionally (#1887); both arms here (skip-render
 noop and re-render) must too.
 """
 
-import asyncio
-import json
-
 import pytest
 from asgiref.sync import sync_to_async
 from channels.layers import get_channel_layer
@@ -22,6 +19,8 @@ from django.test import override_settings
 
 from djust import LiveView, event_handler
 from djust.websocket import LiveViewConsumer
+
+from ._ws_frames import drain_extra, has_type, receive_until
 
 RAN = []
 
@@ -58,12 +57,12 @@ class NotifyAsyncView(LiveView):
         self.set_activity_visible("panel", True)
 
 
-async def _drain(socket, quiet=0.4):
-    while not await socket.receive_nothing(timeout=quiet):
-        out = await socket.receive_output(timeout=3)
-        if out["type"] == "websocket.close":
-            return
-        json.loads(out["text"])
+async def _drain(socket, until):
+    """Frames until ``until(frames)`` holds (event-driven, #3130), then any
+    others before the socket goes quiet."""
+    frames = await receive_until(socket, until)
+    if not (frames and frames[-1].get("type") == "websocket.close"):
+        await drain_extra(socket)
 
 
 def _session():
@@ -93,18 +92,14 @@ async def test_notify_released_event_runs_its_start_async_work(event):
             await socket.send_json_to(
                 {"type": "event", "event": event, "params": {"_activity": "panel"}}
             )
-            await _drain(socket)
+            await _drain(socket, has_type("noop"))  # the queued event's ack
             assert RAN == [], "the event must be queued while the panel is hidden"
 
             await get_channel_layer().group_send(
                 "djust_db_notify_notify_async_2946",
                 {"type": "db_notify", "channel": "notify_async_2946", "payload": {}},
             )
-            await _drain(socket, quiet=0.8)
-            for _ in range(40):
-                if "work" in RAN:
-                    break
-                await asyncio.sleep(0.05)
+            await _drain(socket, lambda frames: "work" in RAN)
             assert event in RAN, "the NOTIFY never released the queued event"
             assert "work" in RAN, "start_async work was dropped"
         finally:
