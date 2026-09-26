@@ -1087,6 +1087,42 @@ The new guide is `docs/website/guides/scaling-across-cores.md`. A truth review c
 - Code Review: 1 🟡 (stripe-test tautology), fixed; 1 🟢 (`str()` vs `to_string()` for a non-string manifest), left.
 - Re-Review: passed, with 1 🟢 filed as #3178.
 
+## v1.3.0-9 — test git-env isolation (#3179)
+
+**Scope**: One djust PR (#3180), which fixed #3179. The main checkout's repo-local config gained `user.name = Test`, `user.email = test@example.com` and `commit.gpgsign = false`, and the 1.3.0rc3 release commit and `82247d27a` were authored "Test".
+
+### Bucket summary
+
+**Outcome.**
+- `tests/test_git_commit_with_precommit.py::_make_repo`, which ran exactly that trio with an inherited environment, and `tests/test_check_shared_git_config.py::_git` / `_run_checker` now use `isolated_git_env()`.
+- 14 test modules that spawn git, or a script that runs git, got a module-level autouse fixture that strips `GIT_EXECUTION_VARS`.
+- The root `conftest.py` strips the same variables for every test, to cover library code that runs git in-process.
+- `tests/test_git_env_guard_3179.py` adds two guards: a behavioural regression, in which the helpers run against a throwaway `GIT_DIR` that must stay unchanged, and a static AST guard with 12 detector self-tests.
+
+**What the bucket learned**
+1. **Defend the class, not the entry point.** #2608 stripped `GIT_*` in `scripts/pre-push-pytest.sh`, and the fixtures stayed unswept. Any other way of running pytest with `GIT_DIR` exported still leaked.
+2. **Let the guard size the problem.** The report named 2 modules. The first static scan found 14, three of them able to write: `git init victim`, `git worktree add` at the repo root, and `git clone`.
+3. **Give a static gate evasion self-tests from the start.** Code Review found four shapes the first detector missed: an aliased module, a `shell=True` string, a variable argv, and asyncio. #3181 has the same finding for #3151's gate.
+4. **Verify under a hostile environment.** Run the touched tests with `GIT_DIR=/nonexistent/.git` and with `GIT_DIR` pointed at a throwaway repo checksummed before and after. Unit tests of the helper alone cannot show that a module is actually protected.
+
+**Open items**
+- The run that wrote the config this time was not identified. Reflogs show the `Test` identity recurring since July.
+- 🟢, not filed: the detector tracks an `isolated_git_env()` binding function-wide, so a reassignment still passes; `scripts/*.py` detection uses the narrower regex.
+- The main checkout still has `commit.gpgsign = false`. That is the maintainer's call.
+
+### PR 1 — git fixtures must not write into the real `.git/config` (PR #3180)
+
+**Date**: 2026-09-26. Squash-merged as `d2033bf1c`. Retro: https://github.com/djust-org/djust/pull/3180#issuecomment-5847442613 (Quality 4/5).
+
+**Tests at close**
+- `tests/test_git_env_guard_3179.py`: 16 tests. Before the fix, 3 failed: both behavioural tests and the static scan.
+- The touched and protected git modules gave 568 passed, 13 skipped, both under a throwaway `GIT_DIR` (unchanged afterwards) and under `GIT_DIR=/nonexistent/.git`.
+- The pre-push hook passed (pytest, cargo test, clippy, audit), and CI was green.
+
+**Review stats**
+- Code Review: 2 🟡 (detector false negatives, and an `env=<local>` false positive), both fixed; 1 🟢 (a long docstring line), fixed; 1 question (why not a conftest), answered with a root conftest catch-all.
+- Re-Review: approved; 2 🟢 left.
+
 ## v1.3.0-8 — free-threaded first-use class caches (#3151)
 
 **Scope**: One djust PR (#3176), which fixed #3151. On snake-arena (3.14t, `PooledHTTP(threads=3)`), the first simultaneous page loads after a start returned 500 with `RuntimeError: dictionary changed size during iteration` in `_descriptor_fields()`. The PR also swept every request-path walk of a class namespace for the same race.
