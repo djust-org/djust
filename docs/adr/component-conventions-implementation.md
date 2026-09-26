@@ -2763,6 +2763,29 @@ Source: [decisions and acceptance](037-event-contract-checks-and-executable-docu
   revision, complete migration/AI guidance, and verify actual website delivery
   rather than equating repository Markdown with publication. Record remaining
   static-analysis limits; only then change the relevant ADR status.
+
+  **Acceptance at the final revision (2026-09-25, `41a436210` on `feat/adr-037-d3`).**
+  - **Python** (the ADR 034–037 acceptance set: interactive, delegated rows, model
+    form, form hooks, parameter contracts, strict dispatch, recovery policy,
+    ADR-037 checks and discovery, `find_handlers_for_template`, the documentation
+    harness, V004 subscriptions, the catalogue entry, the interactive reference
+    generator): **676 passed**.
+  - **JS** (`adr036_documented_examples`, `interactive-nested-ownership`,
+    `parameter_contract_*`, `dj-paste`): **65 passed** in 6 files.
+  - **Browser** (`tests/playwright/`, against this worktree's demo server on
+    port 18448):
+    - `test_strict_parameters`, `test_model_form`, `test_interactive_dropdown`
+      and `test_interactive_collection` pass on WebSocket, SSE and HTTP.
+    - `test_interactive_navigation` passes on WebSocket and SSE, with session
+      and signed state.
+    - `test_embedded_directives` passes. Over HTTP-only, every embedded-child
+      directive reaches the parent, as #3104 records.
+    - `test_interactive_acceptance` failed once in three runs, on WebSocket only
+      (stage 2, a fixed 800 ms wait), and passed on all three transports in the
+      next two runs. Tracked as #3137, the same class as #3130.
+  - **Checks:** `tests/test_check_*.py` has **83 passed**. The demo project's
+    `manage.py check` reports **85 `djust.T019`**, the same as at D1: all on
+    undecorated handlers of 33 views the URLconf does not route.
 - [ ] **DR — retirement decision.** [ADR-037 Step R](037-event-contract-checks-and-executable-documentation.md)
   requires D1 to settle whether this ADR is consolidation or addition: enumerate every
   place that re-derives handler parameters, ownership or event names independently of
