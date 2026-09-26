@@ -2358,20 +2358,7 @@ class TestLogsCommand:
         assert "Error:" not in err
 
     def test_expired_token_mid_follow_is_refreshed(self, runner, creds_dir, requests_mock):
-        cred_file = creds_dir / "credentials"
-        cred_file.write_text(
-            json.dumps(
-                {
-                    "auth_scheme": "bearer",
-                    "access_token": "old-access",
-                    "refresh_token": "valid-refresh",
-                    "expires_at": 0,
-                    "email": "u@e.com",
-                    "server_url": "https://djustlive.com",
-                }
-            )
-        )
-        cred_file.chmod(0o600)
+        _write_bearer_creds(creds_dir, access="old-access")
         # /me/ accepts the old token at startup, then rejects it once the
         # log endpoint has.
         requests_mock.get(
