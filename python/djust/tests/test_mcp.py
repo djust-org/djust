@@ -322,3 +322,51 @@ def test_ai_events_reference_does_not_require_kwargs():
 
     text = pathlib.Path(__file__).resolve().parents[3].joinpath("docs/ai/events.md").read_text()
     assert "require `@event_handler()` decorator and `**kwargs`" not in text
+
+
+def test_no_documentation_teaches_the_retired_kwargs_rule():
+    # #3138 review: ADR-037 retired V007's "always accept **kwargs", but the
+    # website guides still taught it (and "default values for all parameters").
+    import pathlib
+    import re
+
+    root = pathlib.Path(__file__).resolve().parents[3]
+    retired = re.compile(
+        r"(?i)(always (?:accept|include|use)[^\n]{0,40}\*\*kwargs"
+        r"|(?:include|accept) `?\*\*kwargs`? (?:in all|for flexibility)"
+        r"|default values for all (?:handler )?parameters)"
+    )
+    files = [*(root / "docs/website").rglob("*.md"), *(root / "docs/ai").rglob("*.md")]
+    files.append(root / "docs/BEST_PRACTICES_AI.md")
+    found = [
+        "%s:%d" % (path.relative_to(root), number)
+        for path in files
+        for number, line in enumerate(path.read_text().splitlines(), 1)
+        if retired.search(line)
+    ]
+    assert found == [], found
+
+
+def test_guidance_says_what_legacy_submit_actually_sends():
+    # #3138 review: legacy dj-submit sends the form fields plus `_target`, never
+    # `field` (09-event-binding.js; _template_bindings DIRECTIVES "dj-submit").
+    # Guidance telling an AI to declare `field` on a submit handler gets every
+    # submit rejected for a missing required parameter.
+    import json
+    import pathlib
+
+    from djust._template_bindings import DIRECTIVES
+    from djust.schema import BEST_PRACTICES
+
+    submit = DIRECTIVES["dj-submit"]
+    assert "field" not in submit.generated + submit.legacy_only
+    assert submit.legacy_only == ("_target",)
+    root = pathlib.Path(__file__).resolve().parents[3]
+    texts = {
+        "schema": json.dumps(BEST_PRACTICES),
+        "docs/ai/events.md": (root / "docs/ai/events.md").read_text(),
+    }
+    for name, text in texts.items():
+        assert "dj-submit also send" not in text, name
+        assert "dj-change and dj-submit also send" not in text, name
+        assert "raises TypeError" not in text, name

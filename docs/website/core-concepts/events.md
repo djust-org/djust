@@ -50,8 +50,10 @@ class MyView(LiveView):
 **Rules** (the default, legacy parameter policy; for closed, typed signatures
 see [Typed event parameters](#typed-event-parameters-strict-policy)):
 
-- Always accept `**kwargs` — djust may pass extra metadata
-- Provide default values for all parameters (`value: str = ""`)
+- Declare the parameters the binding sends; `manage.py check` reports a binding
+  its handler would reject (`djust.T020`)
+- Under the legacy policy, `dj-input` and `dj-change` also send `field` and `_target`, and `dj-submit` sends `_target` with the form fields: keep `**kwargs` on those handlers, or declare the names
+- Give a parameter a default when a binding may omit it (`value: str = ""`)
 - Use type hints for automatic coercion (`item_id: int` converts `"5"` → `5`)
 - `value` is the magic parameter name for `dj-input` and `dj-change`
 

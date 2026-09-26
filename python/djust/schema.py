@@ -1161,7 +1161,7 @@ BEST_PRACTICES = {
         "rules": [
             "All handlers MUST use @event_handler() decorator",
             "Declare the parameters the binding sends; manage.py check reports a mismatch (djust.T020)",
-            "Under the legacy policy dj-input/dj-change/dj-submit also send field and _target: declare them or keep **kwargs",
+            "Under the legacy policy dj-input/dj-change also send field and _target, and dj-submit sends _target with the form fields: declare them or keep **kwargs",
             "Input/change events use 'value' parameter name",
             "Button data attributes: data-item-id='5' -> item_id=5",
             "Form submission: all fields as kwargs",
@@ -1381,8 +1381,9 @@ BEST_PRACTICES = {
         "description": (
             "Declare the parameters the binding sends. Under the strict policy a "
             "closed, annotated signature is the contract and **kwargs is not needed. "
-            "Under the legacy policy dj-input, dj-change and dj-submit also send "
-            "`field` and `_target`, so declare them or keep **kwargs. `manage.py "
+            "Under the legacy policy dj-input and dj-change also send `field` and "
+            "`_target`, and dj-submit sends `_target` with the form fields, so "
+            "declare them or keep **kwargs. `manage.py "
             "check` reports a binding its handler would reject as djust.T020."
         ),
         "correct": (
@@ -1431,8 +1432,9 @@ BEST_PRACTICES = {
             "problem": "A binding sends parameters its handler does not declare",
             "why": (
                 "Under the strict policy the browser sends only declared parameters "
-                "and rejects the rest; under legacy, dj-input/dj-change/dj-submit also "
-                "send field and _target, so a closed legacy handler raises TypeError."
+                "and rejects the rest; under legacy, dj-input/dj-change also send field "
+                "and _target and dj-submit sends _target, so an event a closed handler "
+                "does not declare is rejected before the handler runs."
             ),
             "solution": (
                 "Run manage.py check: djust.T020 names the binding and the handler. "

@@ -58,7 +58,7 @@ class CounterView(LiveView):
 
 - `mount()` runs on the initial HTTP render and again when the WebSocket connects (unless state is restored) — set initial state here, not in `__init__`, and keep it idempotent (no one-time side effects)
 - Every event handler needs `@event_handler()` — djust blocks undecorated methods for security
-- Always accept `**kwargs` in event handlers (djust may pass extra metadata)
+- Declare the parameters each binding sends; `manage.py check` reports a handler that would reject one (`djust.T020`)
 - State lives on `self` — any change to `self.count` triggers a re-render automatically
 
 ## 2. Create the Template

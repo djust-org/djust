@@ -40,7 +40,7 @@ class ItemView(LiveView):
 
 Legacy policy:
 
-Legacy `dj-input`, `dj-change` and `dj-submit` also send `field` and `_target`: keep `**kwargs` on those handlers, or declare the names.
+Legacy `dj-input` and `dj-change` also send `field` and `_target`, and `dj-submit` sends `_target` with the form fields: keep `**kwargs` on those handlers, or declare the names.
 
 <!-- djust-example: skip -- legacy-policy handler fragments with no view class; import-checked by scripts/check-doc-snippets.py -->
 ```python
@@ -87,6 +87,6 @@ Template bindings:
 
 Rules:
 - `value` is the magic parameter name for `dj-input`/`dj-change` events
-- Always provide default values for all parameters
+- Give a parameter a default when a binding may omit it
 - `data-*` attributes are converted: `data-item-id` -> `item_id`
 - Type hints enable automatic coercion: `item_id: int` converts `"5"` to `5`
