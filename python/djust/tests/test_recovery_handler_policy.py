@@ -177,6 +177,34 @@ class SafeHtmlDynamicRecovery(_RecoveryBase):
     template_name = "rec_r1/safe_dynamic.html"
 
 
+class FlashRecovery(_RecoveryBase):
+    template_name = "rec_r1/flash.html"
+
+
+class ActivityRecovery(_RecoveryBase):
+    """The recovery form sits inside a djust block tag's body."""
+
+    template_name = "rec_r1/activity.html"
+
+
+class InstanceTemplateNameRecovery(_RecoveryBase):
+    """The class names a template without targets; mount() picks one with."""
+
+    template_name = "rec_r1/plain.html"
+
+    def mount(self, request, **kwargs):
+        super().mount(request, **kwargs)
+        self.template_name = "rec_r1/other.html"
+
+
+class InstanceTemplateRecovery(_RecoveryBase):
+    template_name = "rec_r1/plain.html"
+
+    def mount(self, request, **kwargs):
+        super().mount(request, **kwargs)
+        self.template = '<div dj-root><div dj-auto-recover="pick"></div><p>{{ note }}</p></div>'
+
+
 @pytest.fixture
 def templates(tmp_path):
     from django.test import override_settings
@@ -212,6 +240,21 @@ def templates(tmp_path):
         f'<div dj-root dj-view="{MOD}.SafeHtmlDynamicRecovery">'
         '<div dj-auto-recover="{{ target }}"></div><p>{{ note|safe }}</p></div>'
     )
+    (d / "flash.html").write_text(
+        "{% load djust_flash %}"
+        f'<div dj-root dj-view="{MOD}.FlashRecovery">{{% include "rec_r1/form.html" %}}'
+        "{% dj_flash %}<p>{{ note|safe }}</p></div>"
+    )
+    (d / "activity.html").write_text(
+        "{% load live_tags %}"
+        f'<div dj-root dj-view="{MOD}.ActivityRecovery">'
+        '{% dj_activity "panel" visible=True %}{% include "rec_r1/form.html" %}{% enddj_activity %}'
+        "<p>{{ note|safe }}</p></div>"
+    )
+    (d / "plain.html").write_text("<div dj-root>" + form + "<p>{{ note|safe }}</p></div>")
+    (d / "other.html").write_text(
+        '<div dj-root><div dj-auto-recover="pick"></div><p>{{ note|safe }}</p></div>'
+    )
     with override_settings(
         TEMPLATES=[
             {
@@ -223,11 +266,17 @@ def templates(tmp_path):
         ],
         LIVEVIEW_ALLOWED_MODULES=[MOD],
     ):
+        from djust.validation import _RECOVERY_HANDLERS
+
+        # The per-class scan cache outlives settings: a check that ran without
+        # these templates (the V019 tests above) must not answer for them.
+        _RECOVERY_HANDLERS.clear()
         clear_template_dirs_cache()
         try:
             yield
         finally:
             clear_template_dirs_cache()
+            _RECOVERY_HANDLERS.clear()
 
 
 def _mounted(view_class):
@@ -310,6 +359,39 @@ def test_rendered_user_html_cannot_claim_the_downgrade(templates):
     assert CALLS == [("restore_state", ENVELOPE)]
 
 
+def test_a_djust_block_tags_body_is_scanned(templates):
+    """A djust block tag's own output is transparent, and its body is the
+    template's markup: a target declared inside it is seen, and the scan
+    stays complete (so rendered user HTML is not read)."""
+    from djust.validation import _recovery_scan
+
+    assert _recovery_scan(ActivityRecovery) == (frozenset({"restore_state"}), True)
+
+
+@pytest.mark.django_db
+def test_a_djust_tag_does_not_reopen_the_downgrade(templates):
+    """PR #3159 review: ``{% dj_flash %}`` made the scan a gap, so the page went
+    back to trusting rendered user HTML. djust's own tags are transparent to
+    the recovery scan (none of them emits ``dj-auto-recover``)."""
+    config.set("event_parameter_policy", "strict")
+    view, runtime = _mounted(FlashRecovery)
+    _send(runtime, "echo", {"text": '<div dj-auto-recover="pick"></div>'})
+    assert 'dj-auto-recover="pick"' in view.render_with_diff()[0]
+    assert get_handler_parameter_policy(view.pick) == "strict"
+    assert get_handler_parameter_policy(view.restore_state) == "legacy"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("view_class", [InstanceTemplateNameRecovery, InstanceTemplateRecovery])
+def test_a_template_chosen_on_the_instance_keeps_its_targets(templates, view_class):
+    """PR #3159 review: the class-level scan describes the class template, not
+    one mount() assigns, so the render is read for such a view (as on main)."""
+    config.set("event_parameter_policy", "strict")
+    view, _runtime = _mounted(view_class)
+    assert 'dj-auto-recover="pick"' in view.render_with_diff()[0]
+    assert get_handler_parameter_policy(view.pick) == "legacy"
+
+
 @pytest.mark.django_db
 def test_a_computed_target_still_reads_the_render(templates):
     """The documented limit of #3127: where the template computes a target, the
@@ -355,3 +437,37 @@ def test_the_render_scan_agrees_with_the_binding_parser(html):
         if b.directive == "dj-auto-recover" and b.name and EVENT_NAME.match(b.name)
     }
     assert _RENDERED_RECOVERY[probe] == parsed
+
+
+def test_no_djust_tag_or_template_emits_a_recovery_target():
+    """The premise that lets the recovery scan treat djust's own tags as
+    transparent (PR #3159 review): no markup djust renders carries
+    ``dj-auto-recover``. The only files that mention it read or document the
+    attribute; a new one fails here and must be reviewed against that premise.
+    """
+    from pathlib import Path
+
+    import djust
+
+    package = Path(djust.__file__).parent
+    readers = {
+        "_template_bindings.py",
+        "checks/bindings.py",
+        "checks/parameters.py",
+        "schema.py",
+        "validation.py",
+    }
+    found = set()
+    for path in package.rglob("*"):
+        relative = path.relative_to(package).as_posix()
+        if not path.is_file() or relative.startswith(("tests/", "static/")):
+            continue
+        if path.suffix not in (".py", ".html", ".txt", ".jinja", ".j2"):
+            continue
+        if "dj-auto-recover" in path.read_text(encoding="utf-8", errors="ignore"):
+            found.add(relative)
+    assert found == readers
+    crates = package.parents[1] / "crates"
+    if crates.is_dir():
+        rust = [p for p in crates.rglob("*.rs") if "auto-recover" in p.read_text(errors="ignore")]
+        assert rust == []

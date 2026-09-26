@@ -132,13 +132,29 @@ def _strict_possible(view: Any) -> bool:
         return True
 
 
+def _scan_describes(view: Any) -> bool:
+    """Whether the class-level scan sees every recovery target ``view`` renders.
+
+    Not when the view sets ``template`` or ``template_name`` on the instance
+    (in ``mount()``, say): the scan read the class's template, not that one
+    (PR #3159 review).
+    """
+    if _INSTANCE_TEMPLATE_NAMES & set(getattr(view, "__dict__", ())):
+        return False
+    return _recovery_scan(type(view))[1]
+
+
+_INSTANCE_TEMPLATE_NAMES = frozenset({"template", "template_name"})
+
+
 def note_rendered_recovery_targets(view: Any, html: str) -> None:
     """Record the recovery targets in the HTML the server just rendered for ``view``.
 
     Used only where the class-level template scan cannot see every target: a
     computed ``dj-auto-recover`` value, markup the scan cannot follow (a
     dynamic include, a tag that renders markup), or a view that picks its own
-    template. Elsewhere a render adds nothing, because rendered HTML also
+    template (``get_template()``, or ``template``/``template_name`` set on the
+    instance). Elsewhere a render adds nothing, because rendered HTML also
     carries user content: ``|safe`` HTML from a sanitizer that keeps unknown
     attributes could otherwise name a strict handler and downgrade it (#3127).
     Where the render is used, such a sanitizer must drop ``dj-*`` attributes.
@@ -149,11 +165,7 @@ def note_rendered_recovery_targets(view: Any, html: str) -> None:
         names: frozenset[str] = frozenset()
         # R1 only downgrades strict handlers: a legacy-only view never needs the
         # parse (it cost ~3 ms per 20 KB render, PR #3122 review).
-        if (
-            "dj-auto-recover" in html
-            and _strict_possible(view)
-            and not _recovery_scan(type(view))[1]
-        ):
+        if "dj-auto-recover" in html and _strict_possible(view) and not _scan_describes(view):
             from html.parser import HTMLParser
 
             found: set[str] = set()

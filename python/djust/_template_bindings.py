@@ -303,6 +303,11 @@ class Gap:
     file: str
     line: int
     reason: str
+    #: The unseen markup is a djust tag's own output. No djust tag emits a
+    #: ``dj-auto-recover`` attribute (pinned by a test that searches every
+    #: template tag library and template djust ships), so such a gap cannot hide
+    #: a recovery target the template declares (PR #3159 review).
+    recovery_safe: bool = False
 
 
 @dataclass
@@ -326,6 +331,18 @@ class _Flat:
 #: djust tags whose output carries no binding this owner handles: an embedded
 #: child view is checked as its own owner, and client configuration has none.
 _SELF_CHECKED_TAGS = frozenset({"live_render", "djust_client_config"})
+
+#: The package whose own template tags cannot emit a recovery target.
+_DJUST_TAG_MODULE_PREFIX = "djust."
+
+
+def _tag_module(node: Any) -> str:
+    """The module that defines a tag: its function's for ``simple_tag`` and
+    ``inclusion_tag`` nodes (whose class is Django's), else the node class's."""
+    func = getattr(node, "func", None)
+    module = getattr(func, "__module__", None) if func is not None else None
+    return module or getattr(type(node), "__module__", "") or ""
+
 
 _TRANSPARENT_MODULES = (
     "django.template.defaulttags",
@@ -449,15 +466,26 @@ class _Flattener:
                 if tag and tag[0] in _SELF_CHECKED_TAGS:
                     flat.emit(VALUE)
                     continue
+                djust_tag = _tag_module(node).startswith(_DJUST_TAG_MODULE_PREFIX)
                 flat.gaps.append(
                     Gap(
                         node_file,
                         line,
                         "{%% %s %%} renders markup this check cannot see"
                         % (tag[0] if tag else type(node).__name__),
+                        recovery_safe=djust_tag,
                     )
                 )
                 flat.emit(OPAQUE)
+                if djust_tag:
+                    # A djust block tag's body is the template's own markup:
+                    # scan it, so a target declared inside stays visible.
+                    for name in getattr(node, "child_nodelists", ()):
+                        child = getattr(node, name, None)
+                        if child:
+                            flat.emit(BRANCH)
+                            self.nodes(child, node_file, blocks, depth + 1)
+                            flat.emit(BRANCH)
 
     def include(self, node: Any, file: str, line: int, depth: int) -> None:
         expression = node.template
@@ -1069,9 +1097,11 @@ def recovery_scan(cls: type) -> tuple[frozenset[str], bool]:
 
     The flag is False when the scan cannot see every target the page may
     render: no Django engine, no declared template, a template that did not
-    load, markup the scan cannot follow (a dynamic include or extends, a tag
-    that renders markup), or a computed ``dj-auto-recover`` value. Only then
-    do the targets of each render count too (#3127).
+    load, markup the scan cannot follow (a dynamic include or extends, a
+    non-djust tag that renders markup), or a computed ``dj-auto-recover``
+    value. djust's own tags do not count: none emits a recovery target, and a
+    djust block tag's body is scanned. Only then do the targets of each render
+    count too (#3127).
     """
     engine = django_engine()
     if engine is None:
@@ -1083,7 +1113,11 @@ def recovery_scan(cls: type) -> tuple[frozenset[str], bool]:
         return frozenset(), False
     recover = [b for b in scan.bindings if b.directive == "dj-auto-recover"]
     names = frozenset(b.name for b in recover if b.name)
-    complete = not scan.gaps and scan.error is None and all(b.name for b in recover)
+    complete = (
+        all(gap.recovery_safe for gap in scan.gaps)
+        and scan.error is None
+        and all(b.name for b in recover)
+    )
     return names, complete
 
 
