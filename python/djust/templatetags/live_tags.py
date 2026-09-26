@@ -202,10 +202,35 @@ def _resolve_sse_prefix() -> str:
     return ""
 
 
+# WebSocket path (#3186). The LiveView socket route is an ASGI ``URLRouter``
+# entry, not a Django URL, so there is nothing to ``reverse()``. Its path is
+# the script prefix (which Django's handlers set from ``FORCE_SCRIPT_NAME`` /
+# ``SCRIPT_NAME`` / the ASGI ``root_path`` at the start of every request)
+# joined with the canonical ``ws/live/`` route.
+_DJUST_WS_ROUTE = "ws/live/"
+
+
+def _resolve_ws_path() -> str:
+    """Return the LiveView WebSocket path under the current script prefix.
+
+    ``get_script_prefix()`` is ``"/"`` for a root-mounted app, giving
+    ``/ws/live/`` (the client's compile-time default), and ``"/app/"`` under
+    ``FORCE_SCRIPT_NAME="/app"``, giving ``/app/ws/live/``. The ASGI router
+    (or a prefix-stripping proxy) must serve that path; see the deployment
+    guide's sub-path section.
+    """
+    from django.urls import get_script_prefix
+
+    prefix = get_script_prefix() or "/"
+    if not prefix.endswith("/"):
+        prefix = prefix + "/"
+    return prefix + _DJUST_WS_ROUTE
+
+
 def _client_config_html(request: Any = None) -> Any:
     """Build the ``{% djust_client_config %}`` output (shared across engines).
 
-    Emits the API/SSE prefix ``<meta>`` tags and, when the URLconf has any
+    Emits the API/SSE prefix and WebSocket path ``<meta>`` tags and, when the URLconf has any
     ``LiveView`` routes, appends the route-map ``<script>`` that populates
     ``window.djust._routeMap`` for zero-wiring ``dj-navigate`` (#1733,
     ADR-021 Stage 1).
@@ -222,17 +247,20 @@ def _client_config_html(request: Any = None) -> Any:
     """
     api_prefix = _resolve_api_prefix()
     sse_prefix = _resolve_sse_prefix()
+    ws_path = _resolve_ws_path()
     # escape() handles all HTML-special chars including the double-quote
     # (rendered as &quot;) so the value is safe to interpolate inside
     # content="..." — even if a developer accidentally puts
     # <script> in FORCE_SCRIPT_NAME.
     api_escaped = escape(api_prefix)
     sse_escaped = escape(sse_prefix)
+    ws_escaped = escape(ws_path)
     # String concatenation (not f-string) to comply with the repo rule
     # against f-string mark_safe interpolation.
     html = (
         '<meta name="djust-api-prefix" content="' + api_escaped + '">'
         '\n<meta name="djust-sse-prefix" content="' + sse_escaped + '">'
+        '\n<meta name="djust-ws-path" content="' + ws_escaped + '">'
     )
     # auto_navigate (#1734, ADR-021 Stage 2): emit an opt-in flag the client
     # reads to install its delegated link-interception listener. Reads
@@ -267,6 +295,7 @@ def djust_client_config(context: Context) -> Any:
 
         <meta name="djust-api-prefix" content="<resolved API prefix>">
         <meta name="djust-sse-prefix" content="<resolved SSE prefix>">
+        <meta name="djust-ws-path" content="<script prefix>ws/live/">
         <script>window.djust._routeMap={...};</script>   (when LiveViews exist)
 
     The resolved prefix is computed via Django's ``reverse()`` so it

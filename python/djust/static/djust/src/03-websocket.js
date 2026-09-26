@@ -351,9 +351,14 @@ class LiveViewWebSocket {
         }
 
         if (!url) {
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const host = window.location.host;
-            url = `${protocol}//${host}/ws/live/`;
+            // #3186: honor the script prefix ({% djust_client_config %} emits
+            // <meta name="djust-ws-path">); falls back to /ws/live/.
+            if (window.djust && typeof window.djust.wsUrl === 'function') {
+                url = window.djust.wsUrl();
+            } else {
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                url = `${protocol}//${window.location.host}/ws/live/`;
+            }
         }
 
         if (globalThis.djustDebug) console.log('[LiveView] Connecting to WebSocket:', url);

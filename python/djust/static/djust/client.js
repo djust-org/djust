@@ -98,6 +98,42 @@ window.djust.sseUrl = function sseUrl(path) {
 };
 
 // ============================================================================
+// WebSocket path resolution (#3186) — same pattern as ssePrefix
+// ============================================================================
+// Resolves window.djust.wsPath once at bootstrap. Priority: explicit global >
+// <meta name="djust-ws-path"> (emitted by {% djust_client_config %} from the
+// script prefix, so it honors FORCE_SCRIPT_NAME / SCRIPT_NAME) > '/ws/live/'.
+// Used by 03-websocket.js connect() to build the socket URL.
+(function initWsPath() {
+    if (typeof window.djust.wsPath !== 'undefined' && window.djust.wsPath !== null) {
+        return;
+    }
+    let path = '';
+    try {
+        const meta = document.querySelector('meta[name="djust-ws-path"]');
+        if (meta) {
+            const raw = meta.getAttribute('content');
+            if (raw) path = raw.trim();
+        }
+    } catch (_) { /* SSR / detached DOM — fall through to default */ }
+    window.djust.wsPath = path || '/ws/live/';
+})();
+
+// Build the same-host WebSocket URL for the resolved path. Only a
+// root-relative path is honored: anything else (an absolute URL, a
+// protocol-relative '//host' value) falls back to '/ws/live/' so the socket
+// always targets the page's own host.
+window.djust.wsUrl = function wsUrl() {
+    let path = window.djust.wsPath || '/ws/live/';
+    if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//')) {
+        path = '/ws/live/';
+    }
+    if (!path.endsWith('/')) path = path + '/';
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${protocol}//${window.location.host}${path}`;
+};
+
+// ============================================================================
 // djLog: debug-gated console.log (#761)
 // ============================================================================
 // Per djust/CLAUDE.md: "No console.log in JS without if (globalThis.djustDebug)
@@ -1125,9 +1161,14 @@ class LiveViewWebSocket {
         }
 
         if (!url) {
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const host = window.location.host;
-            url = `${protocol}//${host}/ws/live/`;
+            // #3186: honor the script prefix ({% djust_client_config %} emits
+            // <meta name="djust-ws-path">); falls back to /ws/live/.
+            if (window.djust && typeof window.djust.wsUrl === 'function') {
+                url = window.djust.wsUrl();
+            } else {
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                url = `${protocol}//${window.location.host}/ws/live/`;
+            }
         }
 
         if (globalThis.djustDebug) console.log('[LiveView] Connecting to WebSocket:', url);

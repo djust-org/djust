@@ -250,7 +250,9 @@ declare class LiveViewWebSocket {
   /**
    * Establish a WebSocket connection.
    *
-   * @param url - WebSocket URL. Defaults to `ws[s]://<host>/ws/live/`.
+   * @param url - WebSocket URL. Defaults to `ws[s]://<host><djust.wsPath>`, where
+   *   `wsPath` comes from `<meta name="djust-ws-path">` (emitted by
+   *   `{% djust_client_config %}`, honoring `FORCE_SCRIPT_NAME`) or `/ws/live/`.
    */
   connect(url?: string | null): void;
 
