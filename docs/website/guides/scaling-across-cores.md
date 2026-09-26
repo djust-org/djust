@@ -182,7 +182,7 @@ LIVEVIEW_CONFIG = {"worker_threads": True}
 
 `djust serve` runs N uvicorn servers, each with its own event loop on its own thread, all accepting on **one** listening socket. Every loop polls the socket and the kernel gives a new connection to whichever loop accepts first, so a busy loop takes fewer. A connection stays on the loop that accepted it. In-process state (rooms, caches, the channel layer) is shared by all loops, which is the reason to use loops rather than processes. The same launcher is available as `djust.multiloop.serve(app, loops=N, **uvicorn_options)`.
 
-- **`--loops 1`, the default, is plain `uvicorn.run`.** It takes the common uvicorn options (`--host`, `--port`, `--uds`, `--fd`, `--ws`, `--http`, `--loop`, `--lifespan`, `--proxy-headers`, `--forwarded-allow-ips`, `--root-path`, `--ws-per-message-deflate`, `--backlog`, `--timeout-keep-alive`, `--timeout-graceful-shutdown`, `--limit-concurrency`, `--limit-max-requests`, `--ssl-keyfile`, `--ssl-certfile`, `--log-level`); `djust.multiloop.serve` takes any `uvicorn.Config` option. `--reload` and `--workers` are not offered.
+- **`--loops 1`, the default, is plain `uvicorn.run`.** It takes the common uvicorn options (`--host`, `--port`, `--uds`, `--fd`, `--ws`, `--http`, `--loop`, `--lifespan`, `--proxy-headers`, `--forwarded-allow-ips`, `--root-path`, `--ws-per-message-deflate`, `--backlog`, `--timeout-keep-alive`, `--timeout-graceful-shutdown`, `--limit-concurrency`, `--limit-max-requests`, `--ssl-keyfile`, `--ssl-certfile`, `--ssl-keyfile-password`, `--log-level`); `djust.multiloop.serve` takes any `uvicorn.Config` option. `--reload` and `--workers` are not offered.
 - **Free-threaded only.** With the GIL on, several loops only take turns holding it and add thread switches, so `--loops 2` or more refuses to start on a GIL build, and after importing your app if an extension re-enabled the GIL. (`--allow-gil` overrides it, for tests.)
 - **A loop-safe channel layer.** `djust serve` refuses Channels' `InMemoryChannelLayer`, djust's `InMemoryChannelLayer` and `channels_redis`' `RedisChannelLayer`: each keeps state that only one loop may touch (an `asyncio.Queue` per channel, a single receive lock). Use `djust.layers.MultiLoopInMemoryChannelLayer` for one process, or `channels_redis.pubsub.RedisPubSubChannelLayer`, which keeps a connection per loop. Other layers start with a warning.
 - **Lifespan runs once per loop**, as it runs once per worker under `uvicorn --workers`. Whatever your app creates at startup exists once per loop.
@@ -225,35 +225,43 @@ A connection stays on one loop, but two sessions of the same room can be on diff
 
 ### How many loops
 
-Measured with the snake-arena game, as above, on a 12-core Apple Silicon machine (8 performance cores) that other jobs were also using: free-threaded 3.14t, `worker_threads=8`, scoped push, rooms of 4 with a bot game each, every client pressing a key every 400 ms, 45 s per step (30 s measured), the load generator on the same machine. One loop uses `djust.layers.InMemoryChannelLayer`, as in production; 2 and 4 loops use `MultiLoopInMemoryChannelLayer`. Each cell is the range over interleaved rounds. Steps where the machine's 1-minute load average was above 12 before the step or above 20 after it were left out. "Cores per loop thread" is the CPU time of each event loop's own thread.
+Measured with the snake-arena game, as above, on a 12-core Apple Silicon machine (8 performance cores) that other jobs were also using: free-threaded 3.14t, `worker_threads=8`, scoped push, rooms of 4 with a bot game each, every client pressing a key every 400 ms, 45 s per step (30 s measured), and the load generator on the same machine. One loop uses `djust.layers.InMemoryChannelLayer`, as in production; 2 and 4 loops use `MultiLoopInMemoryChannelLayer`. Each cell is the range over interleaved rounds. Steps that started with the machine's load average above 10 (1 minute) or 12 (5 minutes) were left out: 57 steps were kept and 27 left out. "Clients connected" counts the clients that loaded the page and mounted within the load generator's 20 s timeout. "Each loop thread" is the CPU time of each event loop's own thread.
 
 <!-- ML-TABLE-START -->
-| Clients | Loops | p95 event round trip | Frames/s | Process cores | Cores per loop thread | Clients that failed to connect | Load avg before | Rounds |
+| Clients | Loops | Clients connected | p95 event round trip | Frames/s per client | Process cores | Each loop thread (cores) | Load avg before (1 / 5 min) | Rounds |
 |---|---|---|---|---|---|---|---|---|
-| 192 | 1 | 15–18 ms | 4.43–4.56 | 3.4–3.9 | 0.42–0.57 | 0 | 5.8–7.8 | 2 |
-| 192 | 2 | 8–20 ms | 4.50–4.67 | 3.4–3.6 | 0.24–0.30 | 0 | 5.3–8.0 | 2 |
-| 192 | 4 | 78 ms | 4.47 | 4.2 | 0.18–0.25 | 0 | 7.8 | 1 |
-| 256 | 1 | 8–277 ms | 4.43–4.56 | 4.2–4.8 | 0.52–0.70 | 0 | 5.9–7.8 | 3 |
-| 256 | 2 | 8–527 ms | 3.60–4.54 | 4.0–4.4 | 0.32–0.37 | 0 | 5.0–8.0 | 2 |
-| 256 | 4 | 1641 ms | 4.20 | 4.4 | 0.20–0.24 | 0 | 9.9 | 1 |
-| 384 | 1 | 280–4143 ms | 2.89–4.50 | 4.8–6.5 | 0.74–0.86 | 0 | 6.7–10.0 | 3 |
-| 384 | 2 | 188–396 ms | 3.96–4.48 | 6.4–7.3 | 0.55–0.66 | 0 | 5.8–7.5 | 2 |
-| 384 | 4 | 1984 ms | 3.06 | 5.5 | 0.26–0.33 | 0 | 8.0 | 1 |
-| 512 | 1 | 396–442 ms | 4.08–4.25 | 5.6–5.7 | 0.79 | 141–153 | 7.8–11.4 | 2 |
-| 512 | 2 | 350–1792 ms | 3.03–3.85 | 4.8–8.1 | 0.52–0.77 | 0–130 | 7.7–7.9 | 2 |
-| 512 | 4 | 7350 ms | 2.30 | 6.1 | 0.30–0.37 | 0 | 7.9 | 1 |
+| 192 | 1 | 192 | 5–18 ms | 4.46–4.56 | 3.2–3.4 | 0.38–0.42 | 5.5–7.8 / 6.7–11.9 | 4 |
+| 192 | 2 | 192 | 5–20 ms | 4.50–4.67 | 3.2–3.6 | 0.23–0.30 | 5.3–7.8 / 6.5–9.4 | 4 |
+| 192 | 4 | 192 | 6–78 ms | 4.47–4.53 | 3.2–4.2 | 0.11–0.25 | 6.6–7.8 / 6.5–11.5 | 3 |
+| 256 | 1 | 256 | 6–169 ms | 4.43–4.56 | 4.2–4.5 | 0.51–0.59 | 4.5–7.8 / 6.0–11.8 | 5 |
+| 256 | 2 | 256 | 6–527 ms | 3.60–4.58 | 4.0–4.4 | 0.30–0.37 | 4.1–8.0 / 5.9–10.8 | 5 |
+| 256 | 4 | 256 | 11–12 ms | 4.55–4.63 | 4.5 | 0.15–0.25 | 4.2–4.6 / 5.7–6.3 | 2 |
+| 384 | 1 | 384 | 23–4143 ms | 2.89–4.66 | 4.8–6.6 | 0.74–0.82 | 4.1–8.0 / 6.2–10.9 | 5 |
+| 384 | 2 | 384 | 26–396 ms | 3.96–4.70 | 6.4–7.4 | 0.55–0.66 | 4.8–7.8 / 5.9–11.8 | 5 |
+| 384 | 4 | 384 | 38–55 ms | 4.59–4.71 | 7.1–7.4 | 0.33–0.38 | 4.3–5.7 / 5.8–5.9 | 2 |
+| 512 | 1 | 512 | 297–326 ms | 4.19–4.33 | 7.2–7.9 | 0.94–0.97 | 5.2–7.2 / 6.6–9.1 | 3 |
+| 512 | 2 | 382–512 | 284–1792 ms | 3.03–4.26 | 4.8–9.0 | 0.52–0.82 | 5.8–7.9 / 6.1–11.1 | 5 |
+| 512 | 4 | 512 | 311–369 ms | 3.93–4.13 | 8.9–9.2 | 0.44–0.53 | 5.0–6.3 / 5.8–6.2 | 2 |
+| 640 | 1 | 469–476 | 229–273 ms | 4.40–4.48 | 7.4–7.5 | 0.94–0.95 | 6.3–7.5 / 6.5–8.1 | 2 |
+| 640 | 2 | 591–640 | 337–380 ms | 3.46–3.80 | 9.1 | 0.86–0.87 | 6.4–7.7 / 6.8–8.0 | 2 |
+| 640 | 4 | 559–616 | 340–405 ms | 3.19–3.79 | 9.0–9.2 | 0.49–0.55 | 7.5–7.7 / 7.4–7.8 | 2 |
+| 768 | 1 | 641–649 | 425–453 ms | 3.53–3.57 | 6.8 | 0.95 | 6.8–7.9 / 6.7–8.3 | 2 |
+| 768 | 2 | 768 | 539–708 ms | 3.15–3.19 | 8.5–8.6 | 0.82–0.83 | 7.2–7.8 / 7.0–8.1 | 2 |
+| 768 | 4 | 768 | 960–4289 ms | 2.81–3.00 | 8.2–8.6 | 0.46–0.53 | 7.6 / 7.6–8.0 | 2 |
 <!-- ML-TABLE-END -->
 
 What the numbers say:
 
-- **2 loops relieve the loop where one loop runs out.** At 384 clients one loop thread ran at 0.74–0.86 of a core, and its p95 ranged up to 4 s; two loops ran at 0.55–0.66 each with a p95 of 0.2–0.4 s. At 512 clients the single loop could not accept every connection in the ramp (141–153 clients timed out loading the page); two loops connected them all in one of two rounds.
-- **Loop work grows with the number of loops.** For the same clients, two loops used 1.1–1.3 cores between them where one loop used 0.74–0.86, and four loops 1.0–1.5: each loop wakes for fewer events at a time, and a room's push reaches sessions on several loops.
-- **4 loops did not pay on this machine.** The process was limited by total CPU (the worker pool, the load generator and other jobs on 12 cores), not by any loop, so the extra loop work only added latency.
+- **One loop tops out at about 512 clients on this machine.** Its thread ran at 0.94–0.97 of a core from 512 clients up. At 640 and 768 clients it could not take every connection during the ramp: 469–476 of 640 and 641–649 of 768 connected.
+- **2 loops raise that ceiling.** They connected all 768 clients, with each loop at 0.82–0.87 of a core, and delivered about 6% more frames in total than one loop (768 clients × 3.2 frames/s against 645 × 3.6). At that point the process used about 9 of the machine's 12 cores and was limited by CPU, not by a loop: frames per client fell, and 640-client rounds lost up to 49 clients in the ramp.
+- **Below about 384 clients the number of loops changes little.** One loop is not yet the limit there.
+- **Loop work grows with the number of loops.** At 384 clients one loop used 0.74–0.82 of a core; two used 1.1–1.3 between them, and four 1.3–1.5. Each loop wakes for fewer events at a time, and a room's push reaches sessions on several loops.
+- **4 loops did not beat 2** on this machine, and had a worse tail at 768 clients. The extra loop work competes with the worker pool for the same cores.
 - **The same layer on one loop** (`MultiLoopInMemoryChannelLayer` with `--loops 1`) measured like `djust.layers.InMemoryChannelLayer`: 4.4–4.6 frames/s at 192–256 clients.
 
 Guidance:
 
-- Add loops only when **the loop thread is the limit**: it runs above about 0.7 of a core under load while the process has cores to spare. Check the loop threads' CPU with a per-thread view: `py-spy dump` shows them as `djust-loop-N`, and so does `top -H -p <pid>` on Linux, where Python 3.14 gives threads their names.
+- Add loops only when **the loop thread is the limit**: it runs at about 0.9 of a core under load (production snake-arena: 0.93 at 160–192 players) while the process has cores to spare. Check the loop threads' CPU with a per-thread view: `py-spy dump` shows them as `djust-loop-N`, and so does `top -H -p <pid>` on Linux, where Python 3.14 gives threads their names.
 - **Start with 2.** Go to 4 only on a host with spare cores after the pool, and measure: each loop adds loop overhead.
 - **Grow `worker_threads` with the loops**, and leave a core per loop outside the pool.
 
