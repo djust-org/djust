@@ -55,8 +55,6 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Set, Tuple
 
-from djust._ast_bindings import binds_to, import_bindings
-
 logger = logging.getLogger(__name__)
 
 
@@ -328,6 +326,8 @@ class _FileContext:
         self.findings: List[ASTFinding] = []
         self.class_index: Dict[str, ast.ClassDef] = _module_class_index(tree)
         # #3093: import targets, so a decorator is judged by what it binds to.
+        from djust.checks._ast_bindings import import_bindings
+
         self.bindings: Dict[str, Optional[str]] = import_bindings(tree)
 
     def emit(
@@ -538,6 +538,7 @@ def _handler_has_permission_decorator(
     func: ast.FunctionDef | ast.AsyncFunctionDef,
     bindings: Optional[Dict[str, Optional[str]]] = None,
 ) -> bool:
+    from djust.checks._ast_bindings import binds_to
     from djust.decorators import permission_required
 
     for dec in func.decorator_list:

@@ -19,7 +19,6 @@ from typing import Any, Optional, Union
 from django.core.checks import CheckMessage, register
 
 import djust.checks as _root
-from djust._ast_bindings import binds_to, import_bindings
 from djust.checks.utils import (
     DjustError,
     DjustWarning,
@@ -55,6 +54,8 @@ def check_security(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
         relpath = os.path.relpath(filepath)
         # #3093: what each imported name binds to, so S009 judges a decorator
         # by its target rather than its local spelling.
+        from djust.checks._ast_bindings import import_bindings
+
         bindings = import_bindings(tree)
 
         for node in ast.walk(tree):
@@ -603,6 +604,7 @@ def _is_permission_required_decorator(
     ``django.contrib.auth.decorators.permission_required`` is not the gate.
     Names no import binds fall back to the local-name match.
     """
+    from djust.checks._ast_bindings import binds_to
     from djust.decorators import permission_required
 
     return binds_to(deco, bindings or {}, permission_required, "permission_required")

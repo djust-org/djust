@@ -95,7 +95,7 @@ def load_dotted(target: str) -> Any:
         except ImportError:
             continue
         except Exception:  # a project module that raises on import
-            logger.debug("djust: importing %s for a check failed", target, exc_info=True)
+            logger.debug("djust: importing %s for a check failed; using the name match", target)
             return UNRESOLVED
         try:
             for attr in parts[i:]:
