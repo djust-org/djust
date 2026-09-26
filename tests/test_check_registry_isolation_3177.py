@@ -95,3 +95,30 @@ def test_a_check_first_registered_inside_a_test_by_an_installed_app_is_kept():
         assert late in registry.registered_checks
     finally:
         registry.registered_checks.discard(late)
+
+
+def test_a_partial_of_an_installed_apps_check_is_kept():
+    """#3213 review 5: ``functools.partial`` reports ``__module__ ==
+    "functools"``; the fixture must judge it by the function it wraps."""
+    import functools
+
+    djust_check = next(c for c in registry.registered_checks if c.__module__.startswith("djust."))
+    wrapped = functools.partial(djust_check)
+    try:
+        with isolated_check_registry():
+            checks.register(wrapped, "djust")
+        assert wrapped in registry.registered_checks
+    finally:
+        registry.registered_checks.discard(wrapped)
+
+
+def test_a_partial_of_a_non_app_check_is_still_dropped():
+    import functools
+
+    def probe(app_configs, **kwargs):  # module: tests.* -- not an installed app
+        return []
+
+    wrapped = functools.partial(probe)
+    with isolated_check_registry():
+        checks.register(wrapped)
+    assert wrapped not in registry.registered_checks

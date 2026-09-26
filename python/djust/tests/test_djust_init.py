@@ -588,6 +588,13 @@ def test_check_warnings_are_reported_not_called_clean(tmp_path):
             "WARNINGS:\n?: (x.W1) w\n\nSystem check identified 3 issues (1 silenced).\n",
             "3 issues reported (see below)",
         ),
+        # #3213 review: a check message quoting the sentence mid-line must not
+        # be counted instead of the real summary line.
+        (
+            "WARNINGS:\n?: (x.W1) said: System check identified 9 issues (0 silenced).\n\n"
+            "System check identified 1 issue (0 silenced).\n",
+            "1 issue reported (see below)",
+        ),
     ],
 )
 def test_check_summary_counts_django_issues(tmp_path, output, detail):
@@ -605,3 +612,21 @@ def test_check_summary_counts_django_issues(tmp_path, output, detail):
     assert next(step for step in result.steps if step.name == "check").detail == detail
     assert any("manage.py check" in n for n in result.notes) == (detail != "no issues")
     assert result.exit_code == 0
+
+
+def test_dry_run_of_a_done_step_without_planned_wording_falls_back_to_its_detail(
+    tmp_path, monkeypatch
+):
+    """#3213 review 6: a future plan_* returning DONE without the planned
+    wording must not print "would change" with an empty detail."""
+    make_project(tmp_path)
+    real = init.plan_settings
+
+    def without_planned(project):
+        change, step = real(project)
+        return change, init.Step(step.name, step.status, "custom detail")
+
+    monkeypatch.setattr(init, "plan_settings", without_planned)
+    result = init.init_project(tmp_path, dry_run=True, install=False)
+    row = next(step for step in result.steps if step.name == "mysite/settings.py")
+    assert (row.status, row.detail) == (init.PLANNED, "custom detail")

@@ -198,8 +198,8 @@ def run(root: Path, verbose: bool = False) -> tuple[int, str]:
     if sbom_version != py_version:
         errors.append(
             f"{SBOM_PATH} names djust {sbom_version}, expected {py_version} "
-            f"(matching pyproject.toml) — run "
-            f"`PYTHONPATH=python python -m djust.assets.sbom --distribution`."
+            f"(matching pyproject.toml) — run `make version VERSION={py_version}`, "
+            f"which regenerates it."
         )
 
     if errors:

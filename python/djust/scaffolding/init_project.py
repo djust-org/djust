@@ -82,6 +82,7 @@ class Step:
     status: str
     detail: str
     # What a DONE step would do, worded for --dry-run, where nothing is done.
+    # A DONE step without it falls back to its ``detail`` in a dry run.
     planned: str = ""
 
 
@@ -433,7 +434,7 @@ def init_project(
     command = shlex.join(action.command)
     if dry_run:
         result.steps = [
-            Step(step.name, PLANNED, step.planned) if step.status == DONE else step
+            Step(step.name, PLANNED, step.planned or step.detail) if step.status == DONE else step
             for step in result.steps
         ]
         result.steps.append(
@@ -490,7 +491,9 @@ def init_project(
 
 
 # Django's summary line, e.g. "System check identified 2 issues (0 silenced)."
-_CHECK_ISSUES_RE = re.compile(r"System check identified (\d+) issues? \(")
+# Anchored to a line start: the summary is its own line, and a check message
+# quoting that sentence must not be counted instead.
+_CHECK_ISSUES_RE = re.compile(r"^System check identified (\d+) issues? \(", re.M)
 
 
 _STATUS_LABELS = {

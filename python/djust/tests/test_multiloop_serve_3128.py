@@ -393,6 +393,7 @@ def test_the_test_app_fails_exactly_one_startup_under_concurrent_loops(monkeypat
         t.start()
     for t in threads:
         t.join(10)
+    assert not any(t.is_alive() for t in threads), "a loop's lifespan startup hung"
     startups = sorted(o for o in outcomes if o.startswith("lifespan.startup"))
     assert startups == [
         "lifespan.startup.complete",

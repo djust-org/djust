@@ -17,28 +17,51 @@ The root ``conftest.py`` wraps every test in :func:`isolated_check_registry`.
 
 from __future__ import annotations
 
+import functools
 from contextlib import contextmanager
 from typing import Iterator
+
+
+def _defining_module(check: object) -> str:
+    """The module a check was written in. A ``functools.partial`` reports
+    ``functools``, so unwrap it (and any ``__wrapped__`` chain) first."""
+    while isinstance(check, functools.partial):
+        check = check.func
+    check = getattr(check, "__wrapped__", check)
+    return getattr(check, "__module__", None) or ""
 
 
 def _belongs_to_installed_app(check: object) -> bool:
     from django.apps import apps
 
-    module = getattr(check, "__module__", None) or ""
-    return apps.get_containing_app_config(module) is not None
+    return apps.get_containing_app_config(_defining_module(check)) is not None
 
 
 @contextmanager
 def isolated_check_registry() -> Iterator[None]:
-    """On exit, drop the checks added inside the block that belong to no
-    installed app, and restore any check the block removed.
+    """On exit, drop the checks added inside the block whose defining module
+    is not part of an installed app, and restore any check the block removed.
 
-    In a real project, an uninstalled app's checks are never registered. A
-    check added for an app that is still installed is kept, because a check
+    Django registers a check when its module is *imported*, not when its app
+    is installed; ``@register()`` runs at import time. In a normal process a
+    module is imported once, for an installed app, so the two coincide. A test
+    that overrides ``INSTALLED_APPS`` breaks that: it imports the app's check
+    module, and the registration outlives the override. This drops exactly
+    those registrations.
+
+    A check added for an app that is still installed is kept, because a check
     module imported for the first time inside a test (djust's own, for
     example) is never imported again, and dropping its checks would lose them
     for the rest of the process. An app installed again later re-registers
     its checks from ``AppConfig.ready()``.
+
+    Limits:
+    - A check registered by a module outside every installed app (say, a
+      djust module that is not itself an app) is dropped too, if it was first
+      imported inside a test. Only that test sees it; later tests do not.
+    - An ``INSTALLED_APPS`` override with class or module scope registers
+      before the per-test snapshot and so is not undone here. No test does
+      that today.
     """
     from django.apps import apps
     from django.core.checks.registry import registry

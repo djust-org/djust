@@ -271,6 +271,7 @@ class TestSbomVersion:
         assert code == 1, f"expected exit 1, got {code}: {out}"
         assert "djust.cdx.json" in out
         assert "1.3.0rc3" in out and "1.3.0rc4" in out
+        assert "make version VERSION=1.3.0rc4" in out
 
     def test_sbom_in_sync_passes(self, tmp_path):
         _build_fixture(tmp_path, **_IN_SYNC)

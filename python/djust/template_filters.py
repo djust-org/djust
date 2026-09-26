@@ -37,13 +37,15 @@ logger = logging.getLogger(__name__)
 # ``DjustConfig.ready()`` can arm the bridge without importing the
 # ``djust.mixins`` package (every LiveView mixin) for one function (#2565).
 _CUSTOM_FILTERS_BRIDGED = False
-# What the bootstrap registered, and the Rust registry generation it left
-# behind (#3208). The flag alone said "bridged" after anything emptied the
-# global registry (``clear_custom_filters()``), and every later render of a
-# bridged filter failed with "Invalid filter" for the rest of the process. The
-# registry, not the flag, is the truth — the rule
+# What the bootstrap registered in the global registry: name -> the callable
+# it registered under that name (#3208). The flag alone said "bridged" after
+# anything emptied the global registry (``clear_custom_filters()``), and every
+# later render of a bridged filter failed with "Invalid filter" for the rest
+# of the process. The registry, not the flag, is the truth — the rule
 # ``template_libraries._still_bridged`` applies to ``{% load %}``.
-_BRIDGED_FILTER_NAMES: tuple = ()
+_BRIDGED_FILTERS: dict = {}
+# The registry generation at which every name in ``_BRIDGED_FILTERS`` was last
+# seen registered; ``None`` means "probe on the next call".
 _BRIDGED_AT_GENERATION: int | None = None
 
 
@@ -71,52 +73,84 @@ def _global_registry_namespace() -> Iterator[None]:
         set_registry_namespace(previous)
 
 
-def _bridged_filters_still_registered() -> bool:
-    """Whether every filter the bootstrap registered is still in the global
-    Rust registry. One generation read per call; the per-name probes run only
-    after the registry changed."""
+def _library_filters() -> dict:
+    """``{name: callable}`` the bootstrap registers: every Django library
+    filter except the engine's built-ins, the last library winning a shared
+    name — the order ``bootstrap_django_filters`` registers them in."""
+    filters: dict = {}
+    for library in _iter_django_libraries():
+        for name, callable_obj in (getattr(library, "filters", None) or {}).items():
+            if name not in _BUILTIN_NAMES:
+                filters[name] = callable_obj
+    return filters
+
+
+def _registered_globally(name: str) -> bool:
+    """Whether ``name`` is a filter in the active Rust registry namespace
+    (callers hold ``_global_registry_namespace``); False without Rust."""
+    try:
+        from djust._rust import registry_entry_is_local
+    except ImportError:
+        return False
+    return bool(registry_entry_is_local(name, "filter"))
+
+
+def _restore_missing_bridged_filters() -> None:
+    """Re-register, in the global registry, exactly the bootstrap filters
+    that are no longer there, each with the callable the bootstrap
+    registered (#3208 review).
+
+    Never a whole re-walk: a name still present may have been registered
+    since by a ``{% load %}`` of another library that defines the same name,
+    and a re-walk would silently swap that filter for the bootstrap's. One
+    generation read per call when nothing changed; the per-name probes run
+    only after the registry moved.
+    """
     global _BRIDGED_AT_GENERATION
     try:
-        from djust._rust import registry_entry_is_local, registry_generation
+        from djust._rust import registry_generation
     except ImportError:
-        return True
+        return
     generation = registry_generation()
     if generation == _BRIDGED_AT_GENERATION:
-        return True
+        return
+    restored = False
     with _global_registry_namespace():
-        intact = all(registry_entry_is_local(name, "filter") for name in _BRIDGED_FILTER_NAMES)
-    if intact:
-        _BRIDGED_AT_GENERATION = generation
-    return intact
-
-
-def _library_filter_names() -> tuple:
-    return tuple(
-        sorted(
-            {
-                name
-                for library in _iter_django_libraries()
-                for name in (getattr(library, "filters", None) or {})
-                if name not in _BUILTIN_NAMES
-            }
-        )
-    )
+        for name, callable_obj in _BRIDGED_FILTERS.items():
+            if _registered_globally(name):
+                continue
+            try:
+                restored = register_django_filter(name, callable_obj) or restored
+            except Exception:  # noqa: BLE001 — defensive; never block render
+                logger.exception("Failed to re-bridge custom filter '%s' to Rust registry", name)
+    # Re-registering moved the generation, so probe again next time rather
+    # than cache a generation read before our own writes.
+    _BRIDGED_AT_GENERATION = None if restored else generation
 
 
 def _ensure_custom_filters_bridged() -> None:
     """Bootstrap that forwards Django's ``@register.filter`` callables to the
-    global Rust filter registry: once, and again if the registry lost them
-    since (#3208). Idempotent and non-fatal on failure — filters still work in
-    the Python render path even if the Rust bridge is unavailable.
+    global Rust filter registry: once, and afterwards re-registers only the
+    ones the registry lost (#3208). Idempotent and non-fatal on failure —
+    filters still work in the Python render path even if the Rust bridge is
+    unavailable.
     """
-    global _CUSTOM_FILTERS_BRIDGED, _BRIDGED_FILTER_NAMES, _BRIDGED_AT_GENERATION
-    if _CUSTOM_FILTERS_BRIDGED and _bridged_filters_still_registered():
+    global _CUSTOM_FILTERS_BRIDGED, _BRIDGED_FILTERS, _BRIDGED_AT_GENERATION
+    if _CUSTOM_FILTERS_BRIDGED:
+        _restore_missing_bridged_filters()
         return
-    names: tuple = ()
+    recorded: dict = {}
     try:
         with _global_registry_namespace():
             bootstrap_django_filters()
-        names = _library_filter_names()
+            # Only what actually registered: a filter whose registration
+            # raised would otherwise count as "missing" after every
+            # unrelated registry change and be retried each time.
+            recorded = {
+                name: callable_obj
+                for name, callable_obj in _library_filters().items()
+                if _registered_globally(name)
+            }
     except Exception:  # noqa: BLE001 — defensive; never block render
         logger.warning(
             "Failed to bridge Django custom filters to Rust template engine; "
@@ -126,15 +160,14 @@ def _ensure_custom_filters_bridged() -> None:
     finally:
         # Set the guard whether bootstrap succeeded or threw — we never
         # want to re-attempt on every render and re-log the warning. After
-        # a failure no names are recorded, so nothing triggers a retry.
+        # a failure nothing is recorded, so nothing triggers a retry.
         _CUSTOM_FILTERS_BRIDGED = True
-        _BRIDGED_FILTER_NAMES = names
-        try:
-            from djust._rust import registry_generation
-
-            _BRIDGED_AT_GENERATION = registry_generation()
-        except ImportError:
-            _BRIDGED_AT_GENERATION = None
+        _BRIDGED_FILTERS = recorded
+        # Not the generation read now: a clear on another thread between the
+        # last registration and that read would be cached as "intact" with
+        # the registry empty. ``None`` makes the next call probe once, with
+        # a generation read BEFORE its probes.
+        _BRIDGED_AT_GENERATION = None
 
 
 # Filters we never want to forward — built-ins that the Rust engine
