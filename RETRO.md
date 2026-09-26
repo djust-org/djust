@@ -1046,6 +1046,76 @@ The new guide is `docs/website/guides/scaling-across-cores.md`. A truth review c
 
 **Lesson:** a summary line about a gated optimisation must carry its gates.
 
+## v1.3.0-5 — event-loop ceiling (#3095)
+
+**Scope**: Three rows.
+- djust PR #3115: presence broadcasts respect `push_scope` (merged as `7374dc6c0`), with snake-arena PR #16 as its app half.
+- djust PR #3123: less work on the event loop per frame.
+- A design note on #3095 for more than one event loop per process, with the production mode filed as #3128.
+
+### Bucket summary
+
+**Outcome.** Measured on the snake load test on free-threaded 3.14t:
+- Setup: `WORKER_THREADS=5`, a shared 12-core Mac, interleaved rounds. A step is excluded when the load average went above 15.
+- **The event-loop thread's CPU at a fixed load fell by about 25–30% at 128–192 clients** (0.34–0.48 → 0.25–0.38 cores), and by about 15% at 256–384 clients.
+- p95 RTT fell at every step, for example 34–207 ms → 22–26 ms at 192 clients. Frames per second were unchanged below the knee.
+- For production, where the knee is about 160 players with the loop at 0.87, the estimate is roughly 200 players. This has not been measured on the cluster.
+- A two-loop prototype held 512 clients at 2.8–3.4 fps, where one loop collapsed to 1.3–2.6 fps with a p95 of 9–16 s. That is the lever that actually lifts the ceiling (#3128).
+
+**What the bucket learned**
+1. **Profile first: the saturating work was not where the brief guessed.** The brief listed framing, JSON, channel-layer dispatch and ticks.
+   - The main-thread SIGALRM sampler instead found that **key-press events, which skip the render**, cost more loop time than broadcast frames. They made three thread hops for metadata checks (handler permission, object permission, and Channels' per-frame connection check) and rebuilt the handler's signature every time.
+   - Framing and deflate were real, at about 10%, but they live in `websockets`.
+2. **"Proven identical" has to survive a reviewer who tries to break it.** The fresh-context review broke two of the claims:
+   - the signature and type-hint caches went stale after annotations were mutated at runtime;
+   - the deferred connection check ignored asgiref's parent-sync-thread executor.
+
+   Both were fixed so that the claim is true: the caches check the function's definition key, and the deferral steps aside under a parent sync thread or a pre-4.2 Channels. They were not fixed by weakening the wording.
+3. **"Views that don't opt in are unchanged" includes per-connect side effects**, such as group joins and hops, not only the frames sent. PR #3115's first cut joined every presence session to a group nobody sends to.
+4. **The measurement machine is shared.** Two of the three final rounds had other agents' suites push the load average to 20–40 mid-round. The summary script excludes those steps by rule and reports how many rounds remain, rather than hand-picking rows.
+
+**Open items**
+- #3128: a production multi-loop mode, with a loop-aware layer, a launcher, and an audit of loop-bound state.
+- uvloop: 13% less loop CPU in one round at 256 clients, but it dropped connections during a 384-client ramp, probably the macOS accept backlog. Not investigated.
+- snake-arena: bump the djust pin once #3115 is released, delete the fallback override, and consider a CI job against djust `main`.
+- A cluster re-measurement of snake once a djust release carries #3123.
+
+### PR 1 — presence broadcasts respect `push_scope` (PR #3115)
+
+**Date**: 2026-09-25. Squash-merged as `7374dc6c0`. Retro: https://github.com/djust-org/djust/pull/3115 (retrospective comment).
+
+**Tests at close**
+- `python/djust/tests/test_presence_scoped_broadcast_3095.py`: 19 functions, 24 cases.
+- Targeted runs: 672 passed.
+- The full suite ran in the pre-push hook, and CI was green.
+
+**Review stats**
+- Self-review: 3 🟡, all fixed.
+  - A `TenantMixin` view joined a group.
+  - A non-tracking viewer that moved rooms kept its old key.
+  - A join between mount and the group join was lost; a catch-up self-refresh now covers it.
+- Code Review: 2 🟡 and 3 🟢.
+  - Fixed: views that did not opt in paid a join and a hop.
+  - Accepted and documented: a non-tracking viewer's key only follows `push_scope`.
+- Re-Review passed.
+
+### PR 2 — less work on the event loop per frame (PR #3123)
+
+**Date**: 2026-09-25. Retro: https://github.com/djust-org/djust/pull/3123 (retrospective comment).
+
+**Tests at close**
+- `python/djust/tests/test_event_loop_ceiling_3095.py`: 24 tests, most with the pool both off and on.
+- Targeted runs: about 1,300 passed.
+- The full suite ran in the pre-push hook.
+
+**Review stats**
+- Self-review: 1 🟡 (the `require_valid_group_name` call needs Channels 4.2 or later) and several 🟢. All fixed.
+- Code Review: 2 🟡 and 4 🟢.
+  - The stale caches and the parent-sync-thread deferral were fixed.
+  - The tick error path, the `group_send` error path and the guide note were fixed.
+  - Accepted: the scheduling on 3.10 and 3.11, which changes order only.
+  - Documented: a failing deferred check is logged and the task goes on.
+
 ## v1.2.1-7 — state and rendering batch: v1.2.1-7, -8 and -9 (PR #3042)
 
 **Date**: 2026-09-24

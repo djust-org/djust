@@ -38,6 +38,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from channels.exceptions import ChannelFull
 from channels.layers import InMemoryChannelLayer as _ChannelsInMemoryChannelLayer
 
 __all__ = ["InMemoryChannelLayer"]
@@ -79,6 +80,43 @@ class InMemoryChannelLayer(_ChannelsInMemoryChannelLayer):
             return
         self._next_clean = now + self.clean_interval
         super()._clean_expired()
+
+    async def group_send(self, group: str, message: dict) -> None:
+        """Channels' ``group_send`` without a task per member (#3095).
+
+        Channels wraps each member's ``send()`` in ``asyncio.create_task`` and
+        gathers them with ``as_completed``. ``send()`` on this layer never
+        suspends (it puts on the member's queue or raises ``ChannelFull``),
+        so awaiting each in turn delivers the same messages, in the same
+        order, before this returns, without creating and scheduling a task
+        per session on the event loop. A full channel is skipped, as before.
+        Unlike Channels' version it does not yield to the loop between
+        members, which only matters to a caller that group-sends in a loop
+        with no other ``await``.
+        """
+        assert isinstance(message, dict), "Message is not a dict"
+        require = getattr(self, "require_valid_group_name", None)
+        if require is not None:
+            require(group)
+        else:  # Channels < 4.2
+            assert self.valid_group_name(group), "Group name not valid"
+        self._clean_expired()
+        members = self.groups.get(group)
+        if not members:
+            return
+        error: Exception | None = None
+        for channel in list(members):
+            try:
+                await self.send(channel, message)
+            except ChannelFull:
+                pass
+            except Exception as exc:  # noqa: BLE001 - raised after every member got it
+                # Channels' tasks still deliver to the other members when one
+                # send fails, and the first failure then propagates.
+                if error is None:
+                    error = exc
+        if error is not None:
+            raise error
 
     async def flush(self) -> None:
         await super().flush()

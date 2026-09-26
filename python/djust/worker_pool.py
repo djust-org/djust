@@ -60,11 +60,18 @@ class _Slot:
     objects live in the module-level pool for the life of the process.
     """
 
-    __slots__ = ("index", "sessions", "__weakref__")
+    __slots__ = ("index", "sessions", "db_check_due", "checks_on_run", "__weakref__")
 
     def __init__(self, index: int) -> None:
         self.index = index
         self.sessions = 0
+        # Set on the event loop when a WebSocket frame arrives for a session
+        # on this thread; the thread runs Django's close_old_connections()
+        # before its next task (#3095). See mark_db_check_due().
+        self.db_check_due = False
+        # Whether this slot's executor is a _SlotExecutor (so it honours
+        # db_check_due). False if asgiref already had an executor for it.
+        self.checks_on_run = False
 
     def __repr__(self) -> str:
         return f"<djust worker {self.index} sessions={self.sessions}>"
@@ -93,6 +100,46 @@ _pool: List[_Slot] = []
 # HTTP pools by size: every ``PooledHTTP`` of one size shares a pool, and
 # instances of different sizes never rebuild each other's.
 _http_pools: Dict[int, List[_HTTPSlot]] = {}
+
+
+def _channels_checks_per_message() -> bool:
+    """Channels 4.2+ runs ``aclose_old_connections()`` before every message."""
+    try:
+        import channels.consumer
+    except ImportError:  # pragma: no cover - channels is a dependency
+        return False
+    return hasattr(channels.consumer, "aclose_old_connections")
+
+
+_CHANNELS_CHECKS_PER_MESSAGE = _channels_checks_per_message()
+
+
+def _run_checked(slot: _Slot, fn: Any, args: Any, kwargs: Any) -> Any:
+    """Run one task on a slot's thread, first doing a DB check that is due."""
+    if slot.db_check_due:
+        # Clear before checking: a frame that marks the slot again while the
+        # check runs gets its own check before the next task.
+        slot.db_check_due = False
+        from django.db import close_old_connections
+
+        try:
+            close_old_connections()
+        except Exception:  # noqa: BLE001 - never fail another session's task
+            # Value-free: a database error's message can carry query values.
+            # The task's own database access reports a real failure.
+            logger.warning("djust worker pool: close_old_connections() failed")
+    return fn(*args, **kwargs)
+
+
+class _SlotExecutor(ThreadPoolExecutor):
+    """A pool thread's single-thread executor that honours ``db_check_due``."""
+
+    def __init__(self, slot: _Slot, prefix: str = "djust-worker") -> None:
+        super().__init__(max_workers=1, thread_name_prefix=f"{prefix}-{slot.index}")
+        self._slot = slot
+
+    def submit(self, fn: Any, /, *args: Any, **kwargs: Any) -> Any:  # type: ignore[override]
+        return super().submit(_run_checked, self._slot, fn, args, kwargs)
 
 
 def _available_cpus() -> int:
@@ -180,9 +227,15 @@ def _build_slots(cls: Any, size: int, prefix: str) -> List[Any]:
     empty = contextvars.Context()
     for slot in slots:
         if slot not in executors:
-            executor = ThreadPoolExecutor(
-                max_workers=1, thread_name_prefix=f"{prefix}-{slot.index}"
-            )
+            executor: ThreadPoolExecutor
+            if isinstance(slot, _Slot):
+                # WebSocket session threads honour db_check_due (#3095).
+                executor = _SlotExecutor(slot, prefix)
+                slot.checks_on_run = True
+            else:
+                executor = ThreadPoolExecutor(
+                    max_workers=1, thread_name_prefix=f"{prefix}-{slot.index}"
+                )
             empty.run(executor.submit, _noop)
             executors[slot] = executor
     return slots
@@ -269,6 +322,14 @@ def pool_stats() -> List[dict]:
     """Per-thread session counts, for diagnostics and tests."""
     with _lock:
         return [{"index": s.index, "sessions": s.sessions} for s in _pool]
+
+
+def _parent_sync_thread() -> bool:
+    """Whether asgiref would send thread-sensitive calls to a parent sync
+    thread (``async_to_sync`` further up) instead of the session's slot."""
+    from asgiref.sync import AsyncToSync
+
+    return getattr(AsyncToSync.executors, "current", None) is not None
 
 
 def http_pool_stats() -> List[dict]:
@@ -402,4 +463,30 @@ def offload_enabled() -> bool:
     bottleneck.
     """
     var = _thread_sensitive_context()
-    return var is not None and isinstance(var.get(None), _Slot)
+    return var is not None and isinstance(var.get(None), _Slot) and not _parent_sync_thread()
+
+
+def mark_db_check_due() -> bool:
+    """Defer Django's per-message DB-connection check to the session's thread.
+
+    Channels runs ``close_old_connections()`` in its own ``sync_to_async``
+    hop before every message a consumer receives: an event-loop round trip
+    per WebSocket frame. With the pool on, the check instead runs on the
+    session's thread at the start of its next task, before any code of the
+    message's turn can touch the database there (#3095). Connections are
+    per thread, so marking the thread is what matters; as with the hop,
+    other sessions' tasks may run on the thread between the check and this
+    message's own work.
+
+    Returns True when the check was deferred (the caller skips the hop),
+    False when the calling session is not pinned to a pool thread whose
+    executor honours the mark (the caller keeps Channels' hop).
+    """
+    if not _CHANNELS_CHECKS_PER_MESSAGE:
+        return False  # nothing to defer: this Channels makes no per-message check
+    var = _thread_sensitive_context()
+    slot = var.get(None) if var is not None else None
+    if not isinstance(slot, _Slot) or not slot.checks_on_run or _parent_sync_thread():
+        return False
+    slot.db_check_due = True
+    return True

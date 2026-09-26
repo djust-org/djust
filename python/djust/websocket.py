@@ -120,6 +120,26 @@ except ImportError:
 _IMMUTABLE_TYPES = (str, int, float, bool, type(None), bytes, tuple, frozenset)
 
 
+async def _acquire_render_lock(lock: asyncio.Lock, timeout: float) -> None:
+    """``await asyncio.wait_for(lock.acquire(), timeout)``, without the timer
+    when the lock is free (#3095).
+
+    Every server push and tick takes the session's render lock this way, on
+    the event loop. ``wait_for`` arms and cancels a timeout handle each time,
+    which is measurable at a few thousand turns a second. When the lock is
+    unlocked and nobody is queued for it, ``acquire()`` returns without
+    suspending, so the timeout could never fire: take it directly. Otherwise
+    (held, or a woken waiter is about to take it) keep ``wait_for``, which
+    raises ``asyncio.TimeoutError`` exactly as before.
+    """
+    if not lock.locked():
+        waiters = getattr(lock, "_waiters", ())
+        if not waiters or all(w.cancelled() for w in waiters):
+            await lock.acquire()
+            return
+    await asyncio.wait_for(lock.acquire(), timeout=timeout)
+
+
 def _is_send_after_close_error(exc: RuntimeError) -> bool:
     """True when *exc* is the ASGI server rejecting a send on a closed socket.
 
@@ -803,11 +823,21 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         it needs no check. Every other message, and every message with the
         pool off, goes through Channels unchanged.
         """
-        if message.get("type") == "server_push":
+        msg_type = message.get("type")
+        if msg_type == "server_push":
             from .worker_pool import offload_enabled
 
             if offload_enabled():
                 await self.server_push(message)
+                return
+        elif msg_type == "websocket.receive":
+            # Pool on (#3095): the connection check is deferred to the
+            # session's thread, which runs it before its next task, instead
+            # of costing an event-loop hop per frame.
+            from .worker_pool import mark_db_check_due
+
+            if mark_db_check_due():
+                await self.websocket_receive(message)
                 return
         await super().dispatch(message)
 
@@ -4893,7 +4923,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # Acquire render lock with timeout to serialize with tick/event
             # renders. Use same 0.1s timeout as tick loop.
             try:
-                await asyncio.wait_for(self._render_lock.acquire(), timeout=0.1)
+                await _acquire_render_lock(self._render_lock, 0.1)
             except asyncio.TimeoutError:
                 logger.debug(
                     "[djust] server_push on %s deferred — render lock held",
@@ -5364,7 +5394,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 return
 
             try:
-                await asyncio.wait_for(self._render_lock.acquire(), timeout=0.1)
+                await _acquire_render_lock(self._render_lock, 0.1)
             except asyncio.TimeoutError:
                 logger.debug(
                     "[djust] db_notify on %s skipped — render lock held",
@@ -5611,7 +5641,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # timeout so ticks don't block indefinitely if an event handler is
         # slow.
         try:
-            await asyncio.wait_for(self._render_lock.acquire(), timeout=0.1)
+            await _acquire_render_lock(self._render_lock, 0.1)
         except asyncio.TimeoutError:
             logger.debug(
                 "[djust] Tick on %s skipped — render lock held",
@@ -5627,10 +5657,45 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 return False
             if not await self._authorize_explicit_consumer_turn(view):
                 return False
-            # Snapshot state before tick to detect changes
-            pre_assigns = _snapshot_assigns(self.view_instance)
+            from .worker_pool import offload_enabled
 
-            await sync_to_async(self.view_instance.handle_tick)()
+            # Worker pool on (#3095): the change-detection snapshots and the
+            # skip decision run on the session's thread, in the same hop as
+            # handle_tick, instead of on the event loop around it. The render
+            # lock is held across the hop, so nothing else changes the view
+            # between the snapshots and the call. ``offloaded`` is None with
+            # the pool off, else (skip_render, unchanged). The decision is
+            # taken before sync_push_scope_groups below rather than after it,
+            # which is the same: that sync only joins and leaves groups.
+            offloaded: Optional[Tuple[bool, bool]] = None
+            if offload_enabled():
+                tick_view = self.view_instance
+
+                def tick_turn() -> Tuple[bool, bool, Optional[BaseException]]:
+                    before = _snapshot_assigns(tick_view)
+                    tick_view.handle_tick()
+                    # handle_tick ran: a later failure is reported after the
+                    # caller marks its queued work for dispatch, as in the
+                    # stock path.
+                    try:
+                        if _resolve_skip_render(tick_view):
+                            return True, False, None
+                        if getattr(tick_view, "_force_full_html", False):
+                            return False, False, None
+                        return False, before == _snapshot_assigns(tick_view), None
+                    except Exception as exc:  # noqa: BLE001 - re-raised on the loop
+                        return False, False, exc
+
+                skip, unchanged, after_error = await sync_to_async(tick_turn)()
+                offloaded = (skip, unchanged)
+                if after_error is not None:
+                    dispatch_work = True
+                    raise after_error
+            else:
+                # Snapshot state before tick to detect changes
+                pre_assigns = _snapshot_assigns(self.view_instance)
+
+                await sync_to_async(self.view_instance.handle_tick)()
             # start_async work handle_tick queued runs once the lock is
             # released (#2955).
             dispatch_work = True
@@ -5653,7 +5718,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # (#1981) wins over _skip_render — a handler that explicitly
             # asked for a forced full-HTML render must not be silently
             # dropped by a concurrently-set _skip_render.
-            if _resolve_skip_render(self.view_instance):
+            if offloaded[0] if offloaded is not None else _resolve_skip_render(self.view_instance):
                 logger.debug(
                     "[djust] Tick on %s skipped render via _skip_render",
                     self.view_instance.__class__.__name__,
@@ -5667,9 +5732,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # in-place mutation inside handle_tick is invisible to the
             # snapshot, so without this guard the hatch would be
             # silently dropped on the tick path (#1646 parallel-path).
-            force_full_html = getattr(self.view_instance, "_force_full_html", False)
-            post_assigns = _snapshot_assigns(self.view_instance)
-            if pre_assigns == post_assigns and not force_full_html:
+            if offloaded is not None:
+                unchanged = offloaded[1]
+            else:
+                force_full_html = getattr(self.view_instance, "_force_full_html", False)
+                post_assigns = _snapshot_assigns(self.view_instance)
+                unchanged = pre_assigns == post_assigns and not force_full_html
+            if unchanged:
                 logger.debug(
                     "[djust] Tick on %s produced no state changes, skipping render",
                     self.view_instance.__class__.__name__,

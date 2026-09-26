@@ -86,15 +86,15 @@ Two name shapes appear in this roadmap, with distinct meanings:
 | ~~**P1**~~ | ~~#3114 — `djust.worker_pool.PooledHTTP` (opt-in): HTTP requests run on a bounded pool of threads instead of one new thread each; pool threads start from an empty context; scaling guide "Memory under overload" (RSS per client, allocator retention, bounded queues)~~ ✅ (#3118) | v1.3.0 |
 | **P2** | #3116 — The diagnostic owner-slot ContextVar holds strong refs to the consumer and runtime; context copies (tasks started in a turn, threads on 3.14t) pin disconnected sessions. Store weak refs (ADR-038 code) | v1.3.0 |
 
-### v1.3.0-5 — event-loop ceiling (#3095)
+### v1.3.0-5 — event-loop ceiling (#3095) ✅
 
 *Kind:* performance / scalability. On free-threaded 3.14t with `worker_threads` and scoped push, snake-arena in production saturates at about 160 players with the asyncio event-loop thread at 0.87–0.97 of a core while the pool threads use about 3 cores. These rows take per-message work off the loop thread. Every behaviour change is opt-in or proven safe.
 
 | Priority | Task | Milestone |
 |---|---|---|
-| **P1** | #3095 — `PresenceMixin` presence broadcasts respect `push_scope`: a join or leave wakes only the sessions sharing the presence key, not every room (`presence_broadcast_scoped` to choose) | v1.3.0 |
-| **P1** | #3095 — Profile the loop thread at 160–192 players (SIGALRM sampler) and move the CPU-heavy per-frame work into the worker pool, keeping per-session order | v1.3.0 |
-| **P3** | #3095 — Evaluate several event loops per process on 3.14t (design note) | v1.3.0 |
+| ~~**P1**~~ | ~~#3095 — `PresenceMixin` presence broadcasts respect `push_scope`: a join or leave wakes only the sessions sharing the presence key, not every room (`presence_broadcast_scoped` to choose)~~ ✅ (#3115; snake-arena #16) | v1.3.0 |
+| ~~**P1**~~ | ~~#3095 — Profile the loop thread at 160–192 players (SIGALRM sampler) and move the CPU-heavy per-frame work into the worker pool, keeping per-session order~~ ✅ (#3123: loop thread −25–30% at 128–192 clients, −15% at 256–384) | v1.3.0 |
+| ~~**P3**~~ | ~~#3095 — Evaluate several event loops per process on 3.14t (design note)~~ ✅ (design note on #3095; a 2-loop prototype held 512 clients where one loop collapsed; production mode → #3128) | v1.3.0 |
 
 ## Next: v1.2.1 — non-breaking fixes (drain)
 

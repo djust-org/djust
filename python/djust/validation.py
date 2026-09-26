@@ -45,6 +45,82 @@ def get_strict_handler_contract(handler: Callable) -> ParameterContract:
         return variants[bound]
 
 
+def _definition_key(function: Any) -> tuple:
+    """What a function's signature and type hints are derived from.
+
+    A cache entry is used only while this still matches, so a function whose
+    code, defaults, annotations or ``__signature__`` / ``__wrapped__`` are
+    changed after its first event is resolved again, exactly as it would be
+    without the cache. The annotations are compared by value (a dict mutated
+    in place still differs) and are small.
+    """
+    annotations = getattr(function, "__annotations__", None)
+    return (
+        function.__code__,
+        function.__defaults__,
+        tuple(function.__kwdefaults__.items()) if function.__kwdefaults__ else None,
+        tuple(annotations.items()) if annotations else None,
+        function.__dict__.get("__signature__"),
+        function.__dict__.get("__wrapped__"),
+    )
+
+
+_SIGNATURES: weakref.WeakKeyDictionary[Any, Dict[bool, tuple]] = weakref.WeakKeyDictionary()
+
+
+def _handler_signature(handler: Callable) -> inspect.Signature:
+    """``inspect.signature(handler)``, computed once per function (#3095).
+
+    Building a signature is the most expensive step of validating an event's
+    parameters, and it runs on the event loop for every event. Keyed like the
+    strict contracts: by the underlying function (weakly) and whether it is
+    bound, never by a bound method or its owner instance, and valid only
+    while :func:`_definition_key` still matches. A ``Signature`` is
+    immutable, so sharing one is safe across threads.
+    """
+    bound = inspect.ismethod(handler)
+    function: Any = getattr(handler, "__func__", handler) if bound else handler
+    if not inspect.isfunction(function):
+        return inspect.signature(handler)
+    key = _definition_key(function)
+    variants = _SIGNATURES.get(function)
+    if variants is None:
+        with _STRICT_CONTRACT_LOCK:
+            variants = _SIGNATURES.setdefault(function, {})
+    entry = variants.get(bound)
+    if entry is not None and entry[0] == key:
+        cached: inspect.Signature = entry[1]
+        return cached
+    sig = inspect.signature(handler)
+    variants[bound] = (key, sig)
+    return sig
+
+
+_TYPE_HINTS: weakref.WeakKeyDictionary[Any, tuple] = weakref.WeakKeyDictionary()
+
+
+def _handler_type_hints(handler: Callable) -> Dict[str, Any]:
+    """``get_type_hints(handler)``, resolved once per function (#3095).
+
+    Same keying and validity check as :func:`_handler_signature`; the hints
+    of a bound method are its function's. Only a successful resolution is
+    cached: a forward reference that fails now raises again next time, as
+    before. Callers only read the returned dict.
+    """
+    function: Any = getattr(handler, "__func__", handler) if inspect.ismethod(handler) else handler
+    if not inspect.isfunction(function):
+        return get_type_hints(handler)
+    key = _definition_key(function)
+    entry = _TYPE_HINTS.get(function)
+    if entry is not None and entry[0] == key:
+        hints: Dict[str, Any] = entry[1]
+        return hints
+    hints = get_type_hints(handler)
+    with _STRICT_CONTRACT_LOCK:
+        _TYPE_HINTS[function] = (key, hints)
+    return hints
+
+
 def get_handler_parameter_policy(handler: Callable) -> str:
     """Resolve only server-owned policy, independently of client metadata."""
     from .config import config
@@ -165,7 +241,7 @@ def coerce_parameter_types(handler: Callable, params: Dict[str, Any]) -> Dict[st
         {"count": 42, "enabled": True}
     """
     try:
-        type_hints = get_type_hints(handler)
+        type_hints = _handler_type_hints(handler)
     except Exception:
         # If type hints can't be extracted, return params unchanged
         return params
@@ -404,7 +480,13 @@ def _warn_on_near_miss_kwargs(
         # 20 KB apiece. `_is_near_miss` still sees the FULL key, so matching
         # semantics are unchanged; for a normal identifier `sanitize_for_log`
         # is the identity, so the common path is unaffected.
-        safe_key = sanitize_for_log(key, max_length=100)
+        # An identifier of at most 100 characters is what sanitize_for_log
+        # returns unchanged; skip the call on that common path (#3095).
+        safe_key = (
+            key
+            if len(key) <= 100 and key.isidentifier() and key.isascii()
+            else sanitize_for_log(key, max_length=100)
+        )
         pair = (module, name, safe_key)
         if pair in _NEAR_MISS_WARNED:
             # Checked BEFORE the match below, so the steady state on a
@@ -499,7 +581,7 @@ def validate_handler_params(
     # server-only BoundArguments; invokers consume validated_call_arguments(),
     # never serialize the bound call into a response or state snapshot.
     # Map positional arguments to named parameters based on handler signature
-    sig = inspect.signature(handler)
+    sig = _handler_signature(handler)
 
     # Build list of parameter names (excluding self, *args, **kwargs)
     param_names = []
@@ -663,7 +745,7 @@ def validate_parameter_types(
         >>> assert errors[0]["actual"] == "str"
     """
     try:
-        type_hints = get_type_hints(handler)
+        type_hints = _handler_type_hints(handler)
     except Exception:
         # If type hints can't be extracted, skip type validation
         return None
