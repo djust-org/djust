@@ -113,6 +113,32 @@ describe('#3164 SSE fresh-id retry before the first ack', () => {
         expect(sse._freshIdRetried).toBe(false);
     });
 
+    it('a navigation re-arms the retry even if the previous one was never acked', () => {
+        const { sse, streams } = setup();
+        sse.connect('app.views.SearchView', {});
+        refuse(streams[0]); // fresh-id retry in flight, not yet acked
+        expect(sse._freshIdRetried).toBe(true);
+        // TurboNav-style navigation: disconnect, then connect the next page.
+        sse.disconnect();
+        sse.connect('app.views.OtherView', {});
+        refuse(streams[streams.length - 1]);
+        expect(streams).toHaveLength(4);
+        expect(sse.enabled).toBe(true);
+    });
+
+    it('a live_redirect and a new mount re-arm the retry', () => {
+        const { sse } = setup();
+        sse.connect('app.views.SearchView', {});
+        sse._freshIdRetried = true;
+        sse.viewMounted = true;
+        sse.sendMessage = () => true;
+        sse.liveRedirectMount({ type: 'live_redirect_mount', view: 'app.views.OtherView' });
+        expect(sse._freshIdRetried).toBe(false);
+        sse._freshIdRetried = true;
+        sse.handleMessage({ type: 'mount', view: 'app.views.OtherView' });
+        return sse._inflight.then(() => expect(sse._freshIdRetried).toBe(false));
+    });
+
     it('a transient error while EventSource is still reconnecting is left to it', () => {
         const { sse, streams } = setup();
         sse.connect('app.views.SearchView', {});

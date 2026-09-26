@@ -210,6 +210,14 @@ def _resolve_sse_prefix() -> str:
 _DJUST_WS_ROUTE = "ws/live/"
 
 
+def ws_path_is_valid(value: Any) -> bool:
+    """Whether ``value`` is a WebSocket path the client will honor (#3186):
+    a string starting with exactly one ``/`` (not ``//host``). The client's
+    ``djust.wsUrl()`` applies the same rule; system check C025 reports a
+    ``DJUST_WS_PATH`` that fails it."""
+    return isinstance(value, str) and value.startswith("/") and not value.startswith("//")
+
+
 def _resolve_ws_path() -> str:
     """Return the LiveView WebSocket path under the current script prefix.
 
@@ -228,6 +236,8 @@ def _resolve_ws_path() -> str:
 
     pinned = getattr(settings, "DJUST_WS_PATH", None)
     if pinned:
+        # Emitted as set even when invalid: the client ignores it with a
+        # console.warn, and system check C025 reports it at startup.
         return str(pinned)
     prefix = get_script_prefix() or "/"
     if not prefix.endswith("/"):

@@ -151,9 +151,9 @@ class LiveViewSSE {
             }
             if (this.eventSource && this.eventSource.readyState === EventSource.CLOSED
                 && !this._streamAcked && !this._freshIdRetried) {
-                this._freshIdRetried = true;
                 const retryParams = this._connectParams || {};
-                this.disconnect();
+                this.disconnect(); // resets the flag; set it for this retry
+                this._freshIdRetried = true;
                 this.connect(this.primaryViewPath, retryParams);
                 return;
             }
@@ -188,6 +188,9 @@ class LiveViewSSE {
         }
         this.viewMounted = false;
         this.sessionId = null;
+        // #3164: the one fresh-id retry belongs to one page's stream; a
+        // navigation (TurboNav, a new mount) starts with it available again.
+        this._freshIdRetried = false;
 
         // Remove connection state CSS classes on intentional disconnect
         document.body.classList.remove('dj-connected');
@@ -242,6 +245,7 @@ class LiveViewSSE {
 
             case 'mount':
                 this.viewMounted = true;
+                this._freshIdRetried = false; // #3164: a new mount re-arms the retry
                 if (typeof data.view === 'string') this.primaryViewPath = data.view;
                 _installParameterContracts(this, data.parameter_contracts, data.view, true,
                     this._parameterContractFrames.get(data));
@@ -427,6 +431,7 @@ class LiveViewSSE {
         this._replacingView = true;
         this.primaryViewPath = outgoing.view;
         this.viewMounted = false;
+        this._freshIdRetried = false; // #3164: a new page gets its own retry
         return this.sendMessage(outgoing);
     }
 

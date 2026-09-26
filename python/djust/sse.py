@@ -256,6 +256,11 @@ class _StreamGuard:
       the GET) abandons a stream that never began. Not a GC finalizer: the
       response (or a middleware's replacement of it) may be dropped while the
       stream is still being served.
+
+    The deadline timer is cancelled as soon as the stream starts or is
+    abandoned, so it never keeps a closed session (and its view) in memory.
+    An abandoned session is also shut down, so a view it mounted is disposed
+    of instead of waiting for garbage collection.
     """
 
     def __init__(self, session_id: str, session: Optional["SSESession"]) -> None:
@@ -264,6 +269,34 @@ class _StreamGuard:
         self._lock = threading.Lock()
         self._started = False
         self._abandoned = False
+        self._deadline: Optional[asyncio.TimerHandle] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+
+    def arm_deadline(self, delay: float) -> None:
+        """Schedule the abandon check on the running loop after ``delay`` seconds."""
+        self._loop = asyncio.get_running_loop()
+        self._deadline = self._loop.call_later(delay, self._on_deadline)
+
+    def _cancel_deadline(self) -> None:
+        handle, loop = self._deadline, self._loop
+        self._deadline = None
+        if handle is None or loop is None:
+            return
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if running is loop:
+            handle.cancel()
+        elif not loop.is_closed():
+            # response.close() runs in a worker thread (sync_to_async).
+            loop.call_soon_threadsafe(handle.cancel)
+
+    def _on_deadline(self) -> None:
+        # On the loop thread: shutting the view down may do sync work, so do
+        # it in a worker thread like the other SSE teardown paths.
+        self._deadline = None
+        asyncio.ensure_future(sync_to_async(self.abandon)())
 
     def start(self) -> bool:
         """Mark the stream started; ``False`` if it was already abandoned."""
@@ -271,7 +304,8 @@ class _StreamGuard:
             if self._abandoned:
                 return False
             self._started = True
-            return True
+        self._cancel_deadline()
+        return True
 
     def abandon(self) -> None:
         """Drop the session now if its stream never started. Idempotent."""
@@ -280,9 +314,11 @@ class _StreamGuard:
                 return
             self._abandoned = True
             session = self._session
+        self._cancel_deadline()
         if session is not None:
             session._stream_closed = True
             _unregister_sse_session(self._session_id, session)
+            session.shutdown()
 
 
 class _SSEStream:
@@ -956,7 +992,7 @@ class DjustSSEStreamView(View):
 
         guard = _StreamGuard(session_id, session if mounted else None)
         if mounted:
-            asyncio.get_running_loop().call_later(_STREAM_START_DEADLINE_S, guard.abandon)
+            guard.arm_deadline(_STREAM_START_DEADLINE_S)
 
         async def event_stream() -> AsyncIterator[str]:
             # #3164: everything after registration, the ack included, is inside

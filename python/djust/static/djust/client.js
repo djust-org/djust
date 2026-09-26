@@ -126,6 +126,14 @@ window.djust.sseUrl = function sseUrl(path) {
 window.djust.wsUrl = function wsUrl() {
     let path = window.djust.wsPath || '/ws/live/';
     if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//')) {
+        if (!window.djust._wsPathWarned) {
+            window.djust._wsPathWarned = true;
+            console.warn(
+                '[LiveView] Ignoring djust.wsPath %s: it must be a path starting with a single "/" '
+                + '(check DJUST_WS_PATH); using /ws/live/.',
+                String(path)
+            );
+        }
         path = '/ws/live/';
     }
     if (!path.endsWith('/')) path = path + '/';
@@ -1162,15 +1170,21 @@ class LiveViewWebSocket {
 
         // #3186: true when the URL came from djust.wsPath rather than a caller.
         let derivedUrl = false;
+        const rootUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/live/`;
+        // #3186: this attempt is the one provisional try at the host root
+        // (see onclose). It is adopted only if it opens.
+        const rootFallback = this._wsRootFallbackPending === true;
+        this._wsRootFallbackPending = false;
         if (!url) {
             // #3186: honor the script prefix ({% djust_client_config %} emits
             // <meta name="djust-ws-path">); falls back to /ws/live/.
             derivedUrl = true;
-            if (window.djust && typeof window.djust.wsUrl === 'function') {
+            if (rootFallback || this._wsRootAdopted) {
+                url = rootUrl;
+            } else if (window.djust && typeof window.djust.wsUrl === 'function') {
                 url = window.djust.wsUrl();
             } else {
-                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                url = `${protocol}//${window.location.host}/ws/live/`;
+                url = rootUrl;
             }
         }
 
@@ -1180,6 +1194,17 @@ class LiveViewWebSocket {
 
         this.ws.onopen = (_event) => {
             if (globalThis.djustDebug) console.log('[LiveView] WebSocket connected');
+            if (rootFallback && !this._wsRootAdopted) {
+                // #3186: the host root answered where the prefixed path did not,
+                // so this page keeps using it (djust.wsPath itself is unchanged).
+                this._wsRootAdopted = true;
+                console.warn(
+                    '[LiveView] Connected at the host-root /ws/live/ after %s failed; this page '
+                    + 'keeps using it. Route <prefix>/ws/live/ to djust, or set DJUST_WS_PATH '
+                    + '= "/ws/live/" (#3186).',
+                    window.djust && window.djust.wsPath
+                );
+            }
             this.reconnectAttempts = 0;
             this._intentionalDisconnect = false;
 
@@ -1256,18 +1281,21 @@ class LiveViewWebSocket {
 
             // #3186 upgrade path: a deployment under a path prefix that still
             // routes only the host-root /ws/live/ fails the first handshake on
-            // the prefixed path. Retry once at /ws/live/ (the pre-#3186 URL)
-            // before the normal backoff, and say why.
-            if (derivedUrl && this.stats.connectedAt === null && !this._wsPathFallbackTried
-                && window.djust && window.djust.wsPath && window.djust.wsPath !== '/ws/live/') {
+            // the prefixed path. Try the host root once, provisionally: it is
+            // adopted only if that socket opens (see onopen). If it fails too,
+            // the normal backoff below goes back to the prefixed path, so a
+            // transient failure (a restart, a rollout) cannot strand the page
+            // on another app's socket.
+            if (derivedUrl && !rootFallback && !this._wsRootAdopted && url !== rootUrl
+                && this.stats.connectedAt === null && !this._wsPathFallbackTried) {
                 this._wsPathFallbackTried = true;
                 console.warn(
-                    '[LiveView] The WebSocket handshake at %s failed before opening; retrying at the '
-                    + 'host-root /ws/live/. Route <prefix>/ws/live/ to djust, or set DJUST_WS_PATH = '
-                    + '"/ws/live/" to keep the old path (#3186).',
-                    window.djust.wsPath
+                    '[LiveView] The WebSocket handshake at %s failed before opening; trying the '
+                    + 'host-root /ws/live/ once. Route <prefix>/ws/live/ to djust, or set '
+                    + 'DJUST_WS_PATH = "/ws/live/" to keep the old path (#3186).',
+                    url
                 );
-                window.djust.wsPath = '/ws/live/';
+                this._wsRootFallbackPending = true;
                 this.connect();
                 return;
             }
@@ -1296,7 +1324,9 @@ class LiveViewWebSocket {
                 document.body.style.setProperty('--dj-reconnect-attempt', String(this.reconnectAttempts));
                 this._showReconnectBanner(this.reconnectAttempts, this.maxReconnectAttempts);
 
-                setTimeout(() => this.connect(url), jitteredDelay);
+                // #3186: a derived URL is re-derived, so a failed provisional
+                // root attempt does not become the URL every retry reuses.
+                setTimeout(() => this.connect(derivedUrl ? null : url), jitteredDelay);
             } else {
                 console.warn('[LiveView] Max reconnection attempts reached.');
                 this.enabled = false;
@@ -2645,9 +2675,9 @@ class LiveViewSSE {
             }
             if (this.eventSource && this.eventSource.readyState === EventSource.CLOSED
                 && !this._streamAcked && !this._freshIdRetried) {
-                this._freshIdRetried = true;
                 const retryParams = this._connectParams || {};
-                this.disconnect();
+                this.disconnect(); // resets the flag; set it for this retry
+                this._freshIdRetried = true;
                 this.connect(this.primaryViewPath, retryParams);
                 return;
             }
@@ -2682,6 +2712,9 @@ class LiveViewSSE {
         }
         this.viewMounted = false;
         this.sessionId = null;
+        // #3164: the one fresh-id retry belongs to one page's stream; a
+        // navigation (TurboNav, a new mount) starts with it available again.
+        this._freshIdRetried = false;
 
         // Remove connection state CSS classes on intentional disconnect
         document.body.classList.remove('dj-connected');
@@ -2736,6 +2769,7 @@ class LiveViewSSE {
 
             case 'mount':
                 this.viewMounted = true;
+                this._freshIdRetried = false; // #3164: a new mount re-arms the retry
                 if (typeof data.view === 'string') this.primaryViewPath = data.view;
                 _installParameterContracts(this, data.parameter_contracts, data.view, true,
                     this._parameterContractFrames.get(data));
@@ -2921,6 +2955,7 @@ class LiveViewSSE {
         this._replacingView = true;
         this.primaryViewPath = outgoing.view;
         this.viewMounted = false;
+        this._freshIdRetried = false; // #3164: a new page gets its own retry
         return this.sendMessage(outgoing);
     }
 

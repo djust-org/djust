@@ -243,6 +243,35 @@ def test_djust_ws_path_setting_pins_the_emitted_path():
     assert "/app/ws/live/" not in html
 
 
+@pytest.mark.parametrize(
+    "value,reported",
+    [
+        (None, False),
+        ("", False),
+        ("/ws/live/", False),
+        ("/app/ws/live/", False),
+        ("ws/live/", True),
+        ("//evil.example/ws/", True),
+        ("wss://evil.example/ws/", True),
+        (42, True),
+    ],
+)
+def test_c025_reports_a_ws_path_the_client_would_ignore(value, reported):
+    """#3186 re-review: an invalid DJUST_WS_PATH is surfaced at startup."""
+    from djust.checks.configuration import check_configuration
+
+    with override_settings(DJUST_WS_PATH=value):
+        ids = [m.id for m in check_configuration(None)]
+    assert ("djust.C025" in ids) is reported, ids
+
+
+@override_settings(DJUST_WS_PATH="ws/live/", DJUST_CONFIG={"suppress_checks": ["C025"]})
+def test_c025_can_be_suppressed():
+    from djust.checks.configuration import check_configuration
+
+    assert "djust.C025" not in [m.id for m in check_configuration(None)]
+
+
 @override_settings(DJUST_WS_PATH='/x"<script>/ws/')
 def test_djust_ws_path_setting_is_escaped():
     html = _render_tag()

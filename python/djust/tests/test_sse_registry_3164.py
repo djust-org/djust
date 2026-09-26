@@ -375,13 +375,78 @@ async def test_stream_that_never_starts_is_dropped_at_the_start_deadline(monkeyp
     view = DjustSSEStreamView()
     with patch("djust.runtime.ViewRuntime.dispatch_mount", new=_fake_mount_ok):
         resp = await _open_stream(view, sid, _auth_user(7))
-    assert sid in _sse_sessions
+    session = _sse_sessions[sid]
     for _ in range(100):
-        if sid not in _sse_sessions:
+        if sid not in _sse_sessions and not session.active:
             break
         await asyncio.sleep(0.01)
     assert sid not in _sse_sessions
+    # Shut down, not merely unregistered (re-review minor 2).
+    assert session.active is False
     assert [c async for c in _stream(resp)] == []
+
+
+def _capture_guards(monkeypatch):
+    guards = []
+    real_init = sse._StreamGuard.__init__
+
+    def init(self, *args, **kwargs):
+        real_init(self, *args, **kwargs)
+        guards.append(self)
+
+    monkeypatch.setattr(sse._StreamGuard, "__init__", init)
+    return guards
+
+
+@override_settings(ALLOWED_HOSTS=["example.com"])
+@pytest.mark.asyncio
+async def test_abandon_on_close_shuts_the_session_down(monkeypatch):
+    sid = str(uuid.uuid4())
+    view = DjustSSEStreamView()
+    with patch("djust.runtime.ViewRuntime.dispatch_mount", new=_fake_mount_ok):
+        resp = await _open_stream(view, sid, _auth_user(7))
+    session = _sse_sessions[sid]
+    shutdowns = []
+    real_shutdown = session.shutdown
+    monkeypatch.setattr(session, "shutdown", lambda: (shutdowns.append(1), real_shutdown()))
+    resp.close()
+    assert shutdowns == [1]
+    assert session.active is False
+
+
+@override_settings(ALLOWED_HOSTS=["example.com"])
+@pytest.mark.asyncio
+async def test_start_deadline_timer_is_cancelled_when_the_stream_starts(monkeypatch):
+    """Re-review minor 3: the timer must not hold the session for 30 s."""
+    guards = _capture_guards(monkeypatch)
+    sid = str(uuid.uuid4())
+    view = DjustSSEStreamView()
+    with patch("djust.runtime.ViewRuntime.dispatch_mount", new=_fake_mount_ok):
+        resp = await _open_stream(view, sid, _auth_user(7))
+    handle = guards[0]._deadline
+    assert handle is not None and not handle.cancelled()
+    agen = _stream(resp)
+    await agen.__anext__()
+    assert handle.cancelled() and guards[0]._deadline is None
+    await agen.aclose()
+
+
+@override_settings(ALLOWED_HOSTS=["example.com"])
+@pytest.mark.asyncio
+async def test_start_deadline_timer_is_cancelled_by_close_from_a_worker_thread(monkeypatch):
+    """Django calls ``response.close()`` through ``sync_to_async``."""
+    from asgiref.sync import sync_to_async
+
+    guards = _capture_guards(monkeypatch)
+    sid = str(uuid.uuid4())
+    view = DjustSSEStreamView()
+    with patch("djust.runtime.ViewRuntime.dispatch_mount", new=_fake_mount_ok):
+        resp = await _open_stream(view, sid, _auth_user(7))
+    handle = guards[0]._deadline
+    await sync_to_async(resp.close)()
+    await asyncio.sleep(0)  # the thread-safe cancel lands on the loop
+    assert handle.cancelled()
+    assert sid not in _sse_sessions
 
 
 @override_settings(ALLOWED_HOSTS=["example.com"])

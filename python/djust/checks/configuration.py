@@ -583,6 +583,38 @@ def _check_event_parameter_policy(errors: list[CheckMessage]) -> None:
         )
 
 
+def _check_ws_path(errors: list[CheckMessage]) -> None:
+    """C025 — ``DJUST_WS_PATH`` must be a path starting with a single ``/`` (#3186).
+
+    ``{% djust_client_config %}`` emits the setting verbatim as the WebSocket
+    path. The client honors only a root-relative path (so the socket always
+    targets the page's own host); any other value is ignored with a browser
+    ``console.warn`` and the socket goes to ``/ws/live/``, which is not what
+    the operator asked for.
+    """
+    from django.conf import settings
+
+    from ..templatetags.live_tags import ws_path_is_valid
+
+    if _is_check_suppressed("djust.C025"):
+        return
+    value = getattr(settings, "DJUST_WS_PATH", None)
+    if value in (None, "") or ws_path_is_valid(value):
+        return
+    errors.append(
+        DjustError(
+            "DJUST_WS_PATH is %s; it must be a path starting with a single '/'." % repr(value)[:80],
+            hint=(
+                "The client ignores any other value (an absolute URL, '//host/...', a "
+                "relative path) and connects to '/ws/live/' instead, so the socket never "
+                "uses the path you set."
+            ),
+            id="djust.C025",
+            fix_hint="Set `DJUST_WS_PATH` to a path such as `'/ws/live/'`, or remove it.",
+        )
+    )
+
+
 def _check_unknown_extensions(errors: list) -> None:
     """C015 -- unknown adapter name in ``DJUST_CONFIG['extensions']`` (#2063).
 
@@ -1027,6 +1059,9 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
     # C022 -- ADR-036 project event parameter policy
     _check_event_parameter_policy(errors)
+
+    # C025 -- DJUST_WS_PATH is not a root-relative path (#3186)
+    _check_ws_path(errors)
 
     # C005 -- WebSocket routes missing AuthMiddlewareStack
     # A001 -- WebSocket routes missing AllowedHostsOriginValidator (#659)

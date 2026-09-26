@@ -416,15 +416,24 @@ verbatim in place of the script prefix plus `ws/live/`.
 the host-root `/ws/live/`, so an existing prefixed deployment may route only
 that path (for example `location /ws/`) and not `/app/ws/live/`. After
 upgrading, the client connects to `/app/ws/live/` first. If that first
-handshake fails before the socket ever opens, the client retries once at
-`/ws/live/` and logs a `console.warn` naming the path it tried, so such a
-deployment keeps its WebSocket, but it pays one failed handshake per page
-load. To remove it, either route `<prefix>/ws/live/` to djust as above, or pin
-the old path with `DJUST_WS_PATH = "/ws/live/"`. The fallback only fires on a
-socket that never opened, and only once per page, so a correctly routed
-deployment never uses it. A per-site shim that rewrote the socket URL to add
-the prefix (djust-docs' `ws-prefix.js`, for example) is now redundant; it is
-harmless, because it rewrites only an exact `/ws/live/`.
+handshake fails before the socket has ever opened, the client tries
+`/ws/live/` once and logs a `console.warn` naming the URL that failed. The
+root path is adopted for the rest of the page only if that socket opens; if it
+fails too, the normal reconnect backoff goes back to `/app/ws/live/`. So a
+deployment that routes only `/ws/live/` keeps its WebSocket, at the cost of
+one failed handshake per page load. To remove that cost, either route
+`<prefix>/ws/live/` to djust as above, or pin the old path with
+`DJUST_WS_PATH = "/ws/live/"` (system check C025 reports a value that is not a
+path starting with a single `/`).
+
+A correctly routed deployment also makes this one attempt whenever its first
+handshake fails for an ordinary reason, such as a restart or a rollout. On a
+shared host, where something else answers at `/ws/live/`, that attempt can
+open against the other app, and the page then stays there. Setting
+`DJUST_WS_PATH` to your own prefixed path does not avoid the attempt; routing
+nothing else at the host-root `/ws/live/` does. A per-site shim that rewrote
+the socket URL to add the prefix (djust-docs' `ws-prefix.js`, for example) is
+now redundant; it is harmless, because it rewrites only an exact `/ws/live/`.
 
 ## Database Connection Pooling
 

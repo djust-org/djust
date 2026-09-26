@@ -125,6 +125,14 @@ window.djust.sseUrl = function sseUrl(path) {
 window.djust.wsUrl = function wsUrl() {
     let path = window.djust.wsPath || '/ws/live/';
     if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//')) {
+        if (!window.djust._wsPathWarned) {
+            window.djust._wsPathWarned = true;
+            console.warn(
+                '[LiveView] Ignoring djust.wsPath %s: it must be a path starting with a single "/" '
+                + '(check DJUST_WS_PATH); using /ws/live/.',
+                String(path)
+            );
+        }
         path = '/ws/live/';
     }
     if (!path.endsWith('/')) path = path + '/';

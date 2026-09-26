@@ -27,6 +27,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C020 | Config | Error | `DJUST_SERVER_STATE_MAX_AGE` is not an integer from 1 to 86400 |
 | C021 | Config | Error | `LIVEVIEW_CONFIG['worker_threads']` is not `None`, `False`, `True`, `"auto"` or an integer >= 0 |
 | C022 | Config | Error | `LIVEVIEW_CONFIG['event_parameter_policy']` is not `'legacy'` or `'strict'` (ADR-036) |
+| C025 | Config | Error | `DJUST_WS_PATH` is not a path starting with a single `/` (#3186) |
 | V001 | LiveView | Warning | LiveView missing template_name attribute |
 | V002 | LiveView | Info | LiveView missing mount() method |
 | V003 | LiveView | Error | mount() has wrong signature |
@@ -199,6 +200,13 @@ console.log("debug info"); // noqa: Q003
 - **Method**: Settings inspection, through the resolver dispatch uses (`djust.validation.get_project_parameter_policy`)
 - **What it detects**: `LIVEVIEW_CONFIG['event_parameter_policy']` (or the same key in `DJUST_CONFIG`) is set to something other than `'legacy'` or `'strict'`. Every handler without its own `parameter_policy` inherits the value, and dispatch rejects each of their events while it is invalid. An absent key is the `'legacy'` default and never reports. The ADR-036 strict policy is opt-in; legacy remains the default.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C022"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C022"]` (the runtime still rejects the events)
+- **False positives**: None
+
+### C025 — Invalid `DJUST_WS_PATH`
+- **Severity**: Error
+- **Method**: Settings inspection
+- **What it detects**: `DJUST_WS_PATH` is set to something other than a path starting with a single `/` (for example `"ws/live/"`, `"//host/ws/"` or `"wss://host/ws/"`). `{% djust_client_config %}` emits the setting as the WebSocket path; the client honors only a root-relative path, so it ignores any other value with a `console.warn` and connects to `/ws/live/` instead (#3186).
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C025"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C025"]`
 - **False positives**: None
 
 ---
