@@ -250,7 +250,9 @@ declare class LiveViewWebSocket {
   /**
    * Establish a WebSocket connection.
    *
-   * @param url - WebSocket URL. Defaults to `ws[s]://<host>/ws/live/`.
+   * @param url - WebSocket URL. Defaults to `ws[s]://<host><djust.wsPath>`, where
+   *   `wsPath` comes from `<meta name="djust-ws-path">` (emitted by
+   *   `{% djust_client_config %}`, honoring `FORCE_SCRIPT_NAME`) or `/ws/live/`.
    */
   connect(url?: string | null): void;
 
@@ -534,6 +536,23 @@ interface Djust {
    * Null before `djustInit()` completes or after deliberate disconnect.
    */
   liveViewInstance: LiveViewWebSocket | LiveViewSSE | null;
+
+  /**
+   * Root-relative path the WebSocket connects to (#3186). Resolved once at
+   * bootstrap: an explicit value set before the bundle loads wins, then
+   * `<meta name="djust-ws-path">` (emitted by `{% djust_client_config %}`
+   * from the script prefix, or from the `DJUST_WS_PATH` setting), then
+   * `"/ws/live/"`. Reset to `"/ws/live/"` if the first handshake on a
+   * prefixed path fails before opening.
+   */
+  wsPath: string;
+
+  /**
+   * The same-host `ws:`/`wss:` URL for {@link Djust.wsPath}. A value that is
+   * not root-relative (an absolute or `//host` URL) falls back to
+   * `/ws/live/`, so the socket always targets the page's own host.
+   */
+  wsUrl(): string;
 
   // -------------------------------------------------------------------------
   // Hook System

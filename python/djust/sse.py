@@ -46,6 +46,7 @@ import asyncio
 import inspect
 import json
 import logging
+import threading
 import uuid
 from typing import Any, AsyncIterator, Dict, Optional, cast
 
@@ -76,6 +77,12 @@ _sse_sessions: Dict[str, "SSESession"] = {}
 
 # SSE keepalive interval in seconds (sent as ":" comment lines)
 _KEEPALIVE_TIMEOUT = 25.0
+
+# How long a registered session may wait for Django to start streaming its
+# response before it is dropped as abandoned (#3164). Django starts iterating
+# right after the view returns, so this only fires when the client went away
+# first and the handler was cancelled before it could close the response.
+_STREAM_START_DEADLINE_S = 30.0
 
 # How long to retain a session after the stream closes, in seconds.
 # Allows in-flight event POSTs to still find the session briefly.
@@ -110,6 +117,192 @@ def _max_sessions_total() -> int:
     return int(getattr(settings, "DJUST_SSE_MAX_SESSIONS_TOTAL", _MAX_SESSIONS_TOTAL))
 
 
+# ---- Registry lock + cap reservations (#3164) --------------------------------
+# The caps used to count, await the mount, then register, so concurrent GETs
+# all passed the count and overshot the cap; with several event loops
+# (``djust serve --loops N``) those GETs are truly parallel. A GET now reserves
+# its slot under this lock BEFORE the mount and converts the reservation into a
+# registration (or releases it) under the same lock, so the count every GET
+# checks includes the mounts still in flight. The lock also makes the
+# registry's check-and-set / check-and-pop steps atomic across loops.
+_sse_registry_lock = threading.Lock()
+#: In-flight reservations per cap key (see ``_client_cap_key``).
+_sse_reserved: Dict[str, int] = {}
+#: Sum of ``_sse_reserved``.
+_sse_reserved_total = 0
+
+
+def _owner_key(user_pk: Any, session_key: Optional[str]) -> tuple:
+    """The principal an SSE session is bound to (Finding #24), as one value.
+
+    The single builder for the owner tuple: the stream GET and the registry's
+    conflict checks both go through it, so they cannot drift (#3164).
+    """
+    if user_pk is not None:
+        return ("user", user_pk)
+    return ("session", session_key)
+
+
+def _owner_identity(session: "SSESession") -> tuple:
+    """The principal ``session`` is bound to."""
+    return _owner_key(session._owner_user_pk, session._owner_session_key)
+
+
+def _blocks_id_reuse(existing: Optional["SSESession"], owner: tuple) -> bool:
+    """Whether ``existing`` keeps another owner from taking its id (#3164).
+
+    Only a LIVE session does. One whose stream has closed or is closing (in
+    its linger window, or shut down) is replaceable: that is a tab whose owner
+    changed (a login or logout elsewhere rotated the session) reconnecting
+    with the id it already had.
+    """
+    if existing is None or _owner_identity(existing) == owner:
+        return False
+    return existing.active and not existing._stream_closed
+
+
+def _sse_load() -> int:
+    """Registered sessions plus in-flight reservations (what the global cap counts)."""
+    with _sse_registry_lock:
+        return len(_sse_sessions) + _sse_reserved_total
+
+
+def _reserve_sse_slot(cap_key: str, session_id: str, owner: tuple) -> Optional[str]:
+    """Reserve one session slot for ``cap_key``, or say why not.
+
+    Returns ``None`` on success (the caller MUST later call
+    :func:`_register_sse_session` or :func:`_release_sse_slot`), else
+    ``"conflict"`` (``session_id`` is live under another owner), ``"total"``
+    (global cap) or ``"client"`` (per-client cap).
+    """
+    global _sse_reserved_total
+    max_total = _max_sessions_total()
+    max_client = _max_sessions_per_client()
+    with _sse_registry_lock:
+        if _blocks_id_reuse(_sse_sessions.get(session_id), owner):
+            return "conflict"
+        if len(_sse_sessions) + _sse_reserved_total >= max_total:
+            return "total"
+        held = _count_sessions_for_client(cap_key) + _sse_reserved.get(cap_key, 0)
+        if held >= max_client:
+            return "client"
+        _sse_reserved[cap_key] = _sse_reserved.get(cap_key, 0) + 1
+        _sse_reserved_total += 1
+        return None
+
+
+def _release_reservation_locked(cap_key: str) -> None:
+    global _sse_reserved_total
+    held = _sse_reserved.get(cap_key, 0)
+    if held <= 0 or _sse_reserved_total <= 0:
+        # A second release of one reservation. Refuse it loudly rather than
+        # clamp: a silent clamp would hide the bug and could free a slot that
+        # another GET still holds.
+        logger.error(
+            "SSE: reservation for %s released twice (held=%d, total=%d); ignoring",
+            sanitize_for_log(cap_key),
+            held,
+            _sse_reserved_total,
+        )
+        return
+    if held > 1:
+        _sse_reserved[cap_key] = held - 1
+    else:
+        del _sse_reserved[cap_key]
+    _sse_reserved_total -= 1
+
+
+def _release_sse_slot(cap_key: str) -> None:
+    """Give back a reservation whose mount did not register a session."""
+    with _sse_registry_lock:
+        _release_reservation_locked(cap_key)
+
+
+def _register_sse_session(cap_key: str, session_id: str, session: "SSESession") -> bool:
+    """Turn ``cap_key``'s reservation into the registration of ``session``.
+
+    Refuses (returns ``False``, reservation released) when another owner
+    registered ``session_id`` while this GET was mounting. The same owner
+    re-using its id (EventSource auto-reconnect) replaces its old session.
+    """
+    with _sse_registry_lock:
+        _release_reservation_locked(cap_key)
+        if _blocks_id_reuse(_sse_sessions.get(session_id), _owner_identity(session)):
+            return False
+        _sse_sessions[session_id] = session
+        return True
+
+
+def _unregister_sse_session(session_id: str, session: "SSESession") -> None:
+    """Drop ``session`` from the registry only if it is still the one there."""
+    with _sse_registry_lock:
+        if _sse_sessions.get(session_id) is session:
+            del _sse_sessions[session_id]
+
+
+class _StreamGuard:
+    """Unregisters a mounted SSE session whose stream never started (#3164).
+
+    A registered session is normally removed by its stream generator's
+    ``finally``. If the client disconnects before Django starts iterating the
+    response, the generator never runs, so that ``finally`` never runs either
+    and the session would count against the caps forever. Two exits cover it,
+    and both drop the session only if the stream had not started (a started
+    stream cleans up after itself):
+
+    * Django calls the response's ``close()`` once it is done with it.
+    * When the ASGI handler is cancelled before it can close the response, a
+      start deadline (``_STREAM_START_DEADLINE_S``, scheduled on the loop by
+      the GET) abandons a stream that never began. Not a GC finalizer: the
+      response (or a middleware's replacement of it) may be dropped while the
+      stream is still being served.
+    """
+
+    def __init__(self, session_id: str, session: Optional["SSESession"]) -> None:
+        self._session_id = session_id
+        self._session = session
+        self._lock = threading.Lock()
+        self._started = False
+        self._abandoned = False
+
+    def start(self) -> bool:
+        """Mark the stream started; ``False`` if it was already abandoned."""
+        with self._lock:
+            if self._abandoned:
+                return False
+            self._started = True
+            return True
+
+    def abandon(self) -> None:
+        """Drop the session now if its stream never started. Idempotent."""
+        with self._lock:
+            if self._started or self._abandoned:
+                return
+            self._abandoned = True
+            session = self._session
+        if session is not None:
+            session._stream_closed = True
+            _unregister_sse_session(self._session_id, session)
+
+
+class _SSEStream:
+    """The SSE response body: the stream generator plus its ``_StreamGuard``.
+
+    ``StreamingHttpResponse`` iterates ``__aiter__`` and, because this object
+    has ``close()``, calls it from ``response.close()``.
+    """
+
+    def __init__(self, agen: AsyncIterator[str], guard: _StreamGuard) -> None:
+        self._agen = agen
+        self._guard = guard
+
+    def __aiter__(self) -> AsyncIterator[str]:
+        return self._agen
+
+    def close(self) -> None:
+        self._guard.abandon()
+
+
 class SSESession:
     """
     Per-connection state for a single SSE client.
@@ -135,6 +328,10 @@ class SSESession:
         except RuntimeError:
             self._loop = None
         self.active = True
+        # #3164: set when this session's stream closes (before its linger), so
+        # another owner may take the id; ``active`` stays True through the
+        # linger so in-flight POSTs still dispatch.
+        self._stream_closed = False
         self._rate_limiter: ConnectionRateLimiter = ConnectionRateLimiter()
         self._client_ip: Optional[str] = None
         # Serialize POST turns separately from render/result application.
@@ -622,22 +819,33 @@ class DjustSSEStreamView(View):
                 await sync_to_async(django_session.save)()
                 owner_session_key = django_session.session_key
 
-        # ---- Resource-exhaustion caps (Finding #25) ----
-        # Reject (without allocating/registering a session) when the process is
-        # globally saturated (503) or this client already holds too many live
-        # sessions (429). Checked BEFORE creation so a flood leaves no live
-        # session behind.
-        if len(_sse_sessions) >= _max_sessions_total():
+        # ---- Resource-exhaustion caps (Finding #25) + id ownership (#3164) ----
+        # Reject (without allocating/registering a session) when the id is live
+        # under another owner (409), the process is globally saturated (503) or
+        # this client already holds too many live sessions (429). The slot is
+        # RESERVED under the registry lock before the mount, so GETs still
+        # mounting count against the caps; every exit below releases it or
+        # converts it into the registration.
+        cap_key = _client_cap_key(request)
+        refusal = _reserve_sse_slot(
+            cap_key, session_id, _owner_key(owner_user_pk, owner_session_key)
+        )
+        if refusal == "conflict":
             logger.warning(
-                "SSE: global session cap reached (%d) — rejecting stream GET",
-                len(_sse_sessions),
+                "SSE: rejected stream GET for session %s — the id is live under another owner",
+                sanitize_for_log(session_id),
+            )
+            return JsonResponse({"error": "Session ID already in use."}, status=409)
+        if refusal == "total":
+            logger.warning(
+                "SSE: global session cap reached (%d registered or mounting) — rejecting stream GET",
+                _sse_load(),
             )
             return JsonResponse(
                 {"error": "Server is at capacity. Please try again later."},
                 status=503,
             )
-        cap_key = _client_cap_key(request)
-        if _count_sessions_for_client(cap_key) >= _max_sessions_per_client():
+        if refusal == "client":
             logger.warning(
                 "SSE: per-client session cap reached for %s — rejecting stream GET",
                 sanitize_for_log(cap_key),
@@ -646,98 +854,120 @@ class DjustSSEStreamView(View):
                 {"error": "Too many concurrent SSE sessions for this client."},
                 status=429,
             )
+        reserved = True
+        try:
+            # Create the session and bind it to its owner. NOTE: not yet registered
+            # in _sse_sessions — registration happens only after a successful mount
+            # (Finding #25 register-after-mount), so an unauthorized/errored mount
+            # leaves no POST-routable session behind.
+            session = SSESession(session_id)
+            session._client_ip = _client_ip_from_request(request)
+            session._owner_user_pk = owner_user_pk
+            session._owner_session_key = owner_session_key
+            # Stash the REAL HTTP request so the runtime mounts against it (real
+            # request.user / session / path for auth + object-perm) — the converged
+            # runtime mount path reads it via SSESessionTransport.build_request
+            # (#1887, ADR-022 Iter 1). Without this the runtime would synthesize a
+            # userless RequestFactory request and deny every authenticated SSE view.
+            from ._sse_navigation import page_request
 
-        # Create the session and bind it to its owner. NOTE: not yet registered
-        # in _sse_sessions — registration happens only after a successful mount
-        # (Finding #25 register-after-mount), so an unauthorized/errored mount
-        # leaves no POST-routable session behind.
-        session = SSESession(session_id)
-        session._client_ip = _client_ip_from_request(request)
-        session._owner_user_pk = owner_user_pk
-        session._owner_session_key = owner_session_key
-        # Stash the REAL HTTP request so the runtime mounts against it (real
-        # request.user / session / path for auth + object-perm) — the converged
-        # runtime mount path reads it via SSESessionTransport.build_request
-        # (#1887, ADR-022 Iter 1). Without this the runtime would synthesize a
-        # userless RequestFactory request and deny every authenticated SSE view.
-        from ._sse_navigation import page_request
+            mount_params = {
+                k: v
+                for k, v in request.GET.items()
+                if k not in {"view", "_djust_url", "_djust_track_static"}
+            }
+            # #2966: dj-track-static over SSE. The stream GET is the mount (a later
+            # POSTed mount frame is a no-op), and an EventSource auto-reconnect
+            # re-requests this URL without posting anything, so the page's tracked
+            # asset URLs ride the stream URL and are checked at this mount.
+            track_static = request.GET.getlist("_djust_track_static")
+            page_url = request.GET.get("_djust_url", request.path)
+            session._request = await sync_to_async(page_request)(request, page_url, mount_params)
 
-        mount_params = {
-            k: v
-            for k, v in request.GET.items()
-            if k not in {"view", "_djust_url", "_djust_track_static"}
-        }
-        # #2966: dj-track-static over SSE. The stream GET is the mount (a later
-        # POSTed mount frame is a no-op), and an EventSource auto-reconnect
-        # re-requests this URL without posting anything, so the page's tracked
-        # asset URLs ride the stream URL and are checked at this mount.
-        track_static = request.GET.getlist("_djust_track_static")
-        page_url = request.GET.get("_djust_url", request.path)
-        session._request = await sync_to_async(page_request)(request, page_url, mount_params)
-
-        # Mount the view through the shared ViewRuntime (#1887, ADR-022 Iter 1):
-        # converges the legacy bespoke _sse_mount_view onto dispatch_mount, the
-        # SAME spine the WS url_change path + the SSE /message/ endpoint already
-        # use, so the SSE mount can no longer drift from the runtime (#1646).
-        # dispatch_mount pushes "mount" (or "error"/"navigate") onto the queue
-        # and sets runtime.view_instance only on a fully-successful mount; that
-        # is the SSE 'mounted' gate (it replaces the legacy bool return).
-        #
-        # Data-dict shape mirrors the WS mount frame + the existing dispatch_*
-        # callers: 'view' is the ?view= path; 'url' is the real request.path so
-        # _resolve_url_kwargs extracts pk/slug pattern kwargs; 'params' carries
-        # the query-string params the legacy path merged into mount_kwargs
-        # (every GET item except the 'view' selector itself).
-        from ._exposure_diagnostics import (
-            diagnostic_scope,
-            diagnostics_allowed,
-            protected_http_outcome,
-            protected_server_error,
-            watch_diagnostic_owner,
-        )
-
-        # ADR-038 D-a: a failure escaping dispatch_mount for a nonlegacy view
-        # (its mount scope carries the restriction here) gets a value-free 500;
-        # a legacy failure propagates to Django exactly as before.
-        protected_failure = False
-        with diagnostic_scope():
-            watch_diagnostic_owner(session.runtime, "view_instance")
-            try:
-                await session.runtime.dispatch_mount(
-                    {
-                        "type": "mount",
-                        "view": view_path,
-                        "url": session._request.path_info,
-                        "params": mount_params,
-                        "track_static": track_static,
-                    }
-                )
-            except Exception as exc:
-                outcome = protected_http_outcome(exc)
-                if diagnostics_allowed() or outcome == "raise":
-                    raise
-                protected_failure = True
-                del exc
-        if protected_failure:
-            session.shutdown()
-            return cast(
-                HttpResponse, await sync_to_async(protected_server_error)(request, logger, outcome)
+            # Mount the view through the shared ViewRuntime (#1887, ADR-022 Iter 1):
+            # converges the legacy bespoke _sse_mount_view onto dispatch_mount, the
+            # SAME spine the WS url_change path + the SSE /message/ endpoint already
+            # use, so the SSE mount can no longer drift from the runtime (#1646).
+            # dispatch_mount pushes "mount" (or "error"/"navigate") onto the queue
+            # and sets runtime.view_instance only on a fully-successful mount; that
+            # is the SSE 'mounted' gate (it replaces the legacy bool return).
+            #
+            # Data-dict shape mirrors the WS mount frame + the existing dispatch_*
+            # callers: 'view' is the ?view= path; 'url' is the real request.path so
+            # _resolve_url_kwargs extracts pk/slug pattern kwargs; 'params' carries
+            # the query-string params the legacy path merged into mount_kwargs
+            # (every GET item except the 'view' selector itself).
+            from ._exposure_diagnostics import (
+                diagnostic_scope,
+                diagnostics_allowed,
+                protected_http_outcome,
+                protected_server_error,
+                watch_diagnostic_owner,
             )
-        mounted = session.runtime.view_instance is not None
+
+            # ADR-038 D-a: a failure escaping dispatch_mount for a nonlegacy view
+            # (its mount scope carries the restriction here) gets a value-free 500;
+            # a legacy failure propagates to Django exactly as before.
+            protected_failure = False
+            with diagnostic_scope():
+                watch_diagnostic_owner(session.runtime, "view_instance")
+                try:
+                    await session.runtime.dispatch_mount(
+                        {
+                            "type": "mount",
+                            "view": view_path,
+                            "url": session._request.path_info,
+                            "params": mount_params,
+                            "track_static": track_static,
+                        }
+                    )
+                except Exception as exc:
+                    outcome = protected_http_outcome(exc)
+                    if diagnostics_allowed() or outcome == "raise":
+                        raise
+                    protected_failure = True
+                    del exc
+            if protected_failure:
+                session.shutdown()
+                return cast(
+                    HttpResponse,
+                    await sync_to_async(protected_server_error)(request, logger, outcome),
+                )
+            mounted = session.runtime.view_instance is not None
+            if mounted:
+                reserved = False  # the registration below consumes it
+                if not _register_sse_session(cap_key, session_id, session):
+                    # Another owner registered this id while we were mounting.
+                    session.shutdown()
+                    logger.warning(
+                        "SSE: rejected stream GET for session %s — the id is live under another owner",
+                        sanitize_for_log(session_id),
+                    )
+                    return JsonResponse({"error": "Session ID already in use."}, status=409)
+            else:
+                # Failed/unauthorized/redirecting mount: do NOT register the session
+                # (no POST can drive it; it isn't counted against the caps). The
+                # stream below still drains the queued error/navigate message, then
+                # closes promptly.
+                session.shutdown()
+        finally:
+            if reserved:
+                _release_sse_slot(cap_key)
+
+        guard = _StreamGuard(session_id, session if mounted else None)
         if mounted:
-            _sse_sessions[session_id] = session
-        else:
-            # Failed/unauthorized/redirecting mount: do NOT register the session
-            # (no POST can drive it; it isn't counted against the caps). The
-            # stream below still drains the queued error/navigate message, then
-            # closes promptly.
-            session.shutdown()
+            asyncio.get_running_loop().call_later(_STREAM_START_DEADLINE_S, guard.abandon)
 
         async def event_stream() -> AsyncIterator[str]:
-            # Send connection acknowledgment immediately
-            yield f"data: {json.dumps({'type': 'sse_connect', 'session_id': session_id})}\n\n"
-
+            # #3164: everything after registration, the ack included, is inside
+            # the try, so a client that reads the ack and goes away (the
+            # generator is closed at that first yield) still unregisters.
+            if not guard.start():
+                return  # the response was closed before streaming began
             try:
+                # Send connection acknowledgment immediately
+                yield f"data: {json.dumps({'type': 'sse_connect', 'session_id': session_id})}\n\n"
+
                 # Drain any messages already queued before streaming begins (the
                 # "mount"/"error"/"navigate" pushed synchronously above). When the
                 # mount failed, shutdown() already queued the sentinel, so this
@@ -761,15 +991,19 @@ class DjustSSEStreamView(View):
                         # SSE keepalive comment — prevents proxy timeout
                         yield ": keepalive\n\n"
             finally:
+                # Closing: another owner may now take this id (#3164).
+                session._stream_closed = True
                 if mounted:
                     # Linger briefly so in-flight event POSTs can still find the
                     # session (only meaningful for registered/mounted sessions).
                     await asyncio.sleep(_SESSION_LINGER_S)
-                    _sse_sessions.pop(session_id, None)
+                    # Only our own session: a same-owner reconnect may have
+                    # replaced it under this id (#3164).
+                    _unregister_sse_session(session_id, session)
                 logger.debug("SSE: session %s closed", sanitize_for_log(session_id))
 
         response = StreamingHttpResponse(
-            event_stream(),
+            _SSEStream(event_stream(), guard),
             content_type="text/event-stream; charset=utf-8",
         )
         response["Cache-Control"] = "no-cache"

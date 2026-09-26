@@ -382,6 +382,50 @@ server {
 }
 ```
 
+### Serving the app under a path prefix
+
+When the app lives under a prefix (`https://example.com/app/`, set with
+`FORCE_SCRIPT_NAME = "/app"` or passed by the server as `SCRIPT_NAME` /
+the ASGI `root_path`), the client has to open its socket under the same
+prefix. Put `{% djust_client_config %}` in the base template's `<head>`: it
+emits `<meta name="djust-ws-path" content="/app/ws/live/">` from the request's
+script prefix, and the client connects there. Without the tag the client
+connects to `/ws/live/` at the host root, which is some other app (or
+nothing) on a shared host.
+
+The server must then answer the WebSocket at `/app/ws/live/`. Pick one:
+
+- **The proxy strips the prefix** (`location /app/ { proxy_pass http://djust_backend/; }`,
+  with the trailing slash). The server sees `/ws/live/`, so the usual
+  `path("ws/live/", LiveViewConsumer.as_asgi())` route matches unchanged.
+  Keep `FORCE_SCRIPT_NAME = "/app"` so Django's URLs and the emitted
+  paths carry the prefix.
+- **The server knows its root path** (`uvicorn --root-path /app`, and the proxy
+  passes `/app/...` through). Channels' `URLRouter` removes `root_path` from
+  the path before matching, so the `ws/live/` route again matches unchanged.
+- **Neither**: route the prefixed path yourself,
+  `path("app/ws/live/", LiveViewConsumer.as_asgi())`.
+
+Whichever you choose, the nginx `location` for the WebSocket upgrade must
+cover the prefixed path (`location /app/ws/`), not only `/ws/`.
+
+To emit a different path, set `DJUST_WS_PATH` in settings; it is used
+verbatim in place of the script prefix plus `ws/live/`.
+
+**Upgrade note (#3186).** Before this change the client always connected to
+the host-root `/ws/live/`, so an existing prefixed deployment may route only
+that path (for example `location /ws/`) and not `/app/ws/live/`. After
+upgrading, the client connects to `/app/ws/live/` first. If that first
+handshake fails before the socket ever opens, the client retries once at
+`/ws/live/` and logs a `console.warn` naming the path it tried, so such a
+deployment keeps its WebSocket, but it pays one failed handshake per page
+load. To remove it, either route `<prefix>/ws/live/` to djust as above, or pin
+the old path with `DJUST_WS_PATH = "/ws/live/"`. The fallback only fires on a
+socket that never opened, and only once per page, so a correctly routed
+deployment never uses it. A per-site shim that rewrote the socket URL to add
+the prefix (djust-docs' `ws-prefix.js`, for example) is now redundant; it is
+harmless, because it rewrites only an exact `/ws/live/`.
+
 ## Database Connection Pooling
 
 djust apps using Postgres need to manage DB connections carefully — every web process and every Celery worker opens its own connections, and the count multiplies fast. Three layers, in order of effort:

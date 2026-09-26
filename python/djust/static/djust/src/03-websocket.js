@@ -350,10 +350,18 @@ class LiveViewWebSocket {
             return;
         }
 
+        // #3186: true when the URL came from djust.wsPath rather than a caller.
+        let derivedUrl = false;
         if (!url) {
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const host = window.location.host;
-            url = `${protocol}//${host}/ws/live/`;
+            // #3186: honor the script prefix ({% djust_client_config %} emits
+            // <meta name="djust-ws-path">); falls back to /ws/live/.
+            derivedUrl = true;
+            if (window.djust && typeof window.djust.wsUrl === 'function') {
+                url = window.djust.wsUrl();
+            } else {
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                url = `${protocol}//${window.location.host}/ws/live/`;
+            }
         }
 
         if (globalThis.djustDebug) console.log('[LiveView] Connecting to WebSocket:', url);
@@ -433,6 +441,24 @@ class LiveViewWebSocket {
             // Skip reconnection logic if this was an intentional disconnect (TurboNav)
             if (this._intentionalDisconnect) {
                 this._intentionalDisconnect = false;
+                return;
+            }
+
+            // #3186 upgrade path: a deployment under a path prefix that still
+            // routes only the host-root /ws/live/ fails the first handshake on
+            // the prefixed path. Retry once at /ws/live/ (the pre-#3186 URL)
+            // before the normal backoff, and say why.
+            if (derivedUrl && this.stats.connectedAt === null && !this._wsPathFallbackTried
+                && window.djust && window.djust.wsPath && window.djust.wsPath !== '/ws/live/') {
+                this._wsPathFallbackTried = true;
+                console.warn(
+                    '[LiveView] The WebSocket handshake at %s failed before opening; retrying at the '
+                    + 'host-root /ws/live/. Route <prefix>/ws/live/ to djust, or set DJUST_WS_PATH = '
+                    + '"/ws/live/" to keep the old path (#3186).',
+                    window.djust.wsPath
+                );
+                window.djust.wsPath = '/ws/live/';
+                this.connect();
                 return;
             }
 

@@ -209,6 +209,55 @@ def test_tag_emits_sse_meta_under_force_script_name():
     assert 'content="/mysite/djust/"' in html
 
 
+# ---------------------------------------------------------------------------
+# 5c. WebSocket path (#3186) — the socket route follows the script prefix
+# ---------------------------------------------------------------------------
+
+
+def test_tag_emits_ws_path_at_root():
+    """Doc claim (#3186): a root-mounted app gets ``/ws/live/``."""
+    html = _render_tag()
+    assert '<meta name="djust-ws-path" content="/ws/live/">' in html
+
+
+@override_settings(FORCE_SCRIPT_NAME="/app")
+def test_tag_emits_ws_path_under_force_script_name():
+    """Doc claim (#3186): ``FORCE_SCRIPT_NAME="/app"`` gives ``/app/ws/live/``.
+
+    Django's handlers call :func:`set_script_prefix` from
+    ``FORCE_SCRIPT_NAME`` at the start of every request; mirror that here.
+    """
+    set_script_prefix("/app/")
+    html = _render_tag()
+    assert '<meta name="djust-ws-path" content="/app/ws/live/">' in html
+
+
+@override_settings(FORCE_SCRIPT_NAME="/app", DJUST_WS_PATH="/ws/live/")
+def test_djust_ws_path_setting_pins_the_emitted_path():
+    """Upgrade path (#3186 review): ``DJUST_WS_PATH`` overrides the prefixed
+    default, so a prefixed deployment that routes only the host-root socket
+    keeps working."""
+    set_script_prefix("/app/")
+    html = _render_tag()
+    assert '<meta name="djust-ws-path" content="/ws/live/">' in html
+    assert "/app/ws/live/" not in html
+
+
+@override_settings(DJUST_WS_PATH='/x"<script>/ws/')
+def test_djust_ws_path_setting_is_escaped():
+    html = _render_tag()
+    assert 'content="/x&quot;&lt;script&gt;/ws/"' in html
+
+
+@override_settings(ROOT_URLCONF="tests.api_test_urls_default")
+def test_ws_path_is_escaped():
+    """The ws path is HTML-escaped like the API/SSE prefixes."""
+    set_script_prefix('/my"app<script>/')
+    html = _render_tag()
+    assert "<script>" not in html
+    assert 'content="/my&quot;app&lt;script&gt;/ws/live/"' in html
+
+
 @override_settings(ROOT_URLCONF="tests.api_test_urls_unmounted")
 def test_tag_sse_meta_when_not_mounted():
     """Doc claim (#992): SSE not mounted → empty content; client falls back."""

@@ -331,6 +331,10 @@ template's `<head>`:
 The tag emits `<meta name="djust-api-prefix" content="...">`. The
 content is resolved via Django's `reverse()`, so it honors
 `FORCE_SCRIPT_NAME` **and** any custom `api_patterns(prefix=...)` mount.
+It also emits `<meta name="djust-ws-path">` (the script prefix plus
+`ws/live/`), which the client's WebSocket connects to; the server side of
+that is covered in the deployment guide's "Serving the app under a path
+prefix" section.
 
 These rules apply, each with an asserting test (Action Tracker #124):
 
