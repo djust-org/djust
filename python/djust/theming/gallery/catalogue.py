@@ -347,7 +347,7 @@ def interactive_preview_html(component_name: str) -> str:
     return _preview_fragment(response.content.decode())
 
 
-_SCRIPT_RE = re.compile(r"<script\b.*?</script>", re.S | re.I)
+_SCRIPT_RE = re.compile(r"<script\b.*?</script\b[^>]*>", re.S | re.I)
 _ROOT_RE = re.compile(r"<div\b[^>]*\bdj-root\b[^>]*>(.*)</div>", re.S)
 _WIRING_ATTR_RE = re.compile(r'\s(?:dj-[\w:.-]+|data-component-id|data-dj-[\w-]+)(?:="[^"]*")?')
 

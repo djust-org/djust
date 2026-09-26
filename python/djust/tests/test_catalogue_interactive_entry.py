@@ -90,3 +90,14 @@ def test_describe_component_agrees_with_the_detail_context():
     assert namespace[described["class_name"]].__name__ == "DropdownMenu"
     assert {"label", "items"} <= {p["name"] for p in described["params"]}
     assert described["description"]
+
+
+@pytest.mark.parametrize(
+    "end_tag", ["</script>", "</script >", "</SCRIPT>", '</script data-x="1">']
+)
+def test_the_preview_fragment_drops_scripts_whatever_their_end_tag(end_tag):
+    # CodeQL (py/bad-tag-filter) on #3134: `</script>` alone missed `</script >`.
+    from djust.theming.gallery.catalogue import _preview_fragment
+
+    page = '<div dj-root dj-view="x.V"><p>menu</p><script>alert(1)%s</div>' % end_tag
+    assert _preview_fragment(page) == "<p>menu</p>"
