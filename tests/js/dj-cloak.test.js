@@ -103,7 +103,9 @@ describe('dj-cloak', () => {
 
         expect(doc.getElementById('sse-cloaked').hasAttribute('dj-cloak')).toBe(true);
 
-        await sse.handleMessage({ type: 'mount', view: 'test.View', html: '<div>content</div>', version: 1, has_ids: true });
+        // The mount HTML mirrors the prerendered page, as the server's does;
+        // the SSE mount now morphs the page against it (#1610 parity).
+        await sse.handleMessage({ type: 'mount', view: 'test.View', html: '<div id="sse-cloaked" dj-id="1">hidden</div>', version: 1, has_ids: true });
 
         expect(doc.getElementById('sse-cloaked').hasAttribute('dj-cloak')).toBe(false);
     });

@@ -87,7 +87,7 @@ class MyView(LiveView):
         ...
 ```
 
-After `max_warnings` violations, the connection is closed with code `4429`. A per-IP connection tracker rejects new connections from the same IP during the cooldown period.
+After `max_warnings` violations, the connection is closed with code `4429`. A per-IP connection tracker rejects new connections from the same IP during the cooldown period. A handler decorated with `@rate_limit(..., on_exceed="drop")` drops its extra events without counting them as violations; the global per-message limit still applies.
 
 ## XSS Prevention
 

@@ -157,6 +157,12 @@ def _request_scoped_keys(view: Any) -> set:
     return keys
 
 
+def legacy_render_only_keys(view: Any) -> frozenset:
+    """Context keys a legacy session save must drop: they render, never persist."""
+    keys = getattr(view, "_djust_render_only_context_keys", None)
+    return frozenset(keys()) if callable(keys) else frozenset()
+
+
 def _drop_request_scoped_values(view: Any, context: Dict[str, Any]) -> Dict[str, Any]:
     """Return ``context`` without its non-serializable request-scoped values.
 
@@ -177,6 +183,21 @@ def _drop_request_scoped_values(view: Any, context: Dict[str, Any]) -> Dict[str,
         for key, value in context.items()
         if key not in scoped or _is_json_serializable(value)
     }
+
+
+_LIVE_VIEW_MRO: "Optional[frozenset]" = None
+
+
+def _live_view_mro() -> frozenset:
+    """``LiveView``'s MRO: the framework-owned classes whose attributes are
+    configuration, never legacy template context (#2960). Cached; imported
+    lazily because ``live_view`` imports this module."""
+    global _LIVE_VIEW_MRO
+    if _LIVE_VIEW_MRO is None:
+        from ..live_view import LiveView
+
+        _LIVE_VIEW_MRO = frozenset(LiveView.__mro__)
+    return _LIVE_VIEW_MRO
 
 
 class ContextMixin:
@@ -269,15 +290,22 @@ class ContextMixin:
         # Build set of all candidate keys: instance attrs + user class attrs.
         # Walk MRO up to (but not including) ContextMixin and its bases —
         # these are framework classes whose attrs are never template context.
+        # #2960: ``LiveView`` and the mixins listed before ``ContextMixin`` in
+        # its bases come EARLIER in the MRO, so they are skipped too — their
+        # attributes are configuration defaults (``template``,
+        # ``login_required``, ``use_actors``, ``sticky``...), not view data.
+        # This is the boundary the ADR-038 inventory draws (``_user_bases``);
+        # classes the application declares are still walked.
         _seen = set()
-        _framework_bases = set()
-        for base in ContextMixin.__mro__:
-            _framework_bases.add(base)
+        _framework_bases = set(ContextMixin.__mro__)
+        _framework_owned = _live_view_mro()
 
         _all_items = list(self.__dict__.items())
         for cls in type(self).__mro__:
             if cls in _framework_bases:
                 break
+            if cls in _framework_owned:
+                continue
             for key, value in vars(cls).items():
                 if key not in _seen and key not in self.__dict__:
                     _seen.add(key)
@@ -304,10 +332,14 @@ class ContextMixin:
         # Collect keys that came from class-level attrs (not instance __dict__)
         _class_level_keys = _seen
 
+        # Mixin configuration and framework slots a mixin declares (ADR-035's
+        # edit adapter: ``model``, ``queryset``, ``kwargs``, ...) are never
+        # inferred rendering assigns, so never persisted from this context.
+        _configuration: frozenset = getattr(type(self), "_djust_configuration_names", frozenset())
         for key, value in _all_items:
             if key.startswith("_"):
                 continue
-            if key == "exposure_policy":
+            if key == "exposure_policy" or key in _configuration:
                 # Policy configuration is never an inferred rendering assign.
                 continue
             if key in _static_skip:
@@ -317,6 +349,10 @@ class ContextMixin:
             if isinstance(value, (Component, LiveComponent)):
                 if isinstance(value, LiveComponent):
                     self._register_component(value, attr_name=key)
+                context[key] = value
+            elif getattr(type(value), "_djust_component_collection", False):
+                # ADR-034 C3: a bound keyed collection renders its members
+                # (``{% for menu in row_menus.values %}``).
                 context[key] = value
             elif isinstance(value, BoundComponent):
                 # ADR-031: a class-level component resolved through ``__get__``
@@ -336,6 +372,13 @@ class ContextMixin:
                         if not _is_json_serializable(value):
                             continue
                 context[key] = value
+
+        # Render-only values a mixin supplies (ADR-035's managed ``object``).
+        # Added before model serialization so they render like any other model;
+        # ``legacy_render_only_keys`` keeps them out of every session save.
+        render_only = getattr(self, "_djust_render_only_context", None)
+        if callable(render_only):
+            context.update(render_only())
 
         # JIT auto-serialization for QuerySets and Models
         jit_serialized_keys = set()
@@ -608,7 +651,10 @@ class ContextMixin:
             if name in ("view", "streams"):
                 raise ExposureError("Component context provider uses a reserved name")
             if (
-                not isinstance(declaration, LiveComponent)
+                not (
+                    isinstance(declaration, LiveComponent)
+                    or getattr(type(declaration), "_djust_component_collection", False)
+                )
                 or getattr_static(type(self), name) is not declaration
             ):
                 raise ExposureError("Component context provider no longer matches its declaration")

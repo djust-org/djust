@@ -37,6 +37,8 @@ from djust import LiveView
 from djust.components.base import LiveComponent
 from djust.decorators import event_handler
 
+from ._ws_frames import drain_extra, has_type, receive_until
+
 
 # ---------------------------------------------------------------------------
 # Harness
@@ -53,24 +55,21 @@ async def _receive_until(communicator, wanted_type, *, tries=8, timeout=3):
     return last
 
 
-async def _drain_available(communicator, *, max_frames=6, timeout=2):
-    """Best-effort drain of any frames already on the wire.
+_RENDER = has_type("patch", "html_update")
 
-    Stops at the first receive timeout (no more frames). Crucially uses
-    ``communicator.receive_nothing``-style polling via a bounded receive so a
-    trailing timeout does NOT leave the application's receive future in a
-    cancelled state (which would make a subsequent ``disconnect()`` raise
-    ``CancelledError``). Returns the list of frames collected.
+
+async def _drain_available(communicator, *, until):
+    """The frames a turn produced, event-driven (#3130).
+
+    Waits (generous deadline) until ``until(frames)`` holds, then a trailing
+    quiet window collects anything else; that window can only miss a late
+    extra frame, never cut the expected one short. Polls with
+    ``receive_nothing``, so a trailing timeout does NOT leave the application's
+    receive future cancelled (which would make a subsequent ``disconnect()``
+    raise ``CancelledError``). Returns the list of frames collected.
     """
-    frames = []
-    for _ in range(max_frames):
-        # receive_nothing returns True if no frame arrives within ``timeout``;
-        # it polls without leaving a dangling cancelled receive future.
-        nothing = await communicator.receive_nothing(timeout=timeout, interval=0.05)
-        if nothing:
-            break
-        frames.append(await communicator.receive_json_from(timeout=timeout))
-    return frames
+    frames = await receive_until(communicator, until)
+    return frames + await drain_extra(communicator)
 
 
 class _ScopeSession:
@@ -460,7 +459,10 @@ class TestTimeTravelOnEvent:
                 {"type": "event", "event": "bump", "params": {}, "ref": 1}
             )
 
-            frames = await _drain_available(communicator)
+            frames = await _drain_available(
+                communicator,
+                until=lambda fs: has_type("time_travel_event")(fs) and _RENDER(fs),
+            )
 
             types = [f.get("type") for f in frames]
             assert "time_travel_event" in types, (
@@ -491,7 +493,7 @@ class TestTimeTravelOnEvent:
                 {"type": "event", "event": "bump", "params": {}, "ref": 1}
             )
 
-            frames = await _drain_available(communicator)
+            frames = await _drain_available(communicator, until=_RENDER)
 
             types = [f.get("type") for f in frames]
             assert "time_travel_event" not in types, (
@@ -545,7 +547,10 @@ class TestActivityDeferral:
             await communicator.send_json_to(
                 {"type": "event", "event": "show_panel", "params": {}, "ref": 2}
             )
-            frames = await _drain_available(communicator)
+            frames = await _drain_available(
+                communicator,
+                until=lambda fs: {"show_panel", "bump"} <= {f.get("event_name") for f in fs},
+            )
 
             event_names = [f.get("event_name") for f in frames]
             assert "show_panel" in event_names, (
@@ -627,7 +632,7 @@ class TestActorPathEvents:
 
             # The actor event path emits a single render frame (a patch for this
             # text-only diff). Drain to the first patch/html_update.
-            frames = await _drain_available(communicator)
+            frames = await _drain_available(communicator, until=_RENDER)
             render_frames = [f for f in frames if f.get("type") in ("patch", "html_update")]
             assert render_frames, (
                 f"actor event must return a patch/html_update render frame; got {frames!r}"
@@ -1187,7 +1192,9 @@ class TestBackgroundWorkOverRuntime:
                 {"type": "event", "event": "go", "params": {}, "ref": 1}
             )
 
-            frames = await _drain_available(communicator, max_frames=8, timeout=3)
+            frames = await _drain_available(
+                communicator, until=lambda fs: any(f.get("source") == "async" for f in fs)
+            )
             # The background completion frame is tagged source="async" and carries
             # the post-work state (val=99, loading cleared).
             async_frames = [f for f in frames if f.get("source") == "async"]
@@ -1231,7 +1238,7 @@ class TestDebugResidualOnEventFrame:
             await communicator.send_json_to(
                 {"type": "event", "event": "bump", "params": {}, "ref": 1}
             )
-            frames = await _drain_available(communicator, max_frames=6, timeout=3)
+            frames = await _drain_available(communicator, until=_RENDER)
             render_frames = [f for f in frames if f.get("type") in ("patch", "html_update")]
             assert render_frames, f"expected a render frame; got {frames!r}"
             assert any("_debug" in f for f in render_frames), (
@@ -1252,7 +1259,7 @@ class TestDebugResidualOnEventFrame:
             await communicator.send_json_to(
                 {"type": "event", "event": "bump", "params": {}, "ref": 1}
             )
-            frames = await _drain_available(communicator, max_frames=6, timeout=3)
+            frames = await _drain_available(communicator, until=_RENDER)
             render_frames = [f for f in frames if f.get("type") in ("patch", "html_update")]
             assert render_frames, f"expected a render frame; got {frames!r}"
             assert any("timing" in f and "render" in f["timing"] for f in render_frames), (
@@ -1275,7 +1282,7 @@ class TestDebugResidualOnEventFrame:
             await communicator.send_json_to(
                 {"type": "event", "event": "bump", "params": {}, "ref": 1}
             )
-            frames = await _drain_available(communicator, max_frames=6, timeout=3)
+            frames = await _drain_available(communicator, until=_RENDER)
             render_frames = [f for f in frames if f.get("type") in ("patch", "html_update")]
             assert render_frames, f"expected a render frame; got {frames!r}"
             for f in render_frames:

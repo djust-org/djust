@@ -197,7 +197,6 @@ def _check_missing_compiled_css(errors: list[CheckMessage]) -> None:
                     DjustInfo(
                         "Tailwind CSS configured but output.css is missing or stale (development mode).",
                         hint=(
-                            "djust will use Tailwind CDN as fallback in development. "
                             "A placeholder or empty output.css triggers this — run a "
                             "real Tailwind build for production-grade output:\n"
                             "  python manage.py djust_setup_css tailwind --watch"
@@ -521,6 +520,69 @@ def _check_server_state_max_age(errors: list[CheckMessage]) -> None:
     )
 
 
+def _check_worker_threads(errors: list[CheckMessage]) -> None:
+    """C021 — ``LIVEVIEW_CONFIG['worker_threads']`` must be a documented value.
+
+    ``None`` / ``False`` / ``0`` (stock), ``True`` / ``"auto"`` (one thread per
+    CPU) or an ``int`` thread count (#3074). Anything else is treated as "off"
+    at runtime, so a typo would silently keep the single shared thread.
+    """
+    from ..config import config
+    from ..worker_pool import resolve_pool_size
+
+    if _is_check_suppressed("djust.C021"):
+        return
+    try:
+        resolve_pool_size(config.get("worker_threads", None))
+    except ValueError as exc:
+        errors.append(
+            DjustError(
+                str(exc),
+                hint=(
+                    "worker_threads pins each WebSocket session to one thread of a pool. "
+                    "With an invalid value djust keeps the default: one thread shared by "
+                    "every session."
+                ),
+                id="djust.C021",
+                fix_hint=(
+                    "Set `LIVEVIEW_CONFIG['worker_threads']` to `True` (one thread per CPU), "
+                    "an integer thread count, or remove it."
+                ),
+            )
+        )
+
+
+def _check_event_parameter_policy(errors: list[CheckMessage]) -> None:
+    """C022 — the ADR-036 project parameter policy must be "legacy" or "strict".
+
+    Dispatch resolves every handler without its own ``parameter_policy`` through
+    the same resolver this check calls, and rejects the event when the value is
+    invalid. Legacy is the default, so an absent key never reports anything.
+    """
+    from djust._parameter_contract import ContractError
+    from djust.config import config
+    from djust.validation import get_project_parameter_policy
+
+    if _is_check_suppressed("djust.C022"):
+        return
+    try:
+        get_project_parameter_policy()
+    except ContractError:
+        errors.append(
+            DjustError(
+                "LIVEVIEW_CONFIG['event_parameter_policy'] is %s; it must be 'legacy' or 'strict'."
+                % repr(config.get("event_parameter_policy"))[:80],
+                hint=(
+                    "Every event handler that does not declare its own parameter_policy "
+                    "inherits this value, so each of their events is rejected until it "
+                    "is fixed. Remove the key to keep the 'legacy' default."
+                ),
+                id="djust.C022",
+                fix_hint="Set `LIVEVIEW_CONFIG['event_parameter_policy']` to `'legacy'` or `'strict'`.",
+            )
+        )
+
+
 def _check_unknown_extensions(errors: list) -> None:
     """C015 -- unknown adapter name in ``DJUST_CONFIG['extensions']`` (#2063).
 
@@ -565,8 +627,8 @@ def _check_unknown_extensions(errors: list) -> None:
             )
 
 
-#: LIVEVIEW_CONFIG keys that have defaults but that nothing reads (#2984).
-#: Setting one has no effect; they are removed in 1.3.
+#: LIVEVIEW_CONFIG keys removed in 1.3 (#2984). Nothing ever read them; their
+#: defaults are gone, and C018 warns a project that still sets one.
 DEAD_LIVEVIEW_CONFIG_KEYS = (
     "jit_cache_backend",
     "jit_cache_dir",
@@ -578,7 +640,7 @@ DEAD_LIVEVIEW_CONFIG_KEYS = (
 
 
 def _check_dead_config_keys(errors: list) -> None:
-    """C018 -- a LIVEVIEW_CONFIG key that djust never reads is set (#2984)."""
+    """C018 -- a LIVEVIEW_CONFIG key removed in djust 1.3 is still set (#2984)."""
     from django.conf import settings
 
     if _is_check_suppressed("djust.C018"):
@@ -594,16 +656,17 @@ def _check_dead_config_keys(errors: list) -> None:
         return
     errors.append(
         DjustWarning(
-            "%s %s set but djust never reads %s; setting %s has no effect."
+            "%s %s set, but %s removed in djust 1.3 and djust never read %s; "
+            "setting %s has no effect."
             % (
                 ", ".join(found),
                 "is" if len(found) == 1 else "are",
+                "that key was" if len(found) == 1 else "those keys were",
                 "it" if len(found) == 1 else "them",
                 "it" if len(found) == 1 else "them",
             ),
             hint=(
-                "Remove the key%s from settings. These keys are deprecated and will "
-                "be removed in djust 1.3. Suppress with DJUST_CONFIG = "
+                "Remove the key%s from settings. Suppress with DJUST_CONFIG = "
                 "{'suppress_checks': ['C018']}." % ("" if len(found) == 1 else "s")
             ),
             id="djust.C018",
@@ -956,8 +1019,14 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     # S006 -- DJUST_TENANTS['STRICT_MODE']=False disables fail-closed tenancy
     _check_tenant_strict_mode_disabled(errors)
 
+    # C021 -- LIVEVIEW_CONFIG['worker_threads'] has an undocumented value (#3074)
+    _check_worker_threads(errors)
+
     # C020 -- DJUST_SERVER_STATE_MAX_AGE out of range (ADR-038 E2-9)
     _check_server_state_max_age(errors)
+
+    # C022 -- ADR-036 project event parameter policy
+    _check_event_parameter_policy(errors)
 
     # C005 -- WebSocket routes missing AuthMiddlewareStack
     # A001 -- WebSocket routes missing AllowedHostsOriginValidator (#659)

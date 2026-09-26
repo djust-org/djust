@@ -227,6 +227,28 @@ describe('dj-paste', () => {
         expect(calls[0].params._args).toEqual([42, 'chat']);
     });
 
+    it('carries owner context: a component or embedded child receives its paste', async () => {
+        const { window, document, fetchCalls } = createEnv(
+            '<div data-component-id="cmp_1"><textarea id="in-component" dj-paste="on_paste"></textarea></div>' +
+            '<div dj-view data-djust-embedded="child_1"><textarea id="in-child" dj-paste="on_paste"></textarea></div>' +
+            '<textarea id="in-root" dj-paste="on_paste"></textarea>'
+        );
+
+        window.djust.bindLiveViewEvents();
+
+        for (const id of ['in-component', 'in-child', 'in-root']) {
+            document.getElementById(id).dispatchEvent(makePasteEvent(window, { text: id }));
+            await new Promise((r) => setTimeout(r, 10));
+        }
+
+        const calls = fetchCalls.filter((c) => c.eventName === 'on_paste');
+        expect(calls.map((c) => [c.params.text, c.params.component_id, c.params.view_id])).toEqual([
+            ['in-component', 'cmp_1', undefined],
+            ['in-child', undefined, 'child_1'],
+            ['in-root', undefined, undefined],
+        ]);
+    });
+
     it('routes clipboard files through the upload pipeline when dj-upload is set', async () => {
         const { window, document } = createEnv(
             '<div dj-paste="handle_paste" dj-upload="chat"></div>'

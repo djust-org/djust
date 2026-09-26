@@ -70,3 +70,88 @@ delivery. Production legacy binders remain unchanged. Remaining integration:
 The existing global handler-name configuration map cannot satisfy item 1 for
 two owners with the same handler name. Do not turn this staged helper into a
 global strict switch or infer ADR acceptance from its unit tests.
+
+## Native binder activation (P2 sub-slice (b))
+
+Items 2–4 are now implemented, under the ADR's
+[completion decisions](../036-typed-event-parameter-contracts.md#completion-decisions-2026-09-24)
+Q1, Q2 and N1. Item 1's delivery is in the
+[manifest note](036-owner-contract-manifests.md).
+
+**Resolution.** Every native binder resolves the binding's owner and handler
+first, through `_resolveParameterContract`. That happens before any lock,
+confirmation, `dj-disable-with`, optimistic or loading effect. The binders
+covered are:
+- `dj-click` and the form directives (`dj-submit`, `dj-change`, `dj-input`,
+  `dj-blur`, `dj-focus`);
+- keyboard, paste and polling;
+- `dj-window-*`/`dj-document-*`, click-away, shortcuts, mouse enter/leave and
+  `dj-mounted`;
+- form recovery, native dropdown observations, JS-command `push` and
+  `dj-viewport`.
+
+**Outcomes.** A strict binding is collected by `_collectStrictEventParams` with
+the generated values its handler declares, or all of them for a `**`
+catch-all. A legacy binding, or one the mount does not list, keeps its
+existing payload unchanged. The mount itself is the element's nearest
+non-embedded `dj-view` root.
+
+**What is checked before sending:**
+- a `dj-value-*` key that reuses any generated name;
+- a typed wire hint the declared type does not accept (for example `:int` on
+  a `str` parameter, or `:float` on a `Decimal`);
+- a value given both positionally and by name.
+
+Each is rejected before sending. Unhinted text is always accepted, so
+conversion stays the server's.
+
+**Rejection** reports through the existing value-free path, `console.error`
+plus `djust:error` naming only the handler, and applies no effect. An
+invalid scope fails closed for every handler on that mount. A mount with no
+record at all (never delivered a contract: an unmounted, lazy or bare root)
+keeps legacy collection, because strict contracts are always delivered with
+their mount. The server remains authoritative for hand-crafted messages.
+
+**Socket mounts** of the page root now also refresh the HTTP page scope, so
+a fallback after a socket `live_redirect` uses the current contracts.
+
+**Not changed.** `dj-model` (`update_model` receives the fixed
+`field`/`value` pair its framework handler declares), application hook
+`pushEvent` payloads, and `dj-auto-recover`, whose `_form_values` and
+`_data_attrs` keys cannot be strict parameters. The owner decided (R1) that
+recovery stays legacy: the server resolves a literal recovery target in the
+view's template to the legacy policy, and warns (V019) about an explicit
+strict declaration. Forms with file inputs sent to a `**`
+catch-all are rejected by the collector, because it will not serialize a
+`File`; uploads use their own channel. That remains part of the (c) matrix.
+
+Evidence: `tests/js/strict_native_binding.test.js` has 18 bundle cases:
+- strict dj-click excludes `data-*`;
+- legacy precedence is unchanged on the same page;
+- three rejections, each before lock/disable-with/send and without echoing
+  values;
+- component routing;
+- invalid-scope fail-closed;
+- unlisted handlers;
+- dj-input generated values for closed, `field` and catch-all handlers, and
+  legacy `_target`;
+- collision rejection, a checkbox boolean, and keyboard;
+- dj-submit field filtering, `**form_data`, and legacy `_target`.
+
+The full JavaScript suite passes. The shipped gzip grew 2,275 bytes, and the repository's size claims
+were updated to the measured figures.
+
+## Real-browser acceptance (P2 sub-slice (d))
+
+`tests/playwright/test_strict_parameters.py` drives `/demos/strict-parameters/`
+in Chromium over WebSocket, SSE and HTTP-only. It checks the outbound payloads
+and the handler results for the same flows the bundle tests cover:
+- strict typed click;
+- a rejected literal: no request, no `dj-disable-with`, one value-free
+  `djust:error`;
+- declared-only `dj-input` and `dj-submit` values;
+- the legacy control;
+- a hand-crafted forged `component` message.
+
+It passes on all three transports. Against the pre-(b) client bundle it fails
+24 checks, 8 per transport, which shows the script sees the difference.

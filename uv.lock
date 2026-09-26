@@ -621,7 +621,7 @@ wheels = [
 
 [[package]]
 name = "djust"
-version = "1.3.0rc1"
+version = "1.3.0rc3"
 source = { editable = "." }
 dependencies = [
     { name = "channels", extra = ["daphne"] },
@@ -717,7 +717,7 @@ requires-dist = [
     { name = "google-cloud-storage", marker = "extra == 'gcs'", specifier = ">=2.10,<4" },
     { name = "markdown", specifier = ">=3.0,<4" },
     { name = "markdown", marker = "extra == 'components'", specifier = ">=3.0,<4" },
-    { name = "maturin", marker = "extra == 'dev'", specifier = ">=1.0,<2.0" },
+    { name = "maturin", marker = "extra == 'dev'", specifier = ">=1.12.1,<2.0" },
     { name = "mcp", extras = ["cli"], marker = "extra == 'dev'", specifier = ">=1.2.0,<3" },
     { name = "msgpack", specifier = ">=1.0.0,<2" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0,<3" },

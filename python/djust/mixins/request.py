@@ -39,7 +39,7 @@ from ..validation import (
     validated_call_arguments,
     get_handler_parameter_policy,
 )
-from ..security import safe_setattr
+from ..security import safe_setattr, sanitize_for_log
 from ..security.event_guard import is_safe_event_name
 from ..decorators import is_event_handler
 from ..hooks import run_on_mount_hooks
@@ -49,6 +49,64 @@ if TYPE_CHECKING:
     from django.http import HttpRequest
 
 logger = logging.getLogger(__name__)
+
+#: Sent by the client when its HTTP scope holds strict contracts, so a response
+#: whose tree no longer has any carries an explicit clear (the stateless HTTP
+#: counterpart of the socket runtime's ``_parameter_contracts_active``).
+PARAMETER_CONTRACTS_HEADER = "X-Djust-Parameter-Contracts"
+
+
+def _initial_parameter_contracts(view: Any, view_path: str) -> Optional[str]:
+    """Escaped JSON for the initial page's contract element, or None if legacy.
+
+    ``false`` marks discovery failure where strict contracts can exist: the
+    client installs an invalid scope and strict lookups fail closed instead of
+    guessing a legacy contract. A view that can only be legacy keeps its legacy
+    page, as the socket path keeps a legacy session's frame shape.
+    """
+    from .._parameter_metadata import parameter_contract_manifest
+    from ..security import escape_json_for_script
+    from ..validation import _strict_possible
+
+    try:
+        manifest = parameter_contract_manifest(view)
+    except Exception:  # noqa: BLE001 — declaration errors must not break the page
+        logger.warning("Initial parameter contracts unavailable")
+        if not _strict_possible(view):
+            return None
+        return escape_json_for_script(json.dumps({"view": view_path, "contracts": False}))
+    if manifest is None:
+        return None
+    return escape_json_for_script(json.dumps({"view": view_path, "contracts": manifest}))
+
+
+def _http_parameter_contract_fields(view: Any, request: Any) -> Optional[Dict[str, Any]]:
+    """Contract fields for an HTTP render response (``{}`` for a legacy tree).
+
+    None means discovery failed where strict contracts can exist: the caller
+    withholds the DOM update. A legacy-only view whose client never advertised
+    contracts keeps its legacy response shape instead.
+    """
+    from .._parameter_metadata import parameter_contract_manifest
+    from ..validation import _strict_possible
+
+    try:
+        manifest = parameter_contract_manifest(view)
+    except Exception:  # noqa: BLE001 — never send a DOM update with invalid contracts
+        logger.warning("Render parameter contracts unavailable")
+        if request.headers.get(PARAMETER_CONTRACTS_HEADER) != "1" and not _strict_possible(view):
+            return {}
+        return None
+    if manifest is None and request.headers.get(PARAMETER_CONTRACTS_HEADER) != "1":
+        return {}
+    view_path = f"{view.__class__.__module__}.{view.__class__.__name__}"
+    return {"parameter_contracts": manifest, "parameter_contract_view": view_path}
+
+
+def _contract_error_response() -> JsonResponse:
+    return JsonResponse(
+        {"type": "error", "error": "Render parameter contracts unavailable."}, status=500
+    )
 
 
 class RequestMixin:
@@ -194,6 +252,12 @@ class RequestMixin:
                 return HttpResponseRedirect("/")
             return HttpResponseRedirect(hook_redirect)
 
+        # ADR-035: a view that looks its object up from the route receives the
+        # URL kwargs Django resolved for this request, never other input.
+        bind_route = getattr(self, "_djust_bind_route_kwargs", None)
+        if callable(bind_route):
+            bind_route(kwargs)
+
         # IMPORTANT: mount() must be called first to initialize clean state
         t0 = time.perf_counter()
         self.mount(request, **kwargs)
@@ -283,10 +347,17 @@ class RequestMixin:
         # per GET, and streams exist precisely to keep large collections OUT of
         # state.
         if uses_legacy_exposure(self):
+            from .context import legacy_render_only_keys
+            from ..components.base import is_component_collection
+
+            _render_only = legacy_render_only_keys(self)
             _session_state = {
                 k: v
                 for k, v in _cached.items()
-                if not isinstance(v, LiveComponent) and k != "streams"
+                if not isinstance(v, LiveComponent)
+                and not is_component_collection(v)
+                and k != "streams"
+                and k not in _render_only
             }
             request.session[view_key] = normalize_django_value(_session_state, state_roundtrip=True)
 
@@ -319,6 +390,10 @@ class RequestMixin:
         from .._child_rendering import render_view_full_template, render_view_with_diff
 
         html = render_view_full_template(self, request, serialized_context=state_serializable)
+        # ADR-036 R1: recovery targets come from what the server rendered.
+        from ..validation import note_rendered_recovery_targets
+
+        note_rendered_recovery_targets(self, html)
         t_render_full = (time.perf_counter() - t0) * 1000
         liveview_content = html
 
@@ -390,6 +465,13 @@ class RequestMixin:
         # where the author did not declare dj-view themselves (#2981).
         view_path = f"{self.__class__.__module__}.{self.__class__.__name__}"
         html = self._stamp_dj_view(html, view_path)
+
+        # ADR-036: the page's own owner contracts, for events sent before a
+        # socket mounts or over the HTTP fallback. Emitted outside dj-root so
+        # the VDOM baseline is unaffected; all-legacy pages are unchanged.
+        self.__dict__["_initial_parameter_contracts"] = _initial_parameter_contracts(
+            self, view_path
+        )
 
         # Inject LiveView client script
         html = self._inject_client_script(html)
@@ -657,7 +739,7 @@ class RequestMixin:
 
     def post(self, request: "HttpRequest", *args: Any, **kwargs: Any) -> HttpResponse:
         """Handle POST requests - event handling"""
-        from ..components.base import LiveComponent, SESSION_COMPONENT_TYPES
+        from ..components.base import LiveComponent
 
         # Referenced by the ``except`` at the end of this method, which must not
         # raise its own UnboundLocalError when the failure precedes their
@@ -757,6 +839,11 @@ class RequestMixin:
             if private_state:
                 self._restore_private_state(private_state)
 
+            # ADR-035: bound after the restore so saved state cannot supply it.
+            bind_route = getattr(self, "_djust_bind_route_kwargs", None)
+            if callable(bind_route):
+                bind_route(kwargs)
+
             self._initialize_temporary_assigns()
 
             # Run on_mount hooks (auth guards, etc.) before mount
@@ -787,9 +874,11 @@ class RequestMixin:
             component_state = (
                 request.session.get(f"{view_key}_components", {}) if legacy_exposure else {}
             )
+            from ..components.base import is_session_component
+
             for key, state in component_state.items():
                 component = getattr(self, key, None)
-                if component and isinstance(component, SESSION_COMPONENT_TYPES):
+                if component is not None and is_session_component(component):
                     self._restore_component_state(component, state)
 
             # --- Authorization layer 3 of 3: object-level (ADR-017) ----------
@@ -817,6 +906,26 @@ class RequestMixin:
             # registered component, as ``runtime._dispatch_component_event``
             # does over WebSocket (#1646 — the HTTP fallback must not differ).
             owner: Any = self
+            # #3104: an event carrying another view's ``view_id`` belongs to an
+            # embedded ``{% live_render %}`` child. This request has no child to
+            # route to (children register during the render, after dispatch,
+            # under fresh ids), so the event is refused, as the socket runtime
+            # refuses an unknown ``view_id``. Running it on the parent would
+            # silently change the wrong view's state.
+            # Same rule as ``ViewRuntime`` (pop, then refuse only a truthy id
+            # other than this view's own), so the transports cannot disagree.
+            view_id = None
+            if isinstance(params, dict):
+                params = dict(params)
+                view_id = params.pop("view_id", None)
+            if view_id and view_id != getattr(self, "_view_id", None):
+                logger.warning(
+                    "HTTP POST refused event '%s' for embedded view %s on %s",
+                    event_name,
+                    sanitize_for_log(str(view_id)),
+                    type(self).__name__,
+                )
+                return JsonResponse({"error": "Embedded view not found"}, status=400)
             component_id = params.get("component_id") if isinstance(params, dict) else None
             if component_id:
                 registry = getattr(self, "_components", None) or {}
@@ -871,8 +980,11 @@ class RequestMixin:
                     coerce = event_meta.get("coerce_types", True)
 
                 if get_handler_parameter_policy(handler) == "strict" and "event" not in data:
-                    if "_args" in data:
-                        params["_args"] = data["_args"]
+                    # The flat body drops "_" keys for legacy handlers. Strict
+                    # validation owns that namespace on every transport: it
+                    # drops transport metadata, consumes _args and rejects the
+                    # rest, so an unknown key is not silently discarded here.
+                    params.update({k: v for k, v in data.items() if k.startswith("_")})
                 validation = validate_handler_params(handler, params, event_name, coerce=coerce)
                 if not validation["valid"]:
                     logger.error("Parameter validation failed: %s", validation["error"])
@@ -918,8 +1030,16 @@ class RequestMixin:
                     request.session.pop(f"{view_key}__private", None)
 
                 updated_context = self.get_context_data()
+                from .context import legacy_render_only_keys
+                from ..components.base import is_component_collection
+
+                render_only = legacy_render_only_keys(self)
                 state = {
-                    k: v for k, v in updated_context.items() if not isinstance(v, LiveComponent)
+                    k: v
+                    for k, v in updated_context.items()
+                    if not isinstance(v, LiveComponent)
+                    and not is_component_collection(v)
+                    and k not in render_only
                 }
                 request.session[view_key] = normalize_django_value(state, state_roundtrip=True)
                 self._save_components_to_session(request, updated_context)
@@ -955,6 +1075,10 @@ class RequestMixin:
 
             if _resolve_skip_render(self):
                 skip_response: Dict[str, Any] = {"patches": []}
+                contract_fields = _http_parameter_contract_fields(self, request)
+                if contract_fields is None:
+                    return _contract_error_response()
+                skip_response.update(contract_fields)
                 if hasattr(self, "_drain_flash"):
                     flash_commands = self._drain_flash()
                     if flash_commands:
@@ -976,6 +1100,14 @@ class RequestMixin:
                 t0_render = time.perf_counter()
                 html, patches_json, version = render_view_with_diff(self, request)
                 t_render_ms = (time.perf_counter() - t0_render) * 1000
+
+            # ADR-036: the rendered tree's owner contracts travel with the DOM
+            # update they describe. Discovery failure withholds that update and
+            # drops the unsent diff baseline, as the socket runtime does.
+            contract_fields = _http_parameter_contract_fields(self, request)
+            if contract_fields is None:
+                self._rust_view.reset()
+                return _contract_error_response()
 
             if not legacy_exposure:
                 from .._exposure_child_persistence import save_child_states
@@ -1052,8 +1184,13 @@ class RequestMixin:
                 patches = json_module.loads(patches_json)
                 patch_count = len(patches)
 
-                if patch_count > 0 and patch_count <= PATCH_THRESHOLD:
-                    response_data = {"patches": patches, "version": version}
+                # Zero patches is a render with no DOM change. Answer with
+                # the new version and no patches, as the socket runtime's
+                # no-op does. Resetting the diff baseline here restarted the
+                # server's version at 1, so the client's next version check
+                # failed and it reloaded the page, losing its state.
+                if 0 <= patch_count <= PATCH_THRESHOLD:
+                    response_data = {"patches": patches, "version": version, **contract_fields}
                     if cache_request_id:
                         response_data["cache_request_id"] = cache_request_id
                     _inject_side_channels(response_data)
@@ -1061,14 +1198,14 @@ class RequestMixin:
                     return JsonResponse(response_data)
                 else:
                     self._rust_view.reset()
-                    response_data = {"html": html, "version": version}
+                    response_data = {"html": html, "version": version, **contract_fields}
                     if cache_request_id:
                         response_data["cache_request_id"] = cache_request_id
                     _inject_side_channels(response_data)
                     _inject_debug(response_data)
                     return JsonResponse(response_data)
             else:
-                response_data = {"html": html, "version": version}
+                response_data = {"html": html, "version": version, **contract_fields}
                 if cache_request_id:
                     response_data["cache_request_id"] = cache_request_id
                 _inject_side_channels(response_data)

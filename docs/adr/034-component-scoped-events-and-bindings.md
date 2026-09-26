@@ -1,6 +1,6 @@
 # ADR-034: Typed component bindings and instance-scoped events
 
-**Status**: Proposed
+**Status**: Accepted — delivery verified on a local djust-docs build pinned to 1.3.0rc3 that renders the 1.3 branch's docs (2026-09-25; the docs published with 1.3.0rc3 failed djust-docs' nav gate on the unlisted accounts guide, fixed in #3138; production docs.djust.org follows 1.3.0). Gates C1–C4 closed on `feat/adr-034-037`, with evidence in the [acceptance review](component-conventions-implementation.md#adr-034-acceptance-review--c4); acceptance is confirmed at that branch's review. `djust.components.interactive` is available from djust 1.3. CR (Step R) is closed: C1–C4 revealed no retirement target, as this ADR expected.
 **Date**: 2026-09-19
 **Deciders**: Project maintainers
 **Evidence baseline**: `40786f668` on `feat/components-catalogue`.
@@ -22,7 +22,7 @@ creating a server-side component per row. When a reusable, stateful component ow
 the behavior, the view subscribes to its typed outputs using Python references:
 
 ```python
-# Proposed API; not available in the current release.
+# Available from djust 1.3 (not in the 1.3.0rc1 pre-release).
 @project_menu.on.selected
 def on_project_menu_selected(self, component: DropdownMenu, value: str) -> None:
     self.selected_action = value
@@ -39,9 +39,10 @@ they are not required just to repeat an action button.
 `.on` with an unrestricted `__getattr__`, `Any`, or an untyped decorator would
 undermine this decision.
 
-New component APIs and imports below are proposals; the delegated row example
-uses existing view-handler syntax. This ADR neither implements the proposed APIs
-nor changes the status of ADR-031 through ADR-033.
+The component APIs and imports below are implemented in
+`djust.components.interactive`, available from djust 1.3. The delegated row
+example uses existing view-handler syntax. This ADR does not change the status
+of ADR-031 through ADR-033.
 
 ## Context and problem
 
@@ -65,7 +66,7 @@ At the evidence baseline:
   state and component-local dispatch. However, descriptor access currently
   returns an untyped proxy; simply adding new decorator syntax is insufficient.
 - [ViewRuntime._dispatch_component_event](../../python/djust/runtime.py) already
-  resolves component IDs against the view's registry. The proposed API should
+  resolves component IDs against the view's registry. The new API should
   build on this dispatch path, not invent a second browser event system.
 - [event_handler](../../python/djust/decorators.py) has no `component=` or
   `event=` subscription arguments today.
@@ -126,7 +127,7 @@ object; class construction resolves its attribute name and validates ownership.
 It does not look up a component by a user-written string.
 
 ```python
-# Proposed imports and API, not executable against the current release.
+# Available from djust 1.3 (not in the 1.3.0rc1 pre-release).
 from djust import LiveView
 from djust.components.interactive import DropdownMenu
 
@@ -216,9 +217,9 @@ this ADR. A pleasing syntax without working negative type tests is not sufficien
 The [C1 typing proof](notes/034-typing-proof.md) first passed with an isolated descriptor
 and now passes against the real staged bindings. Mypy follows Django's installed
 source declarations, and the LiveView stub includes its real constructor; both
-checkers reject all twenty-one negative locations without a new dependency. C1 and
-this ADR remain open pending the lifecycle, browser and publication requirements;
-the private implementation is not yet the released interactive API.
+checkers reject all twenty-one negative locations without a new dependency. At
+acceptance the proof imports the public module and covers keyed collections:
+both checkers reject 31 negative locations.
 
 ### D3. Components own mechanics; views handle semantic outputs
 
@@ -342,7 +343,7 @@ namespace; a generic container that degrades `.on` to `Any` is not an acceptable
 shortcut. The same callback receives whichever bound item emitted the output.
 
 ```python
-# Proposed API. Static rows keep this example independent of a database model.
+# Available from djust 1.3. Static rows keep this example independent of a database model.
 from djust import LiveView
 from djust.components.interactive import DropdownMenu
 
@@ -445,7 +446,7 @@ visibility mode is client-owned, subscribing to its typed `toggled` observation
 opts into a server notification after the browser changes visibility:
 
 ```python
-# Proposed subscription; project_menu has client-owned visibility in this case.
+# project_menu has client-owned visibility in this case.
 # logger is the application's ordinary Python logger.
 @project_menu.on.toggled
 def on_project_menu_toggled(self, component: DropdownMenu, open: bool) -> None:
@@ -500,6 +501,54 @@ The concrete native-event binding syntax must be checked against the existing
 client before being published; this ADR does not claim a `dj-toggle` attribute
 already exists.
 
+## C1 decisions (2026-09-25)
+
+C1 left the public names open. These are owner decisions. A later change to
+any of them changes its implementation and tests, not just this table.
+
+| # | Question | Decision | Reason |
+| --- | --- | --- | --- |
+| Q1 | Public import path | `djust.components.interactive` exports `DropdownMenu`. It keeps the legacy renderer's name in a new module. `djust.Q004` warns when one module imports both. | The name this ADR proposes. The module path says which component it is (D7), and the check catches mixing. |
+| Q2 | State-owner setting | `visibility="server" \| "client"`, default `"server"`. | Short. Already used by the staged code, tests and signed snapshots. "Client" matches D0/D8's wording. |
+| Q3 | Item types | `ActionItem{label, value, disabled?}` and `SeparatorItem{separator: Literal[True]}`, exported. Values are nonempty and unique. | D2 requires typed configuration. These are the staged TypedDicts. |
+| Q4 | Output-authoring API | Private for 1.3: `OutputContract`, `subscribe`, the `Outputs` namespace and `_emit`. The local action names and the `data-dj-observe-*` markup are framework-internal. | D3 forbids a parallel emit API, and a public author API needs its own typing proof and docs. Components render their own actions, so nothing on the wire is published. |
+| Q5 | Actor views | Unsupported in 1.3, documented, and reported by `djust.V020` (Error) at `manage.py check`. | The actor path has separate dispatch and render baselines. Supporting it is its own gate. |
+| Q6 | Keyed collections | This ADR's spelling: `DropdownMenu.collection()`, `.sync([(key, declaration), ...])`, `.values` and read-only `component.key`. Built in this arc (C3). Documented only once gate 5's separate proof passes. | Changing the spelling later would break the typing proof. Gate 5 forbids publishing before the proof. |
+| Q7 | #3078 legacy alias | Fixed, not retired. The alias resolves ids only against the view's declared descriptors of its own type, and is pinned to the legacy parameter policy. Foreign or unknown ids are a no-op. | The legacy descriptor components continue (Compatibility and migration; Step R). |
+
+## C2 notes (2026-09-25)
+
+The C2 browser matrix, run on real WebSocket, SSE and HTTP-only transports,
+found three transport defects. They are fixed and recorded in the
+implementation ledger. One fix is an owner decision about behavior:
+
+- **HTTP fallback events are ordered.** They are sent one at a time, in
+  dispatch order, as frames are on a socket. Two events in flight at once each
+  restored and saved the view's session state, so one's changes were lost. An
+  ADR-035 form save stored stale values in 3 runs of 4. An event sent alone
+  still goes out at once.
+
+## C3 decisions (2026-09-25)
+
+Keyed collections (D5, gate 5). Q0–Q6 are owner decisions; N1–N4 are
+implementation choices within D5 that the owner accepted.
+
+| # | Question | Decision | Reason |
+| --- | --- | --- | --- |
+| Q0 | Collection subscription | `@rows.on.selected` / `@rows.on.toggled`: one callback per collection and output, receiving the emitting member (`component.key` is its collection key). Typed exactly like the fixed menu's outputs. | D1/D5's single convention. Per-member callbacks would be a third spelling and would persist bound methods; a separate keyed output would duplicate `component.key`. |
+| Q1 | Where `sync()` runs | Anywhere server code runs on the bound view, including the collection's own callback. A callback that removes its member finishes against it; later events for that member are refused. | Reconciliation exists for lists that change after mount. |
+| Q2 | Lookup API | `sync()`, `.values` (a tuple in sync order), `get(key)` (the live member, or `None` for an unknown or removed key), `len()` and iteration (live members in sync order). Nothing else. | Owner decision: the lookups views need, with no `__contains__`, `keys()` or `__getitem__`. |
+| Q3 | Exported collection type | None. `DropdownMenu.collection()` is the constructor; the type is inferred and has its own typing fixtures. | Keeps the public surface to what the ADR names. |
+| Q4 | Member configuration | Per member: `label`, `items`, `visibility`. `.on.toggled` observes only client-visibility members; `.on.selected` covers all. | One configuration model: the constructor. |
+| Q5 | The declarations passed to `sync()` | Configuration only: copied, never bound or mutated, reusable across keys and syncs. | D4: declarations are configuration, not state. |
+| Q6 | Size cap | None. The existing state-size limits and warnings apply. | D5 already requires pagination or virtualization for large lists. |
+| N1 | Changing a retained member's `visibility` | Starts a new member lifetime (new identity). | The state owner changes, so the old state and identity do not carry over. |
+| N2 | Server session persistence | One record per collection: keys, configuration, identities, state and observation cursors in sync order, validated in full before any change. A request or reconnect restored from the session gets the latest membership, and client members rotate their observation lifetime. | Server-written state reflects the last `sync()`, so a removed member is never resurrected. |
+| N3 | Client-signed navigation snapshots | A view that declares a collection is not signed for back-navigation; Back mounts it fresh, and `sync()` supplies the current membership. | A signed snapshot would restore the membership it captured, resurrecting members removed since (D5). |
+| N4 | Debug time travel | Restores member state for members that still exist; membership is not rolled back. | A dev tool must not resurrect removed members either. |
+
+Collection documentation and snippets are published with C4, after this proof.
+
 ## Alternatives considered
 
 | Alternative | Assessment |
@@ -521,7 +570,7 @@ bindings does not remove the need for runtime validation.
 
 ## Compatibility and migration
 
-Introduce the new family explicitly under the proposed
+Introduce the new family explicitly under the
 `djust.components.interactive` module. The first implementation is an interactive
 `DropdownMenu` that can reuse the existing visual renderer. Do not silently turn
 today's plain `DropdownMenu` into a descriptor or change existing event routing.
@@ -583,8 +632,8 @@ the real browser client, and Django and Rust template backends. Specifically tes
 - Every documented output is exercised, and every local action resolves; browser
   tests inspect visible results and server errors, not merely HTTP 200 responses.
 
-This document-only change can validate links and snippet syntax. It cannot claim
-that these future runtime or type-checking acceptance gates have passed.
+These gates are evidenced in the implementation ledger's ADR-034 acceptance
+review.
 
 ## Retirement (Step R — delete)
 
@@ -609,6 +658,12 @@ This ADR is therefore a **net addition** to the framework's surface: new
 requirement that goes with them. It must be justified on developer-facing value,
 not on code removed. If C1-C4 reveal a genuine retirement target, it is recorded
 here and gated like the others.
+
+**Status at acceptance (2026-09-25): closed, nothing retired.** C1–C4
+revealed no retirement target. The one candidate was the legacy `Meta.event`
+alias (#3078). It was fixed rather than retired (owner decision C1-Q7), because
+the legacy descriptor components continue. `event=`, `name=`, `toggle_event=`
+and item `event` all continue as stated above.
 
 ## Consequences and non-goals
 

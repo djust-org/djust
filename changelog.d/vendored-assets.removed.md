@@ -1,0 +1,1 @@
+- **`djust.components.dependencies`** (`DEPENDENCY_REGISTRY`, `DependencyManager`). It was undocumented and unused; declare vendored assets in `djust_assets.json` and set `requires_assets` instead.

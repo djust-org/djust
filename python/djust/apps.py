@@ -1,8 +1,31 @@
 import logging
 import os
+import sys
 from typing import Mapping, Sequence
 
 from django.apps import AppConfig
+
+
+def _running_under_pytest() -> bool:
+    """Whether this process is a pytest run, as seen from ``ready()``.
+
+    ``PYTEST_CURRENT_TEST`` alone is not enough: pytest-django calls
+    ``django.setup()`` from its ``pytest_load_initial_conftests`` /
+    ``pytest_configure`` hooks, before any test has started, so that variable
+    is not set yet and every pytest process (each xdist worker too) started
+    the hot-reload watcher (#3157). pytest is imported by then, so its module
+    is the reliable signal. Environment variables such as ``PYTEST_VERSION``
+    or ``PYTEST_XDIST_WORKER`` are deliberately not used: a subprocess a test
+    spawns inherits them without being a pytest run itself.
+    """
+    return "pytest" in sys.modules or bool(os.environ.get("PYTEST_CURRENT_TEST"))
+
+
+def _log_pytest_skip() -> None:
+    logging.getLogger("djust").debug(
+        "[djust] pytest is running: skipping the hot reload auto-enable, the "
+        "update notice and the filter-bridge warm-up (#3157)"
+    )
 
 
 class DjustConfig(AppConfig):
@@ -38,6 +61,13 @@ class DjustConfig(AppConfig):
         # Import checks module so @register() decorators are executed
         import djust.checks  # noqa: F401
 
+        # Asset registry and integrity caches follow override_settings (ADR-040).
+        from django.core.signals import setting_changed
+
+        from djust.assets import on_setting_changed
+
+        setting_changed.connect(on_setting_changed, dispatch_uid="djust.assets")
+
         # Install the log sanitizer filter on every djust.* logger so every log
         # record emitted by the framework has user-controlled string args
         # sanitized before they reach any handler — preventing log injection
@@ -65,11 +95,10 @@ class DjustConfig(AppConfig):
         # ``hot_reload_server.is_running()``, so this is safe in production
         # (early-return) and safe alongside an explicit consumer call.
         # Skip during pytest runs to avoid spawning a watchdog thread for
-        # every test session — pytest sets ``PYTEST_CURRENT_TEST`` for the
-        # duration of every test invocation. (Tests that need to exercise
-        # the auto-enable path itself temporarily clear this env var; see
-        # ``_no_pytest_env()`` in
-        # ``python/djust/tests/test_auto_hot_reload.py``.)
+        # every test session (and every xdist worker) — see
+        # ``_running_under_pytest``. (Tests that need to exercise the
+        # auto-enable path itself patch that helper; see ``_no_pytest_env()``
+        # in ``python/djust/tests/test_auto_hot_reload.py``.)
 
         # Wire LIVEVIEW_CONFIG['virtual_keyed_ops'] -> the process-global Rust
         # switch (ADR-026 iteration 3, #2017). Done HERE rather than in
@@ -107,9 +136,9 @@ class DjustConfig(AppConfig):
                 "[djust] applying virtual_keyed_ops to the Rust differ failed"
             )
 
-        import os
-
-        if not os.environ.get("PYTEST_CURRENT_TEST"):
+        if _running_under_pytest():
+            _log_pytest_skip()
+        else:
             _start_update_notice()
             try:
                 from djust.config import config

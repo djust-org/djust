@@ -1035,6 +1035,17 @@ class WSConsumerTransport:
             except Exception as e:  # noqa: BLE001
                 logger.warning("Error joining db_notify group for %s: %s", ch, e)
 
+    async def _sync_push_scopes(self, view: Any) -> None:
+        """Match the consumer's scoped-push groups to ``view.push_scope`` (#3004).
+
+        See ``push.sync_push_scope_groups``: idempotent, joins new scopes and
+        leaves dropped ones, logs (never raises) on a bad value or a layer
+        error.
+        """
+        from .push import sync_push_scope_groups
+
+        await sync_push_scope_groups(self._consumer, view)
+
     async def on_event_recorded(self, view: Any, snapshot: Any) -> None:
         """Emit the DEBUG-gated ``time_travel_event`` frame for WS.
 
@@ -1318,6 +1329,11 @@ class WSConsumerTransport:
             # A handler that called ``listen()`` joins its NOTIFY group now,
             # while the turn still holds the render lock (#2962).
             await self._join_listen_channels(view)
+            # Likewise a handler that changed ``push_scope`` (#3004) -- unless
+            # the view was replaced during the turn (a live_redirect does not
+            # take the render lock): its scopes are not this socket's any more.
+            if getattr(consumer, "view_instance", None) is view:
+                await self._sync_push_scopes(view)
         finally:
             sql_scope.__exit__(None, None, None)
             PerformanceTracker.set_current(None)
@@ -1771,8 +1787,10 @@ class WSConsumerTransport:
 
         consumer = self._consumer
         # mount() (or a session restore) has run and the view is admitted:
-        # join the NOTIFY groups for channels ``listen()`` added (#2962).
+        # join the NOTIFY groups for channels ``listen()`` added (#2962), and
+        # the scoped-push groups for the view's ``push_scope`` (#3004).
         await self._join_listen_channels(view)
+        await self._sync_push_scopes(view)
         sticky_preserved = getattr(consumer, "_sticky_preserved", None)
         if not sticky_preserved:
             return html
@@ -1897,6 +1915,8 @@ class WSConsumerTransport:
         try:
             await task
         except asyncio.CancelledError:
+            # Expected: we just cancelled the tick task and only wait for it to
+            # unwind.
             pass
         except Exception as exc:  # noqa: BLE001 — the loop logs its own errors
             from ._exposure_diagnostics import log_failure_for
@@ -1920,7 +1940,7 @@ class WSConsumerTransport:
         """
         consumer = self._consumer
         groups: List[str] = []
-        for attr in ("_view_group", "_presence_group"):
+        for attr in ("_view_group", "_presence_group", "_presence_scope_group"):
             group = getattr(consumer, attr, None)
             if isinstance(group, str) and group:
                 groups.append(group)
@@ -1929,6 +1949,10 @@ class WSConsumerTransport:
         if isinstance(channels, set) and channels:
             groups.extend(f"djust_db_notify_{ch}" for ch in channels)
             consumer._db_notify_channels = set()
+        scoped = getattr(consumer, "_push_scope_groups", None)
+        if isinstance(scoped, dict) and scoped:
+            groups.extend(scoped.values())
+            consumer._push_scope_groups = {}
         channel_layer = getattr(consumer, "channel_layer", None)
         if channel_layer is None:
             return
@@ -2904,19 +2928,21 @@ class ViewRuntime:
                 await sync_to_async(view_instance._assign_component_ids)()
 
                 # Restore component state.
-                from .components.base import SESSION_COMPONENT_TYPES
+                from .components.base import is_session_component
 
                 component_state = await session.aget(f"{view_key}_components", {})
                 for key, state in component_state.items():
                     component = getattr(view_instance, key, None)
-                    if component and isinstance(component, SESSION_COMPONENT_TYPES):
+                    if component is not None and is_session_component(component):
                         await sync_to_async(view_instance._restore_component_state)(
                             component, state
                         )
-                        from .components._interactive import DropdownMenu
+                        from .components._interactive import DropdownMenu, DropdownMenuCollection
 
                         if isinstance(component, DropdownMenu):
                             component._renew_observation_lifetime()
+                        elif isinstance(component, DropdownMenuCollection):
+                            component._renew_observation_lifetimes()
 
                 mounted_from_restore = True
 
@@ -3044,6 +3070,13 @@ class ViewRuntime:
         # mount baseline that a later event diffs against, so neither needs this.
         if mounted_from_restore:
             view_instance._force_full_html = True
+
+        # ADR-035: a view that looks its object up from the route gets only the
+        # kwargs of its own route, never client params. Bound after both restore
+        # mechanisms, so restored state cannot supply it, and before mount().
+        bind_route = getattr(view_instance, "_djust_bind_route_kwargs", None)
+        if callable(bind_route):
+            bind_route(self._own_route_kwargs(view_instance, page_url))
 
         if not mounted_from_restore:
             try:
@@ -3455,6 +3488,20 @@ class ViewRuntime:
         except Exception:  # noqa: BLE001 — value-free; fail closed on eligibility
             logger.warning("Service-worker cache metadata unavailable for mount")
             mount_msg["sw_cache"] = "no-store"
+
+        # #2966: dj-track-static. A reconnecting client sends the tracked asset
+        # URLs its page loaded; report the ones the current static manifest
+        # has replaced. Additive, and absent for pages that track nothing.
+        track_static = data.get("track_static")
+        if track_static:
+            try:
+                from ._track_static import stale_static_urls
+
+                stale_static = stale_static_urls(track_static)
+                if stale_static:
+                    mount_msg["stale_static"] = stale_static
+            except Exception:  # noqa: BLE001 — an asset check must never break mount
+                logger.warning("dj-track-static check failed; no stale assets reported")
 
         # Optional cache_config (mirrors WS consumer)
         cache_config = self._extract_cache_config(view_instance)
@@ -3875,7 +3922,6 @@ class ViewRuntime:
         # Snapshot pre-handler assigns for change detection.
         from .websocket import _compute_changed_keys, _resolve_skip_render, _snapshot_assigns
 
-        pre_assigns = _snapshot_assigns(view)
         # Identity snapshot for the #700 push_commands-only auto-skip below:
         # {attr: id(value)} over the public assigns. Immune to the deep-copy
         # sentinel false-positives _snapshot_assigns can produce for non-copyable
@@ -3883,7 +3929,29 @@ class ViewRuntime:
         # push_event()/push_commands() without touching real state is detected as
         # a true no-op (mirrors WS handle_event websocket.py:3551-3556).
         _fw_attrs: frozenset[str] = getattr(view, "_framework_attrs", frozenset())
-        pre_identity = {k: id(v) for k, v in view.__dict__.items() if k not in _fw_attrs}
+        pre_assigns: Optional[Dict[str, Any]]
+        pre_identity: Optional[Dict[str, int]]
+        _pre_box: Dict[str, Any] = {}
+        from .worker_pool import offload_enabled
+
+        if offload_enabled() and not inspect.iscoroutinefunction(handler):
+            # Worker pool on (#3074): take both snapshots on the session's
+            # thread, in the SAME hop as the sync handler, instead of on the
+            # event loop before it. The render lock is held across both, so
+            # nothing can change the view between the snapshot and the call.
+            _inner_handler = handler
+
+            def handler(*args: Any, **kwargs: Any) -> Any:  # noqa: F811
+                _pre_box["assigns"] = _snapshot_assigns(view)
+                _pre_box["identity"] = {
+                    k: id(v) for k, v in view.__dict__.items() if k not in _fw_attrs
+                }
+                return _inner_handler(*args, **kwargs)
+
+            pre_assigns = pre_identity = None
+        else:
+            pre_assigns = _snapshot_assigns(view)
+            pre_identity = {k: id(v) for k, v in view.__dict__.items() if k not in _fw_attrs}
 
         # Call handler. The time-travel record is finalized + pushed in the
         # ``finally`` for BOTH the success and the raising path (mirrors WS
@@ -3912,6 +3980,13 @@ class ViewRuntime:
         finally:
             record_event_end(view, _tt_snapshot, error=_tt_error)
             await self._push_tt_event(view, _tt_snapshot)
+        if _pre_box:
+            pre_assigns = _pre_box["assigns"]
+            pre_identity = _pre_box["identity"]
+        if pre_assigns is None or pre_identity is None:
+            # Unreachable: the offloaded wrapper always snapshots before it
+            # calls the handler, and a raising handler returned above.
+            raise RuntimeError("pre-event snapshot missing")
 
         # Per-handler percentile telemetry (#1907, THE FLIP). The WS bespoke
         # view-path recorded ``record_handler_timing`` right after a SUCCESSFUL
@@ -4071,6 +4146,13 @@ class ViewRuntime:
             # (websocket.py:4283-4294). Safe + no-op when no activities exist.
             await self._flush_deferred_activity_events()
             return
+
+        # #3098: a legacy opt-in view's signed back-navigation snapshot was
+        # issued only at mount, so Back restored mount-time state. Refresh it on
+        # a state-changing event, as explicit views do (a noop above changed
+        # nothing, so the token the client holds is still current).
+        if not snapshot_fields and view is self.view_instance and uses_legacy_exposure(view):
+            snapshot_fields = await self._legacy_event_snapshot(view)
 
         # Render — scoped to one bound component when that is all that
         # changed (ADR-032 D1/D5); ``_render_and_send`` checks the other gates.
@@ -4421,7 +4503,6 @@ class ViewRuntime:
             if save_session is None:
                 return
 
-            from .components.base import LiveComponent as _LC
             from .serialization import normalize_django_value as _normalize
 
             save_path = mount_request.path if mount_request is not None else "/"
@@ -4448,7 +4529,18 @@ class ViewRuntime:
             else:
                 save_context = await sync_to_async(_gcd_save)()
 
-            save_state = {k: v for k, v in save_context.items() if not isinstance(v, _LC)}
+            from .mixins.context import legacy_render_only_keys
+
+            render_only = legacy_render_only_keys(target_view)
+            from .components.base import LiveComponent as _LC, is_component_collection
+
+            save_state = {
+                k: v
+                for k, v in save_context.items()
+                if not isinstance(v, _LC)
+                and not is_component_collection(v)
+                and k not in render_only
+            }
             await save_session.aset(save_view_key, _normalize(save_state, state_roundtrip=True))
 
             # Components — sync helper, wrap with sync_to_async.
@@ -5100,6 +5192,17 @@ class ViewRuntime:
         params = data.get("params", {})
         uri = data.get("uri", "")
 
+        # #3125: a view whose object the route selects (ADR-035) never runs
+        # handle_params for a URL naming another record; it remounts there, so
+        # the object is resolved and authorized for the URL the user sees.
+        route_changed = getattr(self.view_instance, "_djust_route_changed", None)
+        if callable(route_changed) and isinstance(uri, str) and uri and route_changed(uri):
+            from .mixins.navigation import same_origin_target
+
+            self.view_instance.live_redirect(same_origin_target(uri), replace=True)
+            await self._flush_navigation()
+            return
+
         try:
             await sync_to_async(self.view_instance.handle_params)(params, uri)
 
@@ -5519,6 +5622,17 @@ class ViewRuntime:
         except Exception:
             return {}
 
+    def _own_route_kwargs(self, view_instance: Any, page_url: str) -> Optional[Dict[str, Any]]:
+        """``page_url``'s resolved kwargs if that route serves this view class.
+
+        ``None`` when the URL does not resolve, or resolves to another view: the
+        client names both the view and the URL, so a URL routed elsewhere must
+        not select this view's object.
+        """
+        from .mixins.navigation import own_route_kwargs
+
+        return own_route_kwargs(view_instance, page_url)
+
     def _extract_cache_config(self, view_instance: Any) -> Optional[Dict[str, Any]]:
         """Extract @cache decorator metadata from the view's handlers.
 
@@ -5602,6 +5716,44 @@ class ViewRuntime:
             if event and rule and event not in rules:
                 rules[event] = rule
         return rules
+
+    async def _legacy_event_snapshot(self, view: Any) -> Dict[str, Any]:
+        """The refreshed signed snapshot for a legacy opt-in root view (#3098).
+
+        Same gates, capture and signature as the mount emission
+        (``dispatch_mount``'s ``state_snapshot_signed``): the master switch,
+        ``enable_state_snapshot``, ``_capture_snapshot_state(strict=True)``,
+        and ``sign_snapshot`` bound to the view path and session key. Returns
+        ``{}`` for a view that does not opt in, so nothing is shipped. A
+        capture failure revokes the client's token (``None``) rather than
+        leaving an older state to be restored; it never breaks the event.
+        """
+        from django.conf import settings
+
+        if not getattr(settings, "DJUST_STATE_SNAPSHOT_ENABLED", True):
+            return {}
+        if not getattr(view, "enable_state_snapshot", False):
+            return {}
+        view_path = getattr(view, "_djust_mount_view_path", None)
+        snapshot_fn = getattr(view, "_capture_snapshot_state", None)
+        if not isinstance(view_path, str) or not view_path or not callable(snapshot_fn):
+            return {}
+        fields: Dict[str, Any] = {"view": view_path, "state_snapshot_signed": None}
+        try:
+            public_state = await sync_to_async(snapshot_fn)(strict=True)
+            if isinstance(public_state, dict) and public_state:
+                from .security import sign_snapshot
+
+                state_json = json.dumps(public_state, sort_keys=True, separators=(",", ":"))
+                fields["state_snapshot_signed"] = sign_snapshot(
+                    state_json, view_path, getattr(view, "_django_session_key", None)
+                )
+        except Exception:  # noqa: BLE001 — snapshot refresh must never break the event
+            logger.warning(
+                "Legacy event snapshot unavailable for %s; cached snapshot invalidated",
+                sanitize_for_log(view_path),
+            )
+        return fields
 
     async def _explicit_event_snapshot(self, view: Any) -> Dict[str, Any]:
         """Refresh only declared client persistence after an authorized turn.
@@ -6463,8 +6615,6 @@ class ViewRuntime:
         parent acknowledgement advertises or completes it. Legacy roots and
         legacy children keep their existing behavior.
         """
-        from ._async_batch import AsyncBatch
-        from ._child_async import dispatch_child_work
         from ._exposure import uses_legacy_exposure
 
         root = self.view_instance
@@ -6475,6 +6625,11 @@ class ViewRuntime:
             or getattr(root, "_djust_child_disposed", False)
         ):
             return
+        # Imported past the legacy early return: this runs after every turn,
+        # on the event loop (#3095).
+        from ._async_batch import AsyncBatch
+        from ._child_async import dispatch_child_work
+
         pending = [root]
         seen: set = set()
         owners = []

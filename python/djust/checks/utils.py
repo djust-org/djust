@@ -166,14 +166,27 @@ def _get_project_app_dirs() -> list[str]:
 
 
 def _get_template_dirs() -> list[str]:
-    """Return all configured template directories."""
+    """Return all configured template directories, each once.
+
+    A directory reachable twice (listed by two backends, by ``DIRS`` and
+    ``APP_DIRS``, or through a symlink) is kept at its first spelling, so
+    template-scanning checks don't report every hit in it twice (#3143).
+    """
     from django.conf import settings
 
-    dirs = []
+    dirs: list[Any] = []  # str, or whatever path-like DIRS holds
+    seen: set[str] = set()
+
+    def _add(d: Any) -> None:
+        real = os.path.realpath(d)
+        if real not in seen:
+            seen.add(real)
+            dirs.append(d)
+
     for backend in getattr(settings, "TEMPLATES", []):
         for d in backend.get("DIRS", []):
             if os.path.isdir(d):
-                dirs.append(d)
+                _add(d)
         # Also check APP_DIRS templates
         if backend.get("APP_DIRS"):
             # ``_root`` is ``djust.checks``, whose symbols are re-exported
@@ -184,7 +197,7 @@ def _get_template_dirs() -> list[str]:
             for app_dir in _root._get_project_app_dirs():  # type: ignore[attr-defined]
                 tpl_dir = os.path.join(app_dir, "templates")
                 if os.path.isdir(tpl_dir):
-                    dirs.append(tpl_dir)
+                    _add(tpl_dir)
     return dirs
 
 
@@ -202,12 +215,19 @@ def _iter_python_files(directories: Iterable[str]) -> Iterator[str]:
 
 
 def _iter_template_files(directories: Iterable[str]) -> Iterator[str]:
-    """Yield .html template file paths from directories."""
+    """Yield .html template file paths from directories, each file once
+    (a directory nested inside another listed one would otherwise yield its
+    files twice, #3143)."""
+    seen: set[str] = set()
     for directory in directories:
         for root, _dirs, files in os.walk(directory):
             for fname in files:
                 if fname.endswith(".html"):
-                    yield os.path.join(root, fname)
+                    path = os.path.join(root, fname)
+                    real = os.path.realpath(path)
+                    if real not in seen:
+                        seen.add(real)
+                        yield path
 
 
 def _iter_js_files(directories: Iterable[str]) -> Iterator[str]:
@@ -272,6 +292,17 @@ def _has_noqa(source_lines: list[str], lineno: int, check_id: str) -> bool:
 # ---------------------------------------------------------------------------
 # LiveView checks (V0xx)
 # ---------------------------------------------------------------------------
+
+
+def _is_framework_internal_class(cls: type) -> bool:
+    """True for djust's own production classes, which per-class checks skip.
+
+    djust's test and example modules are still checked (dogfooding).
+    """
+    module = getattr(cls, "__module__", "") or ""
+    if not (module.startswith("djust.") or module.startswith("djust_")):
+        return False
+    return "test" not in module and "example" not in module
 
 
 def _walk_subclasses(cls: type) -> Iterator[type]:

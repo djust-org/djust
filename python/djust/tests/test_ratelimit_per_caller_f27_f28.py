@@ -259,20 +259,14 @@ async def test_f27_two_websocket_connections_combined_limit():
     async def _fire_and_classify(comm):
         """Send one event; return True if accepted, False if rate-limited."""
         await comm.send_json_to({"type": "event", "event": "expensive_send", "params": {}})
-        limited = False
-        # Drain a few frames looking for an error / rate-limit signal.
-        for _ in range(4):
-            try:
-                out = await comm.receive_json_from(timeout=1)
-            except Exception:
-                break
-            t = out.get("type")
-            if t in ("error", "rate_limit_exceeded"):
-                limited = True
-                break
-            if t in ("update", "patch", "html_update", "noop"):
-                break
-        return not limited
+        # Wait for the event's answer (event-driven, #3130): a 1 s window
+        # classified a late error frame as "accepted" under load.
+        from ._ws_frames import receive_type
+
+        frames = await receive_type(
+            comm, "error", "rate_limit_exceeded", "update", "patch", "html_update", "noop"
+        )
+        return frames[-1].get("type") not in ("error", "rate_limit_exceeded")
 
     try:
         accepted = 0

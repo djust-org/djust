@@ -23,6 +23,7 @@ djust uses structured error codes to help you diagnose problems quickly. This gu
 | T0xx | Templates | `manage.py check --tag djust` (startup) |
 | Q0xx | Code Quality | `manage.py check --tag djust` (startup) |
 | A0xx | Audit / Static Security Checks | `manage.py check --tag djust` (startup) |
+| B0xx | Vendored assets and SBOMs | `manage.py check --tag djust` (startup; B011/B013/B014 need `--deploy`; B008 needs `--deploy` when `djust` is above `django.contrib.staticfiles`, see B008; B008 and B012 also run before djust's `collectstatic`) |
 | D0xx | Database notifications | `manage.py check --tag djust` (startup) |
 | U0xx | Update notice | `manage.py check --tag djust` (startup, DEBUG only) |
 | Y0xx | Accessibility | `manage.py check --tag djust` (startup) |
@@ -261,13 +262,13 @@ In development, pages render without Tailwind utilities until you compile the CS
 
 ---
 
-### C018: Deprecated LIVEVIEW_CONFIG key
+### C018: Removed LIVEVIEW_CONFIG key
 
 **Severity**: Warning
 
-**What causes it**: `LIVEVIEW_CONFIG` or `DJUST_CONFIG` sets one of `jit_cache_backend`, `jit_cache_dir`, `jit_redis_url`, `debug_components`, `component_wrapper_class` or `component_loading_class`. djust has defaults for these keys but never reads them, so setting one has no effect.
+**What causes it**: `LIVEVIEW_CONFIG` or `DJUST_CONFIG` sets one of `jit_cache_backend`, `jit_cache_dir`, `jit_redis_url`, `debug_components`, `component_wrapper_class` or `component_loading_class`. djust never read these keys, and 1.3 removed their defaults, so setting one has no effect.
 
-**Fix**: Remove the key. djust 1.3 removes them. Suppress with `DJUST_CONFIG = {"suppress_checks": ["C018"]}`.
+**Fix**: Remove the key. Suppress with `DJUST_CONFIG = {"suppress_checks": ["C018"]}`.
 
 ---
 
@@ -288,6 +289,26 @@ In development, pages render without Tailwind utilities until you compile the CS
 **What causes it**: `DJUST_SERVER_STATE_MAX_AGE` is set but is not an integer number of seconds from 1 to 86400. It is the restore lifetime of ADR-038 explicit server-state envelopes (default 3600). With an invalid value, explicit views cannot load or save server state; the runtime fails closed.
 
 **Fix**: Set `DJUST_SERVER_STATE_MAX_AGE = 3600` or remove the setting. Suppress with `DJUST_CONFIG = {"suppress_checks": ["C020"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C020"]` (the runtime still fails closed).
+
+---
+
+### C021: Invalid worker_threads
+
+**Severity**: Error
+
+**What causes it**: `LIVEVIEW_CONFIG['worker_threads']` is set to something other than `None`, `False`, `True`, `"auto"` or an integer `>= 0` (for example `"8"` or `2.5`). The setting opts the WebSocket path into a pinned worker pool (#3074). At runtime an invalid value is logged and treated as off, so every session keeps sharing one thread.
+
+**Fix**: Use `True` (one thread per CPU, up to 32), an integer thread count such as `8`, or remove the key. See [More than one core per process](deployment.md#more-than-one-core-per-process-worker_threads). Suppress with `DJUST_CONFIG = {"suppress_checks": ["C021"]}`.
+
+---
+
+### C022: Invalid event_parameter_policy
+
+**Severity**: Error
+
+**What causes it**: `LIVEVIEW_CONFIG['event_parameter_policy']` is set to something other than `'legacy'` or `'strict'`. Every event handler without its own `parameter_policy` inherits this value, and dispatch rejects each of their events until it is fixed. The strict policy (ADR-036) is opt-in; `'legacy'` is the default.
+
+**Fix**: Set the key to `'legacy'` or `'strict'`, or remove it. Suppress with `DJUST_CONFIG = {"suppress_checks": ["C022"]}` (the runtime still rejects the events).
 
 ---
 
@@ -528,25 +549,12 @@ self.api_client = MySerializableClient()  # noqa: V006
 
 ---
 
-### V007: Event handler missing **kwargs
+### V007: Retired
 
-**Severity**: Warning
-
-**What causes it**: An `@event_handler` decorated method does not include `**kwargs` in its signature. Event handlers receive all event parameters from the client, and without `**kwargs`, extra parameters will cause errors.
-
-**Fix**:
-
-```python
-# WRONG - will fail if client sends unexpected parameters
-@event_handler()
-def search(self, query: str = ""):
-    self.results = search(query)
-
-# CORRECT
-@event_handler()
-def search(self, query: str = "", **kwargs):
-    self.results = search(query)
-```
+**Retired in 1.3** (ADR-037). V007 recommended `**kwargs` on every event handler.
+A closed signature is now encouraged: a catch-all hides a misspelled parameter.
+djust no longer emits V007, and the ID is never reused. Existing suppressions of
+V007 have no effect and can be removed.
 
 ---
 
@@ -650,6 +658,46 @@ V008 is broader than V006 and will flag any custom class instantiation, not just
 **What causes it**: `LIVEVIEW_ALLOWED_MODULES` is set, your URLconf routes a LiveView that djust ships (the component gallery, the theme gallery, the admin extension), and the list doesn't admit it. An explicit list replaces the default, which includes `"djust"`, so those pages render but never mount ("View not mounted. Please reload the page."). V005 doesn't cover this case because it skips classes defined in djust.
 
 **Fix**: Add `"djust"` to `LIVEVIEW_ALLOWED_MODULES`, as `djust new` does since 1.2.1. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V015"]}`.
+
+---
+
+### V016: Strict event parameter contract is invalid
+
+**Severity**: Error
+
+**What causes it**: An event handler or server function uses the strict parameter policy (ADR-036), and strict dispatch would reject every call to it. Message: "<view>.<handler>(): strict event parameter contract is invalid: Parameter '<name>' ...". The causes are an annotation that cannot be resolved (a misspelled name, a `TYPE_CHECKING`-only import, a name from another class), an unsupported type (supported: `str`, `int`, `float`, `bool`, `Decimal`, `UUID`, `date`, `Optional[T]`, `list[T]`, explicit `Any`), a named parameter without an annotation, or a keyword parameter named `view_id`, `component_id` or starting with `_`, which the framework reserves for routing. Staged component output callbacks are checked the same way for their payload parameters.
+
+**Fix**: Correct the named parameter's declaration, use `Any` for input you validate yourself, or keep the handler on `parameter_policy="legacy"`. Legacy handlers are never reported.
+
+---
+
+### V017: Async strict handler on an actor view
+
+**Severity**: Error
+
+**What causes it**: A view with `use_actors = True` declares a strict-policy `async def` event handler. Actor dispatch rejects strict async handlers before they run.
+
+**Fix**: Make the handler synchronous, set `use_actors = False`, or use `parameter_policy="legacy"`.
+
+---
+
+### V019: Strict declaration on a dj-auto-recover handler
+
+**Severity**: Warning
+
+**What causes it**: A handler targeted by `dj-auto-recover` in the view's template declares `parameter_policy="strict"`. Recovery handlers receive the `_form_values` and `_data_attrs` dictionaries, so they always run under the legacy policy.
+
+**Fix**: Remove `parameter_policy="strict"` from the recovery handler.
+
+---
+
+### V018: params= disagrees with a strict signature
+
+**Severity**: Warning
+
+**What causes it**: `@event_handler(params=[...])` lists different parameters from a strict handler's signature. Under the strict policy the signature is the contract, so the list is ignored by validation and only misleads tooling.
+
+**Fix**: Remove `params=` or make it match the signature.
 
 ---
 
@@ -826,7 +874,7 @@ not trigger it.
 
 **What causes it**: A LiveView declares view-level auth (`login_required`, `permission_required` or a Django auth mixin) and exposes a public `@event_handler` with no per-handler authorization gate. Message: "<file>:<line> -- LiveView '<View>' declares view-level auth but exposes the public @event_handler '<handler>' with no per-handler authorization gate. A user who passes the view's mount auth can call this handler."
 
-**Fix**: If the handler needs finer authorization, add `@permission_required(...)` to it or a `check_permissions()` override that inspects the event. Rename it with a leading underscore if it isn't meant to be client-callable. If view-level auth is sufficient, suppress with `# noqa: S009` on the handler or `DJUST_CONFIG = {"suppress_checks": ["S009"]}`.
+**Fix**: If the handler needs finer authorization, add `@permission_required(...)` to it or a `check_permissions()` override that inspects the event. The check resolves the decorator through the module's imports, so an aliased import (`permission_required as require_permission`) or a dotted `decorators.permission_required(...)` counts; an alias is required whenever the view also sets the `permission_required` class attribute, which shadows the decorator in the class body. Django's `django.contrib.auth.decorators.permission_required` does not gate an event and does not count. Rename it with a leading underscore if it isn't meant to be client-callable. If view-level auth is sufficient, suppress with `# noqa: S009` on the handler or `DJUST_CONFIG = {"suppress_checks": ["S009"]}`.
 
 ---
 
@@ -1072,6 +1120,66 @@ class MyView(LiveView):
 **What causes it**: A LiveView's template references a variable that is never set via a class attribute, a `self.<name> = ...` assignment, or a literal `get_context_data()` return key, and isn't a framework- or Django-injected name. Message: "<view> -- template references undefined variable '<name>' at line N (<template>) -- it resolves to nothing and renders as empty string, with no error." Views whose templates use `{% extends %}` are skipped, and one Info message reports the count ("T018: skipped N view(s) whose template(s) use {% extends %} ...").
 
 **Fix**: Fix the typo, or, if the variable is set dynamically, silence it with a `{# djust_typecheck: noqa <name> #}` template comment. For extends-based templates, run `manage.py djust_typecheck`. Suppress globally with `DJUST_CONFIG = {"suppress_checks": ["T018"]}`. See [Template type checking](typecheck.md).
+
+### T019: Event binding names no handler on its owner
+
+**Severity**: Warning
+
+**What causes it**: A `dj-*` event binding names something its owner cannot
+receive from the browser. That might be a missing method, a method without
+`@event_handler`, or an output callback. It might be an action or output of an
+interactive component the view declares, which a view-owned binding never
+reaches. It might also be an invalid event name, or arguments on `dj-submit` /
+`dj-keydown` / `dj-keyup` / `dj-click-away`, which send their value verbatim.
+The message names the file and line of the binding.
+
+**Fix**: Add or decorate the handler, correct the name, or let the component's
+own markup send its actions. Suppress one binding with
+`{# noqa: T019 -- <reason> #}` on its line or the line above.
+
+---
+
+### T020: Event binding arguments do not match the handler
+
+**Severity**: Warning
+
+**What causes it**: The binding never sends a required argument, sends one the
+handler does not accept, passes extra positional arguments, or sends one name
+twice. Under the legacy policy, `dj-input`, `dj-change` and `dj-submit` also
+send `field` and `_target`, which a closed legacy signature rejects. Under the
+strict policy, only `dj-value-*` attributes are sent, never `data-*`.
+
+**Fix**: Send the argument (for example `data-item-id` or `dj-value-item-id`),
+accept the generated names with a catch-all, or move the handler to the strict
+policy. Suppress with `{# noqa: T020 -- <reason> #}`.
+
+---
+
+### T021: Event binding literal does not fit the handler
+
+**Severity**: Warning
+
+**What causes it**: A literal value the handler's annotation rejects, such as
+`data-count="abc"` for `count: int`. Also an unknown wire hint, or one that does
+not fit the declared type. For `validate_field` / `submit_form`, a field name
+that is not in the view's static `form_class`.
+
+**Fix**: Correct the literal, hint or field name. Suppress with
+`{# noqa: T021 -- <reason> #}`.
+
+---
+
+### T022: Markup supplies routing context
+
+**Severity**: Warning
+
+**What causes it**: An attribute such as `data-view-id` or
+`dj-value-component-id` sends `view_id` / `component_id`. The server reads
+these as routing context, not as arguments, so the event can reach another
+owner.
+
+**Fix**: Rename the attribute. The framework attaches view and component context
+itself.
 
 ---
 
@@ -1409,12 +1517,13 @@ Recognized packages: `axes`, `defender`, `brutebuster`, `ratelimit`, `django_rat
 
 **Severity**: Warning
 
-**What causes it**: The `allauth` backend is configured, Django is set up to run behind a proxy (`USE_X_FORWARDED_HOST` or `SECURE_PROXY_SSL_HEADER`), and allauth has no way to find the real client IP: `DJUST_TRUSTED_PROXY_COUNT` and `ALLAUTH_TRUSTED_PROXY_COUNT` are 0 and `ALLAUTH_TRUSTED_CLIENT_IP_HEADER` is not set. Every visitor then shares the proxy's IP, so one client's failed logins rate-limit everyone.
+**What causes it**: The `allauth` backend is configured, Django is set up to run behind a proxy (`USE_X_FORWARDED_HOST` or `SECURE_PROXY_SSL_HEADER`), and allauth has no way to find the real client IP: `DJUST_TRUSTED_PROXY_COUNT` and `ALLAUTH_TRUSTED_PROXY_COUNT` are 0, `ALLAUTH_TRUSTED_CLIENT_IP_HEADER` is not set, and your allauth adapter doesn't override `get_client_ip`. Every visitor then shares the proxy's IP, so one client's failed logins rate-limit everyone.
 
 **Fix**: Do one of these:
 
 - Set `DJUST_TRUSTED_PROXY_COUNT` to the number of reverse proxies in front of Django (for example `1` behind ingress-nginx). djust passes it to allauth as `ALLAUTH_TRUSTED_PROXY_COUNT`.
 - If your proxy puts the client IP in a header of its own, set `ALLAUTH_TRUSTED_CLIENT_IP_HEADER` to that header's name (for example `"X-Real-IP"`, which ingress-nginx sets; allauth 65.14.2 or later). allauth reads the IP from it. Only name a header that your proxy always sets and that clients can't set themselves. The header covers allauth's rate limits only: djust's own WebSocket, SSE and API rate limits still read `DJUST_TRUSTED_PROXY_COUNT`.
+- Override `get_client_ip` on your allauth adapter, a subclass of `djust.auth.accounts.backends.allauth_integration.DjustAccountAdapter` (check A107). allauth's rate limits ask the adapter for the IP, so this also works when the header can be missing, as in local development, tests and health probes, where `ALLAUTH_TRUSTED_CLIENT_IP_HEADER` makes allauth refuse the request.
 
 ### A103: Email verification off in production
 
@@ -1455,6 +1564,129 @@ Recognized packages: `axes`, `defender`, `brutebuster`, `ratelimit`, `django_rat
 **What causes it**: With the `allauth` backend, your `ACCOUNT_ADAPTER`, `ACCOUNT_FORMS["signup"]`, `SOCIALACCOUNT_ADAPTER` or `SOCIALACCOUNT_FORMS["signup"]` is a class that doesn't subclass djust's. The strict `?next=` redirects, the sign-up gate or `signup_validators` then don't apply.
 
 **Fix**: Base your class on the djust one in `djust.auth.accounts.backends.allauth_integration` (`DjustAccountAdapter`, `DjustSignupForm`, `DjustSocialAccountAdapter`, `DjustSocialSignupForm`) and add your changes there.
+
+---
+
+## Vendored Assets and SBOMs (B0xx)
+
+See [Vendoring third-party JS](vendored-assets.md) and [Scanning a djust app](scanning.md) (ADR-040).
+
+### B001: Manifest unparseable or fails schema
+
+**Severity**: Error
+
+**What causes it**: A `djust_assets.json` file (or an entry inside it) doesn't match schema 1: the file is missing or isn't valid JSON, `"schema"` isn't `1`, `"assets"` isn't an object, an asset isn't an object, `"files"`/`"packages"` is missing or empty, a file entry doesn't have exactly one of `"path"`/`"url"`, an external `"url"` isn't `https://`, `"integrity"` is missing on a vendored file or isn't valid SRI (`sha256-`/`sha384-`/`sha512-`), or `"type"` can't be inferred and isn't given explicitly. An invalid asset is dropped; the rest of the manifest still loads.
+
+**Fix**: Fix the manifest against the schema in [Vendoring third-party JS](vendored-assets.md#the-schema), or rebuild it with `make vendor` if it's a djust-generated one.
+
+### B002: Package purl missing a version, or missing a license
+
+**Severity**: Error
+
+**What causes it**: A `"packages"` entry's `"purl"` doesn't match `pkg:<type>/<name>@<version>` (an exact version is required — no ranges, no floating tags), or `"license"` is missing or empty. The purl is the only record of a package's name and version djust keeps, so an unpinned one can't be checked against an advisory.
+
+**Fix**: Pin an exact version in the purl (for a scoped npm package, percent-encode the `@`: `pkg:npm/%40tiptap/core@3.31.3`) and add an SPDX `"license"` expression.
+
+### B003: Vendored file not found by staticfiles finders
+
+**Severity**: Error
+
+**What causes it**: An asset's `"path"` isn't found by any configured staticfiles finder — the owning app isn't installed, `STATICFILES_DIRS` doesn't include it, or the file was deleted or renamed without updating the manifest.
+
+**Fix**: Check the path and that the owning app or `STATICFILES_DIRS` is configured. Rebuild with `make vendor` if it's a djust bundle.
+
+### B004: Vendored file's hash doesn't match its manifest integrity
+
+**Severity**: Error
+
+**What causes it**: The file djust finds on disk doesn't hash to the `"integrity"` value declared in the manifest — it was edited or replaced without regenerating the manifest — or the file couldn't be read at all (a permissions problem). This check reads and hashes every vendored file (about 1 MB total for djust's own bundles) once per `check`/`runserver`/`migrate` run, never per request.
+
+**Fix**: Rebuild with `make vendor` (djust) or regenerate your manifest's integrity (see [Vendoring third-party JS](vendored-assets.md#how-to-compute-an-integrity)). Check the file's permissions if it couldn't be read.
+
+### B005: External asset declared without opting in
+
+**Severity**: Error
+
+**What causes it**: A manifest declares a file with `"url"` (an external origin), but `DJUST_ALLOW_EXTERNAL_ASSETS` is `False` (the default). Vendoring is the default; loading from another origin is opt-in.
+
+**Fix**: Vendor the file instead, or set `DJUST_ALLOW_EXTERNAL_ASSETS = True` if the external load is intentional.
+
+### B006: External asset without integrity
+
+**Severity**: Error
+
+**What causes it**: An external (`"url"`) file has no `"integrity"`. A floating external script with no SRI fails silently in exactly the way this design exists to prevent.
+
+**Fix**: Add the file's SRI hash as `"integrity"` (see [Vendoring third-party JS](vendored-assets.md#how-to-compute-an-integrity)).
+
+### B007: `requires_assets` names an undeclared asset
+
+**Severity**: Error
+
+**What causes it**: A `Component.requires_assets` entry names an asset that no `djust_assets.json` (app-owned or in `DJUST_ASSET_MANIFESTS`) declares.
+
+**Fix**: Declare the asset, or install the package that ships it.
+
+### B008: A manifest or SBOM file would be collected as a static file
+
+**Severity**: Error
+
+**When it runs**: Finding such a file means listing every static file, so where B008 runs depends on which `collectstatic` is active (the same question `djust.B013` asks):
+
+- **`'djust'` above `'django.contrib.staticfiles'` in `INSTALLED_APPS`** (djust's `collectstatic` override is active): not on `runserver`, autoreload or `migrate`. It runs under `manage.py check --deploy`, and djust's `collectstatic` runs it before collecting, stopping the command before anything is published (unless `--skip-checks` is passed).
+- **Any other order, or another app overriding `collectstatic`**: no djust code runs at `collectstatic` time, so B008 stays in the ordinary check pass, on every `check`, `runserver` start and `migrate`, as it always has.
+
+**What causes it**: Staticfiles finders find a `*.cdx.json`, `*.spdx.json` or `*.bom.json` file — `collectstatic` would publish it, exposing an SBOM (or a stray one) to browsers.
+
+**Fix**: Move it outside every static directory. djust's own `djust.cdx.json` ships in the package/`.dist-info`, never under `static/`.
+
+### B009: A declaration shadows another
+
+**Severity**: Warning
+
+**What causes it**: Two manifests declare the same asset name. Project manifests (`DJUST_ASSET_MANIFESTS`, in list order) win over apps, and apps earlier in `INSTALLED_APPS` win over later ones — the message names both sources and both versions. This is the intended way to ship a security fix for a djust-bundled library ahead of a djust release; see [Vendoring third-party JS](vendored-assets.md#overriding-a-djust-bundled-library-for-a-security-fix).
+
+**Fix**: Informational when the override is intentional — suppress with `DJUST_CONFIG = {"suppress_checks": ["B009"]}`. Otherwise, rename one of the two assets.
+
+### B010: Undeclared external origin in a template
+
+**Severity**: Warning
+
+**What causes it**: A template has a literal `<script src="http…">` or a `<link>` whose `rel` loads a resource (`stylesheet`, `modulepreload`, `preload`, `prefetch`) with `href="http…"` pointing at an origin no manifest declares and `DJUST_ALLOWED_EXTERNAL_ORIGINS` doesn't list. Links that load nothing, such as `canonical` or `preconnect`, are ignored. Heuristic (regex over template source, line by line): a scanner will never see what that origin serves. A template reachable through more than one template directory is reported once. B010 also warns when `DJUST_ALLOWED_EXTERNAL_ORIGINS` isn't a list of strings (then nothing is allowed), or when an entry isn't a bare host — an empty host, a port, userinfo, a path or a query (that entry is ignored).
+
+**Fix**: Vendor it and declare it, declare it as external with integrity, or add `{# noqa: B010 #}` on that line. For an SDK that must load from its own origin and can't be pinned (Stripe.js, Cloudflare Turnstile, Google Tag Manager), list its host in `DJUST_ALLOWED_EXTERNAL_ORIGINS` — see [Origins that can't be pinned](vendored-assets.md#origins-that-cant-be-pinned). Suppress everywhere with `DJUST_CONFIG = {"suppress_checks": ["B010"]}`.
+
+### B011: `DJUST_SBOM_PATH` not set
+
+**Severity**: Warning (`--deploy` only)
+
+**What causes it**: `DJUST_SBOM_PATH` is unset, so `collectstatic` writes no SBOM of the third-party browser code the app serves.
+
+**Fix**: Set it to a path outside every directory your web server serves — see [Scanning a djust app](scanning.md#setting-up-the-app-sbom).
+
+### B012: `DJUST_SBOM_PATH` is inside a served directory
+
+**Severity**: Error
+
+**What causes it**: `DJUST_SBOM_PATH` resolves inside `STATIC_ROOT`, `MEDIA_ROOT`, a `STATICFILES_DIRS` entry, or an installed app's `static/` directory — `collectstatic` would publish the SBOM to browsers, which djust refuses to do — or it isn't a `str`/`os.PathLike` at all. B012 runs at startup and among `collectstatic`'s own checks; djust's `collectstatic` also rejects a non-path value with the same message before it collects anything.
+
+**Fix**: Move it outside `STATIC_ROOT`, `MEDIA_ROOT`, `STATICFILES_DIRS` and every app's `static/` directory.
+
+### B013: `djust` is after `django.contrib.staticfiles`, so the SBOM won't be written
+
+**Severity**: Error (`--deploy` only)
+
+**What causes it**: `DJUST_SBOM_PATH` is set, but `'djust'` comes after `'django.contrib.staticfiles'` in `INSTALLED_APPS`, so djust's `collectstatic` override — the thing that writes the SBOM — never runs. This check only fires once an SBOM path is configured; an app with no `DJUST_SBOM_PATH` and the old app order sees no new check output at all.
+
+**Fix**: Move `'djust'` above `'django.contrib.staticfiles'` in `INSTALLED_APPS`.
+
+### B014: The on-disk SBOM doesn't match the declared assets
+
+**Severity**: Error (`--deploy` only)
+
+**What causes it**: The SBOM at `DJUST_SBOM_PATH` is missing, unreadable, or its recorded manifest digest no longer matches the currently resolved asset registry — typically a build that shipped an image without re-running `collectstatic` after a dependency bump.
+
+**Fix**: Run `collectstatic` (or `manage.py djust_sbom -o PATH`) as part of your build.
 
 ---
 

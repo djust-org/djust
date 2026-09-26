@@ -86,17 +86,29 @@ pip install djust==0.2.0a1  # Specific pre-release
    git push origin release/0.2.0
    ```
 
-5. **Create PR and merge to main**
+5. **Create PR and merge to main.** Do **not** tag the release branch:
+   release PRs are squash-merged, and a squash commit has a new hash, so a
+   tag on `release/*` never becomes reachable from `main`.
 
 ### 2. Create the Release
 
-1. **Tag the release**:
+1. **Tag the release on `main`, after the release PR has merged**:
    ```bash
    git checkout main
    git pull
-   git tag -a v0.2.0a1 -m "Release v0.2.0a1"
-   git push origin v0.2.0a1
+   make release VERSION=0.2.0a1
    ```
+
+   `make release` tags `HEAD` only when the current branch is `main` (or an
+   `X.Y` maintenance branch) and `HEAD` is already on that branch at
+   `origin` (`scripts/check-release-tag-target.py`). A tag the release line
+   cannot reach breaks `scripts/check-changelog-tagged-sections.py`, which
+   enumerates tags with `git tag --merged HEAD`: on `main`,
+   `tests/test_changelog_tagged_sections.py` goes red and the pre-push hook
+   refuses every push. That happened with v1.3.0rc1 and v1.3.0rc3 (tagged on
+   `release/1.3.0rc3`, squash-merged in #3131, repaired by merging the tagged
+   commit back in #3135) (#3149). Check an existing tag with
+   `git merge-base --is-ancestor vX origin/main`.
 
 2. **GitHub Actions will automatically** (`.github/workflows/release.yml`):
    - Run the pre-release security audit (see below) alongside the build
@@ -153,28 +165,23 @@ dispatch with `create_issue` checked.
 
 ## Pre-Release Workflow
 
-For major changes (like breaking changes), use pre-releases to gather feedback:
+For major changes (like breaking changes), use pre-releases to gather feedback.
+Each pre-release is its own release PR, and each tag goes on `main` after
+that PR merges:
 
 ```
 main ─── v0.1.8 (stable)
   │
-  ├─── release/0.2.0
-  │      │
-  │      ├─── v0.2.0a1 (alpha - early testing)
-  │      │      └─── gather feedback, fix issues
-  │      │
-  │      ├─── v0.2.0a2 (alpha - more fixes)
-  │      │      └─── gather feedback
-  │      │
-  │      ├─── v0.2.0b1 (beta - feature complete)
-  │      │      └─── wider testing
-  │      │
-  │      ├─── v0.2.0rc1 (release candidate)
-  │      │      └─── final testing
-  │      │
-  │      └─── v0.2.0 (stable)
+  ├── release PR (bump to 0.2.0a1) merged ── tag v0.2.0a1 on main
+  │      └─── gather feedback, fix issues on main
   │
-  └─── merge back to main
+  ├── release PR (bump to 0.2.0b1) merged ── tag v0.2.0b1 on main
+  │      └─── wider testing
+  │
+  ├── release PR (bump to 0.2.0rc1) merged ── tag v0.2.0rc1 on main
+  │      └─── final testing
+  │
+  └── release PR (bump to 0.2.0) merged ──── tag v0.2.0 on main
 ```
 
 ## Makefile Commands
@@ -184,7 +191,8 @@ main ─── v0.1.8 (stable)
 # and refreshes the uv.lock + Cargo.lock self-entries)
 make version VERSION=0.2.0a1
 
-# Create and push a release tag (verifies lockfile self-entries are in sync)
+# Create and push a release tag (verifies lockfile self-entries are in sync,
+# and that HEAD is on main or an X.Y branch at origin -- #3149)
 make release VERSION=0.2.0a1
 
 # Check current version (includes the uv.lock + Cargo.lock self-entries)
@@ -196,22 +204,25 @@ make check-lockfile-versions
 
 ## Hotfix Releases
 
-For urgent fixes to stable releases:
+For urgent fixes to stable releases, use the release line's `X.Y`
+maintenance branch (for example `0.1`; create it from the last tag,
+`git switch -c 0.1 v0.1.8 && git push -u origin 0.1`, if it does not exist):
 
-1. Branch from the release tag:
+1. Open a PR against `0.1` that applies the fix and bumps the version to
+   `0.1.9`, and merge it.
+
+2. Tag the merged result on the maintenance branch:
    ```bash
-   git checkout -b hotfix/0.1.9 v0.1.8
+   git switch 0.1
+   git pull
+   make release VERSION=0.1.9
    ```
+   Like `main`, the maintenance branch must already contain `HEAD` at
+   `origin`. Its tags are not reachable from `main`, and do not need to be:
+   the tagged-sections check only demands tags reachable from the branch it
+   runs on.
 
-2. Apply fix, update version to `0.1.9`
-
-3. Tag and release:
-   ```bash
-   git tag -a v0.1.9 -m "Hotfix: description"
-   git push origin v0.1.9
-   ```
-
-4. Merge fix back to main and any active release branches
+3. Land the fix on `main` too, and on any other active maintenance branch.
 
 ## Troubleshooting
 

@@ -187,6 +187,9 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         "_prev_context_fingerprints",
         "_dirty_baseline",
         "_rust_render_timing",
+        # Adaptive loop-cache bypass bookkeeping (#3071), written after a render.
+        "_loop_cache_miss_streak",
+        "_loop_cache_bypassed",
         "_djust_mount_kwargs",
         "_jit_serialized_keys",
         "_context_processor_keys",
@@ -617,6 +620,12 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
     template: Optional[str] = None
     use_actors: bool = False  # Enable Tokio actor-based state management (Phase 5+)
     tick_interval: Optional[int] = None  # Periodic tick in ms (e.g. 2000 for 2s)
+    # Scoped server push (#3004): the scope(s) this session receives
+    # ``push_to_view(..., scope=...)`` for — a str or int (a room, a document
+    # id), a list/tuple/set of them (at most 64), or None (default: only
+    # view-wide pushes). Usually set in mount(); reassigning it in a handler,
+    # push hook, handle_tick or handle_info moves the session.
+    push_scope: Any = None
 
     # Class-level marker for abstract base LiveView classes (#1605).
     # When a subclass sets ``abstract = True`` on its own class body, the djust
@@ -1380,6 +1389,13 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
 
         from .components.base import Component
 
+        if strict and _declares_interactive_collection(type(self)):
+            # ADR-034 C3 (D5): a keyed collection's membership comes from the
+            # view's current ``sync()``. A client-signed navigation snapshot
+            # would restore the membership it captured, resurrecting members
+            # removed since, so such a view is never signed: Back mounts fresh.
+            return {}
+
         result: Dict[str, Any] = {}
         for key, value in self.__dict__.items():
             if key.startswith("_"):
@@ -1818,6 +1834,17 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         reassigned while user was disconnected" case automatically.
         """
         self._object = None
+
+
+def _declares_interactive_collection(view_class: type) -> bool:
+    """Whether a view class declares an ADR-034 keyed interactive collection."""
+    from ._component_subscriptions import DECLARATIONS_ATTR
+
+    declarations = getattr(view_class, DECLARATIONS_ATTR, None) or {}
+    return any(
+        getattr(type(declaration), "_djust_component_collection", False)
+        for declaration in declarations.values()
+    )
 
 
 def live_view(

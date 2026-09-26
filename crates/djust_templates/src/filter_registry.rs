@@ -500,13 +500,15 @@ pub fn apply_custom_filter(
     if !ANY_CUSTOM_FILTERS_REGISTERED.load(Ordering::Acquire) {
         return None;
     }
-    let (callable, meta) = {
+    // Attach BEFORE taking the read lock (#3074): `render_with_diff` runs
+    // detached, and a detached thread that held this lock while waiting to
+    // re-attach would deadlock against a `register_filter` that holds the
+    // GIL while it waits for the write lock. See `registry.rs` "Lock order".
+    let (callable, meta) = Python::attach(|py| {
         let registry = FILTER_REGISTRY.read().ok()?;
         let entry = registry.get(name)?;
-        // clone_ref under the GIL; meta is plain Copy-ish.
-        let callable = Python::attach(|py| entry.callable.clone_ref(py));
-        (callable, entry.meta.clone())
-    };
+        Some((entry.callable.clone_ref(py), entry.meta.clone()))
+    })?;
 
     let result = Python::attach(|py| -> Result<(Value, bool), String> {
         use pyo3::IntoPyObject;

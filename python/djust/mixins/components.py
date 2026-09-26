@@ -101,6 +101,8 @@ class ComponentMixin:
 
         if isinstance(component, DropdownMenu):
             return component._dump_session_binding()
+        if getattr(type(component), "_djust_component_collection", False):
+            return component._dump_session_collection()  # type: ignore[no-any-return]
 
         if isinstance(component, BoundComponent):
             # ADR-031 D7: a bound component is saved as its State, nothing else.
@@ -142,6 +144,9 @@ class ComponentMixin:
         if isinstance(component, DropdownMenu):
             component._restore_session_binding(state)
             return
+        if getattr(type(component), "_djust_component_collection", False):
+            component._restore_session_collection(state)
+            return
         for key, value in state.items():
             if not key.startswith("_"):
                 try:
@@ -165,18 +170,20 @@ class ComponentMixin:
         """
         Save component state to session with stable IDs.
         """
-        from ..components.base import SESSION_COMPONENT_TYPES
+        from ..components.base import is_session_component
         from ..components._interactive import DropdownMenu
 
         view_key = f"liveview_{request.path}"
         component_state: Dict[str, Any] = {}
 
         for key, component in context.items():
-            if isinstance(component, SESSION_COMPONENT_TYPES):
+            if component is not None and is_session_component(component):
                 # component_id is declared on LiveComponent; on the plain
                 # Component branch it is set dynamically here (stable session ID).
-                if not isinstance(component, DropdownMenu):
-                    component.component_id = key  # type: ignore[union-attr]
+                if not isinstance(component, DropdownMenu) and not getattr(
+                    type(component), "_djust_component_collection", False
+                ):
+                    component.component_id = key
                 component_state[key] = self._extract_component_state(component)
 
         request.session[f"{view_key}_components"] = normalize_django_value(

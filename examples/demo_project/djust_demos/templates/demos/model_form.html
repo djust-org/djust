@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+
+{% comment %}
+ADR-035 F2 live surface (tests/playwright/test_model_form.py).
+{% endcomment %}
+
+{% block title %}Model form (djust){% endblock %}
+
+{% block content %}
+<div dj-root dj-view="djust_demos.views.model_form_demo.ModelFormDemoView" style="padding: 6rem 2rem 2rem; max-width: 720px; margin: 0 auto;">
+    <h1 id="mf-title">{{ object.name }}</h1>
+    <form id="mf-form" dj-submit="submit_form">
+        <label>Name <input id="mf-name" name="name" value="{{ form_data.name }}" dj-change="validate_field"></label>
+        <span id="mf-error-name">{{ field_errors.name.0 }}</span>
+        <label>Price <input id="mf-price" name="price" value="{{ form_data.price }}" dj-change="validate_field"></label>
+        <span id="mf-error-price">{{ field_errors.price.0 }}</span>
+        <label>Stock <input id="mf-stock" name="stock" value="{{ form_data.stock }}"></label>
+        <button id="mf-save" type="submit">Save</button>
+    </form>
+    <p id="mf-saved">{{ success_message }}</p>
+</div>
+{% endblock %}

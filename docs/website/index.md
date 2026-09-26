@@ -95,6 +95,8 @@ How to build specific features.
 | **[Template Cheat Sheet](guides/template-cheatsheet.md)** | Quick reference for all directives and filters     |
 | **[PWA](guides/pwa.md)**                                  | Build offline-first Progressive Web Apps           |
 | **[Service Worker](guides/service-worker.md)**            | Instant page shell + WebSocket reconnection bridge |
+| **[Vendoring third-party JS](guides/vendored-assets.md)** | Declare bundled JS/CSS with `djust_assets.json`, render it with Subresource Integrity |
+| **[Scanning a djust app](guides/scanning.md)**            | Publish a CycloneDX SBOM and scan it with Trivy, Syft, grype and OSV-Scanner |
 | **[Error Codes](guides/error-codes.md)**                  | Complete error code reference with fixes           |
 | **[Error Overlay (Dev Mode)](guides/error-overlay.md)**   | In-browser Python traceback panel, Next.js-style   |
 | **[Type-Safe Template Validation](guides/typecheck.md)**  | `manage.py djust_typecheck` — catch template typos before prod |
@@ -191,5 +193,5 @@ Rust powers the core rendering engine:
 ## Community
 
 - [GitHub](https://github.com/djust-org/djust) — Source, issues, PRs
-- [Discord](https://discord.gg/djust) — Chat and support
+- [Discord](https://discord.gg/7sPKf3wtp9) — Chat and support
 - [Changelog](../../CHANGELOG.md) — What's new

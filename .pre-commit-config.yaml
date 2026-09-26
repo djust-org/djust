@@ -41,10 +41,12 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
     hooks:
+      # Vendored outputs (make vendor) are byte-exact: their manifests pin each
+      # file's SRI hash, so a whitespace "fix" would break the integrity check.
       - id: trailing-whitespace
-        exclude: '\.min\.js(\.map)?$|\.pxd$'
+        exclude: '\.min\.js(\.map)?$|\.pxd$|^python/djust/components/static/djust_components/(vendor/|markdown-visual\.)|^python/djust/admin_ext/static/djust_admin/admin\.css$'
       - id: end-of-file-fixer
-        exclude: '\.min\.js(\.map)?$|\.pxd$'
+        exclude: '\.min\.js(\.map)?$|\.pxd$|^python/djust/components/static/djust_components/(vendor/|markdown-visual\.)|^python/djust/admin_ext/static/djust_admin/admin\.css$'
       - id: check-yaml
       - id: check-added-large-files
         args: [--maxkb=1000]
@@ -258,6 +260,18 @@ repos:
   # resolver because it imports the compiled `djust._rust` for the handler
   # set. See scripts/generate-template-backend-lists.py and
   # tests/test_generate_template_backend_lists.py. Closes #2533.
+  # ADR-034 C4-Q2: the interactive-components reference tables in
+  # docs/website/api-reference/components.md are generated from the component
+  # contracts. Run `make interactive-reference` to regenerate.
+  - repo: local
+    hooks:
+      - id: check-interactive-reference
+        name: check generated interactive-components reference (ADR-034)
+        entry: bash -c 'PYTHONPATH=python:. bash scripts/run-with-venv-python.sh scripts/generate-interactive-reference.py'
+        language: system
+        files: ^(docs/website/api-reference/components\.md|python/djust/components/(_interactive|interactive)\.py|scripts/generate-interactive-reference\.py)$
+        pass_filenames: false
+
   - repo: local
     hooks:
       - id: check-template-backend-lists

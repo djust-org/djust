@@ -5,7 +5,7 @@ Usage:
     python manage.py djust_check                  # all checks
     python manage.py djust_check --category security
     python manage.py djust_check --json           # CI-friendly JSON output
-    python manage.py djust_check --format json    # enhanced JSON with fix_hints
+    python manage.py djust_check --format json    # enhanced JSON with fix_hints and binding coverage
     python manage.py djust_check --fix            # auto-fix safe issues
 """
 
@@ -228,6 +228,17 @@ def _fix_t004_document_to_window(check: Any) -> Optional[str]:
     )
 
 
+def _binding_coverage(category: Optional[str]) -> Optional[dict[str, Any]]:
+    """ADR-037's binding coverage, when template checks are in scope."""
+    if category not in (None, "templates"):
+        return None
+    try:
+        from djust.checks.bindings import binding_reports, coverage
+    except ImportError:
+        return None
+    return coverage(binding_reports())
+
+
 _FIX_HANDLERS = {
     "djust.V004": _fix_v004_add_event_handler,
     "djust.T001": _fix_t001_replace_deprecated_attr,
@@ -294,9 +305,14 @@ class Command(BaseCommand):
             self._output_json(all_checks)
         elif output_format == "json":
             # New --format json: enhanced format with fix_hints
-            self._output_json_enhanced(all_checks)
+            self._output_json_enhanced(all_checks, _binding_coverage(category))
         else:
             self._output_pretty(all_checks, category)
+            data = _binding_coverage(category)
+            if data is not None:
+                from djust.checks.bindings import summary_line
+
+                self.stdout.write(summary_line(data))
 
     def _output_json(self, checks: list[Any]) -> None:
         """Output checks as JSON for CI pipelines (legacy format)."""
@@ -323,8 +339,14 @@ class Command(BaseCommand):
         output = {"checks": results, "summary": summary}
         self.stdout.write(json.dumps(output, indent=2))
 
-    def _output_json_enhanced(self, checks: list[Any]) -> None:
-        """Output checks as enhanced JSON with fix_hints, file paths, and line numbers."""
+    def _output_json_enhanced(
+        self, checks: list[Any], binding_coverage: Optional[dict[str, Any]] = None
+    ) -> None:
+        """Output checks as enhanced JSON with fix_hints, file paths, and line numbers.
+
+        Binding findings (ADR-037) also carry ``owner``, ``binding``, ``expected``
+        and ``supplied`` when known, and the output gains a ``coverage`` object.
+        """
         results = []
         fixable_count = 0
         for check in checks:
@@ -349,6 +371,10 @@ class Command(BaseCommand):
                 entry["file_path"] = file_path
             if line_number is not None:
                 entry["line_number"] = line_number
+            for name in ("owner", "binding", "expected", "supplied"):
+                value = getattr(check, name, None)
+                if value is not None and value != "":
+                    entry[name] = value
 
             results.append(entry)
 
@@ -360,7 +386,9 @@ class Command(BaseCommand):
             "fixable": fixable_count,
         }
 
-        output = {"checks": results, "summary": summary}
+        output: dict[str, Any] = {"checks": results, "summary": summary}
+        if binding_coverage is not None:
+            output["coverage"] = binding_coverage
         self.stdout.write(json.dumps(output, indent=2))
 
     def _output_pretty(self, checks: list[Any], category: Optional[str]) -> None:

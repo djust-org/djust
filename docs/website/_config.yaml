@@ -45,6 +45,11 @@ navigation:
         file: core-concepts/components.md
         order: 3
         level: beginner
+      - title: Interactive Components
+        slug: interactive-components
+        file: guides/interactive-components.md
+        order: 3.5
+        level: intermediate
       - title: Templates
         slug: templates
         file: core-concepts/templates.md
@@ -232,6 +237,11 @@ navigation:
         file: guides/authentication.md
         order: 8
         level: intermediate
+      - title: Accounts
+        slug: accounts
+        file: guides/accounts.md
+        order: 8.1
+        level: intermediate
       - title: CSS Frameworks
         slug: css-frameworks
         file: guides/css-frameworks.md
@@ -292,6 +302,11 @@ navigation:
         file: guides/deployment.md
         order: 13
         level: intermediate
+      - title: Scaling Across Cores
+        slug: scaling-across-cores
+        file: guides/scaling-across-cores.md
+        order: 13.5
+        level: advanced
       - title: MCP Server
         slug: mcp-server
         file: guides/mcp-server.md
@@ -352,6 +367,16 @@ navigation:
         file: guides/bug-capture.md
         order: 33
         level: intermediate
+      - title: Vendoring third-party JS
+        slug: vendored-assets
+        file: guides/vendored-assets.md
+        order: 34
+        level: intermediate
+      - title: Scanning a djust app
+        slug: scanning
+        file: guides/scanning.md
+        order: 34.5
+        level: advanced
 
   - title: Testing
     slug: testing

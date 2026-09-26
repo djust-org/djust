@@ -69,6 +69,56 @@ def _find_html_close(masked: str) -> int:
     return found
 
 
+_MISSING = object()
+
+
+def _property_types() -> tuple:
+    import functools
+
+    from django.utils.functional import cached_property as django_cached_property
+
+    return (property, functools.cached_property, django_cached_property)
+
+
+def _read_debug_attr(view: Any, name: str) -> "tuple[Any, Dict[str, Any] | None]":
+    """Read one attribute for the legacy debug panel (#3103).
+
+    Returns ``(value, None)`` for a readable attribute, ``(_MISSING, None)``
+    when it does not exist, or ``(_MISSING, placeholder)`` when the panel lists
+    the name without a value. A property is code, not state: running it could
+    raise anything or query the database on every debug render, so it is
+    listed as not evaluated (a cached property already computed is state and
+    is read from the instance). Any other descriptor that raises is reported
+    as unavailable with its exception type, and the rest of the panel renders.
+    """
+    import inspect
+
+    instance_dict = getattr(view, "__dict__", {})
+    if name not in instance_dict:
+        try:
+            static = inspect.getattr_static(view, name)
+        except AttributeError:
+            static = _MISSING
+        if isinstance(static, _property_types()):
+            return _MISSING, {
+                "name": name,
+                "type": "property",
+                "value": "<property: not evaluated>",
+                "size_bytes": 0,
+            }
+    try:
+        return getattr(view, name), None
+    except AttributeError:
+        return _MISSING, None
+    except Exception as exc:  # noqa: BLE001 -- any descriptor may raise; report it, keep going
+        return _MISSING, {
+            "name": name,
+            "type": "unavailable",
+            "value": "<unavailable: %s>" % type(exc).__name__,
+            "size_bytes": 0,
+        }
+
+
 class PostProcessingMixin:
     """Post-processing: get_debug_info, _hydrate_react_components, _inject_client_script."""
 
@@ -101,36 +151,38 @@ class PostProcessingMixin:
                 "template": None,
                 "config": {"maxHistory": config.get("debug_panel_max_history", 50)},
             }
+        from .._parameter_metadata import _event_methods
         from ..validation import get_handler_signature_info
-        from ..decorators import is_event_handler
 
         handlers = {}
         variables = {}
 
-        # Match the runtime event_security policy: only @event_handler-decorated
-        # methods are callable.
+        # Exactly the handlers dispatch resolves (ADR-037 D1), never a second
+        # discovery: only @event_handler-decorated methods are callable.
+        decorators = self._extract_handler_metadata()
+        for name, method in sorted(_event_methods(self).items()):
+            sig_info = get_handler_signature_info(method)
+            handlers[name] = {
+                "name": name,
+                "params": sig_info["params"],
+                "description": sig_info["description"],
+                "accepts_kwargs": sig_info["accepts_kwargs"],
+                "decorators": decorators.get(name, {}),
+            }
 
         for name in dir(self):
-            if name.startswith("_"):
+            if name.startswith("_") or name in handlers:
                 continue
 
-            try:
-                attr = getattr(self, name)
-            except AttributeError:
+            attr, placeholder = _read_debug_attr(self, name)
+            if placeholder is not None:
+                variables[name] = placeholder
+                continue
+            if attr is _MISSING:
                 continue
 
             if callable(attr) and hasattr(attr, "__func__"):
-                # Show only handlers that would pass _check_event_security at runtime
-                if is_event_handler(attr):
-                    sig_info = get_handler_signature_info(attr)
-
-                    handlers[name] = {
-                        "name": name,
-                        "params": sig_info["params"],
-                        "description": sig_info["description"],
-                        "accepts_kwargs": sig_info["accepts_kwargs"],
-                        "decorators": self._extract_handler_metadata().get(name, {}),
-                    }
+                continue  # A method, not a state variable.
 
             elif (
                 not callable(attr)
@@ -236,9 +288,11 @@ class PostProcessingMixin:
             if name in _FRAMEWORK_INTERNAL_ATTRS:
                 continue
 
-            try:
-                attr = getattr(self, name)
-            except AttributeError:
+            attr, placeholder = _read_debug_attr(self, name)
+            if placeholder is not None:
+                variables[name] = placeholder
+                continue
+            if attr is _MISSING:
                 continue
 
             if callable(attr):
@@ -439,6 +493,14 @@ class PostProcessingMixin:
             script += f'\n        <script src="{client_dev_js_url}" defer data-turbo-track="reload"></script>'
 
         full_script = config_script + script
+        # ADR-036: public owner contracts of the initial page (set by get();
+        # escaped JSON, outside dj-root). A data block, not executable script.
+        initial_contracts = self.__dict__.pop("_initial_parameter_contracts", None)
+        if initial_contracts:
+            full_script = (
+                '<script type="application/json" data-djust-parameter-contracts>'
+                f"{initial_contracts}</script>" + full_script
+            )
 
         # The HTTP event fallback and djust.call need the CSRF token even when
         # the project renames the cookie (CSRF_COOKIE_NAME) or keeps it out of

@@ -78,8 +78,9 @@ def raw_handler(self, value: str = "", **kwargs):
 
 **Rules:**
 
-- Always accept `**kwargs` — djust passes extra metadata
-- Always provide default values for all parameters
+- Declare the parameters the binding sends; `manage.py check` reports a mismatch (`djust.T020`)
+- Under the legacy policy, `dj-input` and `dj-change` also send `field` and `_target`, and `dj-submit` sends `_target` with the form fields: keep `**kwargs` on those handlers, or declare the names
+- Give a parameter a default when a binding may omit it
 - `value` is the magic parameter name for `dj-input` and `dj-change` events
 - `data-item-id` becomes `item_id` (kebab-case → snake_case)
 
@@ -263,6 +264,30 @@ def publish(self, **kwargs):
     self.item.save()
 ```
 
+**Name collision with the view-level attribute.** `LiveView.permission_required` is also a class attribute (the permission checked at mount). Once a view assigns it, the name `permission_required` inside that class body is the string, not the decorator, and `@permission_required("...")` raises `TypeError: 'str' object is not callable` at import time. To use both in one view, import the decorator under another name, or spell it through its module:
+
+```python
+from djust import LiveView
+from djust import decorators
+from djust.decorators import event_handler
+from djust.decorators import permission_required as require_permission
+
+
+class BoardView(LiveView):
+    login_required = True
+    permission_required = "app.view_board"  # view-level: checked at mount
+
+    @require_permission("app.add_decision")  # handler-level
+    @event_handler()
+    def decide(self, **kwargs): ...
+
+    @decorators.permission_required("app.delete_decision")  # also fine
+    @event_handler()
+    def undo(self, **kwargs): ...
+```
+
+System check `djust.S009` follows the import, so both spellings count as a per-handler gate.
+
 ---
 
 ## `@background`
@@ -350,6 +375,7 @@ Rate-limit a handler on the server with a per-handler token bucket. When the lim
 
 - `rate` (`float`) — Tokens per second (sustained rate). Default `10`.
 - `burst` (`int`) — Maximum burst capacity. Default `5`.
+- `on_exceed` (`"disconnect"` or `"drop"`) — What a rejection costs the connection. Default `"disconnect"`: each rejection counts toward the connection's warning budget (`DJUST_CONFIG["rate_limit"]["max_warnings"]`, default 3), and at the limit djust closes the WebSocket with code 4429 and puts the client IP on a reconnect cooldown. `"drop"` only drops the event and warns the client, so a quick honest burst never disconnects anyone. The connection's global per-message limit still disconnects a flood in either mode.
 
 **Usage:**
 
@@ -357,6 +383,11 @@ Rate-limit a handler on the server with a per-handler token bucket. When the lim
 @rate_limit(rate=5, burst=3)
 @event_handler()
 def expensive_operation(self, **kwargs):
+    ...
+
+@rate_limit(rate=2, burst=4, on_exceed="drop")
+@event_handler()
+def emote(self, **kwargs):
     ...
 ```
 

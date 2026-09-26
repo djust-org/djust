@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+
+{% comment %}
+ADR-034 C4 live surface (tests/playwright/test_interactive_navigation.py).
+{% endcomment %}
+
+{% block title %}Interactive navigation (djust){% endblock %}
+
+{% block content %}
+<div dj-root dj-view="djust_demos.views.interactive_nav_demo.InteractiveNavView" style="padding: 6rem 2rem 2rem; max-width: 720px; margin: 0 auto;">
+    <h1>Interactive dropdown across navigation</h1>
+    <p>Result: <span id="in-result">{{ result }}</span></p>
+    <div id="in-menu">{{ menu }}</div>
+    <a id="in-away" dj-navigate="/demos/nav-a/">Away</a>
+</div>
+{% endblock %}

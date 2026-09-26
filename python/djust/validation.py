@@ -24,40 +24,298 @@ from ._parameter_contract import ParameterContract
 
 logger = logging.getLogger(__name__)
 
-_STRICT_CONTRACTS: weakref.WeakKeyDictionary[Any, Dict[bool, ParameterContract]] = (
-    weakref.WeakKeyDictionary()
-)
+_STRICT_CONTRACTS: weakref.WeakKeyDictionary[
+    Any, Dict[tuple[bool, frozenset[str]], ParameterContract]
+] = weakref.WeakKeyDictionary()
 _STRICT_CONTRACT_LOCK = threading.RLock()
 _MISSING_POSITIONAL = object()
 _SIGNATURE_OWNER = object()
 
 
-def get_strict_handler_contract(handler: Callable) -> ParameterContract:
-    """Cache declarations, never bound methods or their live owner instances."""
-    bound = inspect.ismethod(handler)
+def get_strict_handler_contract(
+    handler: Callable, trusted: frozenset[str] = frozenset()
+) -> ParameterContract:
+    """Cache declarations, never bound methods or their live owner instances.
+
+    ``trusted`` names framework-injected parameters (ADR-036 D5); see
+    ``ParameterContract.compile``. Client-callable handlers use none.
+    """
+    key = (inspect.ismethod(handler), frozenset(trusted))
     function = handler.__func__ if inspect.ismethod(handler) else handler
     if not inspect.isfunction(function):
-        return ParameterContract.compile(handler)
+        return ParameterContract.compile(handler, key[1])
     with _STRICT_CONTRACT_LOCK:
         variants = _STRICT_CONTRACTS.setdefault(function, {})
-        if bound not in variants:
-            variants[bound] = ParameterContract.compile(handler)
-        return variants[bound]
+        if key not in variants:
+            variants[key] = ParameterContract.compile(handler, key[1])
+        return variants[key]
+
+
+def get_project_parameter_policy() -> str:
+    """The project default, shared by dispatch and the startup system check."""
+    from .config import config
+    from ._parameter_contract import ContractError
+
+    policy = config.get("event_parameter_policy", "legacy")
+    if policy not in ("legacy", "strict"):
+        raise ContractError("event_parameter_policy must be 'legacy' or 'strict'.")
+    return str(policy)
+
+
+_RECOVERY_HANDLERS: "weakref.WeakKeyDictionary[type, tuple[frozenset[str], bool]]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _recovery_scan(view_class: type) -> tuple[frozenset[str], bool]:
+    """``_template_bindings.recovery_scan``, once per class."""
+    cached = _RECOVERY_HANDLERS.get(view_class)
+    if cached is None:
+        from ._template_bindings import recovery_scan
+        from .mixins.template import TemplateMixin
+
+        names, complete = recovery_scan(view_class)
+        # A view that chooses its own template is not described by the scan.
+        if getattr(view_class, "get_template", None) is not TemplateMixin.get_template:
+            complete = False
+        cached = (names, complete)
+        _RECOVERY_HANDLERS[view_class] = cached
+    return cached
+
+
+def recovery_handler_names(view_class: type) -> frozenset[str]:
+    """Handlers a literal ``dj-auto-recover`` in the view's template targets.
+
+    ADR-036 owner decision R1: recovery handlers run under the legacy policy,
+    because their ``_form_values`` / ``_data_attrs`` envelope cannot be a strict
+    signature. The template is server-owned, so a client cannot claim this.
+    Read once per class by the template binding scan (ADR-037 row 18), which
+    follows ``{% include %}`` and ``{% extends %}``. Where the scan cannot see
+    every target (a computed value, markup it cannot follow), dispatch also
+    uses the targets of each render (``note_rendered_recovery_targets``). This
+    scan serves the V019 startup check and renders Python does not see
+    (actors, an HTTP instance before it renders).
+    """
+    return _recovery_scan(view_class)[0]
+
+
+_RENDERED_RECOVERY: "weakref.WeakKeyDictionary[Any, frozenset[str]]" = weakref.WeakKeyDictionary()
+_DECLARES_STRICT: "weakref.WeakKeyDictionary[type, bool]" = weakref.WeakKeyDictionary()
+
+
+def _declares_strict(view_class: type) -> bool:
+    """Whether any handler the class declares opts into the strict policy."""
+    cached = _DECLARES_STRICT.get(view_class)
+    if cached is None:
+        from ._parameter_metadata import declared_handlers
+
+        cached = False
+        for handler in declared_handlers(view_class, server_functions=True):
+            decorators = getattr(handler.function, "_djust_decorators", {})
+            metadata = decorators.get("event_handler", decorators.get("server_function", {}))
+            if metadata.get("parameter_policy") == "strict":
+                cached = True
+                break
+        _DECLARES_STRICT[view_class] = cached
+    return cached
+
+
+def _strict_possible(view: Any) -> bool:
+    """Whether a recovery target could change a policy for ``view`` (fails safe)."""
+    from ._parameter_contract import ContractError
+
+    try:
+        if get_project_parameter_policy() == "strict":
+            return True
+        return _declares_strict(type(view))
+    except (ContractError, TypeError):
+        return True
+
+
+def _scan_describes(view: Any) -> bool:
+    """Whether the class-level scan sees every recovery target ``view`` renders.
+
+    Not when the view sets ``template`` or ``template_name`` on the instance
+    (in ``mount()``, say): the scan read the class's template, not that one
+    (PR #3159 review).
+    """
+    if _INSTANCE_TEMPLATE_NAMES & set(getattr(view, "__dict__", ())):
+        return False
+    return _recovery_scan(type(view))[1]
+
+
+_INSTANCE_TEMPLATE_NAMES = frozenset({"template", "template_name"})
+
+
+def note_rendered_recovery_targets(view: Any, html: str) -> None:
+    """Record the recovery targets in the HTML the server just rendered for ``view``.
+
+    Used only where the class-level template scan cannot see every target: a
+    computed ``dj-auto-recover`` value, markup the scan cannot follow (a
+    dynamic include, a tag that renders markup), or a view that picks its own
+    template (``get_template()``, or ``template``/``template_name`` set on the
+    instance). Elsewhere a render adds nothing, because rendered HTML also
+    carries user content: ``|safe`` HTML from a sanitizer that keeps unknown
+    attributes could otherwise name a strict handler and downgrade it (#3127).
+    Where the render is used, such a sanitizer must drop ``dj-*`` attributes.
+    Only real ``dj-auto-recover`` attributes of parsed elements count; escaped
+    text that merely spells one does not.
+    """
+    try:
+        names: frozenset[str] = frozenset()
+        # R1 only downgrades strict handlers: a legacy-only view never needs the
+        # parse (it cost ~3 ms per 20 KB render, PR #3122 review).
+        if "dj-auto-recover" in html and _strict_possible(view) and not _scan_describes(view):
+            from html.parser import HTMLParser
+
+            found: set[str] = set()
+
+            class _Targets(HTMLParser):
+                def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+                    for name, value in attrs:
+                        if name == "dj-auto-recover" and value and value.isidentifier():
+                            found.add(value)
+
+                handle_startendtag = handle_starttag
+
+            _Targets().feed(html)
+            names = frozenset(found)
+        _RENDERED_RECOVERY[view] = names
+    except TypeError:
+        pass  # Not weak-referenceable: the template scan still applies.
+
+
+def is_recovery_target(view: Any, name: str) -> bool:
+    """R1: a handler a ``dj-auto-recover`` binding targets in this view.
+
+    The union of the last server render of this instance and the class-level
+    template scan (which also covers renders Python did not see, such as actor
+    renders, and a reconstructed HTTP instance before it renders).
+    """
+    try:
+        rendered = _RENDERED_RECOVERY.get(view, frozenset())
+    except TypeError:  # an unhashable or non-weak-referenceable view
+        rendered = frozenset()
+    return name in rendered or name in recovery_handler_names(type(view))
+
+
+def _definition_key(function: Any) -> tuple:
+    """What a function's signature and type hints are derived from.
+
+    A cache entry is used only while this still matches, so a function whose
+    code, defaults, annotations or ``__signature__`` / ``__wrapped__`` are
+    changed after its first event is resolved again, exactly as it would be
+    without the cache. The annotations are compared by value (a dict mutated
+    in place still differs) and are small.
+    """
+    annotations = getattr(function, "__annotations__", None)
+    return (
+        function.__code__,
+        function.__defaults__,
+        tuple(function.__kwdefaults__.items()) if function.__kwdefaults__ else None,
+        tuple(annotations.items()) if annotations else None,
+        function.__dict__.get("__signature__"),
+        function.__dict__.get("__wrapped__"),
+    )
+
+
+_SIGNATURES: weakref.WeakKeyDictionary[Any, Dict[bool, tuple]] = weakref.WeakKeyDictionary()
+
+
+def _handler_signature(handler: Callable) -> inspect.Signature:
+    """``inspect.signature(handler)``, computed once per function (#3095).
+
+    Building a signature is the most expensive step of validating an event's
+    parameters, and it runs on the event loop for every event. Keyed like the
+    strict contracts: by the underlying function (weakly) and whether it is
+    bound, never by a bound method or its owner instance, and valid only
+    while :func:`_definition_key` still matches. A ``Signature`` is
+    immutable, so sharing one is safe across threads.
+    """
+    bound = inspect.ismethod(handler)
+    function: Any = getattr(handler, "__func__", handler) if bound else handler
+    if not inspect.isfunction(function):
+        return inspect.signature(handler)
+    key = _definition_key(function)
+    variants = _SIGNATURES.get(function)
+    if variants is None:
+        with _STRICT_CONTRACT_LOCK:
+            variants = _SIGNATURES.setdefault(function, {})
+    entry = variants.get(bound)
+    if entry is not None and entry[0] == key:
+        cached: inspect.Signature = entry[1]
+        return cached
+    sig = inspect.signature(handler)
+    variants[bound] = (key, sig)
+    return sig
+
+
+_TYPE_HINTS: weakref.WeakKeyDictionary[Any, tuple] = weakref.WeakKeyDictionary()
+
+
+def _handler_type_hints(handler: Callable) -> Dict[str, Any]:
+    """``get_type_hints(handler)``, resolved once per function (#3095).
+
+    Same keying and validity check as :func:`_handler_signature`; the hints
+    of a bound method are its function's. Only a successful resolution is
+    cached: a forward reference that fails now raises again next time, as
+    before. Callers only read the returned dict.
+    """
+    function: Any = getattr(handler, "__func__", handler) if inspect.ismethod(handler) else handler
+    if not inspect.isfunction(function):
+        return get_type_hints(handler)
+    key = _definition_key(function)
+    entry = _TYPE_HINTS.get(function)
+    if entry is not None and entry[0] == key:
+        hints: Dict[str, Any] = entry[1]
+        return hints
+    hints = get_type_hints(handler)
+    with _STRICT_CONTRACT_LOCK:
+        _TYPE_HINTS[function] = (key, hints)
+    return hints
 
 
 def get_handler_parameter_policy(handler: Callable) -> str:
     """Resolve only server-owned policy, independently of client metadata."""
-    from .config import config
     from ._parameter_contract import ContractError
 
     decorators = getattr(handler, "_djust_decorators", {})
     metadata = decorators.get("event_handler", decorators.get("server_function", {}))
     policy = metadata.get("parameter_policy")
+    if policy is not None and policy not in ("legacy", "strict"):
+        raise ContractError("parameter_policy must be 'legacy' or 'strict'.")
+    if policy == "legacy":
+        return "legacy"
+    owner = getattr(handler, "__self__", None)
+
+    def _recovery_target() -> bool:
+        return (
+            owner is not None
+            and not isinstance(owner, type)
+            and _is_live_view(owner)
+            and is_recovery_target(owner, getattr(handler, "__name__", ""))
+        )
+
     if policy is None:
-        policy = config.get("event_parameter_policy", "legacy")
-    if policy not in ("legacy", "strict"):
-        raise ContractError("event_parameter_policy must be 'legacy' or 'strict'.")
-    return str(policy)
+        try:
+            resolved = get_project_parameter_policy()
+        except ContractError:
+            # R1 wins even over an invalid project policy, as before.
+            if _recovery_target():
+                return "legacy"
+            raise
+    else:
+        resolved = str(policy)
+    # R1 only ever downgrades strict, so legacy apps never scan templates here.
+    if resolved == "strict" and _recovery_target():
+        return "legacy"
+    return resolved
+
+
+def _is_live_view(owner: Any) -> bool:
+    from .live_view import LiveView
+
+    return isinstance(owner, LiveView)
 
 
 def get_handler_coercion(handler: Callable) -> bool:
@@ -80,12 +338,22 @@ def validated_call_arguments(validation: Dict[str, Any]) -> tuple[tuple[Any, ...
 def _validate_strict_handler_params(
     handler: Callable, params: Dict[str, Any], coerce: bool, positional_args: Any
 ) -> Dict[str, Any]:
-    from ._parameter_contract import ParameterError
+    from ._parameter_contract import (
+        FRAMEWORK_ARGUMENT_NAMES,
+        TRANSPORT_METADATA_KEYS,
+        ParameterError,
+    )
 
     contract = get_strict_handler_contract(handler)
     expected = [item["name"] for item in contract.metadata()]
     positional = () if positional_args is _MISSING_POSITIONAL else positional_args
     try:
+        if type(params) is dict and any(key in TRANSPORT_METADATA_KEYS for key in params):
+            # D5: transport bookkeeping is dispatch context, never an argument.
+            params = {k: v for k, v in params.items() if k not in TRANSPORT_METADATA_KEYS}
+        if type(params) is dict and any(key in FRAMEWORK_ARGUMENT_NAMES for key in params):
+            # The route that received this event did not consume its target.
+            raise ParameterError("The event's routing target is not handled by this route.")
         if type(params) is dict and "_args" in params:
             if positional_args is not _MISSING_POSITIONAL:
                 raise ParameterError("Positional arguments were supplied twice.")
@@ -97,7 +365,7 @@ def _validate_strict_handler_params(
         # an error envelope. Declared names and fixed type labels are sufficient.
         return {
             "valid": False,
-            "error": str(exc),
+            "error": exc.public_message,
             "expected": expected,
             "provided": [],
             "type_errors": None,
@@ -165,7 +433,7 @@ def coerce_parameter_types(handler: Callable, params: Dict[str, Any]) -> Dict[st
         {"count": 42, "enabled": True}
     """
     try:
-        type_hints = get_type_hints(handler)
+        type_hints = _handler_type_hints(handler)
     except Exception:
         # If type hints can't be extracted, return params unchanged
         return params
@@ -404,7 +672,13 @@ def _warn_on_near_miss_kwargs(
         # 20 KB apiece. `_is_near_miss` still sees the FULL key, so matching
         # semantics are unchanged; for a normal identifier `sanitize_for_log`
         # is the identity, so the common path is unaffected.
-        safe_key = sanitize_for_log(key, max_length=100)
+        # An identifier of at most 100 characters is what sanitize_for_log
+        # returns unchanged; skip the call on that common path (#3095).
+        safe_key = (
+            key
+            if len(key) <= 100 and key.isidentifier() and key.isascii()
+            else sanitize_for_log(key, max_length=100)
+        )
         pair = (module, name, safe_key)
         if pair in _NEAR_MISS_WARNED:
             # Checked BEFORE the match below, so the steady state on a
@@ -431,7 +705,9 @@ def _warn_on_near_miss_kwargs(
             "Rename one side to match. Accepted parameters: %s",
             sanitize_for_log(name, max_length=100),
             sanitize_for_log(str(event_name), max_length=100),
-            safe_key,
+            # ``safe_key`` skips sanitising a short identifier on the hot path
+            # above; this warning runs once per near miss, so sanitise here.
+            sanitize_for_log(safe_key, max_length=100),
             match,
             sanitize_for_log(", ".join(accepted), max_length=200),
         )
@@ -499,7 +775,7 @@ def validate_handler_params(
     # server-only BoundArguments; invokers consume validated_call_arguments(),
     # never serialize the bound call into a response or state snapshot.
     # Map positional arguments to named parameters based on handler signature
-    sig = inspect.signature(handler)
+    sig = _handler_signature(handler)
 
     # Build list of parameter names (excluding self, *args, **kwargs)
     param_names = []
@@ -663,7 +939,7 @@ def validate_parameter_types(
         >>> assert errors[0]["actual"] == "str"
     """
     try:
-        type_hints = get_type_hints(handler)
+        type_hints = _handler_type_hints(handler)
     except Exception:
         # If type hints can't be extracted, skip type validation
         return None

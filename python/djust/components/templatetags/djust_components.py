@@ -518,14 +518,11 @@ def progress(
 def badge(label: Any = "", status: Any = "default", pulse: Any = False) -> "dict[str, Any]":
     """Render a status badge.
 
-    **Styling is yours** (#3025). No stylesheet djust ships has a rule for the
-    status, dot and label classes this renders — ``dj-badge--<status>``,
-    ``dj-badge__dot``, ``dj-badge__dot--pulse``, ``dj-badge__label`` — and the
-    one rule for the base ``dj-badge`` lives in ``components-classes.css``,
-    which ``{% theme_head %}`` does not link. So it renders as plain text until
-    you style them. For a badge styled by the
-    active theme, use ``{% theme_badge %}`` (``{% load theme_components %}``).
-    See "``{% badge %}`` ships no CSS" in the components guide.
+    Styled by ``djust_components/components.css``, which ``{% theme_head %}``
+    links (#3025): a pill on the theme tokens, tinted by status, with a
+    coloured dot. The label stays on ``--foreground``. The classes it renders
+    are ``dj-badge``, ``dj-badge--<status>``, ``dj-badge__dot``,
+    ``dj-badge__dot--pulse`` and ``dj-badge__label``.
 
     Args:
         label: display text
@@ -1877,7 +1874,8 @@ def code_block(
     """Render a syntax-highlighted code block with optional copy button.
 
     Args:
-        highlight: When True (default), lazy-loads highlight.js from CDN.
+        highlight: When True (default), loads djust's vendored highlight.js
+            (declared in djust_assets.json).
         theme: highlight.js theme name (default "github-dark").
     """
     if isinstance(highlight, str):
@@ -1902,7 +1900,35 @@ def code_block(
     )
 
     highlight_html = ""
+    loader = ""
     if highlight:
+        import json
+
+        from djust.assets.tags import asset_source, asset_tags
+
+        # Only the theme stylesheet is a tag: raises ImproperlyConfigured
+        # naming the vendored themes for an unknown one.
+        loader = str(asset_tags("highlight.js", str(theme), file_type="style"))
+        # The library itself is injected ONCE per page by the inline script
+        # below (guarded by __djcHljsLoading) instead of a <script src> per
+        # block, which made 30 blocks parse and execute it 30 times. Its URL,
+        # integrity and crossorigin come from djust.assets (settings and the
+        # vendored file, never user input) and are JSON-encoded, with <, >
+        # and & escaped so nothing can close the <script> element.
+        src, integrity, cross_origin = asset_source("highlight.js", file_type="script")
+        hljs_json = (
+            json.dumps(
+                {
+                    "src": src,
+                    "integrity": integrity,
+                    "crossOrigin": "anonymous" if cross_origin else None,
+                }
+            )
+            .replace("<", "\\u003c")
+            .replace(">", "\\u003e")
+            .replace("&", "\\u0026")
+        )
+
         # The per-instance inline <script> runs on initial HTTP page load and
         # highlights this code block. After hljs is loaded, we ALSO install a
         # MutationObserver ONCE per page (gated by __djcHljsObserverInstalled)
@@ -1910,53 +1936,77 @@ def code_block(
         # WS patch — which doesn't execute its own inline <script> in modern
         # browsers — still gets highlighted (#1625).
         highlight_html = (
-            f"<script>"
-            f"(function(){{"
-            f'var el=document.currentScript.previousElementSibling.querySelector("code");'
-            f"if(el.dataset.highlighted)return;"
-            f'function doHL(){{if(window.hljs){{hljs.highlightElement(el);el.dataset.highlighted="true";}}}}'
+            "<script>"
+            "(function(){"
+            'var el=document.currentScript.previousElementSibling.querySelector("code");'
+            "if(el.dataset.highlighted)return;"
+            'function doHL(){if(window.hljs&&!el.dataset.highlighted){hljs.highlightElement(el);el.dataset.highlighted="true";}}'
+            # Warns only from the injected script's onerror, once per page.
+            "function warn(){if(!window.__djcHljsWarned){window.__djcHljsWarned=true;"
+            "console.warn('[djust] highlight.js did not load; code blocks stay "
+            "unhighlighted. Check the browser console for an integrity (SRI) or "
+            "CSP error.');}}"
+            # Highlights every unmarked block on the page. The injecting
+            # block's onload runs it, so blocks whose poll gave up before a
+            # slow load finished are still highlighted.
+            "function hlAll(){if(!window.hljs)return;"
+            'Array.prototype.forEach.call(document.querySelectorAll("pre code[class^=language-]"),function(n)'
+            '{if(!n.dataset.highlighted){hljs.highlightElement(n);n.dataset.highlighted="true";}});}'
             # #1625: MutationObserver installer — idempotent via the
             # __djcHljsObserverInstalled flag. Watches the whole document
             # for added <pre><code class="language-*"> elements (typical
             # WS-patch insertion point) and highlights any unmarked ones.
-            f"function installObserver(){{"
-            f"if(window.__djcHljsObserverInstalled)return;"
-            f"if(typeof MutationObserver==='undefined')return;"
-            f"window.__djcHljsObserverInstalled=true;"
-            f"var hl=function(root){{if(!window.hljs)return;"
-            f'var sel="pre code[class^=language-]";'
-            f"var nodes=root.matches&&root.matches(sel)?[root]:"
-            f"(root.querySelectorAll?root.querySelectorAll(sel):[]);"
-            f"Array.prototype.forEach.call(nodes,function(n)"
-            f'{{if(!n.dataset.highlighted){{hljs.highlightElement(n);n.dataset.highlighted="true";}}}});}};'
-            f"new MutationObserver(function(records){{"
-            f"records.forEach(function(r){{r.addedNodes&&Array.prototype.forEach.call(r.addedNodes,function(n)"
-            f"{{if(n.nodeType===1)hl(n);}});}});"
-            f"}}).observe(document.body,{{childList:true,subtree:true}});"
-            f"}}"
-            f"if(window.hljs){{doHL();installObserver();return;}}"
-            f"if(!window.__djcHljsLoading){{"
-            f"window.__djcHljsLoading=true;"
-            f'var lnk=document.createElement("link");lnk.rel="stylesheet";'
-            f'lnk.href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11/build/styles/{e_theme}.min.css";'
-            f"document.head.appendChild(lnk);"
-            f'var s=document.createElement("script");'
-            f's.src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11/build/highlight.min.js";'
-            f's.onload=function(){{document.querySelectorAll("pre code[class^=language-]").forEach(function(b)'
-            f'{{if(!b.dataset.highlighted){{hljs.highlightElement(b);b.dataset.highlighted="true";}}}});'
-            f"installObserver();}};"
-            f"document.head.appendChild(s);"
-            f"}}else{{var iv=setInterval(function(){{if(window.hljs){{clearInterval(iv);doHL();installObserver();}}}},50);}}"
-            f"}})();"
-            f"</script>"
+            "function installObserver(){"
+            "if(window.__djcHljsObserverInstalled)return;"
+            "if(typeof MutationObserver==='undefined')return;"
+            "window.__djcHljsObserverInstalled=true;"
+            "var hl=function(root){if(!window.hljs)return;"
+            'var sel="pre code[class^=language-]";'
+            "var nodes=root.matches&&root.matches(sel)?[root]:"
+            "(root.querySelectorAll?root.querySelectorAll(sel):[]);"
+            "Array.prototype.forEach.call(nodes,function(n)"
+            '{if(!n.dataset.highlighted){hljs.highlightElement(n);n.dataset.highlighted="true";}});};'
+            "new MutationObserver(function(records){"
+            "records.forEach(function(r){r.addedNodes&&Array.prototype.forEach.call(r.addedNodes,function(n)"
+            "{if(n.nodeType===1)hl(n);});});"
+            "}).observe(document.body,{childList:true,subtree:true});"
+            "}"
+            "if(window.hljs){doHL();installObserver();return;}"
+            # First block on the page: inject the vendored library once.
+            "if(!window.hljs&&!window.__djcHljsLoading){"
+            "window.__djcHljsLoading=true;"
+            f"var cfg={hljs_json};"
+            'var s=document.createElement("script");'
+            "s.src=cfg.src;s.integrity=cfg.integrity;"
+            "if(cfg.crossOrigin)s.crossOrigin=cfg.crossOrigin;"
+            "s.onload=function(){doHL();hlAll();installObserver();};"
+            "s.onerror=warn;"
+            "document.head.appendChild(s);"
+            "return;}"
+            # Other blocks find the load in progress and wait for it.
+            # Bounded to 200 ticks (~10s, R14) so an SRI mismatch, CSP block,
+            # or 404 cannot poll forever. Giving up is silent: a load slower
+            # than the cap is still handled by the onload sweep above, and a
+            # real failure is reported by onerror.
+            "var tries=0;"
+            "var iv=setInterval(function(){"
+            "if(window.hljs){clearInterval(iv);doHL();installObserver();return;}"
+            "if(++tries>=200)clearInterval(iv);"
+            "},50);"
+            "})();"
+            "</script>"
         )
 
+    # `loader` is format_html output from asset_tags (djust.assets.tags), so
+    # it is already-escaped, safe markup: embedding it verbatim is fine. It
+    # sits before <pre> so the inline script's previousElementSibling is
+    # still the <pre>.
     return mark_safe(
         f'<div class="code-block" data-highlight="{e_theme if highlight else ""}">'
         f'<div class="code-block-header">'
         f"{filename_html}{lang_html}{copy_html}"
         f"</div>"
-        f'<pre class="code-block-pre"><code class="language-{e_language}">{e_code}</code></pre>'
+        f'{loader}<pre class="code-block-pre"><code class="language-{e_language}">{e_code}</code></pre>'
         f"{highlight_html}"
         f"</div>"
     )

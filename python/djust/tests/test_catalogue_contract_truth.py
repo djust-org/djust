@@ -220,7 +220,13 @@ class TestEveryPreviewShowsSomethingOrSaysWhy:
             EMPTY_PREVIEW_REASONS,
         )
 
-        names = {n for group in COMPONENT_CATEGORIES.values() for n in group}
+        from djust.theming.gallery.catalogue import INTERACTIVE_ENTRIES
+
+        # An interactive entry's preview is its example view, not registry
+        # examples (test_catalogue_interactive_entry.py renders it).
+        names = {n for group in COMPONENT_CATEGORIES.values() for n in group} - set(
+            INTERACTIVE_ENTRIES
+        )
         without = {n for n in names if not describe_component(n)["examples"]}
         assert without <= set(EMPTY_PREVIEW_REASONS), sorted(without - set(EMPTY_PREVIEW_REASONS))
 

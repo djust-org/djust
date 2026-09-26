@@ -66,7 +66,7 @@ djust/
 │   ├── templatetags/       # Django template tags
 │   ├── tenants/            # Multi-tenant support
 │   ├── backends/           # Presence backends (memory, redis)
-│   └── static/djust/       # Client JS — shipped client.min.js.gz is ~67 KB
+│   └── static/djust/       # Client JS — shipped client.min.js.gz is ~70 KB
 ├── crates/
 │   ├── djust_live/         # PyO3 bindings — the entry point
 │   │                       #   (pyproject `manifest-path`; module `djust._rust`)
@@ -101,9 +101,9 @@ djust/
   `python/djust/static/djust/client-sizes.json` by `scripts/build-client.sh`
   and enforced by `scripts/check-doc-snippets.py` against the artifact each
   line names — run `make sizes` to print the current values (#2138).
-  - **Shipped**: `client.min.js.gz` is **~67 KB** gz — what a user downloads,
+  - **Shipped**: `client.min.js.gz` is **~70 KB** gz — what a user downloads,
     and the only figure that constrains anything.
-  - **Build input**: unminified `client.js` is ~224 KB gz <!-- size-claim: unminified -->
+  - **Build input**: unminified `client.js` is ~230 KB gz <!-- size-claim: unminified -->
     across 57 modules in `static/djust/src/`. Not a deliverable; do not quote
     it as "the client size".
   - Until #2138 these read ~87 KB gz / 388 KB raw / 35 modules <!-- size-claim: historical -->
@@ -288,9 +288,11 @@ When investigating an issue with a code-location citation:
   installed. Downstream consumers do NOT need to add
   `enable_hot_reload()` to their own `AppConfig.ready()`. Existing
   explicit calls keep working (idempotent). Opt out via
-  `LIVEVIEW_CONFIG['hot_reload_auto_enable']: False`. Tests skip the
-  auto-enable via `PYTEST_CURRENT_TEST` so pytest sessions don't spawn
-  a watchdog thread per test. Don't wrap `uvicorn` in
+  `LIVEVIEW_CONFIG['hot_reload_auto_enable']: False`. A pytest process
+  skips the auto-enable (`djust.apps._running_under_pytest`: `pytest` is
+  imported, or `PYTEST_CURRENT_TEST` is set — the latter alone misses
+  pytest-django's `django.setup()`, #3157), so test sessions don't spawn
+  a watchdog thread. Don't wrap `uvicorn` in
   `watchfiles` / `--reload` for djust dev servers — that's process
   restart and drops view state; djust's HVR is strictly better
   (preserves form input, scroll position, counters).
@@ -1701,6 +1703,8 @@ Four rules from the v1.2.0-6 drain (PRs #2835-#2846, eight issues: #2821, #2823,
   `static/djust/src/`; never hand-merge `client.js` / `client.min.js` / `client-sizes.json`
 - merge: squash (main carries no PR merge commits); drain PRs merge with `--admin`,
   since the author cannot approve their own PR and human review is at the milestone level
+- release: squash-merge the release PR first, then tag `main` with `make release`; never tag
+  `release/*` (the squash leaves the tag unreachable from main — #3149, v1.3.0rc3 / #3131)
 
 **Running the suite from a git worktree** (three parallel worktrees is the tested shape):
 the venv's editable install points at the *main* checkout, so a bare `import djust` inside a

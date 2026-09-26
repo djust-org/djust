@@ -203,21 +203,21 @@ class _DocChild(_DocView):
 
 
 @pytest.fixture
-def _child_template():
-    """Make a renderable template for the embedded child discoverable in the
-    project's first configured template DIRS entry."""
-    from pathlib import Path
+def _child_template(tmp_path, settings):
+    """Make a renderable template for the embedded child discoverable.
 
-    from django.conf import settings
+    Written to a temporary directory prepended to the first engine's DIRS,
+    NOT into the project's template tree: the dev hot-reload watcher watches
+    that tree, and a file written there broadcast a ``reload`` frame into
+    unrelated WebSocket tests running in the same worker (#3099).
+    """
+    import copy
 
-    dirs = [d for t in settings.TEMPLATES for d in t.get("DIRS", [])]
-    assert dirs, "no configured template DIRS to drop the child template into"
-    tpl = Path(dirs[0]) / "_objperm_child.html"
-    tpl.write_text("<div dj-root>{{ doc }}</div>")
-    try:
-        yield
-    finally:
-        tpl.unlink(missing_ok=True)
+    (tmp_path / "_objperm_child.html").write_text("<div dj-root>{{ doc }}</div>")
+    templates = copy.deepcopy(settings.TEMPLATES)
+    templates[0]["DIRS"] = [str(tmp_path), *templates[0].get("DIRS", [])]
+    settings.TEMPLATES = templates
+    yield
 
 
 @pytest.mark.django_db

@@ -151,6 +151,10 @@ _COMPONENT_DESCRIPTIONS = {
     # docstring to use as their one-line catalogue description. Keep the
     # prose next to the catalogue contract rather than silently showing a
     # component card with no explanation.
+    "interactive_dropdown_menu": (
+        "A menu that owns its open, keyboard and selection state and sends the "
+        "view one typed callback per valid choice (ADR-034)."
+    ),
     "checkbox": "Checkbox input with a label, description, and validation state.",
     "input": "Text input with a label, help text, and validation state.",
     "radio": "Radio-group input for choosing one value from a set.",
@@ -309,6 +313,58 @@ def build_catalogue_index_context() -> dict:
 #:
 #: The markup dispatches the same event the component's descriptor listens for,
 #: so this is the real server path rather than a demo-only shim.
+#: Catalogue entries whose preview is a LiveView that owns interactive
+#: components (ADR-034): the name maps to the canonical example view.
+INTERACTIVE_ENTRIES = {
+    "interactive_dropdown_menu": "djust.components.interactive_examples.DropdownMenuExample",
+}
+
+#: The component each interactive entry documents, and the outputs a host
+#: subscribes to (``@<menu>.on.<output>``).
+INTERACTIVE_COMPONENTS = {
+    "interactive_dropdown_menu": ("djust.components.interactive", "DropdownMenu", ["selected"]),
+}
+
+
+def interactive_example_view(component_name: str) -> type:
+    """The canonical example view an interactive entry serves (ADR-037 D2)."""
+    module_path, _, class_name = INTERACTIVE_ENTRIES[component_name].rpartition(".")
+    view: type = getattr(importlib.import_module(module_path), class_name)
+    return view
+
+
+def interactive_preview_html(component_name: str) -> str:
+    """The example view's first render, through a real GET, for the index card."""
+    from django.contrib.auth.models import AnonymousUser
+    from django.contrib.sessions.backends.signed_cookies import SessionStore
+    from django.test import RequestFactory
+
+    request = RequestFactory().get("/")
+    request.user, request.session, request.tenant = AnonymousUser(), SessionStore(), None
+    response = interactive_example_view(component_name)().get(request)
+    if response.status_code != 200:
+        return ""
+    return _preview_fragment(response.content.decode())
+
+
+_SCRIPT_RE = re.compile(r"<script\b.*?</script\b[^>]*>", re.S | re.I)
+_ROOT_RE = re.compile(r"<div\b[^>]*\bdj-root\b[^>]*>(.*)</div>", re.S)
+_WIRING_ATTR_RE = re.compile(r'\s(?:dj-[\w:.-]+|data-component-id|data-dj-[\w-]+)(?:="[^"]*")?')
+
+
+def _preview_fragment(page_html: str) -> str:
+    """The markup inside the example's root, with nothing live left in it.
+
+    A card preview must not carry a second view root, the example's scripts or
+    its parameter-contracts block: the client reads the first contracts block
+    on the page, so an embedded one would describe the wrong view (#3134 review).
+    """
+    body = _SCRIPT_RE.sub("", page_html)
+    match = _ROOT_RE.search(body)
+    inner = match.group(1) if match else ""
+    return _WIRING_ATTR_RE.sub("", inner).strip()
+
+
 _CATALOGUE_TRIGGERS = {
     "modal": (
         '<button type="button" dj-click="toggle_modal" '
@@ -451,20 +507,14 @@ def styles_for(html: str) -> list[dict]:
     return found
 
 
-_EVENT_ATTR_RE = re.compile(
-    r'dj-(?:click|change|input|submit|keydown|keyup|blur|focus)="([A-Za-z_][\w]*)"'
-)
-
-
 def component_events(rendered_html: str) -> list[str]:
     """The server events a component's markup emits, in the order they appear:
     every ``dj-click`` / ``dj-change`` / ``dj-input`` / … name in the rendered
-    example. These are the handlers a host view has to answer."""
-    seen: list[str] = []
-    for name in _EVENT_ATTR_RE.findall(rendered_html or ""):
-        if name not in seen:
-            seen.append(name)
-    return seen
+    example. These are the handlers a host view has to answer. Parsed by the
+    same binding scanner ``manage.py check`` uses (ADR-037)."""
+    from djust._template_bindings import markup_event_names
+
+    return markup_event_names(rendered_html or "")
 
 
 def _is_event_param(name: str) -> bool:
@@ -589,7 +639,6 @@ def usage_with_events(
     if others:
         if "from djust.decorators import event_handler" not in lines:
             lines.insert(2, "from djust.decorators import event_handler")
-        example = example or {}
         stubs = {e: (demo_stubs or {}).get(e) or [] for e in others}
         # Every kwarg some event drives, with the value it starts from.
         initial: dict = {}
@@ -819,6 +868,47 @@ def build_catalogue_detail_context(component_name: str, *, render_examples: bool
         PYTHON_COMPONENT_EXAMPLES,
         _COMPONENT_TO_CATEGORY,
     )
+
+    if component_name in INTERACTIVE_ENTRIES:
+        import inspect
+
+        from django.template.loader import get_template
+
+        from .component_registry import get_component_category
+
+        from .component_registry import _default_source
+
+        view_class = interactive_example_view(component_name)
+        module = importlib.import_module(view_class.__module__)
+        component_module, class_name, outputs = INTERACTIVE_COMPONENTS[component_name]
+        component_class = getattr(importlib.import_module(component_module), class_name)
+        markup = get_template(
+            "djust_theming/catalogue/examples/%s.html" % component_name
+        ).template.source
+        return {
+            "name": component_name,
+            "display_name": component_name.replace("_", " ").title(),
+            "category": get_component_category(component_name),
+            "component_type": "interactive",
+            "description": component_description(component_name),
+            "usage_parts": {"view": inspect.getsource(module), "template": markup},
+            "import_line": "from %s import %s" % (component_module, class_name),
+            "class_name": class_name,
+            "python_params": [
+                {
+                    "name": name,
+                    "kind": param.kind.name,
+                    "default": _default_source(param.default),
+                    "annotation": (
+                        str(param.annotation)
+                        if param.annotation is not inspect.Parameter.empty
+                        else ""
+                    ),
+                }
+                for name, param in inspect.signature(component_class).parameters.items()
+            ],
+            "events": list(outputs),
+        }
 
     if component_name not in COMPONENT_CONTRACTS and component_name not in _COMPONENT_TO_CATEGORY:
         raise KeyError(f"Unknown component: {component_name}")

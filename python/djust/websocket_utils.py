@@ -214,13 +214,22 @@ async def _validate_event_security(
     # The per-connection ``ConnectionRateLimiter`` keeps owning the GLOBAL
     # per-message abuse-disconnect (#17, in websocket.py:receive). On a
     # per-handler rejection we still bump that connection's warning counter so a
-    # single-connection per-handler flood trips should_disconnect() → close.
+    # single-connection per-handler flood trips should_disconnect() → close --
+    # unless the handler opted into ``on_exceed="drop"`` (#3003), which only
+    # drops the event: a quick honest burst must not cost the connection.
     rl_settings = get_rate_limit_settings(handler)
     if rl_settings:
         client_ip = getattr(ws, "_client_ip", None)
         owner_request = getattr(owner_instance, "request", None)
         key = caller_key(owner_request, client_ip)
         if not handler_rate_check(key, event_name, rl_settings):
+            if rl_settings.get("on_exceed") == "drop":
+                logger.debug(
+                    "Per-handler rate limit exceeded for '%s' (dropped)",
+                    sanitize_for_log(event_name),
+                )
+                await ws.send_error("Rate limit exceeded, event dropped")
+                return None
             rate_limiter.warnings += 1
             logger.warning(
                 "Per-handler rate limit exceeded for '%s' (warning %d/%d)",
@@ -254,9 +263,18 @@ async def _validate_event_security(
     # handler, check_handler_permission calls user.has_perms(), which under the
     # default ModelBackend queries the DB for a non-superuser — raising
     # SynchronousOnlyOperation when called bare from this async def.
-    if owner_request and not await sync_to_async(check_handler_permission)(handler, owner_request):
-        await ws.send_error("Permission denied")
-        return None
+    #
+    # Without @permission_required the check reads the decorator metadata and
+    # returns True: no database, no hop. Calling it inline saves a thread hop
+    # on the event loop for every event (#3095).
+    if owner_request:
+        if handler_meta.get("permission_required") is None:
+            permitted = check_handler_permission(handler, owner_request)
+        else:
+            permitted = await sync_to_async(check_handler_permission)(handler, owner_request)
+        if not permitted:
+            await ws.send_error("Permission denied")
+            return None
 
     # Object-level permission check (ADR-017 § Decision 7, v0.9.5-1b).
     # Re-runs on every event so a session can't bypass mount-time denial
@@ -301,7 +319,7 @@ async def _validate_event_security(
         # No custom get_object → no object-permission lifecycle → fall
         # through silently (preserves the existing no-op contract).
     else:
-        from .auth.core import check_object_permission
+        from .auth.core import _has_custom_get_object, check_object_permission
 
         try:
             # Wrap in sync_to_async to mirror the mount path
@@ -311,7 +329,14 @@ async def _validate_event_security(
             # raised SynchronousOnlyOperation, which the fail-closed catch below
             # mistranslated into a spurious "Access denied" on the first event
             # of every URL-bound LiveView (#1638).
-            await sync_to_async(check_object_permission)(owner_instance, owner_request)
+            #
+            # A view that does not override get_object() has no object
+            # lifecycle: the check returns at once, with no database access,
+            # so it runs inline and saves a thread hop per event (#3095).
+            if _has_custom_get_object(owner_instance):
+                await sync_to_async(check_object_permission)(owner_instance, owner_request)
+            else:
+                check_object_permission(owner_instance, owner_request)
         except PermissionDenied:
             await ws.send_error(
                 "Access denied for this object.",

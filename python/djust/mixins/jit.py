@@ -57,8 +57,12 @@ def _cached_extract_template_variables(template_content: str) -> Optional[dict]:
     # ~2µs for a ~10KB string, negligible vs the Rust FFI call being cached.
     content_hash = hashlib.sha256(template_content.encode()).hexdigest()[:8]
 
-    if content_hash in _variable_extraction_cache:
+    # One lookup, not `in` then `[]`: another thread may `.clear()` the cache
+    # between the two (#3074). The cached value itself can be None.
+    try:
         return _variable_extraction_cache[content_hash]
+    except KeyError:
+        pass
 
     try:
         result = extract_template_variables(template_content)

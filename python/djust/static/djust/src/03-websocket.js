@@ -228,21 +228,27 @@ function storeSignedSnapshot(data, primaryViewPath) {
     }
 }
 
-// ADR-038 D-n: service-worker cache metadata carried on mount frames. The
-// identity marker is compared before anything from this mount is cached, so a
-// changed or vanished identity clears the previous identity's caches first.
-function applyServiceWorkerMountMetadata(data) {
-    if (!data || data.type !== 'mount') return;
-    if (typeof data.state_snapshot_max_age === 'number' && data.state_snapshot_max_age > 0) {
-        window.djust._stateSnapshotMaxAge = data.state_snapshot_max_age;
-    }
-    try {
-        if (window.djust._sw && typeof window.djust._sw.syncIdentity === 'function') {
-            window.djust._sw.syncIdentity(data.sw_identity);
-        }
-    } catch (_e) {
-        if (globalThis.djustDebug) console.log('[LiveView] service-worker identity sync failed:', _e);
-    }
+// #1610: morph the HTTP-prerendered DOM against a mount frame's HTML, so
+// mount-context state (per-connection values, and ADR-034's per-instance
+// component identities) reaches the page. Shared by the WebSocket and SSE
+// mount paths (#1646: one path, not two).
+function _morphPrerenderedMount(container, html, formRecoverySnapshot) {
+    const temp = document.createElement('div');
+    // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
+    temp.innerHTML = html;
+    morphChildren(container, temp);
+    if (formRecoverySnapshot) window.djust._restoreFormRecovery(formRecoverySnapshot);
+    // #1813 (a): embedded-view wrappers carry NO `id`, so morphChildren can
+    // only align them positionally. Reconcile them by the stable
+    // `data-djust-embedded` value and copy the server's dj-id onto the live
+    // wrapper, or the first parent patch misses it.
+    _stampEmbeddedWrapperDjIds(container, temp);
+    // #1848: morphChildren re-creates inline <script> nodes inert. Re-run
+    // classic page scripts inside the dj-root so their init runs on mount.
+    _runInsertedScripts(container);
+    // #2058: anything _runInsertedScripts() didn't re-execute gets a loud
+    // DEBUG-mode warning instead of silently staying dead.
+    _warnDeadScripts(container);
 }
 
 class LiveViewWebSocket {
@@ -554,7 +560,8 @@ class LiveViewWebSocket {
 
     async _handleMessageImpl(data) {
         if (globalThis.djustDebug) console.log('[LiveView] Received: %s %o', String(data.type), data);
-        applyServiceWorkerMountMetadata(data);
+        // ADR-038 D-n: compared before anything from this mount is cached.
+        if (window.djust._sw) window.djust._sw.applyMountMetadata(data);
         storeSignedSnapshot(data, this.primaryViewPath);
 
         switch (data.type) {
@@ -567,12 +574,20 @@ class LiveViewWebSocket {
             case 'mount': {
                 _installParameterContracts(this, data.parameter_contracts, data.view, true,
                     this._parameterContractFrames.get(data));
+                if (data.view === this.primaryViewPath) {
+                    globalThis.djust._mirrorPageParameterContracts?.(data.parameter_contracts, data.view);
+                }
                 const formRecoverySnapshot = window.djust._isReconnect
                     && data.view === this.primaryViewPath
                     && typeof window.djust._captureFormRecovery === 'function'
                     ? window.djust._captureFormRecovery() : null;
                 this.viewMounted = true;
                 if (globalThis.djustDebug) console.log('[LiveView] View mounted: %s', String(data.view));
+                // #2966: the server's answer to a reconnect's track_static.
+                if (data.stale_static && data.view === this.primaryViewPath &&
+                    globalThis.djust.djTrackStatic) {
+                    globalThis.djust.djTrackStatic.applyStaleStatic(data.stale_static);
+                }
 
                 // Remove dj-cloak from all elements (FOUC prevention)
                 document.querySelectorAll('[dj-cloak]').forEach(el => el.removeAttribute('dj-cloak'));
@@ -618,38 +633,7 @@ class LiveViewWebSocket {
                         const _morphContainer = findPageViewContainer()
                                             || document.querySelector('[dj-root]');
                         if (_morphContainer) {
-                            const _morphTemp = document.createElement('div');
-                            // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
-                            _morphTemp.innerHTML = data.html;
-                            morphChildren(_morphContainer, _morphTemp);
-                            if (formRecoverySnapshot) window.djust._restoreFormRecovery(formRecoverySnapshot);
-                            // #1813 (a): embedded-view wrappers
-                            // (<div dj-view dj-sticky-view dj-sticky-root
-                            //  data-djust-embedded=...>) carry NO `id`, so
-                            // morphChildren can only align them positionally
-                            // (Strategy 2). If sibling counts diverge before a
-                            // wrapper, it never aligns → morphElement never runs
-                            // → the server's dj-id is never copied onto the live
-                            // wrapper. The first parent patch then targets the
-                            // wrapper by dj-id, finds nothing, falls back to a
-                            // positional path, and breaks once the child subtree
-                            // drifts → triggers html_recovery (the trigger half
-                            // of the sticky-child data-loss bug). Reconcile by
-                            // the STABLE `data-djust-embedded` value (the same
-                            // selector 45-child-view.js uses) and copy the
-                            // server's dj-id onto the live wrapper.
-                            _stampEmbeddedWrapperDjIds(_morphContainer, _morphTemp);
-                            // #1848: morphChildren re-creates inline <script>
-                            // nodes inert (clone+insert never executes them).
-                            // Re-run classic page scripts inside the dj-root so
-                            // their addEventListener / init runs on mount.
-                            _runInsertedScripts(_morphContainer);
-                            // #2058: defense-in-depth — anything
-                            // _runInsertedScripts() didn't re-execute (should
-                            // be nothing for classic scripts) gets a loud
-                            // DEBUG-mode warning instead of silently staying
-                            // dead.
-                            _warnDeadScripts(_morphContainer);
+                            _morphPrerenderedMount(_morphContainer, data.html, formRecoverySnapshot);
                             if (globalThis.djustDebug) console.log('[LiveView] Morphed pre-rendered DOM against WS-mount HTML (#1610)');
                         } else {
                             // Fallback: no [dj-view]/[dj-root] container found
@@ -1378,14 +1362,21 @@ class LiveViewWebSocket {
             console.warn('[LiveView] Could not detect browser timezone:', e);
         }
 
-        this.sendMessage({
+        const frame = {
             type: 'mount',
             view: viewPath,
             params: params,
             url: window.location.pathname,
             has_prerendered: this.skipMountHtml || false,  // Tell server we have pre-rendered content
             client_timezone: clientTimezone  // IANA timezone string (e.g. "America/New_York")
-        });
+        };
+        // #2966: a reconnecting page view asks whether its tracked assets
+        // are stale (dj-track-static). Shared with the SSE mount (#1646).
+        const trackStatic = globalThis.djust.djTrackStatic;
+        if (options.primary && trackStatic) {
+            Object.assign(frame, trackStatic.mountFields(Boolean(window.djust._isReconnect)));
+        }
+        this.sendMessage(frame);
         return true;
     }
 

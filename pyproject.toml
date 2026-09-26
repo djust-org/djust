@@ -1,10 +1,10 @@
 [build-system]
-requires = ["maturin>=1.0,<2.0"]
+requires = ["maturin>=1.12.1,<2.0"]
 build-backend = "maturin"
 
 [project]
 name = "djust"
-version = "1.3.0rc1"
+version = "1.3.0rc3"
 description = "Phoenix LiveView-style reactive components for Django with Rust-powered performance. Real-time UI updates over WebSocket, no JavaScript build step required."
 authors = [{name = "djust contributors"}]
 readme = "README.md"
@@ -26,6 +26,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: Free Threading :: 2 - Beta",
     "Programming Language :: Rust",
     "Topic :: Internet :: WWW/HTTP",
     "Topic :: Software Development :: Libraries :: Python Modules",
@@ -105,7 +106,7 @@ all = [
     "djust[redis,compression,performance,admin,deploy,theming,components,s3,gcs,azure]",
 ]
 dev = [
-    "maturin>=1.0,<2.0",
+    "maturin>=1.12.1,<2.0",
     "django-allauth>=65.0,<66",
     "pytest>=7.0,<10",
     "pytest-django>=4.5,<6",
@@ -148,6 +149,10 @@ include = [
     { path = "LICENSE", format = "sdist" },
     { path = "README.md", format = "sdist" },
 ]
+
+[tool.maturin.sbom]
+rust = true
+include = ["python/djust/djust.cdx.json"]
 
 [tool.pytest.ini_options]
 python_files = ["test_*.py", "*_test.py"]
@@ -1139,7 +1144,6 @@ module = [
     "djust.bug_capture",
     "djust.bug_capture_views",
     "djust.urls",
-    "djust.checks_css_proposal",
     "djust.hooks",
     "djust.hot_view_replacement",
     "djust.state_backend",

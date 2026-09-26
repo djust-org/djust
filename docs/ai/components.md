@@ -108,6 +108,66 @@ from djust.components.ui import Select, Spinner, Switch, Table, Tabs
 from djust.components.ui import TextArea, Toast, Tooltip
 ```
 
+## Interactive components (djust 1.3+)
+
+**Available from djust 1.3** (not in the 1.3.0rc1 pre-release). Import from
+`djust.components.interactive`, never `djust.components.components`: that
+`DropdownMenu` is the legacy renderer, and `djust.Q004` warns when a module
+imports both.
+
+<!-- djust-example: ai-project-menu scenario=project-menu -->
+```python
+from djust import LiveView
+from djust.components.interactive import DropdownMenu
+
+
+class ProjectView(LiveView):
+    template_name = "projects/detail.html"
+
+    project_menu = DropdownMenu(
+        label="Project",
+        items=[{"label": "Edit", "value": "edit"}, {"separator": True}],
+    )
+
+    def mount(self, request, **kwargs):
+        self.selected_action = ""
+
+    @project_menu.on.selected
+    def on_project_menu_selected(self, component: DropdownMenu, value: str) -> None:
+        self.selected_action = value
+```
+
+```html
+<div dj-root>{{ project_menu }}<p>{{ selected_action }}</p></div>
+```
+
+Rules:
+- **Declaring:** declare the menu as a class attribute and subscribe with
+  `@<menu>.on.selected` / `@<menu>.on.toggled`. Never add `@event_handler` to
+  the callback. Never write `toggle`/`select` handlers: the component owns
+  them.
+- **Callbacks:** the parameters are `(self, component: DropdownMenu, value: str)`
+  for `selected` and `(self, component: DropdownMenu, open: bool)` for
+  `toggled`, and a callback returns `None`.
+- **Items:** `{"label", "value", "disabled"?}` with nonempty unique values, or
+  `{"separator": True}`.
+- **Visibility:**
+  - `visibility="client"` gives a native popover. Python must not read or set
+    `open` then.
+  - `.on.toggled` observes it. Without that subscription, nothing is sent to
+    the server.
+- **Rows:** for a row action on a record, use a plain `@event_handler()` with
+  `dj-value-<id>`, not a component per row.
+- **Keyed collections:** use `rows = DropdownMenu.collection()` only when rows
+  own menu state.
+  - Fill it with `self.rows.sync([(str(record.id), DropdownMenu(...)), ...])`,
+    and render `{% for menu in rows.values %}{{ menu }}{% endfor %}`.
+  - One `@rows.on.selected` callback serves every row; `component.key` is the
+    row key.
+  - `get(key)` returns the row or `None`.
+- **Authorization:** callbacks must authorize the record a value refers to.
+- **Actor views:** not supported (`djust.V020`).
+
 ## Common Patterns
 
 ### Alert with show/hide

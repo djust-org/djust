@@ -5,7 +5,7 @@ so an unrelated import failure cannot make the negative suite appear to pass.
 """
 
 from prototype import DropdownMenu, PrototypeOwner
-from positive import Page
+from positive import Page, RowsPage
 
 
 class WrongChild(Page):
@@ -62,3 +62,28 @@ DropdownMenu(label="Bad", items=[{"separator": False}])  # error: invalid separa
 DropdownMenu(label="Bad", items=[{"label": "Edit", "value": 1}])  # error: item value type
 projet_menu  # error: undefined declaration  # noqa: F821
 DropdownMenu(label="Bad", items=[], visibility="automatic")  # error: invalid visibility mode
+
+
+class BadRows(PrototypeOwner):
+    rows = DropdownMenu.collection()
+
+    @rows.on.selected  # error: collection payload type
+    def wrong_value(self, component: DropdownMenu, value: int) -> None:
+        pass
+
+    @rows.on.toggled  # error: collection observation type
+    def wrong_toggle(self, component: DropdownMenu, open: str) -> None:
+        pass
+
+
+rows_page = RowsPage()
+rows_page.rows.on.seleted  # error: misspelled collection output
+rows_page.rows.get(1)  # error: collection keys are strings
+rows_page.rows.sync([("a", "not a menu")])  # error: sync members are DropdownMenus
+rows_page.rows.sync([(1, DropdownMenu(label="A", items=[]))])  # error: sync keys are strings
+count: str = len(rows_page.rows)  # error: len is an int
+first: int = rows_page.rows.values[0]  # error: values are DropdownMenus
+for row in rows_page.rows:
+    row.missing_attribute  # error: iteration yields DropdownMenus
+maybe = rows_page.rows.get("a")
+maybe.open  # error: get may return None

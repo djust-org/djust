@@ -35,43 +35,76 @@ async def render_background(view: Any, runtime: Any) -> BackgroundRender | None:
     None is a redacted contract-discovery failure, not an application callback
     failure. The caller must not deliver this render or invoke an error callback.
     """
-
-    def render() -> BackgroundRender | None:
-        if hasattr(view, "_sync_state_to_rust"):
-            view._sync_state_to_rust()
-        html, patches, _version = view.render_with_diff()
-        try:
-            from ._parameter_metadata import parameter_contract_manifest
-
-            manifest = parameter_contract_manifest(view)
-            fields = {}
-            if manifest is not None or getattr(runtime, "_parameter_contracts_active", False):
-                path = getattr(runtime, "_parameter_contract_view", None)
-                if (
-                    not isinstance(path, str)
-                    or not path
-                    or getattr(runtime, "view_instance", None) is not view
-                ):
-                    raise ValueError("Contract owner unavailable")
-                # Detach before returning from the render worker. Only bounded
-                # public declarations from parameter_contract_manifest are copied.
-                fields["parameter_contract_snapshot"] = json.loads(
-                    json.dumps({"parameter_contracts": manifest, "parameter_contract_view": path})
-                )
-        except Exception:  # invalid metadata must never accompany a DOM frame
-            _discard_baseline(view)
-            return None
-        content = None
-        if patches is None:
-            content = view._extract_liveview_content(view._strip_comments_and_whitespace(html))
-        # Consume a forced render once, including async success/error paths.
-        # Failure and cancellation re-arm it when discarding the unseen baseline.
-        if getattr(view, "_force_full_html", False):
-            view._force_full_html = False
-        return BackgroundRender(html, patches, content, fields)
-
     try:
-        return await settle_render_operation(sync_to_async(render)())
+        return await settle_render_operation(sync_to_async(render_background_sync)(view, runtime))
     except asyncio.CancelledError:
         _discard_baseline(view)
         raise
+
+
+def render_contract_fields(view: Any, runtime: Any) -> dict[str, Any] | None:
+    """``_send_update`` fields carrying the just-rendered tree's public contracts.
+
+    Call in the same synchronous operation as the render. ``{}`` for an
+    all-legacy session; None when discovery fails, since invalid metadata must
+    never accompany a DOM frame (the caller withholds or replaces the frame).
+    """
+    try:
+        from ._parameter_metadata import parameter_contract_manifest
+
+        manifest = parameter_contract_manifest(view)
+        if manifest is None and not getattr(runtime, "_parameter_contracts_active", False):
+            return {}
+        path = getattr(runtime, "_parameter_contract_view", None)
+        if (
+            not isinstance(path, str)
+            or not path
+            or getattr(runtime, "view_instance", None) is not view
+        ):
+            raise ValueError("Contract owner unavailable")
+        # Detach before returning from the render worker. Only bounded public
+        # declarations from parameter_contract_manifest are copied.
+        return {
+            "parameter_contract_snapshot": json.loads(
+                json.dumps({"parameter_contracts": manifest, "parameter_contract_view": path})
+            )
+        }
+    except Exception:  # noqa: BLE001 — reported by withholding the frame
+        return None
+
+
+def direct_render_contract_fields(view: Any, runtime: Any) -> dict[str, Any] | None:
+    """``render_contract_fields`` for producers outside the background worker.
+
+    A session that never advertised strict contracts keeps its legacy frame
+    shape even if discovery fails, as it did before these producers attached
+    snapshots; a strict session withholds or replaces the frame.
+    """
+    fields = render_contract_fields(view, runtime)
+    if fields is None and not getattr(runtime, "_parameter_contracts_active", False):
+        return {}
+    return fields
+
+
+def render_background_sync(view: Any, runtime: Any) -> BackgroundRender | None:
+    """The synchronous body of :func:`render_background`.
+
+    Runs on the session's worker thread. The offloaded server-push turn
+    (#3074) calls it inside the same hop as the push hooks; the caller then
+    owns the ``settle_render_operation`` + ``_discard_baseline`` handling.
+    """
+    if hasattr(view, "_sync_state_to_rust"):
+        view._sync_state_to_rust()
+    html, patches, _version = view.render_with_diff()
+    fields = render_contract_fields(view, runtime)
+    if fields is None:  # invalid metadata must never accompany a DOM frame
+        _discard_baseline(view)
+        return None
+    content = None
+    if patches is None:
+        content = view._extract_liveview_content(view._strip_comments_and_whitespace(html))
+    # Consume a forced render once, including async success/error paths.
+    # Failure and cancellation re-arm it when discarding the unseen baseline.
+    if getattr(view, "_force_full_html", False):
+        view._force_full_html = False
+    return BackgroundRender(html, patches, content, fields)

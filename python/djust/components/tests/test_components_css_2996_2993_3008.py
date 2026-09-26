@@ -3,7 +3,9 @@
 - #3008: ``CodeBlock``'s Copy button copies its own code (``dj-copy``).
 - #2996: button/badge labels follow the theme's paired foreground; empty
   rating stars reach 3:1 against the page.
-- #2993: Alert/Progress/Avatar say they ship no CSS, and that stays true.
+
+#2993's 1.2.1 half (Alert/Progress/Avatar documented as unstyled) was
+replaced in 1.3 by shipped rules; see ``test_component_css_coverage_3025_2993``.
 """
 
 from __future__ import annotations
@@ -193,74 +195,3 @@ class TestEmptyStarContrast2996:
 
         tokens = THEME_PRESETS["default"].light
         assert _blend_contrast(tokens.muted_foreground, tokens.background, 0.3) < 3.0
-
-
-# ---------------------------------------------------------------------------
-# #2993 — Alert / Progress / Avatar ship no CSS, and say so
-# ---------------------------------------------------------------------------
-
-
-def _all_shipped_css() -> str:
-    return "\n".join(
-        p.read_text(errors="ignore")
-        for p in DJUST_ROOT.rglob("*.css")
-        if "node_modules" not in p.parts
-    )
-
-
-class TestUnstyledComponentsAreDocumented2993:
-    def test_the_list_is_still_true(self):
-        """If a shipped stylesheet gains a rule for one of these classes, the
-        component is no longer unstyled: drop it from UNSTYLED_PYTHON_CLASSES
-        and its docstring (the 1.3 part of #2993)."""
-        from djust.theming.gallery.component_registry import UNSTYLED_PYTHON_CLASSES
-
-        css = _all_shipped_css()
-        for _name, (_cls, root) in UNSTYLED_PYTHON_CLASSES.items():
-            # `.dj-avatar-group` / `.dj-progress-circle` are other components.
-            hits = re.findall(rf"\.{root}(?![\w-]*(?:group|circle))[\w-]*", css)
-            assert not hits, f"{root}: shipped CSS now styles {sorted(set(hits))}"
-
-    @pytest.mark.parametrize(
-        "module,cls,tag",
-        [
-            ("alert", "Alert", "theme_alert"),
-            ("progress", "Progress", "theme_progress"),
-            ("avatar", "Avatar", "theme_avatar"),
-        ],
-    )
-    def test_docstring_says_unstyled_and_points_to_the_tag(self, module, cls, tag):
-        import importlib
-
-        klass = getattr(importlib.import_module(f"djust.components.components.{module}"), cls)
-        doc = klass.__doc__ or ""
-        assert "No stylesheet djust ships has a rule" in doc
-        assert f"{{% {tag} %}}" in doc
-        # The first line is the catalogue card's description, and the card
-        # shows the styled tag — it must not call the component unstyled.
-        assert "unstyled" not in doc.strip().splitlines()[0].lower()
-        assert "Style-agnostic" not in doc
-
-
-@pytest.mark.django_db
-class TestCatalogueSaysSo2993:
-    @pytest.fixture(autouse=True)
-    def _urlconf(self):
-        from django.test import override_settings
-
-        from djust.tests.test_catalogue_ux import _SETTINGS
-
-        with override_settings(**_SETTINGS):
-            yield
-
-    @pytest.mark.parametrize(
-        "name,cls", [("alert", "Alert"), ("progress", "Progress"), ("avatar", "Avatar")]
-    )
-    def test_the_detail_page_names_the_unstyled_class(self, client, name, cls):
-        body = client.get(f"/theme/components/{name}/").content.decode()
-        assert f"from djust.components import {cls}</code>) renders the same component" in body
-        assert "<strong>unstyled</strong>" in body
-
-    def test_a_styled_component_has_no_such_note(self, client):
-        body = client.get("/theme/components/badge/").content.decode()
-        assert "<strong>unstyled</strong>" not in body

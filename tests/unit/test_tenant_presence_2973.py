@@ -102,6 +102,33 @@ def test_two_tenants_get_distinct_groups_with_presence_first():
     assert a.get_presence_key() != b.get_presence_key()
 
 
+@pytest.mark.parametrize("cls", [TenantFirst, PresenceFirst])
+def test_two_tenants_in_the_same_room_do_not_see_each_other(cls):
+    """End to end through the global registry's backend: the same room name in
+    two tenants is two presence groups, and neither lists the other's users."""
+    from djust.backends.registry import reset_presence_backend, set_presence_backend
+    from djust.presence import PresenceManager
+
+    set_presence_backend(InMemoryPresenceBackend())
+    try:
+        acme, globex = cls(), cls()
+        acme.doc_id = globex.doc_id = "lobby"
+        acme._tenant = TenantInfo(tenant_id="acme")
+        globex._tenant = TenantInfo(tenant_id="globex")
+        PresenceManager.join_presence(acme.get_presence_key(), "ann", {"name": "Ann"})
+        PresenceManager.join_presence(globex.get_presence_key(), "bob", {"name": "Bob"})
+
+        acme_users = [p["id"] for p in PresenceManager.list_presences(acme.get_presence_key())]
+        globex_users = [p["id"] for p in PresenceManager.list_presences(globex.get_presence_key())]
+        assert acme_users == ["ann"]
+        assert globex_users == ["bob"]
+        assert PresenceManager.presence_group_name(
+            acme.get_presence_key()
+        ) != PresenceManager.presence_group_name(globex.get_presence_key())
+    finally:
+        reset_presence_backend()
+
+
 def test_presence_without_tenant_mixin_is_unchanged():
     view = PresenceOnly()
     view.doc_id = 3

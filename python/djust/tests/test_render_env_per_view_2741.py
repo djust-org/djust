@@ -289,7 +289,9 @@ def test_every_backend_entry_that_applies_auto_call_applies_the_env():
         for n, b in entries.items()
         if "self.render_env.as_ref().map(RenderEnvGuard::install)" in b
     }
-    assert auto_call == env == {"render", "render_with_diff", "render_binary_diff"}, (
+    # `render_with_diff` detaches from the interpreter and delegates to
+    # `render_with_diff_detached`, which holds the render body (#3074).
+    assert auto_call == env == {"render", "render_with_diff_detached", "render_binary_diff"}, (
         f"auto_call entries {sorted(auto_call)} vs env entries {sorted(env)}"
     )
 

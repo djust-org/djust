@@ -120,7 +120,30 @@ async def websocket_session(session_key, view_name):
     return frames
 
 
-async def test_explicit_orm_render_reaches_html_but_not_storage_frames_or_debug(staged):
+class _TickingClock:
+    """``time`` for the snapshot codec: one second per call (#3092).
+
+    The signed snapshot embeds ``"created": int(time.time())`` under its
+    signature, so a mount and an event that straddle a second boundary carry
+    different tokens for identical state. Advancing on every call makes that
+    boundary certain instead of occasional."""
+
+    def __init__(self, start):
+        self._now = start
+
+    def time(self):
+        self._now += 1
+        return self._now
+
+
+async def test_explicit_orm_render_reaches_html_but_not_storage_frames_or_debug(
+    staged, monkeypatch
+):
+    import time
+
+    from djust import _exposure_snapshots
+
+    monkeypatch.setattr(_exposure_snapshots, "time", _TickingClock(int(time.time())))
     user = await sync_to_async(make_user)()
     request = await sync_to_async(make_request)()
     with override_settings(**SETTINGS):
@@ -144,13 +167,18 @@ async def test_explicit_orm_render_reaches_html_but_not_storage_frames_or_debug(
     assert '"member"' not in wire
 
     # The signed snapshot holds only the client-persisted field.
+    # Compare what the tokens carry, not their bytes: each embeds its signing
+    # second, so identical state re-signed a second later differs (#3092).
     token = mount["state_snapshot_signed"]
-    assert token and token == event["state_snapshot_signed"]
+    event_token = event["state_snapshot_signed"]
+    assert token and event_token
     assert_clean(token)
+    assert_clean(event_token)
     fresh = await sync_to_async(make_request)(request.session.session_key)
     view = OrmView.__new__(OrmView)
     codec = await sync_to_async(snapshot_codec)(view, fresh)
     assert codec.restore(token) == {"note": "snap"}
+    assert codec.restore(event_token) == {"note": "snap"}
 
     # Server persistence: the validated adapter load and the raw stored session.
     adapter = await sync_to_async(server_state_adapter)(view, fresh)

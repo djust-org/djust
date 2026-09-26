@@ -41,6 +41,7 @@ KNOWN_MIXINS = {
     "OfflineMixin",
     "SyncMixin",
     "FormMixin",
+    "ModelFormMixin",
 }
 
 # Decorator keys stored in _djust_decorators (besides 'event_handler')
@@ -58,40 +59,19 @@ _DECORATOR_KEYS = {
 def _get_handler_metadata(
     cls: type, base_classes: Optional[list[type]] = None
 ) -> Iterator[tuple[str, dict[str, Any]]]:
-    """Extract event handler metadata from class without instantiating.
+    """Event handler metadata of ``cls``, by name, without instantiating it.
 
-    Skips handlers that are defined only on base framework classes (e.g.,
-    update_model from ModelBindingMixin) unless overridden by the user class.
+    Handlers come from ``_parameter_metadata.declared_handlers``, the discovery
+    dispatch uses (ADR-037 D1). A handler whose resolving declaration belongs
+    to one of ``base_classes`` (e.g. ``update_model`` from ``ModelBindingMixin``
+    on ``LiveView``) is framework surface, not the application's, and is skipped.
     """
-    # Collect handler names defined on framework base classes
-    base_handler_names = set()
-    if base_classes:
-        for base in base_classes:
-            for name in dir(base):
-                if name.startswith("_"):
-                    continue
-                try:
-                    attr = getattr(base, name, None)
-                except Exception:
-                    continue
-                if callable(attr) and hasattr(attr, "_djust_decorators"):
-                    if "event_handler" in attr._djust_decorators:
-                        base_handler_names.add(name)
+    from djust._parameter_metadata import declared_handlers
 
-    for name in sorted(dir(cls)):
-        if name.startswith("_"):
-            continue
-        # Skip handlers inherited unchanged from framework base
-        if name in base_handler_names and name not in cls.__dict__:
-            continue
-        try:
-            attr = getattr(cls, name, None)
-        except Exception:
-            continue
-        if callable(attr) and hasattr(attr, "_djust_decorators"):
-            meta = attr._djust_decorators
-            if "event_handler" in meta:
-                yield name, meta
+    framework = {klass for base in base_classes or () for klass in base.__mro__}
+    handlers = [h for h in declared_handlers(cls) if h.owner not in framework]
+    for handler in sorted(handlers, key=lambda h: h.name):
+        yield handler.name, vars(handler.function)["_djust_decorators"]
 
 
 def _format_handler_params(handler_meta: dict[str, Any]) -> str:
