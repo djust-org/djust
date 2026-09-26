@@ -47,6 +47,8 @@ from djust.observability import tracebacks
 from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
 from djust.websocket import LiveViewConsumer
 
+from ._ws_frames import drain_extra, receive_type, types_of
+
 SENTINEL = "E1_ENTRY_SCOPE_SENTINEL"
 NONLEGACY = ["explicit", None, "invalid"]
 POLICIES = ["legacy", *NONLEGACY]
@@ -441,16 +443,17 @@ async def _connect():
     return socket
 
 
-async def _frames(socket):
-    frames = []
-    while not await socket.receive_nothing(timeout=0.5):
-        frames.append(await socket.receive_json_from(timeout=3))
-    return frames
+async def _frames(socket, expected):
+    """The turn's frames: up to the ``expected`` one (event-driven, #3130),
+    then whatever else follows before the socket goes quiet. The trailing
+    window can only miss an extra frame, never lose the expected one."""
+    frames = await receive_type(socket, expected)
+    return frames + await drain_extra(socket)
 
 
 async def _mount(socket):
     await socket.send_json_to({"type": "mount", "view": VIEW_PATH, "url": "/entry/"})
-    frames = await _frames(socket)
+    frames = await _frames(socket, "mount")
     assert any(frame["type"] == "mount" for frame in frames), frames
 
 
@@ -465,11 +468,11 @@ async def test_ws_request_html_failure(monkeypatch, caplog, debug, policy):
     try:
         await _mount(socket)
         await socket.send_json_to({"type": "event", "event": "bump", "params": {}, "ref": 1})
-        assert any(frame["type"] == "patch" for frame in await _frames(socket))
+        assert any(frame["type"] == "patch" for frame in await _frames(socket, "patch"))
         monkeypatch.setattr(EntryView, "fail_at", "recovery")
         caplog.clear()
         await socket.send_json_to({"type": "request_html"})
-        frames = await _frames(socket)
+        frames = await _frames(socket, "error")
         assert [frame["type"] for frame in frames] == ["error"], frames
         observed = _observe(caplog, json.dumps(frames))
         if debug:
@@ -504,7 +507,7 @@ async def test_ws_live_redirect_mount_failure(monkeypatch, caplog, debug, policy
         await socket.send_json_to(
             {"type": "live_redirect_mount", "view": VIEW_PATH, "url": "/entry/"}
         )
-        frames = await _frames(socket)
+        frames = await _frames(socket, "error")
         assert "error" in [frame["type"] for frame in frames], frames
         observed = _observe(caplog, json.dumps(frames))
         if debug:
@@ -534,8 +537,8 @@ async def test_ws_mount_batch_constructor_failure(monkeypatch, caplog, debug, po
                 "views": [{"view": VIEW_PATH, "url": "/entry/", "target_id": "t1"}],
             }
         )
-        frames = await _frames(socket)
-        assert [frame["type"] for frame in frames] == ["mount_batch"], frames
+        frames = await _frames(socket, "mount_batch")
+        assert types_of(frames) == ["mount_batch"], frames
         assert [entry["target_id"] for entry in frames[0]["failed"]] == ["t1"]
         observed = _observe(caplog, json.dumps(frames))
         if policy == "legacy" or debug:
