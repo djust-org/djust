@@ -1,6 +1,6 @@
 # ADR-036: Python-owned event parameters and canonical dj-value markup
 
-**Status**: Proposed
+**Status**: Accepted: gates P1–P3 closed on `feat/adr-034-037`, with evidence in the [acceptance review](component-conventions-implementation.md#adr-036-acceptance-review--p3); acceptance is confirmed at that branch's review. The strict policy is a supported opt-in, and legacy remains the default. PR (Step R) stays open by this ADR's own rule: it fires only once strict is the default, which needs a separate compatibility decision.
 **Date**: 2026-09-19
 **Deciders**: Project maintainers
 **Evidence baseline**: `0d1aeb882` on `feat/components-catalogue`.
@@ -25,9 +25,10 @@ and invalid values. Preserve legacy behavior during migration.
 This is partly consolidation, not a new coercion system: djust already resolves
 type hints and converts several parameter types. The proposal closes concrete
 gaps and makes the same rules govern browser, HTTP, component, tooling, and docs.
-The server-side configuration and decorator argument are now staged on this
-implementation branch; strict browser collection and full acceptance remain
-incomplete. See [server integration evidence](notes/036-strict-server-integration.md).
+The policy is implemented end to end: server binding, registration checks,
+trusted dispatch context, owner-scoped client contracts, strict browser
+collection and transport parity. See the [acceptance review](component-conventions-implementation.md#adr-036-acceptance-review--p3)
+and the [implementation notes](notes/036-strict-server-integration.md).
 
 ## Evidence and current behavior
 
@@ -54,7 +55,7 @@ define its public inputs. Required parameters stay required; do not recommend
 `id=0` or `**kwargs` merely to make malformed events run.
 
 ```python
-# Staged server API; ADR-036 acceptance is not complete.
+# Strict policy is opt-in; legacy remains the default.
 from djust import LiveView, event_handler
 
 
@@ -181,7 +182,7 @@ secrets or unbounded client values into logs or user-facing output.
 Opt-in server configuration (staged):
 
 ```python
-# Staged server setting; keep legacy during migration until acceptance passes.
+# Project-wide opt-in; the default remains legacy.
 LIVEVIEW_CONFIG = {
     "event_parameter_policy": "strict",
 }
@@ -197,6 +198,22 @@ All relevant paths must honor it: WebSocket, JSON HTTP fallback, actor dispatch,
 scoped components, and deliberately exposed API handlers. Preserve each path's
 authentication and transport protections. New ADR-034 typed subscriptions use
 strict contracts, with trusted source injection outside the client payload.
+
+## Completion decisions (2026-09-24)
+
+P2 left the strict-collection conventions open. These are decided. Q1, Q2
+and R1 are owner decisions. N1–N3 are implementation choices the owner accepted. A
+later change to any of them changes its implementation and tests, not just
+this table.
+
+| # | Question | Decision | Reason |
+| --- | --- | --- | --- |
+| Q1 | Which generated event values (`value`, `field`, `key`, `code`, form fields, paste/copy text) does a strict native binding send? | Contract-aware. A generated key is sent only if the handler declares a parameter with that name, or has a `**` catch-all. `dj-value-*` arguments are always sent, and one that collides with a generated key is rejected. A missing or invalid contract manifest fails closed rather than guessing. The server stays authoritative and still rejects hand-crafted extra keys. | Owner decision. A closed signature is the encouraged contract (D1). A fixed per-directive set would force every strict handler to declare names it doesn't use, such as `field` on every input handler. The client already holds the owner-scoped public contract, so it can send exactly what the handler asks for. |
+| Q2 | `_target` (the triggering field or submitter name) under strict | Not sent. Use `field` or an explicit `dj-value-*`. Legacy bindings are unchanged and keep sending `_target`. | Owner decision. `_`-prefixed names are framework-reserved and cannot be declared by a strict handler (D5). Renaming it would add public API that `field` and `dj-value-*` already cover. |
+| N1 | How is a client-side strict rejection shown? | The existing error path: a fixed, value-free `console.error` and the `djust:error` event (dev overlay, application toasts). It happens before `dj-disable-with`, optimistic and loading effects. | No new UI or API, and nothing is applied that would then have to be rolled back. |
+| N2 | How do HTTP-only pages and the HTTP fallback get contracts? | The initial page renders a framework-internal JSON block (`<script type="application/json" data-djust-parameter-contracts>`) outside the live root. HTTP-fallback render responses carry the additive `parameter_contracts` / `parameter_contract_view` fields that socket frames already use. | Additive, and it keeps the server's VDOM baseline free of framework markup. |
+| R1 | `dj-auto-recover` handlers under strict (decided 2026-09-25) | Recovery stays legacy. A handler that a `dj-auto-recover` binding targets is dispatched, and advertised in the public contract, with the legacy policy, whatever the project or handler policy. Targets are read from the HTML the server rendered for that view instance (following includes, extends, conditionals and dynamic values), plus a scan of the view's own template source for renders Python does not see. The `_form_values` / `_data_attrs` envelope is unchanged. An explicit `parameter_policy="strict"` on such a handler is a startup warning (`djust.V019`). | Owner decision. The envelope's `_`-prefixed dictionaries cannot be strict parameters, and new public names or strict dict types are not worth adding now. Revisit with ADR-035's form lifecycle, which may replace custom recovery handlers. Targets come from server output (only parsed element attributes, never escaped text), so a client cannot claim the downgrade for any other handler. |
+| N3 | Server-issued owner generation tokens | Not added unless the parity matrix shows a concrete stale-owner failure. Two root mounts of the same view path on one page remain a known limitation. | Manifests are whole-tree snapshots applied atomically with the DOM they describe, in receipt order. |
 
 ## Alternatives considered
 
@@ -252,11 +269,11 @@ opt-in — which this ADR does not yet approve.
 
 | Target | Cited at | Retired because |
 | --- | --- | --- |
-| `coerce_parameter_types` | `validation.py:137` | Superseded by the signature-derived metadata in `_parameter_contract.py` |
-| `_coerce_value` | `validation.py:219` | Same conversion, second implementation |
-| `_coerce_single_value` | `validation.py:249` | Same conversion, second implementation |
+| `coerce_parameter_types` | `validation.py:256` | Superseded by the signature-derived metadata in `_parameter_contract.py` |
+| `_coerce_value` | `validation.py:338` | Same conversion, second implementation |
+| `_coerce_single_value` | `validation.py:368` | Same conversion, second implementation |
 
-`validate_handler_params` (`validation.py:440`) is **not** a Step R target: it
+`validate_handler_params` (`validation.py:559`) is **not** a Step R target: it
 keeps its role as the dispatch-path guard and is rewired onto the shared
 contract, not removed.
 
@@ -268,6 +285,15 @@ ADR-033 S3's `event_attrs` sweep. No `data-value` attribute remains in
 **Exit conditions.** One deletion PR removing the three functions and their
 tests; a grep-verified absence of a second coercion implementation; and a
 recorded account of anything retained.
+
+**Status at acceptance (2026-09-25): open, not triggered.** All three
+targets are still reachable, because every legacy-policy handler, which is
+still the default, converts through them. Strict handlers never do: they bind
+through `_parameter_contract.py`, the only strict conversion. The gate is
+therefore neither closed by account (unlike ADR-038's ER, whose deletions
+were scheduled rather than conditional) nor fired. It fires when a
+compatibility decision makes strict the default. Citations above were
+refreshed at acceptance.
 
 ## Consequences and non-goals
 

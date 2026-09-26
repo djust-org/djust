@@ -1467,3 +1467,18 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
 #: (``_save_components_to_session`` and both ``_restore_component_state``
 #: callers). One tuple so the gates cannot drift apart (ADR-031 D7).
 SESSION_COMPONENT_TYPES = (Component, LiveComponent, BoundComponent)
+
+
+def is_session_component(value: Any) -> bool:
+    """A value the session component paths save and restore by its view key.
+
+    ``SESSION_COMPONENT_TYPES``, plus ADR-034's keyed interactive collections,
+    which persist as one record. Test ``is not None`` first at call sites: an
+    empty collection is falsy.
+    """
+    return isinstance(value, SESSION_COMPONENT_TYPES) or is_component_collection(value)
+
+
+def is_component_collection(value: Any) -> bool:
+    """An ADR-034 keyed interactive collection (rendered, never session state)."""
+    return bool(getattr(type(value), "_djust_component_collection", False))

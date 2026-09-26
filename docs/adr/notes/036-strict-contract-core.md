@@ -20,6 +20,10 @@ and removes annotations after compilation, avoiding retention of live owners
 through default objects. Do not call `apply_defaults()` on this internal call
 plan: omitted arguments must stay omitted so Python applies the real defaults.
 
+Deferred input annotations resolve against the defining class body, then the
+module globals, one parameter at a time; see
+[registration checks](036-registration-checks.md), which also covers the
+reserved `view_id`/`component_id`/`_`-prefixed keyword names.
 Named inputs require a supported annotation or explicit `Any`. An unannotated
 catch-all is intentionally open. `Any`, including nested occurrences, is marked
 as reduced checking in metadata. Unsupported annotations and unresolved references

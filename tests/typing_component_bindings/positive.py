@@ -38,6 +38,37 @@ class AsyncPage(PrototypeOwner):
         component.open = open
 
 
+class RowsPage(PrototypeOwner):
+    """ADR-034 C3: a keyed collection, typed like the fixed menu."""
+
+    rows = DropdownMenu.collection()
+
+    @rows.on.selected
+    def on_rows_selected(self, component: DropdownMenu, value: str) -> None:
+        component.open = value == component.key
+
+    @rows.on.toggled
+    async def on_rows_toggled(self, component: DropdownMenu, open: bool) -> None:
+        pass
+
+
+def verify_collection() -> None:
+    page = RowsPage()
+    page.rows.sync([("a", DropdownMenu(label="A", items=[{"label": "Go", "value": "a"}]))])
+    member = page.rows.get("a")
+    assert_type(member, DropdownMenu | None)
+    assert_type(page.rows.values, tuple[DropdownMenu, ...])
+    assert_type(len(page.rows), int)
+    for item in page.rows:
+        assert_type(item, DropdownMenu)
+    assert member is not None and member.key == "a"
+    assert page.rows.get("missing") is None
+    assert list(page.rows) == [member] == list(page.rows.values)
+    assert len(page.rows) == 1
+    page.on_rows_selected(member, "a")
+    assert member.open
+
+
 def verify() -> None:
     page, other = Child(), Child()
     assert_type(page.menu, DropdownMenu)
@@ -60,6 +91,7 @@ def verify() -> None:
     assert async_page.menu.open
     async_page.toggled(async_page.menu, True)
     assert async_page.menu.open
+    verify_collection()
 
 
 if __name__ == "__main__":

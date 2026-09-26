@@ -167,6 +167,22 @@ class MyView(LiveView):
             self.total = data["count"]
 ```
 
+## Choose the owner
+
+Pick the tool by who owns the behavior:
+
+- **Browser presentation only** (show or hide, nothing for Python to read):
+  native HTML such as `<details>` or `popover`, and no server component.
+- **The page** (a row's action on a record): an ordinary `@event_handler()`
+  that receives the record id.
+- **A reusable widget that owns state and mechanics:** an interactive
+  component, such as `djust.components.interactive.DropdownMenu`. It opens,
+  closes and validates by itself, and reports typed outputs that your view
+  subscribes to with `@menu.on.selected`. Available from djust 1.3 (not in the
+  1.3.0rc1 pre-release).
+
+See [Interactive Components](../guides/interactive-components.md).
+
 ## Built-in Components
 
 ### Stateful (LiveComponent)

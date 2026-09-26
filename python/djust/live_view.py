@@ -1386,6 +1386,13 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
 
         from .components.base import Component
 
+        if strict and _declares_interactive_collection(type(self)):
+            # ADR-034 C3 (D5): a keyed collection's membership comes from the
+            # view's current ``sync()``. A client-signed navigation snapshot
+            # would restore the membership it captured, resurrecting members
+            # removed since, so such a view is never signed: Back mounts fresh.
+            return {}
+
         result: Dict[str, Any] = {}
         for key, value in self.__dict__.items():
             if key.startswith("_"):
@@ -1824,6 +1831,17 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         reassigned while user was disconnected" case automatically.
         """
         self._object = None
+
+
+def _declares_interactive_collection(view_class: type) -> bool:
+    """Whether a view class declares an ADR-034 keyed interactive collection."""
+    from ._component_subscriptions import DECLARATIONS_ATTR
+
+    declarations = getattr(view_class, DECLARATIONS_ATTR, None) or {}
+    return any(
+        getattr(type(declaration), "_djust_component_collection", False)
+        for declaration in declarations.values()
+    )
 
 
 def live_view(

@@ -1503,78 +1503,26 @@ def _discover_views(app_label: Optional[str] = None) -> Iterator[Type[Any]]:
 
 
 def _get_handlers(cls: Type[Any]) -> Dict[str, Any]:
-    """Get event handler names and their parameter metadata from a view class.
+    """The event handlers of a view class, with their public parameter metadata.
 
-    Discovers both @event_handler decorated methods (with full param metadata)
-    and plain public methods defined on the user class (not inherited from
-    LiveView/LiveComponent base). Plain methods get basic param info from
-    inspect.signature.
+    Exactly the handlers dispatch resolves (``_parameter_metadata``'s shared
+    discovery, ADR-037): an undecorated method is not included, because the
+    server refuses to call it. A strict handler's parameters come from its
+    compiled contract, a legacy handler's from its decorator. Server functions
+    are not event handlers and are not included.
     """
-    from djust.live_view import LiveView
-
-    # Collect names defined on framework base classes
-    base_names = set()
-    for base in cls.__mro__:
-        if base.__name__ in ("LiveView", "LiveComponent", "object"):
-            break
-        continue
-    for name in dir(LiveView):
-        if not name.startswith("_"):
-            base_names.add(name)
+    from djust._parameter_metadata import declaration_method, declared_handlers, handler_metadata
 
     handlers = {}
-    for name in dir(cls):
-        if name.startswith("_"):
-            continue
-        try:
-            attr = getattr(cls, name, None)
-        except Exception:
-            continue
-        if not callable(attr):
-            continue
-
-        # @event_handler decorated — has full metadata
-        if hasattr(attr, "_djust_decorators"):
-            meta = attr._djust_decorators
-            if "event_handler" in meta:
-                handlers[name] = meta.get("event_handler", {})
-                continue
-
-        # Plain method defined on user class (not inherited from framework)
-        if name in base_names:
-            continue
-        # Must be defined on the user class, not a mixin/base
-        if name not in cls.__dict__:
-            continue
-
-        # Build basic param info from inspect
-        try:
-            sig = inspect.signature(attr)
-        except (ValueError, TypeError):
-            handlers[name] = {"params": [], "accepts_kwargs": False}
-            continue
-
-        params = []
-        accepts_kwargs = False
-        for pname, param in sig.parameters.items():
-            if pname == "self":
-                continue
-            if param.kind == param.VAR_KEYWORD:
-                accepts_kwargs = True
-                continue
-            if param.kind == param.VAR_POSITIONAL:
-                continue
-            p = {"name": pname, "type": "str", "required": True}
-            if param.default is not param.empty:
-                p["required"] = False
-                p["default"] = param.default
-            if param.annotation is not param.empty:
-                type_name = getattr(param.annotation, "__name__", str(param.annotation))
-                p["type"] = type_name
-            params.append(p)
-        handlers[name] = {"params": params, "accepts_kwargs": accepts_kwargs}
-
+    for handler in declared_handlers(cls):
+        method = declaration_method(handler.member, handler.function, cls)
+        metadata = handler_metadata(method).get("event_handler", {})
+        params = [p for p in metadata.get("params", []) if p.get("kind") not in _VARIADIC_KINDS]
+        handlers[handler.name] = {**metadata, "params": params}
     return handlers
+
+
+_VARIADIC_KINDS = ("var_keyword", "var_positional")
 
 
 def _make_fuzz_params(handler_meta: Dict[str, Any]) -> Iterator[Tuple[str, Dict[str, Any]]]:

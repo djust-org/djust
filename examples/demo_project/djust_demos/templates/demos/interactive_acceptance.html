@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{% comment %}
+ADR-034 C4 live surface (tests/playwright/test_interactive_acceptance.py).
+{% endcomment %}
+
+{% block title %}Interactive acceptance (djust){% endblock %}
+
+{% block content %}
+<div dj-root dj-view="djust_demos.views.interactive_acceptance_demo.InteractiveAcceptanceView" style="padding: 6rem 2rem 2rem; max-width: 720px; margin: 0 auto;">
+    <h1>Interactive acceptance</h1>
+    <p>Result: <span id="ia-result">{{ result }}</span></p>
+    <p>Calls: <span id="ia-calls">{{ calls }}</span></p>
+    <p>Observed: <span id="ia-observed">{{ observed }}</span></p>
+    <p>Selected: <span id="ia-selected">{{ menu.selected }}</span></p>
+    <button id="ia-refresh" dj-click="refresh">Refresh</button>
+    <div id="ia-menu">{{ menu }}</div>
+    <div id="ia-quiet">{{ quiet }}</div>
+    <div id="ia-legacy">{{ legacy|safe }}</div>
+</div>
+{% endblock %}

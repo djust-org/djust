@@ -6,6 +6,13 @@ from .counter_demo import CounterView
 from .nav_demo import NavDemoPageAView, NavDemoPageBView
 from .smoke_demo import BrowserSmokeView
 from .exposure_demo import ExposureMatrixView, LegacyExposureMatrixView
+from .strict_parameters_demo import StrictParametersView
+from .model_form_demo import ModelFormDemoView, model_form_index
+from .interactive_dropdown_demo import InteractiveDropdownView
+from .interactive_collection_demo import InteractiveCollectionView
+from .interactive_nav_demo import InteractiveNavView, forget_saved_state
+from .interactive_acceptance_demo import InteractiveAcceptanceView
+from .embedded_directives_demo import EmbeddedDirectivesView
 from .table_select_demo import TableSelectView
 from .demos import (
     TodoView,
@@ -51,6 +58,15 @@ __all__ = [
     "BrowserSmokeView",
     "ExposureMatrixView",
     "LegacyExposureMatrixView",
+    "StrictParametersView",
+    "ModelFormDemoView",
+    "model_form_index",
+    "InteractiveDropdownView",
+    "InteractiveCollectionView",
+    "InteractiveNavView",
+    "forget_saved_state",
+    "InteractiveAcceptanceView",
+    "EmbeddedDirectivesView",
     "TableSelectView",
     "TodoView",
     "ChatView",

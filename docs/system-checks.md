@@ -26,18 +26,24 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C019 | Config | Warning | Unknown DJUST_CONFIG['PRESENCE_BACKEND'] value (presence falls back to in-process memory) |
 | C020 | Config | Error | `DJUST_SERVER_STATE_MAX_AGE` is not an integer from 1 to 86400 |
 | C021 | Config | Error | `LIVEVIEW_CONFIG['worker_threads']` is not `None`, `False`, `True`, `"auto"` or an integer >= 0 |
+| C022 | Config | Error | `LIVEVIEW_CONFIG['event_parameter_policy']` is not `'legacy'` or `'strict'` (ADR-036) |
 | V001 | LiveView | Warning | LiveView missing template_name attribute |
 | V002 | LiveView | Info | LiveView missing mount() method |
 | V003 | LiveView | Error | mount() has wrong signature |
 | V004 | LiveView | Info | Public method looks like event handler but missing @event_handler |
 | V005 | LiveView | Warning | Module not in LIVEVIEW_ALLOWED_MODULES |
 | V006 | LiveView | Warning | Service instance assigned in mount() — high-confidence subset of V008 |
-| V007 | LiveView | Warning | Event handler missing **kwargs |
+| V007 | LiveView | Retired | Retired in 1.3 (ADR-037): recommended `**kwargs` on every handler. Never emitted; the ID is not reused |
 | V008 | LiveView | Info | Non-primitive type assigned in mount() — broader, lower-confidence (skips V006 patterns) |
 | V012 | LiveView | Warning | Sticky child template declares its own dj-view (nested duplicate binding) |
 | V013 | LiveView | Warning | HTTP-only dispatch()/get()/post() override never runs on a WebSocket mount |
 | V014 | LiveView | Warning | Time-travel-enabled view has PII-looking model/form fields not in `time_travel_excluded_fields` |
 | V015 | LiveView | Warning | LIVEVIEW_ALLOWED_MODULES rejects a djust LiveView the URLconf routes (add `"djust"`) |
+| V016 | LiveView | Error | Strict-policy handler declaration that strict dispatch rejects (ADR-036) |
+| V017 | LiveView | Error | Async strict event handler on an actor view (`use_actors = True`) |
+| V018 | LiveView | Warning | `@event_handler(params=[...])` disagrees with a strict handler's signature |
+| V019 | LiveView | Warning | A `dj-auto-recover` handler declares `parameter_policy="strict"`; recovery always runs under legacy policy |
+| V020 | LiveView | Error | A `use_actors = True` view declares an interactive component (`djust.components.interactive`); actor views do not support them |
 | S001 | Security | Error | mark_safe() with f-string (XSS risk) |
 | S002 | Security | Warning | @csrf_exempt without justification comment |
 | S003 | Security | Warning | Bare except: pass swallows all exceptions |
@@ -47,6 +53,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | S009 | Security | Warning | View-auth'd LiveView exposes a public `@event_handler` with no per-handler gate |
 | S011 | Security | Warning | Inline executable `<script>` inside a `dj-root` with no CSP configured (#1848) |
 | S012 | Security | Error | LiveView gates auth via `@method_decorator(..., name="dispatch")` or an overridden `dispatch()` — not enforced over WebSocket (#14; reallocated from a duplicate S004, #2070) |
+| S013 | Security | Warning | A `ModelFormMixin` edit view overrides neither `get_queryset()` nor `has_object_permission()` (ADR-035) |
 | T001 | Templates | Warning | Deprecated @click/@input syntax |
 | T002 | Templates | Info | LiveView template missing dj-root |
 | T003 | Templates | Info | wrapper_template uses {% include %} instead of liveview_content |
@@ -60,9 +67,14 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | T015 | Templates | Warning | Legacy data-djust-root / data-djust-view root attributes |
 | T017 | Templates | Warning | dj-view / dj-root on a table-section element (foster-parented to silent garbage) |
 | T018 | Templates | Warning | Template references a variable that resolves nowhere (renders blank, no error) |
+| T019 | Templates | Warning | An event binding names no browser-callable handler on its owner (ADR-037) |
+| T020 | Templates | Warning | An event binding's arguments are missing, unexpected or supplied twice (ADR-037) |
+| T021 | Templates | Warning | An event binding's literal value or wire-type hint does not fit the handler (ADR-037) |
+| T022 | Templates | Warning | Markup supplies routing context (`view_id` / `component_id`) as an argument (ADR-037) |
 | Q001 | Quality | Info | print() statement found |
 | Q002 | Quality | Warning | f-string in logger call |
 | Q003 | Quality | Info | console.log without djustDebug guard |
+| Q004 | Quality | Warning | One module imports both the interactive and the legacy `DropdownMenu` |
 | Q007 | Quality | Warning | Overlapping static_assigns and temporary_assigns |
 | Q010 | Quality | Info | Event handler sets nav state without patch() (heuristic) |
 | Y001 | Accessibility | Warning | Interactive element (icon-only `<button>`/`<a>`) missing an accessible name |
@@ -168,6 +180,13 @@ console.log("debug info"); // noqa: Q003
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C021"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C021"]`
 - **False positives**: None
 
+### C022 — Invalid `event_parameter_policy`
+- **Severity**: Error
+- **Method**: Settings inspection, through the resolver dispatch uses (`djust.validation.get_project_parameter_policy`)
+- **What it detects**: `LIVEVIEW_CONFIG['event_parameter_policy']` (or the same key in `DJUST_CONFIG`) is set to something other than `'legacy'` or `'strict'`. Every handler without its own `parameter_policy` inherits the value, and dispatch rejects each of their events while it is invalid. An absent key is the `'legacy'` default and never reports. The ADR-036 strict policy is opt-in; legacy remains the default.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C022"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C022"]` (the runtime still rejects the events)
+- **False positives**: None
+
 ---
 
 ## LiveView Checks (V)
@@ -181,7 +200,7 @@ from djust import LiveView
 
 class BaseLiveView(LiveView):
     """Abstract base — provides shared mount + auth boilerplate."""
-    abstract = True   # skip V001 / V005 / V002 / V003 / V004 / V007 / Q007
+    abstract = True   # skip V001 / V005 / V002 / V003 / V004 / Q007
     login_required = True
 
     def mount(self, request, **kwargs):
@@ -261,17 +280,11 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Suppression**: `# noqa: V006` inline on the assignment
 - **False positives**: Objects whose class name contains "Service", "Client", "Session", "API", or "Connection" but are actually lightweight and serialisable
 
-### V007 — Event handler missing **kwargs
-- **Severity**: Warning
-- **Method**: AST (inspects `@event_handler` decorated methods)
-- **What it detects**: An event handler method does not accept `**kwargs`, which causes a `TypeError` when djust passes extra keyword arguments
-- **Suppression** (any of):
-  - Fix the signature (the real fix)
-  - `abstract = True` class attribute on an abstract base
-  - `DJUST_CONFIG = {"suppress_checks": ["V007"]}` — global (fixed in #1607)
-  - `SILENCED_SYSTEM_CHECKS = ["djust.V007"]`
-  - `# noqa: V007` inline
-- **False positives**: None
+### V007 — Retired
+- **Retired in**: 1.3 (ADR-037 D3)
+- **What it did**: warned when an `@event_handler` did not accept `**kwargs`
+- **Why it was retired**: a closed signature is encouraged, not suspicious. A catch-all hides misspelled parameters. The template binding checks report known missing and unexpected arguments instead
+- **Migration**: remove `"V007"` from `suppress_checks`, `SILENCED_SYSTEM_CHECKS` and `# noqa` comments at your convenience; they now have no effect. The ID is never reused
 
 ### V008 — Non-primitive type assigned in mount() (AST)
 - **Severity**: Info
@@ -309,6 +322,53 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Not `DEBUG`-gated**: the runtime surfaces (`BugCapture.encode`, the replay route) are, because they *do* something. A system check only tells you something, and `manage.py check --deploy` on the way to production is exactly when you want to hear that a shipped view records a password field.
 - **Suppression**: `DJUST_CONFIG = {'suppress_checks': ['V014']}` or `SILENCED_SYSTEM_CHECKS = ["djust.V014"]`
 - Added in the unreleased line (#1561)
+
+### V016 — Strict-policy handler declaration that strict dispatch rejects
+- **Severity**: Error
+- **Method**: Runtime (walks user `LiveView` and `LiveComponent` subclasses; compiles each strict `@event_handler` / `@server_function` contract with the same cached resolver dispatch uses, without constructing a view or running a handler)
+- **What it detects**, for handlers whose resolved `parameter_policy` is `'strict'` (declared on the decorator or inherited from `event_parameter_policy`):
+  - an annotation that cannot be resolved: a misspelled name, a name imported only under `if TYPE_CHECKING:`, or a name that exists only in another class. Deferred annotations (`from __future__ import annotations`, quoted forward references) resolve against the defining class body first, then the module, as eager evaluation would. Classes defined inside a function body are not reachable by qualified name, so their class-body names cannot be resolved;
+  - an unsupported type or shape (`dict`, unions other than `Optional[T]`, bare `list`, `Annotated`, `set`, ...). Supported: `str`, `int`, `float`, `bool`, `Decimal`, `UUID`, `date`, `Optional[T]`, `list[T]` and explicit `Any`;
+  - a named parameter without an annotation (use `Any` for unchecked input; unannotated `*args` / `**kwargs` are an intentional open contract);
+  - a keyword-capable parameter named `view_id` or `component_id`, or starting with `_`. Transports strip those routing keys before validation, so the parameter could never receive an application value (ADR-036 D5). Positional-only parameters may use any name;
+  - a handler whose own `parameter_policy` metadata is not `'legacy'` or `'strict'`;
+  - an ADR-034 output-subscription callback (staged) whose payload annotation the strict contract does not support. The source `component` is framework-supplied and not checked as a payload parameter.
+- **Reporting**: one message per declaration, under the declaring class when it is itself checked, otherwise under its first user with `(declared as ...)`. Handlers that inherit an invalid project policy are covered by C022 instead.
+- **Legacy handlers**: never reported. Legacy remains the default.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V016"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V016"]` (dispatch still rejects the events)
+- **False positives**: None: the check and dispatch share one compiled contract.
+
+### V017 — Async strict event handler on an actor view
+- **Severity**: Error
+- **Method**: Runtime (user `LiveView` subclasses with `use_actors = True`)
+- **What it detects**: a strict-policy `async def` event handler on an actor view. Actor dispatch rejects strict async handlers before invoking them.
+- **Limitation**: components hosted by an actor view are not inspected: the host is not known statically.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V017"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V017"]`
+
+### V018 — `params=` disagrees with a strict handler's signature
+- **Severity**: Warning
+- **Method**: Runtime (decorator metadata compared with the compiled strict contract)
+- **What it detects**: `@event_handler(params=[...])` names a different set of parameters from the strict handler's signature. Under the strict policy the signature is the contract; the explicit list is ignored by validation and misleads tooling that reads it.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V018"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V018"]`
+
+### V019 — Strict declaration on a `dj-auto-recover` handler
+- **Severity**: Warning
+- **Method**: Runtime (literal `dj-auto-recover="name"` in the view's own `template` / `template_name` source; dispatch additionally uses the HTML each render produced)
+- **What it detects**: a handler that a `dj-auto-recover` binding targets and that declares `parameter_policy="strict"`. Recovery handlers receive the `_form_values` / `_data_attrs` dictionaries, so dispatch always runs them under the legacy policy (ADR-036 decision R1), whatever the declaration or project policy. Recovery targets are not otherwise checked by V016.
+- **Limitation**: this startup check sees only the view's own template source. A binding in an included or parent template, or with a dynamic value, is not reported here, but dispatch still treats the handler as legacy once a render contains it.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V019"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V019"]`
+
+### V020 — Interactive component on an actor view
+- **Severity**: Error
+- **Method**: Runtime (class inspection; nothing is constructed or mounted)
+- **What it detects**: a LiveView with `use_actors = True` that declares an
+  interactive component from `djust.components.interactive`, such as
+  `DropdownMenu`. Actor views are not supported by interactive components in
+  djust 1.3: the actor path has its own dispatch and render baseline. Without
+  this check the view fails the first time the component is used.
+- **Fix**: remove `use_actors = True` from the view, or move the component to
+  a view that does not use actors.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V020"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V020"]`
 
 ---
 
@@ -454,6 +514,23 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
   suppressed `djust.S004` (via `# noqa: S004` or `SILENCED_SYSTEM_CHECKS`)
   specifically to silence the dispatch-auth warning, update the suppression
   to `djust.S012`.
+
+### S013 — Edit view neither scopes nor authorizes its object
+- **Severity**: Warning
+- **Method**: Class inspection of imported `djust.forms.ModelFormMixin` views
+  (nothing is mounted or queried)
+- **What it detects**: A `ModelFormMixin` view that inherits both
+  `get_queryset()` and `has_object_permission()` from djust. The route's id
+  then selects any row of `model`, so every user who passes the view-level
+  checks can edit every record by changing the URL. The default is
+  deliberately permissive, like Django's `UpdateView`; this warning makes
+  the choice visible.
+- **Fix**: Override `get_queryset()` to limit the rows the requesting user
+  may edit, or `has_object_permission(self, request, obj)` to authorize each
+  object. Either one silences the check.
+- **Suppression**: `# noqa: S013` on the `class` line, or
+  `DJUST_CONFIG = {'suppress_checks': ['S013']}`.
+- **Availability**: `ModelFormMixin` is not in a released version yet.
 
 ---
 
@@ -625,6 +702,58 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Scope**: Static check only; abstract base LiveViews (`abstract = True`)
   are skipped, matching the other V/T checks' convention.
 
+### T019–T022 — Template event bindings (ADR-037)
+- **Severity**: Warning (all four, in 1.3)
+- **Method**: Each LiveView's and LiveComponent's template is compiled with
+  Django's parser, never rendered. `{% extends %}` and constant
+  `{% include %}` are followed, every `{% if %}` branch and `{% for %}` body
+  is kept, and the result is parsed as HTML. Each literal `dj-*` event binding
+  is then checked against its owner. The owner is the view, or the component
+  whose template it is. Handlers are resolved through the same discovery
+  dispatch uses. Arguments go through the runtime's own parameter policy,
+  coercion and strict contract. Nothing is constructed or mounted, no handler
+  runs and no queryset is evaluated.
+- **What each detects**:
+  - `T019`: the name resolves to no browser-callable handler on the owner. This
+    covers a missing method, one without `@event_handler` (under the default
+    strict `event_security`), and an output-subscription callback. It also
+    covers an action or output of a declared interactive component, which a
+    view-owned binding never reaches. The last cases are an invalid event name,
+    and arguments on a directive that sends its value verbatim (`dj-submit`,
+    `dj-keydown`, `dj-keyup`, `dj-click-away`).
+  - `T020`: a required argument the binding never sends; an argument the
+    handler does not accept (under the legacy policy, `dj-input`, `dj-change`
+    and `dj-submit` always send `field` and `_target`); extra positional
+    arguments; or two attributes that send the same name. Under the strict
+    policy, `data-*` attributes are not sent at all: use `dj-value-*`.
+  - `T021`: a literal the handler's annotation rejects (`data-count="abc"` for
+    `count: int`). Also an unknown wire hint, or one that does not fit the
+    declared type (`dj-value-id:bool` for `id: int`), and a field name that is
+    not in a static `form_class` for `validate_field` / `submit_form`.
+  - `T022`: `data-view-id`, `dj-value-component-id` or similar in markup.
+    These are routing context the framework attaches itself, and could
+    redirect the event.
+- **Not reported** (counted in the coverage report instead):
+  - a binding whose name is computed by the template;
+  - one inside markup a component or child view owns;
+  - one outside the live root;
+  - a handler with a `**kwargs` catch-all, whose unknown arguments cannot be
+    checked;
+  - an attribute set that is itself conditional (missing arguments are then
+    unknown).
+- **Not seen**: markup rendered by a third-party template tag or a dynamic
+  `{% include %}`. Each is recorded as a gap, and the owner's event graph is
+  reported as incomplete.
+- **Coverage**: `manage.py djust_check` prints a summary line of how many
+  bindings were checked, dynamic or unsupported. `djust_check --format json`
+  adds a `coverage` object with per-owner counts, per-binding status and gaps.
+  Its binding findings carry `owner`, `binding`, `expected` and `supplied`.
+- **Suppression**: a local comment with a reason, on the binding's line or the
+  line above: `{# noqa: T019 -- rendered by the date-picker widget #}`. A
+  noqa without a reason does not suppress these IDs; the message says so.
+  `DJUST_CONFIG = {"suppress_checks": ["T019"]}` turns a check off
+  project-wide.
+
 ---
 
 ## Code Quality Checks (Q)
@@ -650,6 +779,16 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Correct guard**: `if (globalThis.djustDebug) { console.log(...); }`
 - **Suppression**: `// noqa: Q003` inline or `SILENCED_SYSTEM_CHECKS = ["djust.Q003"]`
 - **False positives**: Intentional debug logging that you intend to remove before merging
+
+### Q004 — Both DropdownMenu classes imported in one module
+- **Severity**: Warning
+- **Method**: AST (`from ... import DropdownMenu` statements)
+- **What it detects**: a module that imports the interactive `DropdownMenu`
+  (`djust.components.interactive`, with typed `.on.selected` outputs) and the
+  legacy plain `DropdownMenu` renderer (`djust.components.components`). The
+  two share a name, so one is easily used where the other was meant.
+- **Fix**: import one `DropdownMenu` per module.
+- **Suppression**: `# noqa: Q004` on the later import, or `SILENCED_SYSTEM_CHECKS = ["djust.Q004"]`
 
 ### Q007 — Overlapping static_assigns and temporary_assigns
 - **Severity**: Warning

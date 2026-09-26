@@ -27,6 +27,14 @@ import { readFileSync } from 'fs';
 
 const clientSource = readFileSync('./python/djust/static/djust/src/03-websocket.js', 'utf-8');
 
+// The branch delegates the morph to _morphPrerenderedMount, which the SSE
+// mount path shares (#1646). Pins read the branch plus that helper's body.
+function getMorphHelper(source) {
+    const start = source.indexOf('function _morphPrerenderedMount(');
+    if (start < 0) throw new Error('_morphPrerenderedMount not found in 03-websocket.js');
+    return source.slice(start, source.indexOf('\n}\n', start) + 2);
+}
+
 function getSkipMountHtmlBranch(source) {
     // The branch starts at `if (this.skipMountHtml) {` and ends at the
     // matching `} else if (data.html) {` that begins the non-prerender
@@ -45,7 +53,7 @@ describe('#1610 — WS-mount HTML applied to prerendered DOM via morphChildren',
 
     beforeEach(() => {
         source = clientSource;
-        branch = getSkipMountHtmlBranch(source);
+        branch = getSkipMountHtmlBranch(source) + getMorphHelper(source);
     });
 
     it('the skipMountHtml branch calls morphChildren to apply WS-mount HTML', () => {
@@ -65,14 +73,16 @@ describe('#1610 — WS-mount HTML applied to prerendered DOM via morphChildren',
         // path that could drift from the canonical embedded-update
         // semantics.
         expect(branch).toMatch(/document\.createElement\(['"]div['"]\)/);
-        expect(branch).toMatch(/\.innerHTML\s*=\s*data\.html/);
+        expect(branch).toMatch(/\.innerHTML\s*=\s*(?:data\.)?html\b/);
     });
 
     it('the morph branch selects a [dj-view] / [dj-root] container excluding sticky', () => {
         // Sticky LiveViews must not be morphed by the parent's mount
         // HTML — they are independent attach points (#1393 era).
         // The container selector must exclude [dj-sticky-root].
-        expect(branch).toMatch(/\[dj-view\][^\]]*:not\(\[dj-sticky-root\]\)|dj-sticky-root/);
+        // findPageViewContainer() is the page container that excludes sticky
+        // roots (#2632). This pin used to match that exclusion only in a comment.
+        expect(branch).toMatch(/findPageViewContainer\(\)/);
         // And there must be a [dj-view] or [dj-root] selector somewhere
         // in the branch.
         expect(branch).toMatch(/\[dj-view\]|\[dj-root\]/);
@@ -120,6 +130,12 @@ describe('#1610 — WS-mount HTML applied to prerendered DOM via morphChildren',
         // The source arg must be the local temp div variable, NOT
         // `data.html` (a string) and NOT a global lookup.
         expect(sourceArg).not.toBe('data.html');
+    });
+
+    it('the branch and the SSE mount both call the shared morph helper (#1646)', () => {
+        expect(getSkipMountHtmlBranch(source)).toMatch(/_morphPrerenderedMount\(_morphContainer, data\.html/);
+        const sse = readFileSync('./python/djust/static/djust/src/03b-sse.js', 'utf-8');
+        expect(sse).toMatch(/_morphPrerenderedMount\(container, data\.html/);
     });
 
     it('the OLD shape (bare _stampDjIds with no morph) is removed from the primary path', () => {

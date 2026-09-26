@@ -49,6 +49,8 @@ directly on view attributes.
 {% live_input "radio" handler="set_plan" value=plan choices=plan_choices %}
 ```
 
+> **Strict parameter policy.** Under the opt-in strict parameter policy (`@event_handler(parameter_policy="strict")`, ADR-036), the browser sends a generated value only if the handler declares a parameter with that name, or has a `**` catch-all. Generated values are `value` and `field` for `dj-input`/`dj-change`, the form fields for `dj-submit`, and `key`/`code` for keyboard events. `dj-value-*` arguments are always sent, and one that reuses a generated name is rejected. `_target` is never sent: use `field` or a `dj-value-*` argument. Legacy handlers (the default) receive every value as before.
+
 With the matching LiveView:
 
 ```python

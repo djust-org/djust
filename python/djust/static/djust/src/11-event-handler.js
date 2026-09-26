@@ -9,12 +9,152 @@ let _djustHttpFallbackWarned = false;
 const _localEventTransport = {};
 let _httpPageGeneration = 0;
 const _pendingHttpControllers = new Set();
+// HTTP fallback events run one at a time, in dispatch order, like frames on
+// one socket. Each POST restores and saves the view's session state, so two
+// in flight at once lose one's changes, and a stale response can overwrite
+// input typed since. Null when nothing is in flight, so an event sent alone
+// still goes out synchronously.
+let _httpEventChain = null;
 for (const event of ['djust:before-navigate', 'turbo:before-visit', 'pagehide']) {
     window.addEventListener(event, () => {
         _httpPageGeneration += 1;
         for (const controller of _pendingHttpControllers) controller.abort();
         _pendingHttpControllers.clear();
     });
+}
+
+// ADR-036: the page's own (HTTP) contract scope. get() renders the root
+// mount's owner contracts into script[data-djust-parameter-contracts], outside dj-root;
+// HTTP fallback responses refresh them like WS/SSE render frames. A page whose
+// data block names another view (a socket live_redirect replaced the root)
+// leaves the scope unknown rather than applying a stale mount's rules.
+function _installPageParameterContracts() {
+    const root = findPageViewContainer();
+    const path = root ? root.getAttribute('dj-view') : null;
+    _localEventTransport.primaryViewPath = path || null;
+    _localEventTransport._parameterContracts = new Map();
+    _localEventTransport._parameterContractApplied = new Map();
+    if (!path) return;
+    const block = document.querySelector('script[data-djust-parameter-contracts]');
+    let manifest = null;
+    if (block) {
+        let payload = null;
+        try { payload = JSON.parse(block.textContent); } catch { payload = null; }
+        if (!payload || payload.view !== path) {
+            if (payload === null) _localEventTransport._parameterContracts.set(path, false);
+            return;
+        }
+        manifest = payload.contracts;
+    }
+    try {
+        _installParameterContracts(_localEventTransport, manifest, path, true, 0);
+    } catch {
+        // The scope is recorded as invalid; strict lookups fail closed.
+        if (globalThis.djustDebug) console.warn('[LiveView] Invalid page parameter contracts');
+    }
+}
+
+// The transport handleEvent() would send through right now.
+function _eventContractTransport() {
+    const socket = liveViewWS;
+    if (socket && socket.enabled && socket.viewMounted &&
+        (!socket.ws || (typeof WebSocket !== 'undefined' && socket.ws.readyState === WebSocket.OPEN))) {
+        return socket;
+    }
+    return _localEventTransport;
+}
+
+// A socket mount of the page's root also refreshes the page scope, so an HTTP
+// fallback after a socket live_redirect uses the current mount's contracts.
+function _mirrorPageParameterContracts(manifest, viewPath) {
+    if (typeof viewPath !== 'string' || !viewPath) return;
+    _localEventTransport.primaryViewPath = viewPath;
+    try {
+        _installParameterContracts(_localEventTransport, manifest, viewPath, true, 0);
+    } catch {
+        // Recorded as invalid; strict lookups fail closed.
+    }
+}
+
+// Resolve the public contract a native binding would dispatch under. The mount
+// is the element's nearest non-embedded dj-view root (normally the page root).
+// The owner address matches server routing: an embedded child's view_id wins
+// over a component inside it. Returns {policy: 'legacy'|'strict'|'unknown'}.
+// 'unknown' covers a mount this transport holds no record for (never delivered
+// a contract: an unmounted, lazy or bare root) and an owner or handler a known
+// mount does not list; neither can be strict, since strict contracts are always
+// delivered and every strict handler is listed. Binders keep legacy collection
+// and the server stays authoritative. A mount whose strict snapshot is invalid
+// or missing (recorded as invalid on receipt) throws: callers fail closed
+// rather than guess (ADR-036 Q1).
+function _resolveParameterContract(element, eventName) {
+    const transport = _eventContractTransport();
+    const container = (element && element.closest &&
+        element.closest('[dj-view]:not([data-djust-embedded])')) || findPageViewContainer();
+    const path = container ? container.getAttribute('dj-view') : null;
+    const mounts = transport._parameterContracts;
+    if (!path || !mounts || !mounts.has(path)) return {policy: 'unknown', transport};
+    const owners = mounts.get(path);
+    if (owners === null) return {policy: 'legacy', transport};
+    if (owners === false) throw new Error('Invalid public parameter contracts');
+    const viewId = (element && getEmbeddedViewId(element)) || null;
+    const componentId = viewId ? null : ((element && getComponentId(element)) || null);
+    const handlers = owners.get(JSON.stringify([viewId, componentId]));
+    if (!handlers || !handlers.has(eventName)) return {policy: 'unknown', transport};
+    const contract = handlers.get(eventName);
+    return {policy: contract.policy, contract, transport, viewId, componentId};
+}
+
+// Declared types each wire hint may produce (ADR-036 D3); a conflicting
+// explicit hint is rejected rather than converted twice. `json` fits any type.
+const _WIRE_HINT_TYPES = {int: 'int float Decimal', integer: 'int float Decimal',
+    float: 'float', number: 'float', bool: 'bool', boolean: 'bool', array: 'list', list: 'list'};
+
+// ADR-036 binder entry point, called before any lock, confirmation,
+// disable-with, optimistic or loading effect. Returns null for a legacy or
+// unlisted binding (the caller keeps its unchanged legacy params). For a strict
+// handler it returns the application payload, with routing context from
+// `contextElement` when given: dj-value-* arguments (strict literals) plus only
+// the generated values the handler declares, or all of them for a ** catch-all
+// (Q1); _target is never generated (Q2). A rejected binding is reported
+// value-free (N1) and returns false: the caller must stop.
+function _strictBinding(element, eventName, generated = {}, positional = [], contextElement = null) {
+    try {
+        const resolved = _resolveParameterContract(element, eventName);
+        if (resolved.policy !== 'strict') return null;
+        const parameters = resolved.contract.parameters;
+        const named = new Map();
+        let open = null;
+        for (const p of parameters) {
+            if (p.kind === 'var_keyword') open = p;
+            else if (p.kind === 'positional_or_keyword' || p.kind === 'keyword_only') named.set(p.name, p);
+        }
+        const sent = Object.create(null);
+        for (const key of Object.keys(generated)) {
+            // eslint-disable-next-line security/detect-object-injection
+            if (named.has(key) || open) sent[key] = generated[key];
+        }
+        const values = _collectStrictEventParams(element, sent, positional, (key, hint) => {
+            const type = (named.get(key) || open || {type: 'Any'}).type
+                .replace(/^Optional\[(.*)\]$/, '$1').replace(/^list\[.*/, 'list');
+            // A dj-value-* name may not reuse any generated name, sent or not.
+            return !Object.hasOwn(generated, key) && (!hint || hint === 'json' || type === 'Any' ||
+                // eslint-disable-next-line security/detect-object-injection
+                (Object.hasOwn(_WIRE_HINT_TYPES, hint) && _WIRE_HINT_TYPES[hint].split(' ').includes(type)));
+        });
+        // A value supplied both positionally and by name is an error, not a choice.
+        if (parameters.filter(p => p.kind.startsWith('positional')).slice(0, positional.length)
+            .some(p => Object.hasOwn(values, p.name))) throw new Error();
+        if (contextElement) addEventContext(values, contextElement);
+        return values;
+    } catch {
+        console.error('[LiveView] Event arguments rejected by the handler contract:', eventName);
+        window.dispatchEvent(new CustomEvent('djust:error', {detail: {
+            error: 'Invalid event arguments for this handler.',
+            traceback: null, event: eventName, validation_details: null,
+        }}));
+        return false;
+    }
 }
 
 // Main Event Handler
@@ -243,11 +383,37 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     const httpController = teardown ? null : new AbortController();
     if (httpController) _pendingHttpControllers.add(httpController);
     const httpOwner = document.querySelector('[dj-root]') || document.body;
-    const httpUrl = window.location.href;
+    // The fragment never reaches the server, so an in-page #anchor jump
+    // does not make this a different page (PR #3122 review).
+    const pageUrl = () => window.location.href.split('#')[0];
+    const httpUrl = pageUrl();
     const httpGeneration = _httpPageGeneration;
     const ownsHttpResponse = () => httpOwner === (document.querySelector('[dj-root]') || document.body)
-        && httpUrl === window.location.href && httpGeneration === _httpPageGeneration;
+        && httpUrl === pageUrl() && httpGeneration === _httpPageGeneration;
+    // Keepalive teardown sends are not queued: they must leave with the page.
+    const previousHttpEvent = teardown ? null : _httpEventChain;
+    let releaseHttpEvent = null;
+    if (!teardown) {
+        const settled = new Promise(resolve => { releaseHttpEvent = resolve; });
+        _httpEventChain = settled;
+        settled.then(() => { if (_httpEventChain === settled) _httpEventChain = null; });
+    }
     try {
+        if (previousHttpEvent) {
+            await previousHttpEvent;
+            // Navigation while queued makes this event belong to a gone page.
+            if (!ownsHttpResponse()) {
+                // Real navigation is quiet (the page is gone); a URL or root
+                // change without one drops an event the user sent, so say so.
+                if (httpGeneration === _httpPageGeneration) {
+                    window.dispatchEvent(new CustomEvent('djust:error', {detail: {
+                        error: `Event "${eventName}" was not sent: the page changed while it was queued.`,
+                        traceback: null,
+                    }}));
+                }
+                return;
+            }
+        }
         // Input, configured-name cookie, then server meta tag (00-namespace.js).
         const csrfToken = window.djust.csrfToken();
         const response = await fetch(teardown ? teardown.url : window.location.href, {
@@ -257,12 +423,28 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
             headers: {
                 'Content-Type': 'application/json',
                 'X-CSRFToken': csrfToken,
-                'X-Djust-Event': eventName
+                'X-Djust-Event': eventName,
+                // A strict (or invalid) page scope asks for an explicit
+                // contract clear when the rendered tree no longer has one.
+                ...(_localEventTransport._parameterContracts?.get(_localEventTransport.primaryViewPath) != null
+                    ? {'X-Djust-Parameter-Contracts': '1'} : {})
             },
             body: JSON.stringify(paramsToSend)
         });
 
         if (!response.ok) {
+            // Report the failure like a socket error frame does (#1646
+            // parity): the server's error body when it sent one.
+            if (!teardown && ownsHttpResponse()) {
+                let detail = {error: `HTTP error! status: ${response.status}`, traceback: null};
+                try {
+                    const body = await response.json();
+                    if (body && typeof body.error === 'string') {
+                        detail = {error: body.error, traceback: body.traceback || null};
+                    }
+                } catch (_e) { /* a non-JSON error body keeps the status message */ }
+                window.dispatchEvent(new CustomEvent('djust:error', {detail}));
+            }
             throw new Error(`HTTP error! status: ${response.status}`);
         }
 
@@ -284,6 +466,11 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     } finally {
         if (httpController) _pendingHttpControllers.delete(httpController);
         if (httpRequest) cancelEventRequests(_localEventTransport, httpRequest.ref);
+        if (releaseHttpEvent) releaseHttpEvent();
     }
 }
 window.djust.handleEvent = handleEvent;
+window.djust._installPageParameterContracts = _installPageParameterContracts;
+window.djust._mirrorPageParameterContracts = _mirrorPageParameterContracts;
+window.djust._strictBinding = _strictBinding;
+window.djust._resolveParameterContract = _resolveParameterContract;

@@ -301,6 +301,16 @@ In development, pages render without Tailwind utilities until you compile the CS
 
 ---
 
+### C022: Invalid event_parameter_policy
+
+**Severity**: Error
+
+**What causes it**: `LIVEVIEW_CONFIG['event_parameter_policy']` is set to something other than `'legacy'` or `'strict'`. Every event handler without its own `parameter_policy` inherits this value, and dispatch rejects each of their events until it is fixed. The strict policy (ADR-036) is opt-in; `'legacy'` is the default.
+
+**Fix**: Set the key to `'legacy'` or `'strict'`, or remove it. Suppress with `DJUST_CONFIG = {"suppress_checks": ["C022"]}` (the runtime still rejects the events).
+
+---
+
 ### C301: Invalid VDOM cache TTL
 
 **Severity**: Error
@@ -538,25 +548,12 @@ self.api_client = MySerializableClient()  # noqa: V006
 
 ---
 
-### V007: Event handler missing **kwargs
+### V007: Retired
 
-**Severity**: Warning
-
-**What causes it**: An `@event_handler` decorated method does not include `**kwargs` in its signature. Event handlers receive all event parameters from the client, and without `**kwargs`, extra parameters will cause errors.
-
-**Fix**:
-
-```python
-# WRONG - will fail if client sends unexpected parameters
-@event_handler()
-def search(self, query: str = ""):
-    self.results = search(query)
-
-# CORRECT
-@event_handler()
-def search(self, query: str = "", **kwargs):
-    self.results = search(query)
-```
+**Retired in 1.3** (ADR-037). V007 recommended `**kwargs` on every event handler.
+A closed signature is now encouraged: a catch-all hides a misspelled parameter.
+djust no longer emits V007, and the ID is never reused. Existing suppressions of
+V007 have no effect and can be removed.
 
 ---
 
@@ -660,6 +657,46 @@ V008 is broader than V006 and will flag any custom class instantiation, not just
 **What causes it**: `LIVEVIEW_ALLOWED_MODULES` is set, your URLconf routes a LiveView that djust ships (the component gallery, the theme gallery, the admin extension), and the list doesn't admit it. An explicit list replaces the default, which includes `"djust"`, so those pages render but never mount ("View not mounted. Please reload the page."). V005 doesn't cover this case because it skips classes defined in djust.
 
 **Fix**: Add `"djust"` to `LIVEVIEW_ALLOWED_MODULES`, as `djust new` does since 1.2.1. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V015"]}`.
+
+---
+
+### V016: Strict event parameter contract is invalid
+
+**Severity**: Error
+
+**What causes it**: An event handler or server function uses the strict parameter policy (ADR-036), and strict dispatch would reject every call to it. Message: "<view>.<handler>(): strict event parameter contract is invalid: Parameter '<name>' ...". The causes are an annotation that cannot be resolved (a misspelled name, a `TYPE_CHECKING`-only import, a name from another class), an unsupported type (supported: `str`, `int`, `float`, `bool`, `Decimal`, `UUID`, `date`, `Optional[T]`, `list[T]`, explicit `Any`), a named parameter without an annotation, or a keyword parameter named `view_id`, `component_id` or starting with `_`, which the framework reserves for routing. Staged component output callbacks are checked the same way for their payload parameters.
+
+**Fix**: Correct the named parameter's declaration, use `Any` for input you validate yourself, or keep the handler on `parameter_policy="legacy"`. Legacy handlers are never reported.
+
+---
+
+### V017: Async strict handler on an actor view
+
+**Severity**: Error
+
+**What causes it**: A view with `use_actors = True` declares a strict-policy `async def` event handler. Actor dispatch rejects strict async handlers before they run.
+
+**Fix**: Make the handler synchronous, set `use_actors = False`, or use `parameter_policy="legacy"`.
+
+---
+
+### V019: Strict declaration on a dj-auto-recover handler
+
+**Severity**: Warning
+
+**What causes it**: A handler targeted by `dj-auto-recover` in the view's template declares `parameter_policy="strict"`. Recovery handlers receive the `_form_values` and `_data_attrs` dictionaries, so they always run under the legacy policy.
+
+**Fix**: Remove `parameter_policy="strict"` from the recovery handler.
+
+---
+
+### V018: params= disagrees with a strict signature
+
+**Severity**: Warning
+
+**What causes it**: `@event_handler(params=[...])` lists different parameters from a strict handler's signature. Under the strict policy the signature is the contract, so the list is ignored by validation and only misleads tooling.
+
+**Fix**: Remove `params=` or make it match the signature.
 
 ---
 
@@ -1082,6 +1119,66 @@ class MyView(LiveView):
 **What causes it**: A LiveView's template references a variable that is never set via a class attribute, a `self.<name> = ...` assignment, or a literal `get_context_data()` return key, and isn't a framework- or Django-injected name. Message: "<view> -- template references undefined variable '<name>' at line N (<template>) -- it resolves to nothing and renders as empty string, with no error." Views whose templates use `{% extends %}` are skipped, and one Info message reports the count ("T018: skipped N view(s) whose template(s) use {% extends %} ...").
 
 **Fix**: Fix the typo, or, if the variable is set dynamically, silence it with a `{# djust_typecheck: noqa <name> #}` template comment. For extends-based templates, run `manage.py djust_typecheck`. Suppress globally with `DJUST_CONFIG = {"suppress_checks": ["T018"]}`. See [Template type checking](typecheck.md).
+
+### T019: Event binding names no handler on its owner
+
+**Severity**: Warning
+
+**What causes it**: A `dj-*` event binding names something its owner cannot
+receive from the browser. That might be a missing method, a method without
+`@event_handler`, or an output callback. It might be an action or output of an
+interactive component the view declares, which a view-owned binding never
+reaches. It might also be an invalid event name, or arguments on `dj-submit` /
+`dj-keydown` / `dj-keyup` / `dj-click-away`, which send their value verbatim.
+The message names the file and line of the binding.
+
+**Fix**: Add or decorate the handler, correct the name, or let the component's
+own markup send its actions. Suppress one binding with
+`{# noqa: T019 -- <reason> #}` on its line or the line above.
+
+---
+
+### T020: Event binding arguments do not match the handler
+
+**Severity**: Warning
+
+**What causes it**: The binding never sends a required argument, sends one the
+handler does not accept, passes extra positional arguments, or sends one name
+twice. Under the legacy policy, `dj-input`, `dj-change` and `dj-submit` also
+send `field` and `_target`, which a closed legacy signature rejects. Under the
+strict policy, only `dj-value-*` attributes are sent, never `data-*`.
+
+**Fix**: Send the argument (for example `data-item-id` or `dj-value-item-id`),
+accept the generated names with a catch-all, or move the handler to the strict
+policy. Suppress with `{# noqa: T020 -- <reason> #}`.
+
+---
+
+### T021: Event binding literal does not fit the handler
+
+**Severity**: Warning
+
+**What causes it**: A literal value the handler's annotation rejects, such as
+`data-count="abc"` for `count: int`. Also an unknown wire hint, or one that does
+not fit the declared type. For `validate_field` / `submit_form`, a field name
+that is not in the view's static `form_class`.
+
+**Fix**: Correct the literal, hint or field name. Suppress with
+`{# noqa: T021 -- <reason> #}`.
+
+---
+
+### T022: Markup supplies routing context
+
+**Severity**: Warning
+
+**What causes it**: An attribute such as `data-view-id` or
+`dj-value-component-id` sends `view_id` / `component_id`. The server reads
+these as routing context, not as arguments, so the event can reach another
+owner.
+
+**Fix**: Rename the attribute. The framework attaches view and component context
+itself.
 
 ---
 

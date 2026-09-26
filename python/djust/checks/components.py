@@ -20,6 +20,7 @@ from djust.checks.utils import (
     DjustWarning,
     _has_noqa,
     _is_check_suppressed,
+    _is_framework_internal_class,
     _iter_python_files,
     _iter_template_files,
     _parse_python_file,
@@ -209,13 +210,11 @@ def check_liveviews(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
         discovered,
         key=lambda c: (getattr(c, "__module__", ""), getattr(c, "__qualname__", "")),
     ):
-        # Skip abstract-looking classes (mixins, bases defined in djust itself)
+        # Skip internal djust classes -- only check user classes, but still
+        # check classes in djust's own examples/tests.
         module = getattr(cls, "__module__", "") or ""
-        if module.startswith("djust.") or module.startswith("djust_"):
-            # Skip internal djust classes -- only check user classes
-            # But still check classes in djust's own examples/tests
-            if "test" not in module and "example" not in module:
-                continue
+        if _is_framework_internal_class(cls):
+            continue
 
         # User-declared abstract base classes opt out of all per-class V/Q checks
         # by setting `abstract = True` on the class body (#1605). Consulted via
@@ -457,47 +456,8 @@ def check_liveviews(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                 )
             )
 
-        # V007 -- event handler missing **kwargs
-        for name, method in cls.__dict__.items():
-            if not callable(method):
-                continue
-            if not is_event_handler(method):
-                continue
-            # Unwrap decorators to get original function
-            inner = method
-            for _attempt in range(10):
-                inner = getattr(inner, "__wrapped__", None) or getattr(inner, "func", None)
-                if inner is None:
-                    break
-            sig_target = inner if inner is not None else method
-            try:
-                sig = inspect.signature(sig_target)
-            except (ValueError, TypeError):
-                continue
-            has_var_keyword = any(
-                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
-            )
-            if not has_var_keyword and not _is_check_suppressed("djust.V007"):
-                method_file = ""
-                method_line = None
-                try:
-                    method_file = inspect.getfile(sig_target)
-                    method_line = inspect.getsourcelines(sig_target)[1]
-                except (OSError, TypeError):
-                    pass  # Source introspection may fail for built-in or C-extension classes
-                errors.append(
-                    DjustWarning(
-                        "%s.%s() event handler missing **kwargs in signature." % (cls_label, name),
-                        hint="Add **kwargs to the event handler signature to receive event parameters.",
-                        id="djust.V007",
-                        fix_hint=(
-                            "Add `**kwargs` to the `%s` method signature in `%s`."
-                            % (name, method_file or cls_label)
-                        ),
-                        file_path=method_file,
-                        line_number=method_line,
-                    )
-                )
+        # V007 (event handler missing **kwargs) is retired by ADR-037 D3: a
+        # closed signature is encouraged, not suspicious. The ID is never reused.
 
         # V009 -- on_mount contains non-callable items
         on_mount_hooks = cls.__dict__.get("on_mount")
@@ -1645,3 +1605,53 @@ def _build_primitive_return_funcs(tree: ast.Module) -> set[str]:
             for item in node.body:
                 _collect(item)
     return safe_funcs
+
+
+@register("djust")
+def check_interactive_actor_views(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    """V020 (Error): an interactive component declared on a ``use_actors`` view.
+
+    ADR-034 owner decision Q5: interactive components (``djust.components.
+    interactive``) are not supported on actor views in 1.3. The actor path has
+    its own dispatch and render baseline, which the component registry does not
+    use. Without this check the view fails on first access; with it, at
+    ``manage.py check``. Nothing is constructed or mounted.
+    """
+    errors: list[CheckMessage] = []
+    if _is_check_suppressed("djust.V020"):
+        return errors
+    try:
+        from djust._component_subscriptions import DECLARATIONS_ATTR
+        from djust.live_view import LiveView
+    except ImportError:
+        return errors
+
+    # Walk the URLconf first: importing it registers routed views (#2559).
+    candidates = set(_routed_liveview_classes()) | set(_walk_subclasses(LiveView))
+    for cls in sorted(candidates, key=lambda c: (c.__module__, c.__qualname__)):
+        if _is_framework_internal_class(cls) or getattr(cls, "use_actors", False) is not True:
+            continue
+        declared = sorted(getattr(cls, DECLARATIONS_ATTR, None) or {})
+        if not declared:
+            continue
+        label = "%s.%s" % (cls.__module__, cls.__qualname__)
+        try:
+            file_path = inspect.getsourcefile(cls) or ""
+            line_number: Optional[int] = inspect.getsourcelines(cls)[1]
+        except (OSError, TypeError):
+            file_path, line_number = "", None
+        errors.append(
+            DjustError(
+                "%s sets use_actors = True and declares interactive component(s) %s, "
+                "which actor views do not support." % (label, ", ".join(declared)),
+                hint=(
+                    "Remove use_actors = True from this view, or move the interactive "
+                    "component to a view that does not use actors."
+                ),
+                id="djust.V020",
+                fix_hint="Remove `use_actors = True` from `%s`." % label,
+                file_path=file_path,
+                line_number=line_number,
+            )
+        )
+    return errors

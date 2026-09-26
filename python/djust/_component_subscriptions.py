@@ -18,6 +18,10 @@ F = TypeVar("F")
 _MARKER = "_djust_component_subscriptions"
 #: Class attribute holding the owner's ``{name: ComponentDeclaration}`` registry.
 DECLARATIONS_ATTR = "_component_declarations"
+#: The callback parameter the framework fills with the originating bound
+#: component (ADR-034 D1). It is trusted dispatch context (ADR-036 D5): output
+#: payloads cannot use the name, and no client key or positional value binds it.
+SOURCE_PARAMETER = "component"
 
 
 @dataclass(frozen=True)
@@ -34,7 +38,8 @@ class OutputContract:
             raise TypeError("Output names must be public Python identifiers")
         names = [name for name, _ in self.payload]
         if len(set(names)) != len(names) or any(
-            not name.isidentifier() or name.startswith("_") or name == "component" for name in names
+            not name.isidentifier() or name.startswith("_") or name == SOURCE_PARAMETER
+            for name in names
         ):
             raise TypeError(
                 "Output payload names must be unique public identifiers other than component"
@@ -176,7 +181,7 @@ def _validate_callback(
         raise TypeError(f"{location} must be an ordinary instance method")
     if _transport_exposed(callback):
         raise TypeError(f"{location}: a subscription cannot also be transport-exposed")
-    expected = {"component": declaration.component_type, **dict(output.payload)}
+    expected = {SOURCE_PARAMETER: declaration.component_type, **dict(output.payload)}
     description = ", ".join(f"{name}: {kind.__name__}" for name, kind in expected.items())
     problem = f"{location} must accept ({description}) and return None or Awaitable[None]"
     try:

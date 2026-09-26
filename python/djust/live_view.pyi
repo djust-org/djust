@@ -55,7 +55,7 @@ class LiveView(
     template_name: Optional[str] = None
     template: Optional[str] = None
     exposure_policy: str = "legacy"
-    _component_bindings: dict[str, LiveComponent]
+    _component_bindings: dict[str, object]
     _components: dict[str, LiveComponent]
     _component_subscriptions: tuple[SubscriptionBinding, ...]
     def _register_component(self, component: Any, attr_name: Optional[str] = None) -> None: ...

@@ -10,6 +10,8 @@ Registers checks with Django's check framework that also run via
 - Templates (T0xx) -- template file scanning
 - Code Quality (Q0xx) -- AST-based quality checks
 - Accessibility (Y0xx) -- template ARIA/WCAG scanning
+- Event parameters (V016-V018) -- ADR-036 strict handler contracts
+- Event bindings (T019-T022) -- ADR-037 template bindings against their owners
 """
 
 # This package was split from a single checks.py module (#1822).
@@ -31,6 +33,8 @@ from . import (  # noqa: F401  (imported for @register side effects + re-export)
     audio,
     updates,
     accounts,
+    parameters,
+    bindings,
 )
 
 _pkg = _sys.modules[__name__]
@@ -46,6 +50,8 @@ for _mod in (
     audio,
     updates,
     accounts,
+    parameters,
+    bindings,
 ):
     for _name in dir(_mod):
         # Skip dunders and the per-submodule ``import djust.checks as

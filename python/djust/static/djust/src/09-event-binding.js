@@ -496,22 +496,31 @@ function _installScopedDelegation() {
                         // Key filtering
                         if (entry.requiredKey && e.key !== entry.requiredKey) return;
 
+                        const generated = {};
+                        if (evtType === 'keydown' || evtType === 'keyup') {
+                            generated.key = e.key;
+                            generated.code = e.code;
+                        } else if (evtType === 'click') {
+                            generated.clientX = e.clientX;
+                            generated.clientY = e.clientY;
+                        } else if (evtType === 'scroll') {
+                            generated.scrollY = window.scrollY;
+                            generated.scrollX = window.scrollX;
+                        } else if (evtType === 'resize') {
+                            generated.innerWidth = window.innerWidth;
+                            generated.innerHeight = window.innerHeight;
+                        }
+                        const strictParams = _strictBinding(entry.element, entry.parsed.name,
+                            generated, entry.parsed.args, entry.element);
+                        if (strictParams === false) return;
+                        if (strictParams) {
+                            handleEvent(entry.parsed.name, strictParams);
+                            return;
+                        }
+
                         const params = extractTypedParams(entry.element);
                         addEventContext(params, entry.element);
-
-                        if (evtType === 'keydown' || evtType === 'keyup') {
-                            params.key = e.key;
-                            params.code = e.code;
-                        } else if (evtType === 'click') {
-                            params.clientX = e.clientX;
-                            params.clientY = e.clientY;
-                        } else if (evtType === 'scroll') {
-                            params.scrollY = window.scrollY;
-                            params.scrollX = window.scrollX;
-                        } else if (evtType === 'resize') {
-                            params.innerWidth = window.innerWidth;
-                            params.innerHeight = window.innerHeight;
-                        }
+                        Object.assign(params, generated);
 
                         if (entry.parsed.args.length > 0) {
                             params._args = entry.parsed.args;
@@ -716,6 +725,32 @@ function buildFormEventParams(element, value) {
 }
 
 /**
+ * ADR-036 strict collection for a form-field binding (change, input, blur,
+ * focus): generated `value` and `field`, dj-value-* from the field itself.
+ * Returns strict params, null for a legacy binding, or false when rejected.
+ */
+function _strictFormBinding(handlerString, field, value) {
+    const parsed = parseEventHandler(handlerString || '');
+    return _strictBinding(field, parsed.name, {value, field: getFieldName(field)}, parsed.args, field);
+}
+
+/** The dj-paste payload: text, html and file metadata (never file bytes). */
+function _pastePayload(clipboardData) {
+    let text = '';
+    let html = '';
+    const files = [];
+    try { text = clipboardData.getData('text/plain') || ''; } catch (_err) { /* older browsers */ }
+    try { html = clipboardData.getData('text/html') || ''; } catch (_err) { /* older browsers */ }
+    const list = clipboardData.files || [];
+    for (let i = 0; i < list.length; i++) {
+        // eslint-disable-next-line security/detect-object-injection
+        const f = list[i];
+        files.push({name: f.name || 'clipboard-paste', type: f.type || '', size: f.size || 0});
+    }
+    return {text, html, has_files: files.length > 0, files};
+}
+
+/**
  * Get or create a rate-limited handler wrapper for one element+BINDING pair.
  *
  * @param {WeakMap} stateMap - WeakMap of element -> Map<variant, wrapper>
@@ -769,11 +804,21 @@ function _getOrCreateRateLimitedHandler(stateMap, element, eventType, rawHandler
 async function _handleDjClick(element, e) {
     e.preventDefault();
 
-    // dj-lock: skip if already locked
-    if (_checkAndLock(element)) return;
-
     // Read attribute at fire time so morphElement attribute updates take effect
     const rawClickValue = element.getAttribute('dj-click') || '';
+
+    // ADR-036: a strict handler's arguments are collected, or rejected, before
+    // any lock, confirmation, disable-with, optimistic or loading effect.
+    let strictParams = null;
+    let parsed = null;
+    if (!(window.djust.js && window.djust.js._parseCommandValue(rawClickValue))) {
+        parsed = parseEventHandler(rawClickValue);
+        strictParams = _strictBinding(element, parsed.name, {}, parsed.args);
+        if (strictParams === false) return;
+    }
+
+    // dj-lock: skip if already locked
+    if (_checkAndLock(element)) return;
 
     // dj-confirm: show confirmation dialog before executing commands/events
     if (!checkDjConfirm(element)) {
@@ -795,7 +840,7 @@ async function _handleDjClick(element, e) {
         }
     }
 
-    const parsed = parseEventHandler(rawClickValue);
+    parsed ??= parseEventHandler(rawClickValue);
 
     // Client-owned dropdown selection dismisses immediately. Confirmation has
     // already succeeded; notification/server failures must not reopen the UI.
@@ -816,11 +861,11 @@ async function _handleDjClick(element, e) {
     }
 
     // Extract all data-* attributes with type coercion support
-    const params = extractTypedParams(element);
+    const params = strictParams || extractTypedParams(element);
 
     // Add positional arguments from handler syntax if present
     // e.g., dj-click="set_period('month')" -> params._args = ['month']
-    if (parsed.args.length > 0) {
+    if (!strictParams && parsed.args.length > 0) {
         params._args = parsed.args;
     }
 
@@ -891,6 +936,12 @@ function _handleDjCopy(element, e) {
 async function _handleDjSubmit(element, e) {
     e.preventDefault();
 
+    // ADR-036: form fields are generated values; a strict handler receives
+    // only the fields it declares (all of them with **form_data), no _target.
+    const strictParams = _strictBinding(element, element.getAttribute('dj-submit'),
+        Object.fromEntries(new FormData(element).entries()), []);
+    if (strictParams === false) return;
+
     // dj-lock: skip if already locked
     if (_checkAndLock(element)) return;
 
@@ -932,16 +983,21 @@ async function _handleDjSubmit(element, e) {
     // so it always resolves regardless of error.
     _setFormPending(element, true);
 
-    const formData = new FormData(element);
-    const params = Object.fromEntries(formData.entries());
+    let params;
+    if (strictParams) {
+        params = strictParams;
+    } else {
+        const formData = new FormData(element);
+        params = Object.fromEntries(formData.entries());
 
-    // Merge dj-value-* attributes from the form element
-    Object.assign(params, collectDjValues(element));
+        // Merge dj-value-* attributes from the form element
+        Object.assign(params, collectDjValues(element));
+    }
 
     addEventContext(params, element);
 
-    // _target: include submitter name if available
-    params._target = (e.submitter && (e.submitter.name || e.submitter.id)) || null;
+    // _target: include submitter name if available (legacy only, ADR-036 Q2)
+    if (!strictParams) params._target = (e.submitter && (e.submitter.name || e.submitter.id)) || null;
 
     // Pass target element for optimistic updates (Phase 3)
     params._targetElement = element;
@@ -959,6 +1015,10 @@ async function _handleDjSubmit(element, e) {
  * @param {Event} e - The original change event
  */
 async function _handleDjChange(element, e) {
+    const changeValue = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
+    const strictParams = _strictFormBinding(element.getAttribute('dj-change'), e.target, changeValue);
+    if (strictParams === false) return;
+
     // dj-lock: skip if already locked
     if (_checkAndLock(element)) return;
 
@@ -971,17 +1031,17 @@ async function _handleDjChange(element, e) {
     const changeHandler = element.getAttribute('dj-change');
     const parsedChange = parseEventHandler(changeHandler);
 
-    const value = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
-    const params = buildFormEventParams(e.target, value);
+    const value = changeValue;
+    const params = strictParams || buildFormEventParams(e.target, value);
 
     // Add positional arguments from handler syntax if present
     // e.g., dj-change="toggle_todo(3)" -> params._args = [3]
-    if (parsedChange.args.length > 0) {
+    if (!strictParams && parsedChange.args.length > 0) {
         params._args = parsedChange.args;
     }
 
-    // _target: include triggering field's name (or id, or null)
-    params._target = e.target.name || e.target.id || null;
+    // _target: include triggering field's name (or id, or null); legacy only
+    if (!strictParams) params._target = e.target.name || e.target.id || null;
 
     // Add target element for loading state (consistent with other handlers)
     params._targetElement = e.target;
@@ -1004,6 +1064,9 @@ async function _handleDjChange(element, e) {
  * @param {Event} e - The original input event
  */
 async function _handleDjInput(element, e) {
+    const strictParams = _strictFormBinding(element.getAttribute('dj-input'), e.target, e.target.value);
+    if (strictParams === false) return;
+
     // dj-lock: skip if already locked
     if (_checkAndLock(element)) return;
 
@@ -1016,13 +1079,13 @@ async function _handleDjInput(element, e) {
     const inputHandler = element.getAttribute('dj-input');
     const parsedInput = parseEventHandler(inputHandler);
 
-    const params = buildFormEventParams(e.target, e.target.value);
-    if (parsedInput.args.length > 0) {
+    const params = strictParams || buildFormEventParams(e.target, e.target.value);
+    if (!strictParams && parsedInput.args.length > 0) {
         params._args = parsedInput.args;
     }
 
-    // _target: include triggering field's name (or id, or null)
-    params._target = e.target.name || e.target.id || null;
+    // _target: include triggering field's name (or id, or null); legacy only
+    if (!strictParams) params._target = e.target.name || e.target.id || null;
 
     await handleEvent(parsedInput.name, params);
 }
@@ -1033,6 +1096,9 @@ async function _handleDjInput(element, e) {
  * @param {Event} e - The original focusout event
  */
 async function _handleDjBlur(element, e) {
+    const strictParams = _strictFormBinding(element.getAttribute('dj-blur'), e.target, e.target.value);
+    if (strictParams === false) return;
+
     // dj-lock: skip if already locked
     if (_checkAndLock(element)) return;
 
@@ -1045,8 +1111,8 @@ async function _handleDjBlur(element, e) {
     const blurHandler = element.getAttribute('dj-blur');
     const parsedBlur = parseEventHandler(blurHandler);
 
-    const params = buildFormEventParams(e.target, e.target.value);
-    if (parsedBlur.args.length > 0) {
+    const params = strictParams || buildFormEventParams(e.target, e.target.value);
+    if (!strictParams && parsedBlur.args.length > 0) {
         params._args = parsedBlur.args;
     }
     await handleEvent(parsedBlur.name, params);
@@ -1058,6 +1124,9 @@ async function _handleDjBlur(element, e) {
  * @param {Event} e - The original focusin event
  */
 async function _handleDjFocus(element, e) {
+    const strictParams = _strictFormBinding(element.getAttribute('dj-focus'), e.target, e.target.value);
+    if (strictParams === false) return;
+
     // dj-lock: skip if already locked
     if (_checkAndLock(element)) return;
 
@@ -1070,8 +1139,8 @@ async function _handleDjFocus(element, e) {
     const focusHandler = element.getAttribute('dj-focus');
     const parsedFocus = parseEventHandler(focusHandler);
 
-    const params = buildFormEventParams(e.target, e.target.value);
-    if (parsedFocus.args.length > 0) {
+    const params = strictParams || buildFormEventParams(e.target, e.target.value);
+    if (!strictParams && parsedFocus.args.length > 0) {
         params._args = parsedFocus.args;
     }
     await handleEvent(parsedFocus.name, params);
@@ -1085,6 +1154,14 @@ async function _handleDjFocus(element, e) {
  * @param {Event} e - The original paste event
  */
 async function _handleDjPaste(element, e) {
+    const clipboard = e.clipboardData || window.clipboardData;
+    let strictPaste = null;
+    if (clipboard) {
+        const early = parseEventHandler(element.getAttribute('dj-paste'));
+        strictPaste = _strictBinding(element, early.name, _pastePayload(clipboard), early.args, element);
+        if (strictPaste === false) return;
+    }
+
     // dj-lock: skip if already locked
     if (_checkAndLock(element)) return;
 
@@ -1108,26 +1185,8 @@ async function _handleDjPaste(element, e) {
     // blow the WS frame budget. Instead, set a dj-upload slot on
     // the element and UploadMixin will pick up any files from the
     // clipboard files list via the existing upload pipeline.
-    let text = '';
-    let html = '';
-    const files = [];
-    try {
-        text = clipboardData.getData('text/plain') || '';
-    } catch (_err) { /* older browsers */ }
-    try {
-        html = clipboardData.getData('text/html') || '';
-    } catch (_err) { /* older browsers */ }
-    if (clipboardData.files) {
-        for (let i = 0; i < clipboardData.files.length; i++) {
-            // eslint-disable-next-line security/detect-object-injection
-            const f = clipboardData.files[i];
-            files.push({
-                name: f.name || 'clipboard-paste',
-                type: f.type || '',
-                size: f.size || 0,
-            });
-        }
-    }
+    const payload = _pastePayload(clipboardData);
+    const files = payload.files;
 
     // If the element has an upload slot configured, route pasted
     // files through the upload pipeline (image paste → chat, etc).
@@ -1141,14 +1200,12 @@ async function _handleDjPaste(element, e) {
         }
     }
 
-    const params = {
-        text: text,
-        html: html,
-        has_files: files.length > 0,
-        files: files,
-    };
-    if (parsedPaste.args.length > 0) {
-        params._args = parsedPaste.args;
+    const params = strictPaste || payload;
+    if (!strictPaste) {
+        if (parsedPaste.args.length > 0) params._args = parsedPaste.args;
+        // Owner context, like every other binding: a paste inside a component or
+        // an embedded child reaches that owner, not the root view.
+        addEventContext(params, element);
     }
 
     // Suppress the default paste only when the element opts in
@@ -1243,6 +1300,10 @@ async function _handleDjKeyboard(element, e, eventType, attrName) {
     // outer bindings. Re-checked here for direct callers.
     if (!_keyboardBindingMatches(name, e)) return false;
 
+    const keyGenerated = {key: e.key, code: e.code, value: e.target.value, field: getFieldName(e.target)};
+    const strictParams = _strictBinding(element, handlerName, keyGenerated, []);
+    if (strictParams === false) return;
+
     // dj-lock: skip if already locked
     if (_checkAndLock(element)) return;
 
@@ -1251,16 +1312,10 @@ async function _handleDjKeyboard(element, e, eventType, attrName) {
         return; // User cancelled
     }
 
-    const fieldName = getFieldName(e.target);
-    const params = {
-        key: e.key,
-        code: e.code,
-        value: e.target.value,
-        field: fieldName
-    };
+    const params = strictParams || keyGenerated;
 
     // Merge dj-value-* attributes from the element
-    Object.assign(params, collectDjValues(element));
+    if (!strictParams) Object.assign(params, collectDjValues(element));
 
     addEventContext(params, e.target);
 
@@ -1503,10 +1558,13 @@ async function _flushNativeObservation(element, record) {
         || _nativeObservationIdentity(element) !== record.identity) return;
     if (record.sequence >= Number.MAX_SAFE_INTEGER) return;
     const open = record.open;
+    const generated = {open, sequence: record.sequence + 1, lifetime: record.lifetime};
+    const strictParams = _strictBinding(element, record.handler, generated, []);
+    if (strictParams === false) return;
     record.dirty = false;
     record.sending = true;
-    const params = {open, sequence: ++record.sequence, lifetime: record.lifetime,
-        _targetElement: element, _skipLoading: true};
+    ++record.sequence;
+    const params = Object.assign(strictParams || generated, {_targetElement: element, _skipLoading: true});
     addEventContext(params, element);
     try {
         await handleEvent(record.handler, params);
@@ -1635,6 +1693,13 @@ function bindLiveViewEvents(scope) {
         // bind-time snapshot would keep dispatching the old ones (#2858).
         const firePoll = () => {
             if (document.hidden) return;
+            // Strict: routing context lets the owner that resolved the contract receive it.
+            const strictParams = _strictBinding(element, parsed.name, {}, [], element);
+            if (strictParams === false) return;
+            if (strictParams) {
+                handleEvent(parsed.name, Object.assign(strictParams, { _skipLoading: true }));
+                return;
+            }
             handleEvent(parsed.name, Object.assign(extractTypedParams(element), { _skipLoading: true }));
         };
 
@@ -1688,10 +1753,13 @@ function bindLiveViewEvents(scope) {
             // Only fire if click is outside the element
             if (element.contains(e.target)) return;
 
+            const strictParams = _strictBinding(element, handlerName, {}, []);
+            if (strictParams === false) return;
+
             // dj-confirm support
             if (!checkDjConfirm(element)) return;
 
-            const params = extractTypedParams(element);
+            const params = strictParams || extractTypedParams(element);
             addEventContext(params, element);
 
             await handleEvent(handlerName, params);
@@ -1773,11 +1841,12 @@ function bindLiveViewEvents(scope) {
                     e.preventDefault();
                 }
 
-                const params = extractTypedParams(element);
+                const shortcutGenerated = {key: e.key, code: e.code, shortcut: binding.comboString};
+                const strictParams = _strictBinding(element, binding.handler, shortcutGenerated, []);
+                if (strictParams === false) return;
+                const params = strictParams || extractTypedParams(element);
                 addEventContext(params, element);
-                params.key = e.key;
-                params.code = e.code;
-                params.shortcut = binding.comboString;
+                if (!strictParams) Object.assign(params, shortcutGenerated);
 
                 await handleEvent(binding.handler, params);
                 return; // Fire first match only
@@ -1826,10 +1895,12 @@ function bindLiveViewEvents(scope) {
                 // between scheduling and firing.
                 const raw = element.getAttribute(attrName);
                 if (raw === null) return;
-                if (!checkDjConfirm(element)) return;
                 const parsed = parseEventHandler(raw);
-                const params = extractTypedParams(element);
-                if (parsed.args.length > 0) {
+                const strictParams = _strictBinding(element, parsed.name, {}, parsed.args);
+                if (strictParams === false) return;
+                if (!checkDjConfirm(element)) return;
+                const params = strictParams || extractTypedParams(element);
+                if (!strictParams && parsed.args.length > 0) {
                     params._args = parsed.args;
                 }
                 addEventContext(params, element);
@@ -1867,7 +1938,9 @@ function bindLiveViewEvents(scope) {
             if (!handlerName) return;
 
             // Collect dj-value-* and data-* params from the mounted element
-            const params = extractTypedParams(el);
+            const strictParams = _strictBinding(el, handlerName, {}, []);
+            if (strictParams === false) return;
+            const params = strictParams || extractTypedParams(el);
             addEventContext(params, el);
 
             handleEvent(handlerName, params);
@@ -2482,6 +2555,14 @@ function _processFormRecovery() {
 
         // Skip if DOM value matches server default (avoid unnecessary server work)
         if (domValue === serverDefault) continue;
+
+        // A strict handler gets the same payload a live dj-change would send.
+        const strictParams = _strictFormBinding(handlerString, field, domValue);
+        if (strictParams === false) continue;
+        if (strictParams) {
+            pendingEvents.push({ handlerName: handlerName, params: strictParams });
+            continue;
+        }
 
         // Build event params matching dj-change param structure
         const value = domValue;

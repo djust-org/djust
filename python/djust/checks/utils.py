@@ -274,6 +274,17 @@ def _has_noqa(source_lines: list[str], lineno: int, check_id: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _is_framework_internal_class(cls: type) -> bool:
+    """True for djust's own production classes, which per-class checks skip.
+
+    djust's test and example modules are still checked (dogfooding).
+    """
+    module = getattr(cls, "__module__", "") or ""
+    if not (module.startswith("djust.") or module.startswith("djust_")):
+        return False
+    return "test" not in module and "example" not in module
+
+
 def _walk_subclasses(cls: type) -> Iterator[type]:
     """Recursively yield all subclasses of cls."""
     for sub in cls.__subclasses__():

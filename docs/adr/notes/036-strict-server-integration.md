@@ -133,13 +133,53 @@ replay-binding slice, and no live-browser or complete ADR acceptance is claimed.
 
 ## Remaining P1–P3 work
 
-- Registration/system-check coverage, including class-local annotation resolution
-  and invalid project policies before an event arrives.
-- Trusted component source injection separate from client payloads, coordinated
-  with ADR-034's typed subscriptions.
-- Scope-aware public client contracts for root, child and component identities;
-  strict `dj-value-*` collection, typed-literal and collision rejection, and
-  unchanged legacy precedence.
-- Full supported-type and `coerce_types=False` parity across every path, open
-  forms/uploads, async actors, and forged-source/error matrices.
+- Registration/system-check coverage is staged in
+  [registration checks](036-registration-checks.md): C022 and V016–V018,
+  class-local annotation resolution and reserved argument names. Legacy-code
+  migration inventory and template-binding checks (ADR-037) remain.
+- Trusted component source injection is staged server-side in
+  [trusted dispatch context](036-trusted-dispatch-context.md): one strict
+  dispatch-context rule on every transport, trusted contract parameters, and
+  ADR-034 output callbacks bound strictly with a framework-supplied source.
+  Client collection and browser acceptance followed in P2.
+- Scope-aware public client contracts, strict `dj-value-*` collection,
+  typed-literal and collision rejection, and unchanged legacy precedence are
+  done (P2 sub-slices (a)–(d)); see the
+  [collector note](036-strict-client-collection.md).
+- Full supported-type and `coerce_types=False` parity is now executed by one
+  shared matrix (see "Transport parity matrix" below). Async actor support
+  remains a rejection (V017). Uploads travel their own channel and are not
+  event arguments: a strict `**` form handler rejects a file field in the
+  browser.
 - Executed developer/AI examples, browser verification and migration guidance.
+
+## Transport parity matrix
+
+`python/djust/tests/test_strict_transport_parity.py` sends one 43-row matrix
+through eight real paths, and requires identical outcomes on all of them:
+- the shared runtime (the WebSocket and SSE dispatcher);
+- real WebSocket sessions in normal and actor mode;
+- a real SSE session;
+- both HTTP-fallback body shapes;
+- the exposed event API;
+- the test client.
+
+Each row gives either the exact Python value the handler receives, or a
+rejection before application code runs. The rows cover:
+- every supported type, including partial, underscore, blank and bool-as-int
+  numbers, NaN, binary floats to `Decimal`, impossible dates, `Optional`
+  null versus missing, and comma-text versus lists;
+- `coerce_types=False`;
+- positional-only and keyword-only binding;
+- an open `**fields: str` form payload;
+- extra keys and a forged `component` source.
+
+All eight paths agree on every row, including the key order of an open `**`
+payload. A full-suite run found the actor path reordering it, because event
+params crossed the Rust boundary in a `HashMap`. They now travel as an ordered
+`EventParams` (`IndexMap`). `test_actor_bridge_keeps_open_payload_key_order`
+sends 64 shuffled keys ten times; it fails on the previous build and passes
+on this one. The browser half is in
+`tests/js/strict_native_binding.test.js`. The strict collector now also
+refuses `_`-prefixed `dj-value-*` names, matching the server's reserved-name
+rule, along with forged `dj-value-component-id` / `dj-value-view-id`.

@@ -1,7 +1,7 @@
 """djust system checks — security checks (S0xx).
 
 Mostly AST-based (S001-S003, S008, S009, S012); S011 is a template-source
-scan (inline-script / CSP). Split from the former monolithic ``checks.py``
+scan (inline-script / CSP); S013 inspects the imported ADR-035 edit views. Split from the former monolithic ``checks.py``
 (#1822). Note: S012 was reallocated from a duplicate S004 (#2070) --
 configuration.py's "DEBUG=True with non-localhost ALLOWED_HOSTS" check kept
 S004; this module's "LiveView gates auth via dispatch()" check moved to
@@ -9,6 +9,7 @@ S012.
 """
 
 import ast
+import inspect
 import logging
 import os
 import re
@@ -954,3 +955,85 @@ def check_inline_script_csp(app_configs: Any, **kwargs: Any) -> list[CheckMessag
             )
 
     return errors
+
+
+# ---------------------------------------------------------------------------
+# S013 -- ADR-035 edit adapter with neither scoping nor object permission
+# ---------------------------------------------------------------------------
+
+
+def _model_form_hook_owner(cls: type, name: str) -> Optional[type]:
+    """The class that defines ``name`` for ``cls``, or None for djust's own."""
+    from djust.forms import ModelFormMixin
+    from djust.live_view import LiveView
+
+    framework = {ModelFormMixin, *LiveView.__mro__}
+    for owner in cls.__mro__:
+        if name in vars(owner):
+            return None if owner in framework else owner
+    return None
+
+
+@register("djust")
+def check_model_form_object_policy(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    """``djust.S013``: a ``ModelFormMixin`` view that edits any row by id.
+
+    With neither ``get_queryset()`` nor ``has_object_permission()`` overridden,
+    every signed-in user who passes the view-level checks can edit every row of
+    ``model`` by changing the id in the URL (ADR-035, owner decision Q5). The
+    default stays permissive, as Django's ``UpdateView`` is; this says so.
+    Nothing is constructed, mounted or queried.
+    """
+    if _is_check_suppressed("S013"):
+        return []
+    try:
+        from djust.forms import ModelFormMixin
+        from djust.live_view import LiveView
+    except ImportError:
+        return []
+    from djust.checks.components import _routed_liveview_classes
+    from djust.checks.utils import _is_framework_internal_class, _walk_subclasses
+
+    # Walk the URLconf first: importing it is what registers routed views (#2559).
+    routed = set(_routed_liveview_classes())
+    candidates = {cls for cls in routed if issubclass(cls, ModelFormMixin)}
+    candidates.update(_walk_subclasses(ModelFormMixin))
+    messages: list[CheckMessage] = []
+    for cls in sorted(candidates, key=lambda c: (c.__module__, c.__qualname__)):
+        if (
+            not issubclass(cls, LiveView)
+            or _is_framework_internal_class(cls)
+            or cls.__dict__.get("abstract") is True
+        ):
+            continue
+        if _model_form_hook_owner(cls, "get_queryset") or _model_form_hook_owner(
+            cls, "has_object_permission"
+        ):
+            continue
+        try:
+            file_path = inspect.getsourcefile(cls) or ""
+            source_lines, line_number = inspect.getsourcelines(cls)
+        except (OSError, TypeError):
+            file_path, source_lines, line_number = "", [], 0
+        # ``_has_noqa`` reads 1-based line numbers; the class line comes first.
+        if source_lines and _has_noqa(["", *source_lines], 1, "S013"):
+            continue
+        label = "%s.%s" % (cls.__module__, cls.__qualname__)
+        messages.append(
+            DjustWarning(
+                "%s lets any user who can open the view edit any %s by its id."
+                % (label, getattr(getattr(cls, "model", None), "__name__", "object")),
+                hint=(
+                    "Override get_queryset() to limit the rows this user may edit, "
+                    "or has_object_permission() to authorize each object."
+                ),
+                id="djust.S013",
+                fix_hint=(
+                    "Scope `%s.get_queryset()` to the requesting user, or add "
+                    "`has_object_permission(self, request, obj)`." % label
+                ),
+                file_path=file_path,
+                line_number=line_number or None,
+            )
+        )
+    return messages

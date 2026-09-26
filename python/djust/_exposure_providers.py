@@ -177,8 +177,12 @@ def registered_components(view_class: type) -> Dict[str, Any]:
         raise ExposureError("Invalid component descriptor registry")
     merged: Dict[str, Any] = dict(descriptors)
     for name, declaration in declarations.items():
-        # Only a declaration that is also a component renders.
-        if not isinstance(declaration, LiveComponent):
+        # Only a declaration that is also a component, or an ADR-034 keyed
+        # collection of them, renders.
+        if not (
+            isinstance(declaration, LiveComponent)
+            or getattr(type(declaration), "_djust_component_collection", False)
+        ):
             continue
         if name not in merged or getattr_static(view_class, name, None) is declaration:
             merged[name] = declaration

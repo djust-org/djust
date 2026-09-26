@@ -1317,27 +1317,33 @@ Always add `data-key` to list items:
 {% endfor %}
 ```
 
-### Missing `**kwargs` in Event Handlers
+### A Catch-All `**kwargs` on Every Handler
 
-**Problem:** Event handlers without `**kwargs` parameter.
+**Problem:** Adding `**kwargs` to every handler "just in case".
 
 **Why it's wrong:**
-- Breaks when extra params are passed from client
-- Not forward-compatible with new framework features
-- System check `djust.V007` warns about this
+- It hides a misspelled parameter: the template sends `item`, the handler takes
+  `item_id`, and the event runs with the default instead of failing
+- A closed signature lets djust reject the mismatch and lets `manage.py check`
+  compare template bindings with the signature
+- `djust.V007`, which recommended the catch-all, is retired (ADR-037)
 
 **Solution:**
-Always include `**kwargs`:
+Declare the parameters the template sends. Under the default legacy parameter
+policy, `dj-input`, `dj-change` and `dj-submit` also send `field` and `_target`,
+so a legacy handler for them keeps a catch-all such as `**form_data`, and
+`manage.py check` reports one that does not (`djust.T020`). The strict policy
+(ADR-036) sends only the names the handler declares:
 
 ```python
 # ❌ Don't do this
 @event_handler
-def delete_item(self, item_id: int):
+def delete_item(self, item_id: int = 0, **kwargs):
     Item.objects.filter(id=item_id).delete()
 
 # ✅ Do this instead
 @event_handler
-def delete_item(self, item_id: int = 0, **kwargs):
+def delete_item(self, item_id: int):
     Item.objects.filter(id=item_id).delete()
 ```
 

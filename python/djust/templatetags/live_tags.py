@@ -1362,48 +1362,28 @@ def do_dj_activity(parser: Parser, token: Token) -> "DjActivityNode":
 # {% live_render %} — embed a LiveView as a child (Phase A of Sticky LiveViews)
 # ---------------------------------------------------------------------------
 
+
 # Event attributes carrying dj-* directives. When ``{% live_render %}``
 # stamps ``view_id`` on embedded elements, it scans for these — a no-op
 # on static markup, but every event-bearing element gets a scoped id so
 # the consumer's event-dispatch path (``websocket.py``) routes per-view.
+# The child's wrapper carries the same stamp, which is what the client's
+# ancestor lookup finds first for an unstamped element.
 #
-# Membership is pinned by
-# ``tests/unit/test_live_render_event_attrs_invariant.py``: every entry
-# must have a client-side binding in ``static/djust/src/`` — the list is
-# the framework asserting "this directive exists", so a name the client
-# never binds must not appear here (#2869).
-_LIVE_RENDER_EVENT_ATTRS = (
-    "dj-click",
-    "dj-submit",
-    "dj-input",
-    "dj-change",
-    "dj-keydown",
-    "dj-keyup",
-    "dj-focus",
-    "dj-blur",
-    "dj-hook",
-    "dj-mounted",
-    # Mouse directives (#2869): bound client-side by direct per-element
-    # listeners (09-event-binding.js) — mouseenter/mouseleave do not bubble,
-    # so the delegated shape used by dj-click cannot serve them.
-    "dj-mouseenter",
-    "dj-mouseleave",
-    # Scoped / window-level directives (#2841). These dispatch through
-    # ``addEventContext`` like every other event attribute, so an element
-    # carrying one inside an embedded child needs the stamp for its events
-    # to route to the child view — they were missing entirely (missed both
-    # bare and dotted).
-    "dj-window-keydown",
-    "dj-window-keyup",
-    "dj-window-click",
-    "dj-window-scroll",
-    "dj-window-resize",
-    "dj-document-keydown",
-    "dj-document-keyup",
-    "dj-document-click",
-    "dj-document-scroll",
-    "dj-document-resize",
-)
+# Derived from the one directive table (ADR-037 row 20): every directive
+# whose client binding attaches owner context, plus ``dj-hook``, whose
+# ``pushEvent`` routes by the element. Membership is pinned by
+# ``tests/unit/test_live_render_event_attrs_invariant.py``: every entry must
+# have a client-side binding in ``static/djust/src/`` (#2869). Longest names
+# first, so ``dj-click-away`` is never read as ``dj-click``.
+def _stamped_event_attrs() -> tuple[str, ...]:
+    from djust._template_bindings import DIRECTIVES
+
+    names = [name for name, directive in DIRECTIVES.items() if directive.owner_context]
+    return tuple(sorted([*names, "dj-hook"], key=lambda name: (-len(name), name)))
+
+
+_LIVE_RENDER_EVENT_ATTRS = _stamped_event_attrs()
 
 # Pre-compiled regex: matches the opening of an element tag that carries
 # one of the event attributes listed above. Captures:
