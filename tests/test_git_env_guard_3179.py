@@ -181,67 +181,122 @@ def _is_autouse_git_strip(node: ast.AST) -> bool:
     return autouse and "GIT_EXECUTION_VARS" in body and "delenv" in body
 
 
-def _is_subprocess_call(node: ast.AST, from_imports: set[str]) -> bool:
+_ASYNC_SUBPROCESS_FUNCS = {"create_subprocess_exec", "create_subprocess_shell"}
+_OS_SPAWN_FUNCS = {"system", "popen"}
+
+
+def _spawners(tree: ast.Module) -> tuple[set[str], set[str], set[str], set[str]]:
+    """Names this module can spawn a process through.
+
+    Returns ``(subprocess module aliases, asyncio aliases, os aliases,
+    bare-name imports)`` so ``import subprocess as sp`` / ``from subprocess
+    import run as sh`` are seen too.
+    """
+    mods: dict[str, set[str]] = {"subprocess": set(), "asyncio": set(), "os": set()}
+    bare: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name in mods:
+                    mods[alias.name].add(alias.asname or alias.name)
+        elif isinstance(node, ast.ImportFrom) and node.module in mods:
+            wanted = {
+                "subprocess": _SUBPROCESS_FUNCS,
+                "asyncio": _ASYNC_SUBPROCESS_FUNCS,
+                "os": _OS_SPAWN_FUNCS,
+            }[node.module]
+            bare |= {a.asname or a.name for a in node.names if a.name in wanted}
+    return mods["subprocess"], mods["asyncio"], mods["os"], bare
+
+
+def _is_spawn(node: ast.AST, spawners: tuple[set[str], set[str], set[str], set[str]]) -> bool:
     if not isinstance(node, ast.Call):
         return False
+    sub, aio, os_, bare = spawners
     func = node.func
-    if isinstance(func, ast.Attribute):
+    if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+        owner, attr = func.value.id, func.attr
         return (
-            isinstance(func.value, ast.Name)
-            and func.value.id == "subprocess"
-            and func.attr in _SUBPROCESS_FUNCS
-        ) or (isinstance(func.value, ast.Name) and func.value.id == "os" and func.attr == "system")
-    return isinstance(func, ast.Name) and func.id in from_imports
+            (owner in sub and attr in _SUBPROCESS_FUNCS)
+            or (owner in aio and attr in _ASYNC_SUBPROCESS_FUNCS)
+            or (owner in os_ and attr in _OS_SPAWN_FUNCS)
+        )
+    return isinstance(func, ast.Name) and func.id in bare
 
 
-def _env_is_isolated(call: ast.Call) -> bool:
+def _is_isolated_env_call(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "isolated_git_env"
+    )
+
+
+def _env_is_isolated(call: ast.Call, isolated_names: set[str]) -> bool:
+    """``env=isolated_git_env(...)``, or ``env=<name>`` where the enclosing
+    function bound ``<name> = isolated_git_env(...)``."""
     for kw in call.keywords:
         if kw.arg == "env":
             value = kw.value
-            return (
-                isinstance(value, ast.Call)
-                and isinstance(value.func, ast.Name)
-                and value.func.id == "isolated_git_env"
-            )
+            if isinstance(value, ast.Name):
+                return value.id in isolated_names
+            return _is_isolated_env_call(value)
     return False
 
 
+def _names_git(tree: ast.Module) -> bool:
+    """A string constant that is the git executable or a git command line:
+    ``["git", ...]``, ``GIT = "git"``, ``"git init"`` with ``shell=True``."""
+    return any(
+        isinstance(n, ast.Constant)
+        and isinstance(n.value, str)
+        and (n.value == "git" or n.value.startswith("git "))
+        for n in ast.walk(tree)
+    )
+
+
 def unprotected_calls(source: str, scripts: list[str]) -> list[int]:
-    """Line numbers of subprocess calls in a git-relevant module that are
+    """Line numbers of process spawns in a git-relevant module that are
     neither under an autouse git-strip fixture nor given an isolated env.
 
-    A module is git-relevant when it spawns anything AND either names ``git``
-    as an argv element or names a script that runs git. Every subprocess call
-    in such a module is checked: an argv built elsewhere cannot be told apart
-    from one that is not git.
+    A module is git-relevant when it spawns a process AND either has a string
+    constant naming git (``"git"``, ``"git init"``) or names a script that
+    runs git. Every spawn in such a module is checked: an argv built elsewhere
+    cannot be told apart from one that is not git.
+
+    Known limit: git run by *library* code a test calls in-process (e.g.
+    ``djust.deploy_cli``) is invisible here. The root ``conftest.py`` strips
+    ``GIT_EXECUTION_VARS`` for every test to cover that case.
     """
     tree = ast.parse(source)
-    from_imports = {
-        alias.asname or alias.name
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom) and node.module == "subprocess"
-        for alias in node.names
-        if alias.name in _SUBPROCESS_FUNCS
-    }
-    if not any(_is_subprocess_call(n, from_imports) for n in ast.walk(tree)):
+    spawners = _spawners(tree)
+    if not any(_is_spawn(n, spawners) for n in ast.walk(tree)):
         return []
-    if not (_PY_GIT_CALL.search(source) or any(name in source for name in scripts)):
+    if not (_names_git(tree) or any(name in source for name in scripts)):
         return []
     if any(_is_autouse_git_strip(n) for n in tree.body):
         return []
 
     bad: list[int] = []
 
-    def visit(node: ast.AST, covered: bool) -> None:
+    def visit(node: ast.AST, covered: bool, isolated: set[str]) -> None:
         if isinstance(node, ast.ClassDef) and any(_is_autouse_git_strip(n) for n in node.body):
             covered = True
-        if _is_subprocess_call(node, from_imports) and not covered:
-            if not _env_is_isolated(node):  # type: ignore[arg-type]
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            isolated = isolated | {
+                t.id
+                for a in ast.walk(node)
+                if isinstance(a, ast.Assign) and _is_isolated_env_call(a.value)
+                for t in a.targets
+                if isinstance(t, ast.Name)
+            }
+        if _is_spawn(node, spawners) and not covered:
+            if not _env_is_isolated(node, isolated):  # type: ignore[arg-type]
                 bad.append(node.lineno)  # type: ignore[attr-defined]
         for child in ast.iter_child_nodes(node):
-            visit(child, covered)
+            visit(child, covered, isolated)
 
-    visit(tree, False)
+    visit(tree, False, set())
     return sorted(bad)
 
 
@@ -267,8 +322,9 @@ def test_every_git_spawning_test_module_is_protected() -> None:
         "stripping git's execution variables. Under a hook GIT_DIR names the "
         "REAL repository and a fixture's `git init` / `git config` rewrites it "
         "(#2608, #3179). Add a module-level autouse fixture that deletes "
-        "tests.git_env.GIT_EXECUTION_VARS, or pass env=isolated_git_env(...):\n  "
-        + "\n  ".join(offenders)
+        "tests.git_env.GIT_EXECUTION_VARS, or pass env=isolated_git_env(...) "
+        "(directly, or via a local bound to isolated_git_env(...) in the same "
+        "function — any other env variable counts as unprotected):\n  " + "\n  ".join(offenders)
     )
 
 
@@ -333,6 +389,47 @@ def test_out():
 """
 
 
+_ALIASED = """
+import subprocess as sp
+def _git(cwd):
+    return sp.run(["git", "init"], cwd=cwd)
+"""
+
+_SHELL_STRING = """
+import subprocess
+def _git(cwd):
+    return subprocess.run("git init", shell=True, cwd=cwd)
+"""
+
+_ARGV_VARIABLE = """
+import subprocess
+GIT = "git"
+def _git(cwd):
+    return subprocess.run([GIT, "init"], cwd=cwd)
+"""
+
+_ASYNCIO = """
+import asyncio
+async def _git(cwd):
+    return await asyncio.create_subprocess_exec("git", "init", cwd=cwd)
+"""
+
+_LOCAL_ISOLATED = """
+import subprocess
+from tests.git_env import isolated_git_env
+def _git(cwd):
+    env = isolated_git_env(GIT_CONFIG_GLOBAL="/dev/null")
+    return subprocess.run(["git", "init"], cwd=cwd, env=env)
+"""
+
+_LOCAL_COPIED = """
+import os, subprocess
+def _git(cwd):
+    env = os.environ.copy()
+    return subprocess.run(["git", "init"], cwd=cwd, env=env)
+"""
+
+
 @pytest.mark.parametrize(
     ("source", "expected"),
     [
@@ -342,6 +439,12 @@ def test_out():
         (_VIA_SCRIPT, [4]),
         (_CLASS_FIXTURE, [12]),
         ("import subprocess\nsubprocess.run(['ls'])\n", []),
+        (_ALIASED, [4]),
+        (_SHELL_STRING, [4]),
+        (_ARGV_VARIABLE, [5]),
+        (_ASYNCIO, [4]),
+        (_LOCAL_ISOLATED, []),
+        (_LOCAL_COPIED, [5]),
     ],
     ids=[
         "copied-environ",
@@ -350,6 +453,12 @@ def test_out():
         "via-script",
         "class-fixture",
         "no-git",
+        "aliased-module",
+        "shell-string",
+        "argv-variable",
+        "asyncio",
+        "local-isolated-env",
+        "local-copied-env",
     ],
 )
 def test_the_detector(source: str, expected: list[int]) -> None:

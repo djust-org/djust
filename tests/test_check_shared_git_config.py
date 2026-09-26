@@ -12,8 +12,9 @@ topology) IN AN ISOLATED tmp dir, simulate the leak in the throwaway repo's
 shared config, and assert the script detects it and ``--fix`` recovers it.
 Every git operation runs against ``tmp_path`` with ``GIT_CONFIG_GLOBAL``/
 ``GIT_CONFIG_SYSTEM`` pointed at ``/dev/null`` and git's execution variables
-(``GIT_DIR`` & co.) stripped — the real repo's config is NEVER touched (#3179). The script itself NEVER writes ``core.bare true``; its only
-write is the recovery ``core.bare false`` behind ``--fix``.
+(``GIT_DIR`` & co.) stripped — the real repo's config is NEVER touched (#3179).
+The script itself NEVER writes ``core.bare true``; its only write is
+the recovery ``core.bare false`` behind ``--fix``.
 """
 
 from __future__ import annotations
