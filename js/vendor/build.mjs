@@ -5,6 +5,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from
 import { dirname, join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
 import { APPS, BUNDLES } from "./bundles.mjs";
+import { addPackage } from "./packages.mjs";
 
 const LICENSE_FILES = ["LICENSE", "LICENSE.md", "LICENSE.txt", "license", "license.md"];
 const sri = (buf) => "sha384-" + createHash("sha384").update(buf).digest("base64");
@@ -63,8 +64,7 @@ async function buildEsbuild(bundle) {
   const packages = new Map();
   for (const input of Object.keys(result.metafile.inputs)) {
     if (!input.includes("node_modules/")) continue;
-    const info = describe(packageDir(input));
-    packages.set(info.name, info);
+    addPackage(packages, describe(packageDir(input)), bundle.asset);
   }
   const sorted = [...packages.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   const licenseRel = bundle.out.replace(/\.m?js$/, ".LICENSE.txt");
