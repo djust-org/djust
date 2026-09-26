@@ -770,13 +770,10 @@ endif
 		echo "$(RED)ERROR: changelog.d/ fragments were just folded into CHANGELOG.md [Unreleased]. Review the diff, commit it, then re-run make release.$(NC)"; \
 		exit 1; \
 	fi
-	@# Verify we're on main or release branch
-	@BRANCH=$$(git branch --show-current); \
-	case "$$BRANCH" in \
-		main|release/*) ;; \
-		[0-9].[0-9]|[0-9].[0-9][0-9]|[0-9][0-9].[0-9]|[0-9][0-9].[0-9][0-9]) ;; \
-		*) echo "$(RED)ERROR: Must be on main, release/*, or an X.Y maintenance branch (got '$$BRANCH')$(NC)"; exit 1 ;; \
-	esac
+	@# Tag only what the release line already contains: main or an X.Y branch,
+	@# HEAD pushed to it. A tag on release/* is lost when the PR is squash-merged,
+	@# and main's tagged-sections check then goes red (#3149, v1.3.0rc3 / #3131).
+	@$(PYTHON) scripts/check-release-tag-target.py
 	@# Verify working directory is clean
 	@if [ -n "$$(git status --porcelain)" ]; then \
 		echo "$(RED)ERROR: Working directory not clean$(NC)"; \
@@ -857,6 +854,7 @@ endif
 		exit 1; \
 	fi
 	@echo "$(GREEN)No existing v$(VERSION) tag found locally or on origin.$(NC)"
+	@$(PYTHON) scripts/check-release-tag-target.py
 
 .PHONY: test-js-coverage
 test-js-coverage: ## Measure dynamic JavaScript coverage and enforce regression floors
