@@ -233,9 +233,14 @@ states that the class is not in the current release. The existing
 The generator and AI-schema updates this ADR also names are recorded as
 pending ADR-037 work in the ledger.
 
-Known limitation: SPA `live_patch` navigation within one adapter view keeps
-the mounted route kwargs, so it cannot retarget the record. Use a full
-navigation (`live_redirect`) to edit a different record.
+SPA navigation within one adapter view cannot rebind the mounted route
+kwargs, so it cannot retarget the record in place. Since #3125 it does not
+try: a `url_change` (a `dj-patch` link, or back/forward within the same path)
+whose URL resolves to other route kwargs is answered with a `live_redirect` to
+that URL instead of `handle_params` and a render, and a server-side
+`live_patch(path=...)` to another record becomes a `live_redirect`. The
+redirect's mount resolves and authorizes the record the URL names, so the form
+and its authorization always match the address bar.
 
 ## Alternatives considered
 

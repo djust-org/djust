@@ -1058,6 +1058,34 @@ class ModelFormMixin(FormMixin, Generic[_ModelT]):
         """
         self.kwargs = dict(route_kwargs) if route_kwargs is not None else {}
 
+    def _djust_route_changed(self, url: str) -> bool:
+        """Whether ``url`` would select a different route (and so object) (#3125).
+
+        A URL change that keeps this view mounted cannot rebind the route, so
+        the runtime answers ``url_change`` to such a URL with a remount there.
+        A URL routed to another view also counts as changed.
+        """
+        from .mixins.navigation import own_route_kwargs
+
+        return own_route_kwargs(self, url) != getattr(self, "kwargs", {})
+
+    def live_patch(
+        self,
+        params: Optional[Dict[str, Any]] = None,
+        path: Optional[str] = None,
+        replace: bool = False,
+    ) -> None:
+        """``live_patch`` that remounts when ``path`` names another record (#3125).
+
+        A patch keeps the view mounted, and the mounted view edits the object
+        its route selected, so a patch to another record's URL would show that
+        URL over the old form. It becomes a ``live_redirect`` instead.
+        """
+        if path is not None and self._djust_route_changed(path):
+            self.live_redirect(path, params=params, replace=replace)  # type: ignore[attr-defined]
+            return
+        super().live_patch(params=params, path=path, replace=replace)  # type: ignore[misc]
+
     def _djust_render_only_context(self) -> Dict[str, Any]:
         """The managed object's template names (render-only, never persisted)."""
         obj = self.object

@@ -236,6 +236,11 @@ This auto-discovers all `LiveView` subclasses in `myapp` and:
 3. Checks DB query counts stay under `max_queries`
 4. If `fuzz=True`, sends malformed payloads and asserts no uncaught exceptions
 
+The fuzzer sends events only to `@event_handler` handlers, the ones dispatch
+resolves in every `event_security` mode. Under `"warn"` or `"open"` a client can
+still call an undecorated public method, so the smoke test emits one
+`UserWarning` per view naming those methods: decorate them, or test them directly.
+
 ---
 
 ## `@performance_test`
