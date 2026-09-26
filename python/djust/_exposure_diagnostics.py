@@ -5,6 +5,7 @@ carry the restriction across async and sync_to_async work without sharing it
 with another request, connection or sibling mount.
 """
 
+import weakref
 from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import wraps
@@ -17,7 +18,12 @@ PROTECTED_FAILURE = "Protected view operation failed"
 _T = TypeVar("_T")
 
 _details_allowed: ContextVar[bool] = ContextVar("djust_exception_details_allowed", default=True)
-_owner_slots: ContextVar[tuple[tuple[Any, str], ...]] = ContextVar(
+# Each slot holds a zero-argument callable returning the container: a
+# ``weakref.ref`` where the container supports one, else a strong holder. A
+# copy of the context taken inside a turn (a task created there, or a thread
+# started from it on 3.14+) keeps its slots for as long as the copy lives, so
+# a strong reference would pin a disconnected session (#3116).
+_owner_slots: ContextVar[tuple[tuple[Callable[[], Any], str], ...]] = ContextVar(
     "djust_diagnostic_owner_slots", default=()
 )
 _scope_depth: ContextVar[int] = ContextVar("djust_diagnostic_scope_depth", default=0)
@@ -80,19 +86,36 @@ def watch_diagnostic_owner(container: Any, attribute: str) -> None:
     """Track a framework-owned slot so nested catches see owner replacement.
 
     Call inside an owned diagnostic scope. Slots are inherited by nested calls
-    and worker contexts, but removed when that scope exits. Only trusted
-    framework call sites register slots; this is not an application callback API.
+    and worker contexts, but removed when that scope exits. A slot refers to
+    its container weakly, so a context copy that outlives the scope does not
+    keep the container alive (#3116); a collected container restricts. Only
+    trusted framework call sites register slots; this is not an application
+    callback API.
     """
     slots = _owner_slots.get()
-    if not any(owner is container and name == attribute for owner, name in slots):
-        _owner_slots.set((*slots, (container, attribute)))
+    if not any(ref() is container and name == attribute for ref, name in slots):
+        _owner_slots.set((*slots, (_owner_ref(container), attribute)))
     diagnostics_allowed()
+
+
+def _owner_ref(container: Any) -> Callable[[], Any]:
+    """A weak reference to ``container``, or a strong holder if it has none."""
+    try:
+        return weakref.ref(container)
+    except TypeError:
+        # No ``__weakref__`` slot (every framework container has one today).
+        return lambda: container
 
 
 def diagnostics_allowed() -> bool:
     """Apply current owner restrictions before allowing exception details."""
-    for container, attribute in _owner_slots.get():
+    for ref, attribute in _owner_slots.get():
         try:
+            container = ref()
+            if container is None:
+                # The owner is gone (a disconnected session seen from a
+                # context copy): nothing can prove the owner allows details.
+                raise LookupError("diagnostic owner no longer exists")
             restrict_diagnostics(getattr(container, attribute))
         except Exception:  # noqa: BLE001 — an unreadable owner cannot grant diagnostics
             _details_allowed.set(False)
