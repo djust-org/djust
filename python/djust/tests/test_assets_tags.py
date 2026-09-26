@@ -224,3 +224,73 @@ def test_documented_component_rendering_patterns(tmp_path):
         own = chart.render()
     assert page == tag
     assert own == f"<div>{tag}<canvas></canvas></div>"
+
+
+class BucketStorage:
+    """Static storage serving from another origin while STATIC_URL stays
+    relative (e.g. a CDN-backed storage that builds its own URLs)."""
+
+    def __new__(cls, *args, **kwargs):
+        from django.contrib.staticfiles.storage import StaticFilesStorage
+
+        class _Bucket(StaticFilesStorage):
+            def url(self, name):
+                return "https://bucket.example/" + name
+
+        return _Bucket(*args, **kwargs)
+
+
+def test_crossorigin_follows_the_rendered_url_not_static_url(tmp_path):
+    storages = {
+        "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+        "staticfiles": {"BACKEND": "djust.tests.test_assets_tags.BucketStorage"},
+    }
+    with _settings(tmp_path), override_settings(STORAGES=storages):
+        html = asset_tags("test-lib")
+    assert 'src="https://bucket.example/testlib/lib.js"' in html
+    assert 'crossorigin="anonymous"' in html
+
+
+def test_production_does_not_cache_the_finder_fallback_hash(tmp_path):
+    """DEBUG off: before collectstatic the source file's hash is used, but it
+    must not be pinned — once the stored file exists (and differs), its hash
+    is what the browser needs."""
+    root = tmp_path / "collected"
+    root.mkdir()
+    with _settings(tmp_path), override_settings(DEBUG=False, STATIC_ROOT=str(root)):
+        assert f'integrity="{sri(CONTENT)}"' in asset_tags("test-lib")
+        served = b"console.log('collected');\n"
+        (root / "testlib").mkdir()
+        (root / "testlib" / "lib.js").write_bytes(served)
+        assert f'integrity="{sri(served)}"' in asset_tags("test-lib")
+
+
+def test_production_caches_the_stored_file_hash(tmp_path, monkeypatch):
+    from django.contrib.staticfiles.storage import staticfiles_storage
+
+    root = tmp_path / "collected"
+    (root / "testlib").mkdir(parents=True)
+    (root / "testlib" / "lib.js").write_bytes(CONTENT)
+    with _settings(tmp_path), override_settings(DEBUG=False, STATIC_ROOT=str(root)):
+        first = asset_tags("test-lib")
+
+        def _raise(*args, **kwargs):
+            raise AssertionError("storage re-read despite a cached hash")
+
+        monkeypatch.setattr(staticfiles_storage, "open", _raise)
+        assert asset_tags("test-lib") == first
+
+
+def test_debug_rehashes_an_edited_vendored_file(tmp_path):
+    """DEBUG: the cache is keyed by the finder file's mtime, so rebuilding or
+    editing a vendored file changes its integrity without a restart."""
+    import os
+
+    with _settings(tmp_path), override_settings(DEBUG=True):
+        assert f'integrity="{sri(CONTENT)}"' in asset_tags("test-lib")
+        source = tmp_path / "static" / "testlib" / "lib.js"
+        rebuilt = b"console.log('rebuilt');\n"
+        before = source.stat().st_mtime_ns
+        source.write_bytes(rebuilt)
+        os.utime(source, ns=(before + 10**9, before + 10**9))
+        assert f'integrity="{sri(rebuilt)}"' in asset_tags("test-lib")
