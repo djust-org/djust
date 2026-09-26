@@ -153,7 +153,9 @@ rendering code.
 | `--dj-md-editor-accent` | Accent color |
 | `--dj-md-editor-code-bg` | Code background |
 | `--dj-md-editor-radius` | Corner radius |
-| `--dj-md-editor-height` | Editor height |
+| `--dj-md-editor-height` | Size of the editing surface (the textarea and the visual surface). It sets `height`, `min-height` and `max-height` at once, so it is a fixed size, not a minimum; longer content scrolls inside it (default `20rem`) |
+| `--dj-md-editor-min-height` | Minimum height of the source/preview panes container, `.dj-md-editor__panes`, in `components.css` (default `16rem`) |
+| `--dj-md-editor-toolbar-bg` | Toolbar background (`components.css`) |
 | `--dj-font-mono` | Monospace font |
 
 The optional visual bundle is approximately 155 KiB gzip and does not enter the

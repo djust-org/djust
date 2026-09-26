@@ -23,13 +23,24 @@ class MarkdownEditor(Component):
 
         {{ editor|safe }}
 
-    CSS Custom Properties::
+    CSS Custom Properties (``components.css`` and ``markdown-editor.css``)::
 
         --dj-md-editor-bg: background color
+        --dj-md-editor-text: text color (visual mode)
         --dj-md-editor-border: border color
+        --dj-md-editor-muted: secondary text (visual mode)
+        --dj-md-editor-accent: accent color (visual mode)
+        --dj-md-editor-code-bg: code background (visual mode)
         --dj-md-editor-radius: border radius
-        --dj-md-editor-min-height: minimum height
         --dj-md-editor-toolbar-bg: toolbar background
+        --dj-md-editor-min-height: minimum height of the source/preview
+            panes container, ``.dj-md-editor__panes`` (default 16rem;
+            components.css)
+        --dj-md-editor-height: size of the editing surface itself, the
+            textarea and the visual-mode surface (default 20rem;
+            markdown-editor.css). It sets height, min-height and max-height
+            at once, so it is a fixed size, not a minimum: longer content
+            scrolls inside it. Set this one to make the editor taller.
 
     Args:
         name: form field name

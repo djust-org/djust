@@ -6,7 +6,7 @@ similar to Phoenix LiveView's Presence system.
 
 Example usage:
 
-    class DocumentView(LiveView, PresenceMixin):
+    class DocumentView(PresenceMixin, LiveView):
         presence_key = "document:{doc_id}"  # Group key
 
         def mount(self, request, **kwargs):
@@ -183,14 +183,44 @@ class PresenceMixin:
     Mixin that provides presence tracking capabilities to LiveView.
 
     Usage:
-        class MyView(LiveView, PresenceMixin):
+        class MyView(PresenceMixin, LiveView):
             presence_key = "my_view:{id}"  # Define the presence group
 
             def mount(self, request, **kwargs):
                 self.track_presence(meta={"name": request.user.username})
+
+    List the mixin BEFORE ``LiveView``. ``__init__`` below sets the presence
+    state, and Django's ``View.__init__`` does not call ``super().__init__()``,
+    so a mixin listed after ``LiveView`` never initialises. Such a class is
+    refused with a ``TypeError`` when it is defined (#3109).
     """
 
     presence_key: Optional[str] = None
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        from django.views import View
+
+        mro = cls.__mro__
+        if View in mro and mro.index(View) < mro.index(PresenceMixin):
+            mixin = next(
+                c for c in mro if issubclass(c, PresenceMixin) and c.__module__ == __name__
+            )
+            host = next(c for c in mro if issubclass(c, View) and c is not cls)
+            raise TypeError(
+                "%s lists %s after %s. Django's View.__init__ does not call "
+                "super().__init__(), so %s.__init__ never runs and presence "
+                "state is missing. Put the mixin first: class %s(%s, %s)."
+                % (
+                    cls.__name__,
+                    mixin.__name__,
+                    host.__name__,
+                    mixin.__name__,
+                    cls.__name__,
+                    mixin.__name__,
+                    host.__name__,
+                )
+            )
 
     # When True, anonymous users get a per-WebSocket-connection unique id
     # (``anon_conn_<ws_session_id>``) instead of one collapsing across tabs of
@@ -673,7 +703,7 @@ class LiveCursorMixin(PresenceMixin):
     Extends PresenceMixin with live cursor tracking capabilities.
 
     Usage:
-        class MyView(LiveView, LiveCursorMixin):
+        class MyView(LiveCursorMixin, LiveView):
             presence_key = "document:{doc_id}"
 
             def handle_cursor_move(self, x, y):

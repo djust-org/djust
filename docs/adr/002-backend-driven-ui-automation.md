@@ -113,7 +113,7 @@ Clicking fires the chain *locally* — no server round-trip.
 ### 4. Multi-user coordination via presence
 
 ```python
-class InstructorView(LiveView, PresenceMixin):
+class InstructorView(PresenceMixin, LiveView):
     presence_key = "classroom:{class_id}"
 
     @event_handler
@@ -348,7 +348,7 @@ class PresenceMixin:
 **Example — instructor-led workshop**:
 
 ```python
-class WorkshopView(LiveView, PresenceMixin):
+class WorkshopView(PresenceMixin, LiveView):
     presence_key = "workshop:{session_id}"
 
     @event_handler
