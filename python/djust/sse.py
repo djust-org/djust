@@ -277,6 +277,26 @@ class SSESession:
 
     def push(self, msg: Dict[str, Any]) -> None:
         """Enqueue a message to be sent to the SSE client."""
+        self._put(msg)
+
+    def _put(self, msg: Optional[Dict[str, Any]]) -> None:
+        """``queue.put_nowait`` on the session's loop (#3128).
+
+        The queue belongs to the stream's loop. With several event loops
+        (``djust serve --loops N``), a put from another thread is handed over
+        with ``call_soon_threadsafe``; otherwise it is a plain put, as before.
+        """
+        from .multiloop import is_multi_loop
+
+        loop = self._loop
+        if loop is not None and is_multi_loop() and loop.is_running():
+            try:
+                here: Optional[asyncio.AbstractEventLoop] = asyncio.get_running_loop()
+            except RuntimeError:
+                here = None
+            if here is not loop:
+                loop.call_soon_threadsafe(self.queue.put_nowait, msg)
+                return
         self.queue.put_nowait(msg)
 
     def shutdown(self) -> None:
@@ -290,7 +310,7 @@ class SSESession:
             dispose_child_subtree(view)
             self.view_instance = None
             self.runtime.view_instance = None
-        self.queue.put_nowait(None)  # None is the sentinel value
+        self._put(None)  # None is the sentinel value
 
     # ------------------------------------------------------------------ #
     # Interface for _validate_event_security
@@ -335,14 +355,15 @@ async def _dispatch_on_session_loop(
         await session.dispatch(request, data)
         return
 
-    from ._exposure_diagnostics import _details_allowed
+    from ._exposure_diagnostics import _details_allowed, diagnostics_allowed
 
     async def on_session_loop() -> tuple[Optional[Exception], bool]:
+        # diagnostics_allowed() also applies owner slots registered there.
         try:
             await session.dispatch(request, data)
         except Exception as exc:  # noqa: BLE001 - re-raised on the caller's loop
-            return exc, _details_allowed.get()
-        return None, _details_allowed.get()
+            return exc, diagnostics_allowed()
+        return None, diagnostics_allowed()
 
     error, allowed = await run_on_loop(loop, on_session_loop())
     if not allowed:
@@ -417,7 +438,9 @@ def _client_cap_key(request: HttpRequest) -> str:
 def _count_sessions_for_client(cap_key: str) -> int:
     """Number of live registered sessions owned by *cap_key* (Finding #25)."""
     count = 0
-    for session in _sse_sessions.values():
+    # A snapshot: with several event loops another loop's thread can register
+    # or drop a session while this counts (#3128).
+    for session in list(_sse_sessions.values()):
         if session._owner_user_pk is not None:
             key = f"user:{session._owner_user_pk}"
         elif session._owner_session_key:

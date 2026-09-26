@@ -303,6 +303,28 @@ def test_an_sse_hop_carries_errors_and_diagnostic_restrictions_back(two_loops, m
 
 
 @pytest.mark.django_db
+def test_an_sse_push_from_another_loop_reaches_the_stream(two_loops, multi_loop_mode):
+    """The stream waits on the session's queue on its own loop; a push made on
+    another loop's thread must wake it."""
+    from djust import sse
+
+    loop_a, loop_b = two_loops
+
+    async def make():
+        return sse.SSESession("sid-3128d")
+
+    session = loop_a.run(make())
+    waiting = loop_a.submit(session.queue.get())  # the stream, parked on loop a
+    time.sleep(0.05)
+
+    async def push():
+        session.push({"type": "patch", "n": 1})
+
+    loop_b.run(push())
+    assert waiting.result(5) == {"type": "patch", "n": 1}
+
+
+@pytest.mark.django_db
 def test_with_one_loop_an_sse_post_dispatches_in_place(two_loops):
     """Not multi-loop (the default): no hop, whatever loop the session was
     created on, exactly as before."""

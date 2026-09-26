@@ -39,7 +39,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -1034,7 +1034,13 @@ def add_serve_parser(subparsers: Any) -> argparse.ArgumentParser:
     p.add_argument(
         "--timeout-graceful-shutdown", dest="timeout_graceful_shutdown", type=int, default=None
     )
-    p.add_argument("--limit-concurrency", dest="limit_concurrency", type=int, default=None)
+    p.add_argument(
+        "--limit-concurrency",
+        dest="limit_concurrency",
+        type=int,
+        default=None,
+        help="Max concurrent connections and tasks, per event loop",
+    )
     p.add_argument(
         "--allow-gil",
         dest="allow_gil",
@@ -1049,7 +1055,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
     from djust.multiloop import MultiLoopError, serve
 
     sys.path.insert(0, os.path.abspath(args.app_dir or "."))
-    kwargs: dict = {
+    kwargs: Dict[str, Any] = {
         "host": args.host,
         "port": args.port,
         "uds": args.uds,

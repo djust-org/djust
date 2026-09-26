@@ -94,6 +94,34 @@ def test_a_loop_bound_channel_layer_is_refused_before_binding(
     assert bound == [], "the socket was bound before the layer check"
 
 
+class _MyInMemoryLayer(__import__("djust.layers", fromlist=["x"]).InMemoryChannelLayer):
+    """An app's subclass of a loop-bound layer."""
+
+
+class _RedisCoreLookalike:
+    """Stands in for channels_redis.core.RedisChannelLayer (not installed here)."""
+
+    def __init__(self, **kwargs):
+        pass
+
+
+_RedisCoreLookalike.__module__ = "channels_redis.core"
+_RedisCoreLookalike.__qualname__ = "RedisChannelLayer"
+
+
+def test_a_subclass_of_a_loop_bound_layer_and_channels_redis_core_are_refused(
+    settings, restore_layers
+):
+    from channels.layers import channel_layers
+
+    _use_layer(settings, "djust.tests.test_multiloop_serve_3128._MyInMemoryLayer")
+    assert len(multiloop.check_channel_layers()) == 1
+    settings.CHANNEL_LAYERS = {"default": {"BACKEND": "x.y"}}
+    channel_layers.backends["default"] = _RedisCoreLookalike()
+    unsafe = multiloop.check_channel_layers()
+    assert unsafe == ["CHANNEL_LAYERS['default'] = channels_redis.core.RedisChannelLayer"]
+
+
 def test_the_multi_loop_layer_passes_the_check(settings, restore_layers):
     _use_layer(settings, "djust.layers.MultiLoopInMemoryChannelLayer")
     assert multiloop.check_channel_layers() == []
@@ -250,6 +278,32 @@ def test_two_loops_share_one_socket_run_lifespan_each_and_stop_gracefully(tmp_pa
     assert code == 0, out
     assert out.count("startup on djust-loop-") == 2, out
     assert out.count("shutdown on djust-loop-") == 2, out
+
+
+def test_a_unix_socket_is_removed_on_exit_so_a_restart_can_bind(tmp_path):
+    import tempfile
+
+    (tmp_path / "mlapp.py").write_text(_APP)
+    # AF_UNIX paths are short on macOS: keep the socket out of tmp_path.
+    uds = os.path.join(tempfile.mkdtemp(prefix="ml"), "s.sock")
+    env = {**os.environ, "PYTHONPATH": REPO_PYTHON}
+    env.pop("DJANGO_SETTINGS_MODULE", None)
+    cmd = [
+        sys.executable, "-m", "djust", "serve", "mlapp:app", "--loops", "2",
+        "--uds", uds, "--app-dir", str(tmp_path), "--lifespan", "off", "--allow-gil",
+    ]  # fmt: skip
+    for _ in range(2):  # the second start must bind the same path
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env
+        )
+        deadline = time.monotonic() + 20
+        while not os.path.exists(uds) and time.monotonic() < deadline:
+            if proc.poll() is not None:
+                raise AssertionError(proc.stdout.read())
+            time.sleep(0.1)
+        code, out = _stop(proc)
+        assert code == 0, out
+        assert not os.path.exists(uds), "the UNIX socket file was left behind"
 
 
 def test_one_failed_startup_stops_every_loop_with_exit_code_3(tmp_path):

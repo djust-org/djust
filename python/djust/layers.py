@@ -377,6 +377,8 @@ class MultiLoopInMemoryChannelLayer(InMemoryChannelLayer):
         Loop-agnostic: the queues are deques, so the sweep touches no loop's
         state and can run from whichever loop calls it.
         """
+        if time.monotonic() < self._next_clean:  # unlocked pre-check: the common case
+            return
         with self._lock:
             now_mono = time.monotonic()
             if now_mono < self._next_clean:

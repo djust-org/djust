@@ -3,7 +3,8 @@
 On free-threaded CPython (3.14t) with ``LIVEVIEW_CONFIG["worker_threads"]``,
 one djust process spreads its sync work over several cores, and the single
 asyncio event loop that decodes, dispatches and encodes every WebSocket frame
-becomes the limit (about 0.93 of a core at 160–192 snake-arena players).
+becomes the limit (#3095 measured about 0.93 of a core for a multiplayer
+game at 160–192 players).
 :func:`serve` runs N uvicorn servers, each on its own event loop in its own
 thread, all accepting on ONE listening socket, so the loop work spreads too
 while in-process state (rooms, caches, the in-memory channel layer) stays
@@ -52,6 +53,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import signal
 import socket
 import sys
@@ -129,7 +131,10 @@ async def run_on_loop(loop: Optional[asyncio.AbstractEventLoop], coro: Coroutine
     if loop is here or loop.is_closed() or not loop.is_running():
         return await coro
     # run_coroutine_threadsafe copies the caller's context into the task.
-    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    try:
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+    except RuntimeError:  # the loop closed after the check above
+        return await coro
     return await asyncio.wrap_future(future)
 
 
@@ -138,8 +143,7 @@ async def run_on_loop(loop: Optional[asyncio.AbstractEventLoop], coro: Coroutine
 # ---------------------------------------------------------------------------
 
 
-def _layer_class_path(backend: Any) -> str:
-    cls = type(backend)
+def _class_path(cls: type) -> str:
     return f"{cls.__module__}.{cls.__qualname__}"
 
 
@@ -165,10 +169,11 @@ def check_channel_layers() -> List[str]:
     unsafe = []
     for alias in aliases:
         backend = channel_layers[alias]
-        path = _layer_class_path(backend)
+        path = _class_path(type(backend))
         if getattr(backend, "multi_loop_safe", False):
             continue
-        if path in _LOOP_UNSAFE_LAYERS:
+        bases = {_class_path(b) for b in type(backend).__mro__}
+        if bases & set(_LOOP_UNSAFE_LAYERS):  # a loop-bound layer or a subclass of one
             unsafe.append(f"CHANNEL_LAYERS[{alias!r}] = {path}")
         elif path == "channels_redis.pubsub.RedisPubSubChannelLayer":
             continue  # keeps one connection per event loop
@@ -252,6 +257,20 @@ class _Runner:
                 pass
 
 
+def _resolve_event_loop(config: Any) -> None:
+    """Import the event loop implementation (``--loop auto`` may pick uvloop)
+    on the main thread, so the GIL check afterwards sees its effect and a bad
+    ``--loop`` fails here rather than inside every loop thread."""
+    try:
+        get_factory = getattr(config, "get_loop_factory", None)  # uvicorn >= 0.36
+        if get_factory is not None:
+            get_factory()
+        else:  # pragma: no cover - older uvicorn
+            config.setup_event_loop()
+    except SystemExit as exc:
+        raise MultiLoopError(f"djust serve: invalid event loop {config.loop!r}") from exc
+
+
 def _signal_all(runners: List[_Runner], force: bool) -> None:
     for runner in runners:
         runner.server.should_exit = True
@@ -262,14 +281,17 @@ def _signal_all(runners: List[_Runner], force: bool) -> None:
 def serve(app: Any, *, loops: int = 1, allow_gil: bool = False, **uvicorn_kwargs: Any) -> int:
     """Serve ``app`` with uvicorn on ``loops`` event loops in this process.
 
-    ``app`` and ``uvicorn_kwargs`` are what ``uvicorn.run`` takes (``host``,
+    ``app`` and ``uvicorn_kwargs`` are what ``uvicorn.Config`` takes (``host``,
     ``port``, ``uds``, ``ws``, ``http``, ``loop``, ``lifespan``, ``log_level``,
     ``proxy_headers``, ``timeout_graceful_shutdown`` and so on). ``loops=1``
-    calls ``uvicorn.run`` unchanged. ``reload`` and ``workers`` are refused
-    with more than one loop.
+    calls ``uvicorn.run`` unchanged. With more than one loop, ``reload`` and
+    ``workers`` are refused, and ``app_dir`` (a ``uvicorn.run`` option, not a
+    ``Config`` one) is not accepted: put the directory on ``sys.path`` first.
 
-    Returns the process exit code (0, or 3 when a server failed to start).
-    Must be called from the main thread, which handles SIGINT and SIGTERM.
+    Returns the process exit code: 0 after a clean shutdown, including one
+    asked for by SIGINT or SIGTERM (``uvicorn.run`` re-raises the signal
+    instead), or 3 when a server failed to start. Must be called from the main
+    thread, which handles SIGINT and SIGTERM.
 
     Raises :class:`MultiLoopError` for several loops on a GIL build (unless
     ``allow_gil``) or with a loop-unsafe channel layer.
@@ -303,7 +325,8 @@ def serve(app: Any, *, loops: int = 1, allow_gil: bool = False, **uvicorn_kwargs
 
     config = uvicorn.Config(app, **uvicorn_kwargs)
     config.load()  # imports the app (and sets Django up) once, on this thread
-    _refuse_gil(loops, allow_gil, "after importing the app")
+    _resolve_event_loop(config)  # imports uvloop, if --loop picks it, before the check
+    _refuse_gil(loops, allow_gil, "after importing the app and the event loop")
     unsafe = check_channel_layers()
     if unsafe:
         raise MultiLoopError(
@@ -314,22 +337,23 @@ def serve(app: Any, *, loops: int = 1, allow_gil: bool = False, **uvicorn_kwargs
     _check_pool(loops)
 
     sock = config.bind_socket()
-    sock.listen(config.backlog)
-    _loop_count = loops
-    # Each server gets its own descriptor for the one listening socket: uvicorn
-    # closes the sockets it was given when it shuts down.
-    runners = [_Runner(i, uvicorn.Server(config), sock.dup()) for i in range(loops)]
-
-    signals = [signal.SIGINT, signal.SIGTERM]
+    runners: List[_Runner] = []
     received: List[int] = []
 
     def on_signal(signum: int, frame: Any) -> None:
         received.append(signum)
         _signal_all(runners, force=len(received) > 1)
 
-    previous = {sig: signal.signal(sig, on_signal) for sig in signals}
-    logger.info("djust serve: starting %d event loops on one socket", loops)
+    previous: dict = {}
     try:
+        sock.listen(config.backlog)
+        _loop_count = loops
+        # Each server gets its own descriptor for the one listening socket:
+        # uvicorn closes the sockets it was given when it shuts down.
+        for i in range(loops):
+            runners.append(_Runner(i, uvicorn.Server(config), sock.dup()))
+        previous = {sig: signal.signal(sig, on_signal) for sig in (signal.SIGINT, signal.SIGTERM)}
+        logger.info("djust serve: starting %d event loops on one socket", loops)
         for runner in runners:
             runner.thread.start()
         stopping = False
@@ -344,8 +368,17 @@ def serve(app: Any, *, loops: int = 1, allow_gil: bool = False, **uvicorn_kwargs
     finally:
         for sig, handler in previous.items():
             signal.signal(sig, handler)
+        for runner in runners:
+            if not runner.thread.is_alive():
+                try:
+                    runner.sock.close()  # never started: its descriptor is still open
+                except OSError:  # pragma: no cover
+                    pass
         sock.close()
         _loop_count = 0
+        # uvicorn.run removes its UNIX socket file on exit; so does this.
+        if config.uds and os.path.exists(config.uds):
+            os.remove(config.uds)
 
     # A server that never started because a signal stopped it first is not a
     # failure; one that errored, or stopped on its own before starting, is.
