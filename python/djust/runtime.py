@@ -6504,11 +6504,12 @@ class ViewRuntime:
             return
         from django.conf import settings as django_settings
         from django.template.exceptions import TemplateDoesNotExist
-        from django.template.loader import render_to_string
+
+        from .mixins.layout import render_pending_layout
 
         try:
-            context = view.get_context_data() if hasattr(view, "get_context_data") else {}
-            layout_html = await sync_to_async(render_to_string)(layout_path, context)
+            # #3178: context + render in one hop (was: context on the loop).
+            layout_html = await sync_to_async(render_pending_layout)(view, layout_path)
         except TemplateDoesNotExist:
             logger.warning(
                 "set_layout(%r) — template not found; ignoring swap request", layout_path

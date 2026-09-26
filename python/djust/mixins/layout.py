@@ -62,3 +62,21 @@ class LayoutMixin:
         path = self._pending_layout
         self._pending_layout = None
         return path
+
+
+def render_pending_layout(view: Any, layout_path: str) -> str:
+    """Render ``layout_path`` with ``view``'s current context (sync).
+
+    The one body both ``_flush_pending_layout`` twins (the WebSocket
+    consumer's and ``ViewRuntime``'s) run. Callers run it in ONE
+    ``sync_to_async`` hop, like every other render path (#3178): the context
+    build and the template render stay off the event-loop thread and, with
+    ``LIVEVIEW_CONFIG["worker_threads"]``, on the session's pinned worker, so
+    ORM access in ``get_context_data`` sees the session's thread and its DB
+    connection. Exceptions propagate to the caller's error handling.
+    """
+    from django.template.loader import render_to_string
+
+    context = view.get_context_data() if hasattr(view, "get_context_data") else {}
+    html: str = render_to_string(layout_path, context)
+    return html
