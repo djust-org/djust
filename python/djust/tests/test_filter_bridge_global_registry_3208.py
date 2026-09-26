@@ -145,7 +145,14 @@ def test_clearing_the_registry_restores_only_the_missing_names_once():
         first = register.call_count
         tf._ensure_custom_filters_bridged()
     assert boot.call_count == 0, "restoring must not re-walk every library"
-    assert first == len(tf._BRIDGED_FILTERS) > 0
+    # Names a {% load %} owns are the loader's to restore, not the bootstrap's
+    # (#3213 re-review e). Earlier tests on the worker decide which those are,
+    # so derive the expected set rather than assume it is every bridged name.
+    with tf._global_registry_namespace():
+        loader_owned = tf._loader_owned_filters()
+    expected = sorted(set(tf._BRIDGED_FILTERS) - loader_owned)
+    assert expected
+    assert sorted(c.args[0] for c in register.call_args_list) == expected
     assert register.call_count == first, "a second call restored again"
     assert _rust.registry_entry_is_local("field_value", "filter")
 
