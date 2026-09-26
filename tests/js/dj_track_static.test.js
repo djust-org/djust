@@ -218,3 +218,101 @@ describe('#2966 server-side stale-asset check', () => {
         expect(reloads).toEqual([]);
     });
 });
+
+// ---------------------------------------------------------------------------
+// #2966 over SSE (review of #3163, I1). The stream GET is the SSE mount; a
+// POSTed mount frame after it is a no-op, and an EventSource auto-reconnect
+// replays the stream URL without posting anything. So the tracked URLs ride
+// the stream URL itself, on every open.
+// ---------------------------------------------------------------------------
+
+function loadSsePage(headHtml) {
+    const reloads = [];
+    const virtualConsole = new VirtualConsole();
+    virtualConsole.on('jsdomError', (err) => {
+        if (/navigation|reload/i.test(String(err && err.message))) reloads.push(err.message);
+    });
+    const dom = new JSDOM(`<!DOCTYPE html>
+<html><head>
+${headHtml}
+</head>
+<body>
+  <div dj-view="test.views.Page" dj-root><p>content</p></div>
+</body>
+</html>`, { runScripts: 'dangerously', url: 'http://localhost/page/', virtualConsole });
+    const opened = [];
+    class MockEventSource {
+        static CLOSED = 2;
+        constructor(url) { this.url = url; this.readyState = 1; opened.push(url); }
+        close() {}
+    }
+    dom.window.EventSource = MockEventSource;
+    for (const k of ['log', 'warn', 'error', 'debug', 'info']) dom.window.console[k] = () => {};
+    dom.window.eval(clientCode);
+    const sse = new dom.window.djust.LiveViewSSE();
+    sse.sendMessage = () => true; // the POSTed frames are not under test here
+    return { dom, sse, opened, reloads };
+}
+
+function trackedParams(url) {
+    return new URL(url, 'http://localhost').searchParams.getAll('_djust_track_static');
+}
+
+describe('#2966 over SSE', () => {
+    it('the stream URL carries the tracked URLs, same-origin as paths', () => {
+        const { sse, opened } = loadSsePage(HEAD);
+        sse.connect('test.views.Page', { tab: 'b' });
+        expect(opened.length).toBe(1);
+        expect(trackedParams(opened[0])).toEqual([
+            '/static/js/app.0123456789ab.js',
+            '/static/css/site.aaaaaaaaaaaa.css',
+            'https://cdn.example.com/lib.js',
+        ]);
+        expect(new URL(opened[0], 'http://localhost').searchParams.get('tab')).toBe('b');
+    });
+
+    it('a page that tracks nothing adds no param', () => {
+        const { sse, opened } = loadSsePage('');
+        sse.connect('test.views.Page', {});
+        expect(trackedParams(opened[0])).toEqual([]);
+    });
+
+    it('the tracked URLs are capped so the stream URL stays bounded', () => {
+        const many = Array.from({ length: 64 }, (_, i) =>
+            `<script dj-track-static src="/static/js/${'x'.repeat(150)}${i}.0123456789ab.js"></script>`,
+        ).join('');
+        const { sse, opened } = loadSsePage(many);
+        sse.connect('test.views.Page', {});
+        const sent = trackedParams(opened[0]);
+        expect(sent.length).toBeGreaterThan(0);
+        expect(sent.length).toBeLessThan(64);
+        expect(new URL(opened[0], 'http://localhost').search.length).toBeLessThan(4500);
+    });
+
+    it('stale_static on the SSE mount reply fires dj:stale-assets', async () => {
+        const { dom, sse, reloads } = loadSsePage(HEAD);
+        const events = [];
+        dom.window.document.addEventListener('dj:stale-assets', (e) => events.push(e.detail));
+        sse.connect('test.views.Page', {});
+        await sse.handleMessage({
+            type: 'mount', view: 'test.views.Page', version: 1,
+            stale_static: ['/static/js/app.0123456789ab.js'],
+        });
+        expect(events).toEqual([{ changed: ['/static/js/app.0123456789ab.js'] }]);
+        expect(reloads).toEqual([]);
+    });
+
+    it('a stale "reload" asset reloads the page over SSE', async () => {
+        const { dom, sse, reloads } = loadSsePage(
+            '<script dj-track-static="reload" src="/static/js/app.0123456789ab.js"></script>');
+        const events = [];
+        dom.window.document.addEventListener('dj:stale-assets', (e) => events.push(e.detail));
+        sse.connect('test.views.Page', {});
+        await sse.handleMessage({
+            type: 'mount', view: 'test.views.Page', version: 1,
+            stale_static: ['/static/js/app.0123456789ab.js'],
+        });
+        expect(reloads.length).toBe(1);
+        expect(events).toEqual([]);
+    });
+});

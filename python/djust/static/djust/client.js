@@ -2491,6 +2491,15 @@ class LiveViewSSE {
         const urlParams = new URLSearchParams(params);
         urlParams.set('view', viewPath);
         urlParams.set('_djust_url', window.location.pathname);
+        // #2966: dj-track-static. The stream GET is the mount, and an
+        // EventSource auto-reconnect re-requests this same URL, so the page's
+        // tracked asset URLs ride it (a POSTed mount frame would be a no-op).
+        const trackStatic = globalThis.djust.djTrackStatic;
+        if (trackStatic) {
+            trackStatic.streamParams().forEach((url) => {
+                urlParams.append('_djust_track_static', url);
+            });
+        }
         const streamUrl = `${this.sseBaseUrl}?${urlParams.toString()}`;
         const pageUrl = window.location.pathname + window.location.search;
 
@@ -2647,7 +2656,8 @@ class LiveViewSSE {
                 }
                 if (globalThis.djustDebug) console.log('[SSE] View mounted:', data.view);
                 // #2966: the server's answer to a reconnect's track_static.
-                if (data.stale_static && globalThis.djust.djTrackStatic) {
+                if (data.stale_static && data.view === this.primaryViewPath &&
+                    globalThis.djust.djTrackStatic) {
                     globalThis.djust.djTrackStatic.applyStaleStatic(data.stale_static);
                 }
 
@@ -2939,20 +2949,15 @@ class LiveViewSSE {
     _sendMountFrame(viewPath, params = {}) {
         let tz = null;
         try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { /* noop */ }
-        const frame = {
+        // dj-track-static URLs ride the stream GET, not this frame (#2966).
+        return this.sendMessage({
             type: 'mount',
             view: viewPath,
             params,
             url: window.location.pathname,
             has_prerendered: false,
             client_timezone: tz,
-        };
-        // #2966: the WebSocket mount's dj-track-static fields (#1646).
-        const trackStatic = globalThis.djust.djTrackStatic;
-        if (trackStatic) {
-            Object.assign(frame, trackStatic.mountFields(Boolean(window.djust._isReconnect)));
-        }
-        return this.sendMessage(frame);
+        });
     }
 
     /**
@@ -18172,8 +18177,11 @@ function _sentUrl(url) {
 
 function _trackedUrls() {
     const urls = [];
-    if (_djTrackStaticSnapshot === null) return urls;
-    _djTrackStaticSnapshot.forEach(function (url) {
+    // Before the page-load snapshot is seeded (a transport connecting ahead
+    // of this module's DOMContentLoaded listener) the live elements are the
+    // page-load ones.
+    const snap = _djTrackStaticSnapshot === null ? _snapshotAssets() : _djTrackStaticSnapshot;
+    snap.forEach(function (url) {
         if (!url || urls.length >= _TRACK_STATIC_MAX) return;
         const sent = _sentUrl(url);
         if (urls.indexOf(sent) === -1) urls.push(sent);
@@ -18187,6 +18195,25 @@ function _mountFields(isReconnect) {
     if (!isReconnect) return {};
     const urls = _trackedUrls();
     return urls.length ? { track_static: urls } : {};
+}
+
+// The SSE transport's form: the tracked URLs as stream-GET params. The GET is
+// the SSE mount and an EventSource auto-reconnect replays the same URL, so
+// they are sent on every stream open (a first open simply finds nothing
+// stale). Capped by length so the stream URL stays well under common URL
+// limits; URLs past the budget are not checked.
+const _TRACK_STATIC_URL_BUDGET = 4000;
+
+function _streamParams() {
+    const urls = [];
+    let used = 0;
+    _trackedUrls().forEach(function (url) {
+        const cost = encodeURIComponent(url).length + 21; // "&_djust_track_static="
+        if (used + cost > _TRACK_STATIC_URL_BUDGET) return;
+        used += cost;
+        urls.push(url);
+    });
+    return urls;
 }
 
 // A mount reply's `stale_static`: reload when a stale asset was tracked with
@@ -18234,6 +18261,7 @@ globalThis.djust.djTrackStatic = {
     _onWsReconnected,
     _trackedUrls,
     mountFields: _mountFields,
+    streamParams: _streamParams,
     applyStaleStatic: _applyStaleStatic,
     _resetSnapshot: function () { _djTrackStaticSnapshot = null; },
 };

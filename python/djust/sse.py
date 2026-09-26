@@ -585,7 +585,16 @@ class DjustSSEStreamView(View):
         # userless RequestFactory request and deny every authenticated SSE view.
         from ._sse_navigation import page_request
 
-        mount_params = {k: v for k, v in request.GET.items() if k not in {"view", "_djust_url"}}
+        mount_params = {
+            k: v
+            for k, v in request.GET.items()
+            if k not in {"view", "_djust_url", "_djust_track_static"}
+        }
+        # #2966: dj-track-static over SSE. The stream GET is the mount (a later
+        # POSTed mount frame is a no-op), and an EventSource auto-reconnect
+        # re-requests this URL without posting anything, so the page's tracked
+        # asset URLs ride the stream URL and are checked at this mount.
+        track_static = request.GET.getlist("_djust_track_static")
         page_url = request.GET.get("_djust_url", request.path)
         session._request = await sync_to_async(page_request)(request, page_url, mount_params)
 
@@ -623,6 +632,7 @@ class DjustSSEStreamView(View):
                         "view": view_path,
                         "url": session._request.path_info,
                         "params": mount_params,
+                        "track_static": track_static,
                     }
                 )
             except Exception as exc:

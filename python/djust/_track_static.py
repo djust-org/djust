@@ -42,6 +42,24 @@ def _manifest() -> "dict[str, str] | None":
     return None
 
 
+#: ``(manifest, size, current hashed names)`` for the last manifest seen
+#: (review of #3163, M2): the value set is built once per manifest object, not
+#: once per reconnecting mount. The size is part of the key so a manifest
+#: mutated in place (``collectstatic`` in the same process) is rebuilt.
+_CURRENT_NAMES: "tuple[Any, int, frozenset] | None" = None
+
+
+def _current_names(manifest: "dict[str, str]") -> frozenset:
+    """The hashed names ``manifest`` currently maps to, cached per manifest."""
+    global _CURRENT_NAMES
+    cached = _CURRENT_NAMES
+    if cached is not None and cached[0] is manifest and cached[1] == len(manifest):
+        return cached[2]
+    names = frozenset(manifest.values())
+    _CURRENT_NAMES = (manifest, len(manifest), names)
+    return names
+
+
 def _static_name(url: str) -> "str | None":
     """The storage name ``url`` points at under ``STATIC_URL``, or ``None``."""
     from django.conf import settings
@@ -70,7 +88,7 @@ def stale_static_urls(urls: Any) -> List[str]:
     manifest = _manifest()
     if manifest is None:
         return []
-    current = set(manifest.values())
+    current = _current_names(manifest)
     stale: List[str] = []
     for url in urls[:MAX_TRACKED_URLS]:
         if not isinstance(url, str) or not url or len(url) > MAX_URL_LENGTH:

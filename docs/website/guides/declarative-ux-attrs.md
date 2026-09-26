@@ -119,7 +119,11 @@ The `{% djust_track_static %}` tag is purely a discoverability convenience — t
 
 1. On page load, djust snapshots the `src` / `href` of every `[dj-track-static]` element.
 2. On every WebSocket reconnect (the socket's `onopen`, before the reconnect mount returns any HTML), it re-reads the current `src` / `href` of those same snapshotted elements and compares them against the snapshot. It does not re-query the document.
-3. The reconnect mount frame carries the snapshotted URLs as `track_static` (same-origin URLs as paths, at most 64). The server reports as `stale_static` each URL that names an older hashed build of an asset the current manifest still has, for example `js/app.0123456789ab.js` when the manifest now maps `js/app.js` to `js/app.ba9876543210.js`. It never reports a URL it cannot judge: an unhashed name, a URL outside `STATIC_URL`, another origin's asset, or an asset missing from the manifest. The first mount after a page load sends nothing, because that page's assets are current.
+3. The server checks the snapshotted URLs. Same-origin URLs are sent as paths, and at most 64 are sent.
+   - Over WebSocket, the URLs ride a reconnect's mount frame as `track_static`. The first mount after a page load sends nothing, because that page's assets are current.
+   - Over SSE, they ride the stream URL as `_djust_track_static` parameters, capped at about 4 KB of query string. The stream GET is the SSE mount, and the browser's automatic EventSource reconnect replays that URL.
+
+   The mount reply lists as `stale_static` each URL that names an older hashed build of an asset the current manifest still has. For example, `js/app.0123456789ab.js` is stale when the manifest now maps `js/app.js` to `js/app.ba9876543210.js`. A URL the server cannot judge is never reported: an unhashed name, a URL outside `STATIC_URL`, another origin's asset, or an asset missing from the manifest.
 4. If any URL changed (step 2) or was reported stale (step 3), djust dispatches a `dj:stale-assets` CustomEvent on `document`:
 
 ```js
@@ -142,6 +146,7 @@ Any one `[dj-track-static="reload"]` element going stale triggers `window.locati
 
 ### Caveats
 
+- **Rolling deploys.** While old and new pods both serve traffic, a client that reconnects to a pod still running the older build is told that its newer assets are stale. A `"reload"` asset can then reload the page more than once until the rollout completes. Pin reconnects to the new build (for example with session affinity), or use the `dj:stale-assets` event and show a prompt instead of `"reload"`.
 - The snapshot is taken once at page load. If an asset is removed from the DOM by a VDOM morph, it's treated as unchanged (we can't distinguish "removed" from "replaced"). Low-impact in practice because `[dj-track-static]` elements live in `<head>` and rarely get morphed.
 - The `djust:ws-reconnected` CustomEvent (dispatched by `03-websocket.js` on every reconnect) is the trigger. Application code can listen for that event too if you want custom reconnect behavior — it's a public contract.
 
