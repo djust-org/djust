@@ -6007,7 +6007,7 @@ class ViewRuntime:
             request = getattr(view, "_djust_event_request", None)
             if request is None:
                 raise ExposureError("Explicit persistence requires current authorization")
-            await _run_explicit_save(self._save_explicit_root, view, request)
+            await _run_explicit_save(lambda: self._save_explicit_root(view, request))
         except ExplicitSaveDeferred:
             view._force_full_html = True
             logger.warning(
@@ -6061,7 +6061,7 @@ class ViewRuntime:
                 request = getattr(view, "_djust_event_request", None)
             if request is None:
                 raise ExposureError("Child persistence requires current authorization")
-            await _run_explicit_save(self._save_explicit_children, view, request)
+            await _run_explicit_save(lambda: self._save_explicit_children(view, request))
         except ExplicitSaveDeferred:
             # Same contract as the root (#3200): withheld, not failed.
             view._force_full_html = True
