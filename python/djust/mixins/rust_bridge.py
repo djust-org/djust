@@ -271,9 +271,11 @@ class RustBridgeMixin:
     #: Adaptive loop-cache bypass (#3071). After this many consecutive
     #: renders whose loop-cache hit rate is below
     #: ``_LOOP_CACHE_MIN_HIT_RATIO``, the view turns the loop render cache off
-    #: for its lifetime: loop items that change on almost every render make the
-    #: cache hash and track every item for no reuse (+20-30% render time
-    #: measured). ``0`` disables the bypass for a view class.
+    #: for the rest of that view instance's lifetime: loop items that change on
+    #: almost every render make the cache hash and track every item for no
+    #: reuse (+20-30% render time measured). It is never re-probed; a new
+    #: instance (a reconnect, another page load) starts with the cache on and
+    #: measures again. ``0`` disables the bypass for a view class.
     _LOOP_CACHE_BYPASS_AFTER: ClassVar[int] = 8
     _LOOP_CACHE_MIN_HIT_RATIO: ClassVar[float] = 0.2
 
@@ -310,7 +312,9 @@ class RustBridgeMixin:
         render with no cacheable loop work (no hits, no misses) neither
         extends nor breaks the streak; a render at or above
         ``_LOOP_CACHE_MIN_HIT_RATIO`` resets it. Turning the cache off is safe
-        at any render: output is byte-identical with the cache on or off.
+        at any render: this view renders the same output with the cache on or
+        off (the cache only reuses fragments it would otherwise re-render), so
+        the next diff is unaffected. The switch lasts for this instance.
         """
         rust_view = getattr(self, "_rust_view", None)
         limit = self._LOOP_CACHE_BYPASS_AFTER
