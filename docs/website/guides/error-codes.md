@@ -262,13 +262,13 @@ In development, pages render without Tailwind utilities until you compile the CS
 
 ---
 
-### C018: Deprecated LIVEVIEW_CONFIG key
+### C018: Removed LIVEVIEW_CONFIG key
 
 **Severity**: Warning
 
-**What causes it**: `LIVEVIEW_CONFIG` or `DJUST_CONFIG` sets one of `jit_cache_backend`, `jit_cache_dir`, `jit_redis_url`, `debug_components`, `component_wrapper_class` or `component_loading_class`. djust has defaults for these keys but never reads them, so setting one has no effect.
+**What causes it**: `LIVEVIEW_CONFIG` or `DJUST_CONFIG` sets one of `jit_cache_backend`, `jit_cache_dir`, `jit_redis_url`, `debug_components`, `component_wrapper_class` or `component_loading_class`. djust never read these keys, and 1.3 removed their defaults, so setting one has no effect.
 
-**Fix**: Remove the key. djust 1.3 removes them. Suppress with `DJUST_CONFIG = {"suppress_checks": ["C018"]}`.
+**Fix**: Remove the key. Suppress with `DJUST_CONFIG = {"suppress_checks": ["C018"]}`.
 
 ---
 
