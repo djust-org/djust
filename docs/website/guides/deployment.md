@@ -11,6 +11,8 @@ description: "Deploy djust with uvicorn, Redis state backend, and Nginx load bal
 
 This guide covers deploying djust applications to production with horizontal scaling, Redis state backend, and WebSocket-aware load balancing.
 
+Before running more than one process or pod, read [Scaling djust](scaling.md). It lists the settings a multi-pod deployment needs, with measured numbers and failover behaviour. In particular, the Redis state backend on its own does not bring a view's state back after a reconnect to another process: that takes `enable_state_snapshot` or `state(..., persist="server")` and a session store every process shares (see [Option B](scaling.md#option-b-redis-between-processes)).
+
 ## Architecture Overview
 
 ```
