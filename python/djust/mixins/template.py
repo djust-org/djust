@@ -230,10 +230,65 @@ def _search_dj_root_open(html: str, *patterns: "re.Pattern[str]") -> "Optional[r
     from it.
     """
     masked = _mask_for_root_search(html)
+    embedded = _embedded_child_spans(html, masked)
     for pattern in patterns:
-        m = pattern.search(masked)
-        if m:
-            return m
+        if not embedded:
+            m = pattern.search(masked)
+            if m:
+                return m
+            continue
+        pos = 0
+        while True:
+            m = pattern.search(masked, pos)
+            if m is None:
+                break
+            span_end = _span_containing(embedded, m.start())
+            if span_end is None:
+                return m
+            pos = span_end
+    return None
+
+
+# #3155: an embedded ``{% live_render %}`` child's wrapper
+# (``<div dj-view data-djust-embedded="…">``, sticky or not) carries
+# ``dj-view``, and the child's own template may carry ``dj-root``. Neither is
+# the PAGE's root: on a page with no ``dj-root`` of its own, taking the child's
+# wrapper spliced the whole page into the child's slot (two documents, the
+# generic form of #3142).
+_EMBEDDED_ATTR_TOKEN_RE = re.compile(
+    _QUOTED + r"""|(?<=\s)(data-djust-embedded)(?=[\s=>/])""", re.IGNORECASE
+)
+
+
+def _embedded_child_spans(html: str, masked: str) -> "list[tuple[int, int]]":
+    """``(start, end)`` of every embedded-child wrapper element in ``html``,
+    outermost only, in document order. A wrapper whose close tag is missing
+    runs to the end of the document (refuse to guess inside it)."""
+    if "data-djust-embedded" not in masked:
+        return []
+    spans: "list[tuple[int, int]]" = []
+    pos = 0
+    while True:
+        m = _DJ_VIEW_RE.search(masked, pos)
+        if m is None:
+            return spans
+        tag = html[m.start() : m.end()]
+        if not any(tok.group(1) for tok in _EMBEDDED_ATTR_TOKEN_RE.finditer(tag)):
+            pos = m.end()
+            continue
+        _close_start, close_end = _find_root_close(html, m)
+        end = len(html) if close_end is None else close_end
+        spans.append((m.start(), end))
+        pos = end
+
+
+def _span_containing(spans: "list[tuple[int, int]]", offset: int) -> "Optional[int]":
+    """End of the span in ``spans`` containing ``offset``, or ``None``."""
+    for start, end in spans:
+        if start <= offset < end:
+            return end
+        if start > offset:
+            return None
     return None
 
 
@@ -1409,9 +1464,15 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         """
         attr = ' dj-view="%s"' % _html_escape(view_path, quote=True)
         masked = _mask_raw_text(html)
+        # #3155: a dj-root inside an embedded {% live_render %} child is the
+        # child's, not this view's — stamping this view's path there would
+        # tell the client to mount the page a second time inside the child.
+        embedded = _embedded_child_spans(html, _mask_for_root_search(html))
         parts: list[str] = []
         last = 0
         for m in _DJ_ROOT_RE.finditer(masked):
+            if embedded and _span_containing(embedded, m.start()) is not None:
+                continue
             tag = html[m.start() : m.end()]
             root_attr_end: Optional[int] = None
             has_view = False
