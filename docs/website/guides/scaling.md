@@ -26,7 +26,7 @@ Every number below comes from a specific app on specific hardware, and each one 
 |---|---|---|
 | One core at 100 %, the others idle | the shared sync thread, the GIL or the event loop | [One process across cores](#one-process-across-cores) |
 | High CPU per frame even with few clients | too much rendered or diffed per frame | [Cost per frame](#before-adding-cores-cost-per-frame) |
-| High latency, low CPU | distance to users, database or other I/O waits | [Cost per frame](#latency-that-is-not-cpu) |
+| High latency, low CPU | distance to users, database or other I/O waits | [Latency that is not CPU](#latency-that-is-not-cpu) |
 | RSS climbs and never falls | state TTL, per-thread heaps, garbage collection, the allocator | [Memory](#memory) |
 | You need more than one host, or high availability | more processes or pods | [More than one process or pod](#more-than-one-process-or-pod), [Failover and deploys](#failover-and-deploys) |
 
@@ -102,7 +102,7 @@ async def app(scope, receive, send):
 
 ### Several event loops
 
-Once the pool spreads the sync work, the asyncio event loop becomes the limit at about one core. `djust serve --loops N` runs several loops in one free-threaded process. Add loops only when the loop thread runs at about 0.9 of a core while the process has cores to spare, start with 2, and leave a core per loop outside the pool. The rules for app code (no asyncio objects shared between sessions, one background task per room) are in [More than one event loop per process](scaling-across-cores.md#more-than-one-event-loop-per-process), and the measurements are in [How many loops](scaling-across-cores.md#how-many-loops).
+Once the pool spreads the sync work, the asyncio event loop becomes the limit at about one core. `djust serve --loops N` runs several loops in one free-threaded process, with `djust.layers.MultiLoopInMemoryChannelLayer` as the channel layer (`djust serve` refuses `djust.layers.InMemoryChannelLayer` with more than one loop). Add loops only when the loop thread runs at about 0.9 of a core while the process has cores to spare, start with 2, and leave a core per loop outside the pool. The rules for app code (no asyncio objects shared between sessions, one background task per room) are in [More than one event loop per process](scaling-across-cores.md#more-than-one-event-loop-per-process), and the measurements are in [How many loops](scaling-across-cores.md#how-many-loops).
 
 A stuck loop stops accepting connections while the others still answer probes. If you run several loops, have each loop update a heartbeat and make liveness fail when one goes stale.
 
@@ -129,7 +129,7 @@ Planning figures, each from one setup:
 
 - about **1 MB RSS per connected client** on the cluster: 3.14t, 2 loops, 6 pool threads, djust 1.3.0rc4;
 - about **0.4 MB per session** on CPython 3.12, one process per pod, with 125–250 MB per pod at its capacity;
-- **2.2–2.7 MB per session** on 3.14t with a pool of 8–12 threads on a shared dev machine (one thread per session: 5.4 MB).
+- **2.2–2.7 MB per session** on 3.14t with a pool of 8–12 threads on a shared dev machine, taken at the first load step rather than at steady state (one thread per session: 5.4 MB).
 
 **Size the container for the peak.** RSS levels off after load; it does not fall back, because the allocator keeps freed pages for reuse. Watch the state backend's entry count and the live heap, not RSS alone. On 3.14t:
 
@@ -173,7 +173,7 @@ Plus a Redis channel layer, `channels_redis.core.RedisChannelLayer`, as in [Chan
 Each item below caused a failure in a multi-pod test when it was missing.
 
 1. **Shared, durable sessions.** The page GET and the WebSocket can land on different processes, so sessions kept per process (a `locmem` cache, files on each pod's disk) share nothing. Use the database (`db`), `cached_db` with a cache every process shares, or a `cache` session on a Redis that persists. With sessions in a Redis without persistence, a Redis restart logs everyone out; in the test, every user of an explicit-exposure view was stuck until they reloaded the page (#3201).
-2. **`socket_timeout` above 5 s on the channel layer with redis-py 8.** redis-py 8 made its socket timeout default to 5 s, which equals channels_redis' receive timeout. A process whose channel receives nothing for 5 s drops a WebSocket: 38 unexpected disconnects in 90 s on 2 pods with idle per-user clients. Give each channel-layer host a `socket_timeout` greater than 5, for example 10. See [#3199](https://github.com/djust-org/djust/issues/3199) for the configuration and the system check.
+2. **`socket_timeout` above 5 s on the channel layer with redis-py 8.** redis-py 8 made its socket timeout default to 5 s, which equals channels_redis' receive timeout. A process whose channel receives nothing for 5 s drops a WebSocket: 38 unexpected disconnects in 90 s on 2 pods with 200 per-user clients and no broadcast traffic. Give each channel-layer host a `socket_timeout` greater than 5, for example 10. See [#3199](https://github.com/djust-org/djust/issues/3199) for the configuration and the system check.
 3. **Opt in to state that survives a reconnect.** `STATE_BACKEND = "redis"` does not bring a view's state back on another process. It caches the compiled view as the diff baseline for the next mount. A default LiveView that reconnects to another process runs `mount()` again, and whatever it held is lost. In the test, a counter went back to 0 on every reconnect of a default view. To keep state across processes, persist it through the Django session:
    - legacy views: set `enable_state_snapshot = True` on the view;
    - [explicit exposure](../state/explicit-exposure.md) views: declare the fields with `state(..., persist="server")`.
@@ -192,7 +192,7 @@ Conditions for every number in this section:
 
 - djust 1.3.0rc4, **CPython 3.12**, one uvicorn process per pod, `worker_threads` unset;
 - each pod had a **2-CPU limit**;
-- `channels_redis.core.RedisChannelLayer` with `socket_timeout=10`, Redis state and presence backends, sessions in Redis;
+- `channels_redis.core.RedisChannelLayer` with `socket_timeout=10`, Redis state and presence backends, sessions in Redis (a `cache` session engine on Redis, not the database sessions recommended above; explicit-exposure views read and write the session on every event, so their figures may differ with database sessions);
 - one Kubernetes node (16 cores) for all pods and Redis, so cross-pod traffic never crossed a real network;
 - load from inside the cluster, real djust WebSocket clients, 60 s steps;
 - capacity = the most clients with p95 at or below 150 ms and no errors, from two rounds hours apart (rounds differed by 10–20 %).
@@ -206,7 +206,7 @@ Conditions for every number in this section:
 - **Chat grows faster than the pod count.** One process renders a room's recipients one after another; more pods render them in parallel.
 - **Cross-pod delivery was not slower than same-pod.** At 4 pods and 200 chat clients: cross-pod p95 95 ms, same-pod p95 119 ms. On a real network, add the hop.
 - **Redis was nearly idle for per-user events.** 1,100 clients on 4 pods cost Redis 0.006 cores and 3 operations per second: the state backend is written at mount, not per event. Moving from in-memory to Redis made no measurable difference to one pod's per-user capacity (252–300 either way).
-- **Redis halved one process's chat capacity:** 30–40 clients against 80–84 with the in-memory layer, 5.1 ms of CPU per delivery against 3.6 ms. Over half of Redis's commands were presence reads from the online-list render. Those numbers predate [#3203](https://github.com/djust-org/djust/issues/3203), which cut a presence list to two Redis commands on the 1.3 line; they have not been re-measured since.
+- **Redis halved one process's chat capacity:** 30–40 clients against 80–84 with the in-memory layer, 5.1 ms of CPU per delivery against 3.6 ms. At 4 pods and 200 chat clients, 52 % of Redis's commands were presence reads from the online-list render. These numbers predate [#3203](https://github.com/djust-org/djust/issues/3203), merged on `main` after 1.3.0rc4, which cuts a presence list to two Redis commands; they have not been re-measured since.
 - **Connect bursts are expensive.** Ramping 1,100 clients in 10 s on 4 pods (27 connects per second per pod) took 4.6 s at p50 and 7.1 s at p95 to load the page and mount.
 - **Explicit exposure is currently much lower:** 76 clients on 1 pod and 300 on 4. Its per-event session save has a 150 ms budget that includes queueing, so under load it answers with "State unavailable. Please reload the page." long before the CPU runs out ([#3200](https://github.com/djust-org/djust/issues/3200)).
 - **Free-threaded pods:** one run with 3.14t, `worker_threads=2`, one loop and a 2-CPU pod handled 600 per-user clients (1.6 cores) and 100 chat clients, at 590 MB RSS. That is one round only.
@@ -231,7 +231,7 @@ This is a design, not a djust feature, and it has not been measured.
 | Pod loss | clients reconnect to any pod in 1–3 s; persisted state restored | the rooms of that process lose their live state |
 | Deploys | rolling, about 1.5 reconnects per client | every room restarts empty unless handed off |
 | Broadcast-heavy rooms | about half the in-memory rate per process (before #3203) | in-memory rate |
-| Redis outage | chat and presence recover by themselves in about 5 s | no Redis in the room path |
+| Redis outage | chat recovers by itself in 5–7 s, with some messages lost; sessions stored in that Redis are lost | no Redis in the room path |
 
 Per-user apps (forms, dashboards, CRUD) fit Option B well. Apps whose shared state is a live in-process object, such as a game room, fit Option A or a single larger process better.
 
@@ -259,7 +259,7 @@ Conditions: the setup from [Measured capacity](#measured-capacity), 4 pods, 200 
 | Real browser (Chromium, djust's `client.min.js`) | No page reloads in 12 kills. Typed form input, including an unsent draft, survived in every view. |
 | Latency | p95 rose to 235–424 ms for about 2 s while persisted views remounted, then settled at 63–84 ms against 41–65 ms before. |
 | Rolling restart (`maxSurge: 1`, `maxUnavailable: 0`) | 30 s for 4 pods. Each client moved about 1.5 times on average, because some reconnected to pods that were replaced next. 0.03–0.07 % of chat deliveries lost; no page reloads. |
-| Redis restart (no persistence) | Chat and presence recovered by themselves in 5–6 s; the room history kept in Redis was gone. Users whose sessions were in that Redis were logged out (see item 1 above). |
+| Redis restart (no persistence) | Redis was back in 5–6 s. Chat clients reconnected by themselves (gaps of 5.2–6.9 s in one run), but 3 % and 18 % of the two runs' chat deliveries were lost, almost all around the outage, and the room history kept in Redis was gone. Presence under-counted until rejoins and the 30 s heartbeats refilled it. Users whose sessions were in that Redis were logged out (see item 1 above). |
 
 #### Connections don't rebalance
 
@@ -286,18 +286,19 @@ These are two apps' numbers, not a promise. The multiplayer game is a snake game
 
 | Setup | Where | Holds up to | Saturated at | Cores used |
 |---|---|---|---|---|
-| Game, 3.12, stock, board rendered as DOM | shared dev machine (12-core Apple Silicon) | about 24 clients | – | 1.0 |
+| Game, 3.12, stock, board rendered as DOM | shared dev machine (12-core Apple Silicon) | about 24 clients (where the process reached 1 core) | – | 1.0 |
 | Game, 3.12, stock, canvas board | shared dev machine | about 32 clients | 64 | up to 1.15 |
 | Game, 3.12, pool + scoped push | shared dev machine | about 64 clients (p95 131–374 ms) | 128 | up to 1.33 |
 | Game, 3.14t, stock | shared dev machine | about 64 clients | 128 | up to 1.51 |
 | Game, 3.14t, pool + scoped push + `djust.layers` | shared dev machine | 192–256 clients (p95 180–304 ms) | – | 4.3–6.6 |
-| Game, 3.14t, 1 loop, djust 1.3.0rc2 | Kubernetes pod, 6-CPU limit | 128 clients | 160 | 4–4.8 |
+| Game, 3.14t, 1 loop, djust 1.3.0rc2 | Kubernetes pod, 6-CPU limit | 128 clients | 160 | 3.9–4.5 |
 | Game, 3.14t, 1 loop, `PooledHTTP`, djust 1.3.0rc3 | pod, 6-CPU limit | 160 clients | 192 | 4.8–5.7 |
 | Game, 3.14t, 2 loops, djust 1.3.0rc4 | pod, 8-CPU limit | 192 clients | 256 | 5.5–6.9 |
 | Benchmark app, 3.12, per-user events, Option B | 1 / 2 / 4 pods, 2-CPU limit each | 252–300 / 504–600 / 1,002–1,100 clients | – | about 1 per pod |
 | Benchmark app, 3.12, chat rooms of 10, Option B | 1 / 2 / 4 pods, 2-CPU limit each | 30–40 / 80–84 / 200–204 clients | – | about 1 per pod |
 | Benchmark app, 3.14t, `worker_threads=2`, Redis (one round) | 1 pod, 2-CPU limit | 600 per-user or 100 chat clients | – | 1.6 |
 
+- For the game's pod rows, "cores used" runs from the "holds up to" step to the "saturated at" step.
 - The dev-machine rows ran while other jobs used the same machine, so their spread is wide.
 - The cluster node's cores were roughly half as fast as the dev machine's (an estimate from comparing runs, not a benchmark), and the loop-bound limit fell about in proportion.
 - The game's pod rows are one process per pod. Room sharding (Option A) would multiply them by the number of processes only if rooms spread evenly; that has not been measured.
@@ -316,7 +317,7 @@ The numbers above came from load generators that behave like browsers. To measur
 ## Troubleshooting checklist
 
 - [ ] **The process sits at about 1.0 core with idle cores.** Is the GIL on (`sys._is_gil_enabled()`)? Is `worker_threads` set? Is some work still on the single shared thread?
-- [ ] **The loop thread is at about 0.9 core.** Is every broadcast scoped, including presence? Are you using `djust.layers.InMemoryChannelLayer`? Then try `djust serve --loops 2`.
+- [ ] **The loop thread is at about 0.9 core.** Is every broadcast scoped, including presence? Are you using `djust.layers.InMemoryChannelLayer`? Then switch to `djust.layers.MultiLoopInMemoryChannelLayer` and try `djust serve --loops 2`.
 - [ ] **Pool threads are busy but the pod is under its limit.** Raise `worker_threads`, and look for a slow handler blocking the sessions on its thread.
 - [ ] **Nothing is CPU-bound, yet p95 explodes.** Check per-thread pool CPU, lock contention and garbage-collection pauses in the logs.
 - [ ] **CPU is throttled** (`nr_throttled` grows). The pool plus the loops exceed the CPU limit: leave a core per loop.
