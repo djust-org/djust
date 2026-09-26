@@ -52,3 +52,15 @@ def test_plain_form_scaffold_is_unchanged():
     (tool,) = [t for t in server._tool_manager._tools.values() if t.name == "scaffold_view"]
     code = tool.fn(name="ContactView", features="form")
     assert "FormMixin" in code and "ModelFormMixin" not in code
+
+
+def test_form_edit_scaffold_lists_its_fields_explicitly():
+    # Review of #3134: `exclude = ["owner"]` made any later field (is_published,
+    # approved) owner-editable. An allowlist is what schema.py teaches too.
+    from djust.mcp.server import create_server
+
+    server = create_server()
+    (tool,) = [t for t in server._tool_manager._tools.values() if t.name == "scaffold_view"]
+    code = tool.fn(name="ItemEditView", features="form_edit")
+    assert "exclude" not in code
+    assert '        fields = ["title"]' in code
