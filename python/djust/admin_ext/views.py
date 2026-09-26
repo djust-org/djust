@@ -81,10 +81,17 @@ class _AdminRegistryMixin:
     # Prefixed with underscore so LiveView's get_context_data() skips it
     _view_registry_id: Optional[str] = None
 
+    # Set once the route lookup has run for this view's request, so a miss is
+    # not re-resolved on every attribute read.
+    _registry_route_checked: bool = False
+
     def _admin_config(self) -> Dict[str, Any]:
-        if self._view_registry_id is None:
+        if self._view_registry_id is None and not self._registry_route_checked:
             # A socket mount: recover the id from the page's route and keep it.
-            self._view_registry_id = _registry_id_from_route(self)
+            # Only once a request exists; before that there is nothing to resolve.
+            if getattr(self, "request", None) is not None:
+                self._view_registry_id = _registry_id_from_route(self)
+                self._registry_route_checked = True
         return get_admin_config(self._view_registry_id)
 
     @property
@@ -165,6 +172,10 @@ class AdminBaseMixin(_AdminRegistryMixin):
         user = getattr(request, "user", None)
         if not (user is not None and user.is_authenticated and user.is_active and user.is_staff):
             raise PermissionDenied("Admin access requires an active staff account.")
+        if self._admin_site is None:
+            # No site registration: a socket mount whose URL does not route to
+            # this view (#3140). Refuse it rather than crash rendering the chrome.
+            raise PermissionDenied("This admin page is not routed at the requested URL.")
 
     @classmethod
     def as_view(cls, **initkwargs: Any) -> Callable[..., Any]:

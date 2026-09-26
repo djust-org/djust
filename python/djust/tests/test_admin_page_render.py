@@ -105,6 +105,8 @@ def _pages(group):
         "add": MODEL + "add/",
         "change": f"{MODEL}{group.pk}/change/",
         "delete": f"{MODEL}{group.pk}/delete/",
+        # An unknown job renders "Job not found" and starts no polling thread.
+        "progress": PREFIX + "djust-progress/no-such-job/",
     }
 
 
@@ -115,6 +117,7 @@ _PAGE_VIEWS = {
     "add": "djust.admin_ext.views.ModelCreateView",
     "change": "djust.admin_ext.views.ModelDetailView",
     "delete": "djust.admin_ext.views.ModelDeleteView",
+    "progress": "djust.admin_ext.progress.BulkActionProgressView",
 }
 
 
@@ -318,6 +321,11 @@ async def test_login_view_mounts_and_its_submit_logs_in(django_user_model):
         ("https://other.example/", PREFIX),
         ("//other.example/", PREFIX),
         ("http://testserver.other.example/", PREFIX),
+        ("/\\other.example", PREFIX),
+        ("https:other.example", PREFIX),
+        ("javascript:alert(1)", PREFIX),
+        (" javascript:alert(1)", PREFIX),
+        ("///other.example", PREFIX),
     ],
 )
 async def test_login_redirect_honors_only_a_same_host_next(django_user_model, next_url, expected):
@@ -339,3 +347,51 @@ async def test_admin_page_mounts_over_websocket(django_user_model, page):
         mounted = await ws.mount(_PAGE_VIEWS[page], _pages(grp)[page])
     # The chrome comes from this site's registration.
     assert "Render-pages administration" in mounted["html"]
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_admin_view_on_an_unrouted_url_is_refused_cleanly(django_user_model, caplog):
+    """A socket mount whose URL routes nowhere (or to another view) has no
+    site registration: it is refused as a permission failure, not a crash."""
+    user = await sync_to_async(django_user_model.objects.create_superuser)("root", password="pw")
+    browser = Client()
+    await sync_to_async(browser.force_login)(user)
+
+    async with _Socket(_session_cookie(browser)) as ws:
+        await ws.send(
+            {
+                "type": "mount",
+                "view": "djust.admin_ext.views.AdminIndexView",
+                "url": "/no-such-page/",
+            }
+        )
+        frames = []
+        for _ in range(10):
+            try:
+                frame = await ws.comm.receive_json_from(timeout=3)
+            except Exception:
+                break
+            frames.append(frame)
+            if frame.get("type") in ("mount", "error", "navigate"):
+                break
+    assert not any(f.get("type") == "mount" for f in frames), frames
+    assert any(f.get("type") in ("error", "navigate") for f in frames), frames
+    assert "Traceback" not in caplog.text
+    assert "get_app_list" not in caplog.text
+
+
+def test_a_failed_route_lookup_is_cached(monkeypatch):
+    from djust.admin_ext import views as admin_views
+
+    calls = []
+    real = admin_views._registry_id_from_route
+
+    def counting(view):
+        calls.append(view)
+        return real(view)
+
+    monkeypatch.setattr(admin_views, "_registry_id_from_route", counting)
+    view = _view_at(admin_views.AdminIndexView, "/no-such-page/")
+    for _ in range(3):
+        assert view._admin_site is None
+    assert len(calls) == 1
