@@ -7,6 +7,1118 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0rc4] - 2026-09-26
+
+The fourth 1.3 release candidate. The headline is **multi-loop mode** (#3128): on free-threaded CPython 3.14t, `djust serve APP --loops N` runs several asyncio event loops in one process, with `djust.layers.MultiLoopInMemoryChannelLayer` delivering between them. It is opt-in, and `--loops 1` is plain uvicorn. With N > 1 it refuses to start on a GIL build, or with a channel layer that isn't loop-safe. The rules for app code are in "Scaling a djust Process Across Cores". It also brings:
+
+- **Free-threaded correctness:** class-attribute walks on the request path no longer race first-use caches (#3151). `djust.worker_pool.PooledHTTP` bounds HTTP request threads, so memory under overload is bounded (#3114). Presence broadcasts respect `push_scope` (#3095).
+- **Performance:** less event-loop work per frame (#3123). `{% djust_audio %}` renders natively, with the manifest built once per view (#3175).
+- **Tests no longer write to the real repository's git config** (#3179).
+
+**Behaviour changes to check when upgrading from rc3:**
+- The `djust` theme preset is recoloured, with dark labels on filled elements. Dark themes built on it will look different.
+- B008 now also runs under `check --deploy` and collectstatic, unless djust is ordered after `staticfiles`.
+- The no-op frame sent in reply to a skip-render server push is removed (#3034).
+- A `PresenceMixin` in the wrong place in a view's bases now fails when the class is defined.
+- New: `@rate_limit(on_exceed="drop")` and `DJUST_ALLOWED_EXTERNAL_ORIGINS`.
+- The unused `LIVEVIEW_CONFIG` keys are removed, and C018 warns if they are still set.
+
+### Added
+
+- **`@rate_limit(..., on_exceed="drop")` caps a handler without risking the connection (#3003).**
+  Every `@rate_limit` rejection counts toward the connection's abuse budget
+  (`max_warnings`, default 3), which then closes the socket with 4429 and puts
+  the client IP on a reconnect cooldown. That is right for OTP sends and other
+  abuse controls, but an honest user tapping an emote or "like" button quickly
+  was disconnected; in a multiplayer game that forfeits the match. With
+  `on_exceed="drop"` the extra event is dropped and the client warned, and
+  nothing counts toward the disconnect. The default (`"disconnect"`) is
+  unchanged, and the connection's global per-message limit still closes a
+  flood in either mode. An unknown `on_exceed` value raises `ValueError`.
+- **Several asyncio event loops in one process on free-threaded Python, opt-in
+  (#3128).** `djust serve <module:app> --loops N` (or
+  `djust.multiloop.serve(app, loops=N, **uvicorn_options)`) runs N uvicorn
+  servers, each on its own event loop and thread, accepting on one shared
+  listening socket, so the loop work of one process spreads over N cores while
+  in-process state stays shared. `--loops 1`, the default, is plain
+  `uvicorn.run`. With more loops it refuses to start on a GIL build (or when an
+  extension re-enabled the GIL) and with a loop-bound channel layer, runs
+  lifespan once per loop, and shuts every loop down on SIGINT/SIGTERM (a second
+  signal forces it; exit code 3 when a loop failed to start). The new
+  `djust.layers.MultiLoopInMemoryChannelLayer` keeps its queues outside any
+  event loop: a send or group send from any loop reaches a consumer on any
+  other, `ChannelFull` is checked before the hand-off, messages on a channel
+  keep their order, and a group send wakes each receiving loop once. Loop-bound
+  state fixed for several loops: an SSE event POST that lands on another loop
+  runs on the session's loop, the `db_notify` listener is claimed by one loop
+  and the others hop to it, and channel layers are created before the loops
+  start. Nothing changes without `djust serve --loops`. Rules for app code
+  (no asyncio object shared between sessions; one room task per room, started
+  under a `threading.Lock`) and measured numbers are in the guide "Scaling a
+  djust Process Across Cores". 42 regression tests in
+  `python/djust/tests/test_multiloop_layer_3128.py`,
+  `python/djust/tests/test_multiloop_sessions_3128.py` and
+  `python/djust/tests/test_multiloop_serve_3128.py`, also on the 3.14t CI job.
+- **`DJUST_ALLOWED_EXTERNAL_ORIGINS` lists third-party origins that can't be pinned (#3143).**
+  Stripe.js, Cloudflare Turnstile, Google Tag Manager and the Google Fonts CSS
+  API must load from their own origin and change without notice, so they can
+  be neither vendored nor given an `integrity`. Until now `djust.B010` could
+  only be silenced for them with `{# noqa: B010 #}` on every line or by
+  suppressing the check project-wide. List their hosts instead:
+  `DJUST_ALLOWED_EXTERNAL_ORIGINS = ["js.stripe.com"]`. The list is empty by
+  default, matches whole hosts only (no wildcards, no subdomains), and affects
+  only B010's template scan. Each entry is a bare host, optionally written as
+  an origin (the scheme is ignored); an entry with an empty host, a port,
+  userinfo, a path or a query, or a value that isn't a list of strings, is
+  ignored with a B010 warning. See "Origins that can't be pinned" in the vendoring
+  guide.
+- **The component catalogue has an interactive `DropdownMenu` entry (ADR-037 D2, ADR-034 C4-Q3).**
+  `/theme/components/interactive_dropdown_menu/` serves one menu and a keyed
+  collection of row menus on one page. Its usage section shows
+  `djust.components.interactive_examples`, the page's own source, which runs in
+  the test suite.
+- **MCP `scaffold_view` generates a `ModelFormMixin` edit view (`features="form_edit"`, ADR-037 D2).**
+  The view edits one record the signed-in user owns: `get_queryset()` filters on
+  `owner`, so `djust.S013` has nothing to report. The generated code runs in the
+  test suite (`python/djust/tests/doc_scenarios/generated.py`).
+- **`djust_assets.json` manifests, `{% djust_asset %}`, and app SBOMs.** Component packages and apps declare the third-party JS/CSS they serve as vendored assets; djust renders it with Subresource Integrity, checks it at startup (`djust.B001`–`B014`), and `collectstatic` writes a CycloneDX SBOM of all of it to `DJUST_SBOM_PATH`. See the vendored assets and scanning guides.
+
+### Changed
+
+- **The `djust` brand preset passes WCAG AA on all 28 text pairs (#2996).**
+  It failed 17, every one a white `*_foreground` on a bright fill (the rust
+  orange at 2.66:1, the status colours at 2.1-3.7:1). The labels on those
+  fills are now a dark green ink (`#182019`, 4.5-7.8:1), light mode's
+  secondary and accent greens are deepened from 39% to 32% lightness so white
+  stays on them (5.3:1), and light `muted_foreground` moves from 45% to 42%
+  lightness (4.74:1 on `muted`). The fills keep their hue. Its 17
+  `A11Y_EXEMPTIONS` entries are removed, and `test_djust_preset_contrast_2996`
+  pins all 28 pairs.
+
+  **Visible change:** every page on the `djust` preset or the `djust` theme
+  pack (which uses it) now renders **dark ink instead of white** on primary,
+  secondary, accent, status and brand fills (buttons, badges, alerts) in both
+  modes. That includes djustlive's dark theme. In dark mode the secondary and
+  accent labels change too, because white could not reach 4.5:1 on those
+  greens. Apps that want the old white labels can override the
+  `--*-foreground` tokens.
+
+- **A server push or DB notification whose handler skips the render no longer sends a `noop` frame (#3034).**
+  `server_push` (including the worker-offloaded turn) and `db_notify` answered
+  a push whose handler set `_skip_render = True` with `{"type": "noop"}`. A push
+  has no `ref` to acknowledge, and the client treats a noop without a `ref` as
+  the acknowledgement of its one in-flight user event (`acknowledgeEventRequest`
+  in `04-cache.js`): a push arriving while the user's own event was running
+  settled that event and ended its loading state early.
+  These turns now send nothing of their own. Side effects the handler queued
+  (`push_event`, flash, navigation) are still flushed. Tests or clients that
+  counted on the frame will no longer see it; event acknowledgements (which
+  carry the event's `ref`) are unchanged.
+- **A view that lists `PresenceMixin` or `LiveCursorMixin` after `LiveView` now fails at import (#3109).**
+  `PresenceMixin.__init_subclass__` raises a `TypeError` when a Django `View`
+  comes before the mixin in the MRO. The message names the class and the fix:
+  `class V(PresenceMixin, LiveView)`. **This breaks code that used to work.**
+  A view with the reversed order that never called `track_presence()`, or any
+  other presence method, used to run without error. It now fails when its
+  module is imported. Views with the reversed order that did call
+  `track_presence()` were already broken with `AttributeError` on first use.
+  Classes that do not inherit from a Django `View` are not checked.
+- **`LiveViewSmokeTest` warns about reachable handlers it does not fuzz
+  (#3126).** Since ADR-037 the fuzzer sends events only to `@event_handler`
+  handlers. Under `event_security = "warn"` or `"open"` a client can still call
+  an undecorated public method, so the fuzz tests now emit one `UserWarning` per
+  view naming those methods (the view's own undecorated plain functions; the
+  framework's lifecycle methods are not named). Ruling: warn rather than fuzz
+  them. Dispatch in those modes reaches every public callable, framework
+  methods included, so no list of "undecorated methods" matches what it allows,
+  and guessing one would bring back the second handler discovery ADR-037
+  retired. Under the default `"strict"` nothing changes. Cases in
+  `python/djust/tests/test_smoke_unfuzzed_3126.py`.
+- **`djust.B008` no longer walks every static file on each start when djust's `collectstatic` can run it (#3144).**
+  B008 lists every static file to find a `*.cdx.json`, `*.spdx.json` or
+  `*.bom.json` that `collectstatic` would publish, and it ran on every
+  `runserver` start, every autoreload and before `migrate`. Where it runs now
+  depends on which `collectstatic` is active, decided the way `djust.B013`
+  decides it:
+  - with `'djust'` above `'django.contrib.staticfiles'` in `INSTALLED_APPS`,
+    it moves to `manage.py check --deploy` and to djust's `collectstatic`,
+    whose system checks stop the command before anything is collected
+    (unless `--skip-checks` is passed);
+  - with any other order, or another app overriding `collectstatic`, no djust
+    code runs at collectstatic time, so B008 stays in the ordinary check pass
+    and detection is unchanged.
+- **`make release` only tags a commit that `main` (or the `X.Y` maintenance branch being released) already contains (#3149).** The new `scripts/check-release-tag-target.py` runs before `git tag` in `make release`, and in `make release-dry-run`. It refuses `release/*` branches and a `HEAD` that is not on the branch at `origin`. v1.3.0rc1 and v1.3.0rc3 were tagged on `release/*` and then squash-merged, so neither tag was reachable from `main`, and `tests/test_changelog_tagged_sections.py` failed there until #3135 merged the tagged commit back. `RELEASING.md` now says to merge the release PR first and then tag `main`; its pre-release and hotfix sections follow the same rule. Publishing is unchanged: `release.yml` runs on the tag push and builds the tagged commit.
+- **The AI schema's forms pattern teaches `ModelFormMixin` for editing (ADR-037 D2).**
+  `get_best_practices()` no longer shows `_model_instance` set in `mount()`. It
+  shows a create form and, as `edit_example`, the form guide's `ModelFormMixin`
+  view. `ModelFormMixin` is listed in `optional_mixins`. Both examples run in the
+  test suite (`python/djust/tests/doc_scenarios/generated.py`).
+- **`{% djust_audio %}` renders natively in Rust, and `AudioMixin` builds its
+  manifest once per view.** The bridged Python tag made every render of an
+  `AudioMixin` view hand Python the whole render context to read one string,
+  and the mixin re-resolved every sound through `static()` and re-serialised
+  the banks on every render. The native node emits the same markup (a test
+  pins it byte for byte to the Django-engine `simple_tag`, which is unchanged),
+  raises the same "requires AudioMixin" error when the manifest is missing or
+  `None`, and reports `djust_audio_manifest` as its only dependency instead of
+  `*`. The manifest is rebuilt only when the banks or
+  `DJUST_AUDIO_STATIC_ORIGINS` change. The cache is safe on free-threaded
+  3.14t with `worker_threads` and several event loops: reads take no lock, and
+  a miss builds under a per-view lock stripe, so one view builds once while
+  different sessions build in parallel (checked in the 3.14t CI job by
+  `python/djust/tests/test_audio_manifest_thread_safety.py`). On Snake Arena (a
+  16-sound bank, ~5 frames a second per player) a frame renders in 1.27 ms
+  instead of 1.53 ms, and live server CPU per delivered frame drops from 4.04
+  to 3.71 ms.
+- **CodeQL follow-up sweep.**
+  - The near-miss parameter warning sanitises the parameter name at the log call
+    again. Since #3095 the hot path skips `sanitize_for_log` for short ASCII
+    identifiers, which cannot carry CR/LF, but the log call now does not rely
+    on that.
+  - `djust.websocket` no longer rebinds an unused `SessionActorHandle`
+    (`live_view` imports it from `_rust` directly), and lists
+    `create_session_actor` in `__all__`.
+  - Documented an intentional `except ChannelFull: pass` in the in-memory
+    channel layer.
+- **`{% code_block %}` themes are the vendored set** (github, github-dark, atom-one-dark, atom-one-light, monokai, vs2015, nord, default, dark, a11y-dark, a11y-light, stackoverflow-light, stackoverflow-dark). Any other `theme=` raises `ImproperlyConfigured` naming them. `js/markdown-editor/` moved to `js/vendor/`; `make markdown-editor-build` is now `make vendor`.
+- **Admin plugin templates only get the Tailwind classes djust's admin uses.** `AdminWidget`/`AdminPage` templates used to get any Tailwind class from the play CDN; the vendored `admin.css` contains only the classes in djust's `admin_ext`. A plugin that needs others adds its own stylesheet through `python/djust/admin_ext/templates/djust_admin/base.html`'s `{% block extra_head %}` (see the admin widgets guide).
+- **A shadowed copy of a djust static file is now an error.** A project keeping an old copy of a djust static file (for example `python/djust/components/static/djust_components/vendor/highlight/highlight.js` copied into `STATICFILES_DIRS`) now fails startup with `djust.B004`, because it no longer matches djust's manifest. Delete the copy; to ship a fix before djust does, override the asset under your own path (see the vendored assets guide).
+- **`{% code_block %}` loads highlight.js once per page.** The first block's inline script injects the vendored library (with `integrity`) instead of every block emitting its own `<script src>`.
+
+### Fixed
+
+- **Legacy template context no longer carries `LiveView`'s configuration
+  defaults (#2960).** The class-attribute walk in
+  `ContextMixin.get_context_data` stopped at `ContextMixin`, but `LiveView` and
+  the mixins it lists first sit earlier in the MRO, so `template`,
+  `login_required`, `use_actors`, `sticky`, `tick_interval` and the rest entered
+  every legacy view's context and session state. The walk now skips every class
+  in `LiveView`'s MRO — the boundary the ADR-038 `djust_exposure_inventory`
+  command already draws. Attributes the application declares on its own
+  classes and mixins still reach the context, including a view's own
+  `template_name`. Regression cases in
+  `python/djust/tests/test_legacy_context_framework_config_2960.py`.
+- **`dj-track-static` detects a deploy (#2966).** The client compared its
+  tracked URLs with themselves, so a deploy that changed asset URLs was never
+  noticed. The page now sends the URLs it loaded to the server: over WebSocket
+  as `track_static` on a reconnect's mount frame, and over SSE as
+  `_djust_track_static` parameters on the stream URL. The SSE stream GET is the
+  mount, and an EventSource auto-reconnect replays that URL. The server answers
+  with `stale_static` on the mount reply: each URL that names an older hashed
+  build of an asset the current `ManifestStaticFilesStorage` manifest still
+  has. The client then fires `dj:stale-assets`, or reloads for
+  `dj-track-static="reload"`. There is no page render, GET or session write,
+  and a URL the server cannot judge (another storage, an unhashed name, another
+  origin) is never reported. During a rolling deploy, a client that reconnects
+  to a pod still running the older build is told its newer assets are stale,
+  so a `"reload"` asset can reload more than once until the rollout completes.
+  All the fields are additive, and a page that tracks nothing sends none.
+  Regression cases in `python/djust/tests/test_track_static_stale_2966.py` and
+  `tests/js/dj_track_static.test.js`.
+- **`Alert`, `Progress` and `Avatar` from `djust.components` render styled (#2993).**
+  `djust_components/components.css` now has rules for every class the three
+  classes render, on the active theme's tokens. Each reads the custom
+  properties its docstring lists first (`--dj-alert-*`, `--dj-progress-*`, and
+  a new `--dj-avatar-size`), so a component can be restyled without touching
+  the theme. The docstrings, the components guide and the catalogue no longer
+  describe the classes as unstyled, and the catalogue's "unstyled Python class"
+  note (`UNSTYLED_PYTHON_CLASSES`) is removed.
+- **`{% badge %}`, `{% avatar %}`, `{% progress %}` and `{% toast_container %}` render styled (#3025).**
+  Their templates render BEM class names (`dj-badge--error`, `dj-badge__dot`,
+  `dj-avatar__status`, `dj-progress__fill`, `dj-toast__message`, …) that no
+  stylesheet djust shipped had a rule for, so the tags rendered as plain text.
+  `djust_components/components.css`, which `{% theme_head %}` links, now styles
+  them on the theme tokens, and `{% data_table %}`'s prev/next pagination
+  (`dj-table__page-btn`) shares the existing pagination rules. Labels stay on
+  `--foreground`; the status colour goes on the fill, border, dot or bar. The
+  badge's base rule is keyed on its `dj-badge--<status>` modifier so it cannot
+  override the `Badge` class's variant colours in `components-classes.css`.
+  Every new selector is at most one class for its target (qualifiers sit in
+  `:where()`), so an app's own single-class rule loaded later still wins. A
+  new test renders every status, size, colour and type through the real tag and
+  checks each emitted class against the linked stylesheets with the catalogue's
+  own `styles_for` lookup. Pages that styled these classes themselves now also
+  get djust's rules underneath theirs.
+- **`WizardMixin` draws a callable field initial once per step (#3063).**
+  A step field such as `UUIDField(initial=uuid.uuid4)` was called again on
+  every render, and separately for `form_data` and `field_html`, so one render
+  could show two different UUIDs, every re-render showed a new one, and an
+  untouched field submitted nothing. The value is now drawn when the step first
+  renders and stored in `wizard_step_data` as the text the widget shows (a
+  `datetime` from `timezone.now` is stored as that text, not the object), so
+  `form_data`, `field_html` and the submitted step data agree. A value the user
+  entered is never replaced, and plain (non-callable) initials are not stored.
+- **A view whose loop items change on every render stops paying for the loop render cache (#3071).**
+  The per-item loop render cache (on by default since #2062) hashes and tracks
+  every loop item so a reorder costs nothing. When the items change on almost
+  every render it rarely hits, and each render was 20–30% slower (measured on
+  snake-arena: p50 3.62 → 4.33 ms, p95 6.24 → 8.24 ms). A view now watches the
+  cache's own hit/miss counters: after 8 consecutive renders whose hit rate is
+  under 20%, it turns the cache off for the rest of that view instance's
+  lifetime; it is not re-probed, and a new instance (a reconnect, another page
+  load) starts with the cache on and measures again. Renders with no cacheable
+  loop don't count, and a render that hits resets the streak, so a
+  reorder-heavy list keeps its cache. The view renders the same output with the
+  cache on or off. A
+  view class can tune or disable this with `_LOOP_CACHE_BYPASS_AFTER` (`0`
+  disables it) and `_LOOP_CACHE_MIN_HIT_RATIO`;
+  `LIVEVIEW_CONFIG["loop_render_cache_enabled"]` still turns the cache off
+  everywhere.
+
+- **`djust.S009` recognises an aliased or dotted `@permission_required` (#3093).**
+  A view that sets the `permission_required` class attribute has to import the
+  decorator under another name, because the attribute shadows it in the class
+  body. S009 matched the local name only, so it warned on exactly those
+  properly gated handlers. S009 now follows the module's top-level imports:
+  `permission_required as require_permission`,
+  `decorators.permission_required(...)`, `djust.permission_required(...)` and
+  `djust.decorators.permission_required(...)` count as the gate. `djust_audit`'s
+  X002 accepts the aliased form too. The decorator reference now documents the
+  collision.
+
+  **Behaviour change:** two decorators that used to silence S009 no longer do,
+  because neither gates a djust event:
+  - Django's `django.contrib.auth.decorators.permission_required` (imported as
+    `permission_required` or through `django.contrib.auth.decorators`);
+  - a different djust decorator imported *as* `permission_required`, e.g.
+    `from djust.decorators import debounce as permission_required`.
+
+  Everything the check cannot decide keeps the old name match: a project's own
+  `permission_required` wrapper, a relative or star import, a name bound twice
+  (a `try`/`except ImportError` fallback), or a module that is not yet loaded.
+  The check never imports the code it scans; it only looks up modules that are
+  already loaded, so neither `manage.py check` nor `djust_audit --ast` runs a
+  project module's import-time code.
+
+- **Back restores a legacy view's latest state from its signed snapshot, not
+  its mount-time state (#3098).** A legacy view with `enable_state_snapshot =
+  True` shipped its signed back-navigation snapshot only on the mount frame, so
+  when the server-saved state was gone Back restored the state at mount. A
+  state-changing event's frame now carries a refreshed `state_snapshot_signed`
+  (same gates, capture and signature as the mount emission), as explicit views
+  already did; a state-unchanging event (`noop`) and a view that does not opt
+  in ship nothing, and a capture failure revokes the client's token. Regression
+  cases in `python/djust/tests/test_legacy_event_signed_snapshot_3098.py`.
+- **The debug panel no longer crashes on a view property that raises, and no
+  longer runs properties at all (#3103).** `get_debug_info()` and
+  `get_debug_update()` (`python/djust/mixins/post_processing.py`) walked
+  `dir(view)` and called `getattr` on every name, catching only
+  `AttributeError`, so a `@property` raising `ValueError` or
+  `ObjectDoesNotExist` broke the whole debug payload, and a property that
+  queried the database ran that query on every debug render. Both now list a
+  property (including an uncomputed `cached_property`) as
+  `<property: not evaluated>` without running it, and report any other
+  attribute whose read raises as `<unavailable: ExceptionType>`; the rest of
+  the panel renders.
+- **The HTTP fallback refuses an embedded child's event instead of running it
+  on the parent (#3104, partial).** Over HTTP-only, an event raised inside a
+  `{% live_render %}` child carries the child's `view_id`, and `post()` in
+  `python/djust/mixins/request.py` ignored it and ran the parent's handler of
+  the same name, silently changing the wrong view's state. It now answers
+  `400 {"error": "Embedded view not found"}`, as the WebSocket and SSE runtime
+  answers an unknown `view_id`. Routing the event to the child over HTTP stays
+  open in #3104: an HTTP request registers its children only while it renders,
+  after dispatch, under new process-wide `child_N` ids, so the id the client
+  sends never names a child of that request. The ADR-037 limits section and
+  `tests/playwright/test_embedded_directives.py` now expect the refusal. Cases
+  in `python/djust/tests/test_http_embedded_view_id_3104.py`.
+- **`PresenceMixin`'s examples list the mixin before `LiveView` (#3109).**
+  The three examples in `python/djust/presence.py` declared
+  `class V(LiveView, PresenceMixin)`. Django's `View.__init__` does not call
+  `super().__init__()`, so the mixin's `__init__` never ran, and the first
+  `track_presence()` raised `AttributeError: ... '_presence_tracked'` from
+  inside `presence.py`. The examples, and the two ADRs that copied them, now
+  read `class V(PresenceMixin, LiveView)`.
+- **`MarkdownEditor`'s docstring lists the custom properties the CSS reads (#3109).**
+  It listed `--dj-md-editor-min-height`, which sizes only the panes container.
+  It left out `--dj-md-editor-height`, which sizes the editing surface and is
+  a fixed size rather than a minimum. The docstring and the Markdown editor
+  guide now document both, plus the visual-mode properties.
+  `test_markdown_editor_css_vars_3109` derives both lists from the stylesheets
+  and fails if they drift apart.
+
+- **A task or thread started inside a turn no longer keeps a disconnected session alive (#3116).**
+  Three turn-scoped context variables held the session strongly: the ADR-038
+  diagnostic owner slots (`djust_diagnostic_owner_slots`, the consumer and its
+  runtime), the per-event SQL capture scope (`djust_sql_capture_scope`, the
+  view) and, while a render runs, the explicit child-render scope
+  (`djust_explicit_child_render`, the view and its rendered children). Any copy
+  of the context taken then (an `asyncio` task a view starts, such as a room
+  clock, or on Python 3.14+ a thread started from the turn, including the
+  loop's default-executor threads) kept the session reachable after the client
+  disconnected; on snake-arena with 3.14t, 2–14 consumers stayed alive after
+  `gc.collect()`. The owner slots and the SQL scope now hold weak references,
+  and the child-render scope is emptied when the render ends.
+
+  **Behaviour change:** a background task that outlives its session, or the
+  runtime it was started from, now runs with diagnostics restricted: its
+  failures are logged value-free and the SQL queries it makes are recorded
+  with parameters redacted, because a collected owner cannot prove it allows
+  details (the same rule as for an unreadable owner).
+
+- **A `ModelFormMixin` view no longer edits the old record under another
+  record's URL (#3125).** A `url_change` (a `dj-patch` link, or back/forward
+  within the same path) ran `handle_params` on the mounted view without
+  rebinding `self.kwargs`, so going from `/items/4/edit/` to `/items/5/edit/`
+  showed record 5's URL over record 4's form. The runtime
+  (`_dispatch_url_change_inner` in `python/djust/runtime.py`, shared by
+  WebSocket and SSE) now answers a URL whose route kwargs differ from the bound
+  ones with a `live_redirect` to that URL, and `ModelFormMixin.live_patch` with
+  a `path` naming another record becomes a `live_redirect`, so the remount
+  resolves and authorizes the record the address bar names. The route
+  resolution the mount already used moved to `own_route_kwargs` in
+  `python/djust/mixins/navigation.py` and now ignores the query string. Cases
+  in `python/djust/tests/test_model_form_route_change_3125.py`.
+- **The djust admin's index, list, add and change pages render again (#3139).**
+  `python/djust/admin_ext/templates/djust_admin/base.html`, `model_list.html` and `model_detail.html` used the
+  `concat` filter without `{% load djust_admin_tags %}`, so every admin page
+  except the delete confirmation returned a 500 (`Invalid filter: 'concat'`).
+  A new test renders every admin page, and another checks that each admin
+  template that uses the library loads it: a page that forgot the load still
+  rendered whenever another page had loaded the library earlier in the
+  process, so the render tests alone could not catch it.
+- **The djust admin opens its WebSocket, and the login form signs in (#3140).**
+  `python/djust/admin_ext/templates/djust_admin/base.html` and `login.html` marked their root with the pre-1.0
+  `data-djust-root` attribute, which the client does not mount, so no admin
+  page connected and clicking **Sign in** did nothing. Both now use `dj-root`,
+  and the server stamps `dj-view` with the rendering view. A socket mount also
+  builds the view without the `as_view()` kwargs that bind it to its admin
+  site, so the admin views now recover that registration from the page's
+  route, and only when the route serves the same view class; a mount whose URL
+  has no such route is refused as a permission failure. Now that sign-in
+  works, its `?next=` redirect is honoured only for a same-host URL
+  (`url_has_allowed_host_and_scheme`), as Django's own login does. The demo project
+  adds `"djust"` to `LIVEVIEW_ALLOWED_MODULES`, as check V015 asks, so its
+  admin mounts.
+- **`djust_theme init --with-examples` writes a template that renders (#3141).** The generated example template (templates/examples/theme_example.html in the project) carried a two-line `{# #}` comment. Django's `{# #}` is single-line only, so the text was parsed as template source and the `{% end_theme_card %}` quoted inside it raised `TemplateSyntaxError`. The comment is now a `{% comment %}` block. `scripts/check-template-comments.py` (the "check no multi-line {# #}" pre-commit hook) now also scans the string literals of every `.py` file under a `management/` or `scaffolding/` directory, where commands keep the templates they write, and `tests/unit/test_check_template_comments_3141.py` runs it over the tree in CI.
+- **A djust admin page widget no longer draws a second copy of the page (#3142).**
+  With no `dj-root` in the admin shell, the page render fell back to the first
+  `dj-view` element, which was the embedded widget's wrapper, and replaced it
+  with the whole page. The duplicate's fixed sidebar and heading were what
+  overlapped the "Change summary" card on the change and detail pages. The
+  `dj-root` from #3140 gives the render the right element.
+- **Template-scanning checks report a template reachable twice once (#3143).**
+  When two `TEMPLATES` backends listed the same directory, `DIRS` and
+  `APP_DIRS` both covered it, or a symlink reached it again, `djust.B010`
+  and every other check that scans templates (T0xx, Y0xx, S011, V011, and the
+  base/layout scans C010 and C012) reported each hit once per route. The
+  shared template-directory list is now de-duplicated by resolved real path,
+  and the shared template-file walk also yields each file once, which covers
+  a listed directory nested inside another.
+- **DEBUG no longer serves a stale SRI hash for a file only static storage has (#3145).**
+  With `DEBUG` on, when no staticfiles finder locates a vendored file and its
+  hash comes from static storage, the hash was cached for the life of the
+  process, so an edited or re-collected file was blocked by the browser's
+  integrity check until the dev server restarted. That hash is now cached
+  under the stored file's modified time, or not cached when the storage
+  backend can't report one.
+- **`collectstatic` rejects a non-path `DJUST_SBOM_PATH` before collecting (#3146).**
+  An int or a list in `DJUST_SBOM_PATH` raised a `TypeError` after the static
+  files had already been published, because `collectstatic` runs only
+  `staticfiles`-tagged checks and `djust.B012` was not one of them. djust's
+  `collectstatic` now raises a `CommandError` with B012's message before it
+  collects anything, and B012 is tagged `staticfiles`, so `collectstatic`'s
+  own system checks (skipped only with `--skip-checks`) also stop it up front
+  for a path inside a served directory.
+- **Free-threaded CPython: the first simultaneous page loads after a start no
+  longer 500 with `RuntimeError: dictionary changed size during iteration`
+  (#3151).** djust caches per-class facts on the class the first time they are
+  needed (`_djust_descriptor_fields_cache`, `_djust_template_hash_slot`,
+  `_djust_component_opaque`, `_djust_warned_*`). On 3.14t with the GIL off, that
+  `setattr(cls, ...)` could land while another thread was walking the same class
+  namespace — `_descriptor_fields()` on the page GET, as seen on snake-arena with
+  `PooledHTTP(threads=3)`. Only `mappingproxy.copy()` and
+  `list(mappingproxy.items())` read a class namespace atomically there; iterating
+  it, `dict()`/`list()`/`tuple()`/`set.update()` over it, and `dir()` of a class
+  or instance all race. Every render, mount and event-dispatch walk now iterates
+  a snapshot (new private `djust._class_snapshot`: `namespace()` and a
+  `dir()`-equivalent `attribute_names()`), with no lock added: the descriptor-field
+  map, the exposure contract and its framework-name set, the legacy
+  `get_context_data` class walk, `SimpleLiveView.get_context_data`, the event
+  handler plan and its per-event freshness check, handler parameter
+  namespaces, persisted form inputs, model property/method serialization and the
+  JIT model hash, the component-opacity check, legacy component state, the debug
+  payloads, interactive-component subscription validation, and the mount
+  frame's `cache_config`/`handler_config` — whose extractor swallowed the error
+  and shipped a mount frame without the client rate-limit config. The Rust
+  template engine's `bit in dir(current)` probe (#2506) now answers by
+  membership (`__dict__` lookups over the MRO) instead of building `dir()`: the
+  race there made a raising `@property` render empty instead of propagating. An
+  AST gate fails any new request-path `dir()`, `inspect.getmembers()`,
+  `{**vars(...)}` or live namespace iteration. Regression cases in
+  `python/djust/tests/test_free_threaded_class_caches_3151.py`, which also runs
+  in the 3.14t CI job.
+- **A page with no `dj-root` that embeds a `{% live_render %}` child no longer
+  renders two documents (#3155).** The page-shell render fell back to the first
+  `dj-view` element, which on such a page is the child's
+  `<div dj-view data-djust-embedded=…>` wrapper, and spliced the whole page into
+  the child's slot. The root locator (`_search_dj_root_open`) now skips an
+  embedded child's wrapper and everything inside it, so neither the wrapper nor
+  a `dj-root` in the child's own template is taken as the page's root; the GET's
+  `dj-view` stamp skips them the same way. The djust admin was fixed for its own
+  pages by #3153; this is the generic form. Regression cases in
+  `python/djust/tests/test_embedded_child_root_fallback_3155.py`.
+- **The hot-reload file watcher no longer starts inside a project's pytest run (#3157).**
+  `DjustConfig.ready()` skipped the DEBUG auto-enable only when
+  `PYTEST_CURRENT_TEST` was set, but pytest-django calls `django.setup()` from
+  its configure hooks, before that variable exists. So every pytest process,
+  and every xdist worker, started a watchdog thread on the project's template
+  and source directories. `ready()` now treats a process with `pytest` imported
+  as a test run. The startup update notice and the filter-bridge warm-up, which
+  share that guard, are skipped under pytest too.
+- **Test fixtures no longer write `user.name = Test`, `user.email` and
+  `commit.gpgsign = false` into the real repository's `.git/config` (#3179).**
+  The self-tests for the pre-commit wrapper and the shared-git-config checker
+  built their git environment from the whole `os.environ`. When pytest ran with
+  `GIT_DIR` exported, as under a git hook, their `git init` / `git config`
+  calls re-initialised and configured the real checkout. Commits made there
+  afterwards were authored "Test". Both now use
+  `tests.git_env.isolated_git_env()`. Every test module that spawns git, or a
+  script that runs git, strips `GIT_EXECUTION_VARS` with an autouse fixture.
+  The root `conftest.py` also strips them for every test, which covers library
+  code that runs git in-process. `tests/test_git_env_guard_3179.py` runs the
+  fixed helpers against a throwaway `GIT_DIR` that must stay unchanged, and
+  adds a static guard that fails on any unprotected process spawn in a
+  git-spawning test module.
+- **`djust.V004` no longer reports component-subscription callbacks (ADR-034).**
+  A `@<menu>.on.<output>` callback, such as the documented
+  `on_project_menu_selected`, was reported as "looks like an event handler but is
+  missing @event_handler". The advice could not be followed: `subscribe()`
+  refuses a callback that is also an event handler. V004 now skips any method
+  that `is_component_subscription()` recognises.
+
+### Security
+
+- **Rendered user HTML can no longer downgrade a strict handler to legacy
+  (#3127).** ADR-036 R1 runs a handler that a `dj-auto-recover` binding targets
+  under the legacy parameter policy, and `note_rendered_recovery_targets`
+  (`python/djust/validation.py`) counted every `dj-auto-recover` element in the
+  rendered HTML, so user HTML rendered with `|safe` by a sanitizer that keeps
+  unknown attributes could name any strict handler. Targets now come from the
+  view's template (the ADR-037 binding scan, `recovery_scan` in
+  `python/djust/_template_bindings.py`); the render is read only where that scan
+  cannot see every target: a computed `dj-auto-recover` value, a dynamic
+  include or extends, a non-djust tag that renders markup, or a view that
+  picks its own template (overriding `get_template()`, or setting `template` /
+  `template_name` on the instance). djust's own tags (`{% dj_flash %}`,
+  `{% theme_head %}`, component tags, ...) do not reopen the fallback: none
+  emits `dj-auto-recover` (a test searches every file djust ships), and a
+  djust block tag's body is scanned. In those templates a sanitizer must still drop `dj-*`
+  attributes, which the ADR-036 R1 row now says. A fully scanned template also
+  skips the per-render HTML parse. Cases in
+  `python/djust/tests/test_recovery_handler_policy.py` and
+  `python/djust/tests/test_recovery_scan_cost_3122.py`.
+- **Third-party browser code is vendored, verified and listed in an SBOM** (ADR-040). highlight.js, xterm and the admin stylesheet no longer load from cdnjs, jsdelivr, esm.sh or cdn.tailwindcss.com; every bundled package is listed with its exact version in `python/djust/djust.cdx.json`, which installs as the package's `djust.cdx.json` (also under `.dist-info/sboms/`), so Trivy and Syft can match advisories against it. Served license files no longer list package versions.
+- **Absolute `STATIC_URL` now needs CORS for admin CSS and highlight.js.** Apps already serving static files from another origin (S3, CloudFront) now get `crossorigin="anonymous"` on the admin stylesheet and highlight.js so the browser applies Subresource Integrity. The static host must send `Access-Control-Allow-Origin`, or the browser blocks those files.
+
+### Removed
+
+- **Six `LIVEVIEW_CONFIG` keys that nothing ever read are removed (#2984).**
+  `jit_cache_backend`, `jit_cache_dir`, `jit_redis_url`, `debug_components`,
+  `component_wrapper_class` and `component_loading_class` no longer have
+  defaults, so `get_config()` stops advertising settings that did nothing.
+  A project that still sets one keeps loading: the key is ignored, and
+  `djust.C018` (added in 1.2.1) warns that it was removed. Upgrade: delete the
+  key from `LIVEVIEW_CONFIG` / `DJUST_CONFIG`.
+- **Removed the dead djust.checks_css_proposal module (#3148).** Nothing imported it; it was an early draft of the C010/C011 checks in `python/djust/checks/configuration.py` and had drifted from them.
+- **The MCP tools no longer report event handlers without `**kwargs` (ADR-037).**
+  `validate_view` and `detect_common_issues` still carried the retired V007 rule.
+  A closed signature is encouraged; `manage.py check` compares template bindings
+  with handlers instead (`djust.T020`). The AI schema's handler guidance says the
+  same, including what legacy handlers also receive (`field` and `_target` from
+  `dj-input`/`dj-change`, `_target` from `dj-submit`).
+- **`djust.components.dependencies`** (`DEPENDENCY_REGISTRY`, `DependencyManager`). It was undocumented and unused; declare vendored assets in `djust_assets.json` and set `requires_assets` instead.
+
+## [1.3.0rc3] - 2026-09-25
+
+The third 1.3 release candidate. It lands the rest of the component-conventions arc: ADRs 034–037 (#3122).
+
+- **ADR-034:** interactive components own their behavior. `djust.components.interactive` starts with a dropdown, and keyed collections of them work.
+- **ADR-035:** `djust.forms.ModelFormMixin` edits one authorized object with a Django `ModelForm`.
+- **ADR-036:** typed event parameters. There is a staged `strict` parameter policy; the default stays `legacy`.
+- **ADR-037:** `manage.py check` now compares every template event binding with its handler (`djust.T019`–`T022`), using the same handler discovery as the runtime.
+- **Other:** `djust.worker_pool.PooledHTTP` runs HTTP requests on a bounded thread pool (#3114). SSE and the HTTP fallback now behave like the WebSocket path.
+
+**Upgrade notes.** Most apps need no changes. Check these:
+
+- **`manage.py check` can now fail your build.** `djust.T019`–`T022` are warnings. A project that runs `check --fail-level WARNING` (or `--deploy` with warnings treated as errors) will fail on any binding the checks flag. Fix the binding, or suppress a deliberate one with `{# noqa: T019 -- <reason> #}` on the line or the line above.
+- **HTTP-fallback events are sent one at a time, in order.** Before, two could be in flight at once, and a form save could store stale values. Pages that fire several events quickly will see them queue.
+- **A zero-patch HTTP render returns `{"patches": []}` with the new version** instead of resetting the diff baseline, which reloaded the page. Custom clients of the HTTP event endpoint should accept an empty patch list.
+- **`dj-paste` routes to the component or embedded child it is in**, like the other `dj-*` events. It no longer goes to the parent view. A parent handler that relied on receiving a child's paste must move to the child.
+- **Check IDs.** `djust.C021` is the `worker_threads` check (from rc2). An invalid `event_parameter_policy` is `djust.C022`. Silence it under that ID.
+- **`djust.V007`** ("event handler missing `**kwargs`") is retired. Remove it from `SILENCED_SYSTEM_CHECKS` if you had it there.
+
+### Added
+
+- **`djust.worker_pool.PooledHTTP`: run HTTP requests on a bounded pool of threads (#3114).**
+  Django's ASGI handler gives every HTTP request a new thread. On free-threaded
+  CPython each thread's allocator heap stays resident after the thread exits, so
+  an overload burst of page loads left the process at its peak thread count's
+  memory for good: 256 concurrent snake-arena page GETs took RSS from 81 MB to
+  1.26 GB with an 89 MB live Python heap. Wrap the HTTP app,
+  `"http": PooledHTTP(get_asgi_application())`, and each request runs on one of
+  a small pool of long-lived `djust-http-N` threads instead; the rest wait on
+  the event loop. `threads=None` follows `LIVEVIEW_CONFIG["worker_threads"]`
+  and passes through while that is off. Opt-in: nothing changes unless you wrap
+  the app. In the snake-arena overload run (64 → 192 → 256 clients, then idle,
+  3.14t, `worker_threads=5`) peak and after-idle RSS fell from 2030 MB to
+  936 MB, and the 256-client p95 event round trip from about 7 s to 0.33 s.
+  The scaling guide gains a "Memory under overload" section: RSS per client,
+  what the allocator keeps, and which queues are bounded. Tests in
+  `python/djust/tests/test_overload_memory_3114.py`.
+
+- **Keyed collections of interactive dropdowns (ADR-034 C3).**
+  `rows = DropdownMenu.collection()` declares one. `self.rows.sync([(key, DropdownMenu(...)), ...])`
+  reconciles its members:
+  - retained keys keep their state;
+  - reordering never moves state between rows;
+  - removed keys are refused afterwards, and a re-added key is a new lifetime;
+  - duplicate keys change nothing.
+
+  One `@rows.on.selected` callback receives the member that emitted, with
+  `component.key` its collection key. `get(key)`, `len()`, iteration and
+  `.values` give the current members.
+
+  A view with a collection is mounted fresh on Back navigation, so a member
+  removed since cannot come back.
+
+- **`djust.components.interactive`: a dropdown that owns its behavior and
+  reports typed outputs (ADR-034 C1).**
+  - `DropdownMenu(label=..., items=[...])` opens, closes and validates a
+    selection itself, then calls the view's
+    `@menu.on.selected def ...(self, component, value: str)` callback.
+  - Items are typed as `ActionItem` / `SeparatorItem`. `visibility="client"`
+    hands open/close to the browser's native popover, and an optional
+    `@menu.on.toggled` callback observes it.
+  - Each view instance gets its own component state. Events route only
+    through the server's registry. mypy and Pyright catch misspelled menus,
+    unknown outputs and wrong callback signatures.
+  - Two new checks: `djust.V020` (interactive components on `use_actors`
+    views, which 1.3 does not support) and `djust.Q004` (a module importing
+    both this and the legacy `DropdownMenu`).
+
+- **`djust.forms.ModelFormMixin`: edit one authorized object without writing a
+  custom `mount()` (ADR-035 F1).** Declare `model` (or `get_queryset()`), a
+  `ModelForm` as `form_class`, and route the view with a `pk` or `slug`.
+  - **Lookup and authorization.** Before the form is built, the object is
+    looked up in `get_queryset()` and authorized with `has_object_permission()`.
+    Every later event does both again.
+  - **Denials.** A missing, filtered-out or forbidden object is the same
+    permission denial on every transport, and no form or hook runs for it.
+  - **Where the id comes from.** `self.kwargs` is the route's resolved kwargs
+    on HTTP, WebSocket and SSE. Client mount parameters never select the object.
+  - **`self.object`.** It is the object authorized for the current request or
+    event, and is looked up once per mount or event. It renders as `object`,
+    plus an opt-in `context_object_name`, and is never persisted.
+    `self.object = form.save()` works; assigning any other record raises
+    `ValueError`.
+  - **Typing.** `ModelFormMixin[Project]` types `self.object`.
+  - **New check.** `djust.S013` warns when an adapter view overrides neither
+    `get_queryset()` nor `has_object_permission()`.
+
+  `FormMixin` and its `_model_instance` pattern are unchanged.
+
+- **Staged ADR-036 contracts reach HTTP pages.** A page whose view has
+  strict-policy handlers now renders its public parameter contracts into a
+  JSON data block outside the live root. HTTP-fallback render responses carry
+  the rendered tree's contracts, the same fields as WebSocket/SSE render
+  frames. The client keeps them as the page's own scope and resolves a
+  native binding's owner (root, component or embedded child) and handler
+  against the transport it will send through. Native binders do not consume
+  the contracts yet. All-legacy pages and responses are unchanged. 10 collected
+  cases in `python/djust/tests/test_http_parameter_contracts.py`.
+- **Startup checks for the staged ADR-036 strict parameter policy.** A
+  strict-policy declaration that strict dispatch would reject is now reported
+  by `manage.py check`, naming the view, the handler and the parameter:
+  `djust.C022` for an invalid `event_parameter_policy`, `djust.V016` for an
+  unresolvable or unsupported annotation, a missing annotation or a reserved
+  argument name, `djust.V017` for an async strict handler on an actor view, and
+  `djust.V018` when `params=` disagrees with a strict signature. The checks
+  compile the same cached contract dispatch uses. Deferred annotations now
+  resolve against the defining class body before module globals, and strict
+  contracts reject keyword parameters named `view_id`, `component_id` or
+  starting with `_`, which no transport can deliver. V007's "add `**kwargs`"
+  advice no longer applies to strict handlers. Legacy-policy handlers, still
+  the default, report nothing new. 32 collected cases in
+  `python/djust/tests/test_parameter_contract_checks.py`.
+- **Native event binders honour the staged ADR-036 strict parameter
+  policy.** For a strict handler, `dj-click`, the form directives, keyboard,
+  paste, polling, scoped window/document, click-away, shortcut, mouse,
+  `dj-mounted`, form-recovery, dropdown-observation, JS `push` and
+  `dj-viewport` bindings send `dj-value-*` arguments, parsed strictly, plus
+  only the generated values (`value`, `field`, form fields, `key`...) the
+  handler declares, or all of them for a `**` catch-all. `_target` is not
+  sent under strict. A malformed typed literal, a wire hint the declared type
+  rejects, a `dj-value-*` key reusing a generated name, or a value given both
+  positionally and by name is rejected in the browser. That happens before
+  any lock, disable-with, optimistic or loading effect, through the existing
+  value-free `djust:error` path. Legacy handlers keep their exact payloads.
+
+- **`manage.py check` compares template event bindings with their handlers
+  (ADR-037): `djust.T019`–`T022`.** Each LiveView and LiveComponent template
+  is compiled, not rendered, with `{% extends %}` and constant `{% include %}`
+  followed. Every literal `dj-*` binding is checked against its owner using the
+  runtime's own handler discovery, parameter policy and strict contract:
+  - `T019`: a missing, undecorated or wrongly owned handler;
+  - `T020`: missing, unexpected or duplicated arguments;
+  - `T021`: literals and wire hints the handler rejects;
+  - `T022`: routing context in markup.
+
+  All four are Warnings in 1.3. `djust_check --format json` adds a `coverage`
+  object (checked, dynamic and unsupported bindings, with gaps). Its binding
+  findings carry `owner`, `binding`, `expected` and `supplied`. Suppression is
+  local and needs a reason: `{# noqa: T019 -- <reason> #}`. 23 cases in
+  `python/djust/tests/test_adr037_binding_checks.py`.
+
+### Changed
+
+- **Less work on the asyncio event loop per WebSocket frame (#3095).** On
+  free-threaded CPython with `LIVEVIEW_CONFIG["worker_threads"]` the event
+  loop, not the cores, caps one process. A profile of a multi-room game at
+  saturation showed the loop spending about a third of its time on events
+  that mostly skip the render. Changes that apply everywhere:
+  - no thread hop for the handler-permission check when the handler has no
+    `@permission_required`, nor for the object-permission check when the view
+    does not override `get_object`; both are metadata checks then;
+  - a handler's `inspect.signature` and type hints are resolved once per
+    function, and again if its code, defaults or annotations change (a failed
+    type-hint resolution is retried, as before);
+  - a free render lock is taken without arming an `asyncio.wait_for` timer;
+  - `djust.layers.InMemoryChannelLayer.group_send` delivers without creating
+    a task per member.
+
+  With the worker pool on only: Channels' (4.2+) per-frame
+  `close_old_connections` hop is replaced by a check the session's pool
+  thread runs before its next task, and a tick's change-detection snapshots
+  run in the `handle_tick` hop. A deferred check that raises is logged
+  (without the error's text) and the task goes on; the task's own database
+  access then reports a broken connection.
+  24 regression tests in
+  `python/djust/tests/test_event_loop_ceiling_3095.py`.
+
+- **Presence broadcasts respect `push_scope` (#3095).** A join or leave in a
+  `PresenceMixin` view pushed `_on_presence_change` to every session of the
+  view, so in a multi-room view one join woke every session in every room.
+  When the view sets `push_scope`, the broadcast now reaches only the sessions
+  that share the sender's presence key: every WebSocket session of such a
+  view joins a per-key group, including sessions that never call
+  `track_presence()` (their key follows their `push_scope`), and a session
+  whose count went stale between mount and that join refreshes once. The new class attribute `presence_broadcast_scoped`
+  chooses explicitly (`True`: scoped without `push_scope`; `False`: the
+  view-wide broadcast).
+
+  **Behaviour change** — who is affected: views that set `push_scope` (new in
+  1.3) and override `_on_presence_change` to react to joins and leaves under
+  *other* presence keys. The default handler only recounts its own key, so its
+  result is unchanged. Migration: set `presence_broadcast_scoped = False`.
+  Views without `push_scope` are unchanged: they join no extra group. 19 regression tests in
+  `python/djust/tests/test_presence_scoped_broadcast_3095.py`.
+
+- **`dj-auto-recover` handlers always run under the legacy parameter policy
+  (ADR-036 decision R1).** A handler that a `dj-auto-recover` binding
+  targets is dispatched, and advertised to the browser, as legacy, even in a
+  project using the staged strict policy, so its `_form_values` /
+  `_data_attrs` dictionaries keep working. Targets are read from the HTML the
+  server rendered (including `{% include %}`, `{% extends %}`, conditional
+  and dynamic bindings), so a client cannot claim the downgrade. An explicit
+  `parameter_policy="strict"` on such a handler is reported at startup as
+  the warning `djust.V019`. 12 collected cases in
+  `python/djust/tests/test_recovery_handler_policy.py`.
+- **The staged strict collector refuses `_`-prefixed `dj-value-*` names.**
+  They match the server's reserved-name rule for strict parameters (ADR-036
+  D5), so the browser rejects them before sending instead of relying on a
+  server rejection. A 43-row conversion and binding matrix now runs
+  identically through every server path in
+  `python/djust/tests/test_strict_transport_parity.py`: the shared runtime,
+  real WebSocket (normal and actor), real SSE, both HTTP-fallback shapes, the
+  exposed API and the test client.
+- **One dispatch-context rule for the staged ADR-036 strict parameter
+  policy.** A strict handler now receives the same application arguments
+  whichever transport delivered the event. The transport keys
+  `_cacheRequestId` and `_activity` are dropped before binding. Before, a
+  strict event carrying either one was rejected over the HTTP fallback, the
+  exposed API, server functions, the test client, replay and actor views. An unconsumed `view_id` or `component_id` fails closed instead of
+  reaching the root handler. Unknown `_` keys in the flat HTTP body are
+  rejected instead of silently discarded. Strict contracts can declare
+  framework-supplied (trusted) parameters that no client key or positional
+  value can fill, and the staged ADR-034 output callbacks now bind their
+  payload through that contract with the source component supplied by the
+  framework. Legacy handlers are unchanged. 68 collected cases in
+  `python/djust/tests/test_trusted_dispatch_context.py`.
+- **The MCP tool `find_handlers_for_template` uses the `manage.py check`
+  binding scan (ADR-037).** A view or component now matches when its template
+  is the file, or includes or extends it, instead of when the file names
+  match. The existing JSON keys are unchanged. Each view gains `bindings`
+  (with each binding's `status` and `djust.T019`–`T022` findings), and the
+  response gains a `coverage` object. 5 cases in
+  `python/djust/tests/test_find_handlers_for_template.py`.
+- **`dj-auto-recover` targets are found in included and parent templates
+  too (ADR-037).** The class-level scan that forces recovery handlers onto
+  the legacy parameter policy (ADR-036 decision R1) now uses the template
+  binding scan. It follows `{% include %}` and `{% extends %}` and keeps every
+  `{% if %}` branch, so more handlers are legacy-forced from mount. For
+  example, a recovery form inside a conditional include was strict until an
+  event rendered it; now it is legacy from mount. Computed targets are still
+  seen only in the render. 17 cases in
+  `python/djust/tests/test_recovery_handler_policy.py`.
+- **`LiveViewSmokeTest` fuzzes exactly the handlers dispatch resolves
+  (ADR-037).** It no longer fuzzes undecorated public methods. With the
+  default `event_security = "strict"` the server refuses to call them; under
+  `"warn"` or `"open"` they are still callable but are no longer fuzzed, so
+  decorate them (or test them directly) to keep that coverage. So a smoke
+  suite sends fewer events, and a failure it reported on such a method no
+  longer appears. A strict-policy handler is
+  fuzzed with its contract's parameter metadata. Components and server
+  functions stay excluded.
+- **CodeQL code-scanning sweep.** Fixed every open non-cycle alert:
+  - A strict handler's parameter-validation error reaches the client from
+    `ParameterError.public_message` instead of `str(exc)` (the text was already
+    framework-written and value-free).
+  - Removed an unreachable explicit-child branch in `{% live_render %}` and a
+    dead variable in the gallery catalogue.
+  - The service-worker mount-metadata hook moved onto `djust._sw` as
+    `applyMountMetadata`, so neither transport needs a `typeof` guard.
+  - `ServerStateSession` derives its storage key through an overridable
+    `_storage_key()`, which the child-state session overrides instead of
+    replacing `key` after construction.
+  - `StateProperty` is listed in `djust.decorators.__all__`.
+  `py/cyclic-import` is excluded from CodeQL: every cycle it reported was
+  guarded by a deferred import. The new
+  `tests/test_no_module_level_import_cycles.py` fails on any cycle made of
+  module-level imports alone.
+
+### Fixed
+
+- **A legacy component's view-level event alias now resolves only its own
+  component type (#3078).** Descriptor components (`Dropdown`, `Modal`, `Tabs`
+  and the others) register a view-level alias for their `Meta.event`, such as
+  `toggle_dropdown`. The alias looked up the client-supplied `component_id` with
+  `getattr` on the view, so an event for one component type could drive a
+  component of another type, and could read any view attribute first. It now
+  accepts only the view class's declared descriptors of its own type, and
+  ignores any other id. The alias is also pinned to the legacy parameter policy,
+  so a project-wide strict `event_parameter_policy` no longer breaks it.
+- **Worker-pool threads no longer keep their first caller's context alive
+  (#3114).** On Python 3.14+ a new thread starts with a copy of its starter's
+  context (`sys.flags.thread_inherit_context`, on by default in free-threaded
+  builds). The `worker_threads` pool started each thread lazily, on the first
+  session's call, so that session's context values stayed referenced for the
+  life of the process. The pool now starts its threads when it is created, in
+  an empty context.
+- **SSE and the HTTP fallback keep up with the page (found by ADR-034 C2's
+  real-transport browser runs).**
+  - **SSE mount.** The mount now morphs an HTTP-prerendered page against the
+    mount HTML, as the WebSocket mount does (#1610). Before, it only stamped
+    `dj-id`s, so values that differ per mount stayed stale, including the
+    identities of interactive components. Every event on such a component
+    then failed with "Component not found".
+  - **HTTP zero-patch renders.** A render that changed nothing no longer
+    resets the server's diff baseline. That reset restarted the version at 1,
+    the client's version check failed, and the page reloaded, losing its
+    state. The answer is now an empty patch list with the new version.
+  - **HTTP event ordering.** Events are now sent one at a time, in order,
+    like frames on a socket. Two in flight at once each restored and saved
+    the session, so a form save could store stale values.
+- **Strict pages kept working after a hot reload or `push_state()`
+  (staged ADR-036).** The hot-reload patch frame and
+  `StreamingMixin.push_state()` sent DOM updates without the public
+  parameter-contract snapshot. That made a strict-policy client invalidate
+  its contracts and refuse strict events until the next render, and a
+  reload that changed handler declarations could advertise stale rules.
+  Both now capture the snapshot in the same operation as the render; a hot
+  reload whose contracts cannot be discovered falls back to a full page
+  reload. Legacy sessions keep their frame shape.
+- **The debug panel lists `@staticmethod` event handlers.** Its handler list
+  was a second `dir()`/`getattr` walk that missed them. It now shows exactly the
+  handlers dispatch resolves (ADR-037). Pinned in
+  `python/djust/tests/test_adr037_shared_discovery.py`.
+- **`dj-paste` reaches the component or embedded child it is in.** The paste
+  binder never attached owner context, so a paste inside a LiveComponent or a
+  `{% live_render %}` child was sent to the page's root view. It now attaches
+  context like every other binding, under both parameter policies. Found by
+  ADR-037's embedded-child browser test
+  (`tests/playwright/test_embedded_directives.py`); a case in
+  `tests/js/dj-paste.test.js` pins it.
+- **Cancelling an `assign_async` loader now cancels it.** The async runner
+  caught `BaseException`, so `cancel_async()` or view teardown was swallowed:
+  the task finished normally and the attribute became an errored `AsyncResult`
+  holding the `CancelledError`. The runners now catch `Exception`, so a loader's
+  own failure is still surfaced, while cancellation (and `KeyboardInterrupt` /
+  `SystemExit` in the sync runner) propagates and the attribute stays pending.
+  Found by CodeQL `py/catch-base-exception`.
+- **A legacy page no longer loses every binding when parameter-contract discovery throws.** Over HTTP, a discovery exception made the initial page publish `contracts: false` and a render return no update (a 500 on POST), even for a view that can only be legacy; the client then rejected every event. Now, as on the socket path, a view whose project policy is legacy and that declares no strict handler keeps its legacy page and response shape (`python/djust/mixins/request.py`). Where strict contracts can exist, or the client already advertised them, discovery failure still fails closed.
+- **The HTTP fallback now reports failed events.** When an event failed over
+  the HTTP fallback, the client wrote only to the browser console, so an
+  HTTP-only page could not show the failure. It now dispatches `djust:error`
+  with the server's error message, as the WebSocket and SSE transports do. The
+  DEBUG error overlay and application listeners see it.
+- **A queued HTTP-fallback event is no longer silently lost after an in-page `#anchor` jump.** HTTP events run one at a time, and a queued event checked that it still belonged to the page by comparing the full URL, fragment included (`python/djust/static/djust/src/11-event-handler.js`). The fragment never reaches the server, so it no longer counts. An event still dropped because the URL or root changed without a navigation now fires `djust:error`; one dropped by real navigation stays quiet.
+- **Legacy-policy apps no longer re-parse every rendered page that contains `dj-auto-recover`.** The ADR-036 R1 recovery downgrade only changes strict handlers, but the per-render recovery-target scan (`python/djust/validation.py`, `note_rendered_recovery_targets`) ran an HTML parse on every render and HTTP GET (about 3 ms for a 20 KB page, 29 ms for 200 KB), and policy resolution ran the class-level template scan for every handler. Both now run only when the project policy is strict, is invalid, or the view declares a strict handler. An invalid project policy still resolves a recovery target to legacy.
+
+### Security
+
+- **A legacy component's view-level event alias now resolves only its own
+  component type (#3078).** Descriptor components (`Dropdown`, `Modal`, `Tabs`
+  and the others) register a view-level alias for their `Meta.event`, such as
+  `toggle_dropdown`. The alias looked up the client-supplied `component_id` with
+  `getattr` on the view, so an event for one component type could drive a
+  component of another type, and could read any view attribute first. It now
+  accepts only the view class's declared descriptors of its own type, and
+  ignores any other id. The alias is also pinned to the legacy parameter policy,
+  so a project-wide strict `event_parameter_policy` no longer breaks it.
+- **`LiveViewTestClient.send_event` now enforces handler authorization (#3094).**
+  It called the handler directly, so a test that sent an event to a
+  `@permission_required` handler as an unprivileged user passed whether the
+  decorator was there or not. It now runs the consumer's gates first:
+  `@permission_required` (denied when the view has no request), then the
+  per-event `has_object_permission` re-check for a view that overrides
+  `get_object`, failing closed. A refused event does not run the handler and
+  returns `success=False` with `code="permission_denied"`. A test that relied on
+  the bypass must mount as a user who holds the permission.
+
+### Documentation
+
+- **Documented: interactive components (ADR-034, available from djust 1.3).**
+  - A new "Interactive Components" guide covers the ownership rule, then
+    `DropdownMenu`: one instance, two menus, client-owned popovers with
+    observations, delegated row actions versus keyed collections, and
+    persistence, keyboard and security. All its examples are executed by
+    `python/djust/tests/test_adr034_documented_examples.py`.
+  - The components API reference gains tables generated from the component's
+    contracts by `scripts/generate-interactive-reference.py`
+    (`make interactive-reference`). A drift test and a pre-commit hook fail
+    when they go stale.
+  - The core-concepts page and the AI components reference point to the new
+    guide.
+  - ADR-034 is accepted.
+- **Documented: editing one record with `ModelFormMixin`, and ADR-035 is
+  accepted.** The form guide gains "Editing one record with `ModelFormMixin`"
+  and a migration recipe from `_model_instance`. The AI form reference gains
+  the same pattern and its rules. Both examples are executed by
+  `python/djust/tests/test_adr035_documented_examples.py`. The existing
+  `_model_instance` pattern still works and its examples are unchanged.
+- **Typed event parameters are documented and ADR-036 is accepted.** The
+  events guide gains a "Typed event parameters (strict policy)" section: how
+  to opt in, typed click and form examples, what the browser sends, the
+  conversion rules, rejections, framework context and a migration checklist.
+  The AI events reference leads with the strict form. Both sets of examples
+  are executed by `python/djust/tests/test_adr036_documented_examples.py`
+  and `tests/js/adr036_documented_examples.test.js`. The strict policy is a
+  supported opt-in; legacy remains the default.
+- **The Discord link in the docs works again.** `discord.gg/djust` returned "Unknown Invite"; `CONTRIBUTING.md`, the docs home page and the state-management guides now link to the permanent invite `https://discord.gg/7sPKf3wtp9`.
+
+### Removed
+
+- **`djust.V007` ("event handler missing `**kwargs`") is retired (ADR-037).**
+  A closed handler signature is now encouraged: a catch-all hides a
+  misspelled parameter. djust no longer emits V007 and never reuses the ID.
+  Existing V007 suppressions have no effect and can be removed.
+
+## [1.3.0rc2] - 2026-09-25
+
+The second 1.3 release candidate. Its headline is multi-core rendering (#3074). On free-threaded CPython 3.14t, one process can now use many cores: with the opt-in settings below, a snake-arena load test held 192–256 clients at full frame rate on 4–6.6 cores, against about 32 on one core with stock 3.12. The work that made this possible is split between opt-in settings and changes that apply on every Python:
+
+- **Opt-in:** `LIVEVIEW_CONFIG["worker_threads"]` pins each WebSocket session to one pool thread. `push_to_view(..., scope=)` and a view's `push_scope` push to part of a view's sessions (#3004). djust also ships its own in-memory channel layer that sweeps expired messages at most once a second.
+- **Always on:** the Rust render and diff run without the GIL, which also speeds up renders on 3.12. There is also a fix for the 1.3.0rc1 per-render CPU regression (#3075).
+- **Builds:** this is the first release built with free-threaded `cp314t` wheels.
+- **Guide:** "Scaling a djust Process Across Cores".
+
+### Added
+
+- **Scoped server push: `push_to_view(..., scope=...)` and
+  `LiveView.push_scope` (#3004, #3074).** `push_to_view` reached every
+  session of a view class. For a view serving many rooms, that meant every
+  room's broadcast reached every session in every room, and each one ran the
+  handler, discarded the message and sent a no-op frame back. In the snake
+  load test that was 57,120 pushes for 3,727 real renders.
+  - A view now sets `self.push_scope = room` (a str, an int, or a list,
+    tuple or set of up to 64 of them), and `push_to_view` / `apush_to_view`
+    accept `scope=` to reach only those sessions.
+  - Reassigning `push_scope` in an event handler, a push hook, `handle_tick`
+    or `handle_info` moves the session at the end of that turn.
+  - Scoped groups are ordinary channel-layer groups, named from a digest of
+    the view path and the scope, so they work across processes.
+  - A push without `scope` is unchanged.
+
+  15 regression tests in `python/djust/tests/test_scoped_push_3004.py`.
+
+- **Free-threaded CPython 3.14t wheels (`cp314-cp314t`) (#3074).**
+  - **The wheels.** The release workflow builds them on Linux, macOS (arm64
+    and x86_64) and Windows. Each build fails unless importing the wheel
+    leaves `sys._is_gil_enabled()` False, which is what the extension's
+    `#[pymodule(gil_used = false)]` promises, with `orjson` absent. orjson
+    has no free-threaded build and stays in the optional `performance` and
+    `dev` extras only.
+  - **A failing 3.14t release cell does not stop the release.** Some
+    dependencies build from source on 3.14t, so if a 3.14t cell fails, that
+    platform just ships no cp314t wheel and every other wheel still
+    publishes.
+  - **CI.** The 3.14t job no longer has `continue-on-error`, so a failure
+    shows red. It checks that importing djust keeps the GIL off, then runs
+    the multi-core modules (the GIL-releasing
+    render, the worker pool, scoped push, event-loop offload, the in-memory
+    layer and the thread-safety fixes) with the GIL asserted off.
+  - **PyPI.** The project now carries the `Free Threading :: 2 - Beta`
+    classifier.
+
+  5 regression tests in `python/djust/tests/test_free_threaded_contract_3074.py`
+  (one of them runs only on a free-threaded build).
+
+- **`djust.layers.InMemoryChannelLayer`: an in-process channel layer whose
+  expiry sweep is rate-limited (#3074).**
+  - **The problem.** Channels' `InMemoryChannelLayer` walks every channel queue
+    and every group membership on each `receive()` and `group_send()`. A
+    broadcast round across N sessions therefore costs O(N²) on the event loop:
+    17.7 ms per round at 224 sessions in rooms of 4, and 78 ms at 512. In the
+    #3074 snake profile it was 11.9 % of the event-loop thread.
+  - **The fix.** djust's subclass sweeps at most once per `clean_interval`
+    (default 1 s; `0` restores Channels' behaviour): 4.4 ms and 10.3 ms per
+    round.
+  - **How to use it.** It is opt-in: set `"BACKEND":
+    "djust.layers.InMemoryChannelLayer"`. It is only for single-process
+    deployments, which with free-threaded Python and `worker_threads` can use
+    several cores. Multi-process deployments still need `channels_redis`.
+  - **What changes.** An expired message or membership is removed up to
+    `clean_interval` seconds later.
+
+  8 regression cases in `python/djust/tests/test_inmemory_layer_3074.py`.
+
+- **Opt-in pinned session worker pool: `LIVEVIEW_CONFIG["worker_threads"]`
+  (#3074).** By default every WebSocket session's sync work (mount, handlers,
+  hooks, renders) runs on asgiref's one thread shared by the whole process.
+  Set `worker_threads` to `True` (one thread per CPU, up to 32) or an integer,
+  and each session is pinned to one thread of a pool for its lifetime, while
+  different sessions run at the same time. The mechanism is asgiref's
+  `SyncToAsync.thread_sensitive_context`, so every thread-sensitive
+  `sync_to_async` a session makes, djust's, Channels' and the app's, lands on
+  its thread. HTTP and SSE are unchanged. The default (`None`) keeps today's
+  behaviour, and `djust.C021` reports an invalid value. See "More than one
+  core per process" in the deployment guide. 11 regression cases in
+  `python/djust/tests/test_worker_pool_3074.py`.
+
+### Changed
+
+- **`RustLiveView.render_with_diff` releases the GIL while it renders
+  (#3074).** The template render, HTML parse and VDOM diff run with the thread
+  detached from the interpreter, and re-attach only to call into Python (the
+  raw-object `getattr` fallback, bridged tags and filters, `{% load %}`). On a
+  GIL build another Python thread (another session's handler, the event loop)
+  now runs while one session renders; the multi-core experiment measured about
+  +15 % frames at the load knee on CPython 3.12, and no change on free-threaded
+  3.14t, which has no GIL to release. The template and tag registries now take
+  their read lock only while attached, so a render that calls a Python tag
+  cannot deadlock against a concurrent `register_*`. Rendered output is
+  unchanged. One behaviour does change: two threads calling into the SAME
+  `RustLiveView` used to queue on the GIL; now the second one gets PyO3's
+  "Already borrowed" `RuntimeError` while the first is rendering, as it
+  already did on free-threaded builds. djust itself never shares a
+  `RustLiveView` between threads (each session has its own, used under its
+  render lock).
+  3 regression cases in `python/djust/tests/test_render_with_diff_gil_3074.py`,
+  plus 2 Rust tests (`render_with_diff_detaches_3074` in
+  `crates/djust_live/src/lib.rs`).
+
+- **With `worker_threads` on, per-frame work moves off the asyncio event loop
+  (#3074).** Once sessions render on several threads, the event loop is the
+  next ceiling.
+  - The pre-event assigns snapshot runs in the same worker hop as a sync
+    handler.
+  - A server push on a legacy-exposure view is one hop: Django's
+    `close_old_connections`, every push's state and hook, the render and the
+    diff. Before, each hook took its own hop, the render took one, and so did
+    Channels' connection check.
+  - On the loop, the Rust patch JSON is spliced into the frame instead of being
+    parsed and re-serialised, unless the frame carries anything else: binary
+    mode, the DEBUG payload, parameter contracts or a signed snapshot.
+  - `dispatch` skips Channels' per-message `aclose_old_connections` hop for
+    `server_push`, because both push-turn paths run the check themselves.
+
+  With the pool off, nothing changes. The frames are the same JSON object on
+  both paths.
+
+  6 regression tests (11 cases, each run with the pool on and off) in
+  `python/djust/tests/test_event_loop_offload_3074.py`.
+
+- **Check `djust.A102` no longer warns when your allauth adapter overrides `get_client_ip`.** allauth's rate limits ask the adapter for the client IP, so an override (for example `X-Real-IP` with a fallback, which keeps working where the header can be missing) is a complete configuration. The hint, the accounts guide and the error-code reference mention it.
+
+### Fixed
+
+- **A LiveView page no longer logs "non-serializable value: FallbackStorage" (or `PermWrapper`, `WSGIRequest`, `AnonymousUser`) on every render (#3061).** The page-shell render (`render_full_template`) sent the context-processor values of the HTTP GET through the state normalizer, and the HTTP POST fallback hid its injected processor values from the #1786 filter. Both paths now drop non-serializable request-scoped values before normalizing, the same way the dj-root and WebSocket render already did. The values still reach the template, so `{% for m in messages %}` works inside and outside the LiveView root. A non-serializable attribute of the view itself still warns. 7 regression cases in `python/tests/test_full_template_context_processors_3061.py`.
+- **Check `djust.A102` no longer warns when `ALLAUTH_TRUSTED_CLIENT_IP_HEADER` is set (#3068).** allauth can read the client IP from a proxy header such as ingress-nginx's `X-Real-IP` without a proxy count, so a non-blank header now counts as configured. The check's hint and the A102 entry in the error-code reference mention the header.
+
+- **Shared state that sessions' sync code touches is now safe when two
+  threads use it at once (#3074).** This was reachable before (an HTTP
+  request thread beside the WebSocket thread) and is common with
+  `worker_threads`.
+  - `DjangoJSONEncoder`'s recursion depth was a single counter shared by
+    every thread, so one render's nesting could decide whether another's
+    related objects were serialised. It is now per thread.
+  - The state and presence backend registries could build two backends on
+    first use and drop one's data.
+  - The tenant-scoped in-memory presence backend, `CursorTracker`,
+    component auto-keys and the JIT variable cache now take a lock or do a
+    single lookup.
+
+  7 regression cases in
+  `python/djust/tests/test_worker_pool_thread_safety_3074.py`.
+
+- **1.3.0rc1 spent ~20% more server CPU per LiveView frame than 1.2.1
+  (#3075).** `parameter_contract_manifest` runs on every render and resolved
+  every public name on the view with `inspect.getattr_static` each time: ~1 ms
+  per frame on an ordinary view, longer than the render itself. The class half
+  of handler discovery is now resolved once per class and re-validated on
+  every call (both MROs, every class dict by key order and value identity, and
+  the resolved descriptors' classes), so a monkeypatched, added, deleted or
+  swapped attribute, a reassigned `__bases__` and a hot view replacement all
+  rebuild it; only the instance storage is re-read per render. The manifest
+  takes 0.08 ms instead of 1.0 ms, and Snake Arena's server CPU per delivered
+  frame is back at 1.2.1's level (2.97 ms vs 2.96 ms; main was 3.59 ms).
+  12 regression cases in `python/djust/tests/test_parameter_metadata_cache_3075.py`,
+  including an oracle comparison against the uncached discovery.
+- **Presence could raise `AttributeError: partially initialized module
+  'djust.tenants.mixin'` when two threads first used it together (#3079).**
+  `tenant_scoped_presence_key` read `TenantMixin` straight off the
+  `sys.modules` entry, which is a half-built module while another thread is
+  still importing it (HTTP worker threads and the channels sync thread, for
+  example). It now takes the class with a normal import, which waits on the
+  module's import lock. Apps without tenants still never import the module.
+  3 regression cases in `tests/unit/test_presence_tenant_import_race_3079.py`,
+  including a slow-import shim that holds the module half-imported while a
+  second thread asks for a presence key.
+- **The in-memory state backend never expired anything, so memory grew with
+  every new session for the life of the process (#3080).** `SESSION_TTL`
+  (default 3600 s) was applied only by `djust clear` and
+  `cleanup_expired_sessions()`, which nothing called at runtime. Each entry
+  holds its view's full render state: about 270 KB of live heap per session in
+  a snake-arena load test, where `SESSION_TTL = 60` still left 65, then 129,
+  193 and 257 entries across 64-client cycles. An entry not written for the
+  TTL is now a miss on `get()` and is dropped, and `set()` sweeps expired
+  entries at most once per `min(SESSION_TTL, 60)` seconds. `SESSION_TTL = 0`
+  still means never expire. The deployment guide now gives the per-session
+  cost and explains why RSS levels off rather than falls. 9 regression cases in
+  `python/tests/test_memory_state_backend_ttl_3080.py`.
+- **The account pages' flash message keeps a 16px side gutter on phones.** At 480px and narrower the card goes full-bleed and `.dj-auth-main` drops its side padding, so the flash's border touched the screen edges (`python/djust/auth/static/djust_auth/auth.css`).
+- **allauth pages now keep a project layout's `<head>` additions.** djust's allauth skin (`python/djust/auth/templates/allauth/layouts/base.html`) replaced the kit layout's `head` block with allauth's `extra_head`, so a stylesheet or meta tag a project added by overriding the kit layout (`python/djust/auth/templates/djust_auth/layouts/auth.html`; the accounts guide's documented way) was missing on every allauth page. The skin now renders the layout's head, then `extra_head`.
+- **`MemoryTracker` retried `import psutil` on every event.** With psutil not
+  installed, each failed import re-scanned `sys.path`: about 42 µs per event
+  on the event-loop thread. Whether psutil is installed is now checked once, at
+  module import. 4 regression cases in
+  `python/tests/test_memory_tracker_psutil_probe.py`.
+
+### Documentation
+
+- **New guide: "Scaling a djust Process Across Cores"
+  (`docs/website/guides/scaling-across-cores.md`, #3074).** It explains
+  why a stock process uses about one core, then covers the recipe:
+  free-threaded CPython 3.14t and the `cp314t` wheels,
+  `LIVEVIEW_CONFIG["worker_threads"]` and its event-loop offload, scoped push
+  (`push_scope` / `scope=`), `djust.layers.InMemoryChannelLayer` and the
+  GIL-releasing render. It includes the snake load test numbers (about 32
+  clients on one core for stock 3.12, 192–256 clients on 4–6.6 cores for
+  3.14t with the opt-in settings), the memory cost per session (2.2–2.7 MB
+  for a pinned pool against 5.4 MB for one thread per session), and the
+  Redis multi-process alternative with its trade-offs.
+
 ## [1.3.0rc1] - 2026-09-24
 
 The first release candidate for 1.3. It adds pluggable account backends (`djust.auth.accounts`, ADR-039) and makes the opt-in explicit state-exposure policy (`exposure_policy = "explicit"`, ADR-038) available; views that don't opt in keep legacy exposure. `djust.auth.social.social_auth_providers` is deprecated. See Security below for the fixes in this release.

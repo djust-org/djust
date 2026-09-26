@@ -16,6 +16,7 @@ from types import MappingProxyType
 from typing import Any, Literal, cast
 
 from django.core.exceptions import ImproperlyConfigured
+from ._class_snapshot import namespace
 
 Destination = Literal["server", "client", "snapshot", "debug"]
 Persistence = Literal["server", "client"] | None
@@ -399,7 +400,7 @@ class ExposureContract:
         fields: dict[str, FieldExposure] = {}
         seen: set[str] = set()
         for owner in view_class.__mro__:
-            for name, descriptor in vars(owner).items():
+            for name, descriptor in namespace(owner).items():  # #3151
                 if name in seen:
                     continue
                 seen.add(name)
@@ -425,7 +426,7 @@ class ExposureContract:
 
         framework_names = set(_FRAMEWORK_INTERNAL_ATTRS)
         for base in LiveView.__mro__:
-            framework_names.update(vars(base))
+            framework_names.update(namespace(base))  # #3151
 
         if type(self.owner) is not str or not self.owner or len(self.owner) > 512:
             raise ExposureError("Invalid state contract owner")

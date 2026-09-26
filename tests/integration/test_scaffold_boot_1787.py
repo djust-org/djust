@@ -173,7 +173,16 @@ class TestScaffoldWarningClean1791:
         )
 
         # Belt-and-suspenders: each specific deferred warning ID is absent.
-        for warn_id in ("djust.C012", "djust.S005", "djust.Y001", "djust.Y003", "djust.A030"):
+        # djust.V015 (#2889): the scaffold routes the component gallery, so its
+        # allowlist must admit "djust" or those pages never mount.
+        for warn_id in (
+            "djust.C012",
+            "djust.S005",
+            "djust.Y001",
+            "djust.Y003",
+            "djust.A030",
+            "djust.V015",
+        ):
             assert warn_id not in combined, (
                 f"{warn_id} fired on a fresh scaffold (#1791 regression):\n{combined}"
             )

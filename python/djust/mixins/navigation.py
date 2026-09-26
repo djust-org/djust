@@ -13,6 +13,41 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
+def own_route_kwargs(view_instance: Any, url: str) -> Optional[Dict[str, Any]]:
+    """``url``'s resolved kwargs if that route serves ``view_instance``'s class.
+
+    ``None`` when the URL does not resolve, or resolves to another view: a URL
+    routed elsewhere must not select this view's object (ADR-035). The query
+    string never takes part in the route.
+    """
+    try:
+        from urllib.parse import unquote, urlsplit
+
+        from django.urls import resolve
+
+        match = resolve(unquote(urlsplit(url).path))
+    except Exception:  # noqa: BLE001 — unresolvable means no route kwargs
+        return None
+    if getattr(match.func, "view_class", None) is not type(view_instance):
+        return None
+    return dict(match.kwargs)
+
+
+def same_origin_target(url: str) -> str:
+    """``url`` reduced to a same-origin path and query, for a server redirect.
+
+    The scheme, host and fragment are dropped, backslashes (which browsers
+    read as slashes) are normalized, and leading slashes collapse to one, so
+    the result can never name another origin (``//host`` or ``/\\host``) or a
+    ``javascript:`` URL (PR #3159 review).
+    """
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url.replace("\\", "/"))
+    path = "/" + parts.path.lstrip("/")
+    return path + ("?" + parts.query if parts.query else "")
+
+
 class NavigationMixin:
     """
     Adds URL navigation capabilities to a LiveView.

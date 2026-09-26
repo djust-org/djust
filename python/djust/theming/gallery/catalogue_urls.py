@@ -29,6 +29,11 @@ urlpatterns = [
         name="components_category",
     ),
     path(
+        "interactive_dropdown_menu/",
+        live_views.InteractiveDropdownCatalogueView.as_view(),
+        name="components_interactive_dropdown_menu",
+    ),
+    path(
         "<str:component_name>/",
         live_views.ComponentsDetailView.as_view(),
         name="components_detail",

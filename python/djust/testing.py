@@ -288,6 +288,31 @@ class LiveViewTestClient:
                 "duration_ms": 0,
             }
 
+        # Run the consumer's authorization gates, so a test of a gated handler
+        # can fail (#3094): handler-level @permission_required, then the
+        # per-event object-permission re-check.
+        denial = self._authorization_denial(handler)
+        if denial is not None:
+            self.events.append(
+                {
+                    "type": "event",
+                    "name": event_name,
+                    "params": params,
+                    "timestamp": time.time(),
+                    "duration_ms": 0,
+                    "error": denial,
+                    "code": "permission_denied",
+                }
+            )
+            return {
+                "success": False,
+                "error": denial,
+                "code": "permission_denied",
+                "state_before": state_before,
+                "state_after": state_before,
+                "duration_ms": 0,
+            }
+
         # Apply type coercion if available
         from .validation import validate_handler_params, validated_call_arguments
 
@@ -336,6 +361,35 @@ class LiveViewTestClient:
             "state_after": state_after,
             "duration_ms": duration_ms,
         }
+
+    def _authorization_denial(self, handler: Any) -> Optional[str]:
+        """The consumer's error message if it would refuse ``handler``, else None.
+
+        Mirrors ``websocket_utils._validate_event_security``: a handler with
+        ``@permission_required`` and no request is denied, a user without the
+        permission is denied, and a view that overrides ``get_object`` has its
+        object permission re-checked on every event, failing closed.
+        """
+        from django.core.exceptions import PermissionDenied
+
+        from .auth import check_handler_permission
+        from .auth.core import _has_custom_get_object, check_object_permission
+
+        view = self.view_instance
+        request = getattr(view, "request", None)
+        if getattr(handler, "_djust_decorators", {}).get("permission_required") and not request:
+            return "Permission denied"
+        if request and not check_handler_permission(handler, request):
+            return "Permission denied"
+        if request is None:
+            return "Access denied for this object." if _has_custom_get_object(view) else None
+        try:
+            check_object_permission(view, request)
+        except PermissionDenied:
+            return "Access denied for this object."
+        except Exception:  # noqa: BLE001 — fail closed, as the consumer does
+            return "Access denied for this object."
+        return None
 
     def get_state(self) -> Dict[str, Any]:
         """
@@ -1449,78 +1503,100 @@ def _discover_views(app_label: Optional[str] = None) -> Iterator[Type[Any]]:
 
 
 def _get_handlers(cls: Type[Any]) -> Dict[str, Any]:
-    """Get event handler names and their parameter metadata from a view class.
+    """The event handlers of a view class, with their public parameter metadata.
 
-    Discovers both @event_handler decorated methods (with full param metadata)
-    and plain public methods defined on the user class (not inherited from
-    LiveView/LiveComponent base). Plain methods get basic param info from
-    inspect.signature.
+    Exactly the handlers dispatch resolves (``_parameter_metadata``'s shared
+    discovery, ADR-037): an undecorated method is not included, because the
+    server refuses to call it. A strict handler's parameters come from its
+    compiled contract, a legacy handler's from its decorator. Server functions
+    are not event handlers and are not included.
     """
-    from djust.live_view import LiveView
-
-    # Collect names defined on framework base classes
-    base_names = set()
-    for base in cls.__mro__:
-        if base.__name__ in ("LiveView", "LiveComponent", "object"):
-            break
-        continue
-    for name in dir(LiveView):
-        if not name.startswith("_"):
-            base_names.add(name)
+    from djust._parameter_metadata import declaration_method, declared_handlers, handler_metadata
 
     handlers = {}
-    for name in dir(cls):
-        if name.startswith("_"):
-            continue
-        try:
-            attr = getattr(cls, name, None)
-        except Exception:
-            continue
-        if not callable(attr):
-            continue
-
-        # @event_handler decorated — has full metadata
-        if hasattr(attr, "_djust_decorators"):
-            meta = attr._djust_decorators
-            if "event_handler" in meta:
-                handlers[name] = meta.get("event_handler", {})
-                continue
-
-        # Plain method defined on user class (not inherited from framework)
-        if name in base_names:
-            continue
-        # Must be defined on the user class, not a mixin/base
-        if name not in cls.__dict__:
-            continue
-
-        # Build basic param info from inspect
-        try:
-            sig = inspect.signature(attr)
-        except (ValueError, TypeError):
-            handlers[name] = {"params": [], "accepts_kwargs": False}
-            continue
-
-        params = []
-        accepts_kwargs = False
-        for pname, param in sig.parameters.items():
-            if pname == "self":
-                continue
-            if param.kind == param.VAR_KEYWORD:
-                accepts_kwargs = True
-                continue
-            if param.kind == param.VAR_POSITIONAL:
-                continue
-            p = {"name": pname, "type": "str", "required": True}
-            if param.default is not param.empty:
-                p["required"] = False
-                p["default"] = param.default
-            if param.annotation is not param.empty:
-                type_name = getattr(param.annotation, "__name__", str(param.annotation))
-                p["type"] = type_name
-            params.append(p)
-        handlers[name] = {"params": params, "accepts_kwargs": accepts_kwargs}
-
+    for handler in declared_handlers(cls):
+        method = declaration_method(handler.member, handler.function, cls)
+        metadata = handler_metadata(method).get("event_handler", {})
+        params = [p for p in metadata.get("params", []) if p.get("kind") not in _VARIADIC_KINDS]
+        handlers[handler.name] = {**metadata, "params": params}
     return handlers
+
+
+_VARIADIC_KINDS = ("var_keyword", "var_positional")
+
+
+# #3126: view classes already warned about in this process, so each is named once.
+_UNFUZZED_WARNED: set = set()
+
+
+def _unfuzzed_reachable_methods(cls: Type[Any]) -> List[str]:
+    """Undecorated public methods a client can still call, which the smoke test skips.
+
+    Under ``event_security = "warn"`` or ``"open"``, ``_check_event_security``
+    lets a client call an undecorated public method, but ``_get_handlers``
+    lists only the decorated handlers dispatch resolves in every mode, so those
+    methods are reachable and unfuzzed (#3126). This names the ones the app
+    wrote: plain functions on the view's own classes, not the framework's
+    lifecycle and helper methods. Empty under ``"strict"`` (the default),
+    where dispatch refuses them.
+    """
+    from djust.config import config
+    from djust.decorators import is_event_handler
+    from djust.live_view import LiveView
+
+    if config.get("event_security", "strict") == "strict" or not isinstance(cls, type):
+        return []
+    framework_names = set(dir(LiveView))
+    declared = set(_get_handlers(cls))
+    names: List[str] = []
+    for klass in cls.__mro__:
+        module = getattr(klass, "__module__", "") or ""
+        if klass is object or klass in LiveView.__mro__:
+            continue
+        if (module == "djust" or module.startswith("djust.")) and ".tests" not in module:
+            continue  # a framework mixin, not app code
+        for name, member in vars(klass).items():
+            if name.startswith("_") or name in framework_names or name in declared:
+                continue
+            # A static or class method is dispatched like any other callable;
+            # any decorator other than @event_handler leaves it undeclared.
+            function = (
+                member.__func__ if isinstance(member, (staticmethod, classmethod)) else member
+            )
+            if not inspect.isfunction(function) or is_event_handler(function):
+                continue
+            if name not in names:
+                names.append(name)
+    return sorted(names)
+
+
+def _warn_unfuzzed_methods(cls: Type[Any]) -> None:
+    """Warn once per view class about reachable methods the fuzzer skips (#3126)."""
+    import warnings
+
+    if cls in _UNFUZZED_WARNED:
+        return
+    names = _unfuzzed_reachable_methods(cls)
+    if not names:
+        return
+    _UNFUZZED_WARNED.add(cls)
+    warnings.warn(
+        "%s.%s: %s %s not decorated with @event_handler, so LiveViewSmokeTest does "
+        'not fuzz %s, but event_security is not "strict" and a client can still '
+        "call %s. Decorate %s or test %s directly."
+        % (
+            cls.__module__,
+            cls.__qualname__,
+            ", ".join(names),
+            "is" if len(names) == 1 else "are",
+            "it" if len(names) == 1 else "them",
+            "it" if len(names) == 1 else "them",
+            "it" if len(names) == 1 else "them",
+            "it" if len(names) == 1 else "them",
+        ),
+        UserWarning,
+        stacklevel=3,
+    )
 
 
 def _make_fuzz_params(handler_meta: Dict[str, Any]) -> Iterator[Tuple[str, Dict[str, Any]]]:
@@ -1639,6 +1715,11 @@ class LiveViewSmokeTest:
         - test_fuzz_xss: XSS payloads don't appear unescaped in output
         - test_fuzz_no_unhandled_crash: Fuzz payloads don't escape send_event()
         - test_fuzz_handlers_succeed: Handlers handle all fuzz input gracefully (no exceptions)
+
+    Fuzzing covers the ``@event_handler`` handlers dispatch resolves in every
+    ``event_security`` mode. Under ``"warn"`` or ``"open"`` an undecorated public
+    method stays callable by a client but is not fuzzed; the fuzz tests emit one
+    ``UserWarning`` per view that has any (#3126).
     """
 
     # Override in subclass
@@ -1728,6 +1809,7 @@ class LiveViewSmokeTest:
 
         for view_class in views:
             view_name = f"{view_class.__module__}.{view_class.__name__}"
+            _warn_unfuzzed_methods(view_class)
             handlers = _get_handlers(view_class)
             if not handlers:
                 continue
@@ -1772,6 +1854,7 @@ class LiveViewSmokeTest:
 
         for view_class in views:
             view_name = f"{view_class.__module__}.{view_class.__name__}"
+            _warn_unfuzzed_methods(view_class)
             handlers = _get_handlers(view_class)
             if not handlers:
                 continue
@@ -1811,6 +1894,7 @@ class LiveViewSmokeTest:
 
         for view_class in views:
             view_name = f"{view_class.__module__}.{view_class.__name__}"
+            _warn_unfuzzed_methods(view_class)
             handlers = _get_handlers(view_class)
             if not handlers:
                 continue

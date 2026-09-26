@@ -1,6 +1,7 @@
 # ADR-039: Account flows go through a swappable backend; the pages are shared
 
-**Status**: Accepted (feat/accounts-backends; plan-time amendments in the spec)
+**Status**: Accepted — shipped (plan-time amendments are in the spec)
+**Shipped in**: v1.3.0rc1 (#3067); follow-ups in v1.3.0rc2 (#3076: the allauth skin keeps the layout's head block, the phone flash gutter, A102 accepts an adapter that overrides `get_client_ip`)
 **Date**: 2026-09-24
 **Deciders**: Project maintainers
 **Spec**: [docs/superpowers/specs/2026-09-24-accounts-backends-design.md](../superpowers/specs/2026-09-24-accounts-backends-design.md)

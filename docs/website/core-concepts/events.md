@@ -47,10 +47,13 @@ class MyView(LiveView):
         email = form_data.get("email", "")
 ```
 
-**Rules:**
+**Rules** (the default, legacy parameter policy; for closed, typed signatures
+see [Typed event parameters](#typed-event-parameters-strict-policy)):
 
-- Always accept `**kwargs` — djust may pass extra metadata
-- Provide default values for all parameters (`value: str = ""`)
+- Declare the parameters the binding sends; `manage.py check` reports a binding
+  its handler would reject (`djust.T020`)
+- Under the legacy policy, `dj-input` and `dj-change` also send `field` and `_target`, and `dj-submit` sends `_target` with the form fields: keep `**kwargs` on those handlers, or declare the names
+- Give a parameter a default when a binding may omit it (`value: str = ""`)
 - Use type hints for automatic coercion (`item_id: int` converts `"5"` → `5`)
 - `value` is the magic parameter name for `dj-input` and `dj-change`
 
@@ -260,6 +263,8 @@ def validate(self, value: str = "", _target: str = "", **kwargs):
 ```
 
 `_target` is the triggering element's `name` attribute (falling back to `id`, then `null`). It is included automatically in `dj-change`, `dj-input`, and `dj-submit` (submitter button name) events. Matches Phoenix LiveView's `_target` convention.
+
+`_target` is sent to legacy-policy handlers only. A strict handler uses `field` or an explicit `dj-value-*` argument instead.
 
 ## Preventing Double Submits
 
@@ -630,6 +635,153 @@ djust skips its own internal `data-*` attributes so they don't leak into your ha
 | `data-x="1"` | `x="1"` | Single-char names work |
 | `data-dj-preset="dark"` | `preset="dark"` | `dj_` prefix stripped |
 | `dj-value-section="hero"` | `section="hero"` | `dj-value-*` form |
+
+## Typed event parameters (strict policy)
+
+Under the strict parameter policy, the handler's Python signature is the
+event's contract. Named parameters, their annotations and their defaults
+decide what an event may carry. Values are converted exactly, and an event
+that doesn't fit is rejected before your code runs. Legacy remains the
+default. Opt in per handler, or for the whole project:
+
+<!-- djust-example: skip -- settings fragment: the project-wide policy switch -->
+<!-- doc-snippet-check: skip -->
+```python
+LIVEVIEW_CONFIG = {"event_parameter_policy": "strict"}
+```
+
+`@event_handler(parameter_policy="strict")` opts one handler in, and
+`parameter_policy="legacy"` opts one out of a strict project.
+
+### Example: typed click arguments
+
+<!-- djust-example: item-selection scenario=strict-policy -->
+```python
+from djust import LiveView
+from djust.decorators import event_handler
+
+
+class ItemSelectionView(LiveView):
+    template_name = "items/select.html"
+
+    def mount(self, request, **kwargs):
+        self.selected_id = 0
+        self.active = False
+
+    @event_handler(parameter_policy="strict")
+    def select_item(self, item_id: int, active: bool = False) -> None:
+        # A demonstration allowlist, not a substitute for database authorization.
+        if item_id not in {42, 87}:
+            raise ValueError("Unknown item")
+        self.selected_id = item_id
+        self.active = active
+```
+
+```html
+<button type="button" dj-click="select_item"
+        dj-value-item-id="42" dj-value-active="true">Select item</button>
+```
+
+`dj-value-item-id` arrives as `item_id`. No `:int` suffix is needed, because
+the annotation converts `"42"` to `42`. `item_id` is required; `active`
+keeps its default when the attribute is absent. A converted ID is not an
+authorized object: look the record up and check permissions as usual.
+
+### Example: inputs and forms
+
+<!-- djust-example: note-view scenario=strict-policy -->
+```python
+from djust import LiveView
+from djust.decorators import event_handler
+
+
+class NoteView(LiveView):
+    template_name = "notes/edit.html"
+
+    def mount(self, request, **kwargs):
+        self.query = ""
+        self.saved = {}
+
+    @event_handler(parameter_policy="strict")
+    def search(self, value: str) -> None:
+        self.query = value
+
+    @event_handler(parameter_policy="strict")
+    def save(self, title: str, **fields: str) -> None:
+        self.saved = {"title": title, **fields}
+```
+
+```html
+<input name="q" dj-input="search">
+<form dj-submit="save">
+    <input name="title" value="Draft">
+    <input name="notes" value="Hello">
+    <button type="submit">Save</button>
+</form>
+```
+
+The browser sends a generated value only when the handler declares a
+parameter with that name, or has a `**` catch-all:
+- `value` and `field` for `dj-input` and `dj-change`;
+- the form's fields for `dj-submit`;
+- `key` and `code` for keyboard events.
+
+`search(value)` therefore receives just `value`, and `save` receives every
+field through `**fields`. `dj-value-*` arguments are always sent, and one that
+reuses a generated name is rejected. `_target` is never sent. Only
+`dj-value-*` names become arguments: `data-*` attributes and `dj-params` are
+ignored for strict handlers.
+
+### Conversion rules
+
+| Annotation | Accepts |
+| --- | --- |
+| `str` | Text, unchanged (no trimming) |
+| `int` | An integer, or complete decimal-integer text. Not `true`, blank text, `4.2`, `1_000` or `12abc` |
+| `float` | A finite number or numeric text. Not a bool, NaN or infinity |
+| `bool` | `true`/`false`, `1`/`0`, `yes`/`no`, `on`/`off` (any case), or a JSON bool |
+| `Decimal` | A decimal string or an integer. Not a binary float |
+| `UUID` | A valid UUID string |
+| `date` | ISO `YYYY-MM-DD` only |
+| `Optional[T]` | JSON `null` or a valid `T`. The argument is still required unless it has a default |
+| `list[T]` | A JSON array whose members are valid `T`. Not comma-separated text |
+| `Any` | Anything, unchecked: an explicit escape hatch |
+
+Other annotations, and named parameters without one, are rejected at startup
+(check `djust.V016`). `coerce_types=False` keeps validation but turns
+conversion off, so only already-typed values pass. Positional-only and
+keyword-only parameters keep their Python meaning:
+`dj-click="choose(3)"` fills the leading positional parameters, and the same
+value given by name as well is an error.
+
+### What a rejection looks like
+
+The browser checks strict arguments before sending: malformed typed literals
+such as `dj-value-n:int="12abc"`, wire hints that contradict the annotation,
+and duplicate names. On a failure it applies no loading, disable or
+optimistic effect. It logs a fixed message and dispatches `djust:error`,
+which the DEBUG overlay shows. The server validates every event again,
+including hand-crafted messages. It rejects missing, extra, duplicate and
+invalid arguments without calling the handler, and its error names the
+parameter and expected type, never the submitted value.
+
+### Framework context and exceptions
+
+- Routing keys (`view_id`, `component_id`) and client bookkeeping are never
+  handler arguments. Names starting with `_` are reserved (check `V016`).
+- `dj-auto-recover` handlers always run under the legacy policy (check
+  `V019` warns about a strict declaration).
+- `dj-model` sends the fixed `field`/`value` pair its handler declares.
+
+### Migrating a handler
+
+1. Annotate every named parameter, removing defaults that only existed to
+   hide missing input.
+2. Replace `data-*` and `dj-params` arguments with `dj-value-*`, and
+   `_target` with `field` or a `dj-value-*` argument.
+3. Add `parameter_policy="strict"`, drop `**kwargs` unless the handler
+   really takes an open payload, and run `manage.py check`: C022 and
+   V016–V019 report what strict dispatch would reject.
 
 ## Next Steps
 

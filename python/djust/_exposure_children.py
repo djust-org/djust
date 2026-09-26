@@ -204,13 +204,15 @@ class ChildStateSession(ServerStateSession):
             limits=contract.limits,
         )
         child_binding = replace(binding, view="child:" + _digest(identity))
+        self.route = binding.view
+        self.slots = slots
         super().__init__(session, contract, child_binding, max_age=max_age)
+
+    def _storage_key(self) -> str:
         # The logical route/slot key deliberately excludes class/schema/inputs.
         # They remain in the validated envelope binding, so replacement meets
         # and rejects prior state rather than hiding it at a fresh storage key.
-        self.route = binding.view
-        self.slots = slots
-        self.key = child_state_key(binding.view, slots)
+        return child_state_key(self.route, self.slots)
 
     def save(self, values: dict[str, Any]) -> None:
         """Write server state and its scoped slot index with sanitized failures."""

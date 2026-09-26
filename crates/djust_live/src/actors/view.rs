@@ -6,6 +6,7 @@
 
 use super::component::{ComponentActor, ComponentActorHandle};
 use super::error::ActorError;
+use super::messages::EventParams;
 use super::messages::{RenderResult, ViewMsg};
 use crate::RustLiveViewBackend;
 use djust_core::{RenderEnv, Value};
@@ -409,7 +410,7 @@ impl ViewActor {
     fn handle_event(
         &mut self,
         event_name: String,
-        params: HashMap<String, Value>,
+        params: EventParams,
         reply: tokio::sync::oneshot::Sender<Result<RenderResult, ActorError>>,
     ) {
         let result = if self.python_view.is_some() {
@@ -426,7 +427,7 @@ impl ViewActor {
     fn event_render_result(
         &mut self,
         event_name: &str,
-        params: &HashMap<String, Value>,
+        params: &EventParams,
     ) -> Result<RenderResult, ActorError> {
         let result = self.call_python_handler(event_name, params);
 
@@ -473,7 +474,7 @@ impl ViewActor {
     fn call_python_handler(
         &self,
         event_name: &str,
-        params: &HashMap<String, Value>,
+        params: &EventParams,
     ) -> Result<(), ActorError> {
         // If no Python view is set, return error
         let python_view = self
@@ -674,7 +675,7 @@ impl ViewActor {
         &mut self,
         component_id: String,
         event_name: String,
-        params: HashMap<String, Value>,
+        params: EventParams,
         reply: tokio::sync::oneshot::Sender<Result<String, ActorError>>,
     ) {
         // Look up component handle
@@ -961,7 +962,7 @@ impl ViewActorHandle {
     pub async fn event(
         &self,
         event_name: String,
-        params: HashMap<String, Value>,
+        params: EventParams,
     ) -> Result<RenderResult, ActorError> {
         let (tx, rx) = tokio::sync::oneshot::channel();
 
@@ -1054,7 +1055,7 @@ impl ViewActorHandle {
         &self,
         component_id: String,
         event_name: String,
-        params: HashMap<String, Value>,
+        params: EventParams,
     ) -> Result<String, ActorError> {
         let (tx, rx) = tokio::sync::oneshot::channel();
 
@@ -1320,7 +1321,7 @@ mod tests {
 
     async fn event_html(handle: &ViewActorHandle, name: &str) -> String {
         handle
-            .event(name.to_string(), HashMap::new())
+            .event(name.to_string(), EventParams::new())
             .await
             .expect("the handler exists and the render succeeds")
             .html

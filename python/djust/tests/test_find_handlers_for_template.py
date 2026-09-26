@@ -1,155 +1,136 @@
 """
-Tests for find_handlers_for_template — static analysis that cross-
-references a template's dj-* attrs against the project's LiveView
-handlers.
+Tests for find_handlers_for_template: which views use a template, and how the
+template's dj-* bindings resolve against each of them.
 
-These tests bypass the MCP server wrapper and exercise the core
-regex + matching logic directly via a temporary template file.
+The tool is built on the ``manage.py check`` binding scan (ADR-037 D1, row
+13): the template is resolved by Django's loaders, and a view uses it when its
+own template is the file or includes or extends it. These tests call the
+module-level ``template_handler_report`` the MCP tool returns as JSON.
 """
 
 from __future__ import annotations
 
+import gc
+import importlib.util
 import json
-import os
-import re
-import tempfile
+import sys
+import textwrap
+
+import pytest
+from django.test import override_settings
+
+from djust.mcp.server import template_handler_report
+
+MODULE = "find_handlers_fixture"
+
+SOURCE = """
+from djust import LiveView
+from djust.decorators import event_handler
 
 
-# The dj-event-attr regex is replicated here because the MCP server's
-# `create_server()` closes over it. In practice the single source of
-# truth is server.py's inline definition — when it changes, this
-# regex (and the tool's behavior) should be updated together.
-DJ_EVENT_ATTR_RE = re.compile(
-    r'\b(dj-(?:click|submit|change|input|keydown|keyup))\s*=\s*[\'"]([^\'"]+)[\'"]',
-    re.IGNORECASE,
-)
+class CounterView(LiveView):
+    template_name = "counter/page.html"
+
+    @event_handler
+    def increment(self, **kwargs):
+        pass
+
+    @event_handler
+    def reset(self, **kwargs):
+        pass
 
 
-def _extract_handlers(source: str) -> list[str]:
-    return sorted({m.group(2) for m in DJ_EVENT_ATTR_RE.finditer(source)})
+class Unrelated(LiveView):
+    template = "<div dj-root></div>"
+"""
+
+TEMPLATES = {
+    "counter/page.html": (
+        "<div dj-root>\n"
+        '{% include "counter/buttons.html" %}\n'
+        '<button dj-click="{{ dynamic }}">?</button>\n'
+        "</div>"
+    ),
+    "counter/buttons.html": (
+        '<button dj-click="increment">+</button>\n<button dj-click="ghost">-</button>\n'
+    ),
+}
 
 
-# --- Regex correctness -----------------------------------------------------
-
-
-def test_extracts_single_handler():
-    src = '<button dj-click="increment">+</button>'
-    assert _extract_handlers(src) == ["increment"]
-
-
-def test_extracts_multiple_distinct_handlers():
-    src = """
-    <button dj-click="increment">+</button>
-    <button dj-click="decrement">-</button>
-    <button dj-click="reset">reset</button>
-    <form dj-submit="add_todo">...</form>
-    <input dj-change="validate_field">
-    """
-    assert _extract_handlers(src) == [
-        "add_todo",
-        "decrement",
-        "increment",
-        "reset",
-        "validate_field",
+@pytest.fixture
+def project(tmp_path):
+    templates = tmp_path / "templates"
+    for name, text in TEMPLATES.items():
+        target = templates / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+    path = tmp_path / ("%s.py" % MODULE)
+    path.write_text(textwrap.dedent(SOURCE), encoding="utf-8")
+    spec = importlib.util.spec_from_file_location(MODULE, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[MODULE] = module
+    spec.loader.exec_module(module)
+    settings = [
+        {
+            "BACKEND": "django.template.backends.django.DjangoTemplates",
+            "DIRS": [str(templates)],
+            "APP_DIRS": True,
+        }
     ]
-
-
-def test_deduplicates_repeated_handlers():
-    """A handler used by multiple elements should appear once."""
-    src = """
-    <button dj-click="increment">+</button>
-    <button dj-click="increment">++</button>
-    """
-    assert _extract_handlers(src) == ["increment"]
-
-
-def test_ignores_non_event_dj_attrs():
-    """dj-id, dj-params, dj-loading etc. must NOT be collected."""
-    src = """
-    <div dj-id="42"></div>
-    <div dj-params='{"x": 1}'></div>
-    <div dj-loading="click" dj-click="real_handler"></div>
-    <div dj-view="path.to.View"></div>
-    """
-    assert _extract_handlers(src) == ["real_handler"]
-
-
-def test_handles_single_and_double_quotes():
-    src = """
-    <button dj-click='quote_one'>a</button>
-    <button dj-click="quote_two">b</button>
-    """
-    assert _extract_handlers(src) == ["quote_one", "quote_two"]
-
-
-def test_empty_template_returns_empty():
-    assert _extract_handlers("") == []
-    assert _extract_handlers("<html><body>no events</body></html>") == []
-
-
-def test_handles_keyboard_events():
-    src = '<input dj-keydown="submit_on_enter" dj-keyup="debounce_search">'
-    assert _extract_handlers(src) == ["debounce_search", "submit_on_enter"]
-
-
-# --- Round-trip with a real file ------------------------------------------
-
-
-def test_roundtrip_via_file():
-    """Confirm reading + parsing a file off disk gives the expected set."""
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".html", delete=False) as f:
-        f.write(
-            """
-            <div>
-              <button dj-click="increment">+</button>
-              <button dj-click="decrement">-</button>
-              <form dj-submit="save">Save</form>
-            </div>
-            """
-        )
-        path = f.name
     try:
-        with open(path) as rf:
-            src = rf.read()
-        assert _extract_handlers(src) == ["decrement", "increment", "save"]
+        with override_settings(TEMPLATES=settings):
+            yield templates
     finally:
-        os.unlink(path)
+        sys.modules.pop(MODULE, None)
+        for value in vars(module).values():
+            if isinstance(value, type) and value.__module__ == MODULE:
+                value.abstract = True
+        gc.collect()
 
 
-# --- Set-math that the tool does on top of the regex -----------------------
+def _view(report, name):
+    return next(v for v in report["views"] if v["class"] == "%s.%s" % (MODULE, name))
 
 
-def test_intersection_logic_matches_tool_contract():
-    """Validates the 'handlers_in_view_not_in_template' /
-    'handlers_in_template_not_in_view' / 'matched_handlers' shape."""
-    template_handlers = {"increment", "decrement", "reset", "ghost"}
-    view_handlers = {"increment", "decrement", "reset", "orphan"}
+def test_an_included_template_is_matched_to_the_view_that_includes_it(project):
+    report = template_handler_report("counter/buttons.html")
+    assert report["resolved_path"] == str(project / "counter" / "buttons.html")
+    assert report["dj_handlers_in_template"] == ["ghost", "increment"]
+    view = _view(report, "CounterView")
+    assert view["template_name"] == "counter/page.html"
+    assert view["matched_handlers"] == ["increment"]
+    assert view["handlers_in_view_not_in_template"] == ["reset"]
+    assert view["handlers_in_template_not_in_view"] == ["ghost"]
+    assert [(b["binding"], b["line"], b["status"], b["findings"]) for b in view["bindings"]] == [
+        ('dj-click="increment"', 1, "checked", []),
+        ('dj-click="ghost"', 2, "checked", ["djust.T019"]),
+    ]
+    assert not any(v["class"].endswith(".Unrelated") for v in report["views"])
 
-    matched = sorted(view_handlers & template_handlers)
-    only_view = sorted(view_handlers - template_handlers)
-    only_template = sorted(template_handlers - view_handlers)
 
-    assert matched == ["decrement", "increment", "reset"]
-    assert only_view == ["orphan"]
-    assert only_template == ["ghost"]
+def test_the_page_itself_reports_dynamic_bindings_and_coverage(project):
+    report = template_handler_report("counter/page.html")
+    view = _view(report, "CounterView")
+    assert [b["status"] for b in view["bindings"]] == ["dynamic"]
+    counts = next(
+        t["counts"] for t in report["coverage"]["templates"] if t["owner"].endswith(".CounterView")
+    )
+    assert counts == {"checked": 2, "dynamic": 1, "unsupported": 0}
 
 
-def test_tool_json_shape_compiles():
-    """Smoke-test that the response shape we document is valid JSON."""
-    sample = {
-        "template_path": "demos/counter.html",
-        "resolved_path": "/abs/demos/counter.html",
-        "dj_handlers_in_template": ["increment", "decrement"],
-        "view_count": 1,
-        "views": [
-            {
-                "class": "CounterView",
-                "template_name": "demos/counter.html",
-                "matched_handlers": ["increment", "decrement"],
-                "handlers_in_view_not_in_template": [],
-                "handlers_in_template_not_in_view": [],
-            }
-        ],
-    }
-    # Must round-trip through json without loss.
-    assert json.loads(json.dumps(sample)) == sample
+def test_an_absolute_path_resolves_the_same_file(project):
+    path = str(project / "counter" / "buttons.html")
+    assert (
+        template_handler_report(path)["views"]
+        == template_handler_report("counter/buttons.html")["views"]
+    )
+
+
+def test_a_missing_template_is_an_error_not_an_exception(project):
+    report = template_handler_report("counter/missing.html")
+    assert report["error"].startswith("Could not resolve template 'counter/missing.html'")
+
+
+def test_the_report_is_json(project):
+    report = template_handler_report("counter/buttons.html")
+    assert json.loads(json.dumps(report)) == report

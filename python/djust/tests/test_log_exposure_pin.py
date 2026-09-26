@@ -1171,6 +1171,15 @@ MIXIN_TABLES = {
             ),
         },
     ),
+    "multiloop.py": (
+        {},
+        {
+            ("_run", "djust serve: event loop %d failed"): (
+                "the `djust serve --loops` launcher thread (#3128): a uvicorn server that "
+                "crashed; no view exists"
+            ),
+        },
+    ),
 }
 
 PINNED = {

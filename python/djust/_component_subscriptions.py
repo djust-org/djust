@@ -13,11 +13,17 @@ import inspect
 import types
 from typing import TypeVar, Union, get_args, get_origin, get_type_hints
 
+from ._class_snapshot import namespace
+
 
 F = TypeVar("F")
 _MARKER = "_djust_component_subscriptions"
 #: Class attribute holding the owner's ``{name: ComponentDeclaration}`` registry.
 DECLARATIONS_ATTR = "_component_declarations"
+#: The callback parameter the framework fills with the originating bound
+#: component (ADR-034 D1). It is trusted dispatch context (ADR-036 D5): output
+#: payloads cannot use the name, and no client key or positional value binds it.
+SOURCE_PARAMETER = "component"
 
 
 @dataclass(frozen=True)
@@ -34,7 +40,8 @@ class OutputContract:
             raise TypeError("Output names must be public Python identifiers")
         names = [name for name, _ in self.payload]
         if len(set(names)) != len(names) or any(
-            not name.isidentifier() or name.startswith("_") or name == "component" for name in names
+            not name.isidentifier() or name.startswith("_") or name == SOURCE_PARAMETER
+            for name in names
         ):
             raise TypeError(
                 "Output payload names must be unique public identifiers other than component"
@@ -176,7 +183,7 @@ def _validate_callback(
         raise TypeError(f"{location} must be an ordinary instance method")
     if _transport_exposed(callback):
         raise TypeError(f"{location}: a subscription cannot also be transport-exposed")
-    expected = {"component": declaration.component_type, **dict(output.payload)}
+    expected = {SOURCE_PARAMETER: declaration.component_type, **dict(output.payload)}
     description = ", ".join(f"{name}: {kind.__name__}" for name, kind in expected.items())
     problem = f"{location} must accept ({description}) and return None or Awaitable[None]"
     try:
@@ -188,7 +195,9 @@ def _validate_callback(
         ):
             raise TypeError(problem)
         signature.bind(None, **dict.fromkeys(expected))
-        hints = get_type_hints(callback, localns={**vars(owner), owner.__name__: owner})
+        # A snapshot: this runs per request (interactive-component observes,
+        # snapshots) while another thread may write a first-use cache (#3151).
+        hints = get_type_hints(callback, localns={**namespace(owner), owner.__name__: owner})
         if any(not _accepts(hints.get(name), kind) for name, kind in expected.items()):
             raise TypeError(problem)
         if not _valid_result(hints.get("return")):
@@ -209,7 +218,7 @@ def compile_subscriptions(owner: type) -> tuple[SubscriptionBinding, ...]:
     effective: dict[str, object] = {}
     subscriptions: dict[tuple[str, str], SubscriptionBinding] = {}
     for cls in owner.__mro__:
-        for name, member in vars(cls).items():
+        for name, member in namespace(cls).items():  # #3151
             effective.setdefault(name, member)
             # Type checks only: a class attribute may be lazy (``SimpleLazyObject``
             # proxies ``__class__``, so ``isinstance`` would evaluate it).

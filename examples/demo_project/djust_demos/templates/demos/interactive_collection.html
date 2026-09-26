@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{% comment %}
+ADR-034 C3 live surface (tests/playwright/test_interactive_collection.py).
+{% endcomment %}
+
+{% block title %}Interactive collection (djust){% endblock %}
+
+{% block content %}
+<div dj-root dj-view="djust_demos.views.interactive_collection_demo.InteractiveCollectionView" style="padding: 6rem 2rem 2rem; max-width: 720px; margin: 0 auto;">
+    <h1>Keyed dropdown collection</h1>
+    <p>Result: <span id="ic-result">{{ result }}</span></p>
+    <p>Calls: <span id="ic-calls">{{ calls }}</span></p>
+    <p>Observed: <span id="ic-observed">{{ observed }}</span></p>
+    <button id="ic-reverse" dj-click="reverse">Reverse</button>
+    <button id="ic-restore" dj-click="restore">Restore</button>
+    <ol id="ic-rows">
+        {% for row in rows.values %}<li class="ic-row">{{ row }}</li>{% endfor %}
+    </ol>
+</div>
+{% endblock %}

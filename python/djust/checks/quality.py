@@ -202,6 +202,57 @@ def _check_navigation_state_in_handlers(errors: list[CheckMessage]) -> None:
 # ---------------------------------------------------------------------------
 
 
+_INTERACTIVE_DROPDOWN_MODULES = frozenset(
+    {"djust.components.interactive", "djust.components._interactive"}
+)
+_LEGACY_DROPDOWN_MODULES = frozenset(
+    {"djust.components.components", "djust.components.components.dropdown_menu"}
+)
+
+
+def _check_mixed_dropdown_imports(
+    tree: ast.AST, source_lines: list[str], filepath: str, relpath: str
+) -> list[CheckMessage]:
+    """Q004: one module imports both the interactive and the legacy DropdownMenu.
+
+    ADR-034 owner decision Q1 keeps the interactive component's name,
+    ``DropdownMenu``, in a new module (``djust.components.interactive``). The
+    legacy plain component keeps the same name. A module that imports both
+    risks using one where the other was meant.
+    """
+    interactive = legacy = None
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom) or node.level or not node.module:
+            continue
+        if not any(alias.name == "DropdownMenu" for alias in node.names):
+            continue
+        if node.module in _INTERACTIVE_DROPDOWN_MODULES:
+            interactive = interactive or node
+        elif node.module in _LEGACY_DROPDOWN_MODULES:
+            legacy = legacy or node
+    if interactive is None or legacy is None:
+        return []
+    later = max(interactive, legacy, key=lambda node: node.lineno)
+    if _has_noqa(source_lines, later.lineno, "Q004"):
+        return []
+    return [
+        DjustWarning(
+            "%s:%d -- imports both the interactive DropdownMenu "
+            "(djust.components.interactive) and the legacy plain DropdownMenu."
+            % (relpath, later.lineno),
+            hint=(
+                "Use one DropdownMenu per module. The interactive one (with .on.selected) "
+                "comes from djust.components.interactive; the legacy renderer from "
+                "djust.components.components. Add '# noqa: Q004' if both are intended."
+            ),
+            id="djust.Q004",
+            fix_hint=("Import only one DropdownMenu in `%s` (line %d)." % (relpath, later.lineno)),
+            file_path=filepath,
+            line_number=later.lineno,
+        )
+    ]
+
+
 @register("djust")
 def check_code_quality(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     """AST-based code quality checks on project Python files."""
@@ -216,6 +267,9 @@ def check_code_quality(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
             continue
 
         relpath = os.path.relpath(filepath)
+
+        # Q004 -- both DropdownMenu classes imported in one module (ADR-034)
+        errors.extend(_check_mixed_dropdown_imports(tree, source_lines, filepath, relpath))
 
         for node in ast.walk(tree):
             # Q001 -- print() in production code

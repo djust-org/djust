@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+
+{% comment %}
+ADR-036 P2 (d) live surface (tests/playwright/test_strict_parameters.py).
+{% endcomment %}
+
+{% block title %}Strict Parameters (djust){% endblock %}
+
+{% block content %}
+<div dj-root dj-view="djust_demos.views.strict_parameters_demo.StrictParametersView" style="padding: 6rem 2rem 2rem; max-width: 720px; margin: 0 auto;">
+    <h1>Strict event parameters</h1>
+    <p>Result: <span id="strict-result">{{ result }}</span></p>
+    <p>Calls: <span id="strict-calls">{{ calls }}</span></p>
+    <button id="strict-pick" dj-click="pick" dj-value-item-id:int="7" data-item-id="9">Pick 7</button>
+    <button id="strict-bad" dj-click="pick" dj-value-item-id:int="7x" dj-disable-with="Wait">Bad literal</button>
+    <input id="strict-search" name="q" dj-input="search" dj-debounce="0">
+    <form id="strict-form" dj-submit="save">
+        <input name="title" value="Title">
+        <input name="other" value="Other">
+        <button id="strict-save" type="submit">Save</button>
+    </form>
+    <button id="strict-legacy" dj-click="legacy_click" dj-value-mode="edit" data-row="3">Legacy</button>
+</div>
+{% endblock %}

@@ -323,13 +323,16 @@ class TestGetHandlers:
         handlers = _get_handlers(cls)
         assert "search" in handlers
 
-    def test_discovers_plain_method(self):
+    def test_skips_plain_method(self):
+        """Dispatch refuses an undecorated method, so fuzzing it tests nothing
+        (ADR-037 row 4): only the handlers dispatch resolves are listed."""
+
         def my_action(self, value=""):
             pass
 
         cls = self._make_mock_liveview_class(methods={"my_action": my_action})
         handlers = _get_handlers(cls)
-        assert "my_action" in handlers
+        assert "my_action" not in handlers
 
     def test_skips_private_methods(self):
         def _internal(self):
@@ -371,26 +374,22 @@ class TestGetHandlers:
                 f"Handler {name!r} should be @event_handler decorated"
             )
 
-    def test_plain_method_gets_param_info(self):
-        def update(self, name: str, count: int = 5):
-            pass
+    def test_strict_handler_uses_its_contract_metadata(self):
+        from djust.decorators import event_handler
+        from djust.live_view import LiveView
 
-        cls = self._make_mock_liveview_class(methods={"update": update})
-        handlers = _get_handlers(cls)
-        assert "update" in handlers
-        params = handlers["update"]["params"]
-        param_names = [p["name"] for p in params]
-        assert "name" in param_names
-        assert "count" in param_names
+        class StrictView(LiveView):
+            template_name = "t.html"
 
-    def test_plain_method_with_kwargs(self):
-        def flexible(self, **kwargs):
-            pass
+            @event_handler(parameter_policy="strict")
+            def update(self, name: str, count: int = 5, **extra: str) -> None:
+                pass
 
-        cls = self._make_mock_liveview_class(methods={"flexible": flexible})
-        handlers = _get_handlers(cls)
-        assert "flexible" in handlers
-        assert handlers["flexible"]["accepts_kwargs"] is True
+        handlers = _get_handlers(StrictView)
+        assert [(p["name"], p["type"], p["required"]) for p in handlers["update"]["params"]] == [
+            ("name", "str", True),
+            ("count", "int", False),
+        ]
 
 
 # ---------------------------------------------------------------------------

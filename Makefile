@@ -241,6 +241,14 @@ check-doc-snippets: ## Smoke-check fenced Python doc snippets + Django/JS-size c
 template-backend-lists: ## Regenerate docs/TEMPLATE_BACKEND.md's supported/unsupported tag+filter lists from the engine (closes #2533)
 	@PYTHONPATH=. $(PYTHON) scripts/generate-template-backend-lists.py --write
 
+.PHONY: interactive-reference
+interactive-reference: ## Regenerate the interactive-components reference tables in docs/website/api-reference/components.md (ADR-034)
+	@PYTHONPATH=python:. $(PYTHON) scripts/generate-interactive-reference.py --write
+
+.PHONY: check-interactive-reference
+check-interactive-reference: ## Fail when the interactive-components reference differs from the components' contracts (ADR-034)
+	@PYTHONPATH=python:. $(PYTHON) scripts/generate-interactive-reference.py
+
 .PHONY: check-template-backend-lists
 check-template-backend-lists: ## Fail when docs/TEMPLATE_BACKEND.md's generated lists differ from the engine (closes #2533)
 	@PYTHONPATH=. $(PYTHON) scripts/generate-template-backend-lists.py
@@ -706,7 +714,7 @@ info: ## Show project information
 ##@ Versioning & Releases
 
 .PHONY: version
-version: ## Bump version (usage: make version VERSION=0.2.0a1)
+version: ## Bump version and regenerate python/djust/djust.cdx.json (usage: make version VERSION=0.2.0a1)
 ifndef VERSION
 	@echo "$(RED)ERROR: VERSION not specified$(NC)"
 	@echo "Usage: make version VERSION=0.2.0a1"
@@ -730,8 +738,11 @@ endif
 	@echo "$(GREEN)Refreshing lockfile self-entries...$(NC)"
 	@uv lock
 	@cargo update --workspace --offline 2>/dev/null || cargo update --workspace
+	@# The distribution SBOM's root version comes from pyproject.toml (ADR-040).
+	@echo "$(GREEN)Regenerating python/djust/djust.cdx.json...$(NC)"
+	@PYTHONPATH=python $(PYTHON) -m djust.assets.sbom --distribution
 	@echo "$(YELLOW)Don't forget to update CHANGELOG.md!$(NC)"
-	@echo "$(YELLOW)Commit uv.lock + Cargo.lock alongside the manifest bump.$(NC)"
+	@echo "$(YELLOW)Commit uv.lock + Cargo.lock + python/djust/djust.cdx.json alongside the manifest bump.$(NC)"
 
 .PHONY: version-check
 version-check: ## Check current version in all files
@@ -759,13 +770,10 @@ endif
 		echo "$(RED)ERROR: changelog.d/ fragments were just folded into CHANGELOG.md [Unreleased]. Review the diff, commit it, then re-run make release.$(NC)"; \
 		exit 1; \
 	fi
-	@# Verify we're on main or release branch
-	@BRANCH=$$(git branch --show-current); \
-	case "$$BRANCH" in \
-		main|release/*) ;; \
-		[0-9].[0-9]|[0-9].[0-9][0-9]|[0-9][0-9].[0-9]|[0-9][0-9].[0-9][0-9]) ;; \
-		*) echo "$(RED)ERROR: Must be on main, release/*, or an X.Y maintenance branch (got '$$BRANCH')$(NC)"; exit 1 ;; \
-	esac
+	@# Tag only what the release line already contains: main or an X.Y branch,
+	@# HEAD pushed to it. A tag on release/* is lost when the PR is squash-merged,
+	@# and main's tagged-sections check then goes red (#3149, v1.3.0rc3 / #3131).
+	@$(PYTHON) scripts/check-release-tag-target.py
 	@# Verify working directory is clean
 	@if [ -n "$$(git status --porcelain)" ]; then \
 		echo "$(RED)ERROR: Working directory not clean$(NC)"; \
@@ -846,14 +854,24 @@ endif
 		exit 1; \
 	fi
 	@echo "$(GREEN)No existing v$(VERSION) tag found locally or on origin.$(NC)"
+	@$(PYTHON) scripts/check-release-tag-target.py
 
 .PHONY: test-js-coverage
 test-js-coverage: ## Measure dynamic JavaScript coverage and enforce regression floors
 	@npm run test:coverage
 
-.PHONY: markdown-editor-build test-markdown-editor
-markdown-editor-build: ## Build the optional visual editor assets (Node is for contributors only)
-	cd js/markdown-editor && npm ci && npm run build
+.PHONY: vendor vendor-check test-vendor
+VENDOR_OUTPUTS := python/djust/components/djust_assets.json python/djust/admin_ext/djust_assets.json \
+	python/djust/djust.cdx.json python/djust/components/static/djust_components \
+	python/djust/admin_ext/static
 
-test-markdown-editor: ## Test Markdown/Visual conversion and native form integration
-	cd js/markdown-editor && npm ci && npm test
+vendor: ## Build vendored third-party browser assets, their manifests and python/djust/djust.cdx.json (ADR-040)
+	cd js/vendor && npm ci && npm run build
+	PYTHONPATH=python $(PYTHON) -m djust.assets.sbom --distribution
+
+vendor-check: vendor ## Fail when committed vendored assets, manifests or djust.cdx.json differ from a rebuild
+	@git diff --exit-code -- $(VENDOR_OUTPUTS) || { echo "Vendored outputs are stale: run 'make vendor' and commit."; exit 1; }
+	@test -z "$$(git status --porcelain --untracked-files=all -- $(VENDOR_OUTPUTS))" || { git status --short -- $(VENDOR_OUTPUTS); echo "Untracked vendored outputs: run 'make vendor' and commit."; exit 1; }
+
+test-vendor: ## Test the vendored bundles (Markdown/Visual conversion, manifests, licenses)
+	cd js/vendor && npm ci && npm test

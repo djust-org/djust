@@ -254,14 +254,14 @@ def get_context_data(self, **kwargs):
 
 ## Event Handlers
 
-### Always use `@event_handler` and `**kwargs`
+### Always use `@event_handler`, and declare what the binding sends
 
 ```python
 from djust import event_handler
 
 @event_handler
 def select_service(self, service_id="", **kwargs):
-    """Always include **kwargs — djust sends internal parameters."""
+    """**kwargs keeps a legacy dj-click handler open to extra dj-value-* keys."""
     if service_id not in SERVICES_BY_ID:
         return
     self.selected_service_id = service_id
@@ -270,8 +270,8 @@ def select_service(self, service_id="", **kwargs):
 Key rules:
 
 1. **`@event_handler` is required** — without it, the method won't be discoverable as an event handler
-2. **Always include `**kwargs`** — the client may send extra params your signature doesn't name (for example `value`, or `dj-value-*` keys), and they must be absorbed
-3. **Provide default values** for all parameters — prevents errors when parameters are missing
+2. **Declare what the binding sends** — under the legacy policy `dj-input` and `dj-change` also send `field` and `_target`, and `dj-submit` sends `_target` with the form fields: keep `**kwargs` on those handlers, or declare the names. `manage.py check` reports a binding its handler would reject (`djust.T020`). Under the strict policy a closed signature is the contract (see [Typed event parameters](../core-concepts/events.md#typed-event-parameters-strict-policy))
+3. **Give defaults only where a binding may omit a parameter** — a default added just to survive a malformed event hides a bug
 4. **Use `value` for input/change events** — `dj-input` and `dj-change` send the input value as `value`
 
 ### Passing parameters from templates
@@ -378,7 +378,7 @@ def expensive_operation(self, **kwargs):
 | Abuse prevention              | `@rate_limit(rate=N)`       | 5-10 req/s     |
 | Long-form editing             | `DraftModeMixin`            | auto-save      |
 
-`@rate_limit` is an abuse control, not a UI throttle: each rejected event counts toward the connection's warning budget (`DJUST_CONFIG["rate_limit"]["max_warnings"]`, default 3), and at the limit djust closes the WebSocket with code 4429 and puts the client IP on a short reconnect cooldown. The budget is shared per caller (user, session or IP), not per tab. An honest user tapping a button quickly can be disconnected, so for a button that may be tapped in bursts use `@throttle` / `@debounce` or their `dj-*` attributes instead. A drop-only mode is planned for 1.3 (#3003).
+By default `@rate_limit` is an abuse control, not a UI throttle: each rejected event counts toward the connection's warning budget (`DJUST_CONFIG["rate_limit"]["max_warnings"]`, default 3), and at the limit djust closes the WebSocket with code 4429 and puts the client IP on a short reconnect cooldown. The budget is shared per caller (user, session or IP), not per tab. An honest user tapping a button quickly can be disconnected, so for a button that may be tapped in bursts use `@rate_limit(..., on_exceed="drop")`, which only drops the extra event, or `@throttle` / `@debounce` and their `dj-*` attributes, which avoid the round trip.
 
 ---
 
@@ -1317,27 +1317,33 @@ Always add `data-key` to list items:
 {% endfor %}
 ```
 
-### Missing `**kwargs` in Event Handlers
+### A Catch-All `**kwargs` on Every Handler
 
-**Problem:** Event handlers without `**kwargs` parameter.
+**Problem:** Adding `**kwargs` to every handler "just in case".
 
 **Why it's wrong:**
-- Breaks when extra params are passed from client
-- Not forward-compatible with new framework features
-- System check `djust.V007` warns about this
+- It hides a misspelled parameter: the template sends `item`, the handler takes
+  `item_id`, and the event runs with the default instead of failing
+- A closed signature lets djust reject the mismatch and lets `manage.py check`
+  compare template bindings with the signature
+- `djust.V007`, which recommended the catch-all, is retired (ADR-037)
 
 **Solution:**
-Always include `**kwargs`:
+Declare the parameters the template sends. Under the default legacy parameter
+policy, `dj-input`, `dj-change` and `dj-submit` also send `field` and `_target`,
+so a legacy handler for them keeps a catch-all such as `**form_data`, and
+`manage.py check` reports one that does not (`djust.T020`). The strict policy
+(ADR-036) sends only the names the handler declares:
 
 ```python
 # ❌ Don't do this
 @event_handler
-def delete_item(self, item_id: int):
+def delete_item(self, item_id: int = 0, **kwargs):
     Item.objects.filter(id=item_id).delete()
 
 # ✅ Do this instead
 @event_handler
-def delete_item(self, item_id: int = 0, **kwargs):
+def delete_item(self, item_id: int):
     Item.objects.filter(id=item_id).delete()
 ```
 
@@ -1404,8 +1410,7 @@ When building a djust LiveView:
 - [ ] Never store service instances in state — use helper methods instead
 - [ ] Add `dj-view` to the template root element (`dj-root` is optional)
 - [ ] Use `@event_handler` on all event handlers
-- [ ] Include `**kwargs` in all event handlers
-- [ ] Provide default values for all handler parameters
+- [ ] Declare the parameters each binding sends (`manage.py check` reports `djust.T020`); keep `**kwargs` on legacy `dj-input`/`dj-change`/`dj-submit` handlers, or declare `field`/`_target`
 - [ ] Use `value` as the parameter name for `dj-input`/`dj-change`
 - [ ] Store QuerySets in private variables (`self._items`)
 - [ ] Assign to public in `get_context_data()` for JIT serialization

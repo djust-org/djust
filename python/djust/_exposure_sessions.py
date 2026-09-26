@@ -258,11 +258,17 @@ class ServerStateSession:
         self.binding = binding
         self.max_age = max_age
         self.migrate = migrate
+        self.key = self._storage_key()
+        self._check_session()
+
+    def _storage_key(self) -> str:
+        """The session key this envelope is stored under."""
         # Use owner rather than schema here: a schema change must encounter and
         # reject old data rather than leaving one unreachable entry per deploy.
-        identity = json.dumps([contract.owner, binding.view], separators=(",", ":")).encode()
-        self.key = "_djust_explicit_" + hashlib.sha256(identity).hexdigest()
-        self._check_session()
+        identity = json.dumps(
+            [self.contract.owner, self.binding.view], separators=(",", ":")
+        ).encode()
+        return "_djust_explicit_" + hashlib.sha256(identity).hexdigest()
 
     def _check_session(self) -> None:
         if self.session.session_key != self.binding.session:

@@ -1,7 +1,48 @@
 # Event Handlers
 
-All handlers require `@event_handler()` decorator and `**kwargs`.
+All handlers require the `@event_handler()` decorator. `manage.py check` compares each template binding with its handler (`djust.T019`–`T022`).
 
+The rules below are the default legacy policy. For new code, prefer the strict
+policy (`@event_handler(parameter_policy="strict")`, or project-wide
+`LIVEVIEW_CONFIG = {"event_parameter_policy": "strict"}`; ADR-036):
+- Closed, annotated signatures are the contract; `**kwargs` is not required.
+- Pass arguments with `dj-value-*` only (never `data-*` or `dj-params`); no type suffix is needed.
+- The browser sends a generated value (`value`/`field` for input/change, form fields for submit, `key`/`code` for keyboard) only when the handler declares that parameter name or a `**` catch-all.
+- A `dj-value-*` name colliding with a generated name is rejected. `_target` is never sent: use `field` or `dj-value-*`.
+- Invalid input is rejected before the handler runs, so don't add defaults just to survive malformed events.
+
+<!-- djust-example: ai-item-view scenario=strict-policy -->
+```python
+from djust import LiveView
+from djust.decorators import event_handler
+
+
+class ItemView(LiveView):
+    template_name = "items/list.html"
+
+    def mount(self, request, **kwargs):
+        self.selected_id = 0
+        self.query = ""
+
+    @event_handler(parameter_policy="strict")
+    def select_item(self, item_id: int, active: bool = False) -> None:
+        self.selected_id = item_id  # still authorize the record before using it
+
+    @event_handler(parameter_policy="strict")
+    def search(self, value: str) -> None:
+        self.query = value
+```
+
+```html
+<button dj-click="select_item" dj-value-item-id="{{ item.id }}" dj-value-active="true">Select</button>
+<input name="q" dj-input="search" value="{{ query }}">
+```
+
+Legacy policy:
+
+Legacy `dj-input` and `dj-change` also send `field` and `_target`, and `dj-submit` sends `_target` with the form fields: keep `**kwargs` on those handlers, or declare the names.
+
+<!-- djust-example: skip -- legacy-policy handler fragments with no view class; import-checked by scripts/check-doc-snippets.py -->
 ```python
 from djust.decorators import event_handler, debounce, throttle
 
@@ -46,6 +87,6 @@ Template bindings:
 
 Rules:
 - `value` is the magic parameter name for `dj-input`/`dj-change` events
-- Always provide default values for all parameters
+- Give a parameter a default when a binding may omit it
 - `data-*` attributes are converted: `data-item-id` -> `item_id`
 - Type hints enable automatic coercion: `item_id: int` converts `"5"` to `5`

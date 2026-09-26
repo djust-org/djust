@@ -29,17 +29,23 @@ def _iter_live_view_subclasses(cls: Type) -> Iterator[Type]:
         yield from _iter_live_view_subclasses(sub)
 
 
+def _declared(view_cls: Type) -> List[Tuple[str, Callable[..., Any], Dict[str, Any]]]:
+    """``(name, class attribute value, decorator metadata)`` of each handler and
+    server function, by name, from the discovery dispatch uses (ADR-037 D1)."""
+    from djust._parameter_metadata import declared_handlers
+
+    found = [
+        (handler.name, getattr(view_cls, handler.name), vars(handler.function)["_djust_decorators"])
+        for handler in declared_handlers(view_cls, server_functions=True)
+    ]
+    return sorted(found, key=lambda item: item[0])
+
+
 def _has_exposed_handler(view_cls: Type) -> bool:
-    for name in dir(view_cls):
-        if name.startswith("_"):
-            continue
-        attr = getattr(view_cls, name, None)
-        if not callable(attr):
-            continue
-        meta = getattr(attr, "_djust_decorators", None)
-        if meta and meta.get("event_handler", {}).get("expose_api"):
-            return True
-    return False
+    return any(
+        meta.get("event_handler", {}).get("expose_api")
+        for _name, _attr, meta in _declared(view_cls)
+    )
 
 
 def _has_server_function(view_cls: Type) -> bool:
@@ -49,16 +55,7 @@ def _has_server_function(view_cls: Type) -> bool:
     that only expose RPC endpoints (``@server_function``), not
     ``@event_handler(expose_api=True)`` HTTP handlers.
     """
-    for name in dir(view_cls):
-        if name.startswith("_"):
-            continue
-        attr = getattr(view_cls, name, None)
-        if not callable(attr):
-            continue
-        meta = getattr(attr, "_djust_decorators", None)
-        if meta and meta.get("server_function"):
-            return True
-    return False
+    return any(meta.get("server_function") for _name, _attr, meta in _declared(view_cls))
 
 
 def _derive_slug(view_cls: Type) -> str:
@@ -168,26 +165,14 @@ def reset_registry() -> None:
 def iter_exposed_handlers() -> Iterator[Tuple[str, Type, str, Callable[..., Any]]]:
     """Yield ``(slug, view_cls, handler_name, handler)`` for every exposed handler."""
     for slug, view_cls in get_api_view_registry().items():
-        for name in dir(view_cls):
-            if name.startswith("_"):
-                continue
-            attr = getattr(view_cls, name, None)
-            if not callable(attr):
-                continue
-            meta = getattr(attr, "_djust_decorators", None)
-            if meta and meta.get("event_handler", {}).get("expose_api"):
+        for name, attr, meta in _declared(view_cls):
+            if meta.get("event_handler", {}).get("expose_api"):
                 yield slug, view_cls, name, attr
 
 
 def iter_server_functions() -> Iterator[Tuple[str, Type, str, Callable[..., Any]]]:
     """Yield ``(slug, view_cls, function_name, function)`` for every @server_function."""
     for slug, view_cls in get_api_view_registry().items():
-        for name in dir(view_cls):
-            if name.startswith("_"):
-                continue
-            attr = getattr(view_cls, name, None)
-            if not callable(attr):
-                continue
-            meta = getattr(attr, "_djust_decorators", None)
-            if meta and meta.get("server_function"):
+        for name, attr, meta in _declared(view_cls):
+            if meta.get("server_function"):
                 yield slug, view_cls, name, attr

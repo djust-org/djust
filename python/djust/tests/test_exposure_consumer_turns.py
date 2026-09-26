@@ -27,6 +27,7 @@ from djust import LiveView, event_handler
 from djust.decorators import state
 from djust.websocket import LiveViewConsumer
 
+from ._ws_frames import WAIT_S, drain_extra, has_type, receive_until
 from .test_exposure_runtime import make_request
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
@@ -113,15 +114,27 @@ async def _connect(request, view_class):
     return socket, frame
 
 
-async def _collect(socket, quiet=0.6):
-    frames, closed = [], None
-    while not await socket.receive_nothing(timeout=quiet):
-        out = await socket.receive_output(timeout=3)
-        if out["type"] == "websocket.close":
-            closed = out
-            break
-        frames.append(json.loads(out["text"]))
-    return frames, closed
+_UPDATE = has_type("patch", "html_update")
+
+
+def _update_from(source):
+    return lambda frames: any(
+        f.get("type") in {"patch", "html_update"} and f.get("source") == source for f in frames
+    )
+
+
+async def _collect(socket, until):
+    """The turn's frames and its close, event-driven (#3130).
+
+    Waits until ``until(frames)`` holds (the turn's own frame arrived), then a
+    trailing quiet window collects anything else. The window can only miss a
+    late extra frame; it never cuts the expected one short.
+    """
+    frames = await receive_until(socket, until, what=getattr(until, "__name__", "the turn"))
+    if not (frames and frames[-1].get("type") == "websocket.close"):
+        frames += await drain_extra(socket)
+    closes = [f for f in frames if f.get("type") == "websocket.close"]
+    return [f for f in frames if f not in closes], (closes[0] if closes else None)
 
 
 async def _restored_count(request, view_class):
@@ -139,10 +152,11 @@ async def _notify(payload):
 
 
 async def _wait_for(label):
-    for _ in range(60):
-        if label in RAN:
-            return
-        await asyncio.sleep(0.05)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + WAIT_S
+    while label not in RAN:
+        assert loop.time() < deadline, f"{label!r} never ran: {RAN}"
+        await asyncio.sleep(0.02)
 
 
 async def test_db_notify_mutation_is_persisted():
@@ -151,7 +165,7 @@ async def test_db_notify_mutation_is_persisted():
         socket, _ = await _connect(request, TurnView)
         try:
             await _notify({"count": 9})
-            frames, closed = await _collect(socket)
+            frames, closed = await _collect(socket, _UPDATE)
             assert RAN == ["notify"] and closed is None, (RAN, frames)
             assert any(f.get("type") in {"patch", "html_update"} for f in frames), frames
         finally:
@@ -166,7 +180,9 @@ async def test_db_notify_on_a_revoked_session_is_denied():
         try:
             await sync_to_async(SessionStore(request.session.session_key).delete)()
             await _notify({"count": 9})
-            frames, closed = await _collect(socket)
+            frames, closed = await _collect(
+                socket, lambda frames: frames[-1:] and frames[-1]["type"] == "websocket.close"
+            )
             assert RAN == [], "handle_info ran without current authorization"
             assert not [f for f in frames if f.get("type") in {"patch", "html_update"}], frames
             assert [f.get("code") for f in frames if f.get("type") == "error"] == [
@@ -186,7 +202,7 @@ async def test_server_push_mutation_is_persisted():
         try:
             await apush_to_view(__name__ + ".TurnView", handler="handle_push", payload={"count": 4})
             await _wait_for("push")
-            frames, _ = await _collect(socket)
+            frames, _ = await _collect(socket, _UPDATE)
             assert RAN == ["push"], (RAN, frames)
         finally:
             await socket.disconnect()
@@ -199,7 +215,7 @@ async def test_tick_mutation_is_persisted():
         socket, _ = await _connect(request, TickView)
         try:
             await _wait_for("tick")
-            frames, _ = await _collect(socket)
+            frames, _ = await _collect(socket, _update_from("tick"))
             assert "tick" in RAN, (RAN, frames)
         finally:
             await socket.disconnect()
@@ -215,11 +231,13 @@ async def test_released_activity_event_and_its_work_are_persisted(event, value):
             await socket.send_json_to(
                 {"type": "event", "event": event, "params": {"_activity": "panel"}}
             )
-            await _collect(socket, quiet=0.4)
+            await _collect(socket, has_type("noop"))  # the queued event's ack
             assert event not in RAN, "the event must be queued while the panel is hidden"
             await _notify({})
             await _wait_for("work" if event == "spawn" else event)
-            frames, closed = await _collect(socket)
+            frames, closed = await _collect(
+                socket, _update_from("async" if event == "spawn" else "event")
+            )
             assert event in RAN and closed is None, (RAN, frames)
         finally:
             await socket.disconnect()
@@ -275,7 +293,7 @@ async def test_start_async_from_a_server_originated_turn_runs(view_class):
         try:
             await _notify({})
             await _wait_for("work")
-            frames, closed = await _collect(socket)
+            frames, closed = await _collect(socket, _update_from("async"))
             assert RAN[:2] == ["notify", "work"], (RAN, frames)
             results = [f for f in frames if f.get("source") == "async"]
             assert results and "21" in json.dumps(results), frames
@@ -322,10 +340,12 @@ async def test_hot_reload_render_failure_is_value_free_for_explicit_views(
                 await get_channel_layer().group_send(
                     "djust_hotreload", {"type": "hotreload", "file": "exposure_hotreload.py"}
                 )
-                for _ in range(60):
-                    if "HOTRELOAD_RENDER_SENTINEL" in caplog.text or "Protected" in caplog.text:
-                        break
-                    await asyncio.sleep(0.05)
+                deadline = asyncio.get_running_loop().time() + WAIT_S
+                while not (
+                    "HOTRELOAD_RENDER_SENTINEL" in caplog.text or "Protected" in caplog.text
+                ):
+                    assert asyncio.get_running_loop().time() < deadline, caplog.text
+                    await asyncio.sleep(0.02)
         finally:
             view_class._fail_render = False
             await socket.disconnect()
@@ -356,7 +376,7 @@ async def test_notify_turn_refreshes_the_client_snapshot():
         socket, mount_frame = await _connect(request, SnapshotNotifyView)
         try:
             await _notify({})
-            frames, _ = await _collect(socket)
+            frames, _ = await _collect(socket, _UPDATE)
         finally:
             await socket.disconnect()
     updates = [f for f in frames if f.get("type") in {"patch", "html_update"}]

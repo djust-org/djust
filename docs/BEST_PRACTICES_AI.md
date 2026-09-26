@@ -82,8 +82,9 @@ class ProductListView(LiveView):
         Rules:
         - Use @event_handler() decorator (REQUIRED)
         - Use 'value' parameter for @input/@change events
-        - Provide default value
-        - Accept **kwargs for flexibility
+        - Declare the parameters the binding sends (manage.py check: djust.T020)
+        - Legacy dj-input/dj-change also send field and _target; dj-submit sends
+          _target with the form fields: keep **kwargs there, or declare them
         - Update state → call refresh
         """
         self.search_query = value
@@ -892,8 +893,7 @@ Draft saving?          → DraftModeMixin
 
 - [ ] Use `@event_handler()` decorator on all handlers
 - [ ] Use `value` parameter for @input/@change events
-- [ ] Provide default values for all parameters
-- [ ] Accept `**kwargs` for flexibility
+- [ ] Declare the parameters each binding sends (`manage.py check`: `djust.T020`); keep `**kwargs` on legacy `dj-input`/`dj-change`/`dj-submit` handlers, or declare `field`/`_target`
 - [ ] Build QuerySets in private methods (`_refresh_*`)
 - [ ] Store QuerySets in private variables (`self._items`)
 - [ ] Assign to public in `get_context_data()` only

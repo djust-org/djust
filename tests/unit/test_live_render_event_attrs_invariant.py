@@ -196,4 +196,10 @@ def test_scoped_dynamic_path_is_derived_not_rested():
     # extraction gone wrong (matching some other array) would drift out.
     assert dynamic, "dynamic set unexpectedly empty"
     assert all(name.startswith(("dj-window-", "dj-document-")) for name in dynamic)
-    assert dynamic <= set(_LIVE_RENDER_EVENT_ATTRS)
+    # The client's loop skips scroll/resize on document (09-event-binding.js,
+    # ``target === document && (scroll || resize)``), so those two products are
+    # never bound and are not stamped (ADR-037 row 20).
+    never_bound = {"dj-document-scroll", "dj-document-resize"}
+    assert never_bound <= dynamic
+    assert dynamic - never_bound <= set(_LIVE_RENDER_EVENT_ATTRS)
+    assert not never_bound & set(_LIVE_RENDER_EVENT_ATTRS)

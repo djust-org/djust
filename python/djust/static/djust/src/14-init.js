@@ -63,6 +63,7 @@ function djustInit() {
 
     // Auto-stamp root attributes on all [dj-view] elements
     const allContainers = autoStampRootAttributes();
+    _installPageParameterContracts();
 
     if (allContainers.length === 0) {
         if (globalThis.djustDebug) console.error(

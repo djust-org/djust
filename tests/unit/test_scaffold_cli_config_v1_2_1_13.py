@@ -308,7 +308,7 @@ def test_c018_flags_dead_keys_in_either_dict():
     assert "LIVEVIEW_CONFIG['jit_cache_backend']" in found[0].msg
     assert "DJUST_CONFIG['component_loading_class']" in found[0].msg
     assert "jit_debug" not in found[0].msg
-    assert "1.3" in found[0].hint
+    assert "removed in djust 1.3" in found[0].msg  # #2984: removed, not pending
 
 
 def test_c018_silent_for_live_keys():

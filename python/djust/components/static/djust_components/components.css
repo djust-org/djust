@@ -199,7 +199,7 @@
 .data-table-empty-title { font-size: var(--text-base); font-weight: var(--font-semibold); color: hsl(var(--foreground)); margin: 0 0 var(--space-2); }
 .data-table-empty-description { font-size: var(--text-sm); margin: 0; }
 .data-table-empty-icon { font-size: var(--text-2xl); margin-bottom: var(--space-3); }
-.data-table-pagination { display: flex; align-items: center; justify-content: center; gap: var(--space-2); padding: var(--space-3) var(--space-4); border-top: 1px solid hsl(var(--border)); background: hsl(var(--muted) / 0.3); }
+.data-table-pagination, .dj-table__pagination { display: flex; align-items: center; justify-content: center; gap: var(--space-2); padding: var(--space-3) var(--space-4); border-top: 1px solid hsl(var(--border)); background: hsl(var(--muted) / 0.3); }
 .data-table th[aria-sort] { cursor: pointer; user-select: none; }
 .data-table th[aria-sort]:hover { color: hsl(var(--foreground)); }
 .data-table tr[aria-selected="true"] { background: hsl(var(--primary) / 0.08); }
@@ -379,11 +379,11 @@
 
 /* Pagination (rendered: dj-pagination, dj-pagination__btn, dj-pagination__ellipsis) */
 .pagination, .dj-pagination { display: flex; align-items: center; justify-content: center; gap: var(--space-1); }
-.pagination-btn, .dj-pagination__btn { display: inline-flex; align-items: center; justify-content: center; min-width: 2.25rem; height: 2.25rem; padding: 0 var(--space-2); background: hsl(var(--muted)); border: 1px solid hsl(var(--border)); border-radius: var(--radius-md); color: hsl(var(--muted-foreground)); font-size: var(--text-xs); font-weight: var(--font-medium); cursor: pointer; transition: all var(--duration-fast) var(--ease-in-out, ease); text-decoration: none; }
-.pagination-btn:hover:not(:disabled), .dj-pagination__btn:hover:not(:disabled) { background: hsl(var(--accent)); border-color: hsl(var(--border)); color: hsl(var(--accent-foreground)); }
-.pagination-btn:disabled, .dj-pagination__btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.pagination-btn, .dj-pagination__btn, .dj-table__page-btn { display: inline-flex; align-items: center; justify-content: center; min-width: 2.25rem; height: 2.25rem; padding: 0 var(--space-2); background: hsl(var(--muted)); border: 1px solid hsl(var(--border)); border-radius: var(--radius-md); color: hsl(var(--muted-foreground)); font-size: var(--text-xs); font-weight: var(--font-medium); cursor: pointer; transition: all var(--duration-fast) var(--ease-in-out, ease); text-decoration: none; }
+.pagination-btn:hover:not(:disabled), .dj-pagination__btn:hover:not(:disabled), .dj-table__page-btn:hover:not(:disabled) { background: hsl(var(--accent)); border-color: hsl(var(--border)); color: hsl(var(--accent-foreground)); }
+.pagination-btn:disabled, .dj-pagination__btn:disabled, .dj-table__page-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .pagination-btn.active, .dj-pagination__btn--active { background: hsl(var(--primary) / 0.15); border-color: hsl(var(--primary)); color: hsl(var(--primary)); }
-.pagination-info, .dj-pagination__info { padding: 0 var(--space-4); font-size: var(--text-xs); color: hsl(var(--muted-foreground)); }
+.pagination-info, .dj-pagination__info, .dj-table__page-info { padding: 0 var(--space-4); font-size: var(--text-xs); color: hsl(var(--muted-foreground)); }
 .pagination-ellipsis, .dj-pagination__ellipsis { padding: 0 var(--space-2); color: hsl(var(--muted-foreground)); }
 
 /* Avatar */
@@ -2643,3 +2643,106 @@ button.rating-star:hover ~ .rating-star { color: hsl(var(--muted-foreground)); }
    inside clicks from closing it, which swallowed every dj-click in the panel. */
 .dj-scrim { position: absolute; inset: 0; z-index: -1; }
 :has(> .dj-scrim) { isolation: isolate; }
+
+/* ==========================================================================
+   Template-tag BEM components and the Alert / Progress / Avatar classes
+   (#3025, #2993). `{% theme_head %}` links this file, so these rules reach
+   every page that loads the theme. Colours come from the theme tokens; the
+   `--dj-*` names each Python class's docstring lists are read first, so an
+   app can override one component without restyling the theme. Labels stay
+   on `--foreground`; the status colour goes on the fill, border, dot or bar,
+   so no label's contrast depends on a status hue.
+   Every selector here is at most one class for its target (qualifiers sit
+   inside `:where()`), so an app's own `.dj-badge` / `.dj-alert-danger` rule
+   loaded after this file wins.
+   ========================================================================== */
+
+/* --- {% badge %} (djust_components/badge.html) ---
+   Keyed on the `dj-badge--<status>` modifier the tag always emits. The
+   `Badge` class renders `dj-badge dj-badge-success` (single dash) and is
+   styled in components-classes.css inside `@layer djust-components`; a bare
+   unlayered `.dj-badge` here would override its variant colours. */
+.dj-badge:where([class*="dj-badge--"]) { display: inline-flex; align-items: center; gap: var(--space-1, 0.25rem); padding: 0.125rem var(--space-2, 0.5rem); border: 1px solid hsl(var(--dj-badge-tone, var(--primary)) / 0.3); border-radius: var(--badge-radius, var(--radius-full, 9999px)); background: hsl(var(--dj-badge-tone, var(--primary)) / 0.1); color: hsl(var(--foreground)); font-size: var(--text-xs, 0.75rem); font-weight: var(--font-medium, 500); line-height: 1.25rem; white-space: nowrap; }
+.dj-badge--default { --dj-badge-tone: var(--primary); }
+.dj-badge--online { --dj-badge-tone: var(--success); }
+.dj-badge--offline { --dj-badge-tone: var(--muted-foreground); }
+.dj-badge--warning { --dj-badge-tone: var(--warning); }
+.dj-badge--error { --dj-badge-tone: var(--destructive); }
+.dj-badge--info { --dj-badge-tone: var(--info); }
+.dj-badge__dot { width: var(--space-2, 0.5rem); height: var(--space-2, 0.5rem); flex-shrink: 0; border-radius: var(--radius-full, 9999px); background: hsl(var(--dj-badge-tone, var(--primary))); }
+.dj-badge__dot--pulse { animation: dj-pulse 2s ease-in-out infinite; }
+.dj-badge__label { min-width: 0; }
+@media (prefers-reduced-motion: reduce) { .dj-badge__dot--pulse { animation: none; } }
+
+/* --- Alert (djust.components.Alert) --- */
+.dj-alert { display: flex; align-items: flex-start; gap: var(--space-3, 0.75rem); padding: var(--dj-alert-padding, 0.75rem 1rem); border: 1px solid var(--dj-alert-border, hsl(var(--dj-alert-tone, var(--info)) / 0.35)); border-radius: var(--dj-alert-radius, var(--radius-md, 0.375rem)); background: var(--dj-alert-bg, hsl(var(--dj-alert-tone, var(--info)) / 0.1)); color: var(--dj-alert-fg, hsl(var(--foreground))); font-size: var(--text-sm, 0.875rem); line-height: 1.5; }
+.dj-alert-info { --dj-alert-tone: var(--info); border-color: var(--dj-alert-info-border, var(--dj-alert-border, hsl(var(--info) / 0.35))); background: var(--dj-alert-info-bg, var(--dj-alert-bg, hsl(var(--info) / 0.1))); color: var(--dj-alert-info-fg, var(--dj-alert-fg, hsl(var(--foreground)))); }
+.dj-alert-success { --dj-alert-tone: var(--success); border-color: var(--dj-alert-success-border, var(--dj-alert-border, hsl(var(--success) / 0.35))); background: var(--dj-alert-success-bg, var(--dj-alert-bg, hsl(var(--success) / 0.1))); color: var(--dj-alert-success-fg, var(--dj-alert-fg, hsl(var(--foreground)))); }
+.dj-alert-warning { --dj-alert-tone: var(--warning); border-color: var(--dj-alert-warning-border, var(--dj-alert-border, hsl(var(--warning) / 0.35))); background: var(--dj-alert-warning-bg, var(--dj-alert-bg, hsl(var(--warning) / 0.1))); color: var(--dj-alert-warning-fg, var(--dj-alert-fg, hsl(var(--foreground)))); }
+.dj-alert-danger { --dj-alert-tone: var(--destructive); border-color: var(--dj-alert-danger-border, var(--dj-alert-border, hsl(var(--destructive) / 0.35))); background: var(--dj-alert-danger-bg, var(--dj-alert-bg, hsl(var(--destructive) / 0.1))); color: var(--dj-alert-danger-fg, var(--dj-alert-fg, hsl(var(--foreground)))); }
+.dj-alert-icon { flex-shrink: 0; color: hsl(var(--dj-alert-tone, var(--info))); }
+.dj-alert-message { flex: 1; min-width: 0; }
+.dj-alert-dismissible { padding-inline-end: var(--space-2, 0.5rem); }
+.dj-alert-dismiss { flex-shrink: 0; margin: -0.125rem 0; padding: 0 var(--space-2, 0.5rem); background: transparent; border: none; border-radius: var(--radius-sm, 0.25rem); color: hsl(var(--muted-foreground)); font-size: var(--text-lg, 1.125rem); line-height: 1.5; cursor: pointer; }
+.dj-alert-dismiss:hover { color: hsl(var(--foreground)); background: hsl(var(--foreground) / 0.08); }
+.dj-alert-dismiss:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
+
+/* --- Progress (djust.components.Progress and {% progress %}) ---
+   The class renders `dj-progress-track` / `dj-progress-bar` (single dash);
+   the tag renders `dj-progress__track` / `dj-progress__fill` (BEM). */
+.dj-progress { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1, 0.25rem) var(--space-2, 0.5rem); width: 100%; }
+.dj-progress-label, .dj-progress__label { font-size: var(--text-sm, 0.875rem); font-weight: var(--font-medium, 500); color: hsl(var(--foreground)); }
+.dj-progress-label { flex-basis: 100%; }
+.dj-progress__header { display: flex; justify-content: space-between; gap: var(--space-2, 0.5rem); width: 100%; }
+.dj-progress-value, .dj-progress__value { font-size: var(--text-xs, 0.75rem); font-variant-numeric: tabular-nums; color: hsl(var(--muted-foreground)); }
+.dj-progress-track, .dj-progress__track { flex: 1; min-width: 0; height: var(--dj-progress-height, 0.5rem); overflow: hidden; border-radius: var(--dj-progress-radius, 9999px); background: var(--dj-progress-bg, hsl(var(--muted))); }
+.dj-progress__track { flex-basis: 100%; }
+.dj-progress-bar, .dj-progress__fill { height: 100%; border-radius: inherit; background: var(--dj-progress-bar-bg, hsl(var(--primary))); transition: width var(--duration-normal, 0.3s) ease; }
+.dj-progress-sm, .dj-progress--sm { --dj-progress-height: 0.25rem; }
+.dj-progress--md { --dj-progress-height: 0.5rem; }
+.dj-progress-lg, .dj-progress--lg { --dj-progress-height: 0.75rem; }
+:where(.dj-progress-success) .dj-progress-bar { background: var(--dj-progress-success-bg, hsl(var(--success))); }
+:where(.dj-progress-info) .dj-progress-bar { background: var(--dj-progress-info-bg, hsl(var(--info))); }
+:where(.dj-progress-warning) .dj-progress-bar { background: var(--dj-progress-warning-bg, hsl(var(--warning))); }
+:where(.dj-progress-danger) .dj-progress-bar { background: var(--dj-progress-danger-bg, hsl(var(--destructive))); }
+.dj-progress__fill--primary { background: hsl(var(--primary)); }
+.dj-progress__fill--success { background: hsl(var(--success)); }
+.dj-progress__fill--warning { background: hsl(var(--warning)); }
+.dj-progress__fill--danger { background: hsl(var(--destructive)); }
+@media (prefers-reduced-motion: reduce) { .dj-progress-bar, .dj-progress__fill { transition: none; } }
+
+/* --- Avatar (djust.components.Avatar and {% avatar %}) ---
+   Sizes: the class renders `dj-avatar-<size>`, the tag `dj-avatar--<size>`.
+   The size class sets `--dj-avatar-size` on the avatar element itself, so an
+   override must also be set on that element (e.g. `.my-avatar.dj-avatar` or
+   an inline style); one inherited from a parent is reset by the size class. */
+.dj-avatar { position: relative; display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: var(--dj-avatar-size, 2.5rem); height: var(--dj-avatar-size, 2.5rem); border-radius: var(--radius-full, 9999px); background: hsl(var(--muted)); color: hsl(var(--muted-foreground)); font-size: calc(var(--dj-avatar-size, 2.5rem) * 0.38); font-weight: var(--font-semibold, 600); line-height: 1; vertical-align: middle; }
+.dj-avatar-xs, .dj-avatar--xs { --dj-avatar-size: 1.5rem; }
+.dj-avatar-sm, .dj-avatar--sm { --dj-avatar-size: 2rem; }
+.dj-avatar-md, .dj-avatar--md { --dj-avatar-size: 2.5rem; }
+.dj-avatar-lg, .dj-avatar--lg { --dj-avatar-size: 3.5rem; }
+.dj-avatar-xl, .dj-avatar--xl { --dj-avatar-size: 4.5rem; }
+.dj-avatar-img, .dj-avatar__img { width: 100%; height: 100%; border-radius: inherit; object-fit: cover; }
+.dj-avatar-initials, .dj-avatar__initials { text-transform: uppercase; user-select: none; }
+.dj-avatar-status, .dj-avatar__status { position: absolute; right: 0; bottom: 0; width: 28%; height: 28%; min-width: 0.5rem; min-height: 0.5rem; box-sizing: border-box; border: 2px solid hsl(var(--background)); border-radius: var(--radius-full, 9999px); background: hsl(var(--muted-foreground)); }
+.dj-avatar-status-online, .dj-avatar__status--online { background: hsl(var(--success)); }
+.dj-avatar-status-offline, .dj-avatar__status--offline { background: hsl(var(--muted-foreground)); }
+.dj-avatar-status-busy, .dj-avatar__status--busy { background: hsl(var(--destructive)); }
+.dj-avatar-status-away, .dj-avatar__status--away { background: hsl(var(--warning)); }
+
+/* --- {% toast_container %} (djust_components/toast.html) ---
+   `.dj-toast-container` (the fixed stack) is styled above, with
+   `pointer-events: none`; the tag's container carries no position modifier,
+   so it takes the top-right corner, and each toast takes its clicks back. */
+.dj-toast-container:where(:not([class*="dj-toast-container--"])) { top: var(--space-4, 1rem); right: var(--space-4, 1rem); }
+.dj-toast { pointer-events: auto; display: flex; align-items: flex-start; gap: var(--space-3, 0.75rem); padding: var(--space-3, 0.75rem) var(--space-4, 1rem); border: 1px solid hsl(var(--dj-toast-tone, var(--border)) / 0.4); border-radius: var(--radius-lg, 0.5rem); background: hsl(var(--card)); color: hsl(var(--card-foreground)); box-shadow: var(--shadow-lg); font-size: var(--text-sm, 0.875rem); animation: dj-slide-in-right 0.2s ease-out; }
+.dj-toast--success { --dj-toast-tone: var(--success); }
+.dj-toast--error { --dj-toast-tone: var(--destructive); }
+.dj-toast--warning { --dj-toast-tone: var(--warning); }
+.dj-toast--info { --dj-toast-tone: var(--info); }
+.dj-toast__icon { flex-shrink: 0; color: hsl(var(--dj-toast-tone, var(--muted-foreground))); font-weight: var(--font-semibold, 600); }
+.dj-toast__message { flex: 1; min-width: 0; font-weight: var(--font-medium, 500); }
+.dj-toast__dismiss { flex-shrink: 0; padding: 0 var(--space-1, 0.25rem); background: transparent; border: none; border-radius: var(--radius-sm, 0.25rem); color: hsl(var(--muted-foreground)); font-size: var(--text-lg, 1.125rem); line-height: 1; cursor: pointer; }
+.dj-toast__dismiss:hover { color: hsl(var(--accent-foreground)); background: hsl(var(--accent)); }
+.dj-toast__dismiss:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .dj-toast { animation: none; } }

@@ -146,6 +146,9 @@ _DJUST_TAGS_BRIDGED: Dict[str, frozenset] = {
             "djust_track_static",
         }
     ),
+    # ADR-040 — vendored-asset tags have no native Rust handler either, the
+    # same class as #2958/#3044 above.
+    "djust.templatetags.djust_assets": frozenset({"djust_asset", "djust_asset_url"}),
 }
 
 #: Probe arguments for djust's own bridged wrapper tags (#2958). The ADR-030

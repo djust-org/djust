@@ -119,7 +119,8 @@ async def mount(request, view_class=RuntimeView, **extra):
 @pytest.fixture
 def staged(monkeypatch):
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
-    # Preserve the production deadline; DB setup is complete before event save.
+    # The save deadline is raised for every test_exposure_* module by the
+    # conftest (#3130): these tests pin destinations, not store latency.
 
 
 async def test_event_persists_without_client_snapshot_opt_in_and_reconnect_restores(staged):

@@ -138,13 +138,13 @@ These tools inspect your live Django project. They only work when launched via `
 
 **`run_audit(app_label="")`** — Runs a security audit across all LiveViews. Returns exposed state, auth config, handler signatures, decorator protections, and mixins per view. *(Requires Django.)*
 
-**`validate_view(code)`** — Validates a LiveView class definition without running it. Pass in Python source code and get back a list of issues: missing `@event_handler` decorators, missing `**kwargs` on handlers, a `mount()` without `request` or `**kwargs`, a missing `template_name`, and `mark_safe()` with f-strings. Uses AST parsing, so it works without Django.
+**`validate_view(code)`** — Validates a LiveView class definition without running it. Pass in Python source code and get back a list of issues: missing `@event_handler` decorators, a `mount()` without `request` or `**kwargs`, a missing `template_name`, and `mark_safe()` with f-strings. Uses AST parsing, so it works without Django.
 
-**`detect_common_issues(code)`** — Checks LiveView source for common anti-patterns: service instances stored in state, public QuerySet attributes (should be `_`-prefixed), handlers missing `**kwargs`, and handler-like methods missing `@event_handler`. Also AST-based, so it works without Django.
+**`detect_common_issues(code)`** — Checks LiveView source for common anti-patterns: service instances stored in state, public QuerySet attributes (should be `_`-prefixed), and handler-like methods missing `@event_handler`. Also AST-based, so it works without Django. Neither tool checks handler signatures: `manage.py check` compares each template binding with its handler (`djust.T019`–`T022`).
 
 ### Code Generation (no Django required)
 
-**`scaffold_view(name, features="")`** — Generates a complete LiveView class. Features: `search`, `crud`, `pagination`, `form`, `presence`, `streaming`, `auth`.
+**`scaffold_view(name, features="")`** — Generates a complete LiveView class. Features: `search`, `crud`, `pagination`, `form`, `form_edit`, `presence`, `streaming`, `auth`. `form_edit` generates a `ModelFormMixin` view that edits one record the signed-in user owns (combine with `auth` only).
 
 **`scaffold_component(name, props="")`** — Generates a LiveComponent class with the specified props.
 
@@ -228,10 +228,13 @@ blocking (the side effects then still happen). A process-wide lock
 serializes dry-runs.
 
 **`find_handlers_for_template(template_path)`** — Cross-references a
-template file against every view that uses it. Returns the `dj-*`
-handlers wired in the template AND the diff against the view's
+template file against every view or component that uses it: its own
+template is the file, or includes or extends it. Returns the `dj-*`
+handlers wired in the template AND the diff against each owner's
 handler methods, so you can catch dead bindings (template uses
-`dj-click="missing"`) at author time.
+`dj-click="missing"`) at author time. Each binding also has a `status`
+(checked, dynamic or unsupported) and the `djust.T019`–`T022` findings
+`manage.py check` reports for it, and a `coverage` object summarizes them.
 
 **`seed_fixtures(fixture_paths)`** — Subprocess wrapper around
 `manage.py loaddata` for regression-fixture DB setup before a

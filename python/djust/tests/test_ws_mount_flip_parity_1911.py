@@ -53,6 +53,8 @@ from asgiref.sync import sync_to_async
 
 from djust import LiveView
 
+from ._ws_frames import drain_extra, has_type, receive_until
+
 
 # ---------------------------------------------------------------------------
 # Harness (lifted from test_ws_event_flip_parity_1896.py)
@@ -69,17 +71,17 @@ async def _receive_until(communicator, wanted_type, *, tries=8, timeout=3):
     return last
 
 
-async def _drain_available(communicator, *, max_frames=8, timeout=2):
-    """Best-effort drain of any frames already on the wire (stops at first
-    receive timeout). Uses ``receive_nothing`` polling so a trailing timeout
-    does not leave a dangling cancelled receive future (which would make a later
-    ``disconnect()`` raise ``CancelledError``)."""
-    frames = []
-    for _ in range(max_frames):
-        nothing = await communicator.receive_nothing(timeout=timeout, interval=0.05)
-        if nothing:
-            break
-        frames.append(await communicator.receive_json_from(timeout=timeout))
+async def _drain_available(communicator, *, until=None, timeout=2):
+    """The frames a turn produced, event-driven (#3130).
+
+    With ``until``, waits (generous deadline) until ``until(frames)`` holds,
+    then a trailing quiet window collects anything else. Without it, only the
+    ``timeout``-second window: for "nothing arrived" checks, which a slow
+    machine can make miss a late frame but never fail. Polls with
+    ``receive_nothing``, so no receive future is left cancelled (which would
+    make a later ``disconnect()`` raise ``CancelledError``)."""
+    frames = await receive_until(communicator, until) if until is not None else []
+    frames += await drain_extra(communicator, quiet=timeout if until is None else 0.3)
     return frames
 
 
@@ -498,7 +500,7 @@ class TestStickyHoldOrdering:
                 }
             )
 
-            frames = await _drain_available(communicator)
+            frames = await _drain_available(communicator, until=has_type("mount"))
             types = [f.get("type") for f in frames]
             assert "sticky_hold" in types, (
                 f"a live_redirect with a surviving sticky must emit sticky_hold; got {types}"
@@ -541,7 +543,7 @@ class TestStickyHoldOrdering:
                 }
             )
 
-            frames = await _drain_available(communicator)
+            frames = await _drain_available(communicator, until=has_type("mount"))
             types = [f.get("type") for f in frames]
             assert "mount" in types, f"the destination must still mount; got {types}"
             if "sticky_hold" in types:
@@ -586,7 +588,9 @@ class TestGroupAddReachability:
             # origin channel set → not a self-broadcast skip).
             await apush_to_view(f"{_ALLOWED}.BroadcastView", state={"v": "pushed"})
 
-            frames = await _drain_available(communicator, timeout=3)
+            frames = await _drain_available(
+                communicator, until=lambda fs: any(f.get("source") == "broadcast" for f in fs)
+            )
             broadcast_frames = [f for f in frames if f.get("source") == "broadcast"]
             assert broadcast_frames, (
                 "a server-push broadcast must reach the session that mounted (proving "
@@ -865,7 +869,7 @@ class TestLiveRedirectRemountIdempotency:
                 }
             )
 
-            frames = await _drain_available(communicator)
+            frames = await _drain_available(communicator, until=has_type("mount"))
             mount_frames = [f for f in frames if f.get("type") == "mount"]
             assert mount_frames, (
                 "the live_redirect to B must produce a fresh mount frame — NOT a "

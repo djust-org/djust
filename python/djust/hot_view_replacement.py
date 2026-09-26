@@ -110,21 +110,18 @@ def _module_has_liveview(module: ModuleType) -> bool:
 
 
 def _list_event_handlers(cls: type) -> Dict[str, Callable[..., Any]]:
-    """Return ``{name: handler_fn}`` for all ``@event_handler``-decorated methods.
+    """Return ``{name: handler_fn}`` for the ``@event_handler`` methods ``cls`` declares.
 
-    Reads the decorator marker :attr:`_djust_decorators` set by
-    :func:`djust.decorators.event_handler`. We intentionally look at
-    ``cls.__dict__`` rather than walking the MRO — inherited handlers
-    from mixins aren't in scope for the compat check because mixins
-    themselves aren't being swapped.
+    Uses the discovery dispatch uses (ADR-037 D1), limited to ``cls`` itself:
+    inherited handlers from mixins aren't in scope for the compat check
+    because mixins themselves aren't being swapped.
     """
-    out: Dict[str, Callable[..., Any]] = {}
-    for name, attr in cls.__dict__.items():
-        if callable(attr) and hasattr(attr, "_djust_decorators"):
-            decorators = getattr(attr, "_djust_decorators", {}) or {}
-            if "event_handler" in decorators:
-                out[name] = attr
-    return out
+    from ._parameter_metadata import declared_handlers
+
+    return {
+        handler.name: handler.function
+        for handler in declared_handlers(cls, lambda klass: klass is not cls)
+    }
 
 
 def _signatures_compatible(old_cls: type, new_cls: type, name: str) -> bool:

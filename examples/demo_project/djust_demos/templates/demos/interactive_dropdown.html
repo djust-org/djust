@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+
+{% comment %}
+ADR-034 C2 live surface (tests/playwright/test_interactive_dropdown.py).
+{% endcomment %}
+
+{% block title %}Interactive dropdowns (djust){% endblock %}
+
+{% block content %}
+<div dj-root dj-view="djust_demos.views.interactive_dropdown_demo.InteractiveDropdownView" style="padding: 6rem 2rem 2rem; max-width: 720px; margin: 0 auto;">
+    <h1>Interactive dropdowns</h1>
+    <p>Result: <span id="dd-result">{{ result }}</span></p>
+    <p>Calls: <span id="dd-calls">{{ calls }}</span></p>
+    <p>Live menu: <span id="dd-live">{{ live_open }}</span></p>
+    <p>Observed: <span id="dd-observed">{{ observed_count }}</span></p>
+    <button id="dd-show-observed" dj-click="show_observed">Show observed</button>
+    <div id="dd-project">{{ project_menu }}</div>
+    <div id="dd-account">{{ account_menu }}</div>
+    <div id="dd-quiet">{{ quiet_menu }}</div>
+    <div id="dd-live-menu">{{ live_menu }}</div>
+    <div id="dd-silent">{{ silent_menu }}</div>
+    <p><button id="dd-outside">Outside</button></p>
+</div>
+{% endblock %}

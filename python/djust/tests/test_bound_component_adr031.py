@@ -618,5 +618,7 @@ class TestBoundComponentParity:
         }
         for rel, expected in sources.items():
             text = (REPO / rel).read_text()
-            assert text.count("isinstance(component, SESSION_COMPONENT_TYPES)") == expected, rel
+            # One shared predicate: SESSION_COMPONENT_TYPES plus ADR-034 keyed
+            # collections (components.base.is_session_component).
+            assert text.count("is_session_component(component)") == expected, rel
             assert "isinstance(component, (Component, LiveComponent))" not in text, rel

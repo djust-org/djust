@@ -14,6 +14,8 @@ is active), never application data or secrets.
 
 from typing import Any, Dict, Optional, Type, TypeVar
 
+from ..._class_snapshot import attribute_names
+
 __all__ = ["ComponentMixin", "TypedState"]
 
 _TS = TypeVar("_TS", bound="TypedState")
@@ -135,7 +137,7 @@ class ComponentMixin:
         inst = instances.get(instance_id)
         if inst is None:
             # Fallback: search all *_instances dicts (multi-mixin composition)
-            for attr in dir(self):
+            for attr in attribute_names(self):  # dir() races class writes (#3151)
                 if attr.endswith("_instances") and attr != self._instances_attr():
                     other = getattr(self, attr, None)
                     if isinstance(other, dict) and instance_id in other:

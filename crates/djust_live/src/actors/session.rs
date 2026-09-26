@@ -5,6 +5,7 @@
 //! has its own SessionActor.
 
 use super::error::ActorError;
+use super::messages::EventParams;
 use super::messages::{MountResponse, PatchResponse, SessionMsg};
 use super::view::{ViewActor, ViewActorHandle};
 use djust_core::{RenderEnv, Value};
@@ -317,7 +318,7 @@ impl SessionActor {
     async fn handle_event(
         &mut self,
         event_name: String,
-        params: HashMap<String, Value>,
+        params: EventParams,
         view_id: Option<String>,
     ) -> Result<PatchResponse, ActorError> {
         // Phase 6: Route by view_id
@@ -405,7 +406,7 @@ impl SessionActor {
         view_id: String,
         component_id: String,
         event_name: String,
-        params: HashMap<String, Value>,
+        params: EventParams,
     ) -> Result<String, ActorError> {
         let view_handle = self
             .views
@@ -545,7 +546,7 @@ impl SessionActorHandle {
     pub async fn event(
         &self,
         event_name: String,
-        params: HashMap<String, Value>,
+        params: EventParams,
         view_id: Option<String>,
     ) -> Result<PatchResponse, ActorError> {
         let (tx, rx) = tokio::sync::oneshot::channel();
@@ -660,7 +661,7 @@ impl SessionActorHandle {
         view_id: String,
         component_id: String,
         event_name: String,
-        params: HashMap<String, Value>,
+        params: EventParams,
     ) -> Result<String, ActorError> {
         let (tx, rx) = tokio::sync::oneshot::channel();
 
@@ -851,7 +852,7 @@ mod tests {
             let without = handle
                 .mount_with_template(
                     "t2741.V".to_string(),
-                    state,
+                    state.into_iter().collect(),
                     None,
                     Some(PROBE.to_string()),
                     Vec::new(),
@@ -923,7 +924,7 @@ mod tests {
 
         // Try to send event before mounting any view
         let result = handle
-            .event("click".to_string(), HashMap::new(), None)
+            .event("click".to_string(), EventParams::new(), None)
             .await;
 
         // Should fail with ViewNotFound error
@@ -950,7 +951,7 @@ mod tests {
 
         // Now send event (backward compat: no view_id)
         let result = handle
-            .event("click".to_string(), HashMap::new(), None)
+            .event("click".to_string(), EventParams::new(), None)
             .await;
 
         assert!(result.is_ok());
@@ -977,7 +978,7 @@ mod tests {
         let result = handle
             .event(
                 "click".to_string(),
-                HashMap::new(),
+                EventParams::new(),
                 Some(view1.view_id.clone()),
             )
             .await;
@@ -985,7 +986,7 @@ mod tests {
 
         // Event without view_id routes to first view (backward compat)
         let result = handle
-            .event("click".to_string(), HashMap::new(), None)
+            .event("click".to_string(), EventParams::new(), None)
             .await;
         assert!(result.is_ok());
 
@@ -1062,7 +1063,7 @@ mod tests {
         let result = handle
             .event(
                 "click".to_string(),
-                HashMap::new(),
+                EventParams::new(),
                 Some(view1.view_id.clone()),
             )
             .await;
@@ -1072,7 +1073,7 @@ mod tests {
         let result = handle
             .event(
                 "click".to_string(),
-                HashMap::new(),
+                EventParams::new(),
                 Some(view2.view_id.clone()),
             )
             .await;

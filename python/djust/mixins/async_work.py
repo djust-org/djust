@@ -474,7 +474,7 @@ class AsyncWorkMixin:
                         logger.debug("assign_async(%s) succeeded but superseded — discarding", name)
                         return
                     setattr(self, name, AsyncResult.succeeded(result))
-                except BaseException as exc:  # noqa: BLE001 — surface all failures in AsyncResult
+                except Exception as exc:  # noqa: BLE001 — surface loader failures in AsyncResult
                     from .._exposure_diagnostics import log_failure_for
 
                     # The loader is application code and this runs as a
@@ -512,7 +512,7 @@ class AsyncWorkMixin:
                         logger.debug("assign_async(%s) succeeded but superseded — discarding", name)
                         return
                     setattr(self, name, AsyncResult.succeeded(result))
-                except BaseException as exc:  # noqa: BLE001 — surface all failures in AsyncResult
+                except Exception as exc:  # noqa: BLE001 — surface loader failures in AsyncResult
                     from .._exposure_diagnostics import log_failure_for
 
                     # The loader is application code and this runs as a

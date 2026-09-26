@@ -341,7 +341,15 @@ async def test_child_save_timeout_is_cancelled_without_success_update(monkeypatc
 
     from django.contrib.sessions.backends.db import SessionStore
 
+    from djust import runtime as runtime_module
+
     runtime, transport, _ = await mount()
+    # The conftest raises the save bound for exposure tests (#3130). This test
+    # needs a bound that fires: a short one, but long enough that a loaded
+    # worker still reaches the stalled save before it expires (the save never
+    # finishes, so any finite bound cancels it). The production value itself
+    # is pinned by test_sticky_child_persistence_1471.
+    monkeypatch.setattr(runtime_module, "EVENT_STATE_SAVE_TIMEOUT_S", 1.0)
     cancelled = []
 
     async def stalled(self, *args, **kwargs):
@@ -351,7 +359,7 @@ async def test_child_save_timeout_is_cancelled_without_success_update(monkeypatc
             cancelled.append(True)
 
     monkeypatch.setattr(SessionStore, "asave", stalled)
-    await asyncio.wait_for(increment(runtime), timeout=2)
+    await asyncio.wait_for(increment(runtime), timeout=10)  # hang guard only
     assert cancelled == [True]
     assert transport.errors
     assert not any(frame.get("type") == "embedded_update" for frame in transport.sent)

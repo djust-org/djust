@@ -170,7 +170,7 @@ describe('dj-input on click-fired widgets: passthrough (no debounce)', () => {
         expect(getFetchCalls(dom).length).toBe(1);
     });
 
-    it('rapid radio clicks each produce an event (no debounce coalescing)', () => {
+    it('rapid radio clicks each produce an event (no debounce coalescing)', async () => {
         // Users can flip Yes/No multiple times; each flip must register.
         // Before the fix, only the last of a burst would send after 300ms idle.
         const dom = createTestEnv(`
@@ -193,8 +193,11 @@ describe('dj-input on click-fired widgets: passthrough (no debounce)', () => {
         yes.checked = true;
         yes.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
 
-        // All three clicks dispatched: no timer coalescing.
-        expect(getFetchCalls(dom).length).toBe(3);
+        // All three clicks dispatched: no timer coalescing. The first goes
+        // out at once; HTTP events then follow one another in order.
+        expect(getFetchCalls(dom).length).toBe(1);
+        await vi.waitFor(() => expect(getFetchCalls(dom).length).toBe(3));
+        expect(getFetchCalls(dom).map(call => call.body.value)).toEqual(['yes', 'no', 'yes']);
     });
 
     it('dj-debounce override still applies to a radio if set explicitly', async () => {

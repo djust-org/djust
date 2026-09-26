@@ -1046,6 +1046,238 @@ The new guide is `docs/website/guides/scaling-across-cores.md`. A truth review c
 
 **Lesson:** a summary line about a gated optimisation must carry its gates.
 
+## v1.3.0-7 — render cost per frame (audio)
+
+**Scope**: One djust PR (#3175): `{% djust_audio %}` rendered natively in Rust, and `AudioMixin`'s sound manifest built once per view instead of on every render. The branch was cut before the worker pool and multi-loop mode. It landed after `origin/main` was merged in and the cache was made safe under free-threaded concurrency.
+
+### Bucket summary
+
+**Outcome.**
+- On Snake Arena (a 16-sound bank, ~5 frames a second per player), `render_with_diff` per frame went from 1.53 to 1.27 ms.
+- Live server CPU per delivered frame went from 4.04 to 3.71 ms (16 clients, 3 interleaved runs).
+- A byte-parity test pins the native tag to the Django-engine `simple_tag`.
+
+**What the bucket learned**
+1. **A per-view cache must not lean on the session render lock.** That lock does serialise one view's renders. But with `worker_threads` and several loops on 3.14t, the cache has to be safe by construction:
+   - the read path takes no lock;
+   - a miss builds under a per-view lock stripe with a re-check;
+   - the key and the build come from one snapshot of the banks;
+   - the entry pins the banks its key names by `id()`.
+2. **Test the invariant, not the allocator.** An attempt to make CPython reuse a freed bank's address never reproduced, so that test passed on the old code as well. A weakref check that the entry keeps its banks alive is deterministic.
+3. **An assertion inside a thread only warns.** The "stripes build in parallel" test passed with one global lock until Code Review forced a lock that is shared by construction. It now asserts a deadline from the test thread.
+4. **Self-review found a parity gap the byte test did not cover.** The Python tag raises on a `None` manifest, while the native node would have rendered `dj-audio="None"`. The native node now raises too.
+
+**Open items**
+- #3178: `_flush_pending_layout` renders `get_context_data()` and the layout on the event-loop thread (pre-existing).
+- The shared `.git/config` of the main checkout has `user.name = Test` / `test@example.com`, which is how the branch's original commit got its author. Squash merges are unaffected.
+
+### PR 1 — native `{% djust_audio %}` and a per-view manifest cache (PR #3175)
+
+**Date**: 2026-09-26. Retro: https://github.com/djust-org/djust/pull/3175 (retrospective comment).
+
+**Tests at close**
+- `tests/unit/test_audio.py`: 28 tests, including byte parity and "never persisted".
+- `python/djust/tests/test_audio_manifest_thread_safety.py`: 4 tests, run in the 3.14t CI job. The build-once, pin and stripe tests were each verified red against the broken variant.
+- Rust `djust_audio` tests: 5. `make test-rust`: 2546 passed.
+- The full suite ran in the pre-push hook, and CI was green.
+
+**Review stats**
+- Self-review: 1 real gap (a `None` manifest), fixed.
+- Security: passed, with no findings.
+- Code Review: 1 🟡 (stripe-test tautology), fixed; 1 🟢 (`str()` vs `to_string()` for a non-string manifest), left.
+- Re-Review: passed, with 1 🟢 filed as #3178.
+
+## v1.3.0-9 — test git-env isolation (#3179)
+
+**Scope**: One djust PR (#3180), which fixed #3179. The main checkout's repo-local config gained `user.name = Test`, `user.email = test@example.com` and `commit.gpgsign = false`, and the 1.3.0rc3 release commit and `82247d27a` were authored "Test".
+
+### Bucket summary
+
+**Outcome.**
+- `tests/test_git_commit_with_precommit.py::_make_repo`, which ran exactly that trio with an inherited environment, and `tests/test_check_shared_git_config.py::_git` / `_run_checker` now use `isolated_git_env()`.
+- 14 test modules that spawn git, or a script that runs git, got a module-level autouse fixture that strips `GIT_EXECUTION_VARS`.
+- The root `conftest.py` strips the same variables for every test, to cover library code that runs git in-process.
+- `tests/test_git_env_guard_3179.py` adds two guards: a behavioural regression, in which the helpers run against a throwaway `GIT_DIR` that must stay unchanged, and a static AST guard with 12 detector self-tests.
+
+**What the bucket learned**
+1. **Defend the class, not the entry point.** #2608 stripped `GIT_*` in `scripts/pre-push-pytest.sh`, and the fixtures stayed unswept. Any other way of running pytest with `GIT_DIR` exported still leaked.
+2. **Let the guard size the problem.** The report named 2 modules. The first static scan found 14, three of them able to write: `git init victim`, `git worktree add` at the repo root, and `git clone`.
+3. **Give a static gate evasion self-tests from the start.** Code Review found four shapes the first detector missed: an aliased module, a `shell=True` string, a variable argv, and asyncio. #3181 has the same finding for #3151's gate.
+4. **Verify under a hostile environment.** Run the touched tests with `GIT_DIR=/nonexistent/.git` and with `GIT_DIR` pointed at a throwaway repo checksummed before and after. Unit tests of the helper alone cannot show that a module is actually protected.
+
+**Open items**
+- The run that wrote the config this time was not identified. Reflogs show the `Test` identity recurring since July.
+- 🟢, not filed: the detector tracks an `isolated_git_env()` binding function-wide, so a reassignment still passes; `scripts/*.py` detection uses the narrower regex.
+- The main checkout still has `commit.gpgsign = false`. That is the maintainer's call.
+
+### PR 1 — git fixtures must not write into the real `.git/config` (PR #3180)
+
+**Date**: 2026-09-26. Squash-merged as `d2033bf1c`. Retro: https://github.com/djust-org/djust/pull/3180#issuecomment-5847442613 (Quality 4/5).
+
+**Tests at close**
+- `tests/test_git_env_guard_3179.py`: 16 tests. Before the fix, 3 failed: both behavioural tests and the static scan.
+- The touched and protected git modules gave 568 passed, 13 skipped, both under a throwaway `GIT_DIR` (unchanged afterwards) and under `GIT_DIR=/nonexistent/.git`.
+- The pre-push hook passed (pytest, cargo test, clippy, audit), and CI was green.
+
+**Review stats**
+- Code Review: 2 🟡 (detector false negatives, and an `env=<local>` false positive), both fixed; 1 🟢 (a long docstring line), fixed; 1 question (why not a conftest), answered with a root conftest catch-all.
+- Re-Review: approved; 2 🟢 left.
+
+## v1.3.0-8 — free-threaded first-use class caches (#3151)
+
+**Scope**: One djust PR (#3176), which fixed #3151. On snake-arena (3.14t, `PooledHTTP(threads=3)`), the first simultaneous page loads after a start returned 500 with `RuntimeError: dictionary changed size during iteration` in `_descriptor_fields()`. The PR also swept every request-path walk of a class namespace for the same race.
+
+### Bucket summary
+
+**Outcome.**
+- Every render, mount and dispatch walk of a class namespace now iterates a snapshot. The new private `djust._class_snapshot` provides `namespace()` and `attribute_names()`, a `dir()` equivalent. No lock was added, and caches still publish with one `setattr`.
+- The Rust `bit in dir(current)` probe (#2506) now answers by membership over `__dict__` and the MRO.
+- An AST gate blocks new live walks.
+- The regression test runs in the 3.14t CI job.
+
+**What the bucket learned**
+1. **Measure atomicity before choosing a primitive.** On 3.14t with the GIL off, only `mappingproxy.copy()` and `list(mappingproxy.items())` are atomic. `dict(vars(C))`, `list(vars(C))`, `set.update(vars(C))` and `dir()` all race.
+2. **A class used as a cache is shared mutable state.** The `setattr(cls, ...)` caches predate free-threading and were harmless under the GIL, so earlier free-threaded audits never looked at them. This is the first free-threaded bug found in production traffic rather than in a designed test.
+3. **A hammer can throttle itself.** With a fresh leaf class per call, every `setattr(base)` had to invalidate a growing subclass list, and one walk never raced. Reusing one leaf per reader, with its caches reset, made all cases fail 3/3 on the old code, even on 3.12 with a 1 µs switch interval. The reader must also record every exception, not only the expected one.
+4. **Classify each sweep site by its callers, not by its name.** The plan called `compile_subscriptions` class-creation-only, but its `_validate_callback` runs per request. Code Review caught it (🔴).
+5. **`except Exception` hides races.** `_extract_handler_config` swallowed the error and shipped a mount frame without the client rate-limit config.
+
+**Open items**
+- #3177: `daphne.E001` leaks into `test_b008_*`, an order-dependent CI flake that predates this PR.
+- #3181: the namespace gate misses `f(**vars(X))` and aliases. It also raises moving first-use caches off the class.
+- Candidate pattern page: `free-threaded-class-namespace-iteration`.
+
+### PR 1 — snapshot class namespaces before walking them (PR #3176)
+
+**Date**: 2026-09-26. Squash-merged as `00955729e`. Retro: https://github.com/djust-org/djust/pull/3176#issuecomment-5847312387 (Quality 4/5).
+
+**Tests at close**
+- `python/djust/tests/test_free_threaded_class_caches_3151.py`: 20 tests, run in the 3.14t CI job. Before the fix they failed 18/18 on both 3.12 and 3.14t; the Rust-probe case failed 3/3 against the old extension.
+- The targeted run gave 4492 passed. The full suite ran in the pre-push hook, and CI was green, including 3.14t.
+
+**Review stats**
+- Code Review: 1 🔴 (`{**vars(owner)}` in `_validate_callback`), fixed; 2 🟡 (gate false negatives, and the Rust `dir()` probe race), both fixed in the PR; 2 🟢 (thread join, which was fixed, and the `fresh()` copy cost of +2.5 µs per event, which was accepted).
+- Re-Review: approved; 1 🟢 filed as #3181.
+
+## v1.3.0-6 — multiple event loops (#3128)
+
+**Scope**: One djust PR (#3162) for the three #3128 rows: the loop-aware in-memory layer and the `djust serve --loops N` launcher, the audit of loop-bound state, and measured guidance on N. The fourth row, the snake-arena room clock, is an app PR that follows the merge.
+
+### Bucket summary
+
+**Outcome.** Measured with the snake load test on free-threaded 3.14t:
+- Setup: `worker_threads=8`, a shared 12-core Mac, seven interleaved rounds. Steps that started with a load average above 10 (1 min) or 12 (5 min) were excluded by rule: 57 kept, 27 excluded.
+- **One loop pins at 0.94–0.97 core from 512 clients.** At 640 and 768 clients only 469–476 and 641–649 clients connected.
+- **Two loops connected all 768**, each loop at 0.82–0.87 core. The process was then CPU-bound at about 9 cores, delivering about 6% more frames in total.
+- **Four loops did not beat two.** Total loop CPU at 384 clients was 0.74–0.82 core for one loop, 1.1–1.3 for two and 1.3–1.5 for four.
+
+**What the bucket learned**
+1. **The machine was the hardest part of the measurement.** Other agents' xdist suites and a VM pushed the load average to 50–340 for over an hour.
+   - A 1-minute load gate alone let steps through at the tail of a burst (1 min at 7.7, 5 min at 63), so the gate and the exclusion rule now check both averages.
+   - The gate also waits indefinitely and honours a PAUSE file, so our own pre-push suite doesn't land mid-step.
+   - The benchmark ran a **frozen copy** of the branch, so merges and review fixes during the rounds could not change the code under test.
+2. **A negative control is what made the session test real.** The first version drained frames every 10 ms, which woke the receiving loop, so it passed even with the loop-bound layer. Running one side at a time, with the receiver idle, made it fail on the old layer and pass on the new one.
+3. **Every review stage found something real.**
+   - Self-review: GIL check before uvloop import, UNIX socket cleanup, subclass refusal.
+   - Security check: diagnostics carry-back, SSE registry races.
+   - Code Review: untested forced exit.
+   - CI: a forced uvicorn shutdown stuck in `Server.wait_closed()` on Linux, which the macOS runs never showed. The fix for the review's subclass refusal broke the class-path helper, and the new test caught it within minutes.
+4. **"Opt-in" needs a switch in every changed path.** The SSE hop, the SSE put and the `db_notify` claim each check `is_multi_loop()`, so a single-loop server, and test harnesses that create a loop per request, behave exactly as before.
+
+**Open items**
+- ~~snake-arena: the room-clock lock~~ Done in snake-arena #25 (not deployed). Its review found a second race, an idle stop decided outside the lock, so the guide's rule 2 now covers stops too.
+- #3164: the SSE session registry. A reused id replaces a live session, and the caps are check-then-register.
+- A cluster measurement of 2 loops once a djust release carries #3162. Production's loop saturates earlier (0.93 at 160–192 players), so the gain there should show sooner than on this Mac.
+- `SO_REUSEPORT` (one socket per loop, kernel-balanced) instead of one shared socket. Not measured.
+
+### PR 1 — several event loops per process (PR #3162)
+
+**Date**: 2026-09-26. Retro: https://github.com/djust-org/djust/pull/3162 (retrospective comment).
+
+**Tests at close**
+- `python/djust/tests/test_multiloop_{layer,sessions,serve}_3128.py`: 42 functions, 50 cases.
+- These run on the 3.14t CI job with the GIL off.
+- Targeted runs passed on 3.12 and 3.14t. The full suite ran in the pre-push hook, and CI was green.
+
+**Review stats**
+- Self-review: 3 🟡, all fixed: the guide section missing at review time, the GIL check before the loop factory, UNIX socket cleanup. Plus nits: subclass refusal, lock pre-check, run_on_loop close race.
+- Security: passed, with 3 🟡.
+  - Fixed: carry back `diagnostics_allowed()`.
+  - Fixed here: a snapshot for the session count.
+  - Filed as #3164: session-id overwrite and cap races.
+- Code Review: approved with 1 🟡 (forced exit and max-requests stop untested), fixed with two end-to-end tests. Also 🟢 items: uvloop `loop.time()` wording, SSL flags, and the per-loop limit in the guide.
+- Re-Review passed.
+
+## v1.3.0-5 — event-loop ceiling (#3095)
+
+**Scope**: Three rows.
+- djust PR #3115: presence broadcasts respect `push_scope` (merged as `7374dc6c0`), with snake-arena PR #16 as its app half.
+- djust PR #3123: less work on the event loop per frame.
+- A design note on #3095 for more than one event loop per process, with the production mode filed as #3128.
+
+### Bucket summary
+
+**Outcome.** Measured on the snake load test on free-threaded 3.14t:
+- Setup: `WORKER_THREADS=5`, a shared 12-core Mac, interleaved rounds. A step is excluded when the load average went above 15.
+- **The event-loop thread's CPU at a fixed load fell by about 25–30% at 128–192 clients** (0.34–0.48 → 0.25–0.38 cores), and by about 15% at 256–384 clients.
+- p95 RTT fell at every step, for example 34–207 ms → 22–26 ms at 192 clients. Frames per second were unchanged below the knee.
+- For production, where the knee is about 160 players with the loop at 0.87, the estimate is roughly 200 players. This has not been measured on the cluster.
+- A two-loop prototype held 512 clients at 2.8–3.4 fps, where one loop collapsed to 1.3–2.6 fps with a p95 of 9–16 s. That is the lever that actually lifts the ceiling (#3128).
+
+**What the bucket learned**
+1. **Profile first: the saturating work was not where the brief guessed.** The brief listed framing, JSON, channel-layer dispatch and ticks.
+   - The main-thread SIGALRM sampler instead found that **key-press events, which skip the render**, cost more loop time than broadcast frames. They made three thread hops for metadata checks (handler permission, object permission, and Channels' per-frame connection check) and rebuilt the handler's signature every time.
+   - Framing and deflate were real, at about 10%, but they live in `websockets`.
+2. **"Proven identical" has to survive a reviewer who tries to break it.** The fresh-context review broke two of the claims:
+   - the signature and type-hint caches went stale after annotations were mutated at runtime;
+   - the deferred connection check ignored asgiref's parent-sync-thread executor.
+
+   Both were fixed so that the claim is true: the caches check the function's definition key, and the deferral steps aside under a parent sync thread or a pre-4.2 Channels. They were not fixed by weakening the wording.
+3. **"Views that don't opt in are unchanged" includes per-connect side effects**, such as group joins and hops, not only the frames sent. PR #3115's first cut joined every presence session to a group nobody sends to.
+4. **The measurement machine is shared.** Two of the three final rounds had other agents' suites push the load average to 20–40 mid-round. The summary script excludes those steps by rule and reports how many rounds remain, rather than hand-picking rows.
+
+**Open items**
+- #3128: a production multi-loop mode, with a loop-aware layer, a launcher, and an audit of loop-bound state.
+- uvloop: 13% less loop CPU in one round at 256 clients, but it dropped connections during a 384-client ramp, probably the macOS accept backlog. Not investigated.
+- snake-arena: bump the djust pin once #3115 is released, delete the fallback override, and consider a CI job against djust `main`.
+- A cluster re-measurement of snake once a djust release carries #3123.
+
+### PR 1 — presence broadcasts respect `push_scope` (PR #3115)
+
+**Date**: 2026-09-25. Squash-merged as `7374dc6c0`. Retro: https://github.com/djust-org/djust/pull/3115 (retrospective comment).
+
+**Tests at close**
+- `python/djust/tests/test_presence_scoped_broadcast_3095.py`: 19 functions, 24 cases.
+- Targeted runs: 672 passed.
+- The full suite ran in the pre-push hook, and CI was green.
+
+**Review stats**
+- Self-review: 3 🟡, all fixed.
+  - A `TenantMixin` view joined a group.
+  - A non-tracking viewer that moved rooms kept its old key.
+  - A join between mount and the group join was lost; a catch-up self-refresh now covers it.
+- Code Review: 2 🟡 and 3 🟢.
+  - Fixed: views that did not opt in paid a join and a hop.
+  - Accepted and documented: a non-tracking viewer's key only follows `push_scope`.
+- Re-Review passed.
+
+### PR 2 — less work on the event loop per frame (PR #3123)
+
+**Date**: 2026-09-25. Retro: https://github.com/djust-org/djust/pull/3123 (retrospective comment).
+
+**Tests at close**
+- `python/djust/tests/test_event_loop_ceiling_3095.py`: 24 tests, most with the pool both off and on.
+- Targeted runs: about 1,300 passed.
+- The full suite ran in the pre-push hook.
+
+**Review stats**
+- Self-review: 1 🟡 (the `require_valid_group_name` call needs Channels 4.2 or later) and several 🟢. All fixed.
+- Code Review: 2 🟡 and 4 🟢.
+  - The stale caches and the parent-sync-thread deferral were fixed.
+  - The tick error path, the `group_send` error path and the guide note were fixed.
+  - Accepted: the scheduling on 3.10 and 3.11, which changes order only.
+  - Documented: a failing deferred check is logged and the task goes on.
+
 ## v1.2.1-7 — state and rendering batch: v1.2.1-7, -8 and -9 (PR #3042)
 
 **Date**: 2026-09-24

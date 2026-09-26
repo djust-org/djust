@@ -1039,6 +1039,12 @@ OPTIONAL_MIXINS: List[Dict[str, Any]] = [
         "Validates on blur/change and shows inline errors.",
     },
     {
+        "name": "ModelFormMixin",
+        "import": "from djust.forms import ModelFormMixin",
+        "description": "Edit one existing record: the route supplies pk, djust "
+        "looks it up and checks access before building the form (ADR-035).",
+    },
+    {
         "name": "TenantMixin",
         "import": "from djust.tenants import TenantMixin",
         "description": "Multi-tenant support via Django Channels groups.",
@@ -1154,8 +1160,8 @@ BEST_PRACTICES = {
     "event_handlers": {
         "rules": [
             "All handlers MUST use @event_handler() decorator",
-            "All handlers MUST accept **kwargs",
-            "All handler params MUST have default values",
+            "Declare the parameters the binding sends; manage.py check reports a mismatch (djust.T020)",
+            "Under the legacy policy dj-input/dj-change also send field and _target, and dj-submit sends _target with the form fields: declare them or keep **kwargs",
             "Input/change events use 'value' parameter name",
             "Button data attributes: data-item-id='5' -> item_id=5",
             "Form submission: all fields as kwargs",
@@ -1239,25 +1245,56 @@ BEST_PRACTICES = {
         ],
     },
     "forms": {
-        "description": "Use FormMixin for Django form integration with real-time validation",
+        "description": (
+            "FormMixin validates a Django form in real time. To edit one existing "
+            "record, use ModelFormMixin: the route supplies pk, and djust looks the "
+            "record up and checks access before it builds the form (ADR-035)."
+        ),
         "example": (
+            "from django import forms\n"
+            "from djust import LiveView\n"
             "from djust.forms import FormMixin\n"
             "\n"
-            "class MyFormView(FormMixin, LiveView):\n"
-            "    template_name = 'form.html'\n"
-            "    form_class = MyForm\n"
             "\n"
-            "    def mount(self, request, pk=None, **kwargs):\n"
-            "        if pk:\n"
-            "            self._model_instance = MyModel.objects.get(pk=pk)\n"
-            "        super().mount(request, **kwargs)  # AFTER setting _model_instance\n"
+            "class ContactForm(forms.Form):\n"
+            "    email = forms.EmailField()\n"
+            "    message = forms.CharField(widget=forms.Textarea)\n"
+            "\n"
+            "\n"
+            "class ContactView(FormMixin, LiveView):\n"
+            '    template_name = "contact.html"\n'
+            "    form_class = ContactForm\n"
             "\n"
             "    def form_valid(self, form):\n"
-            "        obj = form.save()\n"
-            "        self.success_message = 'Saved!'\n"
+            '        self.success_message = "Sent!"\n'
             "\n"
             "    def form_invalid(self, form):\n"
-            "        self.error_message = 'Please fix errors below'"
+            '        self.error_message = "Please fix the errors below"'
+        ),
+        "edit_example": (
+            "from django import forms\n"
+            "from djust import LiveView\n"
+            "from djust.forms import ModelFormMixin\n"
+            "from .models import Article\n"
+            "\n"
+            "class ArticleForm(forms.ModelForm):\n"
+            "    class Meta:\n"
+            "        model = Article\n"
+            '        fields = ["title", "body"]\n'
+            "\n"
+            "class ArticleEditView(ModelFormMixin[Article], LiveView):\n"
+            '    template_name = "article_edit.html"\n'
+            "    model = Article\n"
+            "    form_class = ArticleForm\n"
+            "    login_required = True\n"
+            "\n"
+            "    def get_queryset(self):\n"
+            "        # Only the signed-in user's articles can be opened.\n"
+            "        return super().get_queryset().filter(author=self.request.user)\n"
+            "\n"
+            "    def form_valid(self, form):\n"
+            "        self.object = form.save()\n"
+            '        self.success_message = "Saved!"'
         ),
     },
     "security": {
@@ -1342,19 +1379,22 @@ BEST_PRACTICES = {
     },
     "event_handler_signature": {
         "description": (
-            "All event handlers MUST accept **kwargs to handle extra parameters "
-            "sent by the client (data-* attributes, form fields, etc.). Missing "
-            "**kwargs causes TypeError when unexpected params arrive."
+            "Declare the parameters the binding sends. Under the strict policy a "
+            "closed, annotated signature is the contract and **kwargs is not needed. "
+            "Under the legacy policy dj-input and dj-change also send `field` and "
+            "`_target`, and dj-submit sends `_target` with the form fields, so "
+            "declare them or keep **kwargs. `manage.py "
+            "check` reports a binding its handler would reject as djust.T020."
         ),
         "correct": (
-            "@event_handler()\n"
-            "def delete_item(self, item_id: int = 0, **kwargs):\n"
+            '@event_handler(parameter_policy="strict")\n'
+            "def delete_item(self, item_id: int):\n"
             "    Item.objects.filter(id=item_id).delete()"
         ),
         "wrong": (
             "@event_handler()\n"
-            "def delete_item(self, item_id: int = 0):  # Missing **kwargs!\n"
-            "    Item.objects.filter(id=item_id).delete()"
+            "def delete_item(self, **kwargs):  # a catch-all hides a misspelled parameter\n"
+            '    Item.objects.filter(id=kwargs.get("itemid")).delete()'
         ),
     },
     "common_pitfalls": [
@@ -1389,13 +1429,18 @@ BEST_PRACTICES = {
         },
         {
             "id": 3,
-            "problem": "Event handler missing **kwargs",
+            "problem": "A binding sends parameters its handler does not declare",
             "why": (
-                "The client sends additional context (data-* attributes, form fields) as "
-                "keyword arguments. Without **kwargs, Python raises TypeError on unexpected args."
+                "Under the strict policy the browser sends only declared parameters "
+                "and rejects the rest; under legacy, dj-input/dj-change also send field "
+                "and _target and dj-submit sends _target, so an event a closed handler "
+                "does not declare is rejected before the handler runs."
             ),
-            "solution": "Add **kwargs to every event handler signature.",
-            "related_check": "djust.V004",
+            "solution": (
+                "Run manage.py check: djust.T020 names the binding and the handler. "
+                "Declare the parameter, or keep **kwargs on legacy input handlers."
+            ),
+            "related_check": "djust.T020",
         },
         {
             "id": 4,

@@ -11,9 +11,9 @@ import logging
 import threading
 import re
 import types
-from typing import Callable, Dict, Any, List, Optional, Tuple, Type, cast
+from typing import Callable, ClassVar, Dict, Any, List, Optional, Tuple, Type, cast
 from abc import ABC
-from django.utils.safestring import mark_safe
+from django.utils.safestring import SafeString, mark_safe
 
 from djust._template_guards import TemplateMutatorGuard, alters_data
 from djust.decorators import is_event_handler
@@ -305,6 +305,16 @@ class Component(TemplateMutatorGuard, ABC):
     #: is still seen, appending to it in place is not). Components that hold
     #: data declare theirs so a click never pays a ten-thousand-row walk.
     fingerprint_fields: Optional[Tuple[str, ...]] = None
+
+    #: Names of declared third-party assets this component needs (ADR-040).
+    #: Check djust.B007 fails when a name is not declared in any manifest.
+    requires_assets: ClassVar[Tuple[str, ...]] = ()
+
+    def asset_tags(self, variant: Optional[str] = None) -> SafeString:
+        """Tags for every asset in ``requires_assets``, for the component's template."""
+        from djust.assets.tags import asset_tags
+
+        return mark_safe("\n".join(asset_tags(name, variant) for name in self.requires_assets))
 
     def _create_rust_instance(self, **props: Any) -> None:
         """
@@ -1200,31 +1210,46 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
             obj.__dict__[self._descriptor_attr_name or "component"] = value
 
     def _make_event_handler(self, event_name: str) -> Callable[..., Any]:
-        """Create an event handler that routes to the correct component instance."""
+        """Create the view-level ``Meta.event`` alias for this component type.
+
+        The client names the target with ``component_id``. It is resolved only
+        against the owner class's declared descriptors of this component type,
+        before any view attribute is read, so an alias cannot drive a component
+        of another type or evaluate an arbitrary view attribute (#3078). An
+        unknown or foreign id is ignored, as an unresolved id always was.
+
+        The alias is pinned to the legacy parameter policy: its ``component_id``
+        is a reserved framework name and ``value`` is untyped, so it cannot be a
+        strict contract, and a project-wide strict policy must not break it.
+        """
+        import inspect
+
         component_type = type(self)
 
         def handler(view_self: Any, value: Any = "", component_id: str = "", **kwargs: Any) -> None:
-            # Auto-resolve if only one instance of this component type
+            owner = type(view_self)
+            descriptors = getattr(owner, "_component_descriptors", None) or {}
+            owned = {
+                name: descriptor
+                for name, descriptor in descriptors.items()
+                if isinstance(descriptor, component_type)
+                and inspect.getattr_static(owner, name, None) is descriptor
+            }
             if not component_id:
-                descriptors = getattr(type(view_self), "_component_descriptors", {})
-                matches = [n for n, d in descriptors.items() if isinstance(d, component_type)]
-                if len(matches) == 1:
-                    component_id = matches[0]
-            if not component_id:
+                # Auto-resolve if only one instance of this component type.
+                if len(owned) != 1:
+                    return
+                component_id = next(iter(owned))
+            if type(component_id) is not str or component_id not in owned:
                 return
+            descriptor = owned[component_id]
 
             state = getattr(view_self, component_id, None)
             if isinstance(state, BoundComponent):
                 state = state.state
             if state is None:
                 return
-
-            # Find the component's action method (e.g., toggle, set, open, close)
-            # Convention: the first non-private, non-dunder method that isn't
-            # mount/render/get_context_data is the action
-            descriptor = getattr(type(view_self), component_id, None)
-            if descriptor and hasattr(descriptor, "_handle_event"):
-                descriptor._handle_event(state, value=value, **kwargs)
+            descriptor._handle_event(state, value=value, **kwargs)
 
         # Preserve the event name for djust dispatch
         handler.__name__ = event_name
@@ -1234,7 +1259,7 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
         try:
             from djust.decorators import event_handler as eh_decorator
 
-            handler = eh_decorator(handler)
+            handler = eh_decorator(parameter_policy="legacy")(handler)
         except ImportError:
             # @event_handler is optional here; skip decoration if decorators module isn't available.
             pass
@@ -1452,3 +1477,18 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
 #: (``_save_components_to_session`` and both ``_restore_component_state``
 #: callers). One tuple so the gates cannot drift apart (ADR-031 D7).
 SESSION_COMPONENT_TYPES = (Component, LiveComponent, BoundComponent)
+
+
+def is_session_component(value: Any) -> bool:
+    """A value the session component paths save and restore by its view key.
+
+    ``SESSION_COMPONENT_TYPES``, plus ADR-034's keyed interactive collections,
+    which persist as one record. Test ``is not None`` first at call sites: an
+    empty collection is falsy.
+    """
+    return isinstance(value, SESSION_COMPONENT_TYPES) or is_component_collection(value)
+
+
+def is_component_collection(value: Any) -> bool:
+    """An ADR-034 keyed interactive collection (rendered, never session state)."""
+    return bool(getattr(type(value), "_djust_component_collection", False))

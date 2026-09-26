@@ -59,6 +59,15 @@ class LiveViewSSE {
         const urlParams = new URLSearchParams(params);
         urlParams.set('view', viewPath);
         urlParams.set('_djust_url', window.location.pathname);
+        // #2966: dj-track-static. The stream GET is the mount, and an
+        // EventSource auto-reconnect re-requests this same URL, so the page's
+        // tracked asset URLs ride it (a POSTed mount frame would be a no-op).
+        const trackStatic = globalThis.djust.djTrackStatic;
+        if (trackStatic) {
+            trackStatic.streamParams().forEach((url) => {
+                urlParams.append('_djust_track_static', url);
+            });
+        }
         const streamUrl = `${this.sseBaseUrl}?${urlParams.toString()}`;
         const pageUrl = window.location.pathname + window.location.search;
 
@@ -193,8 +202,8 @@ class LiveViewSSE {
      */
     async _handleMessageImpl(data) {
         if (globalThis.djustDebug) console.log('[SSE] Received:', data.type, data);
-        // Defined in 03-websocket.js; guarded for module-isolated loads.
-        if (typeof applyServiceWorkerMountMetadata === 'function') applyServiceWorkerMountMetadata(data);
+        // ADR-038 D-n: compared before anything from this mount is cached.
+        if (window.djust._sw) window.djust._sw.applyMountMetadata(data);
         storeSignedSnapshot(data, this.primaryViewPath);
 
         switch (data.type) {
@@ -210,7 +219,15 @@ class LiveViewSSE {
                 if (typeof data.view === 'string') this.primaryViewPath = data.view;
                 _installParameterContracts(this, data.parameter_contracts, data.view, true,
                     this._parameterContractFrames.get(data));
+                if (data.view === this.primaryViewPath) {
+                    globalThis.djust._mirrorPageParameterContracts?.(data.parameter_contracts, data.view);
+                }
                 if (globalThis.djustDebug) console.log('[SSE] View mounted:', data.view);
+                // #2966: the server's answer to a reconnect's track_static.
+                if (data.stale_static && data.view === this.primaryViewPath &&
+                    globalThis.djust.djTrackStatic) {
+                    globalThis.djust.djTrackStatic.applyStaleStatic(data.stale_static);
+                }
 
                 // Remove dj-cloak from all elements (FOUC prevention)
                 document.querySelectorAll('[dj-cloak]').forEach(el => el.removeAttribute('dj-cloak'));
@@ -232,7 +249,11 @@ class LiveViewSSE {
                         if (typeof data.view === 'string') container.setAttribute('dj-view', data.view);
                         const hasDataDjAttrs = data.has_ids === true;
                         if (hasDataDjAttrs && !this._replacingView) {
-                            _stampDjIds(data.html);
+                            // The page was prerendered over HTTP: morph it
+                            // against the mount HTML, as the WebSocket mount
+                            // does (#1610), so mount-time state such as
+                            // ADR-034 component identities reaches the DOM.
+                            _morphPrerenderedMount(container, data.html, null);
                         } else {
                             // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                             container.innerHTML = data.html;
@@ -496,6 +517,7 @@ class LiveViewSSE {
     _sendMountFrame(viewPath, params = {}) {
         let tz = null;
         try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { /* noop */ }
+        // dj-track-static URLs ride the stream GET, not this frame (#2966).
         return this.sendMessage({
             type: 'mount',
             view: viewPath,

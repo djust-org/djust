@@ -154,6 +154,11 @@ class TestAllViews(TestCase, LiveViewSmokeTest):
 3. Checks DB query counts stay under `max_queries`
 4. If `fuzz=True`, sends malformed event payloads to handlers and asserts no 500 errors
 
+The fuzzer sends events only to `@event_handler` handlers, the ones dispatch
+resolves in every `event_security` mode. Under `"warn"` or `"open"` a client can
+still call an undecorated public method, so the smoke test emits one
+`UserWarning` per view naming those methods: decorate them, or test them directly.
+
 ## Performance Testing
 
 Ensure handlers meet response-time and query-count budgets:

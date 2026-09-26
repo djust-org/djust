@@ -46,6 +46,8 @@ class TodoView(LiveView):
 
 That's it. `dj-submit` prevents the default submit, collects all form fields via `FormData`, and sends them to your handler as keyword arguments. The view re-renders automatically.
 
+> **Strict parameter policy.** Under the opt-in strict parameter policy (`@event_handler(parameter_policy="strict")`, ADR-036), the browser sends a generated value only if the handler declares a parameter with that name, or has a `**` catch-all. Generated values are `value` and `field` for `dj-input`/`dj-change`, the form fields for `dj-submit`, and `key`/`code` for keyboard events. `dj-value-*` arguments are always sent, and one that reuses a generated name is rejected. `_target` is never sent: use `field` or a `dj-value-*` argument. Legacy handlers (the default) receive every value as before. A strict `dj-submit` handler therefore gets only the fields it names, or all of them through `**form_data`.
+
 
 ## HTTP fallback does not require a second view
 
@@ -262,6 +264,113 @@ class ArticleEditView(FormMixin, LiveView):
 
 FormMixin populates `form_data` from the instance automatically. The template is the same pattern -- `value="{{ form_data.title }}"` etc.
 
+## Editing one record with `ModelFormMixin`
+
+**Available from djust 1.3** (not in the 1.3.0rc1 pre-release).
+
+`djust.forms.ModelFormMixin` edits one existing record with no `mount()`
+override. The URL route supplies the record's `pk` (or `slug`). djust looks
+the record up and checks access before it builds the form, and checks again
+on every event:
+
+<!-- djust-example: article-edit scenario=model-form-edit -->
+```python
+from django import forms
+from djust import LiveView
+from djust.forms import ModelFormMixin
+from .models import Article
+
+class ArticleForm(forms.ModelForm):
+    class Meta:
+        model = Article
+        fields = ["title", "body"]
+
+class ArticleEditView(ModelFormMixin[Article], LiveView):
+    template_name = "article_edit.html"
+    model = Article
+    form_class = ArticleForm
+    login_required = True
+
+    def get_queryset(self):
+        # Only the signed-in user's articles can be opened.
+        return super().get_queryset().filter(author=self.request.user)
+
+    def form_valid(self, form):
+        self.object = form.save()
+        self.success_message = "Saved!"
+```
+
+Route it with the record's id:
+
+<!-- djust-example: skip -- the URL route for article-edit; its scenario reads it from the section -->
+```python
+# urls.py
+path("articles/<int:pk>/edit/", ArticleEditView.as_view())
+```
+
+The template shows the record as `object` and the form as usual:
+
+```html
+<div dj-root>
+    <h1>Editing {{ object.title }}</h1>
+    <form dj-submit="submit_form">
+        {% csrf_token %}
+        <input name="title" value="{{ form_data.title }}" dj-change="validate_field">
+        {% if field_errors.title %}<span>{{ field_errors.title.0 }}</span>{% endif %}
+        <textarea name="body">{{ form_data.body }}</textarea>
+        <button type="submit">Save</button>
+    </form>
+    {% if success_message %}<p>{{ success_message }}</p>{% endif %}
+</div>
+```
+
+What happens:
+
+- **The record comes from the route, never from the browser.** The lookup
+  uses `self.kwargs`: the route's URL kwargs, resolved on the server for
+  every transport.
+  `pk_url_kwarg`, `slug_url_kwarg`, `slug_field` and `query_pk_and_slug`
+  work as in Django's `UpdateView`.
+  Navigating to another record's URL without a page load (a `dj-patch`
+  link, back/forward, or `live_patch(path=...)`) remounts the view there, so
+  the form always edits the record in the address bar.
+- **Access is checked before the form exists.** A record missing from
+  `get_queryset()` and one refused by `has_object_permission(request, obj)`
+  get the same "Access denied" response: HTTP 403, or a `permission_denied`
+  error on a live connection. No form is built and no hook runs, so a user
+  cannot tell a missing record from a forbidden one.
+- **Every event checks again.** If access is revoked or the record is deleted
+  while the page is open, the next event is denied before your code runs.
+- **`self.object` is the checked record for the current request or event.**
+  It renders as `object`; set `context_object_name = "article"` to add a
+  second name. It is never saved to the session: only the route identifies
+  the record. `self.object = form.save()` keeps it current. Assigning a
+  different record raises `ValueError`; link to that record's URL instead.
+- **You decide what saving means.** `form_valid()` runs only for a valid
+  form, and djust never saves on its own.
+- **Scope the records.** Override `get_queryset()` or `has_object_permission()`.
+  With neither, any signed-in user who can open the view can edit any record by
+  changing the id in the URL; system check `djust.S013` warns about it.
+
+`form_class` must be a `ModelForm` that lists its editable fields. Keep
+fields such as `author` out of it, so a user cannot reassign them. For a
+create form, keep using `FormMixin` with a `ModelForm`.
+
+### Moving from `_model_instance`
+
+The pattern in [Editing Existing Records](#editing-existing-records) still
+works. To move a view to `ModelFormMixin`:
+
+1. Replace `FormMixin` with `ModelFormMixin[YourModel]` and set `model`.
+2. Delete the `mount()` code that loads `_model_instance`. The route's `pk`
+   selects the record.
+3. Move any ownership filter into `get_queryset()`, or a per-record rule into
+   `has_object_permission()`.
+4. In `form_valid()`, assign the saved record with `self.object = form.save()`.
+
+Don't set `_model_instance` on a `ModelFormMixin` view: that is a
+configuration error.
+
 ## Form Reset
 
 Clear the form back to its initial state:
@@ -427,7 +536,7 @@ Each radio input carries the attribute; the CSS finds its wrapper with `:has()`.
 
 - **Always include `{% csrf_token %}`** inside `dj-submit` forms (needed for the native, CSRF-protected JSON event fallback).
 - **Use `dj-change="validate_field"`** on fields for instant feedback before submission.
-- **Set `_model_instance` before `super().mount()`** when editing existing records.
+- **Set `_model_instance` before `super().mount()`** when editing existing records, or from djust 1.3 use [`ModelFormMixin`](#editing-one-record-with-modelformmixin).
 - **Keep `form_data` keys consistent.** FormMixin initializes all field keys in `mount()`. Don't add or remove keys -- it breaks VDOM diffing.
 - **Use `form_errors` for cross-field validation.** Errors from `clean()` go to `form_errors`, per-field errors go to `field_errors`.
 

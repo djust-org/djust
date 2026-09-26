@@ -857,6 +857,7 @@ fn node_is_position_dependent(node: &Node) -> bool {
         | Node::Comment
         | Node::Load(_)
         | Node::CsrfToken
+        | Node::DjustAudio
         | Node::Static(_)
         | Node::Extends(_)
         | Node::TemplateTag(_)

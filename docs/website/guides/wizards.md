@@ -119,7 +119,7 @@ That's it. The wizard handles validation, navigation, and data collection automa
 ## How It Works
 
 1. `mount()` initializes step state (index, data, errors, completed steps)
-2. User fills in fields -- `dj-change="validate_field"` stores each value as it changes (no validation yet)
+2. User fills in fields -- `dj-change="validate_field"` stores each value as it changes (no validation yet). A field with a callable `initial` (`UUIDField(initial=uuid.uuid4)`, `initial=timezone.now`) is drawn once, when its step first renders, and stored in the step's data as the text the widget shows, so the value on the page is the value the step submits
 3. User clicks "Continue" -- `next_step` validates the current step, advances if valid
 4. User clicks "Back" -- `prev_step` goes back without validation (data is preserved)
 5. On the last step, "Submit" calls `submit_wizard` which re-validates ALL steps, then calls `on_wizard_complete()`

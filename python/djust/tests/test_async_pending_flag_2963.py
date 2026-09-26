@@ -14,9 +14,6 @@ Client side: an existing frame field. ``async_pending: true`` keeps loading on
 tests/js/loading-states.test.js and tests/js/sse.test.js.
 """
 
-import asyncio
-import json
-
 import pytest
 from asgiref.sync import sync_to_async
 from channels.testing import WebsocketCommunicator
@@ -27,6 +24,8 @@ from django.test import override_settings
 from djust import LiveView, event_handler
 from djust.mixins.async_work import has_pending_async_work
 from djust.websocket import LiveViewConsumer
+
+from ._ws_frames import drain_extra, receive_until
 
 SETTINGS = dict(DEBUG=False, DJUST_TENANTS=None, DJUST_CONFIG={})
 
@@ -97,17 +96,31 @@ async def _mounted():
     return socket
 
 
-async def _frames(socket, quiet=0.6):
-    frames = []
-    while not await socket.receive_nothing(timeout=quiet):
-        frames.append(json.loads((await socket.receive_output(timeout=3))["text"]))
-    return frames
+async def _frames(socket, until):
+    """Frames until ``until(frames)`` holds (event-driven, #3130), then any
+    others before the socket goes quiet. The trailing window can only miss a
+    late extra frame, never cut the expected one short."""
+    frames = await receive_until(socket, until)
+    return frames + await drain_extra(socket)
 
 
-async def _event(socket, name, ref):
+def _replied(ref, *, async_of=None):
+    """``until``: the event's reply arrived and, with ``async_of``, the
+    ``source="async"`` frame that ends that event's loading state."""
+
+    def done(frames):
+        if not any(f.get("ref") == ref for f in frames):
+            return False
+        return async_of is None or any(
+            f.get("source") == "async" and f.get("event_name") == async_of for f in frames
+        )
+
+    return done
+
+
+async def _event(socket, name, ref, *, work):
     await socket.send_json_to({"type": "event", "event": name, "params": {}, "ref": ref})
-    await asyncio.sleep(0.05)
-    return await _frames(socket)
+    return await _frames(socket, _replied(ref, async_of=name if work else None))
 
 
 def _reply(frames, ref):
@@ -123,7 +136,7 @@ async def test_reply_announces_start_async_work_and_result_ends_it(event):
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **SETTINGS):
         socket = await _mounted()
         try:
-            frames = await _event(socket, event, 1)
+            frames = await _event(socket, event, 1, work=True)
             assert _reply(frames, 1).get("async_pending") is True, frames
             results = [f for f in frames if f.get("source") == "async"]
             assert results, f"the result frame that ends loading never came: {frames}"
@@ -139,7 +152,7 @@ async def test_reply_without_work_does_not_announce_it():
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **SETTINGS):
         socket = await _mounted()
         try:
-            frames = await _event(socket, "plain", 2)
+            frames = await _event(socket, "plain", 2, work=False)
             assert "async_pending" not in _reply(frames, 2)
         finally:
             await socket.disconnect()
@@ -152,7 +165,7 @@ async def test_failing_work_without_handler_still_ends_loading():
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **SETTINGS):
         socket = await _mounted()
         try:
-            frames = await _event(socket, "start_failing", 3)
+            frames = await _event(socket, "start_failing", 3, work=True)
             assert _reply(frames, 3).get("async_pending") is True
             results = [f for f in frames if f.get("source") == "async"]
             assert results and results[-1]["event_name"] == "start_failing", frames
@@ -189,8 +202,7 @@ async def test_cancelled_work_still_ends_the_loading_state():
                 {"type": "event", "event": "start_slow", "params": {}, "ref": 4}
             )
             await socket.send_json_to({"type": "event", "event": "stop", "params": {}, "ref": 5})
-            await asyncio.sleep(0.5)
-            frames = await _frames(socket)
+            frames = await _frames(socket, _replied(4, async_of="start_slow"))
             assert _reply(frames, 4).get("async_pending") is True, frames
             ends = [
                 f

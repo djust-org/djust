@@ -49,6 +49,8 @@ from django.test import override_settings
 from djust import LiveView
 from djust.runtime import ViewRuntime, WSConsumerTransport
 
+from ._ws_frames import drain_extra, has_type, receive_until
+
 _ALLOWED = "djust.tests.test_runtime_mount_parity_1917"
 _ALLOWLIST = override_settings(LIVEVIEW_ALLOWED_MODULES=[_ALLOWED])
 
@@ -176,23 +178,16 @@ async def _connect_and_bootstrap_consumer(url: str = "/parity-1917/"):
     return communicator, consumer
 
 
-async def _drain(communicator, *, max_frames=8, timeout=2):
-    """Best-effort drain of JSON frames already on the wire. Stops at the first
-    receive timeout OR a ``websocket.close`` frame (the runtime's
-    finalize_mount_auth close), so an auth-block mount that ends in a 4403 close
-    still yields the preceding navigate/error frames without raising."""
-    frames = []
-    for _ in range(max_frames):
-        if await communicator.receive_nothing(timeout=timeout, interval=0.05):
-            break
-        msg = await communicator.receive_output(timeout=timeout)
-        if msg.get("type") == "websocket.close":
-            break
-        if msg.get("type") == "websocket.send":
-            import json as _json
-
-            frames.append(_json.loads(msg["text"]))
-    return frames
+async def _drain(communicator, wanted):
+    """The JSON frames the mount produced, event-driven (#3130): waits until a
+    ``wanted``-type frame arrives, then collects anything else until the
+    socket goes quiet. Stops at a ``websocket.close`` frame (the runtime's
+    finalize_mount_auth close), so an auth-block mount that ends in a 4403
+    close still yields the preceding navigate/error frames without raising."""
+    frames = await receive_until(communicator, has_type(wanted), what=f"a {wanted} frame")
+    if not (frames and frames[-1].get("type") == "websocket.close"):
+        frames += await drain_extra(communicator)
+    return [f for f in frames if f.get("type") != "websocket.close"]
 
 
 async def _runtime_mount(consumer, view_path: str, *, url: str = "/parity-1917/", extra=None):
@@ -220,7 +215,7 @@ class TestRuntimeBasicMountParity:
         communicator, consumer = await _connect_and_bootstrap_consumer()
         try:
             await _runtime_mount(consumer, f"{_ALLOWED}.PlainView")
-            frames = await _drain(communicator)
+            frames = await _drain(communicator, "mount")
             mounts = [f for f in frames if f.get("type") == "mount"]
             assert mounts, f"runtime dispatch_mount must emit a mount frame; got {frames!r}"
             mf = mounts[0]
@@ -263,7 +258,7 @@ class TestRuntimeActorMountParity:
         communicator, consumer = await _connect_and_bootstrap_consumer()
         try:
             await _runtime_mount(consumer, f"{_ALLOWED}.ActorView")
-            frames = await _drain(communicator, timeout=3)
+            frames = await _drain(communicator, "mount")
             mounts = [f for f in frames if f.get("type") == "mount"]
             errors = [f for f in frames if f.get("type") == "error"]
             assert mounts, (
@@ -297,7 +292,7 @@ class TestRuntimeActorMountParity:
                 await runtime.dispatch_mount(
                     {"type": "mount", "view": f"{_ALLOWED}.ActorView", "url": "/parity-1917/"}
                 )
-            frames = await _drain(communicator)
+            frames = await _drain(communicator, "error")
             mounts = [f for f in frames if f.get("type") == "mount"]
             errors = [f for f in frames if f.get("type") == "error"]
             assert not mounts, (
@@ -335,7 +330,7 @@ class TestRuntimeNoArmVersionWiring:
                 await runtime.dispatch_mount(
                     {"type": "mount", "view": f"{_ALLOWED}.PlainView", "url": "/parity-1917/"}
                 )
-            frames = await _drain(communicator)
+            frames = await _drain(communicator, "mount")
             mounts = [f for f in frames if f.get("type") == "mount"]
             assert mounts and mounts[0].get("version") == 4242, (
                 "the mount frame version must come from next_mount_version (Finding C "
@@ -377,7 +372,7 @@ class TestRuntimeAuthBlockFinalize:
             monkeypatch.setattr(_auth, "run_pre_mount_auth", lambda view, request: "/login/")
             await _runtime_mount(consumer, f"{_ALLOWED}.LoginRequiredView")
 
-            frames = await _drain(communicator)
+            frames = await _drain(communicator, "navigate")
             navs = [f for f in frames if f.get("type") == "navigate"]
             assert navs and navs[0].get("to") == "/login/", (
                 f"a login-required view must emit a navigate frame; got {frames!r}"
@@ -410,7 +405,7 @@ class TestRuntimeAuthBlockFinalize:
             monkeypatch.setattr(_auth, "run_pre_mount_auth", lambda view, request: "/login/")
             await _runtime_mount(consumer, f"{_ALLOWED}.LoginRequiredView")
 
-            frames = await _drain(communicator)
+            frames = await _drain(communicator, "navigate")
             navs = [f for f in frames if f.get("type") == "navigate"]
             assert navs, f"the navigate frame must still be emitted in a batch; got {frames!r}"
             assert closed["flag"] is False, (
@@ -449,7 +444,7 @@ class TestRuntimeStateRestoreParity:
             await sync_to_async(_seed)()
 
             await _runtime_mount(consumer, f"{_ALLOWED}.OptInSnapView", url="/snap-1917/")
-            frames = await _drain(communicator)
+            frames = await _drain(communicator, "mount")
             mounts = [f for f in frames if f.get("type") == "mount"]
             assert mounts, f"the opt-in view must mount; got {frames!r}"
             assert "n=99" in mounts[0].get("html", ""), (

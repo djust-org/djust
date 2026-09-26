@@ -659,7 +659,7 @@ That's it. The framework handles dialog rendering, indicator, op visibility, aud
 ### Example 2: Classroom workshop (instructor → many students)
 
 ```python
-class WorkshopInstructorView(LiveView, PresenceMixin):
+class WorkshopInstructorView(PresenceMixin, LiveView):
     presence_key = "workshop:{session_id}"
     login_required = True
     permission_required = "workshops.lead"
@@ -675,7 +675,7 @@ class WorkshopInstructorView(LiveView, PresenceMixin):
         self.broadcast_commands_to_envelopes(chain, presence_group=self.presence_key)
 
 
-class WorkshopStudentView(LiveView, PresenceMixin):
+class WorkshopStudentView(PresenceMixin, LiveView):
     presence_key = "workshop:{session_id}"
 
     class Meta:

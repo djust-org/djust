@@ -37,34 +37,34 @@ from djust.theming.gallery.component_registry import render_python_component_exa
 
 
 class T:
-    def __init__(s):
-        s._session_id = str(uuid.uuid4())
-        s._client_ip = None
-        s.sent = []
+    def __init__(self):
+        self._session_id = str(uuid.uuid4())
+        self._client_ip = None
+        self.sent = []
 
-    session_id = property(lambda s: s._session_id)
-    client_ip = property(lambda s: s._client_ip)
+    session_id = property(lambda self: self._session_id)
+    client_ip = property(lambda self: self._client_ip)
 
-    async def send(s, d):
-        s.sent.append(d)
+    async def send(self, d):
+        self.sent.append(d)
 
-    async def send_error(s, e, **k):
-        s.sent.append({"type": "error", "error": e})
+    async def send_error(self, e, **k):
+        self.sent.append({"type": "error", "error": e})
 
-    async def close(s, code=1000):
+    async def close(self, code=1000):
         pass
 
-    def next_client_version(s, h, v):
+    def next_client_version(self, h, v):
         return v
 
-    def build_request(s):
+    def build_request(self):
         return None
 
-    def on_view_mounted(s, v):
+    def on_view_mounted(self, v):
         pass
 
     @contextlib.asynccontextmanager
-    async def event_context(s, v):
+    async def event_context(self, v):
         yield
 
 

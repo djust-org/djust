@@ -242,6 +242,7 @@ class PostgresNotifyListener:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._stopping: bool = False
         self._ready_event: Optional[asyncio.Event] = None
+        self._claim_lock = threading.Lock()
 
     @classmethod
     def instance(cls) -> "PostgresNotifyListener":
@@ -331,6 +332,15 @@ class PostgresNotifyListener:
         so a cross-loop call would race against the background task.
         """
         _validate_channel(channel)
+        owner = self._claim_loop()
+        if owner is not None:
+            # Several event loops (djust serve --loops N, #3128): the psycopg
+            # connection and the listener task live on ONE loop; a session on
+            # another loop subscribes by hopping there instead of raising.
+            from ..multiloop import run_on_loop
+
+            await run_on_loop(owner, self.ensure_listening(channel))
+            return
         self._assert_same_loop()
         if channel in self._channels:
             return
@@ -341,6 +351,24 @@ class PostgresNotifyListener:
         # the next reconnect cycle.
         if self._conn is not None:
             await self._listen_on(self._conn, channel)
+
+    def _claim_loop(self) -> Optional[asyncio.AbstractEventLoop]:
+        """With several event loops, the loop to hop to, or ``None`` to go on
+        here. The first loop to subscribe claims the listener, atomically, so
+        two loops never start two listener tasks. With one loop (the default)
+        this always returns ``None`` and #808's same-loop check applies."""
+        from ..multiloop import is_multi_loop
+
+        if not is_multi_loop():
+            return None
+        here = asyncio.get_running_loop()
+        with self._claim_lock:
+            if self._loop is None or self._loop.is_closed():
+                self._loop = here
+            owner = self._loop
+        if owner is here or not owner.is_running():
+            return None
+        return owner
 
     def _assert_same_loop(self) -> None:
         """Reject calls from a different event loop than the listener's.

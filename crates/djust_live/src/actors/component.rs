@@ -8,6 +8,7 @@
 //! - Independent component lifecycles
 
 use super::error::ActorError;
+use super::messages::EventParams;
 use djust_core::{Context, RenderEnv, Value};
 use djust_templates::Template;
 use djust_vdom::{diff, parse_html, VNode};
@@ -30,7 +31,7 @@ pub enum ComponentMsg {
     /// Handle an event within this component
     Event {
         event_name: String,
-        params: HashMap<String, Value>,
+        params: EventParams,
         reply: tokio::sync::oneshot::Sender<Result<String, ActorError>>,
     },
 
@@ -240,7 +241,7 @@ impl ComponentActor {
     async fn handle_event(
         &mut self,
         event_name: String,
-        params: HashMap<String, Value>,
+        params: EventParams,
     ) -> Result<String, ActorError> {
         // Phase 8.2: Call Python event handler if available
         let result = self.call_python_handler(&event_name, &params);
@@ -279,7 +280,7 @@ impl ComponentActor {
     fn call_python_handler(
         &self,
         event_name: &str,
-        params: &HashMap<String, Value>,
+        params: &EventParams,
     ) -> Result<(), ActorError> {
         use pyo3::types::PyDict;
         use pyo3::Python;
@@ -456,7 +457,7 @@ impl ComponentActorHandle {
     pub async fn event(
         &self,
         event_name: String,
-        params: HashMap<String, Value>,
+        params: EventParams,
     ) -> Result<String, ActorError> {
         let (tx, rx) = tokio::sync::oneshot::channel();
 
@@ -705,7 +706,7 @@ mod tests {
         tokio::spawn(actor.run());
 
         // Trigger event (simplified - just updates state)
-        let mut params = HashMap::new();
+        let mut params = EventParams::new();
         params.insert("count".to_string(), Value::Integer(5));
         let html = handle.event("increment".to_string(), params).await.unwrap();
         assert!(html.contains("5"));

@@ -15,7 +15,8 @@ from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.db.models import ForeignKey, OneToOneField, Q
 from django.http import HttpRequest, HttpResponse, HttpResponseRedirect
-from django.urls import reverse
+from django.urls import Resolver404, resolve, reverse
+from django.utils.http import url_has_allowed_host_and_scheme
 from djust import LiveView
 from djust.decorators import StateProperty, debounce, event_handler, state
 
@@ -45,6 +46,58 @@ def register_admin_view(
 def get_admin_config(view_id: Optional[str]) -> Dict[str, Any]:
     """Get admin config for a view."""
     return _VIEW_REGISTRY.get(view_id, {}) if view_id is not None else {}
+
+
+def _registry_id_from_route(view: Any) -> Optional[str]:
+    """The ``_view_registry_id`` the route serving ``view.request`` passes to ``as_view()``.
+
+    ``DjustAdminSite.get_urls`` binds each admin view to its site (and model)
+    through an ``as_view(_view_registry_id=...)`` kwarg. The HTTP GET gets it
+    from ``as_view``; a WebSocket or SSE mount builds the view with no
+    kwargs, from the page URL alone (#3140). Resolve that URL and read the
+    kwarg off the route, but only when the route serves this view's class:
+    the client names both the view and the URL, so a URL routed to another
+    view must not select its registration.
+    """
+    request = getattr(view, "request", None)
+    path_info = getattr(request, "path_info", None)
+    if not path_info:
+        return None
+    try:
+        match = resolve(path_info)
+    except Resolver404:
+        return None
+    if getattr(match.func, "view_class", None) is not type(view):
+        return None
+    initkwargs = getattr(match.func, "view_initkwargs", None) or {}
+    registry_id = initkwargs.get("_view_registry_id")
+    return registry_id if isinstance(registry_id, str) else None
+
+
+class _AdminRegistryMixin:
+    """Resolves an admin view's site registration on every transport."""
+
+    # View ID for registry lookup - set via as_view()
+    # Prefixed with underscore so LiveView's get_context_data() skips it
+    _view_registry_id: Optional[str] = None
+
+    # Set once the route lookup has run for this view's request, so a miss is
+    # not re-resolved on every attribute read.
+    _registry_route_checked: bool = False
+
+    def _admin_config(self) -> Dict[str, Any]:
+        if self._view_registry_id is None and not self._registry_route_checked:
+            # A socket mount: recover the id from the page's route and keep it.
+            # Only once a request exists; before that there is nothing to resolve.
+            if getattr(self, "request", None) is not None:
+                self._view_registry_id = _registry_id_from_route(self)
+                self._registry_route_checked = True
+        return get_admin_config(self._view_registry_id)
+
+    @property
+    def _admin_site(self) -> Any:
+        """Admin site from registry."""
+        return self._admin_config().get("admin_site")
 
 
 def _serialize_widget_slots(
@@ -94,7 +147,7 @@ def admin_login_required(view_func: Callable[..., Any]) -> Callable[..., Any]:
     return wrapped_view
 
 
-class AdminBaseMixin:
+class AdminBaseMixin(_AdminRegistryMixin):
     """Base mixin for all admin views. Provides admin chrome context.
 
     Always combined with ``LiveView`` (e.g. ``AdminIndexView(AdminBaseMixin,
@@ -105,10 +158,6 @@ class AdminBaseMixin:
     # Provided by the co-mixed ``LiveView`` at mount time. Annotation-only
     # (no runtime assignment) so it doesn't shadow LiveView's instance attr.
     request: Any
-
-    # View ID for registry lookup - set via as_view()
-    # Prefixed with underscore so LiveView's get_context_data() skips it
-    _view_registry_id: Optional[str] = None
 
     # Declare djust-honored auth so the WebSocket/SSE mount path gates admin
     # views too. The ``admin_login_required`` wrapper below only protects the
@@ -123,6 +172,10 @@ class AdminBaseMixin:
         user = getattr(request, "user", None)
         if not (user is not None and user.is_authenticated and user.is_active and user.is_staff):
             raise PermissionDenied("Admin access requires an active staff account.")
+        if self._admin_site is None:
+            # No site registration: a socket mount whose URL does not route to
+            # this view (#3140). Refuse it rather than crash rendering the chrome.
+            raise PermissionDenied("This admin page is not routed at the requested URL.")
 
     @classmethod
     def as_view(cls, **initkwargs: Any) -> Callable[..., Any]:
@@ -133,22 +186,14 @@ class AdminBaseMixin:
         return admin_login_required(view)
 
     @property
-    def _admin_site(self) -> Any:
-        """Admin site from registry."""
-        config = get_admin_config(self._view_registry_id)
-        return config.get("admin_site")
-
-    @property
     def _model(self) -> Any:
         """Model class from registry."""
-        config = get_admin_config(self._view_registry_id)
-        return config.get("model")
+        return self._admin_config().get("model")
 
     @property
     def _model_admin(self) -> Any:
         """ModelAdmin from registry."""
-        config = get_admin_config(self._view_registry_id)
-        return config.get("model_admin")
+        return self._admin_config().get("model_admin")
 
     def get_admin_context(self) -> Dict[str, Any]:
         """Add common admin context (JSON serializable).
@@ -752,12 +797,10 @@ class ModelDeleteView(AdminBaseMixin, LiveView):
         self.is_deleting = False
 
 
-class LoginView(LiveView):
+class LoginView(_AdminRegistryMixin, LiveView):
     """Admin login view."""
 
     template_name = "djust_admin/login.html"
-
-    _view_registry_id: Optional[str] = None
 
     username = state(default="")
     password = state(default="")
@@ -766,11 +809,6 @@ class LoginView(LiveView):
     def mount(self, request: HttpRequest, **kwargs: Any) -> None:
         self.request = request
         self.next_url = request.GET.get("next", "")
-
-    @property
-    def _admin_site(self) -> Any:
-        config = get_admin_config(self._view_registry_id)
-        return config.get("admin_site")
 
     def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
         return {
@@ -812,7 +850,11 @@ class LoginView(LiveView):
                 session[HASH_SESSION_KEY] = user.get_session_auth_hash()
                 session.save()
 
-                if self.next_url:
+                if self.next_url and url_has_allowed_host_and_scheme(
+                    url=self.next_url,
+                    allowed_hosts={self.request.get_host()},
+                    require_https=self.request.is_secure(),
+                ):
                     redirect_url = self.next_url
                 else:
                     admin_name = self._admin_site.name if self._admin_site else "djust_admin"
@@ -826,21 +868,14 @@ class LoginView(LiveView):
         self.password = ""
 
 
-class LogoutView(LiveView):
+class LogoutView(_AdminRegistryMixin, LiveView):
     """Admin logout view."""
 
     template_name = "djust_admin/logout.html"
 
-    _view_registry_id: Optional[str] = None
-
     def mount(self, request: HttpRequest, **kwargs: Any) -> None:
         self.request = request
         logout(request)
-
-    @property
-    def _admin_site(self) -> Any:
-        config = get_admin_config(self._view_registry_id)
-        return config.get("admin_site")
 
     def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
         return {

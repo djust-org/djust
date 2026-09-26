@@ -268,7 +268,8 @@ class TestSkipRenderForceParity2834:
             "a handler that sets only _skip_render must still suppress the "
             f"server_push render, got {consumer.sent!r}"
         )
-        assert _noops(consumer.sent), f"expected a noop ack, got {consumer.sent!r}"
+        # A skipped push sends no frame at all (#3034): nothing to acknowledge.
+        assert not _noops(consumer.sent), f"expected no noop, got {consumer.sent!r}"
         assert consumer.view_instance._skip_render is False, "the skip flag must be consumed"
 
     # ---- websocket.db_notify ------------------------------------------------
@@ -296,7 +297,7 @@ class TestSkipRenderForceParity2834:
             "a handler that sets only _skip_render must still suppress the "
             f"db_notify render, got {consumer.sent!r}"
         )
-        assert _noops(consumer.sent), f"expected a noop ack, got {consumer.sent!r}"
+        assert not _noops(consumer.sent), f"expected no noop (#3034), got {consumer.sent!r}"
         assert consumer.view_instance._skip_render is False, "the skip flag must be consumed"
 
 

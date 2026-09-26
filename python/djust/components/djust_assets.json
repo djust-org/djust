@@ -1,0 +1,279 @@
+{
+  "schema": 1,
+  "assets": {
+    "highlight.js": {
+      "files": [
+        {
+          "path": "djust_components/vendor/highlight/highlight.js",
+          "integrity": "sha384-lN1VaRHQn/jwm8u31PVDoExoFeernxG+wGt3IODYhaLmDGRuH2n/acdDCspg54k+"
+        },
+        {
+          "path": "djust_components/vendor/highlight/styles/github.css",
+          "integrity": "sha384-eFTL69TLRZTkNfYZOLM+G04821K1qZao/4QLJbet1pP4tcF+fdXq/9CdqAbWRl/L",
+          "variant": "github"
+        },
+        {
+          "path": "djust_components/vendor/highlight/styles/github-dark.css",
+          "integrity": "sha384-wH75j6z1lH97ZOpMOInqhgKzFkAInZPPSPlZpYKYTOqsaizPvhQZmAtLcPKXpLyH",
+          "variant": "github-dark"
+        },
+        {
+          "path": "djust_components/vendor/highlight/styles/atom-one-dark.css",
+          "integrity": "sha384-oaMLBGEzBOJx3UHwac0cVndtX5fxGQIfnAeFZ35RTgqPcYlbprH9o9PUV/F8Le07",
+          "variant": "atom-one-dark"
+        },
+        {
+          "path": "djust_components/vendor/highlight/styles/atom-one-light.css",
+          "integrity": "sha384-w6Ujm1VWa9HYFqGc89oAPn/DWDi2gUamjNrq9DRvEYm2X3ClItg9Y9xs1ViVo5b5",
+          "variant": "atom-one-light"
+        },
+        {
+          "path": "djust_components/vendor/highlight/styles/monokai.css",
+          "integrity": "sha384-Exar9WeMELq1EieDQNh7c2ggVht9/FEoVtGG2JKgmEwcm5zOXQwPMzp3PEsPJ/zq",
+          "variant": "monokai"
+        },
+        {
+          "path": "djust_components/vendor/highlight/styles/vs2015.css",
+          "integrity": "sha384-BE+nmfgoK1j3fBxbLI64Jzf52Mx/QAyw+4O7GyPYevJnAyrljCoRtQkYNfCfuWPF",
+          "variant": "vs2015"
+        },
+        {
+          "path": "djust_components/vendor/highlight/styles/nord.css",
+          "integrity": "sha384-O/y538KpolLjYHZH8xqC17hcGWgjOw79vqDDhXNIT6Q7q3O5KVr29xbsaq9k6fSL",
+          "variant": "nord"
+        },
+        {
+          "path": "djust_components/vendor/highlight/styles/default.css",
+          "integrity": "sha384-4Y0nObtF3CbKnh+lpzmAVdAMtQXl+ganWiiv73RcGVdRdfVIya8Cao1C8ZsVRRDz",
+          "variant": "default"
+        },
+        {
+          "path": "djust_components/vendor/highlight/styles/dark.css",
+          "integrity": "sha384-0alsyfCbpL3QQtlZaLSFAT675ef/kAjyxgBUG8h+SA1dDmD+Jt4WRibO2BjuIaZs",
+          "variant": "dark"
+        },
+        {
+          "path": "djust_components/vendor/highlight/styles/a11y-dark.css",
+          "integrity": "sha384-2QAAjX8pqaM5azX68KWI2wExF6Q13kY4kEiQFY4b/1zPe6rpgmTByNpDEllH3sb+",
+          "variant": "a11y-dark"
+        },
+        {
+          "path": "djust_components/vendor/highlight/styles/a11y-light.css",
+          "integrity": "sha384-qdZDAN3jffvh670RHw1wxLekabidEFaNRninYgIzBvMbL6WlHdXeHS/Bt+vx33lN",
+          "variant": "a11y-light"
+        },
+        {
+          "path": "djust_components/vendor/highlight/styles/stackoverflow-light.css",
+          "integrity": "sha384-FMwt7cTGo4aLxZnno5k0xTj0W4gmi48Kwept+y/oQmE6cFk36Kr+QJZOKNOQwORe",
+          "variant": "stackoverflow-light"
+        },
+        {
+          "path": "djust_components/vendor/highlight/styles/stackoverflow-dark.css",
+          "integrity": "sha384-iL+x+BroCyHm/p2c6sMA9umXhdCWp2cKe4QUjPeMzHgwXAk+ZxHyIGP3NZTZensU",
+          "variant": "stackoverflow-dark"
+        }
+      ],
+      "license_file": "djust_components/vendor/highlight/highlight.LICENSE.txt",
+      "packages": [
+        {
+          "purl": "pkg:npm/highlight.js@11.12.0",
+          "license": "BSD-3-Clause"
+        }
+      ]
+    },
+    "markdown-visual": {
+      "files": [
+        {
+          "path": "djust_components/markdown-visual.js",
+          "integrity": "sha384-HqQE4e88vqpIFTxJIXSPhjxCG7mGI0+TMFqMiXlcYpjT0AwNLyxoZ08zUu3imy7T"
+        }
+      ],
+      "license_file": "djust_components/markdown-visual.LICENSE.txt",
+      "packages": [
+        {
+          "purl": "pkg:npm/%40tiptap/core@3.31.3",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/%40tiptap/extension-blockquote@3.31.3",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/%40tiptap/extension-bold@3.31.3",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/%40tiptap/extension-code@3.31.3",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/%40tiptap/extension-code-block@3.31.3",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/%40tiptap/extension-document@3.31.3",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/%40tiptap/extension-hard-break@3.31.3",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/%40tiptap/extension-heading@3.31.3",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/%40tiptap/extension-horizontal-rule@3.31.3",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/%40tiptap/extension-image@3.31.3",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/%40tiptap/extension-italic@3.31.3",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/%40tiptap/extension-link@3.31.3",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/%40tiptap/extension-list@3.31.3",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/%40tiptap/extension-paragraph@3.31.3",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/%40tiptap/extension-strike@3.31.3",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/%40tiptap/extension-table@3.31.3",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/%40tiptap/extension-task-item@3.31.3",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/%40tiptap/extension-task-list@3.31.3",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/%40tiptap/extension-text@3.31.3",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/%40tiptap/extension-underline@3.31.3",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/%40tiptap/extensions@3.31.3",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/%40tiptap/markdown@3.31.3",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/%40tiptap/pm@3.31.3",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/%40tiptap/starter-kit@3.31.3",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/linkifyjs@4.3.3",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/marked@17.0.6",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/orderedmap@2.1.1",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/prosemirror-commands@1.7.2",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/prosemirror-dropcursor@1.8.3",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/prosemirror-gapcursor@1.4.1",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/prosemirror-history@1.5.0",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/prosemirror-keymap@1.2.3",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/prosemirror-model@1.25.11",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/prosemirror-schema-list@1.5.1",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/prosemirror-state@1.4.4",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/prosemirror-tables@1.8.5",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/prosemirror-transform@1.12.1",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/prosemirror-view@1.42.3",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/rope-sequence@1.3.4",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/w3c-keyname@2.2.8",
+          "license": "MIT"
+        }
+      ]
+    },
+    "xterm": {
+      "files": [
+        {
+          "path": "djust_components/vendor/xterm/xterm.mjs",
+          "integrity": "sha384-s0JwKMRXSBBDUlPbf3oli3dDVk65q2lo7eKxkRdQ5lDWCmm7q6Nnygi5WjTHiOg4"
+        },
+        {
+          "path": "djust_components/vendor/xterm/xterm.css",
+          "integrity": "sha384-8Xk9wy/gzEDUKrXtrmCFa2bBuK3BpjpDuL/p0SeKQX19Khl/M+lHOgD/CyYf7efP"
+        }
+      ],
+      "license_file": "djust_components/vendor/xterm/xterm.LICENSE.txt",
+      "packages": [
+        {
+          "purl": "pkg:npm/%40xterm/addon-fit@0.10.0",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/%40xterm/xterm@5.5.0",
+          "license": "MIT"
+        }
+      ]
+    }
+  }
+}

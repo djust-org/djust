@@ -1,9 +1,10 @@
-"""Tests for #1607: V002/V003/V004/V007/Q007 must honor suppress_checks.
+"""Tests for #1607: V002/V003/V004/Q007 must honor suppress_checks.
 
 Follow-up to PR #1606 (which fixed V001/V005). The same per-class loop in
 `python/djust/checks.py::check_liveviews` emits V002, V003, V004, V007, and
 Q007 without consulting the `_is_check_suppressed()` helper that every other
-V/C/T/Y check in the file uses. This file pins the fix.
+V/C/T/Y check in the file uses. This file pins the fix. V007 has since been
+retired (ADR-037 D3); ``test_checks.py::TestV007Retired`` pins that.
 """
 
 import pytest
@@ -177,72 +178,6 @@ class TestV004Suppress:
             errors = _check_liveviews_errors()
             v004 = [e for e in errors if e.id == "djust.V004" and "V004NotSuppressedView" in e.msg]
             assert len(v004) >= 1, "V004 should fire normally: %r" % v004
-        finally:
-            del cls
-            _force_gc()
-
-
-class TestV007Suppress:
-    """V007 = event handler missing **kwargs."""
-
-    def test_v007_suppressed_via_djust_config(self, settings):
-        from djust.live_view import LiveView
-        from djust.decorators import event_handler
-
-        settings.DJUST_CONFIG = {"suppress_checks": ["V007"]}
-
-        @event_handler()
-        def bad_handler(self):  # missing **kwargs
-            pass
-
-        def mount(self, request, **kwargs):
-            pass
-
-        cls = type(
-            "V007SuppressedView",
-            (LiveView,),
-            {
-                "__module__": "myapp.views",
-                "template_name": "t.html",
-                "mount": mount,
-                "bad_handler": bad_handler,
-            },
-        )
-        try:
-            errors = _check_liveviews_errors()
-            v007 = [e for e in errors if e.id == "djust.V007" and "V007SuppressedView" in e.msg]
-            assert v007 == [], "V007 should be silenced: %r" % v007
-        finally:
-            del cls
-            _force_gc()
-
-    def test_v007_fires_without_suppression(self, settings):
-        from djust.live_view import LiveView
-        from djust.decorators import event_handler
-
-        settings.DJUST_CONFIG = {}
-
-        @event_handler()
-        def bad_handler(self):
-            pass
-
-        def mount(self, request, **kwargs):
-            pass
-
-        cls = type(
-            "V007NotSuppressedView",
-            (LiveView,),
-            {
-                "__module__": "myapp.views",
-                "template_name": "t.html",
-                "mount": mount,
-                "bad_handler": bad_handler,
-            },
-        )
-        try:
-            errors = _check_liveviews_errors()
-            v007 = [e for e in errors if e.id == "djust.V007" and "V007NotSuppressedView" in e.msg]
-            assert len(v007) == 1, "V007 should fire normally: %r" % v007
         finally:
             del cls
             _force_gc()

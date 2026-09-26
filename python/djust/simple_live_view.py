@@ -38,6 +38,7 @@ try:
 except ImportError:
     _RUST_AVAILABLE = False
 
+from ._class_snapshot import attribute_names
 from .config import template_auto_call_enabled
 from .render_env import apply_render_env
 from .utils import get_template_dirs
@@ -93,7 +94,7 @@ class SimpleLiveView(View):
         rather than a safety net around one.
         """
         context: Dict[str, Any] = {}
-        for key in dir(self):
+        for key in attribute_names(self):  # dir() races class writes (#3151)
             if key.startswith("_") or key in _VIEW_INTERNALS:
                 continue
             try:

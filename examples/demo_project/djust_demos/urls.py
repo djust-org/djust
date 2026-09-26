@@ -28,6 +28,25 @@ urlpatterns = [
     # ADR-038 E5 live matrix (tests/playwright/test_exposure_matrix.py).
     path("exposure/", ExposureMatrixView.as_view(), name="exposure"),
     path("exposure-legacy/", LegacyExposureMatrixView.as_view(), name="exposure-legacy"),
+    # ADR-036 P2 live matrix (tests/playwright/test_strict_parameters.py).
+    path("strict-parameters/", StrictParametersView.as_view(), name="strict-parameters"),
+    # ADR-035 F2 live surface (tests/playwright/test_model_form.py).
+    path("model-form/", model_form_index, name="model-form-index"),
+    path("model-form/<int:pk>/", ModelFormDemoView.as_view(), name="model-form"),
+    # ADR-034 C2 live surface (tests/playwright/test_interactive_dropdown.py).
+    path("interactive-dropdown/", InteractiveDropdownView.as_view(), name="interactive-dropdown"),
+    # ADR-034 C3 live surface (tests/playwright/test_interactive_collection.py).
+    # ADR-034 C4 live surface (tests/playwright/test_interactive_navigation.py).
+    path("interactive-nav/", InteractiveNavView.as_view(), name="interactive-nav"),
+    path("interactive-acceptance/", InteractiveAcceptanceView.as_view(), name="interactive-acceptance"),
+    path("interactive-nav/forget/", forget_saved_state, name="interactive-nav-forget"),
+    # ADR-037 row 20 live surface (tests/playwright/test_embedded_directives.py).
+    path("embedded-directives/", EmbeddedDirectivesView.as_view(), name="embedded-directives"),
+    path(
+        "interactive-collection/",
+        InteractiveCollectionView.as_view(),
+        name="interactive-collection",
+    ),
     # Table-selection canary (#2781) - selectable TableComponent multi-select.
     path("table-select/", TableSelectView.as_view(), name="table-select"),
     path("todo/", TodoView.as_view(), name="todo"),

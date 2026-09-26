@@ -75,12 +75,16 @@ it.each([false, true])('HTTP completion releases only its own loading request (f
         dom.window.djust.globalLoadingManager.scanAndRegister();
         const first = dom.window.djust.handleEvent('save', {_targetElement: button});
         const second = dom.window.djust.handleEvent('save', {_targetElement: button});
-        expect(requests.length).toBe(2);
-        requests[1]({ok: !failure, status: failure ? 500 : 200, json: async () => ({})});
-        await second;
-        expect(button.disabled).toBe(true);
-        requests[0]({ok: true, json: async () => ({})});
+        // HTTP events are sent one at a time; the second is registered (its
+        // loading state is on) but waits for the first to finish.
+        expect(requests.length).toBe(1);
+        requests[0]({ok: !failure, status: failure ? 500 : 200, json: async () => ({})});
         await first;
+        expect(button.disabled).toBe(true);
+        await new Promise(resolve => setTimeout(resolve, 0));
+        expect(requests.length).toBe(2);
+        requests[1]({ok: true, json: async () => ({})});
+        await second;
         expect(button.disabled).toBe(false);
         expect(dom.window.djust._getEventSeqState().pendingEventRefs).toEqual([]);
     } finally {

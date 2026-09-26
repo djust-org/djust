@@ -146,6 +146,54 @@ class TestX002UnprotectedMutation:
         """)
         assert findings == []
 
+    def test_aliased_djust_permission_required_ok_3093(self) -> None:
+        findings = _scan("""
+            from djust.decorators import permission_required as require_permission
+
+            class FooView:
+                @require_permission("app.delete_thing")
+                @event_handler
+                def delete_thing(self, pk):
+                    Thing.objects.filter(pk=pk).delete()
+        """)
+        assert findings == []
+
+    def test_alias_of_unrelated_decorator_still_triggers_3093(self) -> None:
+        findings = _scan("""
+            from djust.decorators import debounce as gate
+
+            class FooView:
+                @gate(300)
+                @event_handler
+                def delete_thing(self, pk):
+                    Thing.objects.filter(pk=pk).delete()
+        """)
+        assert _codes(findings) == ["X002"]
+
+    def test_project_wrapper_aliased_ok_3158(self, tmp_path, monkeypatch) -> None:
+        """S009 and X002 agree: a project wrapper around djust's decorator,
+        imported (under an alias) from an already-loaded module, is a gate."""
+        import importlib
+        import sys
+
+        (tmp_path / "x002_wrap_3158.py").write_text(
+            "from djust.decorators import permission_required as _pr\n"
+            "def permission_required(perm):\n    return _pr(perm)\n"
+        )
+        monkeypatch.syspath_prepend(str(tmp_path))
+        monkeypatch.delitem(sys.modules, "x002_wrap_3158", raising=False)
+        importlib.import_module("x002_wrap_3158")
+        findings = _scan("""
+            from x002_wrap_3158 import permission_required as need
+
+            class FooView:
+                @need("app.delete_thing")
+                @event_handler
+                def delete_thing(self, pk):
+                    Thing.objects.filter(pk=pk).delete()
+        """)
+        assert findings == []
+
     def test_non_mutating_handler_ok(self) -> None:
         findings = _scan("""
             class FooView:

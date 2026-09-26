@@ -153,6 +153,18 @@ class _Render:
             if slot in self.candidates
         }
 
+    def release(self) -> None:
+        """Drop the view and its children once the render is over (#3116).
+
+        The plan is the value of a ContextVar while the render runs, so every
+        copy of the context taken then (a task, or a thread on 3.14+) keeps it;
+        emptying it here stops such a copy from keeping the session alive.
+        """
+        self.owner = None
+        self.candidates.clear()
+        self.plans.clear()
+        self.regions.clear()
+
     def commit(self) -> None:
         from ._child_lifecycle import dispose_child_subtree
 
@@ -217,6 +229,7 @@ def reconcile_child_render(
                 return render(*args, **kwargs)
             current = _Render(view, whole_page, owner_wrapper)
             token = _active.set(current)
+            done = False
             try:
                 result = render(*args, **kwargs)
                 html = result[0] if isinstance(result, tuple) else result
@@ -232,16 +245,25 @@ def reconcile_child_render(
                     # live-root fragment. That is not a completed page shell.
                     current.whole_page = False
                 current.finish(html)
+                done = True
             finally:
                 _active.reset(token)
+                if not done:
+                    for plan in [*current.plans, current]:
+                        plan.release()
             if previous is not None:
                 previous.plans.extend([*current.plans, current])
             else:
-                committed: set[int] = set()
-                for plan in reversed([*current.plans, current]):
-                    if id(plan.owner) not in committed:
-                        plan.commit()
-                        committed.add(id(plan.owner))
+                plans = [*current.plans, current]
+                try:
+                    committed: set[int] = set()
+                    for plan in reversed(plans):
+                        if id(plan.owner) not in committed:
+                            plan.commit()
+                            committed.add(id(plan.owner))
+                finally:
+                    for plan in plans:
+                        plan.release()
             if owner_wrapper:
                 record_rendered_child(view)
             return result

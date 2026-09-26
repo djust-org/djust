@@ -1,0 +1,5 @@
+<p>{{ project_menu }} Selected: <strong>{{ selected_action }}</strong></p>
+<ul>
+    {% for menu in row_menus.values %}<li>{{ menu }}</li>{% endfor %}
+</ul>
+<p>Row action: <strong>{{ row_selection }}</strong></p>

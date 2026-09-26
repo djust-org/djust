@@ -18,6 +18,8 @@ from djust import LiveView
 from djust.runtime import document_title, navigation_title
 from djust.websocket import LiveViewConsumer
 
+from ._ws_frames import drain_extra, receive_until, types_of
+
 SETTINGS = dict(DEBUG=False, DJUST_TENANTS=None, DJUST_CONFIG={})
 
 
@@ -145,17 +147,24 @@ def _session():
     return session
 
 
-async def _drain(socket):
-    frames = []
-    while not await socket.receive_nothing(timeout=0.3):
-        frames.append(await socket.receive_json_from(timeout=3))
-    return frames
+async def _drain(socket, *, title: bool):
+    """The turn's frames, event-driven (#3130): wait for the mount frame and,
+    when ``title``, the title frame (page_metadata goes out after the mount
+    frame). A trailing quiet window then collects anything else; it can miss
+    a late extra frame (so a "no title" assertion can only pass wrongly on a
+    slow machine, never fail wrongly), never cut the expected ones short."""
+
+    def done(frames):
+        return "mount" in types_of(frames) and (not title or bool(_titles(frames)))
+
+    frames = await receive_until(socket, done, what=f"a mount frame (title={title})")
+    return frames + await drain_extra(socket)
 
 
-async def _navigate(target: str):
+async def _navigate(target: str, *, title: bool = True):
     """Mount SourcePage, live-redirect to ``target``; return the frames the
-    redirect produced up to and including its mount frame plus the next
-    few (page_metadata goes out after the mount frame)."""
+    redirect produced: its mount frame, its title frame when ``title``, and
+    whatever follows before the socket goes quiet."""
     socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     socket.scope.update(session=await sync_to_async(_session)(), user=AnonymousUser(), tenant=None)
     assert (await socket.connect())[0]
@@ -173,7 +182,7 @@ async def _navigate(target: str):
                 "params": {},
             }
         )
-        return await _drain(socket)
+        return await _drain(socket, title=title)
     finally:
         await socket.disconnect()
 
@@ -226,7 +235,7 @@ async def test_a_queued_page_title_skips_the_template_title_render(monkeypatch):
 @pytest.mark.asyncio
 async def test_a_template_without_a_head_title_sends_no_title():
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **SETTINGS):
-        frames = await _navigate("NoHeadPage")
+        frames = await _navigate("NoHeadPage", title=False)
     assert any(f.get("type") == "mount" for f in frames), frames
     assert _titles(frames) == []
 
@@ -245,7 +254,7 @@ async def test_an_initial_mount_sends_no_title_frame():
             await socket.send_json_to(
                 {"type": "mount", "view": f"{__name__}.DocsPage", "url": "/dest/"}
             )
-            frames = await _drain(socket)
+            frames = await _drain(socket, title=False)
         finally:
             await socket.disconnect()
     assert any(f.get("type") == "mount" for f in frames)

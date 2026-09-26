@@ -186,19 +186,27 @@ async def _drain_until_done(communicator, tries=40, timeout=3):
     raise AssertionError("never received a stream_done sentinel")
 
 
-async def _drain_quiet(communicator, settle=0.4):
-    """Drain every currently-queued frame WITHOUT a cancelling timeout.
+async def _drain_quiet(communicator):
+    """Frames up to the background work's end-of-callback render, then any
+    others before the socket goes quiet.
 
-    ``receive_nothing`` polls the output queue and never cancels the app (unlike
-    ``receive_output``'s timeout path). Used for the plain-mutation repro, which
-    emits NO stream sentinel — sleep long enough for the ~80ms of background
-    work to finish, then drain whatever was queued.
+    The plain-mutation repro emits NO stream sentinel, so it waits for the
+    ``source="async"`` render instead (event-driven, #3130; it used to sleep
+    0.4 s and hope the work was done). The trailing window can only miss a
+    late extra frame, never cut the render short. ``receive_until`` polls with
+    ``receive_nothing``, which never cancels the app (unlike
+    ``receive_output``'s timeout path).
     """
-    await asyncio.sleep(settle)
-    frames = []
-    while not await communicator.receive_nothing(timeout=0.05):
-        frames.append(await communicator.receive_json_from(timeout=1))
-    return frames
+    from ._ws_frames import drain_extra, receive_until
+
+    frames = await receive_until(
+        communicator,
+        lambda frames: any(
+            f.get("type") in ("patch", "html_update") and f.get("source") == "async" for f in frames
+        ),
+        what="the end-of-callback render",
+    )
+    return frames + await drain_extra(communicator)
 
 
 _CONTENT_OPS = {"replace", "text", "append", "prepend"}

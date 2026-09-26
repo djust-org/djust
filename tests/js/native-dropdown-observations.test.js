@@ -57,24 +57,29 @@ it('reports completed visibility with the correct source and no unsolicited traf
     } finally { dom.window.close(); }
 });
 
-it('coalesces pending visibility to its latest value without blocking another menu', async () => {
+it('coalesces pending visibility to its latest value; another menu reports in order', async () => {
     const {dom, requests, toggle} = await setup();
     try {
-        let finish;
+        const finishes = [];
         dom.window.fetch = (_url, options) => {
             requests.push(JSON.parse(options.body));
-            return new Promise(resolve => { finish = () => resolve({ok: true, json: async () => ({type: 'noop'})}); });
+            return new Promise(resolve => finishes.push(() => resolve({ok: true, json: async () => ({type: 'noop'})})));
         };
         toggle('one', true);
-        const finishOne = finish;
         toggle('one', false);
         toggle('one', true);
         toggle('one', false);
         toggle('two', true);
-        expect(requests).toHaveLength(2);
-        finishOne();
+        // HTTP events go out one at a time: menu two's report waits for the
+        // first, and menu one's latest state is coalesced behind it.
+        expect(requests).toHaveLength(1);
+        finishes[0]();
+        await tick();
+        expect(requests[1]).toEqual({component_id: 'two', open: true, sequence: 1, lifetime: 'obs_two'});
+        finishes[1]();
         await tick();
         expect(requests[2]).toEqual({component_id: 'one', open: false, sequence: 2, lifetime: 'obs_one'});
+        expect(requests).toHaveLength(3);
     } finally { dom.window.close(); }
 });
 
@@ -143,8 +148,12 @@ it('rebinding a lifetime cannot drain an old pending report into the new owner',
         element.setAttribute('data-dj-observe-lifetime', 'obs_new');
         dom.window.djust.bindLiveViewEvents(element); // root itself must be scanned
         await tick();
-        expect(requests[1]).toEqual({component_id: 'one', open: false, sequence: 1, lifetime: 'obs_new'});
+        // The new lifetime's report follows the in-flight one (HTTP events
+        // are sent in order), and the old pending report is never drained.
+        expect(requests).toHaveLength(1);
         pending[0]();
+        await tick();
+        expect(requests[1]).toEqual({component_id: 'one', open: false, sequence: 1, lifetime: 'obs_new'});
         pending[1]();
         await tick();
         expect(requests).toHaveLength(2);

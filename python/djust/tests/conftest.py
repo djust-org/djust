@@ -94,6 +94,29 @@ def generous_save_timeout(monkeypatch):
     monkeypatch.setattr(runtime, "EVENT_STATE_SAVE_TIMEOUT_S", 30.0)
 
 
+@pytest.fixture(autouse=True)
+def _exposure_tests_use_a_generous_save_timeout(request, monkeypatch):
+    """``generous_save_timeout`` for every ``test_exposure_*`` module (#3130).
+
+    An explicit view's mount and event turns save server and child state
+    under the 150ms ``EVENT_STATE_SAVE_TIMEOUT_S`` bound, and a missed save
+    withholds the success frame ("Child state unavailable"). The exposure
+    tests assert which state reaches which destination, not how fast the
+    session store is. Under ``-n auto`` load the save overran the bound on CI
+    (``test_explicit_client_snapshot_mount_round_trip``,
+    ``test_work_a_child_queues_on_its_sibling_runs``). Reproduced by delaying
+    the save 200ms: 268 exposure tests failed.
+
+    No exposure test exercises the bound itself; the tests that do
+    (``test_sticky_child_persistence_1471``, ``test_ws_reconnect_state_1465``,
+    ``test_runtime_state_save_tt_1894``) live in other modules and keep it.
+    """
+    if request.module.__name__.rpartition(".")[2].startswith("test_exposure_"):
+        from djust import runtime
+
+        monkeypatch.setattr(runtime, "EVENT_STATE_SAVE_TIMEOUT_S", 30.0)
+
+
 def observability_request_factory(**defaults: Any) -> Any:
     """A ``RequestFactory`` whose requests carry the observability token.
 

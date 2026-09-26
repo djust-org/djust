@@ -9,6 +9,7 @@ import logging
 from collections.abc import Iterator, Mapping
 from functools import lru_cache
 from typing import Any, Callable, Dict, Optional
+from ._class_snapshot import attribute_names
 
 logger = logging.getLogger("djust")
 
@@ -90,7 +91,7 @@ def _get_model_hash(model_class: type) -> str:
     # These are included in JIT serialization, so changes should invalidate cache
     method_prefixes = ("get_", "is_", "has_", "can_")
     skip_prefixes = ("get_next_by_", "get_previous_by_")
-    for attr_name in sorted(dir(model_class)):
+    for attr_name in attribute_names(model_class):  # sorted; dir() races (#3151)
         if attr_name.startswith("_"):
             continue
         if not any(attr_name.startswith(p) for p in method_prefixes):

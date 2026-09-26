@@ -20,7 +20,7 @@ Every LiveView template needs these two things:
 <!DOCTYPE html>
 <html>
 <head>
-    {% djust_client_config %}   {# Emits client config meta tags; auto-injects ~67 KB gz client JavaScript #}
+    {% djust_client_config %}   {# Emits client config meta tags; auto-injects ~70 KB gz client JavaScript #}
 </head>
 <body>
     <div dj-root>                    {# Reactive region — only this is diffed/patched #}
@@ -34,7 +34,7 @@ Every LiveView template needs these two things:
 | Attribute / Tag | Required | Description |
 |---|---|---|
 | `{% load live_tags %}` | Yes | Load djust template tag library |
-| `{% djust_client_config %}` | Yes | Emits client config meta tags; djust auto-injects the client JavaScript (~67 KB gz) into every LiveView response |
+| `{% djust_client_config %}` | Yes | Emits client config meta tags; djust auto-injects the client JavaScript (~70 KB gz) into every LiveView response |
 | `dj-view="myapp.views.CounterView"` | No | Injected automatically onto `<div dj-root>` for LiveView pages; set it by hand only for non-LiveView pages that embed a view |
 | `dj-root` | Yes | Marks the reactive subtree — only HTML inside is diffed |
 
@@ -449,9 +449,9 @@ Type coercion rules:
 </button>
 ```
 
-### `_target` (automatic)
+### `_target` (automatic, legacy policy only)
 
-For `dj-change` and `dj-input`, the `_target` parameter is included automatically with the triggering element's `name` attribute. Useful when multiple fields share one handler:
+For `dj-change` and `dj-input` bound to a legacy-policy handler (the default), the `_target` parameter is included automatically with the triggering element's `name` attribute. Strict-policy handlers never receive `_target`; see the next section. Useful when multiple fields share one handler:
 
 ```html
 <input name="email" dj-change="validate" />
@@ -459,6 +459,10 @@ For `dj-change` and `dj-input`, the `_target` parameter is included automaticall
 ```
 
 Handler receives `_target="email"` or `_target="username"`.
+
+### Generated values under the strict policy
+
+Under the opt-in strict parameter policy (`@event_handler(parameter_policy="strict")`, ADR-036), the browser sends a generated value only if the handler declares a parameter with that name, or has a `**` catch-all. Generated values are `value` and `field` for `dj-input`/`dj-change`, the form fields for `dj-submit`, and `key`/`code` for keyboard events. `dj-value-*` arguments are always sent, and one that reuses a generated name is rejected. `_target` is never sent: use `field` or a `dj-value-*` argument. Legacy handlers (the default) receive every value as before.
 
 ---
 

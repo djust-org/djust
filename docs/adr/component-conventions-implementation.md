@@ -24,6 +24,297 @@ D6's wording changes to match.
 The diagnostics suites now assert the value-free contract under
 `DEBUG = False`, with `DEBUG = True` cases asserting that the details appear.
 
+## ADR-034 acceptance review — C4
+
+This maps ADR-034's implementation gates and required integration coverage to
+the evidence at the final revision. C1–C3 closure accounts, and C4's
+acceptance progress, are in the checklist below. Owner decisions are
+recorded in ADR-034 as "C1 decisions" (Q1–Q7), "C2 notes" and
+"C3 decisions" (Q0–Q6, N1–N4).
+
+**Gate 1: typing proof.** `tests/typing_component_bindings` imports the public
+module. mypy and Pyright 1.1.408 reject 31 negative locations, including
+inherited declarations, wrong sources, async callbacks, misspelled outputs and
+the collection API. The positive files and runtime assertions pass.
+
+**Gate 2: binding and dispatch.**
+- `test_interactive_bindings.py`, `test_interactive_snapshots.py` and
+  `test_interactive_observations.py` cover the fixed-binding lifecycle.
+- `test_interactive_public_api_c1.py` covers the public import, V020, Q004 and
+  the debug time-travel jump over a real WebSocket.
+- `test_legacy_component_alias_3078.py` pins the fixed legacy alias.
+- Registry-only lookup: unknown and stale identities are refused on every
+  transport.
+
+**Gate 3: dropdown pilot.**
+- `tests/playwright/test_interactive_dropdown.py`: two same-type menus, forged
+  selections, observations and reconnect reporting, on pinned WebSocket, SSE
+  and HTTP-only.
+- `test_adr034_delegated_rows.py`: the separate presentation-only delegated
+  rows.
+
+**Gate 4: documentation.**
+- `guides/interactive-components.md` is new, in the nav next to Components,
+  and has every D7 section:
+  - ownership;
+  - configuration, state, actions and outputs;
+  - one instance, and two instances;
+  - client visibility and observations;
+  - delegated rows, and keyed collections;
+  - persistence, keyboard and focus as implemented, and security.
+- `core-concepts/components.md` gains "Choose the owner", and
+  `docs/ai/components.md` gains an interactive section.
+- `api-reference/components.md` carries the generated tables:
+  `scripts/generate-interactive-reference.py`, `make interactive-reference`, a
+  pre-commit hook, and `tests/test_generate_interactive_reference.py`.
+- All marked "Available from djust 1.3" (not in the 1.3.0rc1 pre-release).
+- `test_adr034_documented_examples.py` extracts every documented view with the
+  doc-snippet extractor and drives it through a real GET and the HTTP
+  fallback. That is six views across the guide and the AI reference. Since
+  ADR-037 D2 these run as `python/djust/tests/test_doc_examples.py`
+  (`doc_scenarios/adr034.py`).
+- djust-docs `docs_verify`, pointed at this branch's `docs/` and djust:
+  - links, symbols (709) and a11y pass;
+  - the nav finding (`guides/accounts.md`) pre-dates this branch;
+  - its symbol check lists the component-scoped decorators
+    (`@project_menu.on.selected`) as advisory "not a known djust decorator"
+    (recorded under ADR-037 D2).
+- The djust-docs site, run locally on port 18462, serves the page at
+  `/guides/interactive-components/`. It is linked from the Components page's
+  nav and pager, all five sections and ten code blocks render, and the API
+  reference renders the generated tables.
+- Publication on the live sites happens at release (owner decision C4-Q4).
+  The catalogue entry is pending under ADR-037 D2 (C4-Q3).
+
+**Gate 5: stateful repetition.** C3's separate proof: 26 unit tests, the typing
+fixtures, and `tests/playwright/test_interactive_collection.py`. Collection
+docs were published only after it passed.
+
+**Required integration coverage.**
+- **Transports:** HTTP, WebSocket (plus actors refused via V020) and SSE in
+  every browser matrix, with the transport checked. Real runs found and fixed
+  three transport defects (C2) and the HTTP `djust:error` gap (C4).
+- **Template backends:** Django and Rust (`test_interactive_collections_c3.py`,
+  `test_interactive_bindings.py`).
+- **Isolation:** one dropdown doesn't mutate another, or another user's view
+  (C2 matrix; `test_interactive_acceptance.py` two-browser case).
+- **Selections:** a selection runs only the matching callback, once, with the
+  actual source; forged, disabled and unknown values never emit (C2, C3, C4
+  matrices).
+- **Collection lifecycle:** reorder, duplicate keys, removal and re-addition,
+  reconnect and restored navigation (C3).
+- **Nested ownership:** an action inside nested component markup names the
+  nearest owner, never an ancestor (`tests/js/interactive-nested-ownership.test.js`).
+  The server routes that identity only through the registry (gate 2).
+- **Refusals:** direct invocation of a subscription callback and unknown scoped
+  targets are refused, with no fallback to a view handler.
+- **Rendering and errors:** sibling and view state changes render; async and
+  failing callbacks behave as documented (C4).
+- **Legacy:** plain components keep their handlers (C4 acceptance, #3078
+  tests).
+- **Delegated rows:** they carry the correct id after a reorder and refuse
+  unauthorized ids.
+- **Native visibility:** focus and dismissal through patches and reconnects;
+  no traffic without an observation subscription; unchanged observers cause
+  no render; duplicate, reordered and old-lifetime reports are dropped
+  (C2, C4).
+- **Signed Back navigation:** session and signed paths (C4).
+
+**Final-revision runs.**
+- Full Python suite at `868df85b4`, from a frozen detached worktree: 33,921
+  passed, 949 skipped, 2 failed. Both failures are the known tag-reachability
+  failures in `tests/test_changelog_tagged_sections.py` (they fail alone too).
+- Full vitest: 2,305 passed across 209 files.
+- Typing gate: mypy and Pyright 1.1.408 reject 31 negative locations.
+- Browser matrices, on pinned WebSocket, SSE and HTTP-only, all pass:
+  - dropdown;
+  - collection;
+  - acceptance;
+  - navigation (WebSocket and SSE);
+  - ADR-035's and ADR-036's.
+
+## ADR-035 acceptance review — F2
+
+This review maps each item in the ADR's "Scope and verification" list to its
+evidence at the final revision. F1 and F2 closure accounts are in the
+checklist below. Owner decisions Q1–Q6 and implementation choices N1–N6 are
+recorded in the ADR.
+
+**A no-custom-`mount()` edit example, a create form, a non-model form, and
+hooks overridden independently and through inherited views.**
+- `test_model_form_acceptance_adr035.py`: edit, create and non-model views,
+  and the hooks declared on a view and inherited by a subclass.
+- The demo `/demos/model-form/<pk>/` has no `mount()`.
+
+**Binding for empty submission, initial values, prefixes, choices, related
+fields and supported uploads; no double save or divergent validation paths.**
+- The acceptance suite covers each of these. Every write is counted in SQL:
+  one UPDATE per valid save, none when `form_valid` does not save, one INSERT
+  for a create.
+- `validate_field`, `submit_form` and restore all build the form through
+  `get_form()`, the path the F1 order tests observe.
+
+**Unauthorized/missing target, tampered identity, access revoked between
+events, failing permission callbacks: no form mutation or data disclosure.**
+- `test_model_form_lifecycle_adr035.py` covers HTTP, the shared runtime,
+  WebSocket in normal and actor mode, SSE and restore. Every denial is
+  asserted to show the same response or frame, with no form, no hook, no
+  write and no record name.
+- The acceptance suite adds deletion and membership removal between events,
+  tampered payload ids, and callbacks raising, on HTTP and on WebSocket
+  mount and event.
+- The browser matrix covers forged ids and identical 403s.
+
+**Real HTTP, WebSocket, reconnect and back-navigation tests; input and errors
+kept as specified, while ORM objects and permission caches are not
+persisted.**
+- A WebSocket reconnect restored from the session skips `mount()` but still
+  resolves and authorizes the object. Typed input survives, and is validated
+  again before any save.
+- Reconnecting after deletion or revocation is denied.
+- Session contents are asserted free of `object`, `kwargs`, the
+  configuration names, `_object` and the mount verdict.
+- The browser matrix's Back navigation leaves a working form on all three
+  transports.
+
+**An authorization-order test that fails if form construction or validation
+comes before authorization; a query-count test for within-dispatch reuse.**
+- The lifecycle suite records lookup → permission → form on every transport.
+- It counts object-lookup SQL: one per mount, one per event.
+- Gate-offs: required-object off fails 8 tests, verdict reuse off fails 4,
+  the legacy session filter off fails 4, and binding the mount parameters
+  instead of the route fails 2.
+
+**Django and Rust rendering, typing, legacy override compatibility and
+browser-visible validation/save feedback.**
+- `object` and `form_data` render identically in both engines under both
+  policies.
+- A mypy consumer test types `self.object` as `Optional[Group]`.
+- Legacy `FormMixin`/`_create_form` behavior keeps its existing suites
+  (`test_form_hooks_adr035.py` and the form suites) unchanged.
+- `tests/playwright/test_model_form.py` checks the field error, the save
+  message and the reloaded values in Chromium. Its canary fails 18 checks.
+  Correction: its SSE and HTTP-only runs were WebSocket runs until ADR-034 C2
+  pinned the transport. Real HTTP-only needed two fixes, recorded there. See
+  F2 below.
+
+**Documentation (Compatibility and migration: guide, AI reference and
+migration recipe after the lifecycle gates).**
+- The form guide gains "Editing one record with `ModelFormMixin`" and a
+  migration recipe from `_model_instance`. `docs/ai/forms.md` gains the
+  adapter section. Both are marked "Available from djust 1.3" (not in the
+  1.3.0rc1 pre-release).
+- The owner chose to publish with a version note (2026-09-25, recorded in
+  the ADR). The existing `_model_instance` examples are unchanged.
+- Generators and AI schema: pending under ADR-037 D2/D3 (see that entry).
+  - Lifecycle checks are covered:
+    - `djust.S013` is new.
+    - `djust_typecheck`'s context manifest declares `object`.
+    - The X008 IDOR audit does not flag adapter views, since they bind no
+      id in `mount()`.
+- `test_adr035_documented_examples.py` extracts both documents' Python with
+  the doc-snippet checker's own extractor and executes it. It uses the
+  guide's route block and the paired HTML, then checks author, other user
+  and missing record over GET and the HTTP fallback. Since ADR-037 D2 this
+  runs as `python/djust/tests/test_doc_examples.py` (`doc_scenarios/adr035.py`).
+- djust-docs' `docs_verify`, pointed at this branch's `docs/` and djust:
+  links, symbols (693) and a11y pass. The nav finding (`guides/accounts.md`)
+  pre-dates this branch.
+- Against the sibling checkout's older djust, the symbols check reports that
+  `ModelFormMixin` is not exported. That clears with the docs submodule and
+  djust bump at release.
+
+**Final-revision runs.**
+- ADR-035 suites: 64 Python tests (lifecycle 31, acceptance 30, documented
+  examples 3). The browser matrix passes on all three transports.
+- Full Python suite at `9dd6a4421`, run from a frozen detached worktree:
+  33,855 passed, 949 skipped, 2 failed. Both failures are in
+  `tests/test_changelog_tagged_sections.py` and fail alone too: release tags
+  are reachable from this branch, so they are not caused by this change.
+- No client JavaScript changed in ADR-035's slices.
+
+## ADR-036 acceptance review — P3
+
+This is the review the ADR's "Scope and acceptance gates" require before
+strict mode is considered supported. Each gate is listed with its evidence at
+the final revision. P1 and P2 closure accounts are in the checklist below.
+
+**Freeze a valid/invalid conversion matrix.** The ADR lists: false-like
+booleans, blank numbers, partial numbers, bool-as-int, overflow/resource
+limits, date boundaries, nullable values, arrays and unsupported annotations.
+- `test_parameter_contract.py`: 144 core cases, covering every listed class
+  plus hostile conversion methods, cycles and subclass budgets.
+- `test_parameter_contract_checks.py`: unsupported and unresolvable
+  declarations are startup errors (V016).
+
+**Real DOM extraction through wire dispatch, parity across every dispatch
+path, `coerce_types=False`.**
+- `strict_native_binding.test.js` (21 cases) drives real DOM events through
+  the bundle.
+- `test_strict_transport_parity.py` runs one 43-row matrix identically
+  through eight paths. The paths are: the shared runtime, WebSocket normal
+  and actor mode, SSE, both HTTP-fallback shapes, the exposed API and the
+  test client. Its rows include `coerce_types=False` and exact `**` key order.
+- `tests/playwright/test_strict_parameters.py` checks outbound payloads and
+  handler results in Chromium over WebSocket, SSE and HTTP-only. Its canary
+  against the pre-activation client fails 24 checks.
+  Correction: until ADR-034 C2 pinned the transport, its SSE and HTTP-only runs
+  were WebSocket runs. Re-run on the real transports, it passes unchanged.
+
+**Missing/extra/duplicate arguments, keyword-only signatures, forms' open
+payloads, client metadata separation, forged component injection.**
+- The parity matrix rows.
+- `test_trusted_dispatch_context.py` (68 cases, forged keys on every
+  transport).
+- The component lifecycle case in `test_producer_parameter_contracts.py`.
+
+**Legacy precedence and values unchanged.**
+- The legacy controls in the trusted-context, strict-binding and browser
+  suites.
+- The unchanged legacy suites in every full run.
+
+**Invalid input never invokes application code; diagnostics expose no
+sensitive payloads.**
+- Every rejection row asserts that the handler was not called, and that
+  `SECRET_INVALID` / forged values are absent from frames, responses and
+  errors.
+- Client rejections report only the handler name (browser matrix and the
+  bundle cases).
+
+**Execute the published examples under the intended policy.**
+- The events guide's new "Typed event parameters (strict policy)" section and
+  the AI events reference now carry strict examples.
+- `test_adr036_documented_examples.py` extracts their Python with the
+  doc-snippet checker's own extractor, executes it, and renders the paired
+  HTML through a real GET. It checks the advertised strict contracts, then
+  drives the documented valid and invalid payloads through the real HTTP
+  fallback. Since ADR-037 D2 this runs as
+  `python/djust/tests/test_doc_examples.py` (`doc_scenarios/adr036.py`).
+- `adr036_documented_examples.test.js` mounts the same HTML blocks in the
+  bundle under those contracts, and checks that the browser sends exactly
+  those payloads.
+
+**Published docs match.**
+- djust-docs' `docs_verify`, run with `DJUST_DOCS_SOURCE` pointed at this
+  branch's `docs/`: links, symbols (689) and a11y pass.
+- Its one nav finding (`guides/accounts.md` absent from `_config.yaml`)
+  pre-dates this branch.
+- `docs_generate --check` could not run: djust-docs imports the sibling
+  checkout's djust (1.2.0rc7), whose generated reference is stale and whose
+  components import recurses there. That is a djust-docs environment issue,
+  not content.
+- Website delivery follows the branch's merge and the docs submodule bump.
+
+**Final-revision runs.**
+- Focused ADR-036 Python suites: 542 passed.
+- Focused bundle suites: 130 passed.
+- Playwright matrix: passes on all three transports.
+- Full Python suite at `cf2ea4aa2`, run from a frozen detached worktree:
+  33,791 passed, 949 skipped, 2 failed. Both failures are in
+  `tests/test_changelog_tagged_sections.py` and fail alone too: release tags
+  are reachable from this branch, so they are not caused by this change.
+- Full vitest run at the same commit: 2,299 passed across 206 files.
+
 ## ADR-038 activation review — E6-5
 
 This is the review E6 requires before the guard is removed. It covers every
@@ -1498,7 +1789,9 @@ prerequisite. **ADR-038's gates E1–E6 and ER are closed on the completion bran
 (#2954): `exposure_policy="explicit"` is activated there, and ER is closed by
 the written account in D-z, with the deletions scheduled for the major release
 that makes `explicit` the default.
-ADRs 034–037 are not accepted.**
+ADRs 034–037 are accepted (2026-09-25): delivery was verified on a local
+djust-docs build pinned to 1.3.0rc3 rendering the 1.3 branch's docs; production
+docs.djust.org follows 1.3.0 (see ADR-037 D3 below).**
 No completion percentage or delivery date is inferred from commit/test counts.
 
 ### Completion rules
@@ -1574,7 +1867,7 @@ Source: [decisions and acceptance](038-explicit-context-and-state-exposure.md).
 
 Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
 
-- [ ] **P1 — canonical contract.** Implement signature-derived metadata and
+- [x] **P1 — canonical contract.** Implement signature-derived metadata and
   freeze the valid/invalid conversion matrix, including optional/collection and
   unsupported types, resource limits, duplicate/extra/missing values and
   framework-versus-application arguments.
@@ -1594,7 +1887,64 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
   full runs on the final unchanged implementation each passed 30,550 tests with
   952 skipped (249.29, 246.81 and 239.29 seconds, four workers). Earlier runs
   predate the cache fix and are not final evidence. Browser acceptance remains open.
-- [ ] **P2 — wire/dispatch parity.** Route real DOM extraction and every server
+  [Registration checks](notes/036-registration-checks.md) now report strict
+  declaration problems at startup through the runtime's own resolvers:
+  `djust.C022` (invalid project policy), `djust.V016` (unresolvable or
+  unsupported annotation, missing annotation, reserved argument name, invalid
+  handler policy), `djust.V017` (async strict handler on an actor view) and
+  `djust.V018` (`params=` disagreeing with the signature). Contract compilation
+  now resolves deferred annotations against the defining class body before
+  module globals, names the failing parameter, and rejects keyword parameters
+  named `view_id`/`component_id` or `_`-prefixed (D5). V007 skips strict
+  handlers; legacy handlers report nothing new. Evidence: 32 cases in
+  `test_parameter_contract_checks.py` (14 invalid declarations, each with its
+  exact ID and message; valid declarations bind and run through
+  `validate_handler_params`; every V016 case raises the same `ContractError` at
+  dispatch). 6 of them fail against the previous resolver. The expanded focused
+  set passes 596 tests; mypy passes 1,174 files. Full suite from a frozen
+  detached worktree at b52a487f1 (four workers, 401.94 s): 33,682 passed, 949
+  skipped, 2 failed. Both failures are in `tests/test_changelog_tagged_sections.py`
+  and fail alone too: the local `v1.3.0rc1` tag is not an ancestor of this
+  branch's base (fdfbc60ef), and the slice changes neither `CHANGELOG.md` nor
+  that script. Still open in P1: trusted argument separation (component source
+  injection, ADR-034 subscriptions) and client/transport acceptance. The
+  legacy-code migration inventory and ADR-037 template-binding checks are also
+  not done.
+  [Trusted dispatch context](notes/036-trusted-dispatch-context.md) closes the
+  server half of D5's argument separation. `FRAMEWORK_ARGUMENT_NAMES` and
+  `TRANSPORT_METADATA_KEYS` are applied once in the shared strict validator:
+  transport bookkeeping (`_cacheRequestId`, `_activity`) is dropped on every
+  path, and an unconsumed `view_id`/`component_id` fails closed. Strict flat
+  HTTP bodies reject unknown `_` keys instead of discarding them. Contracts can
+  declare trusted parameters, bound only from server values. Staged ADR-034
+  output callbacks bind their payload through that contract with the source
+  `component` trusted, and V016 checks those payload contracts. Legacy mapping
+  is unchanged. Evidence: 68 cases in `test_trusted_dispatch_context.py` (a
+  forged/metadata matrix on the shared runtime, both HTTP shapes, exposed
+  API, server functions, test client, replay, actor bridge, and real WS
+  normal/actor and SSE sessions; legacy controls; forged ADR-034 source).
+  25 of them fail against the previous code. The expanded focused set passes
+  885 tests; mypy passes 1,175 files. Full suite from a frozen worktree at
+  bf17b7d6e (four workers, 347.74 s): 33,750 passed, 949 skipped, and the same
+  2 tag-reachability failures in `tests/test_changelog_tagged_sections.py`.
+  Still open in P1 at that point: client/transport acceptance (strict native
+  binders and browser verification). Also recorded there: the actor path
+  fails closed on a root `view_id`, and the legacy descriptor alias takes
+  `component_id` from the client.
+  **P1 closed (2026-09-24).** The client/transport acceptance it lacked was
+  delivered with P2 sub-slices (a)–(d):
+  - owner-scoped contract delivery on every transport, including HTTP;
+  - strict native collection under owner decisions Q1/Q2;
+  - the 43-row eight-path parity matrix;
+  - the real-browser matrix (see P2 (d)).
+
+  Every element of this gate now has implementation, named tests and run
+  results: signature-derived metadata; the frozen conversion matrix
+  (optional, collection and unsupported types); resource limits;
+  duplicate/extra/missing values; framework-versus-application arguments;
+  registration checks. Remaining ADR-036 work is P2's open producer items,
+  P3 acceptance and PR.
+- [x] **P2 — wire/dispatch parity.** Route real DOM extraction and every server
   dispatch path through that contract. Verify forms' open payloads,
   keyword-only arguments, forged component injection, `coerce_types=False` and
   unchanged legacy behavior. Invalid input must never invoke application code.
@@ -1711,14 +2061,199 @@ Source: [decisions and acceptance](036-typed-event-parameter-contracts.md).
   30,741 full-suite Python tests passed (952 skipped), and mypy 1,044 files clean.
   These close the reproduced replay-binding defect, not the remaining P1–P3
   checks, delivery, native-binding and browser-acceptance gates.
-- [ ] **P3 — acceptance.** Execute documented examples under their stated policy;
+  Sub-slice (a), [HTTP delivery and binder resolution](notes/036-owner-contract-manifests.md#initial-page-and-http-fallback-delivery),
+  commit 0fe319bd8:
+  - The initial GET renders the root manifest into a JSON data block outside
+    dj-root.
+  - HTTP-fallback render responses, including `_skip_render`, carry the
+    rendered tree's snapshot. An `X-Djust-Parameter-Contracts` request header
+    turns omission into an explicit clear for a strict page scope. Discovery
+    failure withholds the HTTP DOM update.
+  - The client installs the page scope at init and Turbo navigation.
+    `_resolveParameterContract` resolves a binding's owner (child, then
+    component, then root) and handler against the transport `handleEvent`
+    would use.
+  - All-legacy pages and responses are unchanged. Native binders do not
+    consume contracts yet: (b) waits on the collection-convention decision
+    (generated values, `_target`).
+  - Evidence: 10 Python and 11 bundle cases. Full Python suite from a frozen
+    worktree: 33,760 passed, 949 skipped, and the 2 known tag-reachability
+    failures. Full JavaScript suite: 2,275 tests in 204 files passed. Mypy
+    passes 1,176 files. Guards: init-order, cross-IIFE, bundle ESLint and the
+    doc size claims. The shipped gzip grew by 219 bytes, and the #2632
+    call-site pin now counts 2 contract helpers in `11-event-handler.js`.
+  Sub-slice (b), [strict native collection](notes/036-strict-client-collection.md#native-binder-activation-p2-sub-slice-b),
+  commit 09c5f5ab8:
+  - Implements the owner decisions Q1 (contract-aware generated values) and
+    Q2 (no `_target` under strict), recorded with N1–N3 in ADR-036's
+    completion decisions.
+  - Every native binder resolves its owner-scoped contract before any lock,
+    confirmation, disable-with, optimistic or loading effect.
+  - A strict binding sends only `dj-value-*` plus the declared generated
+    values. The client rejects generated-name collisions, conflicting wire
+    hints and positional/named duplicates, through the value-free
+    `djust:error` path.
+  - Legacy and unlisted handlers keep their payloads. An invalid scope fails
+    closed.
+  - `dj-model`, hook `pushEvent` and `dj-auto-recover` are unchanged, and
+    are recorded as open.
+  - Evidence: 18 bundle cases in `strict_native_binding.test.js`. The full
+    JavaScript suite passes (2,293 tests in 205 files). Full Python from a
+    frozen worktree: 33,759 passed and 949 skipped, plus the 2 known
+    tag-reachability failures. One more failure, the client-size manifest
+    pin on a size figure in the new changelog fragment, was fixed afterwards
+    and its module passes (24 tests). The full suite was not repeated for
+    that one-line fragment edit.
+  - The shipped gzip grew 2,275 bytes. The repository's 33 client-size claim
+    lines, including the unminified one, were moved to the measured figures
+    in `client-sizes.json`.
+  - Compaction, at the owner's request:
+    - `_strictEventParams` and the rejection report were merged into a
+      single `_strictBinding`.
+    - The contract checks moved into the collector's own attribute pass, as
+      an `accept` hook, so `dj-value-*` names are parsed once.
+    - The wire-hint table was shortened.
+    - `dj-paste`'s legacy payload now reuses `_pastePayload`.
+    - The collector's reserved names that the identifier rule already
+      rejects were dropped.
+    - Routing context is attached inside `_strictBinding`.
+
+    Behaviour is unchanged: the 21 strict-binding cases and the full
+    JavaScript suite pass. The shipped gzip went from 71,944 to 71,786
+    bytes (-158). Of the remaining (b) growth, about 850 bytes is the
+    previously dead, already-reviewed collector becoming reachable.
+    Compaction cannot return the claims to the earlier figure without
+    removing reviewed checks, so they stay at the rounded measured value.
+  Sub-slice (c), [transport parity matrix](notes/036-strict-server-integration.md#transport-parity-matrix),
+  commit 0afd54252:
+  - A 43-row strict matrix runs identically through the shared runtime,
+    real WebSocket (normal and actor mode), real SSE, both HTTP-fallback
+    shapes, the exposed API and the test client.
+  - Rows cover every supported type and its edge cases,
+    `coerce_types=False`, positional-only and keyword-only binding, an open
+    `**fields` form, extras and a forged source.
+  - All paths agree on every row, and invalid rows never invoke the handler.
+  - The strict collector now refuses `_`-prefixed `dj-value-*` names; forged
+    `dj-value-component-id` and `dj-value-view-id` are covered.
+  - Full Python suite from a frozen worktree: 33,767 passed and 949 skipped,
+    plus the 2 known tag-reachability failures and one size-manifest pin.
+    That pin was on a figure quoted in this ledger's (b) entry; it was
+    reworded, and the module passes (24 tests). Full JavaScript suite: 2,296
+    tests in 205 files passed.
+  - Uploads are not event arguments: a file field sent to a strict `**`
+    form handler is rejected in the browser. Async actor handlers remain a
+    V017 rejection.
+  Sub-slice (d), real-browser acceptance, `tests/playwright/test_strict_parameters.py`:
+  - Surface: the demo view `/demos/strict-parameters/`, in Chromium over
+    WebSocket, SSE and HTTP-only.
+  - Asserts both what the browser sent and what the view received:
+    - a typed strict click sends only its `dj-value-*` argument, never
+      `data-*`;
+    - a malformed literal sends nothing, applies no `dj-disable-with`, and
+      raises one value-free `djust:error`, shown by the DEBUG overlay without
+      the literal;
+    - strict `dj-input` and `dj-submit` send only declared values, with no
+      `_target`;
+    - the legacy control still receives `dj-value-*` and `data-*`;
+    - a hand-crafted forged `component` message never reaches the handler.
+  - Result: passes on all three transports, run against the worktree's demo
+    server on port 18436.
+  - Canary: the same script against the pre-(b) client bundle fails 24
+    checks, 8 per transport. The permissive parser sent `7x` as `7` and the
+    handler ran; strict `dj-input`/`dj-submit` were refused by the server
+    because of `field`/`_target`/extra fields.
+  - **Correction (2026-09-25, ADR-034 C2).** The "SSE" and "HTTP-only"
+    runs above did not use those transports. The page's own configuration
+    script re-assigns `window.DJUST_USE_WEBSOCKET` after the test's init
+    script, so all three runs used WebSocket. `tests/playwright/_transports.py`
+    now pins the setting and checks which transport the page actually used.
+    Re-run with real SSE and HTTP-only transports, the matrix passes on all
+    three unchanged. With the old init script, the transport check fails for
+    SSE and HTTP.
+  - Full Python suite from a frozen worktree at 3724f4857: 33,767 passed and
+    949 skipped, plus the 2 known tag-reachability failures and one real
+    finding. The actor bridge delivered a `**` payload's keys in a Rust
+    HashMap's order, not the payload's.
+  - Fixed at the source: actor event params are an ordered `EventParams`
+    (`IndexMap`) end to end. The parity matrix asserts exact order again. A
+    64-key shuffled regression fails on the previous build and passes on the
+    new one. `cargo test -p djust_live --no-default-features` passes 93
+    tests, and clippy with `-D warnings` is clean.
+    Mount state stays on its `HashMap` (commit 42e545a8d); only event and
+    component-event params are ordered. After the compaction and this fix,
+    the full Python suite from a frozen worktree at 42e545a8d passed 33,769
+    tests, with 949 skipped and only the 2 known tag-reachability failures.
+    The Playwright matrix passes again on the compacted client over all
+    three transports.
+  Owner decision R1, `dj-auto-recover` stays legacy (commit d8cd2b2cb):
+  - A handler that a literal `dj-auto-recover` in the view's own template
+    targets resolves to the legacy policy in dispatch and in the public
+    manifest. The target is read from the server-owned template, so no
+    client can claim the downgrade.
+  - An explicit strict declaration on such a handler is the warning
+    `djust.V019`.
+  - Evidence: 7 cases in `test_recovery_handler_policy.py`, 5 of which fail
+    without the change. They cover recovery in a strict project, the
+    declared-strict warning, other handlers staying strict, the manifest,
+    and the legacy project unchanged. Full Python suite from a frozen
+    worktree: 33,776 passed and 949 skipped, plus the 2 known tag failures.
+  - Follow-up: recovery targets are now also discovered from the HTML each
+    render produced for the view instance, which covers `{% include %}`,
+    `{% extends %}`, `{% if %}`-toggled forms and dynamic values.
+    - Only parsed element attributes count. A test shows escaped client text
+      that spells the attribute does not downgrade a strict handler.
+    - The class-level template scan remains for renders Python does not see
+      (actor renders, and a reconstructed HTTP instance before it renders)
+      and for the V019 startup check.
+    - Evidence: 5 new cases, 4 of which fail without it (12 in the file).
+      Full Python suite from a frozen worktree at 8f614755d: 33,787 passed
+      and 949 skipped, plus the 2 known tag failures.
+  Producer coverage (the last P2 item):
+  - An audit of every DOM-carrying frame type found two producers without a
+    contract snapshot: the hot-reload patch and `StreamingMixin.push_state`.
+    On a strict page each made the client invalidate its scope, and a reload
+    could also advertise stale declarations.
+  - Both now capture the snapshot with the render through the shared
+    `render_contract_fields`. A strict session whose discovery fails reloads
+    the page (hot reload) or withholds the frame (`push_state`); legacy
+    sessions keep their frame shape.
+  - The remaining producers were already covered, or change no owners.
+  - Cached `@cache` hits leave the current snapshot authoritative.
+  - Evidence: 6 real-WebSocket cases in `test_producer_parameter_contracts.py`
+    (hot reload strict/legacy/failure, `push_state` strict/legacy, component
+    creation → replacement → removal with dispatch after each). 3 of them
+    fail before the fix. Existing hot-reload, streaming and #1788 suites
+    pass (603 tests).
+  - Full Python suite from a frozen worktree at 25f264478: 33,782 passed and
+    949 skipped, plus the 2 known tag failures. Full JavaScript suite: 2,296
+    tests in 205 files passed.
+
+  **P2 closed (2026-09-25).**
+  - Real DOM extraction and every server dispatch path go through the
+    contract: sub-slices (a)–(d) and the producer coverage above.
+  - Verified: forms' open payloads, keyword-only arguments, forged component
+    injection, `coerce_types=False`, legacy behaviour unchanged, and invalid
+    input never invoking application code. Evidence: the 43-row eight-path
+    matrix, the browser matrix, and the forged-key suites.
+  - Recorded, not open work:
+    - `dj-auto-recover` stays legacy (R1);
+    - `dj-model` sends the fixed `field`/`value` its framework handler
+      declares;
+    - uploads are not event arguments;
+    - two root mounts of the same view path on one page are a known
+      limitation (N3).
+- [x] **P3 — acceptance.** Execute documented examples under their stated policy;
   verify redacted diagnostics and the ADR's complete conversion/parity matrix.
+  Closed by the [acceptance review](#adr-036-acceptance-review--p3); ADR-036 is
+  Accepted.
 - [ ] **PR — retirement.** Delete the superseded coercion path per
   [ADR-036 Step R](036-typed-event-parameter-contracts.md): `coerce_parameter_types`
-  (`validation.py:137`), `_coerce_value` (`:219`), `_coerce_single_value` (`:249`),
-  with their tests. `validate_handler_params` (`:440`) is rewired, not removed.
+  (`validation.py:256`), `_coerce_value` (`:338`), `_coerce_single_value` (`:368`),
+  with their tests. `validate_handler_params` (`:559`) is rewired, not removed.
   Fires only once strict is the default, which this ADR does not yet approve.
-  Grep-verify that no second coercion implementation remains.
+  Grep-verify that no second coercion implementation remains. Open and not
+  triggered at acceptance: the targets serve every legacy-policy handler (see
+  the Step R status in the ADR).
 
 ### ADR-035 — Django-native form and object lifecycle
 
@@ -1726,21 +2261,103 @@ Source: [decisions and acceptance](035-django-native-form-and-object-lifecycle.m
 
 - [x] Foundation: public form-construction hooks, empty binding, initial values,
   prefixes and legacy `_create_form` bridge; see `test_form_hooks_adr035.py`.
-- [ ] **F1 — managed object.** Implement resolve → authorize → bind, managed
+- [x] **F1 — managed object.** Implement resolve → authorize → bind, managed
   `self.object`, opt-in ModelForm integration and explicit application policy.
   Prove authorization precedes construction/validation and within-dispatch reuse
   avoids duplicate queries without persisting ORM objects or permission caches.
-- [ ] **F2 — form acceptance.** Exercise no-custom-mount edit, create and
+  Done 2026-09-25 under the owner's
+  [lifecycle decisions](035-django-native-form-and-object-lifecycle.md#lifecycle-decisions-2026-09-25)
+  (Q1–Q6, N1–N6). `djust.forms.ModelFormMixin` lives in `forms.py`. The
+  required-object rule and the one-shot mount verdict are in ADR-017's shared
+  check (`auth/core.py`). Route binding happens in `RequestMixin.get`/`post` and
+  `ViewRuntime.dispatch_mount`. The legacy filters are in the context walk and
+  the three legacy session saves. `djust.S013` is in `checks/security.py`.
+  Evidence: `test_model_form_lifecycle_adr035.py` (31 tests) covers:
+  - lifecycle order (lookup → permission → form) on HTTP GET/POST, the shared
+    runtime, real WebSocket in normal and actor mode (the actor turn is asserted),
+    real SSE, and a WebSocket restore that skips `mount()`;
+  - exactly one object lookup (SQL) per mount and per event;
+  - missing, filtered, revoked, forged mount parameter, other view's route and
+    unrouted mounts, all denied with the same frame or response and no form;
+  - revocation between events: no form, no `form_valid`, no write;
+  - `self.object = form.save()`, and retarget / `None` / unbound raising
+    `ValueError`;
+  - nothing from the object or configuration reaching the legacy session;
+  - `context_object_name`, sensitive fields not rendered under either policy;
+  - configuration errors, and S013 with its suppressions.
+  Limitation recorded in the ADR: `live_patch` within one view keeps the
+  mounted target.
+- [x] **F2 — form acceptance.** Exercise no-custom-mount edit, create and
   non-model examples; independent/inherited hooks; choices, relations, uploads,
   empty submission, validation and exactly-once save. Cover missing/tampered/
   revoked targets, callback failures, HTTP/WS reconnect/back navigation,
   Django/Rust rendering, typing and browser-visible input/errors/save feedback.
-- [ ] **FR — retirement.** Delete the pre-hook object plumbing per
+  Done 2026-09-25; acceptance review above
+  ([ADR-035 acceptance review — F2](#adr-035-acceptance-review--f2)).
+  `test_model_form_acceptance_adr035.py` (30 tests) counts every
+  write in SQL and covers:
+  - an edit view with no `mount()` saves exactly once;
+  - a `form_valid` that doesn't save writes nothing (D5);
+  - a `FormMixin` create form inserts one row;
+  - a non-model form needs no lookup;
+  - a denied edit never creates a row;
+  - `get_initial`/`get_prefix`/`get_form_kwargs` work declared on the view and
+    inherited by a subclass;
+  - M2M (`Group.permissions`) and FK (`Permission.content_type`) initial values
+    are primary keys, choices are listed, and both save;
+  - an upload reaches the form through a `get_form_kwargs` override and is
+    required by the form's validation;
+  - an empty submission revalidates the current values;
+  - blank and duplicate names show their errors, call `form_invalid`, and write
+    nothing;
+  - a payload `id`/`pk` does not retarget the save;
+  - revoked, deleted and removed-membership targets are denied between events;
+  - `get_queryset`/`has_object_permission` raising fail closed on HTTP and on
+    WebSocket mount and event, without leaking the message;
+  - reconnect keeps typed input (per-event session save), which is validated
+    again before saving. A blank draft is refused and nothing is saved;
+  - reconnect after deletion is denied;
+  - `object`/`form_data` render the same in the Django and Rust engines under
+    both policies;
+  - mypy types `self.object` as `Optional[Group]` and rejects a wrong model.
+
+  Browser: `tests/playwright/test_model_form.py` drives
+  `/demos/model-form/<pk>/` (a demo `Product` editor with no `mount()`) over
+  WebSocket, SSE and HTTP-only. It checks:
+  - the initial render;
+  - a field error with nothing saved;
+  - the save message and the saved values after a fresh load;
+  - a working form after leaving and using Back;
+  - a forged `id`/`pk` event does not retarget the save;
+  - filtered-out and forbidden products are the same 403 with no form.
+
+  It passes on all three transports, against the worktree's demo server on
+  port 18437. Canary: with the adapter's `instance` binding removed it fails
+  18 checks, 6 per transport.
+
+  **Correction (2026-09-25, ADR-034 C2).** As with ADR-036's matrix, the
+  "SSE" and "HTTP-only" runs above actually used WebSocket, because the page's
+  configuration script overrode the test's transport setting. With the
+  transport pinned and checked (`tests/playwright/_transports.py`), SSE passed
+  but real HTTP-only failed: the save stored the old values. Two HTTP-fallback
+  fixes, recorded under ADR-034 C2, make it pass:
+  - a render with no DOM change no longer resets the server's version;
+  - HTTP events are now sent one at a time.
+
+  Now it passes on all three real transports, five runs of five. Without event
+  ordering it failed 3 runs of 4.
+- [ ] **FR — retirement.** (Open; trigger met for adopting views. It is
+  scheduled as its own deletion PR on ADR-027's playbook, landing after the
+  deprecation window the ADR requires, because the targets still serve legacy
+  `FormMixin` views. Nothing is deleted yet.) Delete the pre-hook object
+  plumbing per
   [ADR-035 Step R](035-django-native-form-and-object-lifecycle.md):
-  the `_model_instance` attribute (`forms.py:51`, reads `:93-95`, `:215`),
-  `_ensure_model_instance()` (`:223-225`) and the docstring example (`:39-42`),
-  with their tests. `_create_form` (`:281`) is a bridge that stays; its removal is
-  a separate later decision and is not counted as a saving here.
+  the `_model_instance` attribute (`forms.py:228`, used at `:342-344`,
+  `:527-531`, plus the adapter's conflict guards at `:996` and `:1105`),
+  `_ensure_model_instance()` (`:471-501`, called at `:463`, `:627`, `:686`) and
+  the docstring example (`:213-220`), with their tests. `_create_form` (`:541`)
+  is a bridge that stays; its removal is a separate later decision and is not
+  counted as a saving here. Citations refreshed with F1.
 
 ### ADR-034 — component-scoped events and bindings
 
@@ -1748,7 +2365,7 @@ Source: [decisions and acceptance](034-component-scoped-events-and-bindings.md).
 
 - [x] Foundation: native child lifecycle isolation and component-owned loading.
   This is not the proposed typed subscription API or repeated-request support.
-- [ ] **C1 — typed binding API.** Implement per-instance binding, declared outputs
+- [x] **C1 — typed binding API.** Implement per-instance binding, declared outputs
   and subscriptions with positive/negative typing fixtures for inheritance,
   renames, misspellings, wrong sources and async callbacks. Route only through
   registered identities; reject direct client invocation of subscriptions and
@@ -1775,7 +2392,31 @@ Source: [decisions and acceptance](034-component-scoped-events-and-bindings.md).
   resumes send current HTML rather than retaining historical controls. Browser
   signed-navigation/debug transport, actor lifecycle, public export and full
   browser acceptance remain open; see the proof document for evidence boundaries.
-- [ ] **C2 — dropdown pilot and observations.** Implement the documented state
+  **Closed 2026-09-25** under the owner's C1 decisions (recorded in ADR-034):
+  - Q1/Q3: `djust.components.interactive` now exports exactly `DropdownMenu`,
+    `ActionItem` and `SeparatorItem`. `djust.Q004` warns when one module imports
+    both the interactive and the legacy `DropdownMenu`.
+  - Q4: the output-authoring API stays private.
+  - Q5: actor views stay unsupported, and `djust.V020` (Error) reports one that
+    declares an interactive component at `manage.py check`.
+  - The typing proof now imports the public module. mypy and Pyright 1.1.408
+    reject all 21 negative locations, and the runtime assertions pass.
+  - The debug transport is exercised over a real WebSocket.
+    `time_travel_jump` restores both menus' pre-selection state and keeps their
+    identities, emits no output, and the restored menu still dispatches to its
+    own callback. A stale id is refused.
+  - #3078 is fixed (`0463cdf20`): the legacy `Meta.event` alias resolves only
+    its own component type and is pinned to the legacy policy.
+
+  Evidence: `test_interactive_public_api_c1.py` (12 tests),
+  `test_legacy_component_alias_3078.py` (14), plus the existing binding,
+  snapshot and observation suites.
+
+  Moved to C4, where the browser matrix lives: the in-browser signed
+  back-navigation path (Service Worker capture and `live_redirect_mount`
+  restore). The server half (signed manifest, real WebSocket restore) is
+  already tested here.
+- [x] **C2 — dropdown pilot and observations.** Implement the documented state
   owner, local mechanics and semantic outputs. Verify two same-type menus,
   source injection, valid/forged/disabled selections and callback rendering.
   Optional native-toggle observations must report actual visibility without
@@ -1783,22 +2424,176 @@ Source: [decisions and acceptance](034-component-scoped-events-and-bindings.md).
   The private server contract now validates client-mode observations, source,
   subscription, lifetime and sequence; unchanged HTTP/WS observers return no-op
   while reactive observers render. Cursor state is separate from authoritative
-  visibility. Browser listeners/selection dismissal and reconnect coalescing are
-  not wired yet. Independent state-backend claims now pass the former HTTP
+  visibility. The browser listener, local selection dismissal, pending-report
+  coalescing and reconnect reporting are staged in the client bundle
+  (`696248975`, 8 cases in `tests/js/native-dropdown-observations.test.js`).
+  They are not yet verified in a real browser.
+  **Closed 2026-09-25.** `tests/playwright/test_interactive_dropdown.py` drives
+  `/demos/interactive-dropdown/` (two server-owned menus of the same type, and
+  three client-owned menus) in Chromium over WebSocket, SSE and HTTP-only. The
+  transport each run really used is checked (`tests/playwright/_transports.py`).
+  It verifies:
+  - The two server menus open and select independently. Each selection runs
+    only its own callback, once, and the callback's change renders.
+  - The disabled item is not clickable. Hand-crafted disabled, unknown and
+    stale-id selections, and a direct call to the output callback, change
+    nothing. Socket runs raise `djust:error`; HTTP answers 4xx.
+  - Client menus:
+    - A toggle reports the actual visibility after a click, Escape, an outside
+      click and a keyboard open.
+    - The quiet observer's reports cause zero DOM mutations; the live
+      observer's change renders.
+    - The unobserved menu sends nothing.
+    - Choosing an item dismisses the popover at once.
+    - A server patch leaves an open popover open.
+  - Over WebSocket, toggles while disconnected stay local, and after the
+    reconnect each observed menu reports its current value once.
+
+  Real SSE and HTTP-only runs exposed three transport bugs, all fixed:
+  - **SSE mount.** It only stamped `dj-id`s onto the prerendered page, so
+    every interactive event targeted a stale component identity ("Component
+    not found"). It now morphs the page against the mount HTML through
+    `_morphPrerenderedMount`, the helper it shares with the WebSocket mount
+    (#1610; #1646 parity).
+  - **HTTP zero-patch renders.** A render with no DOM change reset the
+    server's diff baseline and restarted its version at 1. The client's
+    version check then reloaded the page. A client-owned selection changes no
+    markup, so every one hit this. The fallback now answers with an empty
+    patch list and the new version, as the socket runtime's no-op does.
+  - **HTTP event ordering.** Concurrent HTTP events each restored and saved
+    the session, so one's changes were lost. They are now sent one at a time,
+    in dispatch order, like frames on a socket. An event sent alone still goes
+    out synchronously.
+
+  Evidence and canaries:
+  - Removing the SSE fix fails the SSE run. Restoring the zero-patch reset
+    fails the HTTP runs of both this matrix and ADR-035's. Removing HTTP
+    ordering failed ADR-035's HTTP run 3 times in 4; with it, 5 of 5 passed.
+  - New tests: `tests/js/sse-mount-prerender-morph.test.js` (gate-off fails)
+    and `test_http_zero_patch_version.py` (gate-off fails).
+  - Existing vitest cases updated:
+    - HTTP ordering: 1 case in `dj-input-click-widgets`, 1 in
+      `http-request-correlation` (two parameterizations), and 2 in
+      `native-dropdown-observations`.
+    - SSE mount HTML: 1 case in `dj-cloak`.
+    - The #1610/#1813 source pins now read the shared helper. One of them had
+      matched the sticky-root exclusion only in a comment, and now pins
+      `findPageViewContainer()`.
+  - Out of scope, not fixed: ADR-038 E5's `tests/playwright/test_exposure_matrix.py`
+    uses the same unpinned init script, so its SSE runs were WebSocket runs.
+    It was not re-run here. Tracked as #3097.
+  - **Owner decision (2026-09-25):** HTTP fallback events stay ordered. They
+    are sent one at a time, as frames are on a socket, because of the
+    lost-update evidence above. Independent state-backend claims now pass the former HTTP
   exception/retry failure and prevent stale session copies from replaying reports.
   Concurrent memory and actual Redis claims are tested; memory remains
   process-local. Missing/expired cursors fail closed until a fresh binding is
   rendered. Browser recovery for this boundary remains open. This is not C2
   acceptance or an exactly-once application callback guarantee.
-- [ ] **C3 — collection lifecycle.** Prove keyed repetition, reorder, duplicate
+- [x] **C3 — collection lifecycle.** Prove keyed repetition, reorder, duplicate
   keys, removal/re-addition, nesting, reconnect and restore. Include a separate
   authorized delegated-row example; do not present it as stateful repetition.
-- [ ] **C4 — acceptance and publication.** Run HTTP/WS and real browser tests
+  **Closed 2026-09-25** (gate 5's separate proof), under the owner's C3
+  decisions in ADR-034 (Q0–Q6, N1–N4). `DropdownMenu.collection()` is
+  implemented in `components/_interactive.py`, with rendering, the explicit
+  provider, session persistence and restore wired through
+  `components.base.is_session_component`.
+  Evidence:
+  - `test_interactive_collections_c3.py` (26 tests):
+    - sync order, `get`/`len`/iteration and `.values`;
+    - invalid pairs, including duplicate keys, change nothing;
+    - reordering keeps state and identity;
+    - retained configuration updates, and an invalidated selection clears
+      without an output;
+    - a `visibility` change starts a new lifetime;
+    - declarations are copied and reusable;
+    - removal and re-addition give a new identity;
+    - the member is the callback source, and `toggled` fires only for client
+      members;
+    - runtime dispatch refuses removed, re-added-old and unknown identities,
+      including after the collection's own callback removes its member;
+    - HTTP session round trip, and a WebSocket reconnect restore, keep
+      identities and state and never resurrect a removed member;
+    - an invalid session record changes nothing;
+    - no signed snapshot for views with collections;
+    - rendering in both engines and both policies;
+    - membership and state changes render.
+  - `test_adr034_delegated_rows.py` (2 tests) runs the ADR's own D5
+    `RowActionsView` through the HTTP fallback: rows carry their own ids
+    before and after a reorder, forged ids and actions are refused, and no
+    component exists per row.
+  - Typing proof: 31 negative locations (10 new for collections) rejected by
+    mypy and Pyright 1.1.408; the positive and runtime assertions pass.
+  - Browser: `tests/playwright/test_interactive_collection.py` on
+    `/demos/interactive-collection/`, over pinned WebSocket, SSE and HTTP-only,
+    checks:
+    - independent rows, and the keyed callback firing once;
+    - reordering keeps state with its row;
+    - removal from the member's own callback;
+    - the removed row's forged event is refused;
+    - restore gives a new identity;
+    - the client row's keyed observation.
+    It passes on all three. Canary: with removed members kept registered and
+    dispatchable, it fails on WebSocket and SSE. HTTP-only restores membership
+    from the session on every request, so the leak cannot occur there.
+  - Gate-offs in the unit suite: members not unregistered fails 3 tests;
+    duplicate keys undetected fails 1; members matched by position fails 7;
+    session restore not applied fails 2.
+  Not yet published: collection docs and snippets go out with C4.
+- [x] **C4 — acceptance and publication.** Run HTTP/WS and real browser tests
   with both template backends: focus/dismissal/default actions, user isolation,
   async/error behavior, duplicate/reordered observations and stale identities.
   Publish runnable examples, generated reference, website navigation and AI
   guidance together through D2 below; preserve legacy plain handlers.
-- [ ] **CR — retirement (expected empty).** [ADR-034 Step R](034-component-scoped-events-and-bindings.md)
+  **Acceptance progress (2026-09-25; publication is still open).** Browser
+  runs, each on pinned and checked transports:
+  - `tests/playwright/test_interactive_acceptance.py` on
+    `/demos/interactive-acceptance/`, over WebSocket, SSE and HTTP-only. It
+    checks:
+    - an async output callback is awaited;
+    - a callback that raises reports `djust:error` on every transport;
+    - on a socket the component's own change stays and the callback ran
+      once, while a failed HTTP turn saves nothing (below);
+    - the `close` action;
+    - a duplicate report (same lifetime and sequence) and an old-lifetime
+      report never reach the observer;
+    - Enter opens a client popover, Escape closes it, and focus returns to
+      the trigger;
+    - a legacy plain `DropdownMenu` still works through its view handlers;
+    - on the WebSocket run, a second browser context is isolated from the
+      first.
+    Three consecutive passes. One earlier WebSocket run, right after a server
+    restart, failed its step 2 once; it did not recur in five later runs.
+  - `tests/playwright/test_interactive_navigation.py`: C1's browser half of
+    signed navigation, over WebSocket and SSE, in two paths:
+    - **Session path.** Back restores the latest state from the server
+      session: same identity, still open, selection and view state kept.
+    - **Signed path.** The demo drops the page's server-saved state, so the
+      restore uses the server-signed snapshot. The same identity comes back,
+      no output fires, and the next selection works.
+    - Canary: with the signed binding restore disabled, the signed path fails
+      (the identity changes on a fresh mount).
+    - Finding (pre-existing, not ADR-034): a legacy view's signed snapshot is
+      issued with its mount frame only; events do not refresh it (explicit
+      views do). So the signed path restores the mount-time state, while the
+      session path restores the latest. Tracked as #3098.
+    - The Service Worker's snapshot storage is replaced by an in-page store
+      with the same bridge methods; capture, signing and restore are real.
+  - Fix: the HTTP fallback reported a failed event only to the console. It
+    now dispatches `djust:error` with the server's error body, as a socket
+    error frame does (#1646). Test: `tests/js/http-fallback-error-event.test.js`
+    (3 cases).
+  - Transport semantics recorded: a failed HTTP turn answers 500 and saves no
+    session state, so the next request sees the state from before it. A
+    socket keeps the in-memory changes made before the exception. This is the
+    existing "no force-save on a 500" behavior, not new.
+  - The C2 and C3 matrices, and ADR-035's and ADR-036's, still pass on all
+    three transports after the client change.
+  **Closed 2026-09-25** with the documentation (owner decisions C4-Q1–Q4); see
+  [ADR-034 acceptance review — C4](#adr-034-acceptance-review--c4).
+- [x] **CR — retirement (expected empty).** Closed 2026-09-25, nothing retired.
+  C1–C4 revealed no target. The #3078 legacy alias was fixed, not retired
+  (C1-Q7). Recorded in ADR-034 Step R. [ADR-034 Step R](034-component-scoped-events-and-bindings.md)
   records that this ADR retires **no** existing code: `event=` is kept per ADR-033 D5,
   the string-routed alternative was rejected rather than shipped, and the existing
   `name=` / `toggle_event=` / item `event` arguments continue. This gate closes by
@@ -1810,13 +2605,74 @@ Source: [decisions and acceptance](034-component-scoped-events-and-bindings.md).
 
 Source: [decisions and acceptance](037-event-contract-checks-and-executable-documentation.md).
 
-- [ ] **D1 — shared checks.** Use the same contract as runtime for ownership,
+- [x] **D1 — shared checks.** Use the same contract as runtime for ownership,
   arguments, injection and exposure checks. Test positive/negative fixtures,
   inherited/decorated handlers, native controls, intentional catch-alls,
   authorized ORM rendering, includes/shared/dynamic templates, locations,
   reasoned suppressions and machine-readable output. No mounts, handlers or
   querysets may execute during checking.
-- [ ] **D2 — executable documentation and catalogue.** Make examples canonical
+
+  **Built (2026-09-25).** The owner decisions are recorded in ADR-037: Q1–Q9, the
+  djust-docs plan, N1, and the retirement table (rows 1–23 plus V020, Q004 and S013).
+  - **One discovery.** `_parameter_metadata.declared_handlers` is the handler
+    discovery. Dispatch's `_event_methods`, the V016–V019 checks, `djust_audit`, the
+    AI schema, the debug panel, the API registry, hot view replacement, the runtime
+    handler metadata, `LiveViewSmokeTest` and the interactive reference generator
+    all use it.
+  - **The scan.** `_template_bindings` compiles each LiveView and LiveComponent
+    template without rendering it, follows `{% extends %}` and constant
+    `{% include %}`, and parses the markup as HTML. `DIRECTIVES` there is the one
+    Python description of what each `dj-*` directive sends. A test pins it against
+    every `dj-*` attribute the client reads.
+  - **The checks.** `checks/bindings.py` reports T019–T022, all Warnings. Findings
+    carry owner, binding, expected and supplied. The coverage object reports
+    checked, dynamic and unsupported bindings, with gaps. Suppression is local and
+    needs a reason.
+  - **Tests.**
+    - `python/djust/tests/test_adr037_binding_checks.py` (23): names and
+      ownership, legacy and strict arguments, literals, routing context, dynamic
+      and outside-root bindings, includes/parents and shared templates, locations,
+      suppression, decorated handlers, managed objects and authorized querysets.
+      One fixture raises if anything runs during checking (mount, context,
+      property, handler or queryset). Also `djust_check` JSON/text output and the
+      client and schema pins.
+    - `python/djust/tests/test_adr037_shared_discovery.py` (12): discovery, the
+      row 9 oracle across framework and demo views, and the debug panel.
+    - `python/djust/tests/test_find_handlers_for_template.py` (5).
+    - `python/djust/tests/test_recovery_handler_policy.py` (17).
+
+  **Retirement commits** (the branch's PR is the deletion PR):
+  - row 1 (V007) `7cede1b3e`;
+  - row 4 `79fbb77e3`;
+  - row 5 `7b2fe4fe7`;
+  - row 6 `4bd808540`;
+  - row 9 `c64fc5867` (pin) and `15cfc2dc2`;
+  - row 10 `2d7a75ad0`;
+  - row 11 `9035a37f1`;
+  - row 12 `de79d8a7d`;
+  - row 13 `0b435e373`;
+  - row 14 `17659940a`;
+  - row 15 `9f67b2fa7`;
+  - row 18 `f3768bbc9`;
+  - row 20 `86d31d0db`.
+
+  **Findings.**
+  - The demo project's 85 T019 findings are all undecorated handlers on 33 views the
+    URLconf does not route.
+  - Row 20's browser test found two defects the stamp list does not decide:
+    - `dj-paste` attached no owner context. Fixed here (owner decision); it is back
+      in the directive table as an owner-context binding.
+    - Over HTTP-only, every embedded-child event reaches the root view: #3104,
+      not fixed here. The browser test holds those cases as strict expected
+      failures. (Follow-up, drain/adr-followups: the HTTP fallback now refuses
+      those events instead; routing them to the child remains open in #3104.)
+  - `get_debug_info()` crashes on a property that raises something other than
+    `AttributeError`: tracked as #3103, not fixed here. (Fixed in the
+    drain/adr-followups follow-up: properties are listed without being run.)
+  - Under the legacy policy, `dj-input`, `dj-change` and `dj-submit` send `field`
+    and `_target`, so a closed legacy handler for them fails at runtime. T020 now
+    reports those bindings; V007 was the blanket guard.
+- [x] **D2 — executable documentation and catalogue.** Make examples canonical
   fixtures and deliberately break each test layer to prove its gate fails.
   Verify website navigation and report skipped fixtures. Include the originally
   reported code-snippet whitespace, checkbox appearance, dropdown items and
@@ -1836,17 +2692,135 @@ Source: [decisions and acceptance](037-event-contract-checks-and-executable-docu
   The final full Python suite passes 30,583 tests with 952 skipped.
   The corrected usage sections were checked in an isolated browser catalogue;
   this does not establish publication on the user's running site or D2 closure.
-- [ ] **D3 — final acceptance.** Run the ADR acceptance matrices at the final
+  **Pending from ADR-035 (2026-09-25).** ADR-035 names "generators, and
+  lifecycle checks" among the updates to make together under ADR-037. The
+  generator side is not built yet:
+  - `python/djust/schema.py`'s `"forms"` pattern (about lines 1241–1258)
+    still teaches `_model_instance` in `mount()`.
+  - Its `OPTIONAL_MIXINS` list has no `ModelFormMixin` entry.
+  - The MCP `scaffold_view` tool (`mcp/server.py`, `form` feature) generates
+    only a `FormMixin` view, with no edit variant.
+  - `djust_gen_live` generates no forms, so nothing to change there.
+  Each needs an executed fixture, as D2 requires. They land with the D2
+  generator work, not as ADR-035 scope. **Done (D2):** the schema patterns,
+  `OPTIONAL_MIXINS` and MCP `form_edit` are executed fixtures.
+
+  **Pending from ADR-034 (2026-09-25):**
+  - A catalogue entry for the interactive `DropdownMenu`, including a keyed
+    collection (owner decision C4-Q3). The catalogue's usage snippets are
+    generated, so the entry comes from the D2 generator, not by hand.
+    **Done (D2):** the entry is its canonical example module rather than generated
+    usage (see Built below).
+  - djust-docs' symbol check reports component-scoped decorators
+    (`@<menu>.on.selected`) as advisory "not a known djust decorator". Teach
+    it the interactive subscription form. **In progress:** a djust-docs PR, plan
+    Task 12.
+
+  **Built (2026-09-25, branch `feat/adr-037-d2-d3`).** Owner decisions: the scope is
+  the ADR surface plus drift, the harness uses Markdown markers, and delivery is
+  checked on staged 1.3 docs (see the spec,
+  `docs/superpowers/specs/2026-09-25-adr-037-d2-d3-design.md`).
+  - **Harness.** `python/djust/tests/_doc_examples.py` reads the
+    `<!-- djust-example: <id> scenario=<name> -->` or
+    `<!-- djust-example: skip -- <reason> -->` marker above each Python block. It
+    pairs each block with the next `html` block in its section and runs the named
+    scenario from `python/djust/tests/doc_scenarios/` (`adr034`, `adr035`,
+    `adr036` and `generated`). `COVERED` lists seven sections.
+  - **Drift.** `test_doc_example_drift.py` fails on:
+    - an unmarked block;
+    - an unknown scenario;
+    - a skip without a reason;
+    - a marker attached to no block;
+    - a duplicate id;
+    - a missing heading.
+  - **Report.** `scripts/doc-examples-report.py`:
+
+    ```text
+    covered file                                       executed  skipped unmarked
+    docs/ai/components.md                                     1        0        0
+    docs/ai/events.md                                         1        1        0
+    docs/ai/forms.md                                          1        0        0
+    docs/website/core-concepts/events.md                      2        1        0
+    docs/website/guides/error-codes.md                        0        0        0
+    docs/website/guides/forms.md                              1        1        0
+    docs/website/guides/interactive-components.md             5        0        0
+    docs/website: 665 Python blocks — 8 executed, 467 parse/import-checked (scripts/check-doc-snippets.py, guides/*.md), 190 unchecked
+    ```
+
+    Only `guides/*.md` is parse/import-checked (`scripts/check-doc-snippets.py`).
+    The spec assumed that check covered every `docs/website` block; the other 190
+    Python blocks, in core-concepts, forms, state and so on, have no check at all
+    (#3134 review).
+  - **Gate-offs.** Each layer (extractor, pairing, scenario driving and drift)
+    goes red when it is reverted: `docs/adr/notes/037-d2-gate-offs.md`, produced by
+    `scripts/doc-examples-gateoff.py`.
+  - **Generators.** Their output runs through the same scenarios:
+    - the `schema.py` forms patterns (a create form, plus the guide's
+      `ModelFormMixin` edit view, pinned equal to it);
+    - MCP `scaffold_view(features="form_edit")`;
+    - the catalogue entry's source.
+  - **Catalogue.** `/theme/components/interactive_dropdown_menu/` serves
+    `DropdownMenuExample` (one menu, plus a keyed collection) inside the catalogue
+    chrome. The browser pass is in `docs/adr/notes/037-d2-catalogue-browser.md`.
+    Two menus stay open at once there, as documented.
+- [x] **D3 — final acceptance.** Run the ADR acceptance matrices at the final
   revision, complete migration/AI guidance, and verify actual website delivery
   rather than equating repository Markdown with publication. Record remaining
   static-analysis limits; only then change the relevant ADR status.
-- [ ] **DR — retirement decision.** [ADR-037 Step R](037-event-contract-checks-and-executable-documentation.md)
+
+  **Acceptance at the final revision (2026-09-25, `41a436210` on `feat/adr-037-d3`).**
+  - **Python** (the ADR 034–037 acceptance set: interactive, delegated rows, model
+    form, form hooks, parameter contracts, strict dispatch, recovery policy,
+    ADR-037 checks and discovery, `find_handlers_for_template`, the documentation
+    harness, V004 subscriptions, the catalogue entry, the interactive reference
+    generator): **676 passed**.
+  - **JS** (`adr036_documented_examples`, `interactive-nested-ownership`,
+    `parameter_contract_*`, `dj-paste`): **65 passed** in 6 files.
+  - **Browser** (`tests/playwright/`, against this worktree's demo server on
+    port 18448):
+    - `test_strict_parameters`, `test_model_form`, `test_interactive_dropdown`
+      and `test_interactive_collection` pass on WebSocket, SSE and HTTP.
+    - `test_interactive_navigation` passes on WebSocket and SSE, with session
+      and signed state.
+    - `test_embedded_directives` passes. Over HTTP-only, every embedded-child
+      directive reaches the parent, as #3104 records. (Since the
+      drain/adr-followups follow-up the HTTP fallback refuses them instead.)
+    - `test_interactive_acceptance` failed once in three runs, on WebSocket only
+      (stage 2, a fixed 800 ms wait), and passed on all three transports in the
+      next two runs. Tracked as #3137, the same class as #3130.
+  - **Checks:** `tests/test_check_*.py` has **83 passed**. The demo project's
+    `manage.py check` reports **85 `djust.T019`**, the same as at D1: all on
+    undecorated handlers of 33 views the URLconf does not route.
+  - **Migration and AI guidance.**
+    - `docs/ai/events.md` no longer requires `**kwargs`. It states the T019–T022
+      checks and the legacy `field`/`_target` case.
+    - The AI schema's handler rules, `event_handler_signature` and pitfall 3 say
+      the same.
+    - The MCP tools no longer lint for `**kwargs` (Step R rows 24–26).
+    - The 1.3.0rc3 CHANGELOG carries the upgrade notes.
+  - **Delivery** (staged; production stays on 1.2.x until 1.3.0):
+    `docs/adr/notes/037-d3-staged-delivery.md`.
+    - djust-docs pinned to 1.3.0rc3 passes `make docs-verify` on this branch's
+      docs.
+    - All 8 ADR pages render and are linked in the nav.
+    - It found two defects: the accounts guide was missing from `_config.yaml`
+      (fixed here), and authoring markers rendered as text (djust-docs#13).
+  - **Static-analysis limits:** ADR-037, "Static-analysis limits at acceptance".
+  - **Also fixed while accepting:** V004 no longer reports component-subscription
+    callbacks (#3134).
+- [x] **DR — retirement decision.** [ADR-037 Step R](037-event-contract-checks-and-executable-documentation.md)
   requires D1 to settle whether this ADR is consolidation or addition: enumerate every
   place that re-derives handler parameters, ownership or event names independently of
   the runtime contract, cited `file:line`, and mark each `RETIRE` (with a deletion PR)
   or `KEEP` (with the reason it is distinct). An empty enumeration is recorded plainly
   and the ADR claims no saving. Every `RETIRE` row carries a merged deletion PR before
   D3 acceptance.
+
+  **Closed (2026-09-25).** Consolidation: rows 1–23 were deleted by #3122. Rows
+  24–26 were found at D3 planning: the MCP `validate_view` and
+  `detect_common_issues` `**kwargs` rules, and the AI schema's V007 prose. They are
+  deleted by the ADR-037 D3 PR, and D3 is accepted with that PR. D2 also retired
+  three hand-maintained documentation test harnesses (see the ADR's Step R).
 
 ### Completed milestone: E4 — request correlation
 

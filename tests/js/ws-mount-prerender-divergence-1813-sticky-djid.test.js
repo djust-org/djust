@@ -151,8 +151,10 @@ describe('#1813 (a) — prerender morph stamps dj-id onto sticky-child wrapper',
 describe('#1813 (a) — source wiring pins', () => {
     it('the prerender morph branch calls _stampEmbeddedWrapperDjIds after morphChildren', () => {
         // The stamp pass must run in the same branch as the morph, AFTER it.
-        const morphIdx = clientSource.indexOf('morphChildren(_morphContainer, _morphTemp)');
-        const stampIdx = clientSource.indexOf('_stampEmbeddedWrapperDjIds(_morphContainer, _morphTemp)');
+        // The WebSocket and SSE mount paths share _morphPrerenderedMount.
+        const helper = extractFunctionSource(clientSource, '_morphPrerenderedMount');
+        const morphIdx = helper.indexOf('morphChildren(container, temp)');
+        const stampIdx = helper.indexOf('_stampEmbeddedWrapperDjIds(container, temp)');
         expect(morphIdx).toBeGreaterThan(-1);
         expect(stampIdx).toBeGreaterThan(morphIdx);
     });

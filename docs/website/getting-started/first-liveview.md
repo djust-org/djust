@@ -58,7 +58,7 @@ class CounterView(LiveView):
 
 - `mount()` runs on the initial HTTP render and again when the WebSocket connects (unless state is restored) — set initial state here, not in `__init__`, and keep it idempotent (no one-time side effects)
 - Every event handler needs `@event_handler()` — djust blocks undecorated methods for security
-- Always accept `**kwargs` in event handlers (djust may pass extra metadata)
+- Declare the parameters each binding sends; `manage.py check` reports a handler that would reject one (`djust.T020`)
 - State lives on `self` — any change to `self.count` triggers a re-render automatically
 
 ## 2. Create the Template
@@ -86,7 +86,7 @@ Create `myapp/templates/myapp/counter.html`:
 
 **Template requirements:**
 
-- `{% load live_tags %}` and `{% djust_client_config %}` emit client config meta tags; djust auto-injects the client JS (~67 KB gz) into every LiveView response
+- `{% load live_tags %}` and `{% djust_client_config %}` emit client config meta tags; djust auto-injects the client JS (~70 KB gz) into every LiveView response
 - `dj-root` marks the reactive region — only this subtree is patched on updates. It is the only root attribute you write; djust stamps `dj-view` onto it server-side with the dotted path of the view rendering the page, which is what connects the page to the WebSocket session
 - (Write `dj-view="myapp.views.MyView"` yourself only to name a specific view — an embedded or sticky view, or a template shared by several views. It is a literal path; there is no `dj_view_id` variable)
 - `dj-click="increment"` binds a click event to the `increment` handler

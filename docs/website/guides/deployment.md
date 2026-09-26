@@ -295,7 +295,7 @@ LIVEVIEW_CONFIG = {
 
 - Each session is assigned to the least-loaded pool thread when it connects, and **stays on that thread for its lifetime**. Thread-locals and the thread's Django database connection stay consistent for the session.
 - Different sessions' handlers run at the same time on different threads. A session's own events still run one at a time, in order.
-- HTTP requests and SSE streams are unchanged: Django already gives each HTTP request its own thread.
+- HTTP requests and SSE streams are unchanged: Django gives each HTTP request its own new thread. On free-threaded CPython that is costly under overload, because each thread's allocator heap stays resident after the thread exits: a burst of 256 concurrent page loads cost about 1.2 GB in #3114. Wrap the HTTP app in `djust.worker_pool.PooledHTTP` to run requests on a bounded pool instead. See [Memory under overload](scaling-across-cores.md#memory-under-overload).
 - The default (`None`) keeps the single shared thread. An invalid value is reported by the system check `djust.C021`.
 - **With the pool on, djust also moves per-frame work off the asyncio event loop**, which becomes the next bottleneck once sessions render in parallel:
   - the snapshot of the view's assigns taken before an event runs on the session's thread, in the same hop as a sync handler;
@@ -316,6 +316,10 @@ Things to know before you turn it on:
   - 3.14t by itself moved the snake knee from 32–64 clients (stock, 3.12) to 64–96. Adding per-session threads left the knee there: they raised the cores in use from about 1.6 to 1.9, until the event loop saturated.
   - The pool starts to pay off once the event loop is relieved. With scoped push added, per-session threads reached 192–224 clients, against 96–128 on the shared thread.
   - With event-loop offload and a lighter in-process channel layer as well, one process used about 5 cores and served about 4–5× the clients of stock 3.12.
+
+### More than one event loop per process: `djust serve --loops`
+
+Once the pool spreads the sync work, the asyncio event loop that handles every WebSocket frame is the next ceiling, at about one core. On free-threaded Python, `djust serve myproject.asgi:application --loops N` runs N uvicorn servers, each on its own event loop and thread, on one shared listening socket, with `djust.layers.MultiLoopInMemoryChannelLayer` as the channel layer (djust 1.3, opt-in; `--loops 1` is plain `uvicorn.run`). It changes what app code may share between sessions: see [More than one event loop per process](scaling-across-cores.md#more-than-one-event-loop-per-process) for the rules, the lifespan and shutdown behaviour, and measured numbers.
 
 ### WebSocket per-message compression (permessage-deflate)
 

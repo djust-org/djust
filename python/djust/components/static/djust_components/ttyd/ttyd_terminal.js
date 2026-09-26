@@ -1,16 +1,13 @@
 // ttyd_terminal.js — djust hook for xterm.js + ttyd WebSocket
-// ESM module; CDN imports (no build step required).
+// xterm is djust's vendored build (ADR-040): the template renders a
+// <link rel="modulepreload" integrity> for it and passes its URL here.
 //
 // ttyd binary protocol:
 //   Client→server: [0x00, ...stdin_bytes] | [0x01, ...resize_json_bytes]
 //   Server→client: [0x00, ...stdout_bytes] | [0x01, title] | [0x02, prefs]
 //
 // ttyd must be run with --check-origin=false (or same origin) to allow
-// WebSocket connections. For offline/air-gapped environments, vendor xterm.js
-// to your static files instead of using CDN imports.
-
-const XTERM_CDN = "https://esm.sh/xterm@5";
-const FIT_CDN   = "https://esm.sh/@xterm/addon-fit@0.10";
+// WebSocket connections.
 
 export const TtydTerminalHook = {
   async mounted() {
@@ -21,9 +18,7 @@ export const TtydTerminalHook = {
     let theme  = {};
     try { theme = JSON.parse(el.dataset.theme || "{}"); } catch (_) {}
 
-    // Dynamic CDN imports — loaded once, cached by browser
-    const { Terminal } = await import(XTERM_CDN);
-    const { FitAddon } = await import(FIT_CDN);
+    const { Terminal, FitAddon } = await import(el.dataset.xtermSrc);
 
     this._term = new Terminal({ rows, cols, theme, convertEol: true });
     this._fit  = new FitAddon();

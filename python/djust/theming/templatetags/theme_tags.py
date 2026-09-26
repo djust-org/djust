@@ -829,7 +829,12 @@ def _thumbnail_html(component_name: str) -> str:
         render_python_component_example,
     )
 
+    from ..gallery.catalogue import INTERACTIVE_ENTRIES, interactive_preview_html
+
     try:
+        if component_name in INTERACTIVE_ENTRIES:
+            # Its preview is its canonical example view, rendered as-is.
+            return _inert_markup(interactive_preview_html(component_name))
         if component_name in COMPONENT_CONTRACTS:
             examples = build_catalogue_detail_context(component_name, render_examples=False).get(
                 "examples"

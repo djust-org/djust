@@ -28,6 +28,7 @@ from django.http import Http404
 
 from djust import LiveView
 from djust.components.descriptors.base import LiveComponent, TypedState
+from djust.components.interactive_examples import DropdownMenuExample
 from djust.decorators import event_handler
 
 from djust.components.descriptors import (
@@ -975,6 +976,12 @@ class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVi
     preview = Preview()
 
     def mount(self, request: Any, component_name: Optional[str] = None, **kwargs: Any) -> None:
+        from .catalogue import INTERACTIVE_ENTRIES
+
+        if component_name in INTERACTIVE_ENTRIES:
+            # Served by its own route and view (the example view itself).
+            raise Http404(f"Unknown component: {component_name}")
+
         from .component_registry import _COMPONENT_TO_CATEGORY
         from .catalogue import build_catalogue_detail_context
         from djust.theming.contracts import COMPONENT_CONTRACTS
@@ -1095,11 +1102,6 @@ class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVi
         from .component_registry import component_client
 
         client = component_client(component_name)
-        from .component_registry import unstyled_python_class
-
-        # The tag this page previews is styled; its Python class twin is not
-        # (#2993). Say so where the reader chooses between them.
-        ctx["unstyled_class"], ctx["unstyled_class_root"] = unstyled_python_class(component_name)
         ctx["client_hook"] = client["hook"] if not client["hook_shipped"] else ""
         ctx["client_script"] = client["script"]
         ctx["client_script_url"] = static(client["script"]) if client["script"] else ""
@@ -1355,6 +1357,46 @@ for _event in (
     if not hasattr(ComponentsDetailView, _event):
         setattr(ComponentsDetailView, _event, _make_forwarder(_event))
 del _event
+
+
+class InteractiveDropdownCatalogueView(
+    ComponentsAccessMixin, ComponentsSidebarMixin, DropdownMenuExample
+):
+    """The interactive DropdownMenu's catalogue page: the canonical example,
+    served as-is inside the catalogue chrome (ADR-037 D2)."""
+
+    template_name = "djust_theming/catalogue/interactive_detail.html"
+    login_required = False
+    component_name = "interactive_dropdown_menu"
+
+    def mount(self, request: Any, **kwargs: Any) -> None:
+        super().mount(request, **kwargs)
+        from .catalogue import build_catalogue_detail_context
+
+        self._base_ctx = build_catalogue_detail_context(self.component_name)
+        self.page_title = self._base_ctx["display_name"] + " — Components"
+        self._init_sidebar(self.component_name)
+
+    def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
+        from django.urls import reverse
+
+        from djust.components.components.code_snippet import CodeSnippet
+
+        ctx = super().get_context_data(**kwargs)
+        ctx.update(self._base_ctx)
+        ctx.update(self._chrome_context())
+        ctx["crumbs"] = [
+            {"label": "Components", "url": reverse("djust_theming:components"), "navigate": True},
+            {"label": ctx["display_name"], "url": ""},
+        ]
+        ctx["usage_html"] = {
+            "view": CodeSnippet(code=ctx["usage_parts"]["view"], language="python").render(),
+            "template": CodeSnippet(
+                code=ctx["usage_parts"]["template"], language="django"
+            ).render(),
+        }
+        ctx["docs_guide_url"] = catalogue_chrome()["docs_url"] + "/guides/interactive-components/"
+        return ctx
 
 
 class ComponentsIndexView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveView):

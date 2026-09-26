@@ -409,6 +409,11 @@ class TestUsageWithEvents:
 
         for component in get_all_components_with_metadata():
             name = component["name"]
+            if component["component_type"] == "interactive":
+                # Served by its own view, not ComponentsDetailView. Its usage is
+                # the canonical example module, executed with its scenario in
+                # test_doc_examples.py (catalogue-dropdown).
+                continue
             view = _detail(name)
             src = view._base_ctx["usage_parts"]["view"]
             assert "...  # write to self.component" not in src, name

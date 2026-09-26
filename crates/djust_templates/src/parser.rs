@@ -83,6 +83,12 @@ pub enum Node {
     /// re-emit the tag for downstream Django rendering.
     Load(Vec<String>),
     CsrfToken,
+    /// `{% djust_audio %}` — the audio controls, rendered natively from the
+    /// view's `djust_audio_manifest` (AudioMixin). Native so a render never
+    /// crosses into Python for it; the Django-engine path keeps the Python
+    /// `simple_tag` in `templatetags/live_tags.py`, and the two must agree
+    /// byte for byte (see `DJUST_AUDIO_*` in renderer.rs).
+    DjustAudio,
     Static(String), // Path to static file
     With {
         assignments: Vec<(String, String)>, // var_name, expression
@@ -450,6 +456,7 @@ macro_rules! child_lists {
             | Node::Comment
             | Node::Load(_)
             | Node::CsrfToken
+            | Node::DjustAudio
             | Node::Static(_)
             | Node::RustComponent { .. }
             | Node::CustomTag { .. }
@@ -1465,6 +1472,18 @@ fn parse_token_inner(
                 "csrf_token" => {
                     // {% csrf_token %} - generates CSRF token hidden input
                     Ok(Some(Node::CsrfToken))
+                }
+
+                "djust_audio" => {
+                    // Native, ahead of the registry: the bridged Python
+                    // handler would hand Python the whole render context on
+                    // every render just to read one string.
+                    if !args.is_empty() {
+                        return Err(DjangoRustError::TemplateError(
+                            "djust_audio takes no arguments".to_string(),
+                        ));
+                    }
+                    Ok(Some(Node::DjustAudio))
                 }
 
                 "static" => {
@@ -3383,6 +3402,13 @@ fn extract_from_nodes(
             // the earlier arm above.) Fixes #783.
             Node::Include { .. } => {
                 variables.entry("*".to_string()).or_default();
+            }
+            // Reads exactly one key, so a partial render re-runs it only
+            // when the manifest changes (a bridged tag would be "*").
+            Node::DjustAudio => {
+                variables
+                    .entry("djust_audio_manifest".to_string())
+                    .or_default();
             }
             // Text, Comment, CsrfToken, Extends, TemplateTag, Now, Static
             // don't contain variable references.
@@ -5974,6 +6000,28 @@ mod dep_tests {
     }
 
     #[test]
+    fn test_deps_djust_audio_reads_only_its_manifest() {
+        let deps = deps_for("{% djust_audio %}");
+        assert_eq!(deps.len(), 1);
+        assert!(
+            deps[0].contains("djust_audio_manifest"),
+            "got {:?}",
+            deps[0]
+        );
+        assert!(
+            !deps[0].contains("*"),
+            "must not be a wildcard; got {:?}",
+            deps[0]
+        );
+    }
+
+    #[test]
+    fn test_djust_audio_rejects_arguments() {
+        let tokens = crate::lexer::tokenize("{% djust_audio x %}").unwrap();
+        assert!(parse(&tokens).is_err());
+    }
+
+    #[test]
     fn test_deps_plain_text_has_no_vars() {
         let deps = deps_for("hello world");
         assert_eq!(deps.len(), 1);
@@ -6029,6 +6077,7 @@ mod dep_tests {
             Node::Comment => "Comment",
             Node::Load(_) => "Load",
             Node::CsrfToken => "CsrfToken",
+            Node::DjustAudio => "DjustAudio",
             Node::Static(_) => "Static",
             Node::With { .. } => "With",
             Node::ReactComponent { .. } => "ReactComponent",
@@ -6101,6 +6150,7 @@ mod dep_tests {
             Node::Comment,
             Node::Load(vec!["mytags".into()]),
             Node::CsrfToken,
+            Node::DjustAudio,
             Node::Static("\"img/foo.png\"".into()),
             Node::With {
                 assignments: vec![("x".into(), "y".into())],

@@ -10,7 +10,8 @@ These tests pin the behavior:
 
 1. The auto-enable call fires from ``ready()``.
 2. The ``hot_reload_auto_enable`` config knob disables it.
-3. ``PYTEST_CURRENT_TEST`` skips it (so test sessions don't spawn the watcher).
+3. A pytest run skips it (so test sessions don't spawn the watcher), including
+   the ``django.setup()`` pytest-django makes before any test starts (#3157).
 4. Idempotency: calling ``ready()`` twice doesn't double-start.
 5. Startup-failure isolation: if ``enable_hot_reload`` raises, ``ready()`` still completes.
 """
@@ -20,6 +21,9 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import subprocess
+import sys
+import textwrap
 from unittest import mock
 
 import pytest
@@ -48,7 +52,10 @@ def _no_pytest_env():
     """
     saved = os.environ.pop("PYTEST_CURRENT_TEST", None)
     try:
-        yield
+        # pytest itself is imported in this process, which ``ready()`` also
+        # treats as a pytest run (#3157); hide that signal too.
+        with mock.patch("djust.apps._running_under_pytest", return_value=False):
+            yield
     finally:
         if saved is not None:
             os.environ["PYTEST_CURRENT_TEST"] = saved
@@ -245,3 +252,96 @@ def test_warm_filter_bridge_opt_out(fresh_config):
         assert template_filters._CUSTOM_FILTERS_BRIDGED is False
     finally:
         template_filters._CUSTOM_FILTERS_BRIDGED = saved
+
+
+# ---------------------------------------------------------------------------
+# #3157: pytest-django calls ``django.setup()`` from its configure hooks, before
+# any test runs, so ``PYTEST_CURRENT_TEST`` is not set yet at ``ready()``.
+# ---------------------------------------------------------------------------
+
+_SETUP_LIKE_PYTEST_DJANGO = textwrap.dedent(
+    """
+    import os, sys
+    os.environ.pop("PYTEST_CURRENT_TEST", None)
+    if sys.argv[1] == "pytest":
+        import pytest  # noqa: F401 - pytest-django's process has pytest imported
+
+    import djust
+    calls = []
+    djust.enable_hot_reload = lambda: calls.append(1)
+
+    from django.conf import settings
+    settings.configure(
+        DEBUG=True,
+        SECRET_KEY="x",
+        INSTALLED_APPS=["django.contrib.contenttypes", "django.contrib.auth", "djust"],
+        DATABASES={"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}},
+        TEMPLATES=[{"BACKEND": "django.template.backends.django.DjangoTemplates"}],
+        LIVEVIEW_CONFIG={"filter_bridge_warm": False},
+    )
+    import django
+    django.setup()
+    print("@@CALLS@@%d" % len(calls))
+    """
+)
+
+
+def _setup_calls(mode: str) -> int:
+    import djust
+
+    pkg_root = os.path.dirname(os.path.dirname(os.path.abspath(djust.__file__)))
+    env = dict(os.environ)
+    env.pop("PYTEST_CURRENT_TEST", None)
+    env.pop("DJANGO_SETTINGS_MODULE", None)
+    env["DJUST_NO_UPDATE_CHECK"] = "1"
+    env["PYTHONPATH"] = pkg_root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    proc = subprocess.run(
+        [sys.executable, "-c", _SETUP_LIKE_PYTEST_DJANGO, mode],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=120,
+    )
+    assert proc.returncode == 0, proc.stderr
+    lines = [ln for ln in proc.stdout.splitlines() if ln.startswith("@@CALLS@@")]
+    assert len(lines) == 1, proc.stdout + proc.stderr
+    return int(lines[0][len("@@CALLS@@") :])
+
+
+def test_django_setup_inside_a_pytest_process_does_not_start_the_watcher():
+    """``django.setup()`` with pytest imported and no ``PYTEST_CURRENT_TEST``
+    (what pytest-django does at configure time) must not auto-enable."""
+    assert _setup_calls("pytest") == 0
+
+
+def test_django_setup_outside_pytest_still_starts_the_watcher():
+    """The same setup in a plain process (``runserver``) still auto-enables:
+    the guard keys on pytest, not on the subprocess or the settings."""
+    assert _setup_calls("plain") == 1
+
+
+def test_ready_says_why_it_skipped_under_pytest(caplog):
+    """A downstream project wondering why HVR is off in its test run gets a
+    debug line naming the reason (#3157)."""
+    app = _make_app_config()
+    with (
+        caplog.at_level(logging.DEBUG, logger="djust"),
+        mock.patch("djust.enable_hot_reload") as mock_enable,
+    ):
+        app.ready()
+    assert mock_enable.call_count == 0
+    assert any(
+        "pytest" in r.getMessage() and "hot reload" in r.getMessage() for r in caplog.records
+    )
+
+
+def test_ready_logs_nothing_about_pytest_outside_pytest(caplog):
+    app = _make_app_config()
+    with (
+        _no_pytest_env(),
+        caplog.at_level(logging.DEBUG, logger="djust"),
+        mock.patch("djust.enable_hot_reload"),
+        mock.patch("djust.template_filters._ensure_custom_filters_bridged"),
+    ):
+        app.ready()
+    assert not any("pytest" in r.getMessage() for r in caplog.records)

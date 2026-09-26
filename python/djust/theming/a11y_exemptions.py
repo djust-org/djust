@@ -24,7 +24,9 @@ ungated or force-fixed — recolouring brand palettes (dracula, catppuccin,
 nord, solarized, ...) to satisfy a ratio would erase their identity. The
 ``default``/``blue``/``shadcn``/``slate`` status-label fixes (#2874) are
 the exception that proves the rule: those palettes were fixed, and their
-now-stale entries removed. 134 of the entries imported at the #2874 W001
+now-stale entries removed. So was ``djust`` (#2996), because djust owns that
+identity: its labels on the bright fills became dark ink, and its 17 entries
+went. 134 of the entries imported at the #2874 W001
 reconciliation are catastrophic (<3.0) — tracked in the branded-palette
 remediation follow-up.
 
@@ -299,42 +301,6 @@ A11Y_EXEMPTIONS: dict[tuple[str, str, str, str], str] = {
         "destructive_foreground",
         "destructive",
     ): "grandfathered at gate introduction (2026-07, #2060); ratio 4.42",
-    (
-        "djust",
-        "light",
-        "primary_foreground",
-        "primary",
-    ): "grandfathered at gate introduction (2026-07, #2060); ratio 2.78",
-    (
-        "djust",
-        "light",
-        "destructive_foreground",
-        "destructive",
-    ): "grandfathered at gate introduction (2026-07, #2060); ratio 3.69",
-    (
-        "djust",
-        "light",
-        "accent_foreground",
-        "accent",
-    ): "grandfathered at gate introduction (2026-07, #2060); ratio 3.87",
-    (
-        "djust",
-        "dark",
-        "primary_foreground",
-        "primary",
-    ): "grandfathered at gate introduction (2026-07, #2060); ratio 2.66",
-    (
-        "djust",
-        "dark",
-        "destructive_foreground",
-        "destructive",
-    ): "grandfathered at gate introduction (2026-07, #2060); ratio 3.69",
-    (
-        "djust",
-        "dark",
-        "accent_foreground",
-        "accent",
-    ): "grandfathered at gate introduction (2026-07, #2060); ratio 2.53",
     (
         "docs",
         "light",
@@ -1528,72 +1494,6 @@ A11Y_EXEMPTIONS: dict[tuple[str, str, str, str], str] = {
         "brand_foreground",
         "brand",
     ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.02",
-    (
-        "djust",
-        "light",
-        "secondary_foreground",
-        "secondary",
-    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.80",
-    (
-        "djust",
-        "light",
-        "muted_foreground",
-        "muted",
-    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.22",
-    (
-        "djust",
-        "light",
-        "success_foreground",
-        "success",
-    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.59",
-    (
-        "djust",
-        "light",
-        "warning_foreground",
-        "warning",
-    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.13",
-    (
-        "djust",
-        "light",
-        "info_foreground",
-        "info",
-    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.86",
-    (
-        "djust",
-        "light",
-        "brand_foreground",
-        "brand",
-    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.78",
-    (
-        "djust",
-        "dark",
-        "secondary_foreground",
-        "secondary",
-    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.25",
-    (
-        "djust",
-        "dark",
-        "success_foreground",
-        "success",
-    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.59",
-    (
-        "djust",
-        "dark",
-        "warning_foreground",
-        "warning",
-    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.13",
-    (
-        "djust",
-        "dark",
-        "info_foreground",
-        "info",
-    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.86",
-    (
-        "djust",
-        "dark",
-        "brand_foreground",
-        "brand",
-    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.66",
     (
         "docs",
         "light",

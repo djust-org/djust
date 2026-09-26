@@ -19,6 +19,7 @@ client, snapshot or debug projection reads the render context.
 from types import FunctionType
 from typing import Any, Dict, Iterable, Mapping, Optional
 
+from ._class_snapshot import namespace
 from ._exposure import (
     ExposureConfigurationError,
     ExposureError,
@@ -177,8 +178,12 @@ def registered_components(view_class: type) -> Dict[str, Any]:
         raise ExposureError("Invalid component descriptor registry")
     merged: Dict[str, Any] = dict(descriptors)
     for name, declaration in declarations.items():
-        # Only a declaration that is also a component renders.
-        if not isinstance(declaration, LiveComponent):
+        # Only a declaration that is also a component, or an ADR-034 keyed
+        # collection of them, renders.
+        if not (
+            isinstance(declaration, LiveComponent)
+            or getattr(type(declaration), "_djust_component_collection", False)
+        ):
             continue
         if name not in merged or getattr_static(view_class, name, None) is declaration:
             merged[name] = declaration
@@ -240,7 +245,7 @@ def actions_provider(view_class: type) -> ProviderContract:
     names: set[str] = set()
     seen: set[str] = set()
     for owner in view_class.__mro__:
-        for name, value in vars(owner).items():
+        for name, value in namespace(owner).items():  # #3151
             if name in seen:
                 continue
             seen.add(name)

@@ -66,6 +66,7 @@ if TYPE_CHECKING:
     from ._async_batch import AsyncBatch
     from ._exposure_children import ChildStateSession
 
+from ._class_snapshot import attribute_names
 from .rate_limit import ConnectionRateLimiter
 from .security import handle_exception, sanitize_for_log
 from .serialization import fast_json_loads
@@ -1915,6 +1916,8 @@ class WSConsumerTransport:
         try:
             await task
         except asyncio.CancelledError:
+            # Expected: we just cancelled the tick task and only wait for it to
+            # unwind.
             pass
         except Exception as exc:  # noqa: BLE001 — the loop logs its own errors
             from ._exposure_diagnostics import log_failure_for
@@ -1938,7 +1941,7 @@ class WSConsumerTransport:
         """
         consumer = self._consumer
         groups: List[str] = []
-        for attr in ("_view_group", "_presence_group"):
+        for attr in ("_view_group", "_presence_group", "_presence_scope_group"):
             group = getattr(consumer, attr, None)
             if isinstance(group, str) and group:
                 groups.append(group)
@@ -2412,7 +2415,7 @@ def _view_is_component_opaque(view: Any, name: str) -> bool:
     if verdict is None:
         verdict = _template_is_component_opaque(source, name)
         if verdict:
-            for attr in dir(cls):
+            for attr in attribute_names(cls):  # dir() races class writes (#3151)
                 prop = getattr(cls, attr, None)
                 deps = getattr(prop, "_computed_deps", None)
                 if deps and name in deps:
@@ -2926,19 +2929,21 @@ class ViewRuntime:
                 await sync_to_async(view_instance._assign_component_ids)()
 
                 # Restore component state.
-                from .components.base import SESSION_COMPONENT_TYPES
+                from .components.base import is_session_component
 
                 component_state = await session.aget(f"{view_key}_components", {})
                 for key, state in component_state.items():
                     component = getattr(view_instance, key, None)
-                    if component and isinstance(component, SESSION_COMPONENT_TYPES):
+                    if component is not None and is_session_component(component):
                         await sync_to_async(view_instance._restore_component_state)(
                             component, state
                         )
-                        from .components._interactive import DropdownMenu
+                        from .components._interactive import DropdownMenu, DropdownMenuCollection
 
                         if isinstance(component, DropdownMenu):
                             component._renew_observation_lifetime()
+                        elif isinstance(component, DropdownMenuCollection):
+                            component._renew_observation_lifetimes()
 
                 mounted_from_restore = True
 
@@ -3066,6 +3071,13 @@ class ViewRuntime:
         # mount baseline that a later event diffs against, so neither needs this.
         if mounted_from_restore:
             view_instance._force_full_html = True
+
+        # ADR-035: a view that looks its object up from the route gets only the
+        # kwargs of its own route, never client params. Bound after both restore
+        # mechanisms, so restored state cannot supply it, and before mount().
+        bind_route = getattr(view_instance, "_djust_bind_route_kwargs", None)
+        if callable(bind_route):
+            bind_route(self._own_route_kwargs(view_instance, page_url))
 
         if not mounted_from_restore:
             try:
@@ -3477,6 +3489,20 @@ class ViewRuntime:
         except Exception:  # noqa: BLE001 — value-free; fail closed on eligibility
             logger.warning("Service-worker cache metadata unavailable for mount")
             mount_msg["sw_cache"] = "no-store"
+
+        # #2966: dj-track-static. A reconnecting client sends the tracked asset
+        # URLs its page loaded; report the ones the current static manifest
+        # has replaced. Additive, and absent for pages that track nothing.
+        track_static = data.get("track_static")
+        if track_static:
+            try:
+                from ._track_static import stale_static_urls
+
+                stale_static = stale_static_urls(track_static)
+                if stale_static:
+                    mount_msg["stale_static"] = stale_static
+            except Exception:  # noqa: BLE001 — an asset check must never break mount
+                logger.warning("dj-track-static check failed; no stale assets reported")
 
         # Optional cache_config (mirrors WS consumer)
         cache_config = self._extract_cache_config(view_instance)
@@ -4122,6 +4148,13 @@ class ViewRuntime:
             await self._flush_deferred_activity_events()
             return
 
+        # #3098: a legacy opt-in view's signed back-navigation snapshot was
+        # issued only at mount, so Back restored mount-time state. Refresh it on
+        # a state-changing event, as explicit views do (a noop above changed
+        # nothing, so the token the client holds is still current).
+        if not snapshot_fields and view is self.view_instance and uses_legacy_exposure(view):
+            snapshot_fields = await self._legacy_event_snapshot(view)
+
         # Render — scoped to one bound component when that is all that
         # changed (ADR-032 D1/D5); ``_render_and_send`` checks the other gates.
         await self._render_and_send(
@@ -4471,7 +4504,6 @@ class ViewRuntime:
             if save_session is None:
                 return
 
-            from .components.base import LiveComponent as _LC
             from .serialization import normalize_django_value as _normalize
 
             save_path = mount_request.path if mount_request is not None else "/"
@@ -4498,7 +4530,18 @@ class ViewRuntime:
             else:
                 save_context = await sync_to_async(_gcd_save)()
 
-            save_state = {k: v for k, v in save_context.items() if not isinstance(v, _LC)}
+            from .mixins.context import legacy_render_only_keys
+
+            render_only = legacy_render_only_keys(target_view)
+            from .components.base import LiveComponent as _LC, is_component_collection
+
+            save_state = {
+                k: v
+                for k, v in save_context.items()
+                if not isinstance(v, _LC)
+                and not is_component_collection(v)
+                and k not in render_only
+            }
             await save_session.aset(save_view_key, _normalize(save_state, state_roundtrip=True))
 
             # Components — sync helper, wrap with sync_to_async.
@@ -5150,6 +5193,17 @@ class ViewRuntime:
         params = data.get("params", {})
         uri = data.get("uri", "")
 
+        # #3125: a view whose object the route selects (ADR-035) never runs
+        # handle_params for a URL naming another record; it remounts there, so
+        # the object is resolved and authorized for the URL the user sees.
+        route_changed = getattr(self.view_instance, "_djust_route_changed", None)
+        if callable(route_changed) and isinstance(uri, str) and uri and route_changed(uri):
+            from .mixins.navigation import same_origin_target
+
+            self.view_instance.live_redirect(same_origin_target(uri), replace=True)
+            await self._flush_navigation()
+            return
+
         try:
             await sync_to_async(self.view_instance.handle_params)(params, uri)
 
@@ -5569,6 +5623,17 @@ class ViewRuntime:
         except Exception:
             return {}
 
+    def _own_route_kwargs(self, view_instance: Any, page_url: str) -> Optional[Dict[str, Any]]:
+        """``page_url``'s resolved kwargs if that route serves this view class.
+
+        ``None`` when the URL does not resolve, or resolves to another view: the
+        client names both the view and the URL, so a URL routed elsewhere must
+        not select this view's object.
+        """
+        from .mixins.navigation import own_route_kwargs
+
+        return own_route_kwargs(view_instance, page_url)
+
     def _extract_cache_config(self, view_instance: Any) -> Optional[Dict[str, Any]]:
         """Extract @cache decorator metadata from the view's handlers.
 
@@ -5577,7 +5642,9 @@ class ViewRuntime:
         """
         try:
             cache_config: Dict[str, Any] = {}
-            for attr_name in dir(type(view_instance)):
+            # dir() races a first-use class cache on a free-threaded build, and
+            # the ``except`` below would silently drop the config (#3151).
+            for attr_name in attribute_names(type(view_instance)):
                 if attr_name.startswith("_"):
                     continue
                 method = getattr(view_instance, attr_name, None)
@@ -5604,7 +5671,9 @@ class ViewRuntime:
         """
         try:
             handler_config: Dict[str, Any] = {}
-            for attr_name in dir(type(view_instance)):
+            # dir() races a first-use class cache on a free-threaded build, and
+            # the ``except`` below would silently drop the config (#3151).
+            for attr_name in attribute_names(type(view_instance)):
                 if attr_name.startswith("_"):
                     continue
                 method = getattr(view_instance, attr_name, None)
@@ -5652,6 +5721,44 @@ class ViewRuntime:
             if event and rule and event not in rules:
                 rules[event] = rule
         return rules
+
+    async def _legacy_event_snapshot(self, view: Any) -> Dict[str, Any]:
+        """The refreshed signed snapshot for a legacy opt-in root view (#3098).
+
+        Same gates, capture and signature as the mount emission
+        (``dispatch_mount``'s ``state_snapshot_signed``): the master switch,
+        ``enable_state_snapshot``, ``_capture_snapshot_state(strict=True)``,
+        and ``sign_snapshot`` bound to the view path and session key. Returns
+        ``{}`` for a view that does not opt in, so nothing is shipped. A
+        capture failure revokes the client's token (``None``) rather than
+        leaving an older state to be restored; it never breaks the event.
+        """
+        from django.conf import settings
+
+        if not getattr(settings, "DJUST_STATE_SNAPSHOT_ENABLED", True):
+            return {}
+        if not getattr(view, "enable_state_snapshot", False):
+            return {}
+        view_path = getattr(view, "_djust_mount_view_path", None)
+        snapshot_fn = getattr(view, "_capture_snapshot_state", None)
+        if not isinstance(view_path, str) or not view_path or not callable(snapshot_fn):
+            return {}
+        fields: Dict[str, Any] = {"view": view_path, "state_snapshot_signed": None}
+        try:
+            public_state = await sync_to_async(snapshot_fn)(strict=True)
+            if isinstance(public_state, dict) and public_state:
+                from .security import sign_snapshot
+
+                state_json = json.dumps(public_state, sort_keys=True, separators=(",", ":"))
+                fields["state_snapshot_signed"] = sign_snapshot(
+                    state_json, view_path, getattr(view, "_django_session_key", None)
+                )
+        except Exception:  # noqa: BLE001 — snapshot refresh must never break the event
+            logger.warning(
+                "Legacy event snapshot unavailable for %s; cached snapshot invalidated",
+                sanitize_for_log(view_path),
+            )
+        return fields
 
     async def _explicit_event_snapshot(self, view: Any) -> Dict[str, Any]:
         """Refresh only declared client persistence after an authorized turn.
@@ -6513,8 +6620,6 @@ class ViewRuntime:
         parent acknowledgement advertises or completes it. Legacy roots and
         legacy children keep their existing behavior.
         """
-        from ._async_batch import AsyncBatch
-        from ._child_async import dispatch_child_work
         from ._exposure import uses_legacy_exposure
 
         root = self.view_instance
@@ -6525,6 +6630,11 @@ class ViewRuntime:
             or getattr(root, "_djust_child_disposed", False)
         ):
             return
+        # Imported past the legacy early return: this runs after every turn,
+        # on the event loop (#3095).
+        from ._async_batch import AsyncBatch
+        from ._child_async import dispatch_child_work
+
         pending = [root]
         seen: set = set()
         owners = []

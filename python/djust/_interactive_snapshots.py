@@ -85,7 +85,7 @@ def restore_bindings(view: LiveView, payload: object) -> None:
         # A constructor/registration error must not leave partially installed
         # snapshot identities behind when the transport falls back to mount.
         for name, cached in view._component_bindings.items():
-            if cached is not previous_bindings.get(name):
+            if cached is not previous_bindings.get(name) and isinstance(cached, LiveComponent):
                 LiveComponent.unmount(cached)
         view._component_bindings.clear()
         view._component_bindings.update(previous_bindings)

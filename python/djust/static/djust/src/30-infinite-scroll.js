@@ -48,7 +48,10 @@
         }));
         if (window.djust && typeof window.djust.handleEvent === 'function') {
             try {
-                window.djust.handleEvent(eventName, { edge });
+                // ADR-036: `edge` is a generated value; a strict handler gets it
+                // only when declared (plus its dj-value-* arguments).
+                const strictParams = window.djust._strictBinding(container, eventName, { edge }, []);
+                if (strictParams !== false) window.djust.handleEvent(eventName, strictParams || { edge });
             } catch (err) {
                 if (globalThis.djustDebug) {
                     console.warn(

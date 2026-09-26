@@ -153,6 +153,7 @@ push_to_view("games.views.RoomView", handler="handle_refresh", scope="room-42")
 - Scopes belong to one view path. `scope="room-42"` for `RoomView` does not reach another view class whose sessions use the same scope; push to each view path.
 - Scoped groups are ordinary channel-layer groups. They work across processes with the Redis channel layer, like view-wide push.
 - WebSocket sessions only. SSE and HTTP-only sessions receive no server push, scoped or not.
+- **Presence follows.** In a view that also uses `PresenceMixin`, a join or leave then wakes only the sessions that share the presence key, not every room (v1.3+; see [Presence](../guides/presence.md#multi-room-views-who-a-join-wakes)).
 
 ## Event Sequencing
 

@@ -74,6 +74,24 @@ from .forms import initial_field_value
 
 logger = logging.getLogger(__name__)
 
+
+def _submittable(field: Any, value: Any) -> Any:
+    """``value`` as the text its widget shows, unless it is already JSON-plain.
+
+    ``wizard_step_data`` holds what the browser would submit and is public,
+    JSON-serialised state, so a drawn ``datetime`` is stored as the widget's
+    text (which the field parses back), never as the object. A multi-value
+    widget (``SelectMultiple``, ``CheckboxSelectMultiple``) shows a list, and
+    the browser submits one value per item, so a list stays a list.
+    """
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    shown = field.widget.format_value(value)
+    if isinstance(shown, (list, tuple)):
+        return [str(item) for item in shown]
+    return str(value) if shown is None else str(shown)
+
+
 #: ADR-038 E2-1: the wizard's render-only context keys. The flat
 #: ``<field>_choices`` aliases depend on each step's runtime form fields, so
 #: they cannot be declared; explicit views render ``form_choices`` only.
@@ -178,6 +196,46 @@ class WizardMixin:
         self.wizard_completed_steps: list[int] = []
 
     # ------------------------------------------------------------------
+    # Callable initials (#3063)
+    # ------------------------------------------------------------------
+
+    def _pin_callable_initials(self) -> None:
+        """Draw the current step's callable field initials once and keep them.
+
+        A field such as ``UUIDField(initial=uuid.uuid4)`` would otherwise be
+        called again by every render (and separately for ``form_data`` and
+        ``field_html``), so the page showed a new value each time and the step
+        submitted none. The drawn value goes into ``wizard_step_data`` the
+        first time the step renders, as the text the widget shows, so the
+        value on the page is the value the step submits. A value already in
+        the step's data (typed by the user, or pinned earlier) is kept; plain
+        initials are not stored.
+        """
+        steps = self._steps
+        index = getattr(self, "wizard_step_index", 0)
+        step_data = getattr(self, "wizard_step_data", None)
+        if not steps or not isinstance(step_data, dict) or index >= len(steps):
+            return
+        step = steps[index]
+        form_class = step.get("form_class")
+        if not form_class:
+            return
+        step_name = step.get("name", "")
+        current = step_data.get(step_name) or {}
+        form_instance = form_class()
+        pinned: Dict[str, Any] = {}
+        for name, field in form_instance.fields.items():
+            if name in current or not callable(field.initial):
+                continue
+            # Only a field-level callable counts: a form-level ``initial``
+            # for this name wins in Django and is not re-evaluated.
+            if name in form_instance.initial:
+                continue
+            pinned[name] = _submittable(field, initial_field_value(form_instance, name, field))
+        if pinned:
+            step_data[step_name] = {**current, **pinned}
+
+    # ------------------------------------------------------------------
     # Field rendering
     # ------------------------------------------------------------------
 
@@ -278,6 +336,7 @@ class WizardMixin:
         if not form_class:
             return ""
         step_name = step.get("name", "")
+        self._pin_callable_initials()
         step_data = getattr(self, "wizard_step_data", {}).get(step_name, {})
         step_errors = getattr(self, "wizard_step_errors", {}).get(step_name, {})
 
@@ -286,7 +345,12 @@ class WizardMixin:
         if not field:
             return ""
 
-        value = step_data.get(field_name, initial_field_value(form_instance, field_name, field))
+        # Membership, not ``.get(name, default)``: the default would call a
+        # callable initial even when the step already holds the value.
+        if field_name in step_data:
+            value = step_data[field_name]
+        else:
+            value = initial_field_value(form_instance, field_name, field)
         errors = step_errors.get(field_name, [])
 
         adapter = get_adapter(kwargs.pop("framework", None))
@@ -312,6 +376,7 @@ class WizardMixin:
         # Guard: the Rust bridge may call get_context_data() before mount()
         # initialises instance attributes.  Use getattr() with safe defaults.
         total = len(self._steps)
+        self._pin_callable_initials()
         current_index = getattr(self, "wizard_step_index", 0)
         completed_steps = getattr(self, "wizard_completed_steps", [])
         step_data = getattr(self, "wizard_step_data", {})
@@ -350,7 +415,10 @@ class WizardMixin:
             # over the class-level default. None = render all (legacy behavior).
             rendered_filter = current_step.get("rendered_fields", self.wizard_rendered_fields)
             for fname, field in form_instance.fields.items():
-                val = current_step_data.get(fname, initial_field_value(form_instance, fname, field))
+                if fname in current_step_data:
+                    val = current_step_data[fname]
+                else:
+                    val = initial_field_value(form_instance, fname, field)
                 form_data[fname] = val if val is not None else ""
                 form_required[fname] = bool(field.required)
                 if hasattr(field, "choices"):

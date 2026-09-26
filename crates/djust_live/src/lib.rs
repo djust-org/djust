@@ -3106,7 +3106,7 @@ impl SessionActorHandlePy {
         let handle = self.handle.clone();
 
         // Convert Python dict to Rust HashMap<String, Value>
-        let params_rust = python_dict_to_hashmap(params)?;
+        let params_rust = python_dict_to_params(params)?;
 
         future_into_py(py, async move {
             let result = handle
@@ -3260,7 +3260,7 @@ impl SessionActorHandlePy {
         params: &Bound<'py, PyDict>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let handle = self.handle.clone();
-        let params_rust = python_dict_to_hashmap(params)?;
+        let params_rust = python_dict_to_params(params)?;
 
         future_into_py(py, async move {
             let html = handle
@@ -3389,15 +3389,21 @@ pub fn get_actor_stats() -> SupervisorStatsPy {
 
 // Helper functions for Python ↔ Rust conversion
 
-/// Convert Python dict to Rust HashMap<String, Value>
+/// Convert Python dict to Rust HashMap<String, Value> (component props).
 fn python_dict_to_hashmap(dict: &Bound<'_, PyDict>) -> PyResult<HashMap<String, Value>> {
+    Ok(python_dict_to_params(dict)?.into_iter().collect())
+}
+
+/// Convert Python event arguments to ordered Rust params: the key order the
+/// client sent is the order a `**kwargs` handler sees (ADR-036 parity).
+fn python_dict_to_params(dict: &Bound<'_, PyDict>) -> PyResult<actors::EventParams> {
     // Snapshotted BEFORE any recursive conversion (#2510 sibling — the
     // actor-dispatch path's own copy of the live-iterator-plus-reentrant-
     // extraction bug fixed in djust_core's `impl FromPyObject for Value`;
     // this is the SECOND Python->Value converter #1646 already calls out
     // above, and it had the identical shape).
     let pairs: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = dict.iter().collect();
-    let mut map = HashMap::with_capacity(pairs.len());
+    let mut map = actors::EventParams::with_capacity(pairs.len());
 
     for (key, value) in pairs {
         let key_str = key.extract::<String>()?;

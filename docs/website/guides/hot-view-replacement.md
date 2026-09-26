@@ -37,6 +37,11 @@ it's missing:
 pip install watchdog
 ```
 
+Under pytest the watcher is never started: `DjustConfig.ready()` skips the
+auto-enable in any process that has imported `pytest` (including the
+`django.setup()` that pytest-django runs before the first test, and every
+xdist worker), and logs a `DEBUG` line on the `djust` logger saying so.
+
 ### Manual opt-in / advanced control
 
 The auto-enable is on by default. If you orchestrate the file watcher

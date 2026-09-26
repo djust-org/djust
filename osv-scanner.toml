@@ -1,0 +1,13 @@
+# Known advisories in vendored browser packages that we accept for now.
+# Every entry needs a reason and an ignoreUntil date; after that date the
+# advisory fails CI again. Add entries only with a linked issue.
+#
+# [[IgnoredVulns]]
+# id = "GHSA-xxxx-xxxx-xxxx"
+# ignoreUntil = 2026-12-31
+# reason = "Not reachable: … (#NNNN)"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0141"
+ignoreUntil = 2026-12-31
+reason = "bincode 2.0.1 (direct dependency of crates/djust_live) is flagged unmaintained, not vulnerable. Same policy as .cargo/audit.toml: unmaintained advisories warn, they do not block. Review by the ignoreUntil date."

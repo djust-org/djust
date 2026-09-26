@@ -156,6 +156,9 @@ LIVEVIEW_ALLOWED_MODULES = [
     "djust_shared.views",
     "djust_rentals.views",
     "djust_tests.views",
+    # djust's own routed LiveViews (the admin extension at /djust-admin-demo/).
+    # An explicit list replaces the default that admits them (check V015).
+    "djust",
 ]
 
 # djust State Backend Configuration

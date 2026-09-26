@@ -23,6 +23,13 @@ and this script with ``E5_DEBUG=0`` for the production contract. The legacy
 twin is the control in each mode: its DEBUG error frame, or its production
 log, carries the error sentinel.
 
+Over real SSE (the transport is pinned and checked, #3097), an explicit view's
+``start_async`` result fails its server-state save and answers "State
+unavailable. Please reload the page." instead of rendering. That step is a
+strict expected failure: the ``explicit/sse`` run requires the error frame,
+and fails with "#3097 appears fixed: flip this expectation" once the count
+renders, so the fix for #3097 must update this script.
+
 Standalone, like the other scripts here: exits 0 on success and non-zero with
 the list of failures. Environment:
 
@@ -43,6 +50,8 @@ import sys
 import urllib.request
 
 from playwright.async_api import async_playwright
+
+from _transports import INIT, TransportWatch
 
 BASE = os.environ.get("E5_BASE", "http://localhost:8002")
 SECOND = os.environ.get("E5_SECOND", "http://localhost:8003")
@@ -182,9 +191,12 @@ async def run_flow(browser, transport, policy, failures, notes):
     context = await browser.new_context()
     frames = []
     if transport == "sse":
-        await context.add_init_script("window.DJUST_USE_WEBSOCKET = false;")
-        await context.add_init_script(SSE_CAPTURE)
+        # Pin the transport: the page's own configuration script sets
+        # DJUST_USE_WEBSOCKET after a plain assignment in an init script, so
+        # every "SSE" run used to be a WebSocket run (#3097).
+        await context.add_init_script(INIT["sse"] + SSE_CAPTURE)
     page = await context.new_page()
+    watch = TransportWatch(page)
     page.on(
         "websocket",
         lambda ws: ws.on(
@@ -199,6 +211,43 @@ async def run_flow(browser, transport, policy, failures, notes):
             return frames + (await page.evaluate("() => window.__e5frames || []"))
         return frames
 
+    async def error_frames():
+        found = []
+        for raw in await received():
+            try:
+                frame = json.loads(raw)
+            except ValueError:
+                continue
+            if isinstance(frame, dict) and frame.get("type") == "error":
+                found.append(frame)
+        return found
+
+    async def spawn_outcome(timeout=10.0):
+        """#3097: 'rendered' (count=12), 'state_unavailable' (the known error
+        frame), or 'neither' at the deadline."""
+        deadline = asyncio.get_running_loop().time() + timeout
+        while asyncio.get_running_loop().time() < deadline:
+            if ((await text(page, "#matrix-count")) or "").strip() == "12":
+                return "rendered"
+            for frame in await error_frames():
+                if frame.get("code") == "state_error" and "State unavailable" in str(
+                    frame.get("error")
+                ):
+                    return "state_unavailable"
+            await asyncio.sleep(0.1)
+        return "neither"
+
+    async def wait_for_error_frame(before=0, timeout=10.0):
+        # Event-driven (#3137 shape): the failing turn's error frame, not a
+        # fixed 800 ms that a freshly started server can overrun. ``before``
+        # counts error frames already received (the #3097 SSE state error).
+        deadline = asyncio.get_running_loop().time() + timeout
+        while len(await error_frames()) <= before:
+            if asyncio.get_running_loop().time() >= deadline:
+                failures.append(f"{label}: the failing handler sent no error frame")
+                return
+            await asyncio.sleep(0.1)
+
     await page.goto(BASE + path, timeout=60000)
     await wait_mounted(page)
     await wait_text(page, "#matrix-count", "0")
@@ -208,11 +257,27 @@ async def run_flow(browser, transport, policy, failures, notes):
     await page.click("#matrix-increment")
     await wait_text(page, "#matrix-count", "2")
     await page.click("#matrix-spawn")
-    await wait_text(page, "#matrix-count", "12", timeout=10000)
+    if (policy, transport) == ("explicit", "sse"):
+        # Strict expected failure until #3097: over SSE an explicit view's
+        # start_async completion fails its server-state save and answers
+        # "State unavailable" instead of rendering count=12.
+        outcome = await spawn_outcome()
+        if outcome == "rendered":
+            failures.append(f"{label}: #3097 appears fixed: flip this expectation")
+        elif outcome != "state_unavailable":
+            failures.append(
+                f"{label}: #3097 expected a 'State unavailable' error frame for the "
+                f"background result; saw neither it nor count=12 "
+                f"(count {await text(page, '#matrix-count')!r})"
+            )
+        await page.evaluate("() => document.getElementById('djust-error-overlay')?.remove()")
+    else:
+        await wait_text(page, "#matrix-count", "12", timeout=10000)
     await page.click("#matrix-page2")
     await wait_text(page, "#matrix-page", "2")
+    errors_before = len(await error_frames())
     await page.click("#matrix-boom")
-    await page.wait_for_timeout(800)
+    await wait_for_error_frame(errors_before)
     # The DEBUG dev overlay opens on the error; dismiss it like a developer.
     await page.evaluate("() => document.getElementById('djust-error-overlay')?.remove()")
 
@@ -310,6 +375,7 @@ async def run_flow(browser, transport, policy, failures, notes):
         if ERROR_SENTINEL not in log_tail(start):
             failures.append(f"{label}: control failed, legacy production log lacks the detail")
 
+    watch.check(transport, label, failures)
     await context.close()
 
 
