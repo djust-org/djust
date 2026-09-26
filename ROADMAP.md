@@ -115,6 +115,14 @@ Two name shapes appear in this roadmap, with distinct meanings:
 |---|---|---|
 | ~~**P2**~~ | ~~`{% djust_audio %}` rendered natively in Rust (byte-parity test against the Django-engine tag) and `AudioMixin`'s manifest built once per view, safe under free-threaded concurrency (3.14t CI test). Snake Arena: render 1.53 → 1.27 ms per frame, server CPU per frame 4.04 → 3.71 ms~~ ✅ (#3175) | v1.3.0 |
 
+### v1.3.0-8 — free-threaded first-use class caches (#3151) ✅
+
+*Kind:* correctness under free-threading. On snake-arena (3.14t, `PooledHTTP(threads=3)`), the first simultaneous page loads after a start returned 500: a first-use per-class cache written with `setattr(cls, ...)` resized a class `__dict__` that another thread was iterating. Non-breaking: no public API, default, wire or markup change.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| ~~**P1**~~ | ~~#3151 — Every render, mount and dispatch walk of a class namespace iterates a snapshot (`djust._class_snapshot`: `namespace()`, `attribute_names()` for `dir()`), with no lock added; the Rust `bit in dir(current)` probe answers by membership; an AST gate blocks new live walks; the regression test runs in the 3.14t CI job~~ ✅ (#3176) | v1.3.0 |
+
 ## Next: v1.2.1 — non-breaking fixes (drain)
 
 > Planned 2026-09-24 from a triage of every open issue. **Policy:** non-breaking bug fixes ship in 1.2.1; anything breaking, new features, and parser/dependency upgrades go to 1.3. Issues split into a 1.2.1 part and a 1.3 part are marked. The ADR-034–038 stack (#2944, #2954) merges after 1.2.1 is cut. Already shipped toward 1.2.1 on `main`: #3009 (inline whitespace, #2999/#3010), the CSRF resolver (#2978), SerializerCache removal (#2992), the audit gate (#2989).
