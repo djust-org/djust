@@ -43,6 +43,7 @@ import inspect
 import json
 import logging
 import re
+import sys
 import time
 from functools import wraps
 from typing import (
@@ -846,6 +847,29 @@ class Transport(Protocol):
         return False
 
 
+def _joins_presence_group(view: Any) -> bool:
+    """Whether a mounted view joins a presence group (#3202).
+
+    Any view with a ``get_presence_key`` does, except one whose only source of
+    it is ``TenantMixin`` (tenant-scoped, but with no presence to broadcast):
+    reading its key would cost a thread hop per mount for a group nothing
+    sends to.
+    """
+    if not hasattr(view, "get_presence_key"):
+        return False
+    from .presence import PresenceMixin
+
+    if isinstance(view, PresenceMixin):
+        return True
+    tenant_mixin_module = sys.modules.get("djust.tenants.mixin")
+    tenant_mixin = getattr(tenant_mixin_module, "TenantMixin", None)
+    if tenant_mixin is not None and isinstance(view, tenant_mixin):
+        return getattr(type(view), "get_presence_key", None) is not getattr(
+            tenant_mixin, "get_presence_key", None
+        )
+    return True
+
+
 class WSConsumerTransport:
     """Transport adapter wrapping ``LiveViewConsumer``.
 
@@ -1044,11 +1068,9 @@ class WSConsumerTransport:
         so it runs on the session's thread. A failure is logged and the
         session joins no presence group.
         """
-        from .presence import PresenceManager, PresenceMixin
+        from .presence import PresenceManager
 
-        # Only presence views: TenantMixin defines get_presence_key too, and a
-        # view without PresenceMixin never broadcasts to a presence group.
-        if not isinstance(view, PresenceMixin):
+        if not _joins_presence_group(view):
             return
         consumer = self._consumer
         try:

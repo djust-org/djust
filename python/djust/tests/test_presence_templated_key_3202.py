@@ -217,18 +217,24 @@ async def test_mount_batch_with_two_presence_views_leaves_both_groups():
         assert _members(_group("chat:b2")) == []
 
 
-@pytest.mark.asyncio
-async def test_a_view_without_presence_joins_no_presence_group():
-    """TenantMixin defines get_presence_key too; only PresenceMixin views join."""
-    from unittest.mock import AsyncMock, MagicMock
+def test_only_views_with_presence_join_a_presence_group():
+    """TenantMixin defines get_presence_key too; a TenantMixin-only view joins
+    nothing, so its key is not read (a thread hop per mount). A view with its
+    own get_presence_key, or with PresenceMixin, still joins."""
+    from djust.runtime import _joins_presence_group
+    from djust.tenants.mixin import TenantMixin
 
-    from djust.runtime import WSConsumerTransport
+    class _TenantOnly(TenantMixin):
+        pass
 
-    class _TenantOnly:
+    class _TenantPresence(PresenceMixin, TenantMixin):
+        pass
+
+    class _OwnKey:
         def get_presence_key(self):
-            raise AssertionError("read the presence key of a view without presence")
+            return "k"
 
-    consumer = MagicMock()
-    consumer.channel_layer.group_add = AsyncMock()
-    await WSConsumerTransport(consumer)._join_presence_group(_TenantOnly())
-    consumer.channel_layer.group_add.assert_not_awaited()
+    assert _joins_presence_group(object.__new__(_TenantOnly)) is False
+    assert _joins_presence_group(object.__new__(_TenantPresence)) is True
+    assert _joins_presence_group(_OwnKey()) is True
+    assert _joins_presence_group(object()) is False
