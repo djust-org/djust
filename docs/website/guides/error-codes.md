@@ -1053,13 +1053,13 @@ class MyView(LiveView):
 
 ---
 
-### T012: dj-* directives without dj-view
+### T012: dj-* directives without dj-view or dj-root
 
 **Severity**: Warning
 
-**What causes it**: A template uses `dj-*` event directives but has no `dj-view` attribute. Message: "<file> -- template uses dj-* event directives but has no dj-view attribute."
+**What causes it**: A template uses `dj-*` event directives but has no `dj-root` or `dj-view` attribute. Message: "<file> -- template uses dj-* event directives but has no dj-root or dj-view attribute."
 
-**Fix**: Add `dj-view="yourapp.views.YourView"` to the root element. If the template is an intentional fragment included from a parent LiveView root, add a `{# djust:partial #}` comment, or suppress with `DJUST_CONFIG = {"suppress_checks": ["T012"]}`.
+**Fix**: Add `dj-root` to the root element (e.g. `<div dj-root>`), or explicitly add `dj-view="yourapp.views.YourView"`. If the template is an intentional fragment included from a parent LiveView root, add a `{# djust:partial #}` comment, or suppress with `DJUST_CONFIG = {"suppress_checks": ["T012"]}`.
 
 ---
 
