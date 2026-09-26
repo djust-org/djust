@@ -81,10 +81,7 @@ def check_css_framework_config(errors: list[CheckMessage]) -> None:
             errors.append(
                 Info(
                     "Tailwind CSS configured but compiled file not found (development mode).",
-                    hint=(
-                        "Run: tailwindcss -i static/css/input.css -o static/css/output.css\n"
-                        'Or use Tailwind CDN for development only: <script src="https://cdn.tailwindcss.com"></script>'
-                    ),
+                    hint=("Run: tailwindcss -i static/css/input.css -o static/css/output.css"),
                     id="djust.C011",
                 )
             )

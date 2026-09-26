@@ -1,5 +1,5 @@
 [build-system]
-requires = ["maturin>=1.0,<2.0"]
+requires = ["maturin>=1.12.1,<2.0"]
 build-backend = "maturin"
 
 [project]
@@ -106,7 +106,7 @@ all = [
     "djust[redis,compression,performance,admin,deploy,theming,components,s3,gcs,azure]",
 ]
 dev = [
-    "maturin>=1.0,<2.0",
+    "maturin>=1.12.1,<2.0",
     "django-allauth>=65.0,<66",
     "pytest>=7.0,<10",
     "pytest-django>=4.5,<6",
@@ -149,6 +149,10 @@ include = [
     { path = "LICENSE", format = "sdist" },
     { path = "README.md", format = "sdist" },
 ]
+
+[tool.maturin.sbom]
+rust = true
+include = ["python/djust/djust.cdx.json"]
 
 [tool.pytest.ini_options]
 python_files = ["test_*.py", "*_test.py"]

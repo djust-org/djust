@@ -109,6 +109,24 @@ class InventoryAlertWidget(LiveView):
     label = "Low stock alerts"
 ```
 
+### Styling: which Tailwind classes exist
+
+The admin's stylesheet is a vendored static Tailwind build (ADR-040), not
+the Tailwind play CDN it used to load. It contains only the classes
+djust's own `admin_ext` templates and Python use, so a widget or plugin
+page (`AdminWidget`, `AdminPage`) template that relies on any other
+Tailwind class renders it unstyled. Ship your own stylesheet for those
+classes and add it through the admin base template's
+`{% block extra_head %}`:
+
+```html
+{% extends "djust_admin/base.html" %}
+{% load static %}
+{% block extra_head %}
+<link rel="stylesheet" href="{% static 'myapp/admin-extra.css' %}">
+{% endblock %}
+```
+
 ## Bulk-action progress
 
 ### Quick start — `@admin_action_with_progress`

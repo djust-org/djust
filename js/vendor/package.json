@@ -1,5 +1,5 @@
 {
-  "name": "djust-markdown-visual",
+  "name": "djust-vendor",
   "private": true,
   "type": "module",
   "scripts": {
@@ -13,11 +13,15 @@
     "@tiptap/extension-task-item": "3.31.3",
     "@tiptap/extension-task-list": "3.31.3",
     "@tiptap/markdown": "3.31.3",
-    "@tiptap/starter-kit": "3.31.3"
+    "@tiptap/starter-kit": "3.31.3",
+    "@xterm/addon-fit": "0.10.0",
+    "@xterm/xterm": "5.5.0",
+    "highlight.js": "11.12.0"
   },
   "devDependencies": {
     "esbuild": "0.28.2",
     "jsdom": "29.1.1",
-    "prettier": "3.9.6"
+    "prettier": "3.9.6",
+    "tailwindcss": "3.4.19"
   }
 }
