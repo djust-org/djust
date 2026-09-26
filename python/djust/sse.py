@@ -275,7 +275,7 @@ class _StreamGuard:
     def arm_deadline(self, delay: float) -> None:
         """Schedule the abandon check on the running loop after ``delay`` seconds."""
         self._loop = asyncio.get_running_loop()
-        self._deadline = self._loop.call_later(delay, self._on_deadline)
+        self._deadline = self._loop.call_later(delay, self.deadline_expired)
 
     def _cancel_deadline(self) -> None:
         handle, loop = self._deadline, self._loop
@@ -292,7 +292,7 @@ class _StreamGuard:
             # response.close() runs in a worker thread (sync_to_async).
             loop.call_soon_threadsafe(handle.cancel)
 
-    def _on_deadline(self) -> None:
+    def deadline_expired(self) -> None:
         # On the loop thread: shutting the view down may do sync work, so do
         # it in a worker thread like the other SSE teardown paths.
         self._deadline = None
