@@ -4133,6 +4133,13 @@ class ViewRuntime:
             await self._flush_deferred_activity_events()
             return
 
+        # #3098: a legacy opt-in view's signed back-navigation snapshot was
+        # issued only at mount, so Back restored mount-time state. Refresh it on
+        # a state-changing event, as explicit views do (a noop above changed
+        # nothing, so the token the client holds is still current).
+        if not snapshot_fields and view is self.view_instance and uses_legacy_exposure(view):
+            snapshot_fields = await self._legacy_event_snapshot(view)
+
         # Render — scoped to one bound component when that is all that
         # changed (ADR-032 D1/D5); ``_render_and_send`` checks the other gates.
         await self._render_and_send(
@@ -5692,6 +5699,44 @@ class ViewRuntime:
             if event and rule and event not in rules:
                 rules[event] = rule
         return rules
+
+    async def _legacy_event_snapshot(self, view: Any) -> Dict[str, Any]:
+        """The refreshed signed snapshot for a legacy opt-in root view (#3098).
+
+        Same gates, capture and signature as the mount emission
+        (``dispatch_mount``'s ``state_snapshot_signed``): the master switch,
+        ``enable_state_snapshot``, ``_capture_snapshot_state(strict=True)``,
+        and ``sign_snapshot`` bound to the view path and session key. Returns
+        ``{}`` for a view that does not opt in, so nothing is shipped. A
+        capture failure revokes the client's token (``None``) rather than
+        leaving an older state to be restored; it never breaks the event.
+        """
+        from django.conf import settings
+
+        if not getattr(settings, "DJUST_STATE_SNAPSHOT_ENABLED", True):
+            return {}
+        if not getattr(view, "enable_state_snapshot", False):
+            return {}
+        view_path = getattr(view, "_djust_mount_view_path", None)
+        snapshot_fn = getattr(view, "_capture_snapshot_state", None)
+        if not isinstance(view_path, str) or not view_path or not callable(snapshot_fn):
+            return {}
+        fields: Dict[str, Any] = {"view": view_path, "state_snapshot_signed": None}
+        try:
+            public_state = await sync_to_async(snapshot_fn)(strict=True)
+            if isinstance(public_state, dict) and public_state:
+                from .security import sign_snapshot
+
+                state_json = json.dumps(public_state, sort_keys=True, separators=(",", ":"))
+                fields["state_snapshot_signed"] = sign_snapshot(
+                    state_json, view_path, getattr(view, "_django_session_key", None)
+                )
+        except Exception:  # noqa: BLE001 — snapshot refresh must never break the event
+            logger.warning(
+                "Legacy event snapshot unavailable for %s; cached snapshot invalidated",
+                sanitize_for_log(view_path),
+            )
+        return fields
 
     async def _explicit_event_snapshot(self, view: Any) -> Dict[str, Any]:
         """Refresh only declared client persistence after an authorized turn.
