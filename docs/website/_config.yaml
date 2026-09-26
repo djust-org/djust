@@ -237,6 +237,11 @@ navigation:
         file: guides/authentication.md
         order: 8
         level: intermediate
+      - title: Accounts
+        slug: accounts
+        file: guides/accounts.md
+        order: 8.1
+        level: intermediate
       - title: CSS Frameworks
         slug: css-frameworks
         file: guides/css-frameworks.md
