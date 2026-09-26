@@ -45,6 +45,20 @@ def pytest_sessionstart(session):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_system_check_registry():
+    """Drop system checks registered by an app a test installed and then
+    removed, so they cannot fire in a later test (#3177, `tests/check_registry.py`).
+
+    This is what made `test_b008_*` fail with `daphne.E001` when an
+    INSTALLED_APPS test ran before it in the same xdist worker (#3169).
+    """
+    from tests.check_registry import isolated_check_registry
+
+    with isolated_check_registry():
+        yield
+
+
+@pytest.fixture(autouse=True)
 def _no_inherited_git_env(monkeypatch):
     """Strip git's execution variables for every test (#2608, #3179).
 

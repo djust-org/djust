@@ -31,14 +31,18 @@ KNOWN_PRESENCE_BACKENDS = ("memory", "redis", "tenant_memory", "tenant_redis")
 def _create_presence_backend(backend_type: str, config: dict) -> PresenceBackend:
     """Factory that creates the appropriate presence backend from config."""
     if backend_type in ("redis", "tenant_redis"):
-        from .redis import RedisPresenceBackend
+        from .redis import RedisPresenceBackend, presence_cleanup_interval
 
         redis_url = config.get(
             "PRESENCE_REDIS_URL",
             config.get("REDIS_URL", "redis://localhost:6379/0"),
         )
         key_prefix = config.get("PRESENCE_REDIS_PREFIX", "djust:presence")
-        return RedisPresenceBackend(redis_url=redis_url, key_prefix=key_prefix)
+        return RedisPresenceBackend(
+            redis_url=redis_url,
+            key_prefix=key_prefix,
+            cleanup_interval=presence_cleanup_interval(config),
+        )
     else:
         if backend_type not in KNOWN_PRESENCE_BACKENDS:
             logger.warning(

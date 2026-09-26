@@ -877,6 +877,7 @@ DEPLOY_HELP = """\
 Usage: djust deploy [<slug>] [--from-git] [--dir DIR]
        djust deploy login | logout
        djust deploy status [<slug>]
+       djust deploy logs [<slug>] [--deployment ID] [--follow]
 
 Deploy the current directory to djustlive.com.
 
@@ -884,6 +885,8 @@ Commands:
   djust deploy login          Log in to djustlive.com (stores token in ~/.djustlive/credentials)
   djust deploy logout         Remove stored credentials
   djust deploy status [slug]  Show deployment status (optionally for one project)
+  djust deploy logs [slug]    Show the build/deploy log of the latest deployment
+                              (--deployment ID for another one, --follow to stream)
   djust deploy <slug>         Deploy current directory to project <slug> (default action)
   djust deploy <slug> --from-git
                               Deploy the latest pushed commit instead of the local working tree
@@ -939,7 +942,7 @@ def cmd_deploy(rest: list[str]) -> int:
         argv = ["deploy-dir"]
     else:
         first = rest[0]
-        if first in ("login", "logout", "status"):
+        if first in ("login", "logout", "status", "logs"):
             argv = rest
         elif "--from-git" in rest:
             # `djust deploy --from-git <slug>` or `djust deploy <slug> --from-git`
@@ -968,6 +971,11 @@ def cmd_deploy(rest: list[str]) -> int:
             if isinstance(e, click.ClickException):
                 e.show()
                 return e.exit_code
+            if isinstance(e, click.exceptions.Abort):
+                # Without standalone mode click re-raises Ctrl-C (and EOF on
+                # a prompt) as a bare Abort, which printed "Error: ".
+                print("Aborted.", file=sys.stderr)
+                return 130 if isinstance(e.__context__, KeyboardInterrupt) else 1
         except ImportError:
             # click isn't importable in this environment; fall through to
             # the generic error-print path below which handles `e` without

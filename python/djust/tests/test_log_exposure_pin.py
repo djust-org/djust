@@ -622,6 +622,10 @@ MIXIN_TABLES = {
             ("bridge_library_filters", "Failed to bridge custom filter '%s' to Rust regi"): (
                 "filter bridging"
             ),
+            (
+                "_restore_missing_bridged_filters",
+                "Failed to re-bridge custom filter '%s' to Rust r",
+            ): ("filter bridging (#3208)"),
         },
     ),
     "forms.py": (

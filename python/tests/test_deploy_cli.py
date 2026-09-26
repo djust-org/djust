@@ -1877,3 +1877,376 @@ class TestDeployDoctor:
 
         _run_deploy_doctor(tmp_path)
         assert capsys.readouterr().err == ""
+
+
+# ---------------------------------------------------------------------------
+# logs
+# ---------------------------------------------------------------------------
+
+_LOGS_API = "https://djustlive.com/api/v1"
+_DEP_ID = "11111111-2222-3333-4444-555555555555"
+
+
+def _logs_page(lines, *, status="active", done=True, cursor=None, has_more=False, error=""):
+    return {
+        "deployment_id": _DEP_ID,
+        "project_slug": "myapp",
+        "environment": "production",
+        "status": status,
+        "done": done,
+        "error_message": error,
+        "lines": [
+            {"line": n, "timestamp": f"2026-01-01T00:00:0{n}Z", "level": level, "message": msg}
+            for n, level, msg in lines
+        ],
+        "cursor": cursor if cursor is not None else (lines[-1][0] if lines else 0),
+        "has_more": has_more,
+    }
+
+
+class TestLogsCommand:
+    """`djust deploy logs [PROJECT] [--deployment ID] [--follow]`."""
+
+    @pytest.fixture(autouse=True)
+    def _token_is_valid(self, requests_mock):
+        requests_mock.get(
+            f"{_LOGS_API}/me/",
+            json={"username": "u", "email": "u@e.com", "is_staff": False},
+        )
+
+    @pytest.fixture(autouse=True)
+    def _no_sleep(self):
+        with patch("djust.deploy_cli.time.sleep") as mock_sleep:
+            yield mock_sleep
+
+    def test_latest_deployment_of_project(self, runner, creds_dir, saved_creds, requests_mock):
+        adapter = requests_mock.get(
+            f"{_LOGS_API}/projects/myapp/deployments/latest/logs/",
+            json=_logs_page(
+                [(1, "info", "Cloning"), (2, "error", "pip failed")],
+                status="failed",
+                error="Build failed",
+            ),
+        )
+        result = runner.invoke(cli, ["logs", "myapp"])
+        assert result.exit_code == 0, result.output
+        assert adapter.last_request.qs["since"] == ["0"]
+        assert adapter.last_request.headers["Authorization"] == "Token test-token-abc"
+        assert result.stdout.splitlines() == [
+            "2026-01-01T00:00:01Z INFO    Cloning",
+            "2026-01-01T00:00:02Z ERROR   pip failed",
+        ]
+        assert _DEP_ID in result.stderr
+        assert "Deployment failed." in result.stderr
+        assert "Error: Build failed" in result.stderr
+
+    def test_slug_from_pyproject(
+        self, runner, creds_dir, saved_creds, requests_mock, tmp_path, monkeypatch
+    ):
+        (tmp_path / "pyproject.toml").write_text('[tool.djust.deploy]\nproject = "fromfile"\n')
+        monkeypatch.chdir(tmp_path)
+        adapter = requests_mock.get(
+            f"{_LOGS_API}/projects/fromfile/deployments/latest/logs/", json=_logs_page([])
+        )
+        result = runner.invoke(cli, ["logs"])
+        assert result.exit_code == 0, result.output
+        assert adapter.called
+
+    def test_no_slug_anywhere_fails_without_prompting(
+        self, runner, creds_dir, saved_creds, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(cli, ["logs"])
+        assert result.exit_code == 1, result.output
+        assert "positional argument" in result.output
+
+    def test_deployment_id_without_project(self, runner, creds_dir, saved_creds, requests_mock):
+        adapter = requests_mock.get(
+            f"{_LOGS_API}/deployments/{_DEP_ID}/logs/", json=_logs_page([(1, "info", "x")])
+        )
+        result = runner.invoke(cli, ["logs", "--deployment", _DEP_ID])
+        assert result.exit_code == 0, result.output
+        assert adapter.called
+
+    def test_deployment_id_with_project(self, runner, creds_dir, saved_creds, requests_mock):
+        adapter = requests_mock.get(
+            f"{_LOGS_API}/projects/myapp/deployments/{_DEP_ID}/logs/", json=_logs_page([])
+        )
+        result = runner.invoke(cli, ["logs", "myapp", "--deployment", _DEP_ID])
+        assert result.exit_code == 0, result.output
+        assert adapter.called
+
+    def test_not_found(self, runner, creds_dir, saved_creds, requests_mock):
+        requests_mock.get(
+            f"{_LOGS_API}/projects/nope/deployments/latest/logs/",
+            json={"detail": "Not found."},
+            status_code=404,
+        )
+        result = runner.invoke(cli, ["logs", "nope"])
+        assert result.exit_code == 1
+        assert "Could not find a deployment of 'nope'" in result.output
+
+    def test_api_error(self, runner, creds_dir, saved_creds, requests_mock):
+        requests_mock.get(
+            f"{_LOGS_API}/projects/myapp/deployments/latest/logs/", text="boom", status_code=500
+        )
+        result = runner.invoke(cli, ["logs", "myapp"])
+        assert result.exit_code == 1
+        assert "API error 500" in result.output
+
+    def test_has_more_pages_without_follow(self, runner, creds_dir, saved_creds, requests_mock):
+        """A long log arrives in pages; all of them print even without --follow."""
+        requests_mock.get(
+            f"{_LOGS_API}/projects/myapp/deployments/latest/logs/",
+            json=_logs_page([(1, "info", "a")], has_more=True),
+        )
+        pinned = requests_mock.get(
+            f"{_LOGS_API}/deployments/{_DEP_ID}/logs/", json=_logs_page([(2, "info", "b")])
+        )
+        result = runner.invoke(cli, ["logs", "myapp"])
+        assert result.exit_code == 0, result.output
+        assert pinned.last_request.qs["since"] == ["1"]
+        assert [line.split()[-1] for line in result.stdout.splitlines()] == ["a", "b"]
+
+    def test_without_follow_stops_while_in_progress(
+        self, runner, creds_dir, saved_creds, requests_mock, _no_sleep
+    ):
+        requests_mock.get(
+            f"{_LOGS_API}/projects/myapp/deployments/latest/logs/",
+            json=_logs_page([(1, "info", "a")], status="building", done=False),
+        )
+        pinned = requests_mock.get(f"{_LOGS_API}/deployments/{_DEP_ID}/logs/", json={})
+        result = runner.invoke(cli, ["logs", "myapp"])
+        assert result.exit_code == 0, result.output
+        assert not pinned.called
+        assert not _no_sleep.called
+
+    def test_follow_polls_pinned_deployment_until_done(
+        self, runner, creds_dir, saved_creds, requests_mock, _no_sleep
+    ):
+        requests_mock.get(
+            f"{_LOGS_API}/projects/myapp/deployments/latest/logs/",
+            json=_logs_page([(1, "info", "Cloning")], status="building", done=False),
+        )
+        pinned = requests_mock.get(
+            f"{_LOGS_API}/deployments/{_DEP_ID}/logs/",
+            [
+                {"json": _logs_page([], status="building", done=False, cursor=1)},
+                {"json": _logs_page([(2, "info", "Rolled out")], status="active", done=True)},
+                # One more poll after done picks up a line logged just after.
+                {"json": _logs_page([(3, "info", "Serving at x")], status="active", done=True)},
+            ],
+        )
+        result = runner.invoke(cli, ["logs", "myapp", "--follow"])
+        assert result.exit_code == 0, result.output
+        assert [r.qs["since"] for r in pinned.request_history] == [["1"], ["1"], ["2"]]
+        assert "Rolled out" in result.stdout
+        assert "Serving at x" in result.stdout
+        assert "Deployment active." in result.stderr
+        assert _no_sleep.call_count == 3
+
+    def test_follow_on_finished_deployment_makes_one_request(
+        self, runner, creds_dir, saved_creds, requests_mock, _no_sleep
+    ):
+        adapter = requests_mock.get(
+            f"{_LOGS_API}/projects/myapp/deployments/latest/logs/",
+            json=_logs_page([(1, "info", "done")], status="active", done=True),
+        )
+        result = runner.invoke(cli, ["logs", "myapp", "--follow"])
+        assert result.exit_code == 0, result.output
+        assert adapter.call_count == 1
+        assert not _no_sleep.called
+
+    def test_follow_exits_1_when_cancelled(self, runner, creds_dir, saved_creds, requests_mock):
+        requests_mock.get(
+            f"{_LOGS_API}/projects/myapp/deployments/latest/logs/",
+            json=_logs_page([], status="cancelled"),
+        )
+        result = runner.invoke(cli, ["logs", "myapp", "--follow"])
+        assert result.exit_code == 1, result.output
+        assert "Deployment cancelled." in result.stderr
+
+    def test_transient_failures_are_retried_with_backoff(
+        self, runner, creds_dir, saved_creds, requests_mock, _no_sleep
+    ):
+        import requests as _requests
+
+        adapter = requests_mock.get(
+            f"{_LOGS_API}/projects/myapp/deployments/latest/logs/",
+            [
+                {"status_code": 502, "text": "bad gateway"},
+                {"exc": _requests.ConnectionError("reset")},
+                {"exc": _requests.Timeout("slow")},
+                {"status_code": 503, "text": "unavailable"},
+                {"json": _logs_page([(1, "info", "back")])},
+            ],
+        )
+        result = runner.invoke(cli, ["logs", "myapp"])
+        assert result.exit_code == 0, result.output
+        assert adapter.call_count == 5
+        assert "back" in result.stdout
+        assert [c.args[0] for c in _no_sleep.call_args_list] == [1, 2, 4, 8]
+        assert "retrying" in result.stderr
+
+    def test_gives_up_after_too_many_transient_failures(
+        self, runner, creds_dir, saved_creds, requests_mock
+    ):
+        adapter = requests_mock.get(
+            f"{_LOGS_API}/projects/myapp/deployments/latest/logs/", status_code=500, text="boom"
+        )
+        result = runner.invoke(cli, ["logs", "myapp"])
+        assert result.exit_code == 1
+        assert "API error 500" in result.output
+        assert "gave up after 6 attempts" in result.output
+        assert adapter.call_count == 6
+
+    def test_client_errors_are_not_retried(self, runner, creds_dir, saved_creds, requests_mock):
+        adapter = requests_mock.get(
+            f"{_LOGS_API}/projects/myapp/deployments/latest/logs/", status_code=400, text="bad"
+        )
+        result = runner.invoke(cli, ["logs", "myapp"])
+        assert result.exit_code == 1
+        assert "API error 400" in result.output
+        assert adapter.call_count == 1
+
+    def test_has_more_without_progress_does_not_spin(
+        self, runner, creds_dir, saved_creds, requests_mock
+    ):
+        requests_mock.get(
+            f"{_LOGS_API}/projects/myapp/deployments/latest/logs/",
+            json=_logs_page([], cursor=0, has_more=True),
+        )
+        pinned = requests_mock.get(
+            f"{_LOGS_API}/deployments/{_DEP_ID}/logs/",
+            json=_logs_page([], cursor=0, has_more=True),
+        )
+        result = runner.invoke(cli, ["logs", "myapp"])
+        assert result.exit_code == 0, result.output
+        assert not pinned.called
+
+    def test_non_json_200_is_a_clear_error(self, runner, creds_dir, saved_creds, requests_mock):
+        requests_mock.get(
+            f"{_LOGS_API}/projects/myapp/deployments/latest/logs/", text="<html>proxy</html>"
+        )
+        result = runner.invoke(cli, ["logs", "myapp"])
+        assert result.exit_code == 1
+        assert "not JSON" in result.output
+
+    def test_path_segments_are_quoted(self, runner, creds_dir, saved_creds, requests_mock):
+        adapter = requests_mock.get(f"{_LOGS_API}/deployments/..%2Fx/logs/", json=_logs_page([]))
+        result = runner.invoke(cli, ["logs", "--deployment", "../x"])
+        assert result.exit_code == 0, result.output
+        assert adapter.called
+
+    def test_follow_exits_1_when_deployment_failed(
+        self, runner, creds_dir, saved_creds, requests_mock
+    ):
+        requests_mock.get(
+            f"{_LOGS_API}/projects/myapp/deployments/latest/logs/",
+            json=_logs_page([(1, "error", "pip failed")], status="failed", error="Build failed"),
+        )
+        result = runner.invoke(cli, ["logs", "myapp", "-f"])
+        assert result.exit_code == 1, result.output
+        assert "pip failed" in result.stdout
+        assert "Deployment failed: Build failed" in result.stderr
+
+    def test_djust_deploy_logs_routes_to_logs_command(
+        self, creds_dir, saved_creds, requests_mock, capsys
+    ):
+        """`djust deploy logs` must reach this command, not deploy a project
+        named "logs"; and a failed --follow must still exit non-zero."""
+        from djust.cli import cmd_deploy
+
+        requests_mock.get(
+            f"{_LOGS_API}/projects/myapp/deployments/latest/logs/",
+            json=_logs_page([(1, "error", "pip failed")], status="failed"),
+        )
+        assert cmd_deploy(["logs", "myapp"]) == 0
+        assert "pip failed" in capsys.readouterr().out
+        assert cmd_deploy(["logs", "myapp", "--follow"]) == 1
+
+    def test_ctrl_c_through_djust_deploy_exits_130(self, creds_dir, saved_creds, capsys):
+        from djust.cli import cmd_deploy
+
+        with patch("djust.deploy_cli.requests.get", side_effect=KeyboardInterrupt):
+            assert cmd_deploy(["logs", "myapp"]) == 130
+        err = capsys.readouterr().err
+        assert "Aborted." in err
+        assert "Error:" not in err
+
+    def test_expired_token_mid_follow_is_refreshed(self, runner, creds_dir, requests_mock):
+        cred_file = creds_dir / "credentials"
+        cred_file.write_text(
+            json.dumps(
+                {
+                    "auth_scheme": "bearer",
+                    "access_token": "old-access",
+                    "refresh_token": "valid-refresh",
+                    "expires_at": 0,
+                    "email": "u@e.com",
+                    "server_url": "https://djustlive.com",
+                }
+            )
+        )
+        cred_file.chmod(0o600)
+        # /me/ accepts the old token at startup, then rejects it once the
+        # log endpoint has.
+        requests_mock.get(
+            f"{_LOGS_API}/me/", [{"json": {"email": "u@e.com"}}, {"status_code": 401}]
+        )
+        requests_mock.post(
+            "https://djustlive.com/o/token/",
+            json={
+                "access_token": "new-access",
+                "refresh_token": "rotated-refresh",
+                "expires_in": 3600,
+                "token_type": "Bearer",
+            },
+        )
+
+        def _logs(request, ctx):
+            if request.headers["Authorization"] != "Bearer new-access":
+                ctx.status_code = 401
+                return {"detail": "expired"}
+            return _logs_page([(1, "info", "ok")])
+
+        adapter = requests_mock.get(
+            f"{_LOGS_API}/projects/myapp/deployments/latest/logs/", json=_logs
+        )
+        result = runner.invoke(cli, ["logs", "myapp"])
+        assert result.exit_code == 0, result.output
+        assert adapter.call_count == 2
+        assert "ok" in result.stdout
+
+    def test_token_is_refreshed_again_after_a_later_expiry(
+        self, runner, creds_dir, saved_creds, requests_mock, _no_sleep
+    ):
+        """``refreshed`` resets after a success, so a second expiry during the
+        same --follow is refreshed too instead of ending in a 401."""
+        requests_mock.get(
+            f"{_LOGS_API}/projects/myapp/deployments/latest/logs/",
+            json=_logs_page([(1, "info", "a")], status="building", done=False),
+        )
+        pinned = requests_mock.get(
+            f"{_LOGS_API}/deployments/{_DEP_ID}/logs/",
+            [
+                {"status_code": 401, "json": {"detail": "expired"}},
+                {"json": _logs_page([], status="building", done=False, cursor=1)},
+                {"status_code": 401, "json": {"detail": "expired"}},
+                {"json": _logs_page([(2, "info", "b")], status="active", done=True)},
+                {"json": _logs_page([], status="active", done=True, cursor=2)},
+            ],
+        )
+        with patch(
+            "djust.deploy_cli._ensure_logged_in", side_effect=lambda *a, **k: {"token": "t"}
+        ) as resolver:
+            result = runner.invoke(cli, ["logs", "myapp", "--follow"])
+        assert result.exit_code == 0, result.output
+        assert pinned.call_count == 5
+        # once at start, then once per expiry
+        assert resolver.call_count == 3
+
+    def test_not_logged_in(self, runner, creds_dir):
+        result = runner.invoke(cli, ["logs", "myapp"])
+        assert result.exit_code == 1
+        assert "djust deploy login" in result.output

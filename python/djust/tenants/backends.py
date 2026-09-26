@@ -18,6 +18,12 @@ import time
 from typing import Any, Callable, Dict, List, Optional, TypeVar
 
 from ..backends.base import PresenceBackend
+from ..backends.redis import (
+    CLEANUP_INTERVAL,
+    CleanupThrottle,
+    presence_cleanup_interval,
+    read_presences,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +83,7 @@ class TenantAwareRedisBackend(TenantAwareBackendMixin, PresenceBackend):
         redis_url: str = "redis://localhost:6379/0",
         key_prefix: str = "djust",
         timeout: int = PRESENCE_TIMEOUT,
+        cleanup_interval: float = CLEANUP_INTERVAL,
     ) -> None:
         super().__init__(tenant_id=tenant_id)
         try:
@@ -90,6 +97,7 @@ class TenantAwareRedisBackend(TenantAwareBackendMixin, PresenceBackend):
         self._client = redis_lib.from_url(redis_url, decode_responses=True)
         self._base_prefix = key_prefix
         self._timeout = timeout
+        self._cleanup_throttle = CleanupThrottle(cleanup_interval)
 
         # Verify connection
         try:
@@ -145,31 +153,20 @@ class TenantAwareRedisBackend(TenantAwareBackendMixin, PresenceBackend):
         return record
 
     def list(self, presence_key: str) -> List[Dict[str, Any]]:
-        """List all active presences in the group."""
-        self.cleanup_stale(presence_key)
+        """List all active presences in the group.
 
-        members = self._client.zrangebyscore(
+        Two Redis commands in one round trip, with ``cleanup_stale`` at most
+        once per ``cleanup_interval`` per key (#3203), as
+        ``RedisPresenceBackend.list``.
+        """
+        if self._cleanup_throttle.due(presence_key):
+            self.cleanup_stale(presence_key)
+        return read_presences(
+            self._client,
             self._zset_key(presence_key),
-            min=time.time() - self._timeout,
-            max="+inf",
+            self._meta_key(presence_key),
+            time.time() - self._timeout,
         )
-
-        if not members:
-            return []
-
-        pipe = self._client.pipeline()
-        for uid in members:
-            pipe.hget(self._meta_key(presence_key), uid)
-        results = pipe.execute()
-
-        presences = []
-        for raw in results:
-            if raw:
-                try:
-                    presences.append(json.loads(raw))
-                except (json.JSONDecodeError, TypeError):
-                    logger.debug("Skipping malformed presence record in %s", presence_key)
-        return presences
 
     def count(self, presence_key: str) -> int:
         """Count active users in the group."""
@@ -471,6 +468,7 @@ class TenantPresenceManager:
             backend = TenantAwareRedisBackend(
                 tenant_id=tenant_id,
                 redis_url=redis_url,
+                cleanup_interval=presence_cleanup_interval(config),
             )
         else:
             backend = TenantAwareMemoryBackend(tenant_id=tenant_id)
