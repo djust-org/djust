@@ -172,7 +172,7 @@ Plus a Redis channel layer, `channels_redis.core.RedisChannelLayer`, as in [Chan
 
 Each item below caused a failure in a multi-pod test when it was missing.
 
-1. **Shared, durable sessions.** The page GET and the WebSocket can land on different processes, so sessions kept per process (a `locmem` cache, files on each pod's disk) share nothing. Use the database (`db`), `cached_db` with a cache every process shares, or a `cache` session on a Redis that persists. With sessions in a Redis without persistence, a Redis restart logs everyone out; in the test, every user of an explicit-exposure view was stuck until they reloaded the page (#3201).
+1. **Shared, durable sessions.** The page GET and the WebSocket can land on different processes, so sessions kept per process (a `locmem` cache, files on each pod's disk) share nothing. Use the database (`db`), `cached_db` with a cache every process shares, or a `cache` session on a Redis that persists. With sessions in a Redis without persistence, a Redis restart logs everyone out. In the test, on 1.3.0rc4, every user of an explicit-exposure view was also stuck until they reloaded the page; since [#3201](https://github.com/djust-org/djust/issues/3201) (merged on `main` after 1.3.0rc4) such a page mounts fresh, as an anonymous user.
 2. **`socket_timeout` above 5 s on the channel layer with redis-py 8.** redis-py 8 made its socket timeout default to 5 s, which equals channels_redis' receive timeout. A process whose channel receives nothing for 5 s drops a WebSocket: 38 unexpected disconnects in 90 s on 2 pods with 200 per-user clients and no broadcast traffic. Give each channel-layer host a `socket_timeout` greater than 5, for example 10. See [#3199](https://github.com/djust-org/djust/issues/3199) for the configuration and the system check.
 3. **Opt in to state that survives a reconnect.** `STATE_BACKEND = "redis"` does not bring a view's state back on another process. It caches the compiled view as the diff baseline for the next mount. A default LiveView that reconnects to another process runs `mount()` again, and whatever it held is lost. In the test, a counter went back to 0 on every reconnect of a default view. To keep state across processes, persist it through the Django session:
    - legacy views: set `enable_state_snapshot = True` on the view;
@@ -208,7 +208,7 @@ Conditions for every number in this section:
 - **Redis was nearly idle for per-user events.** 1,100 clients on 4 pods cost Redis 0.006 cores and 3 operations per second: the state backend is written at mount, not per event. Moving from in-memory to Redis made no measurable difference to one pod's per-user capacity (252–300 either way).
 - **Redis halved one process's chat capacity:** 30–40 clients against 80–84 with the in-memory layer, 5.1 ms of CPU per delivery against 3.6 ms. At 4 pods and 200 chat clients, 52 % of Redis's commands were presence reads from the online-list render. These numbers predate [#3203](https://github.com/djust-org/djust/issues/3203), merged on `main` after 1.3.0rc4, which cuts a presence list to two Redis commands; they have not been re-measured since.
 - **Connect bursts are expensive.** Ramping 1,100 clients in 10 s on 4 pods (27 connects per second per pod) took 4.6 s at p50 and 7.1 s at p95 to load the page and mount.
-- **Explicit exposure is currently much lower:** 76 clients on 1 pod and 300 on 4. Its per-event session save has a 150 ms budget that includes queueing, so under load it answers with "State unavailable. Please reload the page." long before the CPU runs out ([#3200](https://github.com/djust-org/djust/issues/3200)).
+- **Explicit exposure measured much lower on 1.3.0rc4:** 76 clients on 1 pod and 300 on 4. Its per-event session save had a 150 ms budget that included queueing, so under load it answered with "State unavailable. Please reload the page." long before the CPU ran out. [#3200](https://github.com/djust-org/djust/issues/3200), merged on `main` after 1.3.0rc4, starts the deadline when the save starts running and makes it configurable (`DJUST_EXPLICIT_STATE_SAVE_TIMEOUT`); this has not been re-measured.
 - **Free-threaded pods:** one run with 3.14t, `worker_threads=2`, one loop and a 2-CPU pod handled 600 per-user clients (1.6 cores) and 100 chat clients, at 590 MB RSS. That is one round only.
 
 ### Option A: route each room to one process (not built)
@@ -269,12 +269,12 @@ So a cluster that has just failed over runs on N−1 pods until clients churn. K
 
 #### Explicit exposure under failover
 
-Until [#3200](https://github.com/djust-org/djust/issues/3200) and [#3201](https://github.com/djust-org/djust/issues/3201) are fixed:
+On 1.3.0rc4, explicit-exposure views were the one configuration where failover showed users an error:
 
 - a rolling restart produced 80–93 "State unavailable. Please reload the page." errors among 100 explicit-view users, in a burst at each step of the roll, because the surviving pods were busy with the reconnect wave;
 - after a Redis restart that lost their sessions, explicit-view pages could not mount again until the user reloaded.
 
-Keep sessions in the database, and test a rolling restart under load before relying on explicit exposure in a multi-pod deployment.
+Both are fixed on `main` after 1.3.0rc4 ([#3200](https://github.com/djust-org/djust/issues/3200), [#3201](https://github.com/djust-org/djust/issues/3201)), and neither fix has been re-measured under failover. Keep sessions in the database, and test a rolling restart under load before relying on explicit exposure in a multi-pod deployment.
 
 #### Probes
 
