@@ -41,3 +41,37 @@ def test_the_detail_context_describes_the_entry():
     assert ctx["component_type"] == "interactive"
     assert "class DropdownMenuExample(LiveView)" in ctx["usage_parts"]["view"]
     assert "{{ project_menu }}" in ctx["usage_parts"]["template"]
+
+
+def test_the_index_card_thumbnail_is_markup_not_a_second_live_page():
+    # Review of #3134: the card embedded the example's whole GET response,
+    # adding a nested dj-root, its scripts and a contracts block that the
+    # client read as the index page's own.
+    from djust.theming.templatetags.theme_tags import _thumbnail_html
+
+    _thumbnail_html.cache_clear()
+    thumb = _thumbnail_html(ENTRY)
+    assert "Project" in thumb and "Alpha" in thumb  # it still shows the menus
+    for leak in (
+        "<script",
+        "dj-view",
+        "dj-root",
+        "data-djust-parameter-contracts",
+        "data-component-id",
+    ):
+        assert leak not in thumb, leak
+
+
+@pytest.mark.django_db
+@override_settings(
+    DEBUG=True, DJUST_THEMING_GALLERY_PUBLIC=True, ROOT_URLCONF="tests.gallery_test_urls"
+)
+def test_the_index_page_carries_only_its_own_view():
+    from django.urls import reverse
+
+    from djust.theming.templatetags.theme_tags import _thumbnail_html
+
+    _thumbnail_html.cache_clear()
+    html = Client().get(reverse("djust_theming:components")).content.decode()
+    assert "interactive_examples.DropdownMenuExample" not in html
+    assert html.count("data-djust-parameter-contracts") <= 1

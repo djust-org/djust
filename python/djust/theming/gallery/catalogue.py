@@ -336,7 +336,27 @@ def interactive_preview_html(component_name: str) -> str:
     request = RequestFactory().get("/")
     request.user, request.session, request.tenant = AnonymousUser(), SessionStore(), None
     response = interactive_example_view(component_name)().get(request)
-    return response.content.decode() if response.status_code == 200 else ""
+    if response.status_code != 200:
+        return ""
+    return _preview_fragment(response.content.decode())
+
+
+_SCRIPT_RE = re.compile(r"<script\b.*?</script>", re.S | re.I)
+_ROOT_RE = re.compile(r"<div\b[^>]*\bdj-root\b[^>]*>(.*)</div>", re.S)
+_WIRING_ATTR_RE = re.compile(r'\s(?:dj-[\w:.-]+|data-component-id|data-dj-[\w-]+)(?:="[^"]*")?')
+
+
+def _preview_fragment(page_html: str) -> str:
+    """The markup inside the example's root, with nothing live left in it.
+
+    A card preview must not carry a second view root, the example's scripts or
+    its parameter-contracts block: the client reads the first contracts block
+    on the page, so an embedded one would describe the wrong view (#3134 review).
+    """
+    body = _SCRIPT_RE.sub("", page_html)
+    match = _ROOT_RE.search(body)
+    inner = match.group(1) if match else ""
+    return _WIRING_ATTR_RE.sub("", inner).strip()
 
 
 _CATALOGUE_TRIGGERS = {
