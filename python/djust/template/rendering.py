@@ -561,8 +561,9 @@ class DjustTemplate:
             # here at all and its custom filters did not resolve. Same
             # parallel-path shape as #2223, one entry point over.
             #
-            # Free after the first call: ``_ensure_custom_filters_bridged``
-            # short-circuits on a module-level flag and never raises.
+            # Cheap after the first call: ``_ensure_custom_filters_bridged``
+            # short-circuits on a flag plus one registry-generation read
+            # (#3208) and never raises.
             from ..template_filters import _ensure_custom_filters_bridged
 
             _ensure_custom_filters_bridged()
