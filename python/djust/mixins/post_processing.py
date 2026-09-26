@@ -69,6 +69,56 @@ def _find_html_close(masked: str) -> int:
     return found
 
 
+_MISSING = object()
+
+
+def _property_types() -> tuple:
+    import functools
+
+    from django.utils.functional import cached_property as django_cached_property
+
+    return (property, functools.cached_property, django_cached_property)
+
+
+def _read_debug_attr(view: Any, name: str) -> "tuple[Any, Dict[str, Any] | None]":
+    """Read one attribute for the legacy debug panel (#3103).
+
+    Returns ``(value, None)`` for a readable attribute, ``(_MISSING, None)``
+    when it does not exist, or ``(_MISSING, placeholder)`` when the panel lists
+    the name without a value. A property is code, not state: running it could
+    raise anything or query the database on every debug render, so it is
+    listed as not evaluated (a cached property already computed is state and
+    is read from the instance). Any other descriptor that raises is reported
+    as unavailable with its exception type, and the rest of the panel renders.
+    """
+    import inspect
+
+    instance_dict = getattr(view, "__dict__", {})
+    if name not in instance_dict:
+        try:
+            static = inspect.getattr_static(view, name)
+        except AttributeError:
+            static = _MISSING
+        if isinstance(static, _property_types()):
+            return _MISSING, {
+                "name": name,
+                "type": "property",
+                "value": "<property: not evaluated>",
+                "size_bytes": 0,
+            }
+    try:
+        return getattr(view, name), None
+    except AttributeError:
+        return _MISSING, None
+    except Exception as exc:  # noqa: BLE001 -- any descriptor may raise; report it, keep going
+        return _MISSING, {
+            "name": name,
+            "type": "unavailable",
+            "value": "<unavailable: %s>" % type(exc).__name__,
+            "size_bytes": 0,
+        }
+
+
 class PostProcessingMixin:
     """Post-processing: get_debug_info, _hydrate_react_components, _inject_client_script."""
 
@@ -124,9 +174,11 @@ class PostProcessingMixin:
             if name.startswith("_") or name in handlers:
                 continue
 
-            try:
-                attr = getattr(self, name)
-            except AttributeError:
+            attr, placeholder = _read_debug_attr(self, name)
+            if placeholder is not None:
+                variables[name] = placeholder
+                continue
+            if attr is _MISSING:
                 continue
 
             if callable(attr) and hasattr(attr, "__func__"):
@@ -236,9 +288,11 @@ class PostProcessingMixin:
             if name in _FRAMEWORK_INTERNAL_ATTRS:
                 continue
 
-            try:
-                attr = getattr(self, name)
-            except AttributeError:
+            attr, placeholder = _read_debug_attr(self, name)
+            if placeholder is not None:
+                variables[name] = placeholder
+                continue
+            if attr is _MISSING:
                 continue
 
             if callable(attr):
