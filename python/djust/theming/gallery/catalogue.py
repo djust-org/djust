@@ -151,6 +151,10 @@ _COMPONENT_DESCRIPTIONS = {
     # docstring to use as their one-line catalogue description. Keep the
     # prose next to the catalogue contract rather than silently showing a
     # component card with no explanation.
+    "interactive_dropdown_menu": (
+        "A menu that owns its open, keyboard and selection state and sends the "
+        "view one typed callback per valid choice (ADR-034)."
+    ),
     "checkbox": "Checkbox input with a label, description, and validation state.",
     "input": "Text input with a label, help text, and validation state.",
     "radio": "Radio-group input for choosing one value from a set.",
@@ -309,6 +313,32 @@ def build_catalogue_index_context() -> dict:
 #:
 #: The markup dispatches the same event the component's descriptor listens for,
 #: so this is the real server path rather than a demo-only shim.
+#: Catalogue entries whose preview is a LiveView that owns interactive
+#: components (ADR-034): the name maps to the canonical example view.
+INTERACTIVE_ENTRIES = {
+    "interactive_dropdown_menu": "djust.components.interactive_examples.DropdownMenuExample",
+}
+
+
+def interactive_example_view(component_name: str) -> type:
+    """The canonical example view an interactive entry serves (ADR-037 D2)."""
+    module_path, _, class_name = INTERACTIVE_ENTRIES[component_name].rpartition(".")
+    view: type = getattr(importlib.import_module(module_path), class_name)
+    return view
+
+
+def interactive_preview_html(component_name: str) -> str:
+    """The example view's first render, through a real GET, for the index card."""
+    from django.contrib.auth.models import AnonymousUser
+    from django.contrib.sessions.backends.signed_cookies import SessionStore
+    from django.test import RequestFactory
+
+    request = RequestFactory().get("/")
+    request.user, request.session, request.tenant = AnonymousUser(), SessionStore(), None
+    response = interactive_example_view(component_name)().get(request)
+    return response.content.decode() if response.status_code == 200 else ""
+
+
 _CATALOGUE_TRIGGERS = {
     "modal": (
         '<button type="button" dj-click="toggle_modal" '
@@ -812,6 +842,28 @@ def build_catalogue_detail_context(component_name: str, *, render_examples: bool
         PYTHON_COMPONENT_EXAMPLES,
         _COMPONENT_TO_CATEGORY,
     )
+
+    if component_name in INTERACTIVE_ENTRIES:
+        import inspect
+
+        from django.template.loader import get_template
+
+        from .component_registry import get_component_category
+
+        view_class = interactive_example_view(component_name)
+        module = importlib.import_module(view_class.__module__)
+        markup = get_template(
+            "djust_theming/catalogue/examples/%s.html" % component_name
+        ).template.source
+        return {
+            "name": component_name,
+            "display_name": component_name.replace("_", " ").title(),
+            "category": get_component_category(component_name),
+            "component_type": "interactive",
+            "description": component_description(component_name),
+            "usage_parts": {"view": inspect.getsource(module), "template": markup},
+            "events": ["selected"],
+        }
 
     if component_name not in COMPONENT_CONTRACTS and component_name not in _COMPONENT_TO_CATEGORY:
         raise KeyError(f"Unknown component: {component_name}")

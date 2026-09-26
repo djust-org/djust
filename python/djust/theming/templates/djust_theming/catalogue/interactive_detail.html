@@ -1,0 +1,27 @@
+{% extends "djust_theming/catalogue/base.html" %}
+{% load theme_tags theme_components djust_components %}
+
+{% block title %}{{ display_name }} — Components{% endblock %}
+
+{% block catalogue_content %}
+<article>
+{% theme_breadcrumb items=crumbs %}
+<h1 class="dc-comp-title">{{ display_name }}</h1>
+<p class="dc-comp-desc">A menu that owns its open, keyboard and selection behavior. The view receives one typed callback per valid choice (ADR-034). Below: one menu, and a keyed collection of row menus, on one page.</p>
+<p class="dc-doc-links"><a href="{{ docs_guide_url }}" rel="noopener">Guide</a></p>
+
+<section class="dc-section">
+{% include "djust_theming/catalogue/examples/interactive_dropdown_menu.html" %}
+</section>
+
+<section id="dc-usage" class="dc-section">
+  {% card title="Usage" %}
+    <div class="dc-subtitle">views.py</div>
+    {{ usage_html.view }}
+    <div class="dc-subtitle">my_template.html</div>
+    {{ usage_html.template }}
+    <p class="dc-note">This source is the page above, and it runs in djust's test suite.</p>
+  {% endcard %}
+</section>
+</article>
+{% endblock %}
