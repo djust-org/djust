@@ -61,7 +61,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | T005 | Templates | Warning | dj-view and dj-root on different elements |
 | T010 | Templates | Warning | dj-click used for navigation instead of dj-patch |
 | T011 | Templates | Warning | Unsupported Django template tags (silently ignored by Rust renderer) |
-| T012 | Templates | Warning | Template with dj-* directives but no dj-view |
+| T012 | Templates | Warning | Template with dj-* directives but no `dj-root` or `dj-view` (`dj-root` accepted since #3171) |
 | T013 | Templates | Warning | dj-view with empty or dynamic value |
 | T014 | Templates | Warning | Deprecated data-dj-id attribute |
 | T015 | Templates | Warning | Legacy data-djust-root / data-djust-view root attributes |
@@ -612,12 +612,12 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **False positives**: Base templates processed by Django's Python renderer rather than the Rust renderer
 - **Note**: `{% extends %}` and `{% block %}` are **fully supported** by the Rust renderer since template inheritance was implemented; T011 does not flag them
 
-### T012 — Template with dj-* directives but no dj-view
+### T012 — Template with dj-* directives but no dj-root or dj-view
 - **Severity**: Warning
 - **Method**: Regex (template scan)
-- **What it detects**: Template uses `dj-*` attributes but has no `dj-view` attribute to bind to a LiveView
+- **What it detects**: Template uses `dj-*` attributes but has neither a `dj-root` nor a `dj-view` attribute to bind to a LiveView. Before #3171 only `dj-view` satisfied the check, so a template written the documented way (`<div dj-root>`, with djust stamping `dj-view` server-side) was flagged
 - **Suppression**: `SILENCED_SYSTEM_CHECKS = ["djust.T012"]`
-- **False positives**: Partial templates that intentionally omit `dj-view` because the parent/wrapper template provides it
+- **False positives**: Partial templates that intentionally omit `dj-root` / `dj-view` because the parent/wrapper template provides it (mark them with `{# djust:partial #}`)
 
 ### T013 — dj-view with empty or dynamic value
 - **Severity**: Warning
@@ -639,7 +639,7 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **What it detects**: The pre-1.0 root attributes `data-djust-root` and
   `data-djust-view`, renamed in djust 1.0 to `dj-root` / `dj-view` (the
   `data-` prefix is no longer required). The generic T012 ("dj-* directives
-  but no dj-view") doesn't recognise that a view IS declared when it uses the
+  but no dj-root or dj-view") doesn't recognise that a view IS declared when it uses the
   deprecated spelling, so the path from symptom (the LiveView never connects
   over WebSocket) to fix is non-obvious — T015 names the rename explicitly.
 - **Suppression**: Fix the templates (`data-djust-view` → `dj-view`,
