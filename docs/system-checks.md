@@ -81,6 +81,20 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | Y002 | Accessibility | Warning | `<img>` tag missing an `alt` attribute (WCAG 1.1.1) |
 | Y003 | Accessibility | Warning | Form control (`<input>`/`<select>`/`<textarea>`) with no associated label (WCAG 1.3.1 / 3.3.2) |
 | Y004 | Accessibility | Warning | Positive `tabindex` value — a focus-order anti-pattern (WCAG 2.4.3) |
+| B001 | Vendored Assets | Error | Manifest unparseable or fails schema |
+| B002 | Vendored Assets | Error | Package purl missing `@version`, or missing a license |
+| B003 | Vendored Assets | Error | Vendored file not found by staticfiles finders |
+| B004 | Vendored Assets | Error | Vendored file's hash doesn't match its manifest integrity |
+| B005 | Vendored Assets | Error | External asset declared without `DJUST_ALLOW_EXTERNAL_ASSETS` |
+| B006 | Vendored Assets | Error | External asset without integrity |
+| B007 | Vendored Assets | Error | `requires_assets` names an undeclared asset |
+| B008 | Vendored Assets | Error | A manifest or SBOM file would be collected as a static file |
+| B009 | Vendored Assets | Warning | A declaration shadows another (override, both sources named) |
+| B010 | Vendored Assets | Warning | Undeclared external origin (`<script src="http…">`) in a template |
+| B011 | Vendored Assets | Warning | `DJUST_SBOM_PATH` not set (`--deploy` only) |
+| B012 | Vendored Assets | Error | `DJUST_SBOM_PATH` resolves inside a served directory |
+| B013 | Vendored Assets | Error | `djust` after `django.contrib.staticfiles`, SBOM set but won't be written (`--deploy` only) |
+| B014 | Vendored Assets | Error | On-disk SBOM missing or its digest no longer matches declared assets (`--deploy` only) |
 
 ---
 
@@ -847,6 +861,110 @@ the full narrative.
 - **What it detects**: A `tabindex` attribute with a positive value (`tabindex="1"`+), which overrides the natural DOM focus order (WCAG 2.4.3, Level A). `tabindex="0"` (focusable in natural order) and `tabindex="-1"` (focusable only programmatically) are valid and not flagged
 - **Suppression**: `DJUST_CONFIG['suppress_checks'] = ['Y004']` or `SILENCED_SYSTEM_CHECKS = ["djust.Y004"]`
 - **False positives**: Near zero — `tabindex="0"` / `tabindex="-1"` are valid and not flagged; an interpolated value (`tabindex="{{ ... }}"` / `{% ... %}`) is treated conservatively and not flagged; a `data-tabindex` attribute is not mistaken for `tabindex`
+
+---
+
+## Vendored Assets Checks (B)
+
+See [Vendoring third-party JS](website/guides/vendored-assets.md), [Scanning a djust app](website/guides/scanning.md) and [ADR-040](adr/040-vendored-assets-and-sboms.md) for the full manifest schema and SBOM setup.
+
+### B001 — manifest unparseable or fails schema
+- **Severity**: Error
+- **Method**: Runtime (`djust_assets.json` parse, at startup)
+- **What it detects**: A manifest, or one asset inside it, doesn't match schema 1 — missing/invalid JSON, wrong `"schema"` value, a file entry missing `"path"`/`"url"` or a valid `"integrity"`, or a `"type"` that can't be inferred. The invalid asset is dropped; its neighbours still load
+- **Suppression**: Cannot be suppressed meaningfully — fix the manifest, or `make vendor` if it's a djust-generated one
+- **False positives**: None
+
+### B002 — package purl missing `@version` or license
+- **Severity**: Error
+- **Method**: Runtime (`djust_assets.json` parse, at startup)
+- **What it detects**: A `"packages"` entry's `"purl"` has no exact `@version`, or its `"license"` is missing
+- **Suppression**: Cannot be suppressed meaningfully — pin the version and add an SPDX license
+- **False positives**: None
+
+### B003 — vendored file not found by staticfiles finders
+- **Severity**: Error
+- **Method**: Runtime (staticfiles finder lookup, at startup)
+- **What it detects**: An asset's `"path"` is not found by any configured staticfiles finder
+- **Suppression**: Cannot be suppressed meaningfully — fix the path or app configuration
+- **False positives**: None
+
+### B004 — vendored file's hash doesn't match its manifest integrity
+- **Severity**: Error
+- **Method**: Runtime (reads and hashes the file, at startup — about 1 MB total for djust's own bundles, once per `check`/`runserver`/`migrate`, never per request)
+- **What it detects**: The file on disk doesn't hash to the manifest's declared `"integrity"` (edited or replaced without regenerating the manifest), or the file couldn't be read
+- **Suppression**: Cannot be suppressed meaningfully — `make vendor` (djust) or regenerate the manifest's integrity
+- **False positives**: None
+
+### B005 — external asset without `DJUST_ALLOW_EXTERNAL_ASSETS`
+- **Severity**: Error
+- **Method**: Runtime (settings inspection, at startup)
+- **What it detects**: A manifest declares an external (`"url"`) file while `DJUST_ALLOW_EXTERNAL_ASSETS` is `False` (the default)
+- **Suppression**: `SILENCED_SYSTEM_CHECKS = ["djust.B005"]`, or set `DJUST_ALLOW_EXTERNAL_ASSETS = True` if intentional
+- **False positives**: None; vendoring is the default deliberately
+
+### B006 — external asset without integrity
+- **Severity**: Error
+- **Method**: Runtime (`djust_assets.json` parse, at startup)
+- **What it detects**: An external (`"url"`) file has no `"integrity"`
+- **Suppression**: Cannot be suppressed meaningfully — add the SRI hash
+- **False positives**: None
+
+### B007 — `requires_assets` names an undeclared asset
+- **Severity**: Error
+- **Method**: Runtime (`Component` subclass scan, at startup)
+- **What it detects**: `Component.requires_assets` names an asset no manifest declares
+- **Suppression**: Cannot be suppressed meaningfully — declare the asset or install the package that ships it
+- **False positives**: None
+
+### B008 — a manifest or SBOM file would be collected as a static file
+- **Severity**: Error
+- **Method**: Runtime (staticfiles finder listing, at startup)
+- **What it detects**: A `*.cdx.json`, `*.spdx.json` or `*.bom.json` is found by a staticfiles finder — `collectstatic` would publish it
+- **Suppression**: Cannot be suppressed meaningfully — move it outside every static directory
+- **False positives**: None
+
+### B009 — a declaration shadows another
+- **Severity**: Warning
+- **Method**: Runtime (manifest resolution, at startup)
+- **What it detects**: Two manifests declare the same asset name; the message names both sources and both versions. Resolution order: project manifests (`DJUST_ASSET_MANIFESTS`, list order) win over apps, and earlier `INSTALLED_APPS` win over later
+- **Suppression**: `DJUST_CONFIG['suppress_checks'] = ['B009']` or `SILENCED_SYSTEM_CHECKS = ["djust.B009"]`
+- **False positives**: Intentional overrides — for example shipping a security fix for a djust-bundled library ahead of a djust release
+
+### B010 — undeclared external origin in a template
+- **Severity**: Warning
+- **Method**: Regex (template file scan)
+- **What it detects**: A literal `<script src="http…">` or `<link href="http…">` pointing at an origin no manifest declares
+- **Suppression**: `{# noqa: B010 #}` on the line, `DJUST_CONFIG['suppress_checks'] = ['B010']`, or `SILENCED_SYSTEM_CHECKS = ["djust.B010"]`
+- **False positives**: A heuristic regex scan — an origin assembled at runtime rather than written literally in the template is not seen either way
+
+### B011 — `DJUST_SBOM_PATH` not set
+- **Severity**: Warning (`--deploy` only)
+- **Method**: Runtime (settings inspection)
+- **What it detects**: `DJUST_SBOM_PATH` is unset, so `collectstatic` writes no app SBOM
+- **Suppression**: `SILENCED_SYSTEM_CHECKS = ["djust.B011"]`, or set `DJUST_SBOM_PATH`
+- **False positives**: Apps that don't need a scanner-visible SBOM
+
+### B012 — `DJUST_SBOM_PATH` resolves inside a served directory
+- **Severity**: Error
+- **Method**: Runtime (settings inspection)
+- **What it detects**: `DJUST_SBOM_PATH` is inside `STATIC_ROOT`, `MEDIA_ROOT`, or a `STATICFILES_DIRS` entry
+- **Suppression**: Cannot be suppressed meaningfully — move it outside those directories
+- **False positives**: None
+
+### B013 — `djust` after `django.contrib.staticfiles`, SBOM won't be written
+- **Severity**: Error (`--deploy` only)
+- **Method**: Runtime (`INSTALLED_APPS` order inspection)
+- **What it detects**: `DJUST_SBOM_PATH` is set, but `'djust'` comes after `'django.contrib.staticfiles'` in `INSTALLED_APPS`, so djust's `collectstatic` override never runs. Fires only when an SBOM path is configured — an app with no `DJUST_SBOM_PATH` sees no new check output regardless of app order
+- **Suppression**: Cannot be suppressed meaningfully — move `'djust'` above `'django.contrib.staticfiles'`
+- **False positives**: None
+
+### B014 — on-disk SBOM missing or stale
+- **Severity**: Error (`--deploy` only)
+- **Method**: Runtime (reads the SBOM at `DJUST_SBOM_PATH`, compares its recorded digest against the current registry)
+- **What it detects**: The SBOM file is missing, unreadable, or its digest no longer matches the currently declared assets — typically an image built without re-running `collectstatic` after a dependency bump
+- **Suppression**: Cannot be suppressed meaningfully — run `collectstatic` (or `manage.py djust_sbom -o PATH`) as part of the build
+- **False positives**: None
 
 ---
 

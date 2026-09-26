@@ -1,0 +1,1 @@
+- **`{% code_block %}` themes are the vendored set** (github, github-dark, atom-one-dark, atom-one-light, monokai, vs2015, nord, default, dark, a11y-dark, a11y-light, stackoverflow-light, stackoverflow-dark). Any other `theme=` raises `ImproperlyConfigured` naming them. `js/markdown-editor/` moved to `js/vendor/`; `make markdown-editor-build` is now `make vendor`.

@@ -2,7 +2,7 @@
 
 Date: 2026-09-25
 Status: approved design, pending spec review
-Target: 1.3.0rc2 (no 1.2.x backport)
+Target: the next 1.3 pre-release after v1.3.0rc2 (no 1.2.x backport)
 
 ## Goal
 
@@ -300,7 +300,7 @@ version list; it does not make bundles unidentifiable.
   contains `djust.cdx.json` (1.3 onward), scan it with the current advisory
   database and open one issue per advisory × line (deduplicated by title).
 
-## 6. Rollout (1.3.0rc2)
+## 6. Rollout (the next 1.3 pre-release after v1.3.0rc2)
 
 - `js/vendor/`, manifests, `djust.assets`, checks B001–B014, all three
   SBOM outputs, CI job and weekly workflow.
@@ -380,3 +380,69 @@ a `dependencies` edge. Per the decision rule (any "no" in the nested column
 forces flat), the generator must emit vendored packages as top-level
 `components` entries linked via `dependencies`, not nested inside the
 `probe-bundle`/asset component's own `components[]`.
+
+## Planning amendments
+
+The implementation plan (`docs/superpowers/plans/2026-09-25-vendored-assets-sbom.md`,
+"Global Constraints") made six amendments to this design while planning,
+ahead of any implementation code:
+
+1. **B013 is conditional.** It fires only when `DJUST_SBOM_PATH` is set.
+   The demo project (and most apps) list `"djust"` after
+   `"django.contrib.staticfiles"`; without an SBOM path the `collectstatic`
+   override has nothing to do.
+2. **Schema validation is replaced by scanner canaries.** Validating
+   against the CycloneDX 1.6 JSON schema needs the schema plus its
+   SPDX/JSF sub-schemas vendored into tests. Parsing by the real consumers
+   (the Task 0 probe, the CI canary) is the stronger test.
+3. **Nested vs flat is decided by Task 0.** If any of Trivy, Syft or
+   OSV-Scanner ignores nested `components`, the generator emits packages
+   top-level and records asset→package in `dependencies`. (Decided above:
+   flat.)
+4. **`vendor-check` uses `git diff` on a rebuilt tree**, like the earlier
+   `markdown-editor.yml`, rather than a temp directory.
+5. **highlight.js themes are a curated set** (thirteen, listed in the
+   vendoring guide), not all ~250 upstream themes; an unknown theme is a
+   loud `ImproperlyConfigured` naming the available ones. (Wheel size: each
+   release publishes ~20 platform wheels against the PyPI 10 GB project
+   cap.)
+6. **Modules render as `<link rel="modulepreload" integrity>`** plus
+   `{% djust_asset_url %}` for the importing code, because `import()`
+   cannot carry SRI.
+
+### Execution rulings
+
+Facts established while implementing this design, recorded here because
+they refine or correct the text above:
+
+1. **Scanner commands.** Use `trivy rootfs /app` or `trivy image <image>`,
+   never `trivy fs` — `trivy fs` (repository mode) does not read an
+   embedded `*.cdx.json` the way `rootfs`/`image` do. The tested
+   OSV-Scanner command is `osv-scanner scan source -L <path>.cdx.json`;
+   the file must end in `.cdx.json` for OSV-Scanner to recognize it.
+2. **The SBOM is flat, not nested** (see the Task 0 decision above):
+   packages are top-level components, and each asset links to its
+   packages through the top-level `dependencies` array, because `trivy
+   sbom` ignores components nested inside another component.
+3. **xterm is pinned to 5.5.0 with `@xterm/addon-fit` 0.10.0** — the ttyd
+   hook targets the xterm 5 API; upgrading to xterm 6 is a separate
+   change. highlight.js is 11.12.0 and tailwindcss is 3.4.19.
+4. **tailwindcss appears in the SBOM as the `admin-css` package**, even
+   though it is a `devDependency`, because its MIT preflight CSS is
+   embedded in the built `admin.css` output. `admin.css` keeps exactly one
+   upstream `tailwindcss v3.4.19` attribution banner — a single-library
+   banner, not a version list, and a documented exception to the
+   no-version-in-served-files rule.
+5. **Advisory policy.** `osv-scanner.toml` ignores `RUSTSEC-2025-0141`
+   (bincode, unmaintained) until 2026-12-31, following the existing
+   `.cargo/audit.toml` policy: unmaintained advisories warn, vulnerabilities
+   fail.
+6. **Registering a tag library for the Rust engine.** `{% djust_asset %}`
+   only renders inside a LiveView template because
+   `djust.templatetags.djust_assets` was added to
+   `djust.template_libraries._DJUST_TAGS_BRIDGED` — any future built-in tag
+   library needs the same registration.
+7. **Two B-check details confirmed against `checks/sbom.py`.** B013 is
+   registered `deploy=True` and returns no messages when `DJUST_SBOM_PATH`
+   is unset (amendment 1, above). B011 is a separate `deploy=True` check
+   that warns whenever `DJUST_SBOM_PATH` is unset, independent of B013.

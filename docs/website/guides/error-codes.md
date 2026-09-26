@@ -23,6 +23,7 @@ djust uses structured error codes to help you diagnose problems quickly. This gu
 | T0xx | Templates | `manage.py check --tag djust` (startup) |
 | Q0xx | Code Quality | `manage.py check --tag djust` (startup) |
 | A0xx | Audit / Static Security Checks | `manage.py check --tag djust` (startup) |
+| B0xx | Vendored assets and SBOMs | `manage.py check --tag djust` (startup; B011/B013/B014 need `--deploy`) |
 | D0xx | Database notifications | `manage.py check --tag djust` (startup) |
 | U0xx | Update notice | `manage.py check --tag djust` (startup, DEBUG only) |
 | Y0xx | Accessibility | `manage.py check --tag djust` (startup) |
@@ -1563,6 +1564,124 @@ Recognized packages: `axes`, `defender`, `brutebuster`, `ratelimit`, `django_rat
 **What causes it**: With the `allauth` backend, your `ACCOUNT_ADAPTER`, `ACCOUNT_FORMS["signup"]`, `SOCIALACCOUNT_ADAPTER` or `SOCIALACCOUNT_FORMS["signup"]` is a class that doesn't subclass djust's. The strict `?next=` redirects, the sign-up gate or `signup_validators` then don't apply.
 
 **Fix**: Base your class on the djust one in `djust.auth.accounts.backends.allauth_integration` (`DjustAccountAdapter`, `DjustSignupForm`, `DjustSocialAccountAdapter`, `DjustSocialSignupForm`) and add your changes there.
+
+---
+
+## Vendored Assets and SBOMs (B0xx)
+
+See [Vendoring third-party JS](vendored-assets.md) and [Scanning a djust app](scanning.md) (ADR-040).
+
+### B001: Manifest unparseable or fails schema
+
+**Severity**: Error
+
+**What causes it**: A `djust_assets.json` file (or an entry inside it) doesn't match schema 1: the file is missing or isn't valid JSON, `"schema"` isn't `1`, `"assets"` isn't an object, an asset isn't an object, `"files"`/`"packages"` is missing or empty, a file entry doesn't have exactly one of `"path"`/`"url"`, an external `"url"` isn't `https://`, `"integrity"` is missing on a vendored file or isn't valid SRI (`sha256-`/`sha384-`/`sha512-`), or `"type"` can't be inferred and isn't given explicitly. An invalid asset is dropped; the rest of the manifest still loads.
+
+**Fix**: Fix the manifest against the schema in [Vendoring third-party JS](vendored-assets.md#the-schema), or rebuild it with `make vendor` if it's a djust-generated one.
+
+### B002: Package purl missing a version, or missing a license
+
+**Severity**: Error
+
+**What causes it**: A `"packages"` entry's `"purl"` doesn't match `pkg:<type>/<name>@<version>` (an exact version is required — no ranges, no floating tags), or `"license"` is missing or empty. The purl is the only record of a package's name and version djust keeps, so an unpinned one can't be checked against an advisory.
+
+**Fix**: Pin an exact version in the purl (for a scoped npm package, percent-encode the `@`: `pkg:npm/%40tiptap/core@3.31.3`) and add an SPDX `"license"` expression.
+
+### B003: Vendored file not found by staticfiles finders
+
+**Severity**: Error
+
+**What causes it**: An asset's `"path"` isn't found by any configured staticfiles finder — the owning app isn't installed, `STATICFILES_DIRS` doesn't include it, or the file was deleted or renamed without updating the manifest.
+
+**Fix**: Check the path and that the owning app or `STATICFILES_DIRS` is configured. Rebuild with `make vendor` if it's a djust bundle.
+
+### B004: Vendored file's hash doesn't match its manifest integrity
+
+**Severity**: Error
+
+**What causes it**: The file djust finds on disk doesn't hash to the `"integrity"` value declared in the manifest — it was edited or replaced without regenerating the manifest — or the file couldn't be read at all (a permissions problem). This check reads and hashes every vendored file (about 1 MB total for djust's own bundles) once per `check`/`runserver`/`migrate` run, never per request.
+
+**Fix**: Rebuild with `make vendor` (djust) or regenerate your manifest's integrity (see [Vendoring third-party JS](vendored-assets.md#how-to-compute-an-integrity)). Check the file's permissions if it couldn't be read.
+
+### B005: External asset declared without opting in
+
+**Severity**: Error
+
+**What causes it**: A manifest declares a file with `"url"` (an external origin), but `DJUST_ALLOW_EXTERNAL_ASSETS` is `False` (the default). Vendoring is the default; loading from another origin is opt-in.
+
+**Fix**: Vendor the file instead, or set `DJUST_ALLOW_EXTERNAL_ASSETS = True` if the external load is intentional.
+
+### B006: External asset without integrity
+
+**Severity**: Error
+
+**What causes it**: An external (`"url"`) file has no `"integrity"`. A floating external script with no SRI fails silently in exactly the way this design exists to prevent.
+
+**Fix**: Add the file's SRI hash as `"integrity"` (see [Vendoring third-party JS](vendored-assets.md#how-to-compute-an-integrity)).
+
+### B007: `requires_assets` names an undeclared asset
+
+**Severity**: Error
+
+**What causes it**: A `Component.requires_assets` entry names an asset that no `djust_assets.json` (app-owned or in `DJUST_ASSET_MANIFESTS`) declares.
+
+**Fix**: Declare the asset, or install the package that ships it.
+
+### B008: A manifest or SBOM file would be collected as a static file
+
+**Severity**: Error
+
+**What causes it**: Staticfiles finders find a `*.cdx.json`, `*.spdx.json` or `*.bom.json` file — `collectstatic` would publish it, exposing an SBOM (or a stray one) to browsers.
+
+**Fix**: Move it outside every static directory. djust's own `djust.cdx.json` ships in the package/`.dist-info`, never under `static/`.
+
+### B009: A declaration shadows another
+
+**Severity**: Warning
+
+**What causes it**: Two manifests declare the same asset name. Project manifests (`DJUST_ASSET_MANIFESTS`, in list order) win over apps, and apps earlier in `INSTALLED_APPS` win over later ones — the message names both sources and both versions. This is the intended way to ship a security fix for a djust-bundled library ahead of a djust release; see [Vendoring third-party JS](vendored-assets.md#overriding-a-djust-bundled-library-for-a-security-fix).
+
+**Fix**: Informational when the override is intentional — suppress with `DJUST_CONFIG = {"suppress_checks": ["B009"]}`. Otherwise, rename one of the two assets.
+
+### B010: Undeclared external origin in a template
+
+**Severity**: Warning
+
+**What causes it**: A template has a literal `<script src="http…">` or `<link href="http…">` pointing at an origin no manifest declares. Heuristic (regex over template source): a scanner will never see what that origin serves.
+
+**Fix**: Vendor it and declare it, declare it as external with integrity, or add `{# noqa: B010 #}` on that line. Suppress everywhere with `DJUST_CONFIG = {"suppress_checks": ["B010"]}`.
+
+### B011: `DJUST_SBOM_PATH` not set
+
+**Severity**: Warning (`--deploy` only)
+
+**What causes it**: `DJUST_SBOM_PATH` is unset, so `collectstatic` writes no SBOM of the third-party browser code the app serves.
+
+**Fix**: Set it to a path outside every directory your web server serves — see [Scanning a djust app](scanning.md#setting-up-the-app-sbom).
+
+### B012: `DJUST_SBOM_PATH` is inside a served directory
+
+**Severity**: Error
+
+**What causes it**: `DJUST_SBOM_PATH` resolves inside `STATIC_ROOT`, `MEDIA_ROOT`, or a `STATICFILES_DIRS` entry — `collectstatic` would publish the SBOM to browsers, which djust refuses to do.
+
+**Fix**: Move it outside `STATIC_ROOT`, `MEDIA_ROOT` and `STATICFILES_DIRS`.
+
+### B013: `djust` is after `django.contrib.staticfiles`, so the SBOM won't be written
+
+**Severity**: Error (`--deploy` only)
+
+**What causes it**: `DJUST_SBOM_PATH` is set, but `'djust'` comes after `'django.contrib.staticfiles'` in `INSTALLED_APPS`, so djust's `collectstatic` override — the thing that writes the SBOM — never runs. This check only fires once an SBOM path is configured; an app with no `DJUST_SBOM_PATH` and the old app order sees no new check output at all.
+
+**Fix**: Move `'djust'` above `'django.contrib.staticfiles'` in `INSTALLED_APPS`.
+
+### B014: The on-disk SBOM doesn't match the declared assets
+
+**Severity**: Error (`--deploy` only)
+
+**What causes it**: The SBOM at `DJUST_SBOM_PATH` is missing, unreadable, or its recorded manifest digest no longer matches the currently resolved asset registry — typically a build that shipped an image without re-running `collectstatic` after a dependency bump.
+
+**Fix**: Run `collectstatic` (or `manage.py djust_sbom -o PATH`) as part of your build.
 
 ---
 
