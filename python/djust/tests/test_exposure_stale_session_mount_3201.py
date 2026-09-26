@@ -243,3 +243,87 @@ async def test_revoked_socket_recovers_on_the_reconnect_mount(staged):
             assert ">5<" in frame["html"]
         finally:
             await comm.disconnect()
+
+
+def _session_rows():
+    from django.contrib.sessions.models import Session
+
+    return set(Session.objects.values_list("session_key", flat=True))
+
+
+async def test_cookieless_sockets_create_no_sessions(staged):
+    """Review I2 of #3206: only a present-then-vanished key is replaced.
+
+    A socket with no session key at all behaves exactly as before the fix
+    (the explicit binding refuses it) and creates no rows, so cookieless
+    sockets cannot mint sessions.
+    """
+    before = await sync_to_async(_session_rows)()
+    with _settings():
+        for _ in range(3):
+            comm = await _connect(SessionStore())
+            try:
+                frame = await _mount(comm)
+                assert frame["type"] == "error", frame
+            finally:
+                await comm.disconnect()
+    assert await sync_to_async(_session_rows)() == before
+
+
+async def test_repeated_mounts_on_one_socket_reuse_one_replacement(staged):
+    """Review I2 of #3206: mount frames on one socket share one replacement."""
+    key = await _persisted_then_deleted_session_key()
+    before = await sync_to_async(_session_rows)()
+    with _settings():
+        comm = await _connect(SessionStore(key))
+        try:
+            for _ in range(4):
+                frame = await _mount(comm)
+                assert frame["type"] == "mount", frame
+        finally:
+            await comm.disconnect()
+    created = await sync_to_async(_session_rows)() - before
+    assert len(created) == 1, created
+
+
+async def test_replacement_session_expires_with_the_state_lifetime(staged):
+    """No cookie points at the replacement, so it must not live two weeks."""
+    from django.contrib.sessions.models import Session
+    from django.utils import timezone
+
+    key = await _persisted_then_deleted_session_key()
+    before = await sync_to_async(_session_rows)()
+    with override_settings(DJUST_SERVER_STATE_MAX_AGE=600), _settings():
+        comm = await _connect(SessionStore(key))
+        try:
+            frame = await _mount(comm)
+            assert frame["type"] == "mount", frame
+        finally:
+            await comm.disconnect()
+    [created] = await sync_to_async(_session_rows)() - before
+    row = await sync_to_async(Session.objects.get)(session_key=created)
+    remaining = (row.expire_date - timezone.now()).total_seconds()
+    assert 0 < remaining <= 600, remaining
+
+
+async def test_vanished_cached_db_session_mounts_fresh(staged):
+    """Review M4 of #3206: the cached_db backend takes the same path."""
+    from django.contrib.sessions.backends.cached_db import SessionStore as CachedDB
+
+    def cached_db_key():
+        session = CachedDB()
+        session.create()
+        return session.session_key
+
+    key = await sync_to_async(cached_db_key)()
+    await sync_to_async(CachedDB(key).delete)()
+    with _settings():
+        comm = await _connect(CachedDB(key))
+        try:
+            frame = await _mount(comm)
+            assert frame["type"] == "mount", frame
+            await comm.send_json_to({"type": "event", "event": "increment", "params": {}})
+            reply = await comm.receive_json_from(timeout=5)
+            assert reply["type"] in {"patch", "html_update"}, reply
+        finally:
+            await comm.disconnect()

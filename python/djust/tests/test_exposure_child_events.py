@@ -262,9 +262,14 @@ async def test_parent_child_save_failure_has_no_success_ack(failure, monkeypatch
     await asyncio.wait_for(dispatch, timeout=10)
     # The abandoned save still runs; let the Django thread finish it (FIFO).
     await sync_to_async(lambda: None)()
+    if runtime._explicit_catch_up is not None:
+        # The catch-up turn retries once storage answers; storage still fails
+        # here, so it ends in the terminal error instead of a success frame.
+        await asyncio.wait_for(runtime._explicit_catch_up, timeout=10)
     assert transport.errors
     # A timed-out save is transient: withheld, but no "reload" (#3200).
-    assert [bool(error.get("transient")) for error in transport.errors] == [failure == "timeout"]
+    assert bool(transport.errors[0].get("transient")) is (failure == "timeout")
+    assert not any(error.get("transient") for error in transport.errors[1:])
     assert not any(
         frame.get("type") in ("noop", "patch", "html_update") for frame in transport.sent
     )
@@ -400,9 +405,12 @@ async def test_child_save_timeout_is_withheld_and_lands_late(monkeypatch):
     assert [error.get("transient") for error in transport.errors] == [True]
     assert "reload" not in transport.errors[0]["error"].lower()
     assert not any(frame.get("type") == "embedded_update" for frame in transport.sent)
-    # The abandoned save still runs; let the Django thread finish it (FIFO).
-    await sync_to_async(lambda: None)()
-    assert saved == [True], "the abandoned save must still land"
+    # The abandoned save still runs, and the catch-up turn follows it.
+    await asyncio.wait_for(runtime._explicit_catch_up, timeout=10)
+    assert saved[:1] == [True], "the abandoned save must still land"
+    assert any(
+        f.get("type") == "html_update" and f.get("source") == "async" for f in transport.sent
+    ), "the catch-up turn must send full HTML"
     monkeypatch.setattr(SessionStore, "save", original)
     restored, _, _ = await mount(request.session.session_key)
     assert restored.view_instance._get_child_view("menu").count == 2

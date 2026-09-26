@@ -870,6 +870,18 @@ def test_the_event_save_is_still_bounded():
         for node in ast.parse(src).body
         if isinstance(node, ast.AsyncFunctionDef) and node.name == "_run_explicit_save"
     )
+    # The deadline is read once from the configurable bound ...
+    deadline_reads = [
+        node
+        for node in ast.walk(helper)
+        if isinstance(node, ast.Assign)
+        and [t.id for t in node.targets if isinstance(t, ast.Name)] == ["deadline"]
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == "explicit_state_save_timeout"
+    ]
+    assert len(deadline_reads) == 1, "the explicit helper must read its configured deadline"
+    # ... and bounds both waits: the previous (ordered) save, then this one.
     helper_bounds = [
         node
         for node in ast.walk(helper)
@@ -878,13 +890,12 @@ def test_the_event_save_is_still_bounded():
         and node.func.attr == "wait_for"
         and any(
             keyword.arg == "timeout"
-            and isinstance(keyword.value, ast.Call)
-            and isinstance(keyword.value.func, ast.Name)
-            and keyword.value.func.id == "explicit_state_save_timeout"
+            and isinstance(keyword.value, ast.Name)
+            and keyword.value.id == "deadline"
             for keyword in node.keywords
         )
     ]
-    assert len(helper_bounds) == 1, "the explicit save helper must keep its deadline"
+    assert len(helper_bounds) == 2, "the explicit save helper must keep its deadlines"
     explicit_callers = {
         method.name
         for method in runtime_class.body
