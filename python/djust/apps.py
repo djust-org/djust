@@ -21,6 +21,13 @@ def _running_under_pytest() -> bool:
     return "pytest" in sys.modules or bool(os.environ.get("PYTEST_CURRENT_TEST"))
 
 
+def _log_pytest_skip() -> None:
+    logging.getLogger("djust").debug(
+        "[djust] pytest is running: skipping the hot reload auto-enable, the "
+        "update notice and the filter-bridge warm-up (#3157)"
+    )
+
+
 class DjustConfig(AppConfig):
     name = "djust"
     default_auto_field = "django.db.models.BigAutoField"
@@ -129,7 +136,9 @@ class DjustConfig(AppConfig):
                 "[djust] applying virtual_keyed_ops to the Rust differ failed"
             )
 
-        if not _running_under_pytest():
+        if _running_under_pytest():
+            _log_pytest_skip()
+        else:
             _start_update_notice()
             try:
                 from djust.config import config

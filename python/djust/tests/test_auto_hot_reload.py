@@ -318,3 +318,30 @@ def test_django_setup_outside_pytest_still_starts_the_watcher():
     """The same setup in a plain process (``runserver``) still auto-enables:
     the guard keys on pytest, not on the subprocess or the settings."""
     assert _setup_calls("plain") == 1
+
+
+def test_ready_says_why_it_skipped_under_pytest(caplog):
+    """A downstream project wondering why HVR is off in its test run gets a
+    debug line naming the reason (#3157)."""
+    app = _make_app_config()
+    with (
+        caplog.at_level(logging.DEBUG, logger="djust"),
+        mock.patch("djust.enable_hot_reload") as mock_enable,
+    ):
+        app.ready()
+    assert mock_enable.call_count == 0
+    assert any(
+        "pytest" in r.getMessage() and "hot reload" in r.getMessage() for r in caplog.records
+    )
+
+
+def test_ready_logs_nothing_about_pytest_outside_pytest(caplog):
+    app = _make_app_config()
+    with (
+        _no_pytest_env(),
+        caplog.at_level(logging.DEBUG, logger="djust"),
+        mock.patch("djust.enable_hot_reload"),
+        mock.patch("djust.template_filters._ensure_custom_filters_bridged"),
+    ):
+        app.ready()
+    assert not any("pytest" in r.getMessage() for r in caplog.records)
