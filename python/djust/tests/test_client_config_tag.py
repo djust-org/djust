@@ -232,6 +232,23 @@ def test_tag_emits_ws_path_under_force_script_name():
     assert '<meta name="djust-ws-path" content="/app/ws/live/">' in html
 
 
+@override_settings(FORCE_SCRIPT_NAME="/app", DJUST_WS_PATH="/ws/live/")
+def test_djust_ws_path_setting_pins_the_emitted_path():
+    """Upgrade path (#3186 review): ``DJUST_WS_PATH`` overrides the prefixed
+    default, so a prefixed deployment that routes only the host-root socket
+    keeps working."""
+    set_script_prefix("/app/")
+    html = _render_tag()
+    assert '<meta name="djust-ws-path" content="/ws/live/">' in html
+    assert "/app/ws/live/" not in html
+
+
+@override_settings(DJUST_WS_PATH='/x"<script>/ws/')
+def test_djust_ws_path_setting_is_escaped():
+    html = _render_tag()
+    assert 'content="/x&quot;&lt;script&gt;/ws/"' in html
+
+
 @override_settings(ROOT_URLCONF="tests.api_test_urls_default")
 def test_ws_path_is_escaped():
     """The ws path is HTML-escaped like the API/SSE prefixes."""

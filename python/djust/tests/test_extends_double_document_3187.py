@@ -189,3 +189,46 @@ def test_rendered_html_search_is_unchanged():
     html = "<p>{# </p><div dj-root>x</div><p> #}</p>"
     m = _search_dj_root_open(html, _DJ_ROOT_RE, _DJ_VIEW_RE)
     assert m is not None and html[m.start() :].startswith("<div dj-root>")
+
+
+# ---------------------------------------------------------------------------
+# The masking follows Django's lexer (review of #3214): verbatim blocks are
+# text, the tag name must be exactly ``comment``, and ``{{ }}`` is taken
+# before ``{#``.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        # A {% comment %} split across two verbatim blocks is literal text:
+        # the real root between them must be found.
+        "{% verbatim %}{% comment %}{% endverbatim %}"
+        + _REAL_ROOT
+        + "{% verbatim %}{% endcomment %}{% endverbatim %}",
+        # {{ '{#' }} is a variable token, so no {# ... #} comment opens there.
+        "<p>{{ '{#' }}</p>" + _REAL_ROOT + "<p> #}</p>",
+        # {% comment-box %} is not the comment tag.
+        "{% comment-box %}" + _REAL_ROOT + "{% endcomment %}",
+        # A named verbatim block ends only at its own end tag.
+        "{% verbatim v1 %}{% comment %}{% endverbatim %}{% endverbatim v1 %}" + _REAL_ROOT,
+    ],
+    ids=["verbatim-split-comment", "variable-before-hash", "comment-box", "named-verbatim"],
+)
+def test_masking_follows_djangos_lexer(src):
+    view = SearchView3187()
+    assert view._extract_liveview_root_with_wrapper(src) == _REAL_ROOT
+
+
+def test_comment_with_a_note_and_multiline_body_is_masked():
+    view = SearchView3187()
+    src = '{% comment "why" %}\n<div dj-root>\nfake\n</div>\n{% endcomment %}' + _REAL_ROOT
+    assert view._extract_liveview_root_with_wrapper(src) == _REAL_ROOT
+
+
+def test_hash_comment_does_not_span_lines():
+    """As in Django, ``{# ... #}`` is one line; across lines it is text."""
+    from djust.mixins.template import _mask_template_comments
+
+    src = "{# a\n<div dj-root> #}"
+    assert _mask_template_comments(src) == src

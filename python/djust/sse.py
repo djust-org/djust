@@ -48,6 +48,7 @@ import json
 import logging
 import threading
 import uuid
+import weakref
 from typing import Any, AsyncIterator, Dict, Optional, cast
 
 from asgiref.sync import sync_to_async
@@ -126,11 +127,39 @@ _sse_reserved: Dict[str, int] = {}
 _sse_reserved_total = 0
 
 
+def _owner_key(user_pk: Any, session_key: Optional[str]) -> tuple:
+    """The principal an SSE session is bound to (Finding #24), as one value.
+
+    The single builder for the owner tuple: the stream GET and the registry's
+    conflict checks both go through it, so they cannot drift (#3164).
+    """
+    if user_pk is not None:
+        return ("user", user_pk)
+    return ("session", session_key)
+
+
 def _owner_identity(session: "SSESession") -> tuple:
-    """The principal a session is bound to (Finding #24)."""
-    if session._owner_user_pk is not None:
-        return ("user", session._owner_user_pk)
-    return ("session", session._owner_session_key)
+    """The principal ``session`` is bound to."""
+    return _owner_key(session._owner_user_pk, session._owner_session_key)
+
+
+def _blocks_id_reuse(existing: Optional["SSESession"], owner: tuple) -> bool:
+    """Whether ``existing`` keeps another owner from taking its id (#3164).
+
+    Only a LIVE session does. One whose stream has closed or is closing (in
+    its linger window, or shut down) is replaceable: that is a tab whose owner
+    changed (a login or logout elsewhere rotated the session) reconnecting
+    with the id it already had.
+    """
+    if existing is None or _owner_identity(existing) == owner:
+        return False
+    return existing.active and not existing._stream_closed
+
+
+def _sse_load() -> int:
+    """Registered sessions plus in-flight reservations (what the global cap counts)."""
+    with _sse_registry_lock:
+        return len(_sse_sessions) + _sse_reserved_total
 
 
 def _reserve_sse_slot(cap_key: str, session_id: str, owner: tuple) -> Optional[str]:
@@ -145,8 +174,7 @@ def _reserve_sse_slot(cap_key: str, session_id: str, owner: tuple) -> Optional[s
     max_total = _max_sessions_total()
     max_client = _max_sessions_per_client()
     with _sse_registry_lock:
-        existing = _sse_sessions.get(session_id)
-        if existing is not None and _owner_identity(existing) != owner:
+        if _blocks_id_reuse(_sse_sessions.get(session_id), owner):
             return "conflict"
         if len(_sse_sessions) + _sse_reserved_total >= max_total:
             return "total"
@@ -160,12 +188,23 @@ def _reserve_sse_slot(cap_key: str, session_id: str, owner: tuple) -> Optional[s
 
 def _release_reservation_locked(cap_key: str) -> None:
     global _sse_reserved_total
-    left = _sse_reserved.get(cap_key, 0) - 1
-    if left > 0:
-        _sse_reserved[cap_key] = left
+    held = _sse_reserved.get(cap_key, 0)
+    if held <= 0 or _sse_reserved_total <= 0:
+        # A second release of one reservation. Refuse it loudly rather than
+        # clamp: a silent clamp would hide the bug and could free a slot that
+        # another GET still holds.
+        logger.error(
+            "SSE: reservation for %s released twice (held=%d, total=%d); ignoring",
+            sanitize_for_log(cap_key),
+            held,
+            _sse_reserved_total,
+        )
+        return
+    if held > 1:
+        _sse_reserved[cap_key] = held - 1
     else:
-        _sse_reserved.pop(cap_key, None)
-    _sse_reserved_total = max(0, _sse_reserved_total - 1)
+        del _sse_reserved[cap_key]
+    _sse_reserved_total -= 1
 
 
 def _release_sse_slot(cap_key: str) -> None:
@@ -183,8 +222,7 @@ def _register_sse_session(cap_key: str, session_id: str, session: "SSESession") 
     """
     with _sse_registry_lock:
         _release_reservation_locked(cap_key)
-        existing = _sse_sessions.get(session_id)
-        if existing is not None and _owner_identity(existing) != _owner_identity(session):
+        if _blocks_id_reuse(_sse_sessions.get(session_id), _owner_identity(session)):
             return False
         _sse_sessions[session_id] = session
         return True
@@ -195,6 +233,65 @@ def _unregister_sse_session(session_id: str, session: "SSESession") -> None:
     with _sse_registry_lock:
         if _sse_sessions.get(session_id) is session:
             del _sse_sessions[session_id]
+
+
+class _StreamGuard:
+    """Unregisters a mounted SSE session whose stream never started (#3164).
+
+    A registered session is normally removed by its stream generator's
+    ``finally``. If the client disconnects before Django starts iterating the
+    response, the generator never runs, so that ``finally`` never runs either
+    and the session would count against the caps forever. Django calls the
+    response's ``close()`` (and the guard's finalizer is the backstop when the
+    handler is cancelled before it can), which drops the session only if the
+    stream had not started; a started stream cleans up after itself.
+    """
+
+    def __init__(self, session_id: str, session: Optional["SSESession"]) -> None:
+        self._session_id = session_id
+        self._session = session
+        self._lock = threading.Lock()
+        self._started = False
+        self._abandoned = False
+
+    def start(self) -> bool:
+        """Mark the stream started; ``False`` if it was already abandoned."""
+        with self._lock:
+            if self._abandoned:
+                return False
+            self._started = True
+            return True
+
+    def abandon(self) -> None:
+        """Drop the session now if its stream never started. Idempotent."""
+        with self._lock:
+            if self._started or self._abandoned:
+                return
+            self._abandoned = True
+            session = self._session
+        if session is not None:
+            session._stream_closed = True
+            _unregister_sse_session(self._session_id, session)
+
+
+class _SSEStream:
+    """The SSE response body: the stream generator plus its ``_StreamGuard``.
+
+    ``StreamingHttpResponse`` iterates ``__aiter__`` and, because this object
+    has ``close()``, calls it from ``response.close()``.
+    """
+
+    def __init__(self, agen: AsyncIterator[str], guard: _StreamGuard) -> None:
+        self._agen = agen
+        self._guard = guard
+        # Backstop for a handler cancelled before it closes the response.
+        weakref.finalize(self, guard.abandon)
+
+    def __aiter__(self) -> AsyncIterator[str]:
+        return self._agen
+
+    def close(self) -> None:
+        self._guard.abandon()
 
 
 class SSESession:
@@ -222,6 +319,10 @@ class SSESession:
         except RuntimeError:
             self._loop = None
         self.active = True
+        # #3164: set when this session's stream closes (before its linger), so
+        # another owner may take the id; ``active`` stays True through the
+        # linger so in-flight POSTs still dispatch.
+        self._stream_closed = False
         self._rate_limiter: ConnectionRateLimiter = ConnectionRateLimiter()
         self._client_ip: Optional[str] = None
         # Serialize POST turns separately from render/result application.
@@ -717,10 +818,9 @@ class DjustSSEStreamView(View):
         # mounting count against the caps; every exit below releases it or
         # converts it into the registration.
         cap_key = _client_cap_key(request)
-        owner = (
-            ("user", owner_user_pk) if owner_user_pk is not None else ("session", owner_session_key)
+        refusal = _reserve_sse_slot(
+            cap_key, session_id, _owner_key(owner_user_pk, owner_session_key)
         )
-        refusal = _reserve_sse_slot(cap_key, session_id, owner)
         if refusal == "conflict":
             logger.warning(
                 "SSE: rejected stream GET for session %s — the id is live under another owner",
@@ -729,8 +829,8 @@ class DjustSSEStreamView(View):
             return JsonResponse({"error": "Session ID already in use."}, status=409)
         if refusal == "total":
             logger.warning(
-                "SSE: global session cap reached (%d) — rejecting stream GET",
-                len(_sse_sessions),
+                "SSE: global session cap reached (%d registered or mounting) — rejecting stream GET",
+                _sse_load(),
             )
             return JsonResponse(
                 {"error": "Server is at capacity. Please try again later."},
@@ -845,11 +945,18 @@ class DjustSSEStreamView(View):
             if reserved:
                 _release_sse_slot(cap_key)
 
-        async def event_stream() -> AsyncIterator[str]:
-            # Send connection acknowledgment immediately
-            yield f"data: {json.dumps({'type': 'sse_connect', 'session_id': session_id})}\n\n"
+        guard = _StreamGuard(session_id, session if mounted else None)
 
+        async def event_stream() -> AsyncIterator[str]:
+            # #3164: everything after registration, the ack included, is inside
+            # the try, so a client that reads the ack and goes away (the
+            # generator is closed at that first yield) still unregisters.
+            if not guard.start():
+                return  # the response was closed before streaming began
             try:
+                # Send connection acknowledgment immediately
+                yield f"data: {json.dumps({'type': 'sse_connect', 'session_id': session_id})}\n\n"
+
                 # Drain any messages already queued before streaming begins (the
                 # "mount"/"error"/"navigate" pushed synchronously above). When the
                 # mount failed, shutdown() already queued the sentinel, so this
@@ -873,6 +980,8 @@ class DjustSSEStreamView(View):
                         # SSE keepalive comment — prevents proxy timeout
                         yield ": keepalive\n\n"
             finally:
+                # Closing: another owner may now take this id (#3164).
+                session._stream_closed = True
                 if mounted:
                     # Linger briefly so in-flight event POSTs can still find the
                     # session (only meaningful for registered/mounted sessions).
@@ -883,7 +992,7 @@ class DjustSSEStreamView(View):
                 logger.debug("SSE: session %s closed", sanitize_for_log(session_id))
 
         response = StreamingHttpResponse(
-            event_stream(),
+            _SSEStream(event_stream(), guard),
             content_type="text/event-stream; charset=utf-8",
         )
         response["Cache-Control"] = "no-cache"

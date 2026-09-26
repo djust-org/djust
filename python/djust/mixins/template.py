@@ -347,23 +347,68 @@ def _find_root_close(html: str, match: "re.Match[str]") -> "tuple[int, int] | tu
 # as one: the child's VDOM template became the slice from the commented tag to
 # the real root's close, and the GET spliced a second full document into the
 # base's ``<main>``. ``{# #}`` cannot span lines, as in Django's lexer.
-_TEMPLATE_COMMENT_RE = re.compile(
-    r"\{%-?\s*comment\b.*?%\}.*?\{%-?\s*endcomment\s*-?%\}|\{#[^\n]*?#\}",
-    re.DOTALL,
-)
+# Django's template lexer token pattern (``django.template.base.tag_re``):
+# no DOTALL, so a tag never spans lines, and the leftmost token wins, so
+# ``{{ '{#' }}`` is a variable, not the start of a comment.
+_DJANGO_TOKEN_RE = re.compile(r"({%.*?%}|{{.*?}}|{#.*?#})")
 
 
 def _mask_template_comments(template: str) -> str:
     """``template`` with every Django template comment replaced by NULs of the
     same length, so positions found in it index the original (#3187).
 
-    Only for template SOURCE: rendered HTML carries no template comments, and
-    literal ``{# #}`` text on a rendered page (a docs page showing template
-    syntax) must stay visible to the root search.
+    Tokenizes the way Django's ``Lexer`` and the ``comment`` tag do:
+
+    * ``{# ... #}`` on one line is a comment.
+    * ``{% comment %}`` (tag name exactly ``comment``, optional note, so
+      ``{% comment-box %}`` is not one) runs to the first ``{% endcomment %}``,
+      as ``parser.skip_past("endcomment")`` does. An unclosed one is left
+      unmasked: Django refuses that template anyway.
+    * Inside ``{% verbatim %}`` ... its matching ``{% endverbatim %}`` nothing
+      is a tag, so comment syntax there is literal text and stays visible.
+
+    Remaining limits: custom tags that swallow raw content the way ``comment``
+    does (a third-party ``{% raw %}``-style block) are not recognized, and a
+    ``{% comment %}`` inside such a block would still be masked. Only for
+    template SOURCE: rendered HTML carries no template comments, and literal
+    ``{# #}`` text on a rendered page (a docs page showing template syntax)
+    must stay visible to the root search.
     """
     if "{#" not in template and "comment" not in template:
         return template
-    return _TEMPLATE_COMMENT_RE.sub(lambda m: "\x00" * len(m.group(0)), template)
+    spans: "list[tuple[int, int]]" = []
+    verbatim_end: Optional[str] = None
+    comment_start: Optional[int] = None
+    for m in _DJANGO_TOKEN_RE.finditer(template):
+        token = m.group(0)
+        is_block = token.startswith("{%")
+        content = token[2:-2].strip() if is_block else ""
+        if verbatim_end is not None:
+            if is_block and content == verbatim_end:
+                verbatim_end = None
+            continue
+        if comment_start is not None:
+            if is_block and content == "endcomment":
+                spans.append((comment_start, m.end()))
+                comment_start = None
+            continue
+        if token.startswith("{#"):
+            spans.append(m.span())
+        elif is_block:
+            if content[:9] in ("verbatim", "verbatim "):
+                verbatim_end = "end" + content
+            elif content.split(None, 1)[:1] == ["comment"]:
+                comment_start = m.start()
+    if not spans:
+        return template
+    out: "list[str]" = []
+    last = 0
+    for a, b in spans:
+        out.append(template[last:a])
+        out.append("\x00" * (b - a))
+        last = b
+    out.append(template[last:])
+    return "".join(out)
 
 
 def _search_template_root_open(template: str) -> "Optional[re.Match[str]]":

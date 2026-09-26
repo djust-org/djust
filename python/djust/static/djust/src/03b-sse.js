@@ -43,6 +43,10 @@ class LiveViewSSE {
         // Session ID is generated client-side; the server stores it as the
         // lookup key so event POSTs can reach the right session.
         this.sessionId = this._generateSessionId();
+        // #3164: set when this stream's sse_connect ack arrives; kept so a
+        // fresh-id retry can remount with the same params.
+        this._streamAcked = false;
+        this._connectParams = params;
         // Resolved via window.djust.sseUrl() — honors FORCE_SCRIPT_NAME and
         // custom mount prefixes (closes #992). Default '/djust/' preserved
         // for deployments that don't use {% djust_client_config %}.
@@ -112,6 +116,10 @@ class LiveViewSSE {
                 this.stats.received++;
                 this.stats.receivedBytes += event.data.length;
                 const data = JSON.parse(event.data);
+                if (data && data.type === 'sse_connect') {
+                    this._streamAcked = true;
+                    this._freshIdRetried = false;
+                }
                 // ``handleMessage`` is the queue-wrapper (#1098); its
                 // returned promise is the chain-tail with an internal
                 // ``.catch`` that already logs and swallows. The returned
@@ -129,6 +137,24 @@ class LiveViewSSE {
             if (this.eventSource && pageUrl !== window.location.pathname + window.location.search) {
                 this.disconnect();
                 this.connect(this.primaryViewPath, Object.fromEntries(new URLSearchParams(window.location.search)));
+                return;
+            }
+            // #3164: the server refuses (409) a session id that is live under
+            // another owner, e.g. after a login or logout in another tab
+            // rotated the session. EventSource never retries a non-200, so
+            // when a connection fails before its sse_connect ack, retry once
+            // with a fresh id. The server acks every (re)connection, so a
+            // drop (EventSource about to reconnect by itself) clears the ack
+            // and the reconnect must earn its own.
+            if (this.eventSource && this.eventSource.readyState !== EventSource.CLOSED) {
+                this._streamAcked = false;
+            }
+            if (this.eventSource && this.eventSource.readyState === EventSource.CLOSED
+                && !this._streamAcked && !this._freshIdRetried) {
+                this._freshIdRetried = true;
+                const retryParams = this._connectParams || {};
+                this.disconnect();
+                this.connect(this.primaryViewPath, retryParams);
                 return;
             }
             // EventSource auto-reconnects; we only disable on persistent failure.

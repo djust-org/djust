@@ -154,10 +154,17 @@ def _bind_identity(request, *, user=None, session_key=None):
     return request
 
 
+# Responses of streams a test keeps open. Since #3164 a stream response that
+# is dropped (or closed) before Django iterates it models a client that
+# disconnected first, and its session is unregistered.
+_OPEN_STREAMS: list = []
+
+
 @pytest.fixture(autouse=True)
 def _clear_sessions():
     _sse_sessions.clear()
     yield
+    _OPEN_STREAMS.clear()
     _sse_sessions.clear()
 
 
@@ -329,7 +336,7 @@ class TestF24OwnerCapture:
 
         view = DjustSSEStreamView()
         with patch("djust.runtime.ViewRuntime.dispatch_mount", new=_fake_mount_ok):
-            await view.get(request, session_id=sid)
+            _OPEN_STREAMS.append(await view.get(request, session_id=sid))
 
         assert sid in _sse_sessions
         bound = _sse_sessions[sid]
@@ -366,6 +373,7 @@ class TestF25Caps:
             for _ in range(2):  # fill the cap
                 sid = str(uuid.uuid4())
                 resp = await view.get(self._get_request(sid, user=_auth_user(7)), session_id=sid)
+                _OPEN_STREAMS.append(resp)
                 assert isinstance(resp, StreamingHttpResponse)
 
             assert len(_sse_sessions) == 2
@@ -388,7 +396,9 @@ class TestF25Caps:
         with patch("djust.runtime.ViewRuntime.dispatch_mount", new=_fake_mount_ok):
             for _ in range(2):
                 sid = str(uuid.uuid4())
-                await view.get(self._get_request(sid, user=_auth_user(7)), session_id=sid)
+                _OPEN_STREAMS.append(
+                    await view.get(self._get_request(sid, user=_auth_user(7)), session_id=sid)
+                )
 
             other_sid = str(uuid.uuid4())
             resp = await view.get(
@@ -405,7 +415,9 @@ class TestF25Caps:
         view = DjustSSEStreamView()
         with patch("djust.runtime.ViewRuntime.dispatch_mount", new=_fake_mount_ok):
             sid = str(uuid.uuid4())
-            await view.get(self._get_request(sid, user=_auth_user(7)), session_id=sid)
+            _OPEN_STREAMS.append(
+                await view.get(self._get_request(sid, user=_auth_user(7)), session_id=sid)
+            )
             assert len(_sse_sessions) == 1
 
             over_sid = str(uuid.uuid4())

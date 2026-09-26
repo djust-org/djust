@@ -218,9 +218,17 @@ def _resolve_ws_path() -> str:
     ``FORCE_SCRIPT_NAME="/app"``, giving ``/app/ws/live/``. The ASGI router
     (or a prefix-stripping proxy) must serve that path; see the deployment
     guide's sub-path section.
+
+    ``settings.DJUST_WS_PATH``, when set, is emitted verbatim instead: an
+    operator whose prefixed deployment still routes only the host-root socket
+    pins it to ``"/ws/live/"`` (the pre-#3186 path).
     """
+    from django.conf import settings
     from django.urls import get_script_prefix
 
+    pinned = getattr(settings, "DJUST_WS_PATH", None)
+    if pinned:
+        return str(pinned)
     prefix = get_script_prefix() or "/"
     if not prefix.endswith("/"):
         prefix = prefix + "/"

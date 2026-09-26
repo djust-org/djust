@@ -409,6 +409,23 @@ The server must then answer the WebSocket at `/app/ws/live/`. Pick one:
 Whichever you choose, the nginx `location` for the WebSocket upgrade must
 cover the prefixed path (`location /app/ws/`), not only `/ws/`.
 
+To emit a different path, set `DJUST_WS_PATH` in settings; it is used
+verbatim in place of the script prefix plus `ws/live/`.
+
+**Upgrade note (#3186).** Before this change the client always connected to
+the host-root `/ws/live/`, so an existing prefixed deployment may route only
+that path (for example `location /ws/`) and not `/app/ws/live/`. After
+upgrading, the client connects to `/app/ws/live/` first. If that first
+handshake fails before the socket ever opens, the client retries once at
+`/ws/live/` and logs a `console.warn` naming the path it tried, so such a
+deployment keeps its WebSocket, but it pays one failed handshake per page
+load. To remove it, either route `<prefix>/ws/live/` to djust as above, or pin
+the old path with `DJUST_WS_PATH = "/ws/live/"`. The fallback only fires on a
+socket that never opened, and only once per page, so a correctly routed
+deployment never uses it. A per-site shim that rewrote the socket URL to add
+the prefix (djust-docs' `ws-prefix.js`, for example) is now redundant; it is
+harmless, because it rewrites only an exact `/ws/live/`.
+
 ## Database Connection Pooling
 
 djust apps using Postgres need to manage DB connections carefully — every web process and every Celery worker opens its own connections, and the count multiplies fast. Three layers, in order of effort:

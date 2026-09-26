@@ -23,6 +23,8 @@ function mountPage({ meta = null, url = 'http://localhost:8000/app/search/', pre
     );
     const { window } = dom;
     const opened = [];
+    const sockets = [];
+    const warnings = [];
     class MockWebSocket {
         static CONNECTING = 0;
         static OPEN = 1;
@@ -32,16 +34,20 @@ function mountPage({ meta = null, url = 'http://localhost:8000/app/search/', pre
             opened.push(wsUrl);
             this.url = wsUrl;
             this.readyState = MockWebSocket.CONNECTING;
+            sockets.push(this);
         }
         send() {}
         close() {}
     }
     window.WebSocket = MockWebSocket;
-    window.console = { log: () => {}, error: () => {}, warn: () => {}, debug: () => {}, info: () => {} };
+    window.console = {
+        log: () => {}, error: () => {}, debug: () => {}, info: () => {},
+        warn: (...a) => warnings.push(a),
+    };
     if (preInit) preInit(window);
     window.eval(clientCode);
     window.document.dispatchEvent(new window.Event('DOMContentLoaded'));
-    return { window, opened };
+    return { window, opened, sockets, warnings };
 }
 
 describe('#3186 WebSocket path follows the script prefix', () => {
@@ -83,5 +89,57 @@ describe('#3186 WebSocket path follows the script prefix', () => {
         const ws = new window.djust.LiveViewWebSocket();
         ws.connect('ws://other.local/custom/');
         expect(opened).toContain('ws://other.local/custom/');
+    });
+});
+
+describe('#3186 upgrade path: one fallback to /ws/live/ when the prefixed handshake fails', () => {
+    // A socket that never opened and closed: the handshake failed.
+    const failHandshake = (ws) => { ws.readyState = 3; ws.onclose({ code: 1006 }); };
+
+    it('retries once at /ws/live/ and warns, before any backoff', () => {
+        const { window, opened, sockets, warnings } = mountPage({ meta: '/app/ws/live/' });
+        expect(opened).toEqual(['ws://localhost:8000/app/ws/live/']);
+        failHandshake(sockets[0]);
+
+        expect(opened).toEqual(['ws://localhost:8000/app/ws/live/', 'ws://localhost:8000/ws/live/']);
+        expect(window.djust.wsPath).toBe('/ws/live/');
+        const warn = warnings.find((w) => String(w[0]).includes('failed before opening'));
+        expect(warn).toBeTruthy();
+        // Parameterized (%s), not interpolated into the format string.
+        expect(warn[0]).toContain('%s');
+        expect(warn[1]).toBe('/app/ws/live/');
+        expect(warn[0]).toContain('DJUST_WS_PATH');
+    });
+
+    it('falls back only once: a failed /ws/live/ goes to the normal backoff', () => {
+        const { opened, sockets } = mountPage({ meta: '/app/ws/live/' });
+        failHandshake(sockets[0]);
+        failHandshake(sockets[1]);
+        // No immediate third socket: the retry is the scheduled reconnect.
+        expect(opened).toHaveLength(2);
+    });
+
+    it('does not fall back after the prefixed socket has opened once', () => {
+        const { opened, sockets } = mountPage({ meta: '/app/ws/live/' });
+        sockets[0].readyState = 1;
+        sockets[0].onopen({});
+        failHandshake(sockets[0]);
+        expect(opened).toEqual(['ws://localhost:8000/app/ws/live/']);
+    });
+
+    it('does not fall back when the path already is /ws/live/', () => {
+        const { opened, sockets, warnings } = mountPage({ meta: '/ws/live/' });
+        failHandshake(sockets[0]);
+        expect(opened).toEqual(['ws://localhost:8000/ws/live/']);
+        expect(warnings.some((w) => String(w[0]).includes('failed before opening'))).toBe(false);
+    });
+
+    it('does not fall back for an explicit connect(url)', () => {
+        const { window, opened, sockets } = mountPage({ meta: '/app/ws/live/' });
+        const ws = new window.djust.LiveViewWebSocket();
+        ws.connect('ws://localhost:8000/custom/');
+        failHandshake(sockets[sockets.length - 1]);
+        expect(opened[opened.length - 1]).toBe('ws://localhost:8000/custom/');
+        expect(opened.filter((u) => u === 'ws://localhost:8000/ws/live/')).toHaveLength(0);
     });
 });
