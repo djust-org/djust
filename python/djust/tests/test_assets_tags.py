@@ -294,3 +294,49 @@ def test_debug_rehashes_an_edited_vendored_file(tmp_path):
         source.write_bytes(rebuilt)
         os.utime(source, ns=(before + 10**9, before + 10**9))
         assert f'integrity="{sri(rebuilt)}"' in asset_tags("test-lib")
+
+
+def test_debug_rehashes_an_edited_stored_file_no_finder_locates(tmp_path):
+    """#3145: DEBUG, and no finder has the file, so the hash comes from static
+    storage: editing the stored file must change the integrity without a
+    restart."""
+    import os
+
+    root = tmp_path / "collected"
+    (root / "testlib").mkdir(parents=True)
+    stored = root / "testlib" / "lib.js"
+    stored.write_bytes(CONTENT)
+    with (
+        _settings(tmp_path),
+        override_settings(DEBUG=True, STATIC_ROOT=str(root), STATICFILES_DIRS=[]),
+    ):
+        assert f'integrity="{sri(CONTENT)}"' in asset_tags("test-lib")
+        edited = b"console.log('recollected');\n"
+        before = stored.stat().st_mtime_ns
+        stored.write_bytes(edited)
+        os.utime(stored, ns=(before + 10**9, before + 10**9))
+        assert f'integrity="{sri(edited)}"' in asset_tags("test-lib")
+
+
+def test_debug_storage_hash_is_not_cached_when_storage_has_no_mtime(tmp_path, monkeypatch):
+    """#3145: a storage backend without get_modified_time is re-read every
+    time in DEBUG rather than pinned for the life of the process."""
+    from django.contrib.staticfiles.storage import staticfiles_storage
+
+    root = tmp_path / "collected"
+    (root / "testlib").mkdir(parents=True)
+    stored = root / "testlib" / "lib.js"
+    stored.write_bytes(CONTENT)
+
+    def _unsupported(name):
+        raise NotImplementedError
+
+    with (
+        _settings(tmp_path),
+        override_settings(DEBUG=True, STATIC_ROOT=str(root), STATICFILES_DIRS=[]),
+    ):
+        monkeypatch.setattr(staticfiles_storage, "get_modified_time", _unsupported)
+        assert f'integrity="{sri(CONTENT)}"' in asset_tags("test-lib")
+        edited = b"console.log('recollected');\n"
+        stored.write_bytes(edited)
+        assert f'integrity="{sri(edited)}"' in asset_tags("test-lib")

@@ -56,6 +56,35 @@ def test_collectstatic_writes_nothing_without_the_setting(tmp_path):
     assert not list(tmp_path.rglob("*.cdx.json"))
 
 
+@pytest.mark.parametrize("value", [42, ["a.cdx.json"], object()])
+def test_collectstatic_rejects_a_non_path_sbom_setting_before_collecting(tmp_path, value):
+    """#3146: B012 does not run under collectstatic's own checks by default,
+    so the override validates the setting itself, with B012's message, and
+    before anything is collected."""
+    static_dir, _ = write_asset(tmp_path)
+    root = tmp_path / "collected"
+    with override_settings(
+        STATIC_ROOT=str(root),
+        STATICFILES_DIRS=[str(static_dir)],
+        DJUST_SBOM_PATH=value,
+        INSTALLED_APPS=APPS_DJUST_FIRST,
+    ):
+        with pytest.raises(CommandError, match="str or os.PathLike") as raised:
+            call_command("collectstatic", interactive=False, verbosity=0)
+        (b012,) = check_sbom_path(None)
+    assert str(raised.value) == b012.msg
+    assert not root.exists()
+
+
+def test_b012_runs_under_collectstatics_system_checks(tmp_path):
+    """#3146: collectstatic runs only Tags.staticfiles checks; B012 carries
+    that tag, so a served-directory SBOM path stops it before collecting."""
+    from django.core.checks import Tags, run_checks
+
+    with override_settings(STATIC_ROOT=str(tmp_path), DJUST_SBOM_PATH=str(tmp_path / "a.cdx.json")):
+        assert "djust.B012" in ids(run_checks(tags=[Tags.staticfiles]))
+
+
 def test_collectstatic_writes_the_sbom_when_configured(tmp_path):
     out = tmp_path / "private" / "djust-assets.cdx.json"
     with override_settings(

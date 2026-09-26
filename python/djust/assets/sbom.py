@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import os
 import re
 import subprocess
 import sys
@@ -276,6 +277,17 @@ def served_directory_containing(path: Path) -> Path | None:
         root = Path(candidate).resolve()
         if target == root or root in target.parents:
             return root
+    return None
+
+
+def sbom_setting_type_error(value: object) -> str | None:
+    """Why ``DJUST_SBOM_PATH`` can't name a file, or None when it can (or is
+    unset). Shared by check djust.B012 and ``collectstatic`` (#3146)."""
+    if value and not isinstance(value, (str, os.PathLike)):
+        return (
+            f"DJUST_SBOM_PATH must be a str or os.PathLike naming a file, "
+            f"not {type(value).__name__} ({value!r})."
+        )
     return None
 
 
