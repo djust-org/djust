@@ -1,6 +1,6 @@
 # Event Handlers
 
-All handlers require `@event_handler()` decorator and `**kwargs`.
+All handlers require the `@event_handler()` decorator. `manage.py check` compares each template binding with its handler (`djust.T019`–`T022`).
 
 The rules below are the default legacy policy. For new code, prefer the strict
 policy (`@event_handler(parameter_policy="strict")`, or project-wide
@@ -39,6 +39,8 @@ class ItemView(LiveView):
 ```
 
 Legacy policy:
+
+Legacy `dj-input` and `dj-change` also send `field` and `_target`, and `dj-submit` sends `_target` with the form fields: keep `**kwargs` on those handlers, or declare the names.
 
 <!-- djust-example: skip -- legacy-policy handler fragments with no view class; import-checked by scripts/check-doc-snippets.py -->
 ```python
@@ -85,6 +87,6 @@ Template bindings:
 
 Rules:
 - `value` is the magic parameter name for `dj-input`/`dj-change` events
-- Always provide default values for all parameters
+- Give a parameter a default when a binding may omit it
 - `data-*` attributes are converted: `data-item-id` -> `item_id`
 - Type hints enable automatic coercion: `item_id: int` converts `"5"` to `5`

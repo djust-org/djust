@@ -1,6 +1,6 @@
 # ADR-034: Typed component bindings and instance-scoped events
 
-**Status**: Accepted: gates C1–C4 closed on `feat/adr-034-037`, with evidence in the [acceptance review](component-conventions-implementation.md#adr-034-acceptance-review--c4); acceptance is confirmed at that branch's review. `djust.components.interactive` is available from djust 1.3. CR (Step R) is closed: C1–C4 revealed no retirement target, as this ADR expected.
+**Status**: Accepted — delivery verified on a local djust-docs build pinned to 1.3.0rc3 that renders the 1.3 branch's docs (2026-09-25; the docs published with 1.3.0rc3 failed djust-docs' nav gate on the unlisted accounts guide, fixed in #3138; production docs.djust.org follows 1.3.0). Gates C1–C4 closed on `feat/adr-034-037`, with evidence in the [acceptance review](component-conventions-implementation.md#adr-034-acceptance-review--c4); acceptance is confirmed at that branch's review. `djust.components.interactive` is available from djust 1.3. CR (Step R) is closed: C1–C4 revealed no retirement target, as this ADR expected.
 **Date**: 2026-09-19
 **Deciders**: Project maintainers
 **Evidence baseline**: `40786f668` on `feat/components-catalogue`.

@@ -1160,8 +1160,8 @@ BEST_PRACTICES = {
     "event_handlers": {
         "rules": [
             "All handlers MUST use @event_handler() decorator",
-            "All handlers MUST accept **kwargs",
-            "All handler params MUST have default values",
+            "Declare the parameters the binding sends; manage.py check reports a mismatch (djust.T020)",
+            "Under the legacy policy dj-input/dj-change also send field and _target, and dj-submit sends _target with the form fields: declare them or keep **kwargs",
             "Input/change events use 'value' parameter name",
             "Button data attributes: data-item-id='5' -> item_id=5",
             "Form submission: all fields as kwargs",
@@ -1379,19 +1379,22 @@ BEST_PRACTICES = {
     },
     "event_handler_signature": {
         "description": (
-            "All event handlers MUST accept **kwargs to handle extra parameters "
-            "sent by the client (data-* attributes, form fields, etc.). Missing "
-            "**kwargs causes TypeError when unexpected params arrive."
+            "Declare the parameters the binding sends. Under the strict policy a "
+            "closed, annotated signature is the contract and **kwargs is not needed. "
+            "Under the legacy policy dj-input and dj-change also send `field` and "
+            "`_target`, and dj-submit sends `_target` with the form fields, so "
+            "declare them or keep **kwargs. `manage.py "
+            "check` reports a binding its handler would reject as djust.T020."
         ),
         "correct": (
-            "@event_handler()\n"
-            "def delete_item(self, item_id: int = 0, **kwargs):\n"
+            '@event_handler(parameter_policy="strict")\n'
+            "def delete_item(self, item_id: int):\n"
             "    Item.objects.filter(id=item_id).delete()"
         ),
         "wrong": (
             "@event_handler()\n"
-            "def delete_item(self, item_id: int = 0):  # Missing **kwargs!\n"
-            "    Item.objects.filter(id=item_id).delete()"
+            "def delete_item(self, **kwargs):  # a catch-all hides a misspelled parameter\n"
+            '    Item.objects.filter(id=kwargs.get("itemid")).delete()'
         ),
     },
     "common_pitfalls": [
@@ -1426,13 +1429,18 @@ BEST_PRACTICES = {
         },
         {
             "id": 3,
-            "problem": "Event handler missing **kwargs",
+            "problem": "A binding sends parameters its handler does not declare",
             "why": (
-                "The client sends additional context (data-* attributes, form fields) as "
-                "keyword arguments. Without **kwargs, Python raises TypeError on unexpected args."
+                "Under the strict policy the browser sends only declared parameters "
+                "and rejects the rest; under legacy, dj-input/dj-change also send field "
+                "and _target and dj-submit sends _target, so an event a closed handler "
+                "does not declare is rejected before the handler runs."
             ),
-            "solution": "Add **kwargs to every event handler signature.",
-            "related_check": "djust.V004",
+            "solution": (
+                "Run manage.py check: djust.T020 names the binding and the handler. "
+                "Declare the parameter, or keep **kwargs on legacy input handlers."
+            ),
+            "related_check": "djust.T020",
         },
         {
             "id": 4,

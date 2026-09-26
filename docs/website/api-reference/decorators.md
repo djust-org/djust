@@ -78,8 +78,9 @@ def raw_handler(self, value: str = "", **kwargs):
 
 **Rules:**
 
-- Always accept `**kwargs` — djust passes extra metadata
-- Always provide default values for all parameters
+- Declare the parameters the binding sends; `manage.py check` reports a mismatch (`djust.T020`)
+- Under the legacy policy, `dj-input` and `dj-change` also send `field` and `_target`, and `dj-submit` sends `_target` with the form fields: keep `**kwargs` on those handlers, or declare the names
+- Give a parameter a default when a binding may omit it
 - `value` is the magic parameter name for `dj-input` and `dj-change` events
 - `data-item-id` becomes `item_id` (kebab-case → snake_case)
 

@@ -1,6 +1,6 @@
 # ADR-037: Shared event-contract checks and executable documentation
 
-**Status**: Proposed
+**Status**: Accepted — delivery verified on a local djust-docs build pinned to 1.3.0rc3 that renders the 1.3 branch's docs (2026-09-25; the docs published with 1.3.0rc3 failed djust-docs' nav gate on the unlisted accounts guide, fixed in #3138; production docs.djust.org follows 1.3.0). D1–D3 and Step R are closed, with evidence in the [implementation tracker](component-conventions-implementation.md#adr-037--checks-and-executable-documentation). Step R's deletion PRs are #3122 (rows 1–23) and the ADR-037 D3 PR (rows 24–26). The static-analysis limits at acceptance are recorded below.
 **Date**: 2026-09-19
 **Deciders**: Project maintainers
 **Evidence baseline**: `0d1aeb882` on `feat/components-catalogue`.
@@ -311,10 +311,15 @@ All rows are owner decisions (2026-09-25).
 | 20 | `python/djust/templatetags/live_tags.py:1375` `_LIVE_RENDER_EVENT_ATTRS` | A hand-written list of event directives for the embedded-child stamp | RETIRE | Derived from `DIRECTIVES` (directives whose client binding attaches owner context) plus `dj-hook`. |
 | 21 | `python/djust/schema.py:21` `DIRECTIVES` | The AI schema's directive table | KEEP | Prose for AI guidance. A test pins its event-directive names and generated parameters to `_template_bindings.DIRECTIVES`. |
 | 22 | `python/djust/checks/templates.py:985–1000` (T010) | `dj-click` with navigation data attributes | KEEP | A heuristic, not name resolution. |
-| 23 | `python/djust/components/gallery/views.py:589` | The catalogue preview's JS shim reading `dj-click` | KEEP | Revisited at D2 with the `"view"` catalogue entries. |
+| 23 | `python/djust/components/gallery/views.py:589` | The catalogue preview's JS shim reading `dj-click` | KEEP | Revisited at D2: the interactive catalogue entry is served by its own example view (`djust.components.interactive_examples`), so the shim is not involved. |
+| 24 | `python/djust/mcp/server.py:970` `validate_view` | Handler signatures, warning that an event handler "should accept `**kwargs`" | RETIRE | D3: a closed signature is encouraged; `manage.py check` T020 compares bindings with handlers. |
+| 25 | `python/djust/mcp/server.py:1145` `detect_common_issues` (`missing_kwargs`) | The same rule, as an AI-facing lint | RETIRE | Same reason as row 24. |
+| 26 | `python/djust/schema.py` `BEST_PRACTICES` (the `event_handlers` rules, `event_handler_signature`, pitfall 3) and `docs/ai/events.md:3` | AI guidance stating the V007 rule as a requirement | RETIRE | The guidance now states the T020 contract, including the legacy `field`/`_target` case. |
 | V020 | `python/djust/checks/components.py:1665` | Interactive declarations on actor views | KEEP | It reads the runtime's own declarations and enforces ADR-034 decision Q5. |
 | Q004 | `python/djust/checks/quality.py:213` | Imports of both `DropdownMenu` classes | KEEP | Import hygiene; no handler names, parameters or ownership. |
 | S013 | `python/djust/checks/security.py:979` | Edit views with no row scoping or object permission | KEEP | An authorization policy the binding checks cannot express. |
+
+Rows 24–26 were found at D3 planning (2026-09-25). The D1 enumeration covered checks and dispatch, but not the MCP tools or the AI schema's prose. Their deletion PR is the ADR-037 D3 PR.
 
 Row 4's terms: `_get_handlers` keeps its name as a thin adapter over the shared
 discovery. Undecorated methods stop being fuzzed, since dispatch refuses them.
@@ -366,6 +371,54 @@ Owner decisions on the public output and markers this ADR left open.
 | Q8 | Catalogue entry | A new `"view"` entry kind backed by `components/gallery/live_views.py`; its usage snippet is generated from the class. |
 | Q9 | Form field checks | Only against a static `form_class`'s `base_fields`. A dynamic `get_form_class()` is reported as dynamic. |
 | DD | djust-docs symbol check | Public `djust.components.interactive.outputs_of(cls) -> tuple[str, ...]` in djust, with typing-proof coverage and docs. djust-docs learns `@<name>.on.<output>` on a separate branch that merges after the djust release shipping `outputs_of`. |
+
+## Static-analysis limits at acceptance (2026-09-25)
+
+The binding checks report what they could not decide; they do not guess. At
+acceptance, a binding is left **unsupported** or **dynamic** (it is listed in
+`manage.py djust_check` coverage, never silently passed) in these cases:
+
+- **Outside the live root** — unsupported (`python/djust/checks/bindings.py:184`).
+- **Inside markup a component or an embedded child view owns**, seen from the
+  host template — dynamic (`bindings.py:186`). The owner's own template is
+  checked separately.
+- **A name or value the template computes** (`dj-click="{{ action }}"`, a JS
+  command list) — dynamic (`bindings.py:192`).
+- **A component directive that always reaches its host view** — dynamic
+  (`bindings.py:197`).
+- **An owner that resolves attributes dynamically** (`__getattr__`) — dynamic
+  (`bindings.py:206`).
+
+Some owners are **not scanned at all**. Each is listed in the coverage report with
+its reason:
+
+- a view that overrides `get_template()` or `get_template_names()`: "the template is
+  chosen at runtime" (`python/djust/checks/bindings.py:140-144`);
+- an owner with no `template` or `template_name` (`bindings.py:146-147`);
+- an owner whose own template cannot be compiled (`bindings.py:149-150`).
+
+Whole templates or regions become **gaps**:
+
+- `{% extends %}` with a variable, or nested past `_MAX_DEPTH`
+  (`python/djust/_template_bindings.py:364-365`, reported as "names a dynamic
+  template");
+- `{% include %}` with a variable or filters, or nested past `_MAX_DEPTH`
+  (`_template_bindings.py:465-466`);
+- a template that fails to load or parse (`_template_bindings.py:378`).
+
+Only templates that belong to a `LiveView` or `LiveComponent` class are scanned. A
+template another view renders with `render()` or a third-party tag's markup is out
+of reach.
+
+Two limits outside the checks, recorded at D2 and D3:
+
+- **Executable documentation covers the ADR surface only.** Of `docs/website`'s
+  665 Python blocks, 8 run as fixtures, 467 are parse- and import-checked
+  (`scripts/check-doc-snippets.py` reads `guides/*.md` only), and 190 are not
+  checked at all (`scripts/doc-examples-report.py`).
+- **Over HTTP-only, every embedded-child event reaches the root view** (#3104).
+  `tests/playwright/test_embedded_directives.py` holds those cases as expected
+  failures.
 
 ## Consequences and non-goals
 
