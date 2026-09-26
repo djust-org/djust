@@ -9,15 +9,12 @@ from typing import Any
 class Avatar(Component):
     """Avatar component with optional status indicator.
 
-    **Styling is yours.** No stylesheet djust ships has a rule for the markup
-    this class renders (``dj-avatar``, ``dj-avatar-<size>``,
-    ``dj-avatar-img``, ``dj-avatar-initials``, ``dj-avatar-status``,
-    ``dj-avatar-status-<status>``), so an image renders at its natural size
-    and the status dot is invisible until you style them. For a styled avatar,
-    use the ``{% theme_avatar %}`` tag from ``djust.theming``
-    (``{% load theme_components %}``), which follows the active theme. It
-    reads no ``--dj-avatar-*`` custom properties. See "Unstyled Python
-    components" in the components guide.
+    Styled by ``djust_components/components.css``, which ``{% theme_head %}``
+    links (#2993), on the active theme's tokens: a round ``--muted`` disc
+    sized by ``dj-avatar-<size>``, with the status dot in the status colour.
+    The classes it renders are ``dj-avatar``, ``dj-avatar-<size>``,
+    ``dj-avatar-img``, ``dj-avatar-initials``, ``dj-avatar-status`` and
+    ``dj-avatar-status-<status>``. ``--dj-avatar-size`` overrides the size.
 
     Args:
         src: image URL

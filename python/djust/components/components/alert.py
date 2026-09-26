@@ -12,13 +12,12 @@ class Alert(Component):
 
     Displays contextual feedback messages with optional dismiss functionality.
 
-    **Styling is yours.** No stylesheet djust ships has a rule for the markup
-    this class renders (``dj-alert``, ``dj-alert-<variant>``,
-    ``dj-alert-dismissible``, ``dj-alert-icon``, ``dj-alert-message``,
-    ``dj-alert-dismiss``), so it renders as bare markup until you style it.
-    For a styled alert, use the ``{% theme_alert %}`` tag from
-    ``djust.theming`` (``{% load theme_components %}``), which follows the
-    active theme. See "Unstyled Python components" in the components guide.
+    Styled by ``djust_components/components.css``, which ``{% theme_head %}``
+    links (#2993), on the active theme's tokens: a tinted panel with a
+    border in the variant's colour and the text on ``--foreground``. The
+    classes it renders are ``dj-alert``, ``dj-alert-<variant>``,
+    ``dj-alert-dismissible``, ``dj-alert-icon``, ``dj-alert-message`` and
+    ``dj-alert-dismiss``.
 
     Usage in a LiveView::
 
@@ -43,13 +42,13 @@ class Alert(Component):
         {{ alert|safe }}
         {{ success|safe }}
 
-    CSS custom properties — the names to use in your own stylesheet. Nothing
-    djust ships reads them::
+    CSS custom properties the stylesheet reads before the theme tokens, to
+    restyle alerts without touching the theme::
 
         --dj-alert-bg: background color
         --dj-alert-fg: text color
         --dj-alert-border: border color
-        --dj-alert-radius: border radius (default: 0.25rem)
+        --dj-alert-radius: border radius (default: the theme's --radius-md)
         --dj-alert-padding: internal padding (default: 0.75rem 1rem)
 
         # Variant-specific colors

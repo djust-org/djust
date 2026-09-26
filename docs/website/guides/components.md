@@ -846,13 +846,14 @@ INSTALLED_APPS = [
 | `{% pagination %}`                         | Page navigation                      |
 | `{% avatar %}`                             | User avatar with initials fallback   |
 
-#### `{% badge %}` ships no CSS
+#### Styles for `{% badge %}`, `{% avatar %}`, `{% progress %}` and `{% toast_container %}`
 
-`{% badge %}` renders BEM class names that **no stylesheet djust ships has a
-rule for** (#3025), so its output appears as plain text until you style it.
-(Only the base `dj-badge` class has a rule, in
-`djust_components/components-classes.css`, which `{% theme_head %}` does not
-link; the status, dot and label classes have none anywhere.)
+These tags render BEM class names, styled in
+`djust_components/components.css` (the file the `<link>` above loads, and the
+one `{% theme_head %}` links whenever `djust.components` is installed). The
+rules are on the active theme's tokens, so the components follow light and
+dark mode. The status colour goes on the fill, border, dot or bar, and every
+label stays on `--foreground`, so no label's contrast depends on a status hue.
 
 ```html
 <span class="dj-badge dj-badge--error">
@@ -862,16 +863,16 @@ link; the status, dot and label classes have none anywhere.)
 </span>
 ```
 
-Style `dj-badge`, `dj-badge--<status>` (`online`, `offline`, `warning`,
-`error`, `default`), `dj-badge__dot`, `dj-badge__dot--pulse` and
-`dj-badge__label` in your own stylesheet, for example on the theme tokens
-(`hsl(var(--success))` and so on). The similarly named rules in
-`djust_components/components.css` (`.badge-online`, `.badge-pulse`, …) and
-`components-classes.css` (`.dj-badge-danger`, single dash, …) belong to other
-badge markup and do not match these classes. For a badge styled by the active
-theme, use `{% theme_badge "Failed" variant="destructive" %}`
-(`{% load theme_components %}`). Shipping styles for `{% badge %}` is planned
-for 1.3.
+| Tag | Classes it renders |
+| --- | --- |
+| `{% badge %}` | `dj-badge`, `dj-badge--<status>` (`default`, `online`, `offline`, `warning`, `error`, `info`), `dj-badge__dot`, `dj-badge__dot--pulse`, `dj-badge__label` |
+| `{% avatar %}` | `dj-avatar`, `dj-avatar--<size>`, `dj-avatar__img`, `dj-avatar__initials`, `dj-avatar__status`, `dj-avatar__status--<status>` |
+| `{% progress %}` | `dj-progress`, `dj-progress--<size>`, `dj-progress__header`, `dj-progress__label`, `dj-progress__value`, `dj-progress__track`, `dj-progress__fill`, `dj-progress__fill--<color>` |
+| `{% toast_container %}` | `dj-toast-container`, `dj-toast`, `dj-toast--<type>`, `dj-toast__icon`, `dj-toast__message`, `dj-toast__dismiss` |
+
+To restyle one, write a rule for the same class after the stylesheet. The
+similarly named `.badge-online` / `.badge-pulse` rules belong to other badge
+markup, and `.dj-badge-danger` (single dash) to the `Badge` Python class.
 
 ### `{% data_table %}` row-level navigation (#1111)
 
@@ -982,22 +983,22 @@ All components use CSS custom properties. Override them to match any theme:
 
 This is what makes them style-agnostic: change the variables, and every component adapts. Works standalone or with `djust.theming` for full design system support.
 
-#### Unstyled Python components
+#### Styles for the `Alert`, `Progress` and `Avatar` classes
 
-Three `djust.components` classes render markup that **no stylesheet djust
-ships has a rule for**, so they appear as bare markup until you style them.
-Each has a styled template-tag twin that follows the active theme:
+The `djust.components` classes `Alert`, `Progress` and `Avatar` are styled in
+the same `djust_components/components.css`, on the theme's tokens. Each reads
+its own custom properties first, so you can restyle one component without
+touching the theme:
 
-| Class (`from djust.components import …`) | Classes it renders | Custom properties its docstring suggests | Styled equivalent |
-| --- | --- | --- | --- |
-| `Alert` | `dj-alert`, `dj-alert-<variant>`, `dj-alert-dismissible`, `dj-alert-icon`, `dj-alert-message`, `dj-alert-dismiss` | `--dj-alert-{bg,fg,border,radius,padding}`, `--dj-alert-<variant>-{bg,fg,border}` | `{% theme_alert %}` |
-| `Progress` | `dj-progress`, `dj-progress-<variant>`, `dj-progress-<size>`, `dj-progress-label`, `dj-progress-track`, `dj-progress-bar`, `dj-progress-value` | `--dj-progress-{bg,bar-bg,radius,height}`, `--dj-progress-<variant>-bg` | `{% theme_progress %}` |
-| `Avatar` | `dj-avatar`, `dj-avatar-<size>`, `dj-avatar-img`, `dj-avatar-initials`, `dj-avatar-status`, `dj-avatar-status-<status>` | none | `{% theme_avatar %}` |
+| Class (`from djust.components import …`) | Classes it renders | Custom properties it reads |
+| --- | --- | --- |
+| `Alert` | `dj-alert`, `dj-alert-<variant>`, `dj-alert-dismissible`, `dj-alert-icon`, `dj-alert-message`, `dj-alert-dismiss` | `--dj-alert-{bg,fg,border,radius,padding}`, `--dj-alert-<variant>-{bg,fg,border}` |
+| `Progress` | `dj-progress`, `dj-progress-<variant>`, `dj-progress-<size>`, `dj-progress-label`, `dj-progress-track`, `dj-progress-bar`, `dj-progress-value` | `--dj-progress-{bg,bar-bg,radius,height}`, `--dj-progress-<variant>-bg` |
+| `Avatar` | `dj-avatar`, `dj-avatar-<size>`, `dj-avatar-img`, `dj-avatar-initials`, `dj-avatar-status`, `dj-avatar-status-<status>` | `--dj-avatar-size` |
 
-The custom properties are naming suggestions for your own stylesheet. Nothing
-djust ships reads them. To get the styled version, use the tag instead
-(`{% load theme_components %}`). Their catalogue pages
-(`/theme/components/alert/` and so on) preview the tag and say the same.
+The `{% theme_alert %}` / `{% theme_progress %}` / `{% theme_avatar %}` tags
+from `djust.theming` render the same components with the theming package's
+own class names.
 
 ## djust-theming
 
