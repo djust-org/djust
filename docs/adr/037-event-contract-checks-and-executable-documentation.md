@@ -1,6 +1,6 @@
 # ADR-037: Shared event-contract checks and executable documentation
 
-**Status**: Proposed
+**Status**: Accepted — delivery verified on staged 1.3 docs (djust-docs pinned to 1.3.0rc3, 2026-09-25; production docs.djust.org is bumped with 1.3.0). D1–D3 and Step R are closed, with evidence in the [implementation tracker](component-conventions-implementation.md#adr-037--checks-and-executable-documentation). Step R's deletion PRs are #3122 (rows 1–23) and the ADR-037 D3 PR (rows 24–26). The static-analysis limits at acceptance are recorded below.
 **Date**: 2026-09-19
 **Deciders**: Project maintainers
 **Evidence baseline**: `0d1aeb882` on `feat/components-catalogue`.
@@ -371,6 +371,43 @@ Owner decisions on the public output and markers this ADR left open.
 | Q8 | Catalogue entry | A new `"view"` entry kind backed by `components/gallery/live_views.py`; its usage snippet is generated from the class. |
 | Q9 | Form field checks | Only against a static `form_class`'s `base_fields`. A dynamic `get_form_class()` is reported as dynamic. |
 | DD | djust-docs symbol check | Public `djust.components.interactive.outputs_of(cls) -> tuple[str, ...]` in djust, with typing-proof coverage and docs. djust-docs learns `@<name>.on.<output>` on a separate branch that merges after the djust release shipping `outputs_of`. |
+
+## Static-analysis limits at acceptance (2026-09-25)
+
+The binding checks report what they could not decide; they do not guess. At
+acceptance, a binding is left **unsupported** or **dynamic** (it is listed in
+`manage.py djust_check` coverage, never silently passed) in these cases:
+
+- **Outside the live root** — unsupported (`python/djust/checks/bindings.py:184`).
+- **Inside markup a component or an embedded child view owns**, seen from the
+  host template — dynamic (`bindings.py:186`). The owner's own template is
+  checked separately.
+- **A name or value the template computes** (`dj-click="{{ action }}"`, a JS
+  command list) — dynamic (`bindings.py:192`).
+- **A component directive that always reaches its host view** — dynamic
+  (`bindings.py:197`).
+- **An owner that resolves attributes dynamically** (`__getattr__`) — dynamic
+  (`bindings.py:206`).
+
+Whole templates or regions become **gaps**:
+
+- `{% extends %}` with a variable (`python/djust/_template_bindings.py:365`);
+- `{% include %}` with a variable (`_template_bindings.py:466`);
+- a template that fails to load or parse (`_template_bindings.py:378`).
+
+Only templates that belong to a `LiveView` or `LiveComponent` class are scanned. A
+template another view renders with `render()` or a third-party tag's markup is out
+of reach.
+
+Two limits outside the checks, recorded at D2 and D3:
+
+- **Executable documentation covers the ADR surface only.** Of `docs/website`'s
+  665 Python blocks, 8 run as fixtures, 467 are parse- and import-checked
+  (`scripts/check-doc-snippets.py` reads `guides/*.md` only), and 190 are not
+  checked at all (`scripts/doc-examples-report.py`).
+- **Over HTTP-only, every embedded-child event reaches the root view** (#3104).
+  `tests/playwright/test_embedded_directives.py` holds those cases as expected
+  failures.
 
 ## Consequences and non-goals
 

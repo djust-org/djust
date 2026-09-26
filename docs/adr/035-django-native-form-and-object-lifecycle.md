@@ -1,6 +1,6 @@
 # ADR-035: Django-native form hooks and an authorized object lifecycle
 
-**Status**: Accepted: gates F1–F2 closed on `feat/adr-034-037`, with evidence in the [acceptance review](component-conventions-implementation.md#adr-035-acceptance-review--f2); acceptance is confirmed at that branch's review. `ModelFormMixin` is available from djust 1.3. FR (Step R) is open: its trigger is met for adopting views, and it is scheduled as its own deletion PR on ADR-027's playbook, after the deprecation window this ADR requires for removing legacy support.
+**Status**: Accepted — delivery verified on staged 1.3 docs (djust-docs pinned to 1.3.0rc3, 2026-09-25; production docs.djust.org is bumped with 1.3.0). Gates F1–F2 closed on `feat/adr-034-037`, with evidence in the [acceptance review](component-conventions-implementation.md#adr-035-acceptance-review--f2); acceptance is confirmed at that branch's review. `ModelFormMixin` is available from djust 1.3. FR (Step R) is open: its trigger is met for adopting views, and it is scheduled as its own deletion PR on ADR-027's playbook, after the deprecation window this ADR requires for removing legacy support.
 **Date**: 2026-09-19
 **Deciders**: Project maintainers
 **Evidence baseline**: `0d1aeb882` on `feat/components-catalogue`.

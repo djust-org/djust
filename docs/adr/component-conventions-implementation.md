@@ -1789,7 +1789,8 @@ prerequisite. **ADR-038's gates E1–E6 and ER are closed on the completion bran
 (#2954): `exposure_policy="explicit"` is activated there, and ER is closed by
 the written account in D-z, with the deletions scheduled for the major release
 that makes `explicit` the default.
-ADRs 034–037 are not accepted.**
+ADRs 034–037 are accepted (2026-09-25): delivery was verified on staged 1.3
+docs; production docs.djust.org is bumped with 1.3.0 (see ADR-037 D3 below).**
 No completion percentage or delivery date is inferred from commit/test counts.
 
 ### Completion rules
@@ -2759,7 +2760,7 @@ Source: [decisions and acceptance](037-event-contract-checks-and-executable-docu
     `DropdownMenuExample` (one menu, plus a keyed collection) inside the catalogue
     chrome. The browser pass is in `docs/adr/notes/037-d2-catalogue-browser.md`.
     Two menus stay open at once there, as documented.
-- [ ] **D3 — final acceptance.** Run the ADR acceptance matrices at the final
+- [x] **D3 — final acceptance.** Run the ADR acceptance matrices at the final
   revision, complete migration/AI guidance, and verify actual website delivery
   rather than equating repository Markdown with publication. Record remaining
   static-analysis limits; only then change the relevant ADR status.
@@ -2786,13 +2787,36 @@ Source: [decisions and acceptance](037-event-contract-checks-and-executable-docu
   - **Checks:** `tests/test_check_*.py` has **83 passed**. The demo project's
     `manage.py check` reports **85 `djust.T019`**, the same as at D1: all on
     undecorated handlers of 33 views the URLconf does not route.
-- [ ] **DR — retirement decision.** [ADR-037 Step R](037-event-contract-checks-and-executable-documentation.md)
+  - **Migration and AI guidance.**
+    - `docs/ai/events.md` no longer requires `**kwargs`. It states the T019–T022
+      checks and the legacy `field`/`_target` case.
+    - The AI schema's handler rules, `event_handler_signature` and pitfall 3 say
+      the same.
+    - The MCP tools no longer lint for `**kwargs` (Step R rows 24–26).
+    - The 1.3.0rc3 CHANGELOG carries the upgrade notes.
+  - **Delivery** (staged; production stays on 1.2.x until 1.3.0):
+    `docs/adr/notes/037-d3-staged-delivery.md`.
+    - djust-docs pinned to 1.3.0rc3 passes `make docs-verify` on this branch's
+      docs.
+    - All 8 ADR pages render and are linked in the nav.
+    - It found two defects: the accounts guide was missing from `_config.yaml`
+      (fixed here), and authoring markers rendered as text (djust-docs#13).
+  - **Static-analysis limits:** ADR-037, "Static-analysis limits at acceptance".
+  - **Also fixed while accepting:** V004 no longer reports component-subscription
+    callbacks (#3134).
+- [x] **DR — retirement decision.** [ADR-037 Step R](037-event-contract-checks-and-executable-documentation.md)
   requires D1 to settle whether this ADR is consolidation or addition: enumerate every
   place that re-derives handler parameters, ownership or event names independently of
   the runtime contract, cited `file:line`, and mark each `RETIRE` (with a deletion PR)
   or `KEEP` (with the reason it is distinct). An empty enumeration is recorded plainly
   and the ADR claims no saving. Every `RETIRE` row carries a merged deletion PR before
   D3 acceptance.
+
+  **Closed (2026-09-25).** Consolidation: rows 1–23 were deleted by #3122. Rows
+  24–26 were found at D3 planning: the MCP `validate_view` and
+  `detect_common_issues` `**kwargs` rules, and the AI schema's V007 prose. They are
+  deleted by the ADR-037 D3 PR, and D3 is accepted with that PR. D2 also retired
+  three hand-maintained documentation test harnesses (see the ADR's Step R).
 
 ### Completed milestone: E4 — request correlation
 
