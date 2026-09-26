@@ -95,3 +95,25 @@ def test_a_parent_event_still_runs_on_the_parent(session):
     response = _post(session, {})
     assert response.status_code == 200
     assert _parent_received(session) == ["click"]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("flat", [True, False])
+@pytest.mark.parametrize("empty", [None, "", 0, False, []])
+def test_an_empty_view_id_is_the_parent_as_on_the_socket_runtime(session, flat, empty):
+    """PR #3159 review: the runtime pops ``view_id`` and routes a falsy one to
+    the root view; the HTTP fallback now does the same."""
+    _page(session)
+    body = {"view_id": empty}
+    response = _post(session, body if flat else {"event": "got_click", "params": body})
+    assert response.status_code == 200, response.content
+    assert _parent_received(session) == ["click"]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("forged", ["child_999999", "__root", ["child_1"], 1])
+def test_every_truthy_foreign_view_id_is_refused(session, forged):
+    _page(session)
+    response = _post(session, {"view_id": forged})
+    assert response.status_code == 400
+    assert _parent_received(session) == []

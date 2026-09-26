@@ -912,17 +912,20 @@ class RequestMixin:
             # under fresh ids), so the event is refused, as the socket runtime
             # refuses an unknown ``view_id``. Running it on the parent would
             # silently change the wrong view's state.
-            view_id = params.get("view_id") if isinstance(params, dict) else None
-            if view_id is not None:
-                if view_id != getattr(self, "_view_id", None):
-                    logger.warning(
-                        "HTTP POST refused event '%s' for embedded view %s on %s",
-                        event_name,
-                        sanitize_for_log(str(view_id)),
-                        type(self).__name__,
-                    )
-                    return JsonResponse({"error": "Embedded view not found"}, status=400)
-                params = {k: v for k, v in params.items() if k != "view_id"}
+            # Same rule as ``ViewRuntime`` (pop, then refuse only a truthy id
+            # other than this view's own), so the transports cannot disagree.
+            view_id = None
+            if isinstance(params, dict):
+                params = dict(params)
+                view_id = params.pop("view_id", None)
+            if view_id and view_id != getattr(self, "_view_id", None):
+                logger.warning(
+                    "HTTP POST refused event '%s' for embedded view %s on %s",
+                    event_name,
+                    sanitize_for_log(str(view_id)),
+                    type(self).__name__,
+                )
+                return JsonResponse({"error": "Embedded view not found"}, status=400)
             component_id = params.get("component_id") if isinstance(params, dict) else None
             if component_id:
                 registry = getattr(self, "_components", None) or {}
