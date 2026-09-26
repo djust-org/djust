@@ -1944,10 +1944,17 @@ def code_block(
             'var el=document.currentScript.previousElementSibling.querySelector("code");'
             "if(el.dataset.highlighted)return;"
             'function doHL(){if(window.hljs&&!el.dataset.highlighted){hljs.highlightElement(el);el.dataset.highlighted="true";}}'
+            # Warns only from the injected script's onerror, once per page.
             "function warn(){if(!window.__djcHljsWarned){window.__djcHljsWarned=true;"
             "console.warn('[djust] highlight.js did not load; code blocks stay "
             "unhighlighted. Check the browser console for an integrity (SRI) or "
             "CSP error.');}}"
+            # Highlights every unmarked block on the page. The injecting
+            # block's onload runs it, so blocks whose poll gave up before a
+            # slow load finished are still highlighted.
+            "function hlAll(){if(!window.hljs)return;"
+            'Array.prototype.forEach.call(document.querySelectorAll("pre code[class^=language-]"),function(n)'
+            '{if(!n.dataset.highlighted){hljs.highlightElement(n);n.dataset.highlighted="true";}});}'
             # #1625: MutationObserver installer — idempotent via the
             # __djcHljsObserverInstalled flag. Watches the whole document
             # for added <pre><code class="language-*"> elements (typical
@@ -1975,17 +1982,19 @@ def code_block(
             'var s=document.createElement("script");'
             "s.src=cfg.src;s.integrity=cfg.integrity;"
             "if(cfg.crossOrigin)s.crossOrigin=cfg.crossOrigin;"
-            "s.onload=function(){doHL();installObserver();};"
+            "s.onload=function(){doHL();hlAll();installObserver();};"
             "s.onerror=warn;"
             "document.head.appendChild(s);"
             "return;}"
             # Other blocks find the load in progress and wait for it.
-            # Bounded to 200 ticks (~10s, R14): an SRI mismatch, CSP block,
-            # or 404 must not poll forever.
+            # Bounded to 200 ticks (~10s, R14) so an SRI mismatch, CSP block,
+            # or 404 cannot poll forever. Giving up is silent: a load slower
+            # than the cap is still handled by the onload sweep above, and a
+            # real failure is reported by onerror.
             "var tries=0;"
             "var iv=setInterval(function(){"
             "if(window.hljs){clearInterval(iv);doHL();installObserver();return;}"
-            "if(++tries>=200){clearInterval(iv);warn();}"
+            "if(++tries>=200)clearInterval(iv);"
             "},50);"
             "})();"
             "</script>"

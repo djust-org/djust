@@ -90,12 +90,99 @@ def test_dependencies_module_is_gone():
 
 def test_wait_loop_gives_up_after_200_ticks_and_warns_once():
     """R14: if the vendored highlight.js never loads (bad SRI, CSP block,
-    404), the fallback poll must not run forever."""
+    404), the fallback poll must not run forever. The warning comes from the
+    injected script's onerror, not from the poll's cap."""
     html = str(code_block(code="x = 1", language="python"))
     assert "tries>=200" in html
     assert "clearInterval(iv)" in html
+    assert "s.onerror=warn;" in html
+    assert "clearInterval(iv);warn()" not in html
     assert "__djcHljsWarned" in html
     assert "console.warn(" in html
     assert "highlight.js did not load" in html
     # The warn is guarded by the flag, not unconditional.
     assert "if(!window.__djcHljsWarned){window.__djcHljsWarned=true;" in html
+
+
+# A tiny fake DOM, run under node's vm module, so the inline scripts' timing
+# behaviour is tested rather than their source text.
+_NODE_HARNESS = r"""
+const vm = require("vm");
+const fs = require("fs");
+const [scriptsPath, scenario] = process.argv.slice(2);
+const scripts = JSON.parse(fs.readFileSync(scriptsPath, "utf8"));
+const codes = scripts.map(() => ({ dataset: {}, matches: () => true }));
+const warns = [];
+let injected = null;
+const intervals = [];
+const ctx = {
+  console: { warn: (m) => warns.push(String(m)) },
+  setInterval: (fn) => intervals.push(fn) - 1,
+  clearInterval: (i) => { intervals[i] = null; },
+  MutationObserver: class { observe() {} },
+  document: {
+    head: { appendChild: (s) => { injected = s; } },
+    body: {},
+    createElement: () => ({}),
+    querySelectorAll: () => codes,
+    currentScript: null,
+  },
+};
+ctx.window = ctx;
+vm.createContext(ctx);
+scripts.forEach((src, i) => {
+  ctx.document.currentScript = {
+    previousElementSibling: { querySelector: () => codes[i] },
+  };
+  vm.runInContext(src, ctx);
+});
+// Run every live poll well past its cap before the library arrives.
+for (let t = 0; t < 400; t++) intervals.forEach((fn) => fn && fn());
+const polling = intervals.filter(Boolean).length;
+if (scenario === "load") {
+  ctx.hljs = { highlightElement: (n) => { n.hl = (n.hl || 0) + 1; } };
+  injected.onload();
+} else {
+  injected.onerror();
+  injected.onerror();
+}
+process.stdout.write(JSON.stringify({
+  highlighted: codes.map((c) => c.hl || 0),
+  warns: warns.length,
+  polling,
+}));
+"""
+
+
+def _run_page(tmp_path, blocks, scenario):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    scripts = [
+        _inline_script(str(code_block(code="x%d" % i, language="python"))) for i in range(blocks)
+    ]
+    scripts_path = tmp_path / "scripts.json"
+    scripts_path.write_text(json.dumps(scripts))
+    harness = tmp_path / "harness.js"
+    harness.write_text(_NODE_HARNESS)
+    result = subprocess.run(
+        [node, str(harness), str(scripts_path), scenario], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def test_late_library_highlights_every_block_without_a_false_warning(tmp_path):
+    """The library arrives after the other blocks' polls hit their cap (slow
+    network). Its onload must highlight every block on the page, once, and no
+    "did not load" warning may fire."""
+    out = _run_page(tmp_path, 3, "load")
+    assert out["polling"] == 0  # the cap still stops the polls
+    assert out["highlighted"] == [1, 1, 1]
+    assert out["warns"] == 0
+
+
+def test_script_error_warns_exactly_once(tmp_path):
+    out = _run_page(tmp_path, 3, "error")
+    assert out["highlighted"] == [0, 0, 0]
+    assert out["warns"] == 1
