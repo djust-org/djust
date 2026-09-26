@@ -873,6 +873,10 @@ label stays on `--foreground`, so no label's contrast depends on a status hue.
 To restyle one, write a rule for the same class after the stylesheet. The
 similarly named `.badge-online` / `.badge-pulse` rules belong to other badge
 markup, and `.dj-badge-danger` (single dash) to the `Badge` Python class.
+The `Toast` Python class renders single-dash names (`dj-toast-<type>`,
+`dj-toast-message`, `dj-toast-dismiss`), styled in the same file, which also
+reads the `--dj-toast-*` properties its docstring lists (`--dj-toast-bg`,
+`--dj-toast-success-border`, …), each falling back to a theme token.
 
 ### `{% data_table %}` row-level navigation (#1111)
 
