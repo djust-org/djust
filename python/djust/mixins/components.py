@@ -4,6 +4,7 @@ ComponentMixin - Component lifecycle and management for LiveView.
 
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
+from .._class_snapshot import attribute_names
 from ..serialization import normalize_django_value
 
 if TYPE_CHECKING:
@@ -113,7 +114,7 @@ class ComponentMixin:
             return dict(component.state)
 
         state: Dict[str, Any] = {}
-        for key in dir(component):
+        for key in attribute_names(component):  # dir() races class writes (#3151)
             if not key.startswith("_") and key not in ("template_name",):
                 try:
                     value = getattr(component, key)

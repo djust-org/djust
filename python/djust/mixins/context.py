@@ -10,6 +10,7 @@ from django.db import models
 from django.test.signals import setting_changed
 from django.utils.datastructures import MultiValueDict
 
+from .._class_snapshot import namespace as _class_namespace
 from .._exposure_providers import STREAMS_PROVIDER, actions_provider, components_provider
 from ..serialization import _crosses_as_encoded, normalize_django_value
 from ..utils import is_model_list
@@ -306,7 +307,9 @@ class ContextMixin:
                 break
             if cls in _framework_owned:
                 continue
-            for key, value in vars(cls).items():
+            # A snapshot: another thread may be writing a first-use cache to
+            # this class while it is walked (#3151).
+            for key, value in _class_namespace(cls).items():
                 if key not in _seen and key not in self.__dict__:
                     _seen.add(key)
                     # Skip framework-defined derived properties (``is_dirty``,

@@ -17,6 +17,7 @@ from django.core.serializers.json import DjangoJSONEncoder as _DjangoJSONEncoder
 from django.db import models
 from django.utils.datastructures import MultiValueDict
 from django.utils.functional import Promise
+from ._class_snapshot import attribute_names, namespace
 
 logger = logging.getLogger(__name__)
 
@@ -863,7 +864,7 @@ class DjangoJSONEncoder(json.JSONEncoder, metaclass=_EncoderDepthMeta):
         allowed = self._get_allowlist_fields(obj)
         optout = self._get_sensitive_optout_fields(obj)
 
-        for attr_name in dir(obj):
+        for attr_name in attribute_names(obj):  # dir() races class writes (#3151)
             if attr_name in result:
                 continue
             if not attr_name.startswith("get_"):
@@ -917,7 +918,7 @@ class DjangoJSONEncoder(json.JSONEncoder, metaclass=_EncoderDepthMeta):
             for cls in model_class.__mro__:
                 if cls is models.Model:
                     break
-                for attr_name, attr_value in cls.__dict__.items():
+                for attr_name, attr_value in namespace(cls).items():  # #3151
                     if isinstance(attr_value, property):
                         prop_names.append(attr_name)
             DjangoJSONEncoder._property_cache[model_class] = prop_names

@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Union, cast
 from django.utils.decorators import classonlymethod
 from django.views import View
 
+from ._class_snapshot import namespace as _class_namespace
 from ._context_provider import ContextProviderMixin  # noqa: F401  # re-exported for back-compat
 from .change_detection import deep_fingerprint, fingerprints_by_content
 from .serialization import (  # noqa: F401
@@ -245,9 +246,12 @@ def _descriptor_fields(cls: type) -> Dict[str, tuple]:
         return cast(Dict[str, tuple], cached)
     from .components.base import LiveComponent as _DescriptorComponent
 
+    # Built into a new dict from namespace SNAPSHOTS, then published with one
+    # setattr: on a free-threaded build another thread may be writing a
+    # first-use cache to one of these classes right now (#3151).
     fields: Dict[str, tuple] = {}
     for klass in reversed(cls.__mro__):
-        for name, value in vars(klass).items():
+        for name, value in _class_namespace(klass).items():
             # Type checks only: a class attribute may be lazy
             # (``SimpleLazyObject``, whose ``__class__`` is proxied, so not
             # even ``isinstance``) and must not be evaluated here.
@@ -848,7 +852,7 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         # evaluate properties, factories, ORM queries or component descriptors.
         seen_state_names: set[str] = set()
         for owner in type(self).__mro__:
-            for name, declaration in vars(owner).items():
+            for name, declaration in _class_namespace(owner).items():  # #3151
                 if name in seen_state_names:
                     continue
                 seen_state_names.add(name)

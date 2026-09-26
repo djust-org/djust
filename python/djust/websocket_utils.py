@@ -14,6 +14,7 @@ from asgiref.sync import sync_to_async
 from django.core.exceptions import PermissionDenied
 
 
+from ._class_snapshot import attribute_names
 from .config import config as djust_config
 from .decorators import is_event_handler
 from .rate_limit import (
@@ -62,7 +63,7 @@ def _format_handler_not_found_error(owner_instance: object, event_name: str) -> 
     # 1. Typo detection — suggest similar public method names
     public_methods = [
         name
-        for name in dir(owner_instance)
+        for name in attribute_names(owner_instance)  # dir() races class writes (#3151)
         if not name.startswith("_") and callable(getattr(owner_instance, name, None))
     ]
     close = difflib.get_close_matches(event_name, public_methods, n=3, cutoff=0.6)
@@ -81,7 +82,7 @@ def _format_handler_not_found_error(owner_instance: object, event_name: str) -> 
     # 3. List available @event_handler methods on the class
     handlers = [
         name
-        for name in dir(owner_instance)
+        for name in attribute_names(owner_instance)  # dir() races class writes (#3151)
         if not name.startswith("_")
         and callable(getattr(owner_instance, name, None))
         and is_event_handler(getattr(owner_instance, name))

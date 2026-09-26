@@ -214,7 +214,7 @@ def compile_subscriptions(owner: type) -> tuple[SubscriptionBinding, ...]:
     effective: dict[str, object] = {}
     subscriptions: dict[tuple[str, str], SubscriptionBinding] = {}
     for cls in owner.__mro__:
-        for name, member in vars(cls).items():
+        for name, member in vars(cls).copy().items():  # snapshot (#3151)
             effective.setdefault(name, member)
             # Type checks only: a class attribute may be lazy (``SimpleLazyObject``
             # proxies ``__class__``, so ``isinstance`` would evaluate it).

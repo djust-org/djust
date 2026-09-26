@@ -16,6 +16,7 @@ import types
 from collections.abc import Callable, Iterator
 from typing import Any, NamedTuple
 
+from ._class_snapshot import namespace
 from ._parameter_contract import ContractError
 from .decorators import is_event_handler, is_server_function
 from .validation import (
@@ -81,7 +82,7 @@ def _class_members(cls: type, stop: Callable[[type], bool]) -> dict[str, tuple[A
     for klass in cls.__mro__:
         if stop(klass):
             break
-        for name, member in klass.__dict__.items():
+        for name, member in namespace(klass).items():  # #3151
             members.setdefault(name, (member, klass))
     return members
 
@@ -145,8 +146,9 @@ _IMMUTABLE_TYPE = 1 << 8
 
 
 def _dict_snapshot(cls: type) -> tuple[type, tuple[str, ...], tuple[Any, ...]]:
-    namespace = cls.__dict__
-    return (cls, tuple(namespace), tuple(namespace.values()))
+    # One atomic copy, so keys and values come from the same instant (#3151).
+    current = namespace(cls)
+    return (cls, tuple(current), tuple(current.values()))
 
 
 class _ClassPlan:
@@ -211,7 +213,10 @@ class _ClassPlan:
             if cls.__mro__ != mro:
                 return False
         for cls, keys, values in self.snapshot:
-            current = cls.__dict__
+            # Compared against a copy: iterating the live namespace races a
+            # first-use cache written by another thread (#3151). A write that
+            # lands fails the comparison, and the plan is rebuilt.
+            current = namespace(cls)
             if (
                 len(current) != len(values)
                 or tuple(current) != keys

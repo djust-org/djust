@@ -16,6 +16,7 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Union, get_args, get_origin, get_type_hints
 from uuid import UUID
+from ._class_snapshot import namespace
 
 
 # Fixed, transport-independent bounds for the initial strict contract. Wire byte
@@ -107,7 +108,7 @@ def _defining_class(function: Any) -> type | None:
         scope = vars(scope).get(part)
         if not isinstance(scope, type):
             return None
-    for member in vars(scope).values():
+    for member in namespace(scope).values():  # #3151
         if isinstance(member, (staticmethod, classmethod)):
             member = member.__func__
         if isinstance(member, types.FunctionType) and inspect.unwrap(member) is function:
@@ -127,7 +128,7 @@ def declaration_namespaces(
     origin = inspect.unwrap(getattr(handler, "__func__", handler))
     globalns = getattr(origin, "__globals__", None)
     owner = _defining_class(origin)
-    return globalns, dict(vars(owner)) if owner is not None else {}
+    return globalns, namespace(owner) if owner is not None else {}  # #3151
 
 
 def _resolve_annotation(
