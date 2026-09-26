@@ -8,7 +8,6 @@ per-message limiter still closes a flood whichever mode a handler uses.
 
 from __future__ import annotations
 
-import json
 import sys
 
 import pytest
@@ -18,6 +17,10 @@ from djust import LiveView
 from djust.config import config
 from djust.decorators import event_handler, rate_limit
 from djust.rate_limit import reset_handler_buckets
+from djust.tests._ws_frames import receive_until
+
+#: Handler runs, by name: a dropped event must not reach the handler.
+RAN: list = []
 
 
 class _EmoteView(LiveView):
@@ -31,6 +34,7 @@ class _EmoteView(LiveView):
     @event_handler()
     @rate_limit(rate=0.01, burst=1, on_exceed="drop")
     def emote(self, **kwargs):
+        RAN.append("emote")
         self.n += 1
 
     @event_handler()
@@ -51,6 +55,7 @@ _VIEW = f"{__name__}._EmoteView"
 def _fresh_buckets():
     reset_handler_buckets()
     config.reset()
+    RAN.clear()
     yield
     reset_handler_buckets()
     config.reset()
@@ -74,22 +79,27 @@ async def _connect():
     return comm
 
 
+_ANSWERS = {"patch", "html_update", "noop", "error", "rate_limit_exceeded", "websocket.close"}
+
+
 async def _send(comm, event):
-    """Send one event and return the frames it produced, up to a close."""
+    """Send one event; return its frames up to the one that answers it.
+
+    Event-driven (#3156's helper): every event is answered by a render, a
+    noop, an error, a rate-limit notice or a close, so this waits for that
+    frame instead of for a quiet window.
+    """
     await comm.send_json_to({"type": "event", "event": event, "params": {}})
-    frames = []
-    while True:
-        try:
-            out = await comm.receive_output(timeout=1)
-        except Exception:  # noqa: BLE001 - nothing more for this event
-            return frames
-        if out["type"] == "websocket.close":
-            frames.append({"type": "close", "code": out.get("code")})
-            return frames
-        frame = json.loads(out["text"])
-        frames.append(frame)
-        if frame.get("type") in ("patch", "html_update", "noop", "error", "rate_limit_exceeded"):
-            return frames
+    frames = await receive_until(
+        comm,
+        lambda got: any(f.get("type") in _ANSWERS for f in got),
+        what="the answer to %r" % event,
+        allow_close=True,
+    )
+    return [
+        {"type": "close", "code": f.get("code")} if f.get("type") == "websocket.close" else f
+        for f in frames
+    ]
 
 
 def _types(frames):
@@ -103,6 +113,7 @@ async def test_drop_mode_rejections_never_close_the_socket():
     comm = await _connect()
     try:
         assert "error" not in _types(await _send(comm, "emote"))  # the one token
+        assert RAN == ["emote"]
         # Twice the default max_warnings (3) of rejections.
         for _ in range(6):
             frames = await _send(comm, "emote")
@@ -111,6 +122,8 @@ async def test_drop_mode_rejections_never_close_the_socket():
                 f.get("type") == "error" and "Rate limit exceeded" in f.get("error", "")
                 for f in frames
             ), frames
+        # Dropped means dropped: the handler never ran for a rejected event.
+        assert RAN == ["emote"]
         # Still connected: an unrelated event renders.
         assert {"patch", "html_update"} & set(_types(await _send(comm, "bump")))
     finally:
