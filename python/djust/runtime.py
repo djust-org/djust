@@ -7183,6 +7183,10 @@ class ViewRuntime:
         ``_render_lock`` across handler + render). SSE uses its session render
         lock to prevent late results from crossing a page-replacement boundary.
         """
+        # The task outlives the turn that queued it; on SSE that turn's request
+        # executors die with the POST (#3097, #3200 review B-b). Legacy and
+        # explicit tasks alike.
+        _detach_from_finished_request()
         view = self.view_instance
         if not view:
             return
@@ -7346,9 +7350,6 @@ class ViewRuntime:
         """
         from .mixins.async_work import run_async_callback
 
-        # The task outlives the turn that queued it; on SSE that turn's request
-        # executors die with the POST (#3200 review B-b).
-        _detach_from_finished_request()
         # cancel_async() / cancel_async_all() before the task started (#2969).
         # No settle frame on this path: an event turn's batch ends the client's
         # loading state with its ``async_complete`` token, and unbatched

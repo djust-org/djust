@@ -252,3 +252,92 @@ async def test_sse_stream_with_a_vanished_cookie_issues_a_default_lifetime_sessi
     age, max_age = await sync_to_async(log_in)()
     assert age == settings.SESSION_COOKIE_AGE
     assert max_age == settings.SESSION_COOKIE_AGE
+
+
+def _through_a_sync_bridge(coro_factory):
+    """Run a coroutine the way Django's sync-middleware adaption runs the SSE
+    POST: from a worker thread, through ``async_to_sync``. Tasks it spawns
+    inherit that bridge's asgiref executors, which die when it returns."""
+
+    def run():
+        async_to_sync(coro_factory)()
+
+    return sync_to_async(run)()
+
+
+async def test_child_background_result_renders_through_the_sync_bridge(monkeypatch, settings):
+    """Review I-c of #3206: a CHILD view's start_async over SSE (#3097)."""
+    from djust.tests.test_exposure_child_events import EventChild
+    from djust.tests.test_exposure_child_events import mount as child_mount
+
+    settings.DJUST_LIVE_RENDER_ALLOWED_MODULES = ["djust.tests.test_exposure_child_events"]
+    done = {}
+
+    @event_handler(parameter_policy="strict")
+    def begin(self):
+        def work():
+            return 4
+
+        self.start_async(work, name="w")
+
+    def handle_async_result(self, name, result=None, error=None):
+        done["result"] = result
+        if result is not None:
+            self.count = result
+
+    monkeypatch.setattr(EventChild, "begin", begin, raising=False)
+    monkeypatch.setattr(EventChild, "handle_async_result", handle_async_result, raising=False)
+    runtime, transport, _ = await child_mount()
+    transport.sent.clear()
+
+    await _through_a_sync_bridge(
+        lambda: runtime.dispatch_event({"event": "begin", "params": {"view_id": "menu"}, "ref": 7})
+    )
+    child = runtime.view_instance._get_child_view("menu")
+    handles = tuple(getattr(child, "_async_task_handles", ()))
+    await asyncio.wait_for(asyncio.gather(*handles, return_exceptions=True), 10)
+    assert not transport.errors, transport.errors
+    assert done == {"result": 4}
+    assert child.count == 4
+    assert any(f.get("type") == "embedded_update" for f in transport.sent), transport.sent
+
+
+async def test_catch_up_delivers_through_the_sync_bridge():
+    """Review I-d of #3206: the catch-up's own detach is load-bearing.
+
+    The deferred turn runs through the bridge, so the catch-up task inherits
+    the bridge's executors. Without detaching, its authorization hop fails and
+    the user gets "State unavailable" instead of the promised update.
+    """
+    import time
+
+    from djust.tests.test_exposure_runtime import RuntimeView, make_request, mount
+
+    request = await sync_to_async(make_request)()
+    runtime, transport = await mount(request, view_class=RuntimeView)
+    transport.sent.clear()
+    original = SessionStore.save
+    calls = []
+
+    def first_slow(self, *args, **kwargs):
+        calls.append(True)
+        if len(calls) == 1:
+            time.sleep(0.2)
+        return original(self, *args, **kwargs)
+
+    with override_settings(
+        LIVEVIEW_ALLOWED_MODULES=["djust"], DJUST_EXPLICIT_STATE_SAVE_TIMEOUT=0.05
+    ):
+        SessionStore.save = first_slow
+        try:
+            await _through_a_sync_bridge(
+                lambda: runtime.dispatch_event(
+                    {"type": "event", "event": "increment", "params": {}}
+                )
+            )
+            assert runtime._explicit_catch_up is not None
+            await asyncio.wait_for(runtime._explicit_catch_up, 10)
+        finally:
+            SessionStore.save = original
+    assert [bool(e.get("transient")) for e in transport.errors] == [True], transport.errors
+    assert [f["type"] for f in transport.sent if f.get("source") == "async"] == ["html_update"]
