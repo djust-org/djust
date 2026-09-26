@@ -43,15 +43,25 @@ from .test_sse_session_binding_f24_f25 import (
 )
 
 _open: list = []
+_bodies: list = []
 
 
 @pytest.fixture(autouse=True)
 def _clean_registry(monkeypatch):
     _sse_sessions.clear()
     _open.clear()
+    _bodies.clear()
+    real_init = sse._SSEStream.__init__
+
+    def recording_init(self, *args, **kwargs):
+        real_init(self, *args, **kwargs)
+        _bodies.append(self)
+
+    monkeypatch.setattr(sse._SSEStream, "__init__", recording_init)
     monkeypatch.setattr(sse, "_SESSION_LINGER_S", 0)
     yield
     _open.clear()
+    _bodies.clear()
     _sse_sessions.clear()
     # A leaked reservation would silently shrink every later test's caps.
     assert sse._sse_reserved == {}
@@ -71,6 +81,17 @@ async def _open_stream(view, sid, user, **kw):
     response = await view.get(_get(sid, user, **kw), session_id=sid)
     _open.append(response)
     return response
+
+
+def _body(response):
+    """The response's ``_SSEStream`` body, whose ``close()`` Django calls from
+    ``response.close()``. Tests call it directly: ``response.close()`` also
+    fires ``request_finished`` (``close_old_connections``), which touches the
+    database and made tests without DB access order-dependent."""
+    for body in _bodies:
+        if body._agen is response._iterator:
+            return body
+    raise AssertionError("no _SSEStream body recorded for this response")
 
 
 def _stream(response):
@@ -359,7 +380,7 @@ async def test_disconnect_before_the_first_ack_unregisters_on_close(monkeypatch)
     with patch("djust.runtime.ViewRuntime.dispatch_mount", new=_fake_mount_ok):
         resp = await _open_stream(view, sid, _auth_user(7))
     assert sid in _sse_sessions
-    resp.close()
+    _body(resp).close()
     assert sid not in _sse_sessions
     # A stream closed before it started yields nothing, not even the ack.
     assert [c async for c in _stream(resp)] == []
@@ -409,7 +430,7 @@ async def test_abandon_on_close_shuts_the_session_down(monkeypatch):
     shutdowns = []
     real_shutdown = session.shutdown
     monkeypatch.setattr(session, "shutdown", lambda: (shutdowns.append(1), real_shutdown()))
-    resp.close()
+    _body(resp).close()
     assert shutdowns == [1]
     assert session.active is False
 
@@ -434,7 +455,11 @@ async def test_start_deadline_timer_is_cancelled_when_the_stream_starts(monkeypa
 @override_settings(ALLOWED_HOSTS=["example.com"])
 @pytest.mark.asyncio
 async def test_start_deadline_timer_is_cancelled_by_close_from_a_worker_thread(monkeypatch):
-    """Django calls ``response.close()`` through ``sync_to_async``."""
+    """Django calls ``response.close()`` through ``sync_to_async``; that calls
+    the body's ``close()`` in a worker thread. The body's ``close()`` is called
+    directly here: ``response.close()`` also fires ``request_finished`` (and so
+    ``close_old_connections``), which touches the database from a test that
+    has no DB access and made this test order-dependent."""
     from asgiref.sync import sync_to_async
 
     guards = _capture_guards(monkeypatch)
@@ -443,7 +468,7 @@ async def test_start_deadline_timer_is_cancelled_by_close_from_a_worker_thread(m
     with patch("djust.runtime.ViewRuntime.dispatch_mount", new=_fake_mount_ok):
         resp = await _open_stream(view, sid, _auth_user(7))
     handle = guards[0]._deadline
-    await sync_to_async(resp.close)()
+    await sync_to_async(_body(resp).close)()
     # The thread-safe cancel lands on the loop in a later iteration; wait
     # for it (bounded) rather than assume one yield is enough.
     for _ in range(200):
@@ -481,7 +506,7 @@ async def test_close_after_a_started_stream_leaves_cleanup_to_the_stream():
         resp = await _open_stream(view, sid, _auth_user(7))
     agen = _stream(resp)
     await agen.__anext__()
-    resp.close()
+    _body(resp).close()
     assert sid in _sse_sessions
     await agen.aclose()
     assert sid not in _sse_sessions

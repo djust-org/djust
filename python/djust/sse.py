@@ -270,6 +270,7 @@ class _StreamGuard:
         self._started = False
         self._abandoned = False
         self._deadline: Optional[asyncio.TimerHandle] = None
+        self._deadline_task: Optional["asyncio.Future[None]"] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
 
     def arm_deadline(self, delay: float) -> None:
@@ -296,7 +297,8 @@ class _StreamGuard:
         # On the loop thread: shutting the view down may do sync work, so do
         # it in a worker thread like the other SSE teardown paths.
         self._deadline = None
-        asyncio.ensure_future(sync_to_async(self.abandon)())
+        # Keep a reference: the loop holds tasks only weakly.
+        self._deadline_task = asyncio.ensure_future(sync_to_async(self.abandon)())
 
     def start(self) -> bool:
         """Mark the stream started; ``False`` if it was already abandoned."""

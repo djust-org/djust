@@ -631,7 +631,10 @@ def _check_ws_path(errors: list[CheckMessage]) -> None:
     if _is_check_suppressed("djust.C025"):
         return
     value = getattr(settings, "DJUST_WS_PATH", None)
-    if value in (None, "") or ws_path_is_valid(value):
+    if isinstance(value, str):
+        value = value.strip()  # the client trims the emitted value
+    # Falsy is unset, as in {% djust_client_config %} (``if pinned:``).
+    if not value or ws_path_is_valid(value):
         return
     errors.append(
         DjustError(
