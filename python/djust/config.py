@@ -80,7 +80,6 @@ class LiveViewConfig:
         "websocket_compression": True,
         # Debug settings
         "debug_vdom": False,  # Enable detailed VDOM patching debug logs
-        "debug_components": False,  # Deprecated, never read (#2984; djust.C018; removed in 1.3)
         "debug_panel_max_history": 50,  # Maximum number of events/patches to keep in debug panel history
         "debug_auto_open_on_error": False,  # Auto-open debug panel on first error/warning (DEBUG mode only)
         # Colocated JS hook namespacing (Phoenix 1.1 parity).
@@ -152,10 +151,10 @@ class LiveViewConfig:
         # JIT Serialization (Phase 5)
         "jit_serialization": True,  # False skips JIT auto-serialization (#2984)
         "jit_debug": False,  # Debug logging for JIT serialization
-        # Deprecated, never read (#2984; djust.C018 warns when set, removed in 1.3):
-        "jit_cache_backend": "filesystem",
-        "jit_cache_dir": "__pycache__/djust_serializers",
-        "jit_redis_url": "redis://localhost:6379/0",
+        # jit_cache_backend / jit_cache_dir / jit_redis_url and
+        # debug_components / component_wrapper_class / component_loading_class
+        # were removed in 1.3 (#2984): nothing read them. djust.C018 warns when
+        # one is still set.
         "serialization_max_depth": 3,  # Max depth for nested model serialization (e.g., lease.tenant.user = 3 levels)
         # Serialization behavior (issue #292)
         # When False (default): non-serializable values are converted via str() fallback with a warning log
@@ -325,10 +324,6 @@ class LiveViewConfig:
         "render_help_text": True,
         "render_errors": True,
         "auto_validate_on_change": True,
-        # Component defaults. Deprecated, never read (#2984; djust.C018 warns
-        # when set; removed in 1.3):
-        "component_wrapper_class": "",
-        "component_loading_class": "loading",
         # Service worker (v0.5.0 P3) — opt-in instant shell + reconnection bridge.
         # These values are informational for tooling / system checks; the
         # actual runtime knobs live in the client-side registration call

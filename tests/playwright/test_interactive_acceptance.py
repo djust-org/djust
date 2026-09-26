@@ -113,10 +113,16 @@ async def run(browser, transport, failures):
     errors_before = await page.evaluate("() => window.__iaErrors.length")
     await page.click("#ia-menu .dj-dropdown-menu__trigger")
     await page.click("#ia-menu .dj-dropdown-menu__item[dj-value-value='fail']")
-    await page.wait_for_timeout(800)
-    await clear_overlay()
-    if await page.evaluate("() => window.__iaErrors.length") <= errors_before:
+    # Wait for the failing turn's djust:error, not a fixed 800 ms (#3137): on a
+    # freshly started server the turn could still be in flight when the
+    # refresh below was sent, so the refresh read the state from before it.
+    try:
+        await page.wait_for_function(
+            "(before) => window.__iaErrors.length > before", arg=errors_before, timeout=10000
+        )
+    except Exception:
         failures.append(f"{label}: a failing callback reported no djust:error")
+    await clear_overlay()
     await page.click("#ia-refresh")
     if transport == "http":
         # A failed HTTP turn answers 500 and saves nothing: the next request

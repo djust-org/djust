@@ -21,3 +21,22 @@ pytest_plugins = [
     "tests.lost_items_guard",  # #2746: a run that loses collected items goes red
     "tests.corpus_shards",  # share the full differential sweep within one CI shard
 ]
+
+
+def pytest_sessionstart(session):
+    """Stop the hot-reload file watcher in every pytest process (#3099).
+
+    ``DjustConfig.ready()`` skips its DEBUG auto-enable when
+    ``PYTEST_CURRENT_TEST`` is set, but pytest-django calls ``django.setup()``
+    during ``pytest_configure``, before any test sets it, so with the demo
+    settings' ``DEBUG=True`` each worker started a watchdog observer on the
+    demo project. A test that writes a template there then pushed hot-reload
+    frames into whichever WebSocket test was connected in that worker. This
+    hook runs after configure in the controller and in every xdist worker.
+    Tests that exercise the watcher start (and stop) their own.
+    """
+    try:
+        from djust.dev_server import hot_reload_server
+    except Exception:  # noqa: BLE001 — djust not importable: nothing started
+        return
+    hot_reload_server.stop()
