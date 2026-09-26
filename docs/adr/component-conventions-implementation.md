@@ -70,7 +70,9 @@ the collection API. The positive files and runtime assertions pass.
 - All marked "Available from djust 1.3" (not in the 1.3.0rc1 pre-release).
 - `test_adr034_documented_examples.py` extracts every documented view with the
   doc-snippet extractor and drives it through a real GET and the HTTP
-  fallback. That is six views across the guide and the AI reference.
+  fallback. That is six views across the guide and the AI reference. Since
+  ADR-037 D2 these run as `python/djust/tests/test_doc_examples.py`
+  (`doc_scenarios/adr034.py`).
 - djust-docs `docs_verify`, pointed at this branch's `docs/` and djust:
   - links, symbols (709) and a11y pass;
   - the nav finding (`guides/accounts.md`) pre-dates this branch;

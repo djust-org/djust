@@ -115,6 +115,7 @@ from djust.components.ui import TextArea, Toast, Tooltip
 `DropdownMenu` is the legacy renderer, and `djust.Q004` warns when a module
 imports both.
 
+<!-- djust-example: ai-project-menu scenario=project-menu -->
 ```python
 from djust import LiveView
 from djust.components.interactive import DropdownMenu

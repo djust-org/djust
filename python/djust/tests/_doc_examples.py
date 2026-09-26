@@ -63,7 +63,14 @@ class DocExampleError(ValueError):
 
 
 #: The covered sections (filled in by Task 5).
-COVERED: Tuple[Section, ...] = ()
+COVERED: Tuple[Section, ...] = (
+    Section("docs/website/guides/interactive-components.md"),
+    Section(
+        "docs/ai/components.md",
+        "## Interactive components (djust 1.3+)",
+        "## Common Patterns",
+    ),
+)
 
 
 def _path(section_path: str) -> pathlib.Path:
