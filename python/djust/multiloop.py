@@ -59,6 +59,7 @@ import socket
 import sys
 import sysconfig
 import threading
+import time
 from typing import Any, Coroutine, List, Optional, TypeVar
 
 logger = logging.getLogger(__name__)
@@ -76,6 +77,12 @@ T = TypeVar("T")
 
 #: Exit code when a server failed to start (uvicorn's ``STARTUP_FAILURE``).
 STARTUP_FAILURE = 3
+
+#: Seconds the supervisor still waits for the loops after a second signal.
+#: A forced uvicorn shutdown can stay in ``Server.wait_closed()`` while a
+#: connection is open (Python 3.12+ waits for connections there); the loop
+#: threads are daemon threads, so returning ends the process.
+FORCE_EXIT_GRACE = 3.0
 
 # Set by serve() before it starts the loops; read by the code that must hop to
 # another loop (SSE sessions, the db_notify listener). 0 = not launched here.
@@ -340,9 +347,14 @@ def serve(app: Any, *, loops: int = 1, allow_gil: bool = False, **uvicorn_kwargs
     runners: List[_Runner] = []
     received: List[int] = []
 
+    forced_at: List[float] = []
+
     def on_signal(signum: int, frame: Any) -> None:
         received.append(signum)
-        _signal_all(runners, force=len(received) > 1)
+        force = len(received) > 1
+        if force and not forced_at:
+            forced_at.append(time.monotonic())
+        _signal_all(runners, force=force)
 
     previous: dict = {}
     try:
@@ -358,6 +370,10 @@ def serve(app: Any, *, loops: int = 1, allow_gil: bool = False, **uvicorn_kwargs
             runner.thread.start()
         stopping = False
         while any(r.thread.is_alive() for r in runners):
+            if forced_at and time.monotonic() - forced_at[0] > FORCE_EXIT_GRACE:
+                stuck = [r.index for r in runners if r.thread.is_alive()]
+                logger.warning("djust serve: forced exit; event loop(s) %s still closing", stuck)
+                break
             for runner in runners:
                 runner.thread.join(timeout=0.1)
                 if not runner.thread.is_alive() and not stopping:
