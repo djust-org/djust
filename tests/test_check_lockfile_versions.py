@@ -11,8 +11,10 @@ Fixture shape per temp dir:
     Cargo.toml      — [workspace.package] version (Cargo form)
     uv.lock         — one editable `djust` [[package]] self-entry
     Cargo.lock      — N `djust*` workspace-crate [[package]] entries
+    python/djust/djust.cdx.json — SBOM whose root component is djust (#3184)
 """
 
+import json
 import pathlib
 import subprocess
 import sys
@@ -91,11 +93,36 @@ def _cargo_lock(crate_versions):
     return "version = 3\n\n" + "\n\n".join(blocks) + "\n"
 
 
-def _build_fixture(directory, *, py_version, cargo_version, uv_djust, cargo_crates):
+def _write_sbom(directory, version, name="djust"):
+    """The shape `djust.assets.sbom.to_cyclonedx` writes, trimmed to what the
+    audit reads."""
+    path = directory / "python" / "djust" / "djust.cdx.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    document = {
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.6",
+        "metadata": {
+            "component": {
+                "bom-ref": "root:%s" % name,
+                "name": name,
+                "type": "application",
+                "version": version,
+            }
+        },
+        "components": [],
+    }
+    path.write_text(json.dumps(document, indent=2))
+    return path
+
+
+def _build_fixture(
+    directory, *, py_version, cargo_version, uv_djust, cargo_crates, sbom_version=None
+):
     _write(directory, "pyproject.toml", _pyproject(py_version))
     _write(directory, "Cargo.toml", _cargo_toml(cargo_version))
     _write(directory, "uv.lock", _uv_lock(uv_djust))
     directory.joinpath("Cargo.lock").write_text(_cargo_lock(cargo_crates))
+    _write_sbom(directory, py_version if sbom_version is None else sbom_version)
 
 
 def _run(root):
@@ -224,3 +251,50 @@ class TestCheckLockfileVersions:
         assert result.returncode == 0, (
             f"real repo lockfiles must be in sync: {result.stdout}{result.stderr}"
         )
+
+
+_IN_SYNC = dict(
+    py_version="1.3.0rc4",
+    cargo_version="1.3.0-rc.4",
+    uv_djust="1.3.0rc4",
+    cargo_crates={"djust_core": "1.3.0-rc.4"},
+)
+
+
+class TestSbomVersion:
+    """#3184: the shipped SBOM must name the version being released."""
+
+    def test_stale_sbom_version_fails(self, tmp_path):
+        """The 1.3.0rc4 cut: manifests bumped, SBOM still on rc3."""
+        _build_fixture(tmp_path, **_IN_SYNC, sbom_version="1.3.0rc3")
+        code, out = _run(tmp_path)
+        assert code == 1, f"expected exit 1, got {code}: {out}"
+        assert "djust.cdx.json" in out
+        assert "1.3.0rc3" in out and "1.3.0rc4" in out
+        assert "make version VERSION=1.3.0rc4" in out
+
+    def test_sbom_in_sync_passes(self, tmp_path):
+        _build_fixture(tmp_path, **_IN_SYNC)
+        code, out = _run(tmp_path)
+        assert code == 0, f"expected exit 0, got {code}: {out}"
+
+    def test_missing_sbom_is_a_usage_error(self, tmp_path):
+        _build_fixture(tmp_path, **_IN_SYNC)
+        (tmp_path / "python" / "djust" / "djust.cdx.json").unlink()
+        code, out = _run(tmp_path)
+        assert code == 2, f"expected exit 2, got {code}: {out}"
+        assert "djust.cdx.json" in out and "not found" in out.lower()
+
+    def test_sbom_whose_root_is_not_djust_is_a_usage_error(self, tmp_path):
+        _build_fixture(tmp_path, **_IN_SYNC)
+        _write_sbom(tmp_path, "1.3.0rc4", name="someapp")
+        code, out = _run(tmp_path)
+        assert code == 2, f"expected exit 2, got {code}: {out}"
+        assert "someapp" in out
+
+    def test_make_version_regenerates_the_sbom(self):
+        """`make version` is what keeps the SBOM in sync; pin that its
+        recipe runs the distribution SBOM writer (#3184)."""
+        makefile = (_SELF.parents[1] / "Makefile").read_text()
+        recipe = makefile.split("\nversion:", 1)[1].split("\n.PHONY:", 1)[0]
+        assert "-m djust.assets.sbom --distribution" in recipe
