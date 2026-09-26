@@ -22,7 +22,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C014 | Config | Warning | Multi-tenant ASGI without TENANT_LIMIT_SET_CALLS |
 | C015 | Config | Error | Unknown adapter name in DJUST_CONFIG['extensions'] |
 | C016 | Config | Warning | DjangoTemplates listed before DjustTemplateBackend, no DjangoTemplates fallback for admin, or a djust-first entry lacking the admin's context processors |
-| C018 | Config | Warning | Deprecated LIVEVIEW_CONFIG key set that djust never reads (removed in 1.3) |
+| C018 | Config | Warning | A LIVEVIEW_CONFIG key removed in 1.3 (never read) is still set |
 | C019 | Config | Warning | Unknown DJUST_CONFIG['PRESENCE_BACKEND'] value (presence falls back to in-process memory) |
 | C020 | Config | Error | `DJUST_SERVER_STATE_MAX_AGE` is not an integer from 1 to 86400 |
 | C021 | Config | Error | `LIVEVIEW_CONFIG['worker_threads']` is not `None`, `False`, `True`, `"auto"` or an integer >= 0 |
@@ -465,6 +465,16 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **False positives**: Conservative by design — private (`_`-prefixed) handlers
   and read-only-looking handlers (`load_` / `get_` / `list_` / `search_` / …)
   are exempt, and a falsy `login_required = False` does not count as view auth.
+- **Decorator resolution** (#3093): the per-handler gate is recognised by what
+  it binds to, following the module's imports — `permission_required as
+  require_permission`, `decorators.permission_required(...)` and
+  `djust.decorators.permission_required(...)` all count. Django's
+  `permission_required`, and a different djust decorator imported as
+  `permission_required`, do not. Anything the check cannot decide falls back to
+  matching the name `permission_required`: a project's own wrapper, a relative
+  or star import, a name bound twice at module level (a `try`/`except` import
+  fallback), or a module that is not already loaded. Only module-level imports
+  count, and the check never imports the code it scans.
 
 ### S011 — Inline `<script>` inside a `dj-root` without a CSP
 - **Severity**: Warning

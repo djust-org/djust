@@ -264,6 +264,30 @@ def publish(self, **kwargs):
     self.item.save()
 ```
 
+**Name collision with the view-level attribute.** `LiveView.permission_required` is also a class attribute (the permission checked at mount). Once a view assigns it, the name `permission_required` inside that class body is the string, not the decorator, and `@permission_required("...")` raises `TypeError: 'str' object is not callable` at import time. To use both in one view, import the decorator under another name, or spell it through its module:
+
+```python
+from djust import LiveView
+from djust import decorators
+from djust.decorators import event_handler
+from djust.decorators import permission_required as require_permission
+
+
+class BoardView(LiveView):
+    login_required = True
+    permission_required = "app.view_board"  # view-level: checked at mount
+
+    @require_permission("app.add_decision")  # handler-level
+    @event_handler()
+    def decide(self, **kwargs): ...
+
+    @decorators.permission_required("app.delete_decision")  # also fine
+    @event_handler()
+    def undo(self, **kwargs): ...
+```
+
+System check `djust.S009` follows the import, so both spellings count as a per-handler gate.
+
 ---
 
 ## `@background`
