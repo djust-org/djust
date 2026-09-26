@@ -214,6 +214,10 @@ class LiveViewSSE {
                     globalThis.djust._mirrorPageParameterContracts?.(data.parameter_contracts, data.view);
                 }
                 if (globalThis.djustDebug) console.log('[SSE] View mounted:', data.view);
+                // #2966: the server's answer to a reconnect's track_static.
+                if (data.stale_static && globalThis.djust.djTrackStatic) {
+                    globalThis.djust.djTrackStatic.applyStaleStatic(data.stale_static);
+                }
 
                 // Remove dj-cloak from all elements (FOUC prevention)
                 document.querySelectorAll('[dj-cloak]').forEach(el => el.removeAttribute('dj-cloak'));
@@ -503,14 +507,20 @@ class LiveViewSSE {
     _sendMountFrame(viewPath, params = {}) {
         let tz = null;
         try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { /* noop */ }
-        return this.sendMessage({
+        const frame = {
             type: 'mount',
             view: viewPath,
             params,
             url: window.location.pathname,
             has_prerendered: false,
             client_timezone: tz,
-        });
+        };
+        // #2966: the WebSocket mount's dj-track-static fields (#1646).
+        const trackStatic = globalThis.djust.djTrackStatic;
+        if (trackStatic) {
+            Object.assign(frame, trackStatic.mountFields(Boolean(window.djust._isReconnect)));
+        }
+        return this.sendMessage(frame);
     }
 
     /**

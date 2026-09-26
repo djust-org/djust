@@ -3489,6 +3489,20 @@ class ViewRuntime:
             logger.warning("Service-worker cache metadata unavailable for mount")
             mount_msg["sw_cache"] = "no-store"
 
+        # #2966: dj-track-static. A reconnecting client sends the tracked asset
+        # URLs its page loaded; report the ones the current static manifest
+        # has replaced. Additive, and absent for pages that track nothing.
+        track_static = data.get("track_static")
+        if track_static:
+            try:
+                from ._track_static import stale_static_urls
+
+                stale_static = stale_static_urls(track_static)
+                if stale_static:
+                    mount_msg["stale_static"] = stale_static
+            except Exception:  # noqa: BLE001 — an asset check must never break mount
+                logger.warning("dj-track-static check failed; no stale assets reported")
+
         # Optional cache_config (mirrors WS consumer)
         cache_config = self._extract_cache_config(view_instance)
         if cache_config:

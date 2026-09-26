@@ -84,6 +84,63 @@ function _onWsReconnected() {
     }));
 }
 
+// #2966: the checks above compare the page's tracked URLs with themselves, so
+// a deploy that changes `<head>` asset URLs is never seen by them. A
+// reconnecting client therefore sends the URLs its page LOADED with its mount
+// frame (`track_static`), and the server answers with the ones its current
+// static manifest has replaced (`stale_static`). Same-origin URLs are sent as
+// paths; the list is capped like the server's.
+const _TRACK_STATIC_MAX = 64;
+
+function _sentUrl(url) {
+    try {
+        const parsed = new URL(url, window.location.href);
+        if (parsed.origin === window.location.origin) return parsed.pathname;
+    } catch (_e) { /* keep the attribute value as written */ }
+    return url;
+}
+
+function _trackedUrls() {
+    const urls = [];
+    if (_djTrackStaticSnapshot === null) return urls;
+    _djTrackStaticSnapshot.forEach(function (url) {
+        if (!url || urls.length >= _TRACK_STATIC_MAX) return;
+        const sent = _sentUrl(url);
+        if (urls.indexOf(sent) === -1) urls.push(sent);
+    });
+    return urls;
+}
+
+// Fields to merge into a mount frame. Only a reconnect asks: a first mount
+// follows a page load, whose assets are current by construction.
+function _mountFields(isReconnect) {
+    if (!isReconnect) return {};
+    const urls = _trackedUrls();
+    return urls.length ? { track_static: urls } : {};
+}
+
+// A mount reply's `stale_static`: reload when a stale asset was tracked with
+// dj-track-static="reload", otherwise dispatch dj:stale-assets.
+function _applyStaleStatic(stale) {
+    if (!Array.isArray(stale) || _djTrackStaticSnapshot === null) return;
+    const reported = stale.filter(function (u) { return typeof u === 'string' && u; });
+    if (!reported.length) return;
+    let shouldReload = false;
+    _djTrackStaticSnapshot.forEach(function (url, el) {
+        if (reported.indexOf(_sentUrl(url)) !== -1 &&
+            (el.getAttribute('dj-track-static') || '').trim() === 'reload') {
+            shouldReload = true;
+        }
+    });
+    if (shouldReload) {
+        window.location.reload();
+        return;
+    }
+    document.dispatchEvent(new CustomEvent('dj:stale-assets', {
+        detail: { changed: reported },
+    }));
+}
+
 function _installDjTrackStatic() {
     // Seed snapshot on page load (the \"first connect\" for SSR / full page
     // load case). The subsequent djust:ws-reconnected events compare
@@ -105,5 +162,8 @@ globalThis.djust.djTrackStatic = {
     _snapshotAssets,
     _checkStale,
     _onWsReconnected,
+    _trackedUrls,
+    mountFields: _mountFields,
+    applyStaleStatic: _applyStaleStatic,
     _resetSnapshot: function () { _djTrackStaticSnapshot = null; },
 };

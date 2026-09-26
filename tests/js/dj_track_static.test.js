@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { JSDOM } from 'jsdom';
+import { JSDOM, VirtualConsole } from 'jsdom';
 import fs from 'fs';
 
 const clientCode = fs.readFileSync('./python/djust/static/djust/client.js', 'utf-8');
@@ -91,5 +91,130 @@ describe('dj-track-static', () => {
     it('exposes _snapshotAssets on window.djust.djTrackStatic', () => {
         dom = createDom('');
         expect(typeof dom.window.djust.djTrackStatic._snapshotAssets).toBe('function');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// #2966 — a deploy is detected by the SERVER on reconnect. The page's tracked
+// URLs ride the reconnect mount frame (`track_static`); the mount reply's
+// `stale_static` fires dj:stale-assets or reloads. Driven through the real
+// LiveViewWebSocket mount() and handleMessage().
+// ---------------------------------------------------------------------------
+
+// jsdom's location.reload cannot be stubbed (it is unforgeable); a call is
+// observable as its "Not implemented" jsdomError on the virtual console.
+async function loadWsPage(headHtml) {
+    const reloads = [];
+    const virtualConsole = new VirtualConsole();
+    virtualConsole.on('jsdomError', (err) => {
+        if (/navigation|reload/i.test(String(err && err.message))) reloads.push(err.message);
+    });
+    const dom = new JSDOM(`<!DOCTYPE html>
+<html><head>
+${headHtml}
+</head>
+<body>
+  <div dj-view="test.views.Page" dj-root><p>content</p></div>
+</body>
+</html>`, { runScripts: 'dangerously', url: 'http://localhost/page/', virtualConsole });
+    dom.window.eval(`
+        window.WebSocket = class {
+            static CONNECTING = 0; static OPEN = 1; static CLOSING = 2; static CLOSED = 3;
+            constructor() { this.readyState = 1; this.sent = []; }
+            send(d) { this.sent.push(d); }
+            close() {}
+        };
+        window.requestAnimationFrame = function(cb) { return setTimeout(cb, 0); };
+        window.scrollTo = function() {};
+    `);
+    for (const k of ['log', 'warn', 'error', 'debug', 'info']) dom.window.console[k] = () => {};
+    dom.window.eval(clientCode);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const ws = dom.window.djust.liveViewInstance;
+    ws.ws.sent.length = 0;
+    return { dom, ws, reloads };
+}
+
+function mountFrames(ws) {
+    return ws.ws.sent.map((s) => JSON.parse(s)).filter((m) => m.type === 'mount');
+}
+
+const HEAD = `
+  <script dj-track-static src="/static/js/app.0123456789ab.js"></script>
+  <link dj-track-static rel="stylesheet" href="http://localhost/static/css/site.aaaaaaaaaaaa.css">
+  <script dj-track-static src="https://cdn.example.com/lib.js"></script>`;
+
+describe('#2966 server-side stale-asset check', () => {
+    it('a reconnect mount carries the URLs the page loaded, same-origin as paths', async () => {
+        const { dom, ws } = await loadWsPage(HEAD);
+        dom.window.djust._isReconnect = true;
+        ws.mount('test.views.Page', {}, { primary: true });
+        const [frame] = mountFrames(ws);
+        expect(frame.track_static).toEqual([
+            '/static/js/app.0123456789ab.js',
+            '/static/css/site.aaaaaaaaaaaa.css',
+            'https://cdn.example.com/lib.js',
+        ]);
+    });
+
+    it('a first mount does not ask', async () => {
+        const { dom, ws } = await loadWsPage(HEAD);
+        dom.window.djust._isReconnect = false;
+        ws.mount('test.views.Page', {}, { primary: true });
+        expect(mountFrames(ws)[0].track_static).toBeUndefined();
+    });
+
+    it('a sibling (non-primary) mount does not ask', async () => {
+        const { dom, ws } = await loadWsPage(HEAD);
+        dom.window.djust._isReconnect = true;
+        ws.mount('test.views.Other', {}, {});
+        expect(mountFrames(ws)[0].track_static).toBeUndefined();
+    });
+
+    it('a page that tracks nothing sends nothing', async () => {
+        const { dom, ws } = await loadWsPage('');
+        dom.window.djust._isReconnect = true;
+        ws.mount('test.views.Page', {}, { primary: true });
+        expect(mountFrames(ws)[0].track_static).toBeUndefined();
+    });
+
+    it('stale_static on the mount reply fires dj:stale-assets', async () => {
+        const { dom, ws, reloads } = await loadWsPage(HEAD);
+        const events = [];
+        dom.window.document.addEventListener('dj:stale-assets', (e) => events.push(e.detail));
+        ws.primaryViewPath = 'test.views.Page';
+        await ws.handleMessage({
+            type: 'mount', view: 'test.views.Page', version: 1,
+            stale_static: ['/static/js/app.0123456789ab.js'],
+        });
+        expect(events).toEqual([{ changed: ['/static/js/app.0123456789ab.js'] }]);
+        expect(reloads).toEqual([]);
+    });
+
+    it('a stale dj-track-static="reload" asset reloads the page', async () => {
+        const { dom, ws, reloads } = await loadWsPage(
+            '<script dj-track-static="reload" src="/static/js/app.0123456789ab.js"></script>');
+        const events = [];
+        dom.window.document.addEventListener('dj:stale-assets', (e) => events.push(e.detail));
+        ws.primaryViewPath = 'test.views.Page';
+        await ws.handleMessage({
+            type: 'mount', view: 'test.views.Page', version: 1,
+            stale_static: ['/static/js/app.0123456789ab.js'],
+        });
+        expect(reloads.length).toBe(1);
+        expect(events).toEqual([]);
+    });
+
+    it('a mount reply without stale_static does nothing', async () => {
+        const { dom, ws, reloads } = await loadWsPage(HEAD);
+        const events = [];
+        dom.window.document.addEventListener('dj:stale-assets', (e) => events.push(e.detail));
+        ws.primaryViewPath = 'test.views.Page';
+        await ws.handleMessage({ type: 'mount', view: 'test.views.Page', version: 1 });
+        await ws.handleMessage({
+            type: 'mount', view: 'test.views.Page', version: 2, stale_static: [42, ''],
+        });
+        expect(events).toEqual([]);
+        expect(reloads).toEqual([]);
     });
 });

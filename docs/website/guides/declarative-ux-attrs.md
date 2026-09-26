@@ -92,9 +92,9 @@ That's it. Appending a new `<div class="msg">` scrolls the container to the bott
 
 ## `dj-track-static`
 
-Intended to warn clients on long-lived WebSocket connections that they are running stale JavaScript after you ship new code.
+Warns clients on long-lived WebSocket connections that they are running stale JavaScript or CSS after you ship new code.
 
-> **Known issue: #2966.** At 1.2.0rc10, `dj-track-static` cannot detect a server deploy. On reconnect it re-reads the `src`/`href` of the same elements it snapshotted at page load, and nothing ever sends the client the new asset URLs (there is no server-side comparison either). After a deploy the `<script>`/`<link>` tags in `<head>` keep their old URLs, so neither `dj:stale-assets` nor the `"reload"` behaviour fires. The check only fires if a VDOM patch rewrites a tracked element's `src`/`href` in place inside the LiveView root. Don't rely on it for deploy detection until the fix ships.
+Deploy detection needs a hashed static storage: `ManifestStaticFilesStorage` (or a subclass). The server compares each tracked URL with the current `staticfiles.json` manifest. With any other storage, only the in-page check in step 2 below runs. Before 1.3 (#2966), `dj-track-static` could not detect a deploy at all.
 
 Phoenix parity: this is `phx-track-static`, renamed for djust.
 
@@ -119,7 +119,8 @@ The `{% djust_track_static %}` tag is purely a discoverability convenience — t
 
 1. On page load, djust snapshots the `src` / `href` of every `[dj-track-static]` element.
 2. On every WebSocket reconnect (the socket's `onopen`, before the reconnect mount returns any HTML), it re-reads the current `src` / `href` of those same snapshotted elements and compares them against the snapshot. It does not re-query the document.
-3. If any URL changed, djust dispatches a `dj:stale-assets` CustomEvent on `document`:
+3. The reconnect mount frame carries the snapshotted URLs as `track_static` (same-origin URLs as paths, at most 64). The server reports as `stale_static` each URL that names an older hashed build of an asset the current manifest still has, for example `js/app.0123456789ab.js` when the manifest now maps `js/app.js` to `js/app.ba9876543210.js`. It never reports a URL it cannot judge: an unhashed name, a URL outside `STATIC_URL`, another origin's asset, or an asset missing from the manifest. The first mount after a page load sends nothing, because that page's assets are current.
+4. If any URL changed (step 2) or was reported stale (step 3), djust dispatches a `dj:stale-assets` CustomEvent on `document`:
 
 ```js
 document.addEventListener('dj:stale-assets', (e) => {
