@@ -203,24 +203,20 @@ def _host(entry: str) -> str:
     return urlsplit(entry if "//" in entry else "//" + entry).netloc.lower()
 
 
-def _allowed_origins() -> tuple[frozenset[str], list[CheckMessage]]:
-    """``DJUST_ALLOWED_EXTERNAL_ORIGINS`` as hosts, plus a B010 warning when
-    the setting isn't a list of strings (then nothing is allowed)."""
+def _allowed_origins() -> tuple[frozenset[str], str | None]:
+    """``DJUST_ALLOWED_EXTERNAL_ORIGINS`` as hosts, or no hosts plus the
+    reason when the setting isn't a list of strings."""
     value = getattr(settings, "DJUST_ALLOWED_EXTERNAL_ORIGINS", None)
     if value is None:
-        return frozenset(), []
+        return frozenset(), None
     if isinstance(value, (list, tuple, set, frozenset)) and all(
         isinstance(entry, str) for entry in value
     ):
-        return frozenset(_host(entry) for entry in value), []
-    return frozenset(), [
-        Warning(
-            "DJUST_ALLOWED_EXTERNAL_ORIGINS must be a list of hostnames such as "
-            f'["js.stripe.com"], not {type(value).__name__} ({value!r}); it is ignored.',
-            hint="List each origin that can't be vendored or pinned, one string per host.",
-            id="djust.B010",
-        )
-    ]
+        return frozenset(_host(entry) for entry in value), None
+    return frozenset(), (
+        "DJUST_ALLOWED_EXTERNAL_ORIGINS must be a list of hostnames such as "
+        f'["js.stripe.com"], not {type(value).__name__} ({value!r}); it is ignored.'
+    )
 
 
 @register("djust")
@@ -241,7 +237,16 @@ def check_undeclared_origins(app_configs: Any, **kwargs: Any) -> list[CheckMessa
         for f in asset.files
         if f.url
     }
-    allowed, messages = _allowed_origins()
+    allowed, problem = _allowed_origins()
+    messages: list[CheckMessage] = []
+    if problem is not None:
+        messages.append(
+            Warning(
+                problem,
+                hint="List each origin that can't be vendored or pinned, one string per host.",
+                id="djust.B010",
+            )
+        )
     for template_path in _iter_template_files(_get_template_dirs()):
         try:
             content = Path(template_path).read_text(encoding="utf-8", errors="replace")

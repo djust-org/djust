@@ -89,12 +89,9 @@ def _storage_mtime(path: str) -> float | None:
 
     try:
         return staticfiles_storage.get_modified_time(_stored_name(path)).timestamp()
-    except Exception as exc:  # noqa: BLE001 - NotImplementedError, missing file, remote errors
-        logger.debug(
-            "static storage has no modified time for %r (%s); not caching its hash",
-            path,
-            type(exc).__name__,
-        )
+    except Exception:  # noqa: BLE001 - NotImplementedError, missing file, remote errors
+        # Not cached, then: the storage read that follows reports any real
+        # failure with the file's path.
         return None
 
 
