@@ -312,6 +312,16 @@ In development, pages render without Tailwind utilities until you compile the CS
 
 ---
 
+### C024: Invalid DJUST_EXPLICIT_STATE_SAVE_TIMEOUT
+
+**Severity**: Error
+
+**What causes it**: `DJUST_EXPLICIT_STATE_SAVE_TIMEOUT` is set but is not a number of seconds greater than 0 and at most 10. It is how long an ADR-038 explicit view's turn waits for its state save, counted from when the save starts running rather than from when it is queued. With an invalid value the runtime uses the default of 0.15 seconds.
+
+**Fix**: Set a value such as `DJUST_EXPLICIT_STATE_SAVE_TIMEOUT = 0.5`, or remove the setting. Suppress with `DJUST_CONFIG = {"suppress_checks": ["C024"]}` (the runtime still uses the default).
+
+---
+
 ### C301: Invalid VDOM cache TTL
 
 **Severity**: Error

@@ -27,6 +27,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C020 | Config | Error | `DJUST_SERVER_STATE_MAX_AGE` is not an integer from 1 to 86400 |
 | C021 | Config | Error | `LIVEVIEW_CONFIG['worker_threads']` is not `None`, `False`, `True`, `"auto"` or an integer >= 0 |
 | C022 | Config | Error | `LIVEVIEW_CONFIG['event_parameter_policy']` is not `'legacy'` or `'strict'` (ADR-036) |
+| C024 | Config | Error | `DJUST_EXPLICIT_STATE_SAVE_TIMEOUT` is not a number of seconds greater than 0 and at most 10 |
 | V001 | LiveView | Warning | LiveView missing template_name attribute |
 | V002 | LiveView | Info | LiveView missing mount() method |
 | V003 | LiveView | Error | mount() has wrong signature |
@@ -199,6 +200,13 @@ console.log("debug info"); // noqa: Q003
 - **Method**: Settings inspection, through the resolver dispatch uses (`djust.validation.get_project_parameter_policy`)
 - **What it detects**: `LIVEVIEW_CONFIG['event_parameter_policy']` (or the same key in `DJUST_CONFIG`) is set to something other than `'legacy'` or `'strict'`. Every handler without its own `parameter_policy` inherits the value, and dispatch rejects each of their events while it is invalid. An absent key is the `'legacy'` default and never reports. The ADR-036 strict policy is opt-in; legacy remains the default.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C022"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C022"]` (the runtime still rejects the events)
+- **False positives**: None
+
+### C024 — Invalid `DJUST_EXPLICIT_STATE_SAVE_TIMEOUT`
+- **Severity**: Error
+- **Method**: Settings inspection
+- **What it detects**: `DJUST_EXPLICIT_STATE_SAVE_TIMEOUT` is set but is not an `int` or `float` greater than 0 and at most 10 (booleans, strings, NaN and infinity are rejected). The setting is how long, in seconds, an ADR-038 explicit turn waits for its state save, counted from when the save starts running (#3200). At runtime an invalid value falls back to the 0.15 s default.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C024"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C024"]` (the runtime still uses the default)
 - **False positives**: None
 
 ---
