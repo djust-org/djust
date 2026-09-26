@@ -311,10 +311,15 @@ All rows are owner decisions (2026-09-25).
 | 20 | `python/djust/templatetags/live_tags.py:1375` `_LIVE_RENDER_EVENT_ATTRS` | A hand-written list of event directives for the embedded-child stamp | RETIRE | Derived from `DIRECTIVES` (directives whose client binding attaches owner context) plus `dj-hook`. |
 | 21 | `python/djust/schema.py:21` `DIRECTIVES` | The AI schema's directive table | KEEP | Prose for AI guidance. A test pins its event-directive names and generated parameters to `_template_bindings.DIRECTIVES`. |
 | 22 | `python/djust/checks/templates.py:985–1000` (T010) | `dj-click` with navigation data attributes | KEEP | A heuristic, not name resolution. |
-| 23 | `python/djust/components/gallery/views.py:589` | The catalogue preview's JS shim reading `dj-click` | KEEP | Revisited at D2 with the `"view"` catalogue entries. |
+| 23 | `python/djust/components/gallery/views.py:589` | The catalogue preview's JS shim reading `dj-click` | KEEP | Revisited at D2: the interactive catalogue entry is served by its own example view (`djust.components.interactive_examples`), so the shim is not involved. |
+| 24 | `python/djust/mcp/server.py:970` `validate_view` | Handler signatures, warning that an event handler "should accept `**kwargs`" | RETIRE | D3: a closed signature is encouraged; `manage.py check` T020 compares bindings with handlers. |
+| 25 | `python/djust/mcp/server.py:1145` `detect_common_issues` (`missing_kwargs`) | The same rule, as an AI-facing lint | RETIRE | Same reason as row 24. |
+| 26 | `python/djust/schema.py` `BEST_PRACTICES` (the `event_handlers` rules, `event_handler_signature`, pitfall 3) and `docs/ai/events.md:3` | AI guidance stating the V007 rule as a requirement | RETIRE | The guidance now states the T020 contract, including the legacy `field`/`_target` case. |
 | V020 | `python/djust/checks/components.py:1665` | Interactive declarations on actor views | KEEP | It reads the runtime's own declarations and enforces ADR-034 decision Q5. |
 | Q004 | `python/djust/checks/quality.py:213` | Imports of both `DropdownMenu` classes | KEEP | Import hygiene; no handler names, parameters or ownership. |
 | S013 | `python/djust/checks/security.py:979` | Edit views with no row scoping or object permission | KEEP | An authorization policy the binding checks cannot express. |
+
+Rows 24–26 were found at D3 planning (2026-09-25). The D1 enumeration covered checks and dispatch, but not the MCP tools or the AI schema's prose. Their deletion PR is the ADR-037 D3 PR.
 
 Row 4's terms: `_get_handlers` keeps its name as a thin adapter over the shared
 discovery. Undecorated methods stop being fuzzed, since dispatch refuses them.

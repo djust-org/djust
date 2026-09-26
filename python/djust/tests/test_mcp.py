@@ -108,7 +108,9 @@ class MyView:
         assert any("handle_click" in n for n in names)
         assert any("on_submit" in n for n in names)
 
-    def test_detects_missing_kwargs(self, mcp_server):
+    def test_a_closed_handler_signature_is_not_an_issue(self, mcp_server):
+        # ADR-037 retired V007: a closed signature is encouraged, and
+        # `manage.py check` (T020) compares bindings with handlers instead.
         code = """
 from djust.decorators import event_handler
 
@@ -117,10 +119,13 @@ class MyView:
     def do_thing(self, item_id: int = 0):
         pass
 """
-        result = _call_tool(mcp_server, "detect_common_issues", code=code)
-        kwargs_issues = [i for i in result["issues"] if i["type"] == "missing_kwargs"]
-        assert len(kwargs_issues) == 1
-        assert "do_thing" in kwargs_issues[0]["message"]
+        for tool in ("detect_common_issues", "validate_view"):
+            result = _call_tool(mcp_server, tool, code=code)
+            # detect_common_issues answers {"issues": [...]}; validate_view a list.
+            issues = result["issues"] if isinstance(result, dict) else result
+            assert not [
+                i for i in issues if "kwargs" in json.dumps(i) and "mount" not in json.dumps(i)
+            ], tool
 
     def test_detects_public_queryset(self, mcp_server):
         code = """
@@ -168,7 +173,7 @@ class MyView:
         result = _call_tool(mcp_server, "detect_common_issues", code=code)
         assert result["summary"]["total"] > 0
         assert result["summary"]["errors"] >= 1  # service_in_state
-        assert result["summary"]["warnings"] >= 1  # missing_kwargs or missing_decorator
+        assert result["summary"]["warnings"] >= 1  # missing_decorator
 
 
 # ============================================================================
@@ -270,10 +275,11 @@ class TestGetBestPracticesExpanded:
 
     def test_has_event_handler_signature_section(self, mcp_server):
         result = _call_tool(mcp_server, "get_best_practices")
-        assert "event_handler_signature" in result
         sig = result["event_handler_signature"]
-        assert "**kwargs" in sig["correct"]
-        assert "**kwargs" not in sig["wrong"] or "Missing" in sig["wrong"]
+        assert "**kwargs" not in sig["correct"]
+        assert "T020" in sig["description"]
+        rules = " ".join(result["event_handlers"]["rules"])
+        assert "MUST accept **kwargs" not in rules and "MUST have default values" not in rules
 
     def test_common_pitfalls_are_structured(self, mcp_server):
         result = _call_tool(mcp_server, "get_best_practices")
@@ -309,3 +315,10 @@ class TestGetBestPracticesExpanded:
         assert "jit_serialization" in result
         assert "forms" in result
         assert "security" in result
+
+
+def test_ai_events_reference_does_not_require_kwargs():
+    import pathlib
+
+    text = pathlib.Path(__file__).resolve().parents[3].joinpath("docs/ai/events.md").read_text()
+    assert "require `@event_handler()` decorator and `**kwargs`" not in text
