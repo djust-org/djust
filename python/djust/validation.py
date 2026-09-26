@@ -673,7 +673,9 @@ def _warn_on_near_miss_kwargs(
             "Rename one side to match. Accepted parameters: %s",
             sanitize_for_log(name, max_length=100),
             sanitize_for_log(str(event_name), max_length=100),
-            safe_key,
+            # ``safe_key`` skips sanitising a short identifier on the hot path
+            # above; this warning runs once per near miss, so sanitise here.
+            sanitize_for_log(safe_key, max_length=100),
             match,
             sanitize_for_log(", ".join(accepted), max_length=200),
         )
