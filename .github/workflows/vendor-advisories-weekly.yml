@@ -1,0 +1,75 @@
+name: Vendored asset advisories (weekly)
+on:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+permissions:
+  contents: read
+  issues: write
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Add each later line (e.g. '1.4') once its branch has a committed
+        # python/djust/djust.cdx.json. '1.3' is the first line that ships one.
+        line: ['1.3']
+    env:
+      # Pin osv-scanner to a released binary instead of `go install ...@latest`
+      # (unpinned = floating security gate). Version and SHA-256 recorded
+      # from https://github.com/google/osv-scanner/releases/download/v2.6.0/
+      # (osv-scanner_SHA256SUMS), verified locally before writing this file.
+      OSV_SCANNER_VERSION: '2.6.0'
+      OSV_SCANNER_SHA256: ca69b3d3cd08f889a49dc0a383122f71cc528b83803671df5fd874d97485b108
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Latest tag on the line
+        id: tag
+        run: echo "tag=$(git tag -l 'v${{ matrix.line }}.*' --sort=-v:refname | head -1)" >> "$GITHUB_OUTPUT"
+      - name: Check out that release's SBOM
+        id: sbom
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          if [ -z "$TAG" ]; then
+            echo "::notice::No tag found on line ${{ matrix.line }} yet; skipping."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git cat-file -e "$TAG:python/djust/djust.cdx.json" || {
+            echo "::notice::$TAG has no python/djust/djust.cdx.json yet (SBOM shipped in 1.3); skipping."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+          git show "$TAG:python/djust/djust.cdx.json" > release.cdx.json
+          echo "found=true" >> "$GITHUB_OUTPUT"
+      - name: Install osv-scanner
+        if: steps.sbom.outputs.found == 'true'
+        run: |
+          curl -sSLO "https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
+          echo "${OSV_SCANNER_SHA256}  osv-scanner_linux_amd64" | sha256sum -c -
+          chmod +x osv-scanner_linux_amd64
+          sudo mv osv-scanner_linux_amd64 /usr/local/bin/osv-scanner
+      - name: Scan
+        id: scan
+        if: steps.sbom.outputs.found == 'true'
+        run: |
+          set +e
+          osv-scanner scan source --format json -L release.cdx.json > result.json
+          echo "code=$?" >> "$GITHUB_OUTPUT"
+      - name: One issue per advisory and line
+        if: steps.sbom.outputs.found == 'true' && steps.scan.outputs.code != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          jq -r '.results[].packages[] | .package as $p | .vulnerabilities[] | "\(.id)\t\($p.name)@\($p.version)"' result.json | sort -u |
+          while IFS=$'\t' read -r id pkg; do
+            title="Vendored ${pkg} in ${TAG}: ${id}"
+            if [ -z "$(gh issue list --state all --search "\"${title}\" in:title" --json number -q '.[].number')" ]; then
+              gh issue create --title "$title" --label security \
+                --body "The weekly scan of \`python/djust/djust.cdx.json\` at ${TAG} matched ${id} for ${pkg}. Bump it in js/vendor, run \`make vendor\`, and release a patch. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            fi
+          done

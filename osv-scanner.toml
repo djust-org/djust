@@ -1,0 +1,8 @@
+# Known advisories in vendored browser packages that we accept for now.
+# Every entry needs a reason and an ignoreUntil date; after that date the
+# advisory fails CI again. Add entries only with a linked issue.
+#
+# [[IgnoredVulns]]
+# id = "GHSA-xxxx-xxxx-xxxx"
+# ignoreUntil = 2026-12-31
+# reason = "Not reachable: … (#NNNN)"

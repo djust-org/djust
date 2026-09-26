@@ -1,0 +1,61 @@
+name: Vendored assets
+on:
+  pull_request:
+    paths:
+      - 'js/vendor/**'
+      - 'Cargo.lock'
+      - 'crates/*/Cargo.toml'
+      - 'python/djust/djust.cdx.json'
+      - 'python/djust/**/djust_assets.json'
+      - 'python/djust/assets/**'
+      - 'python/djust/components/static/djust_components/**'
+      - 'python/djust/admin_ext/static/**'
+      - 'python/djust/admin_ext/templates/**'
+      - 'osv-scanner.toml'
+      - 'scripts/vendor_canary_sbom.py'
+      - '.github/workflows/vendor.yml'
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  vendor:
+    runs-on: ubuntu-latest
+    env:
+      # Pin osv-scanner to a released binary instead of `go install ...@latest`
+      # (unpinned = floating security gate). Version and SHA-256 recorded
+      # from https://github.com/google/osv-scanner/releases/download/v2.6.0/
+      # (osv-scanner_SHA256SUMS), verified locally before writing this file.
+      OSV_SCANNER_VERSION: '2.6.0'
+      OSV_SCANNER_SHA256: ca69b3d3cd08f889a49dc0a383122f71cc528b83803671df5fd874d97485b108
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: js/vendor/package-lock.json
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Rebuild and compare every vendored output
+        run: make vendor-check PYTHON=python
+      - name: Bundle behaviour, manifests and license files
+        run: make test-vendor
+      - name: Install osv-scanner
+        run: |
+          curl -sSLO "https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
+          echo "${OSV_SCANNER_SHA256}  osv-scanner_linux_amd64" | sha256sum -c -
+          chmod +x osv-scanner_linux_amd64
+          sudo mv osv-scanner_linux_amd64 /usr/local/bin/osv-scanner
+      - name: Canary — the scanner must see a package inside our SBOM
+        run: |
+          python scripts/vendor_canary_sbom.py "$RUNNER_TEMP/canary/canary.cdx.json"
+          if osv-scanner scan source -L "$RUNNER_TEMP/canary/canary.cdx.json"; then
+            echo "osv-scanner found no advisory in the canary SBOM: it is not reading our SBOM shape."
+            exit 1
+          fi
+      - name: Scan djust's vendored packages for known advisories
+        run: osv-scanner scan source --config osv-scanner.toml -L python/djust/djust.cdx.json
