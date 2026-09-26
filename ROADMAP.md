@@ -123,6 +123,14 @@ Two name shapes appear in this roadmap, with distinct meanings:
 |---|---|---|
 | ~~**P1**~~ | ~~#3151 — Every render, mount and dispatch walk of a class namespace iterates a snapshot (`djust._class_snapshot`: `namespace()`, `attribute_names()` for `dir()`), with no lock added; the Rust `bit in dir(current)` probe answers by membership; an AST gate blocks new live walks; the regression test runs in the 3.14t CI job~~ ✅ (#3176) | v1.3.0 |
 
+### v1.3.0-9 — test git-env isolation (#3179) ✅
+
+*Kind:* test-suite hygiene, with no runtime change. Test fixtures that inherited `GIT_DIR` wrote `user.name = Test`, `user.email` and `commit.gpgsign = false` into the real `.git/config`, so later commits were authored "Test". Same class as #2608 and `core.bare = true`.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| ~~**P1**~~ | ~~#3179 — The pre-commit-wrapper and shared-git-config fixtures use `isolated_git_env()`; every test module that spawns git (14 swept) strips `GIT_EXECUTION_VARS` with an autouse fixture; the root `conftest.py` strips them for every test; `tests/test_git_env_guard_3179.py` adds a behavioural regression against a throwaway `GIT_DIR` and a static AST guard~~ ✅ (#3180) | v1.3.0 |
+
 ## Next: v1.2.1 — non-breaking fixes (drain)
 
 > Planned 2026-09-24 from a triage of every open issue. **Policy:** non-breaking bug fixes ship in 1.2.1; anything breaking, new features, and parser/dependency upgrades go to 1.3. Issues split into a 1.2.1 part and a 1.3 part are marked. The ADR-034–038 stack (#2944, #2954) merges after 1.2.1 is cut. Already shipped toward 1.2.1 on `main`: #3009 (inline whitespace, #2999/#3010), the CSRF resolver (#2978), SerializerCache removal (#2992), the audit gate (#2989).
