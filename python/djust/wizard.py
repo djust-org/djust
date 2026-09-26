@@ -80,11 +80,15 @@ def _submittable(field: Any, value: Any) -> Any:
 
     ``wizard_step_data`` holds what the browser would submit and is public,
     JSON-serialised state, so a drawn ``datetime`` is stored as the widget's
-    text (which the field parses back), never as the object.
+    text (which the field parses back), never as the object. A multi-value
+    widget (``SelectMultiple``, ``CheckboxSelectMultiple``) shows a list, and
+    the browser submits one value per item, so a list stays a list.
     """
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     shown = field.widget.format_value(value)
+    if isinstance(shown, (list, tuple)):
+        return [str(item) for item in shown]
     return str(value) if shown is None else str(shown)
 
 

@@ -109,3 +109,27 @@ def test_a_value_the_user_entered_is_never_replaced():
     ctx = view.get_context_data()
     assert ctx["form_data"]["token"] == mine
     assert _html_value(ctx["field_html"]["token"]) == mine
+
+
+class PickStep(forms.Form):
+    tags = forms.MultipleChoiceField(
+        choices=[("a", "A"), ("b", "B"), ("c", "C")], initial=lambda: ["a", "b"]
+    )
+
+
+class PickWizard(WizardMixin, LiveView):
+    wizard_steps = [
+        {"name": "pick", "title": "Pick", "form_class": PickStep},
+        {"name": "done", "title": "Done", "form_class": DoneStep},
+    ]
+    template = "<div dj-root></div>"
+
+
+def test_a_multi_value_callable_initial_is_pinned_as_a_list():
+    view = PickWizard()
+    view.mount(RequestFactory().get("/"))
+    ctx = view.get_context_data()
+    assert ctx["form_data"]["tags"] == ["a", "b"]
+    assert view.wizard_step_data["pick"]["tags"] == ["a", "b"]
+    view.next_step()
+    assert view.wizard_step_index == 1, view.wizard_step_errors
