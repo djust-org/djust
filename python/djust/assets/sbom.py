@@ -250,11 +250,19 @@ def app_document() -> dict:
 
 
 def served_directory_containing(path: Path) -> Path | None:
+    """The served directory ``path`` is inside, or None: STATIC_ROOT,
+    MEDIA_ROOT, every STATICFILES_DIRS entry and every installed app's
+    ``static/`` directory (which AppDirectoriesFinder publishes)."""
+    from django.apps import apps
     from django.conf import settings
 
     candidates = [getattr(settings, "STATIC_ROOT", None), getattr(settings, "MEDIA_ROOT", None)]
     for entry in getattr(settings, "STATICFILES_DIRS", []):
         candidates.append(entry[1] if isinstance(entry, (tuple, list)) else entry)
+    for app in apps.get_app_configs():
+        app_static = Path(app.path) / "static"
+        if app_static.is_dir():
+            candidates.append(app_static)
     target = Path(path).resolve()
     for candidate in candidates:
         if not candidate:

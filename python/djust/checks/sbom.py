@@ -63,7 +63,7 @@ def check_sbom_path(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
         return []
     served = served_directory_containing(path)
     if served is not None:
-        hint = "Move it outside STATIC_ROOT, MEDIA_ROOT and STATICFILES_DIRS."
+        hint = "Move it outside STATIC_ROOT, MEDIA_ROOT, STATICFILES_DIRS and every app's static/ directory."
         if not path.name.endswith(".cdx.json"):
             hint += _SUFFIX_NOTE
         return [

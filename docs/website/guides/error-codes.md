@@ -1663,9 +1663,9 @@ See [Vendoring third-party JS](vendored-assets.md) and [Scanning a djust app](sc
 
 **Severity**: Error
 
-**What causes it**: `DJUST_SBOM_PATH` resolves inside `STATIC_ROOT`, `MEDIA_ROOT`, or a `STATICFILES_DIRS` entry — `collectstatic` would publish the SBOM to browsers, which djust refuses to do.
+**What causes it**: `DJUST_SBOM_PATH` resolves inside `STATIC_ROOT`, `MEDIA_ROOT`, a `STATICFILES_DIRS` entry, or an installed app's `static/` directory — `collectstatic` would publish the SBOM to browsers, which djust refuses to do.
 
-**Fix**: Move it outside `STATIC_ROOT`, `MEDIA_ROOT` and `STATICFILES_DIRS`.
+**Fix**: Move it outside `STATIC_ROOT`, `MEDIA_ROOT`, `STATICFILES_DIRS` and every app's `static/` directory.
 
 ### B013: `djust` is after `django.contrib.staticfiles`, so the SBOM won't be written
 

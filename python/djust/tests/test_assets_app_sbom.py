@@ -171,3 +171,21 @@ def test_b014_non_object_json_does_not_raise(tmp_path):
 def test_djust_sbom_command_prints_the_document(capsys):
     call_command("djust_sbom")
     assert json.loads(capsys.readouterr().out)["bomFormat"] == "CycloneDX"
+
+
+def test_app_static_directory_is_served(tmp_path):
+    """AppDirectoriesFinder serves every installed app's static/ directory,
+    so an SBOM there would be published by collectstatic too."""
+    from pathlib import Path
+
+    from django.apps import apps
+
+    app_static = Path(apps.get_app_config("djust").path) / "static"
+    assert app_static.is_dir()
+    target = app_static / "sbom" / "app.cdx.json"
+    with override_settings(STATIC_ROOT=str(tmp_path / "root"), DJUST_SBOM_PATH=str(target)):
+        assert served_directory_containing(target) == app_static.resolve()
+        assert "djust.B012" in ids(check_sbom_path(None))
+        with pytest.raises(CommandError, match="served"):
+            write_app_sbom(target)
+    assert not target.exists()

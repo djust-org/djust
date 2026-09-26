@@ -948,7 +948,7 @@ See [Vendoring third-party JS](website/guides/vendored-assets.md), [Scanning a d
 ### B012 — `DJUST_SBOM_PATH` resolves inside a served directory
 - **Severity**: Error
 - **Method**: Runtime (settings inspection)
-- **What it detects**: `DJUST_SBOM_PATH` is inside `STATIC_ROOT`, `MEDIA_ROOT`, or a `STATICFILES_DIRS` entry
+- **What it detects**: `DJUST_SBOM_PATH` is inside `STATIC_ROOT`, `MEDIA_ROOT`, a `STATICFILES_DIRS` entry, or an installed app's `static/` directory
 - **Suppression**: Cannot be suppressed meaningfully — move it outside those directories
 - **False positives**: None
 
