@@ -16,7 +16,7 @@ import pytest
 
 from djust import LiveView
 from djust.config import config
-from djust.decorators import event_handler
+from djust.decorators import background, event_handler, optimistic
 from djust.testing import LiveViewSmokeTest, _UNFUZZED_WARNED, _unfuzzed_reachable_methods
 
 
@@ -81,7 +81,7 @@ def test_reachable_undecorated_method_warns_once_per_view(monkeypatch, mode):
     _mode(monkeypatch, mode)
     found = _run_fuzz([_Mixed])
     assert len(found) == 1
-    assert "reset_counter is not decorated" in str(found[0].message)
+    assert "helper, reset_counter are not decorated" in str(found[0].message)
 
 
 def test_strict_mode_does_not_warn(monkeypatch):
@@ -96,7 +96,40 @@ def test_decorated_only_view_does_not_warn(monkeypatch):
 
 
 def test_lists_exactly_the_app_methods(monkeypatch):
-    """Framework lifecycle overrides, decorated handlers and static helpers
-    are not named; only the undecorated app method is."""
+    """Framework lifecycle overrides and decorated handlers are not named; the
+    undecorated app methods are, a static one included (dispatch calls it)."""
     _mode(monkeypatch, "warn")
-    assert _unfuzzed_reachable_methods(_Mixed) == ["reset_counter"]
+    assert _unfuzzed_reachable_methods(_Mixed) == ["helper", "reset_counter"]
+
+
+class _DecoratedButNotHandlers(LiveView):
+    """Reachable under warn/open, yet not ``@event_handler``: each must be named."""
+
+    template = "<div dj-root></div>"
+
+    @optimistic
+    def opt_only(self, **kwargs):
+        pass
+
+    @background
+    def bg_only(self, **kwargs):
+        pass
+
+    @staticmethod
+    def static_one(**kwargs):
+        pass
+
+    @event_handler
+    @optimistic
+    def handled(self, **kwargs):
+        pass
+
+
+def test_non_handler_decorators_and_static_methods_are_named(monkeypatch):
+    """PR #3159 review: ``_djust_decorators`` alone is not ``@event_handler``."""
+    _mode(monkeypatch, "warn")
+    assert _unfuzzed_reachable_methods(_DecoratedButNotHandlers) == [
+        "bg_only",
+        "opt_only",
+        "static_one",
+    ]

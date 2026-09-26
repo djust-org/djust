@@ -1541,6 +1541,7 @@ def _unfuzzed_reachable_methods(cls: Type[Any]) -> List[str]:
     where dispatch refuses them.
     """
     from djust.config import config
+    from djust.decorators import is_event_handler
     from djust.live_view import LiveView
 
     if config.get("event_security", "strict") == "strict" or not isinstance(cls, type):
@@ -1557,7 +1558,12 @@ def _unfuzzed_reachable_methods(cls: Type[Any]) -> List[str]:
         for name, member in vars(klass).items():
             if name.startswith("_") or name in framework_names or name in declared:
                 continue
-            if not inspect.isfunction(member) or hasattr(member, "_djust_decorators"):
+            # A static or class method is dispatched like any other callable;
+            # any decorator other than @event_handler leaves it undeclared.
+            function = (
+                member.__func__ if isinstance(member, (staticmethod, classmethod)) else member
+            )
+            if not inspect.isfunction(function) or is_event_handler(function):
                 continue
             if name not in names:
                 names.append(name)
