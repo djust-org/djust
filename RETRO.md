@@ -1046,6 +1046,47 @@ The new guide is `docs/website/guides/scaling-across-cores.md`. A truth review c
 
 **Lesson:** a summary line about a gated optimisation must carry its gates.
 
+## v1.3.0-7 — render cost per frame (audio)
+
+**Scope**: One djust PR (#3175): `{% djust_audio %}` rendered natively in Rust, and `AudioMixin`'s sound manifest built once per view instead of on every render. The branch was cut before the worker pool and multi-loop mode. It landed after `origin/main` was merged in and the cache was made safe under free-threaded concurrency.
+
+### Bucket summary
+
+**Outcome.**
+- On Snake Arena (a 16-sound bank, ~5 frames a second per player), `render_with_diff` per frame went from 1.53 to 1.27 ms.
+- Live server CPU per delivered frame went from 4.04 to 3.71 ms (16 clients, 3 interleaved runs).
+- A byte-parity test pins the native tag to the Django-engine `simple_tag`.
+
+**What the bucket learned**
+1. **A per-view cache must not lean on the session render lock.** That lock does serialise one view's renders. But with `worker_threads` and several loops on 3.14t, the cache has to be safe by construction:
+   - the read path takes no lock;
+   - a miss builds under a per-view lock stripe with a re-check;
+   - the key and the build come from one snapshot of the banks;
+   - the entry pins the banks its key names by `id()`.
+2. **Test the invariant, not the allocator.** An attempt to make CPython reuse a freed bank's address never reproduced, so that test passed on the old code as well. A weakref check that the entry keeps its banks alive is deterministic.
+3. **An assertion inside a thread only warns.** The "stripes build in parallel" test passed with one global lock until Code Review forced a lock that is shared by construction. It now asserts a deadline from the test thread.
+4. **Self-review found a parity gap the byte test did not cover.** The Python tag raises on a `None` manifest, while the native node would have rendered `dj-audio="None"`. The native node now raises too.
+
+**Open items**
+- #3178: `_flush_pending_layout` renders `get_context_data()` and the layout on the event-loop thread (pre-existing).
+- The shared `.git/config` of the main checkout has `user.name = Test` / `test@example.com`, which is how the branch's original commit got its author. Squash merges are unaffected.
+
+### PR 1 — native `{% djust_audio %}` and a per-view manifest cache (PR #3175)
+
+**Date**: 2026-09-26. Retro: https://github.com/djust-org/djust/pull/3175 (retrospective comment).
+
+**Tests at close**
+- `tests/unit/test_audio.py`: 28 tests, including byte parity and "never persisted".
+- `python/djust/tests/test_audio_manifest_thread_safety.py`: 4 tests, run in the 3.14t CI job. The build-once, pin and stripe tests were each verified red against the broken variant.
+- Rust `djust_audio` tests: 5. `make test-rust`: 2546 passed.
+- The full suite ran in the pre-push hook, and CI was green.
+
+**Review stats**
+- Self-review: 1 real gap (a `None` manifest), fixed.
+- Security: passed, with no findings.
+- Code Review: 1 🟡 (stripe-test tautology), fixed; 1 🟢 (`str()` vs `to_string()` for a non-string manifest), left.
+- Re-Review: passed, with 1 🟢 filed as #3178.
+
 ## v1.3.0-6 — multiple event loops (#3128)
 
 **Scope**: One djust PR (#3162) for the three #3128 rows: the loop-aware in-memory layer and the `djust serve --loops N` launcher, the audit of loop-bound state, and measured guidance on N. The fourth row, the snake-arena room clock, is an app PR that follows the merge.

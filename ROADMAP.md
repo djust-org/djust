@@ -107,6 +107,14 @@ Two name shapes appear in this roadmap, with distinct meanings:
 | ~~**P2**~~ | ~~#3128 — Measured guidance on N: snake-arena at 192–768 clients on 1, 2 and 4 loops (scaling guide)~~ ✅ (#3162) | v1.3.0 |
 | ~~**P2**~~ | ~~snake-arena — the room clock starts, and decides an idle stop, under a `threading.Lock`, so two loops never start two clocks for one room or strand a room without one (app PR after the djust PR)~~ ✅ (snake-arena #25; merged, not deployed) | v1.3.0 |
 
+### v1.3.0-7 — render cost per frame (audio) ✅
+
+*Kind:* performance. An `AudioMixin` view paid for `{% djust_audio %}` on every frame: the bridged Python tag took the whole render context to read one string, and the mixin rebuilt the sound manifest (a `static()` lookup per sound) on every render. Non-breaking: same markup, same errors.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| ~~**P2**~~ | ~~`{% djust_audio %}` rendered natively in Rust (byte-parity test against the Django-engine tag) and `AudioMixin`'s manifest built once per view, safe under free-threaded concurrency (3.14t CI test). Snake Arena: render 1.53 → 1.27 ms per frame, server CPU per frame 4.04 → 3.71 ms~~ ✅ (#3175) | v1.3.0 |
+
 ## Next: v1.2.1 — non-breaking fixes (drain)
 
 > Planned 2026-09-24 from a triage of every open issue. **Policy:** non-breaking bug fixes ship in 1.2.1; anything breaking, new features, and parser/dependency upgrades go to 1.3. Issues split into a 1.2.1 part and a 1.3 part are marked. The ADR-034–038 stack (#2944, #2954) merges after 1.2.1 is cut. Already shipped toward 1.2.1 on `main`: #3009 (inline whitespace, #2999/#3010), the CSRF resolver (#2978), SerializerCache removal (#2992), the audit gate (#2989).
