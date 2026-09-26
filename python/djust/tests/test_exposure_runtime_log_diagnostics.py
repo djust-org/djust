@@ -25,7 +25,10 @@ from djust import LiveView, event_handler
 from djust.decorators import state
 from djust.websocket import LiveViewConsumer
 
+from ._ws_frames import drain_extra, receive_until
 from .test_exposure_runtime import make_request
+
+PROTECTED = "Protected view operation failed"
 
 
 class LayoutFailureView(LiveView):
@@ -41,13 +44,27 @@ class LayoutFailureView(LiveView):
         self.set_layout("exposure_layout.html")
 
 
-async def _drain(socket, quiet=0.5):
-    # receive_nothing checks for a quiet socket without the timeout path of
-    # receive_json_from, which cancels the application under test.
-    frames = []
-    while not await socket.receive_nothing(timeout=quiet):
-        frames.append(await socket.receive_json_from(timeout=3))
-    return frames
+async def _drain(socket, caplog=None, marker=None, ready=lambda: True):
+    """The turn's frames, event-driven (#3130).
+
+    Waits until the turn answered (at least one frame), the log ``marker`` the
+    test asserts on (when given) has been written and ``ready()`` holds. Only then does a
+    trailing quiet window collect any extra frames: it can miss a late extra
+    frame, never cut the turn short. (``receive_until`` polls with
+    ``receive_nothing``; a ``receive_json_from`` timeout would cancel the
+    application under test.)
+    """
+
+    def done(frames):
+        return bool(frames) and (marker is None or marker in caplog.text) and ready()
+
+    frames = await receive_until(socket, done, what=f"a frame and the log line {marker!r}")
+    return frames + await drain_extra(socket)
+
+
+def _marker(policy, debug, detail):
+    """The log line this policy/DEBUG combination must write."""
+    return detail if policy == "legacy" or debug else PROTECTED
 
 
 @pytest.mark.django_db(transaction=True)
@@ -85,7 +102,11 @@ async def test_layout_render_failure_log_is_value_free_for_explicit_views(
             caplog.clear()
             with caplog.at_level(logging.DEBUG):
                 await socket.send_json_to({"type": "event", "event": "swap", "params": {}})
-                frames = await _drain(socket)
+                frames = await _drain(
+                    socket,
+                    caplog,
+                    _marker(policy, debug, "set_layout('exposure_layout.html') — template"),
+                )
 
             if policy == "legacy" or debug:
                 assert "Traceback" in caplog.text
@@ -151,7 +172,7 @@ async def test_deferred_callback_failure_log_is_value_free_for_explicit_views(
             caplog.clear()
             with caplog.at_level(logging.DEBUG):
                 await socket.send_json_to({"type": "event", "event": "later", "params": {}})
-                await _drain(socket)
+                await _drain(socket, caplog, _marker(policy, debug, "Deferred callback"))
 
             if policy == "legacy" or debug:
                 assert "Traceback" in caplog.text
@@ -208,7 +229,9 @@ async def test_presence_key_failure_at_mount_is_value_free_for_explicit_views(
                 await socket.send_json_to(
                     {"type": "mount", "view": __name__ + ".PresenceKeyFailureView", "url": "/p/"}
                 )
-                await _drain(socket)
+                await _drain(
+                    socket, caplog, _marker(policy, debug, "Error setting up presence group")
+                )
             assert PRESENCE_KEY_CALLS, "get_presence_key never ran; the test would be vacuous"
             if policy == "legacy" or debug:
                 assert "Error setting up presence group: PRESENCE_KEY_SENTINEL" in caplog.text
@@ -272,7 +295,11 @@ async def test_full_html_signal_receiver_failure_is_value_free_for_explicit_view
                 caplog.clear()
                 with caplog.at_level(logging.DEBUG):
                     await socket.send_json_to({"type": "event", "event": "refresh", "params": {}})
-                    await _drain(socket)
+                    await _drain(
+                        socket,
+                        caplog,
+                        _marker(policy, debug, "full-HTML-update signal emit failed"),
+                    )
                 assert received, "the signal never fired; the test would be vacuous"
                 if policy == "legacy" or debug:
                     assert "Traceback" in caplog.text
@@ -342,7 +369,11 @@ async def test_post_event_state_save_failure_is_value_free_for_explicit_views(
             caplog.clear()
             with caplog.at_level(logging.DEBUG):
                 await socket.send_json_to({"type": "event", "event": "bump", "params": {}})
-                await _drain(socket)
+                await _drain(
+                    socket,
+                    caplog,
+                    _marker(policy, debug, "Failed to save LiveView state after runtime event"),
+                )
             assert writes, "the post-event save never reached the store; vacuous"
             if policy == "legacy" or debug:
                 assert "Traceback" in caplog.text
@@ -409,7 +440,7 @@ async def test_time_travel_push_failure_logs_detail_under_debug_for_every_policy
             caplog.clear()
             with caplog.at_level(logging.DEBUG):
                 await socket.send_json_to({"type": "event", "event": "bump", "params": {}})
-                await _drain(socket)
+                await _drain(socket, caplog, "time_travel: failed to push event frame")
             assert calls, "the time-travel push never ran; the test would be vacuous"
             assert "time_travel: failed to push event frame" in caplog.text
             assert "TT_PUSH_SENTINEL" in caplog.text
@@ -497,8 +528,6 @@ async def test_assign_async_loader_failure_is_value_free_for_explicit_views(
     """``assign_async``'s runners log a failed loader's exception text. They run
     as background tasks, and ``_execute_async_task`` opens no diagnostic scope,
     so the log needs its own owner check."""
-    import asyncio
-
     LOADER_CALLS.clear()
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
     monkeypatch.setattr(AssignAsyncView, "exposure_policy", policy)
@@ -518,13 +547,12 @@ async def test_assign_async_loader_failure_is_value_free_for_explicit_views(
             caplog.clear()
             with caplog.at_level(logging.DEBUG):
                 await socket.send_json_to({"type": "event", "event": "load", "params": {}})
-                await _drain(socket)
-                for _ in range(40):
-                    if "assign_async loader for data raised" in caplog.text or (
-                        LOADER_CALLS and "Protected view operation failed" in caplog.text
-                    ):
-                        break
-                    await asyncio.sleep(0.05)
+                await _drain(
+                    socket,
+                    caplog,
+                    _marker(policy, debug, "assign_async loader for data raised"),
+                    ready=lambda: bool(LOADER_CALLS),
+                )
             assert LOADER_CALLS, "the loader never ran; the test would be vacuous"
             if policy == "legacy" or debug:
                 assert "assign_async loader for data raised: ASSIGN_ASYNC_SENTINEL" in caplog.text
