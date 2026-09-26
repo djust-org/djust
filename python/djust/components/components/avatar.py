@@ -14,7 +14,9 @@ class Avatar(Component):
     sized by ``dj-avatar-<size>``, with the status dot in the status colour.
     The classes it renders are ``dj-avatar``, ``dj-avatar-<size>``,
     ``dj-avatar-img``, ``dj-avatar-initials``, ``dj-avatar-status`` and
-    ``dj-avatar-status-<status>``. ``--dj-avatar-size`` overrides the size.
+    ``dj-avatar-status-<status>``. ``--dj-avatar-size`` overrides the size;
+    set it on the avatar element itself (the ``dj-avatar-<size>`` class sets
+    it there, so a value inherited from a parent has no effect).
 
     Args:
         src: image URL

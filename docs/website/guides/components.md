@@ -994,7 +994,7 @@ touching the theme:
 | --- | --- | --- |
 | `Alert` | `dj-alert`, `dj-alert-<variant>`, `dj-alert-dismissible`, `dj-alert-icon`, `dj-alert-message`, `dj-alert-dismiss` | `--dj-alert-{bg,fg,border,radius,padding}`, `--dj-alert-<variant>-{bg,fg,border}` |
 | `Progress` | `dj-progress`, `dj-progress-<variant>`, `dj-progress-<size>`, `dj-progress-label`, `dj-progress-track`, `dj-progress-bar`, `dj-progress-value` | `--dj-progress-{bg,bar-bg,radius,height}`, `--dj-progress-<variant>-bg` |
-| `Avatar` | `dj-avatar`, `dj-avatar-<size>`, `dj-avatar-img`, `dj-avatar-initials`, `dj-avatar-status`, `dj-avatar-status-<status>` | `--dj-avatar-size` |
+| `Avatar` | `dj-avatar`, `dj-avatar-<size>`, `dj-avatar-img`, `dj-avatar-initials`, `dj-avatar-status`, `dj-avatar-status-<status>` | `--dj-avatar-size`, set on the avatar element itself (its size class sets the property there, so a value on a parent has no effect) |
 
 The `{% theme_alert %}` / `{% theme_progress %}` / `{% theme_avatar %}` tags
 from `djust.theming` render the same components with the theming package's

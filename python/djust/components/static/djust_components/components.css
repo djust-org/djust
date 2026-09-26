@@ -2652,6 +2652,9 @@ button.rating-star:hover ~ .rating-star { color: hsl(var(--muted-foreground)); }
    app can override one component without restyling the theme. Labels stay
    on `--foreground`; the status colour goes on the fill, border, dot or bar,
    so no label's contrast depends on a status hue.
+   Every selector here is at most one class for its target (qualifiers sit
+   inside `:where()`), so an app's own `.dj-badge` / `.dj-alert-danger` rule
+   loaded after this file wins.
    ========================================================================== */
 
 /* --- {% badge %} (djust_components/badge.html) ---
@@ -2659,7 +2662,7 @@ button.rating-star:hover ~ .rating-star { color: hsl(var(--muted-foreground)); }
    `Badge` class renders `dj-badge dj-badge-success` (single dash) and is
    styled in components-classes.css inside `@layer djust-components`; a bare
    unlayered `.dj-badge` here would override its variant colours. */
-.dj-badge[class*="dj-badge--"] { display: inline-flex; align-items: center; gap: var(--space-1, 0.25rem); padding: 0.125rem var(--space-2, 0.5rem); border: 1px solid hsl(var(--dj-badge-tone, var(--primary)) / 0.3); border-radius: var(--badge-radius, var(--radius-full, 9999px)); background: hsl(var(--dj-badge-tone, var(--primary)) / 0.1); color: hsl(var(--foreground)); font-size: var(--text-xs, 0.75rem); font-weight: var(--font-medium, 500); line-height: 1.25rem; white-space: nowrap; }
+.dj-badge:where([class*="dj-badge--"]) { display: inline-flex; align-items: center; gap: var(--space-1, 0.25rem); padding: 0.125rem var(--space-2, 0.5rem); border: 1px solid hsl(var(--dj-badge-tone, var(--primary)) / 0.3); border-radius: var(--badge-radius, var(--radius-full, 9999px)); background: hsl(var(--dj-badge-tone, var(--primary)) / 0.1); color: hsl(var(--foreground)); font-size: var(--text-xs, 0.75rem); font-weight: var(--font-medium, 500); line-height: 1.25rem; white-space: nowrap; }
 .dj-badge--default { --dj-badge-tone: var(--primary); }
 .dj-badge--online { --dj-badge-tone: var(--success); }
 .dj-badge--offline { --dj-badge-tone: var(--muted-foreground); }
@@ -2698,10 +2701,10 @@ button.rating-star:hover ~ .rating-star { color: hsl(var(--muted-foreground)); }
 .dj-progress-sm, .dj-progress--sm { --dj-progress-height: 0.25rem; }
 .dj-progress--md { --dj-progress-height: 0.5rem; }
 .dj-progress-lg, .dj-progress--lg { --dj-progress-height: 0.75rem; }
-.dj-progress-success .dj-progress-bar { background: var(--dj-progress-success-bg, hsl(var(--success))); }
-.dj-progress-info .dj-progress-bar { background: var(--dj-progress-info-bg, hsl(var(--info))); }
-.dj-progress-warning .dj-progress-bar { background: var(--dj-progress-warning-bg, hsl(var(--warning))); }
-.dj-progress-danger .dj-progress-bar { background: var(--dj-progress-danger-bg, hsl(var(--destructive))); }
+:where(.dj-progress-success) .dj-progress-bar { background: var(--dj-progress-success-bg, hsl(var(--success))); }
+:where(.dj-progress-info) .dj-progress-bar { background: var(--dj-progress-info-bg, hsl(var(--info))); }
+:where(.dj-progress-warning) .dj-progress-bar { background: var(--dj-progress-warning-bg, hsl(var(--warning))); }
+:where(.dj-progress-danger) .dj-progress-bar { background: var(--dj-progress-danger-bg, hsl(var(--destructive))); }
 .dj-progress__fill--primary { background: hsl(var(--primary)); }
 .dj-progress__fill--success { background: hsl(var(--success)); }
 .dj-progress__fill--warning { background: hsl(var(--warning)); }
@@ -2709,7 +2712,10 @@ button.rating-star:hover ~ .rating-star { color: hsl(var(--muted-foreground)); }
 @media (prefers-reduced-motion: reduce) { .dj-progress-bar, .dj-progress__fill { transition: none; } }
 
 /* --- Avatar (djust.components.Avatar and {% avatar %}) ---
-   Sizes: the class renders `dj-avatar-<size>`, the tag `dj-avatar--<size>`. */
+   Sizes: the class renders `dj-avatar-<size>`, the tag `dj-avatar--<size>`.
+   The size class sets `--dj-avatar-size` on the avatar element itself, so an
+   override must also be set on that element (e.g. `.my-avatar.dj-avatar` or
+   an inline style); one inherited from a parent is reset by the size class. */
 .dj-avatar { position: relative; display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: var(--dj-avatar-size, 2.5rem); height: var(--dj-avatar-size, 2.5rem); border-radius: var(--radius-full, 9999px); background: hsl(var(--muted)); color: hsl(var(--muted-foreground)); font-size: calc(var(--dj-avatar-size, 2.5rem) * 0.38); font-weight: var(--font-semibold, 600); line-height: 1; vertical-align: middle; }
 .dj-avatar-xs, .dj-avatar--xs { --dj-avatar-size: 1.5rem; }
 .dj-avatar-sm, .dj-avatar--sm { --dj-avatar-size: 2rem; }
@@ -2728,7 +2734,7 @@ button.rating-star:hover ~ .rating-star { color: hsl(var(--muted-foreground)); }
    `.dj-toast-container` (the fixed stack) is styled above, with
    `pointer-events: none`; the tag's container carries no position modifier,
    so it takes the top-right corner, and each toast takes its clicks back. */
-.dj-toast-container:not([class*="dj-toast-container--"]) { top: var(--space-4, 1rem); right: var(--space-4, 1rem); }
+.dj-toast-container:where(:not([class*="dj-toast-container--"])) { top: var(--space-4, 1rem); right: var(--space-4, 1rem); }
 .dj-toast { pointer-events: auto; display: flex; align-items: flex-start; gap: var(--space-3, 0.75rem); padding: var(--space-3, 0.75rem) var(--space-4, 1rem); border: 1px solid hsl(var(--dj-toast-tone, var(--border)) / 0.4); border-radius: var(--radius-lg, 0.5rem); background: hsl(var(--card)); color: hsl(var(--card-foreground)); box-shadow: var(--shadow-lg); font-size: var(--text-sm, 0.875rem); animation: dj-slide-in-right 0.2s ease-out; }
 .dj-toast--success { --dj-toast-tone: var(--success); }
 .dj-toast--error { --dj-toast-tone: var(--destructive); }

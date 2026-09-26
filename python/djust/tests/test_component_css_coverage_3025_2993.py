@@ -37,7 +37,13 @@ NOT_STYLING = {
     "dj-toast-container--empty": "empty placeholder",
 }
 
-LINKED_CSS = Path(__file__).resolve().parents[1] / "static" / "djust_components" / "components.css"
+LINKED_CSS = (
+    Path(__file__).resolve().parents[1]
+    / "components"
+    / "static"
+    / "djust_components"
+    / "components.css"
+)
 
 
 def _tag(source: str, context: dict | None = None) -> str:
@@ -179,7 +185,7 @@ def test_the_template_badge_rule_does_not_match_the_badge_class_markup():
     assert "dj-badge--" not in html
 
 
-GUIDE = Path(__file__).resolve().parents[3].parent / "docs" / "website" / "guides" / "components.md"
+GUIDE = Path(__file__).resolve().parents[3] / "docs" / "website" / "guides" / "components.md"
 
 
 @pytest.mark.parametrize(
@@ -215,12 +221,77 @@ def test_the_catalogue_no_longer_calls_the_python_class_unstyled(client, name):
     assert "<strong>unstyled</strong>" not in body
 
 
+#: Interaction states. An app overriding `.dj-alert-dismiss:hover` writes the
+#: same pseudo-class, so they do not count against the budget below.
+_STATES = re.compile(r":not\(:disabled\)|:hover|:focus-visible|:disabled")
+
+
+def _strip_where(selector: str) -> str:
+    """Remove every ``:where(...)``, which contributes zero specificity."""
+    out, i = [], 0
+    while i < len(selector):
+        if selector.startswith(":where(", i):
+            depth, i = 1, i + len(":where(")
+            while depth:
+                depth += {"(": 1, ")": -1}.get(selector[i], 0)
+                i += 1
+        else:
+            out.append(selector[i])
+            i += 1
+    return "".join(out)
+
+
+def specificity(selector: str) -> tuple[int, int, int]:
+    """(ids, classes/attributes/pseudo-classes, types) of one complex
+    selector, enough for the selectors in this block: ``:where()`` is zero,
+    ``:not(x)`` counts as ``x``."""
+    s = _strip_where(selector)
+    s = re.sub(r":not\(([^()]*)\)", r"\1", s)
+    ids = len(re.findall(r"#[\w-]+", s))
+    classes = len(re.findall(r"\.[\w-]+", s)) + len(re.findall(r"\[[^\]]*\]", s))
+    classes += len(re.findall(r"(?<!:):(?!:)[\w-]+", s))
+    types = len(re.findall(r"(?:^|[\s>+~])([a-zA-Z][\w-]*)", s))
+    return ids, classes, types
+
+
+def _new_block_selectors() -> list[str]:
+    css = LINKED_CSS.read_text()
+    block = css[css.rindex("/*", 0, css.index("Template-tag BEM components and the Alert")) :]
+    block = re.sub(r"/\*.*?\*/", "", block, flags=re.S)
+    selectors = []
+    for group in re.findall(r"([^{}]+)\{[^{}]*\}", block):
+        selectors += [s.strip() for s in group.split(",") if s.strip()]
+    return selectors
+
+
+def test_the_specificity_helper_is_not_vacuous():
+    assert specificity(".a") == (0, 1, 0)
+    assert specificity('.a[class*="b"]') == (0, 2, 0)
+    assert specificity('.a:where([class*="b"])') == (0, 1, 0)
+    assert specificity(".a:not(.b)") == (0, 2, 0)
+    assert specificity(":where(.a) .b") == (0, 1, 0)
+    assert specificity(".a .b") == (0, 2, 0)
+    assert specificity("div.a") == (0, 1, 1)
+
+
+def test_a_one_class_app_rule_loaded_later_beats_every_new_rule():
+    """Review of #3161: `.dj-badge[class*="dj-badge--"]` was (0,2,0), so an
+    app's own `.dj-badge { … }` after `components.css` silently lost. Every
+    new selector must be at most (0,1,0) once interaction states (which the
+    app's override repeats) are set aside; source order then lets the app
+    win."""
+    selectors = _new_block_selectors()
+    assert len(selectors) > 60, selectors  # the block was found and parsed
+    heavy = [s for s in selectors if specificity(_STATES.sub("", s)) > (0, 1, 0)]
+    assert not heavy, heavy
+
+
 def test_labels_stay_on_the_foreground_token():
     """The status hue goes on the fill, border, dot or bar, never on the label
     text, so no label's contrast depends on a status colour (#2996)."""
     css = LINKED_CSS.read_text()
     for selector in (
-        '.dj-badge[class*="dj-badge--"]',
+        '.dj-badge:where([class*="dj-badge--"])',
         ".dj-alert",
         ".dj-toast",
     ):

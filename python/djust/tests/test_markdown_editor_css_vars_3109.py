@@ -14,8 +14,8 @@ from pathlib import Path
 
 from djust.components.components.markdown_editor import MarkdownEditor
 
-STATIC = Path(__file__).resolve().parents[1] / "static" / "djust_components"
-GUIDE = Path(__file__).resolve().parents[4] / "docs" / "website" / "guides" / "markdown-editor.md"
+STATIC = Path(__file__).resolve().parents[1] / "components" / "static" / "djust_components"
+GUIDE = Path(__file__).resolve().parents[3] / "docs" / "website" / "guides" / "markdown-editor.md"
 _VAR = re.compile(r"var\((--dj-md-editor-[a-z-]+)")
 
 
