@@ -105,7 +105,7 @@ Two name shapes appear in this roadmap, with distinct meanings:
 | ~~**P1**~~ | ~~#3128 — `djust.layers.MultiLoopInMemoryChannelLayer` (queues bound to no loop; cross-loop send and group send, per-channel order, capacity before the hand-off, loop-agnostic expiry sweep) and `djust serve --loops N` / `djust.multiloop.serve` (N uvicorn servers on one socket; GIL and channel-layer refusal; signals, lifespan per loop, shutdown)~~ ✅ (#3162) | v1.3.0 |
 | ~~**P1**~~ | ~~#3128 — Audit of loop-bound state: SSE event POSTs hop to the session's loop, the `db_notify` listener is claimed by one loop, channel layers are created before the loops start; rules for app code in the scaling guide; 3.14t CI runs the multi-loop tests~~ ✅ (#3162) | v1.3.0 |
 | ~~**P2**~~ | ~~#3128 — Measured guidance on N: snake-arena at 192–768 clients on 1, 2 and 4 loops (scaling guide)~~ ✅ (#3162) | v1.3.0 |
-| ~~**P2**~~ | ~~snake-arena — the room clock starts, and decides an idle stop, under a `threading.Lock`, so two loops never start two clocks for one room or strand a room without one (app PR after the djust PR)~~ ✅ (snake-arena #25) | v1.3.0 |
+| ~~**P2**~~ | ~~snake-arena — the room clock starts, and decides an idle stop, under a `threading.Lock`, so two loops never start two clocks for one room or strand a room without one (app PR after the djust PR)~~ ✅ (snake-arena #25; merged, not deployed) | v1.3.0 |
 
 ## Next: v1.2.1 — non-breaking fixes (drain)
 
