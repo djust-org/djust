@@ -95,6 +95,14 @@ def _registered_globally(name: str) -> bool:
     return bool(registry_entry_is_local(name, "filter"))
 
 
+def _loader_owned_filters() -> frozenset:
+    """Filter names a ``{% load %}`` has bridged in the active registry
+    namespace (callers hold ``_global_registry_namespace``)."""
+    from . import template_libraries as tl
+
+    return frozenset(tl._engine_state("_filter_owner", tl._filter_owner))
+
+
 def _restore_missing_bridged_filters() -> None:
     """Re-register, in the global registry, exactly the bootstrap filters
     that are no longer there, each with the callable the bootstrap
@@ -116,8 +124,15 @@ def _restore_missing_bridged_filters() -> None:
         return
     restored = False
     with _global_registry_namespace():
+        loader_owned = _loader_owned_filters()
         for name, callable_obj in _BRIDGED_FILTERS.items():
             if _registered_globally(name):
+                continue
+            if name in loader_owned:
+                # A ``{% load %}`` bridged this name since: its library, not
+                # the bootstrap's, is the owner. Restoring the bootstrap's
+                # callable would satisfy the loader's presence check and it
+                # would never re-bridge its own (#3213 re-review).
                 continue
             try:
                 restored = register_django_filter(name, callable_obj) or restored

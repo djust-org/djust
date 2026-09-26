@@ -198,6 +198,41 @@ def test_restoring_never_overwrites_a_same_name_filter_a_load_registered():
         _fresh_bootstrap()
 
 
+def test_a_missing_name_the_loader_owns_is_left_to_the_loader():
+    """#3213 re-review e: when the name a ``{% load %}`` bridged is itself
+    unregistered, restoring the bootstrap's callable would satisfy the
+    loader's owner+presence check, and it would never re-bridge its own. The
+    restore leaves that name to the loader; the next ``{% load %}`` puts the
+    loaded library's filter back."""
+    from django.template import Library, engines
+
+    from djust import template_libraries as tl
+
+    first, second = Library(), Library()
+    first.filter("dup_3213", lambda value: "FIRST")
+    second.filter("dup_3213", lambda value: "SECOND")
+    engine = next(
+        e.engine for e in engines.all() if hasattr(getattr(e, "engine", None), "template_libraries")
+    )
+    engine.template_libraries["dup_second_3213"] = second
+    try:
+        _fresh_bootstrap()
+        tl._bridge_library("dup_first_3213", first)
+        _rust.unregister_custom_filter("dup_3213")
+        tf._ensure_custom_filters_bridged()
+        assert not _rust.registry_entry_is_local("dup_3213", "filter"), (
+            "the bootstrap's SECOND was restored over the loader's name"
+        )
+        tl._bridge_library("dup_first_3213", first)  # the next {% load first %}
+        assert _rust.render_template("{{ x|dup_3213 }}", {"x": 1}) == "FIRST"
+    finally:
+        engine.template_libraries.pop("dup_second_3213", None)
+        _rust.unregister_custom_filter("dup_3213")
+        tl._filter_owner.pop("dup_3213", None)
+        tl._loaded.pop("dup_first_3213", None)
+        _fresh_bootstrap()
+
+
 def test_a_filter_that_failed_to_register_is_not_retried_on_every_change():
     """#3213 review 3: a registration that raised is never recorded, so it
     cannot count as "missing" after every unrelated registry change."""
