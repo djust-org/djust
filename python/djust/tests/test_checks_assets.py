@@ -232,3 +232,44 @@ def test_b010_ignores_data_src_and_data_href(tmp_path):
     with override_settings(TEMPLATES=_templates(tpl)):
         found = check_undeclared_origins(None)
     assert found == []
+
+
+@pytest.mark.parametrize(
+    "snippet",
+    [
+        '<link rel="canonical" href="https://www.other.example/page/">',
+        '<link rel="preconnect" href="https://fonts.other.example">',
+        '<link rel="dns-prefetch" href="//fonts.other.example">',
+        '<link rel="alternate" type="application/rss+xml" href="https://feeds.other.example/rss">',
+        '<link rel="icon" href="https://img.other.example/favicon.ico">',
+        '<link href="https://www.other.example/x" rel="manifest">',
+    ],
+    ids=["canonical", "preconnect", "dns-prefetch", "alternate", "icon", "manifest-rel-last"],
+)
+def test_b010_ignores_links_that_load_no_resource(tmp_path, snippet):
+    tpl = tmp_path / "templates"
+    tpl.mkdir()
+    (tpl / "page.html").write_text(snippet + "\n")
+    with override_settings(TEMPLATES=_templates(tpl)):
+        assert check_undeclared_origins(None) == []
+
+
+@pytest.mark.parametrize(
+    "snippet",
+    [
+        '<link rel="stylesheet" href="https://cdn.other.example/x.css">',
+        '<link rel="modulepreload" href="https://cdn.other.example/x.mjs">',
+        "<link href='https://cdn.other.example/x.js' rel='preload' as='script'>",
+        '<link rel="prefetch" href="//cdn.other.example/x.js">',
+        '<LINK REL="Alternate Stylesheet" HREF="https://cdn.other.example/alt.css">',
+    ],
+    ids=["stylesheet", "modulepreload", "preload-rel-last", "prefetch", "multi-token-upper"],
+)
+def test_b010_flags_links_that_load_a_resource(tmp_path, snippet):
+    tpl = tmp_path / "templates"
+    tpl.mkdir()
+    (tpl / "page.html").write_text(snippet + "\n")
+    with override_settings(TEMPLATES=_templates(tpl)):
+        found = check_undeclared_origins(None)
+    assert [m.id for m in found] == ["djust.B010"]
+    assert "cdn.other.example" in found[0].msg

@@ -934,9 +934,9 @@ See [Vendoring third-party JS](website/guides/vendored-assets.md), [Scanning a d
 ### B010 — undeclared external origin in a template
 - **Severity**: Warning
 - **Method**: Regex (template file scan)
-- **What it detects**: A literal `<script src="http…">` or `<link href="http…">` pointing at an origin no manifest declares
+- **What it detects**: A literal `<script src="http…">` or a `<link>` whose `rel` loads a resource (`stylesheet`, `modulepreload`, `preload`, `prefetch`) with `href="http…"` pointing at an origin no manifest declares
 - **Suppression**: `{# noqa: B010 #}` on the line, `DJUST_CONFIG['suppress_checks'] = ['B010']`, or `SILENCED_SYSTEM_CHECKS = ["djust.B010"]`
-- **False positives**: A heuristic regex scan — an origin assembled at runtime rather than written literally in the template is not seen either way
+- **False positives**: A heuristic regex scan — an origin assembled at runtime rather than written literally in the template is not seen either way; a tag split across lines is not seen. Links that load nothing (`canonical`, `alternate`, `preconnect`, `dns-prefetch`, `icon`, `manifest`) are ignored
 
 ### B011 — `DJUST_SBOM_PATH` not set
 - **Severity**: Warning (`--deploy` only)

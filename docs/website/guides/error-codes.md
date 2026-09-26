@@ -1647,7 +1647,7 @@ See [Vendoring third-party JS](vendored-assets.md) and [Scanning a djust app](sc
 
 **Severity**: Warning
 
-**What causes it**: A template has a literal `<script src="http…">` or `<link href="http…">` pointing at an origin no manifest declares. Heuristic (regex over template source): a scanner will never see what that origin serves.
+**What causes it**: A template has a literal `<script src="http…">` or a `<link>` whose `rel` loads a resource (`stylesheet`, `modulepreload`, `preload`, `prefetch`) with `href="http…"` pointing at an origin no manifest declares. Links that load nothing, such as `canonical` or `preconnect`, are ignored. Heuristic (regex over template source, line by line): a scanner will never see what that origin serves.
 
 **Fix**: Vendor it and declare it, declare it as external with integrity, or add `{# noqa: B010 #}` on that line. Suppress everywhere with `DJUST_CONFIG = {"suppress_checks": ["B010"]}`.
 

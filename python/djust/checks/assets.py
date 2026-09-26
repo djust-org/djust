@@ -17,9 +17,14 @@ from django.core.exceptions import SuspiciousFileOperation
 from .utils import _get_template_dirs, _is_check_suppressed, _iter_template_files, _walk_subclasses
 
 _SBOM_SUFFIXES = (".cdx.json", ".spdx.json", ".bom.json")
-_EXTERNAL_REF = re.compile(
-    r"<(?:script|link)\b[^>]*?\s(?:src|href)\s*=\s*[\"']((?:https?:)?//[^\"'/]+)", re.I
-)
+_TAG = re.compile(r"<(script|link)\b([^>]*)>", re.I)
+# \s before the name keeps data-src / data-href out.
+_ATTR = re.compile(r"\s(src|href|rel)\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s>]+))", re.I)
+_EXTERNAL = re.compile(r"^((?:https?:)?//[^/?#]+)", re.I)
+# <link> rels that make the browser fetch the href as a resource; canonical,
+# alternate, preconnect, dns-prefetch, icon, manifest and the like do not
+# load code, so they are not B010's concern.
+_LOADING_RELS = frozenset({"stylesheet", "modulepreload", "preload", "prefetch"})
 _REBUILD = "Rebuild with `make vendor` (djust) or regenerate your manifest's integrity."
 
 
@@ -166,8 +171,31 @@ def check_sbom_not_served(app_configs: Any, **kwargs: Any) -> list[CheckMessage]
     return messages
 
 
+def _external_loads(line: str) -> list[str]:
+    """External origins that ``<script src>`` and resource-loading ``<link>``
+    tags on ``line`` fetch from."""
+    refs = []
+    for tag, attrs in _TAG.findall(line):
+        values = {m[0].lower(): m[1] or m[2] or m[3] for m in _ATTR.findall(attrs)}
+        if tag.lower() == "script":
+            url = values.get("src", "")
+        elif _LOADING_RELS & set(values.get("rel", "").lower().split()):
+            url = values.get("href", "")
+        else:
+            continue
+        match = _EXTERNAL.match(url.strip())
+        if match:
+            refs.append(match.group(1))
+    return refs
+
+
 @register("djust")
 def check_undeclared_origins(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    """B010: templates that load code from an origin no manifest declares.
+
+    Scans line by line, so a ``<script>`` or ``<link>`` tag split across
+    lines is not seen.
+    """
     if _is_check_suppressed("B010"):
         return []
     from djust.assets.registry import get_registry
@@ -188,7 +216,7 @@ def check_undeclared_origins(app_configs: Any, **kwargs: Any) -> list[CheckMessa
         for lineno, line in enumerate(lines, start=1):
             if "noqa: B010" in line:
                 continue
-            for ref in _EXTERNAL_REF.findall(line):
+            for ref in _external_loads(line):
                 origin = urlsplit(ref if ref.startswith("http") else "https:" + ref).netloc
                 if origin not in declared:
                     messages.append(
