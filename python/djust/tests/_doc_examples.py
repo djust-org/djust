@@ -86,6 +86,11 @@ COVERED: Tuple[Section, ...] = (
         "## Next Steps",
     ),
     Section("docs/ai/events.md"),
+    Section(
+        "docs/website/guides/error-codes.md",
+        "### T019: Event binding names no handler on its owner",
+        "## Code Quality (Q0xx)",
+    ),
 )
 
 
@@ -300,3 +305,65 @@ class Page:
         if "html" in body:
             self.html = body["html"]
         return response.status_code
+
+
+def problems(sections, scenarios) -> List[str]:
+    """Everything that makes covered documentation drift from its fixtures."""
+    found: List[str] = []
+    seen: Dict[str, str] = {}
+    for section in sections:
+        try:
+            collected = examples(section)
+            markers = marker_lines(section)
+        except DocExampleError as exc:
+            found.append(str(exc))
+            continue
+        attached = set()
+        for example in collected:
+            where = "%s:%d" % (section.path, example.line)
+            if not example.marked:
+                found.append("%s: Python block without a djust-example marker" % where)
+                continue
+            if example.scenario and example.scenario not in scenarios:
+                found.append("%s: unknown scenario %r" % (where, example.scenario))
+            if example.scenario:
+                if example.id in seen:
+                    found.append(
+                        "%s: duplicate id %r (also %s)" % (where, example.id, seen[example.id])
+                    )
+                seen[example.id] = where
+        first, last = bounds(section)
+        for block in blocks(_path(section.path)):
+            if block.language == "python" and first <= block.line <= last:
+                # The block's comment run: the lines directly above its fence.
+                attached.update(range(block.line - len(block.comments), block.line))
+        for line in markers:
+            if line not in attached:
+                found.append(
+                    "%s:%d: marker not attached to an extracted Python block" % (section.path, line)
+                )
+    return found
+
+
+def report(sections) -> Dict[str, object]:
+    """Executed, skipped and unmarked counts per covered file."""
+    covered: Dict[str, Dict[str, int]] = {}
+    for section in sections:
+        counts = covered.setdefault(section.path, {"executed": 0, "skipped": 0, "unmarked": 0})
+        for example in examples(section):
+            key = (
+                "unmarked"
+                if not example.marked
+                else "skipped"
+                if example.skip_reason
+                else "executed"
+            )
+            counts[key] += 1
+    website = sorted((ROOT / "docs/website").rglob("*.md"))
+    total = sum(1 for p in website for b in blocks(p) if b.language == "python")
+    executed = sum(c["executed"] for p, c in covered.items() if p.startswith("docs/website/"))
+    return {
+        "covered": covered,
+        "docs_website_python_blocks": total,
+        "docs_website_unexecuted": total - executed,
+    }
