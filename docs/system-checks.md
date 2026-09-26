@@ -205,9 +205,9 @@ console.log("debug info"); // noqa: Q003
 ### C023 — channels_redis socket timeout at redis-py 8's default
 - **Severity**: Warning
 - **Method**: Settings inspection plus the installed `redis` distribution's version (read from package metadata; nothing is imported)
-- **What it detects**: a `CHANNEL_LAYERS` entry uses `channels_redis.core.RedisChannelLayer`, redis-py 8 or later is installed, and at least one host does not set `socket_timeout` above 5 s (or `None`). redis-py 8 lowered the default `socket_timeout` to 5 s, the same as the layer's `BZPOPMIN` timeout, so an idle consumer's read times out and its WebSocket closes every few seconds (django/channels_redis#422). URL and `(host, port)` hosts and an omitted `hosts` all count as the default; a URL can carry `?socket_timeout=10`. The pub/sub layer is not checked.
+- **What it detects**: a `CHANNEL_LAYERS` entry uses `channels_redis.core.RedisChannelLayer` (or a subclass of it), redis-py 8 or later is installed, and at least one host does not set `socket_timeout` above 5 s (or `None`). redis-py 8 lowered the default `socket_timeout` to 5 s, the same as the layer's `BZPOPMIN` timeout, so an idle consumer's read times out and its WebSocket closes every few seconds (django/channels_redis#422). The check reads the timeout the way `redis.ConnectionPool.from_url` does: a `?socket_timeout=` in the URL (a URL host or a dict's `address`) overrides the dict's `socket_timeout` key, and a bare URL, a `(host, port)` tuple or an omitted `hosts` get the 5 s default. 10 is recommended: anything just above 5 s leaves little headroom for network and event-loop latency. Settings shapes channels_redis itself rejects (a non-dict `CONFIG`, a non-list `hosts`) are skipped rather than reported. The pub/sub layer is not checked.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C023"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C023"]`
-- **False positives**: None known; pinning `redis<8` also silences it
+- **False positives**: None known. A backend path that cannot be imported at check time is not checked, so a subclass in such a module is missed; pinning `redis<8` also silences the check
 
 ---
 

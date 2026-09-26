@@ -320,7 +320,7 @@ In development, pages render without Tailwind utilities until you compile the CS
 
 **What causes it**: `CHANNEL_LAYERS` uses `channels_redis.core.RedisChannelLayer` with redis-py 8 or later installed, and a host does not set `socket_timeout` above 5 s. redis-py 8's default `socket_timeout` is 5 s, the same as the layer's blocking read, so idle LiveView WebSockets are dropped every few seconds (django/channels_redis#422).
 
-**Fix**: Use the dict host form with a longer timeout: `"hosts": [{"address": REDIS_URL, "socket_timeout": 10}]` (see [Deployment: Channel Layer](deployment.md)). Pinning `redis<8` also works. Suppress with `DJUST_CONFIG = {"suppress_checks": ["C023"]}`.
+**Fix**: Use the dict host form with a longer timeout (10 is recommended): `"hosts": [{"address": REDIS_URL, "socket_timeout": 10}]`. A `?socket_timeout=` in the URL overrides the key, as in redis-py (see [Deployment: Channel Layer](deployment.md)). Pinning `redis<8` also works. Suppress with `DJUST_CONFIG = {"suppress_checks": ["C023"]}`.
 
 ---
 

@@ -877,6 +877,9 @@ The `Toast` Python class renders single-dash names (`dj-toast-<type>`,
 `dj-toast-message`, `dj-toast-dismiss`), styled in the same file, which also
 reads the `--dj-toast-*` properties its docstring lists (`--dj-toast-bg`,
 `--dj-toast-success-border`, …), each falling back to a theme token.
+`{% toast_container %}` toasts read only the six base properties
+(`--dj-toast-bg`, `-fg`, `-border`, `-radius`, `-padding`, `-shadow`), not
+the per-type ones.
 
 ### `{% data_table %}` row-level navigation (#1111)
 
