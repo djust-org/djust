@@ -367,6 +367,16 @@ navigation:
         file: guides/bug-capture.md
         order: 33
         level: intermediate
+      - title: Vendoring third-party JS
+        slug: vendored-assets
+        file: guides/vendored-assets.md
+        order: 34
+        level: intermediate
+      - title: Scanning a djust app
+        slug: scanning
+        file: guides/scanning.md
+        order: 34.5
+        level: advanced
 
   - title: Testing
     slug: testing

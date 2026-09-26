@@ -38,6 +38,13 @@ class DjustConfig(AppConfig):
         # Import checks module so @register() decorators are executed
         import djust.checks  # noqa: F401
 
+        # Asset registry and integrity caches follow override_settings (ADR-040).
+        from django.core.signals import setting_changed
+
+        from djust.assets import on_setting_changed
+
+        setting_changed.connect(on_setting_changed, dispatch_uid="djust.assets")
+
         # Install the log sanitizer filter on every djust.* logger so every log
         # record emitted by the framework has user-controlled string args
         # sanitized before they reach any handler — preventing log injection

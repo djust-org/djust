@@ -24,8 +24,9 @@ Usage::
     # Or pass URL query params: /shell/?url=ws://host:7681&rows=30&cols=100
 
 Note: ttyd must be run with --check-origin=false (or same origin) to allow
-WebSocket connections from the browser. CDN-loaded xterm.js requires internet
-access; vendor xterm.js to static/ for offline/air-gapped environments.
+WebSocket connections from the browser. xterm.js is vendored by djust (asset
+``xterm``) and loaded same-origin with Subresource Integrity, so no internet
+access is needed.
 """
 
 import json

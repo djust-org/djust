@@ -56,15 +56,15 @@ class TestCodeBlockObserverBootstrap1625:
         assert "__djcHljsObserverInstalled" not in html
 
     def test_existing_lazy_loader_path_preserved(self):
-        """Regression backstop: __djcHljsLoading + the lazy CDN URL remain.
+        """Regression backstop: the once-per-page loader and the wait loop
+        remain.
 
-        The CDN URL assertion uses a path-specific substring rather than just
-        the host name — CodeQL flags bare-host substring checks as the
-        ``js/incomplete-url-substring-sanitization`` anti-pattern (false-positive
-        for test assertions, but a real concern for runtime sanitization), so
-        the longer slice keeps the assertion unambiguous AND silences the
-        rule.
+        highlight.js loads from djust's vendored asset (ADR-040). The first
+        block's inline script injects it once (guarded by
+        `__djcHljsLoading`); the `setInterval` wait loop covers the other
+        blocks that find the load already in progress.
         """
         html = code_block(code="print(1)", language="python")
-        assert "__djcHljsLoading" in html
-        assert "highlightjs/cdn-release" in html
+        assert '"/static/djust_components/vendor/highlight/highlight.js"' in html
+        assert "window.__djcHljsLoading" in html
+        assert "setInterval" in html

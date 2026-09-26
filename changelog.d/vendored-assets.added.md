@@ -1,0 +1,1 @@
+- **`djust_assets.json` manifests, `{% djust_asset %}`, and app SBOMs.** Component packages and apps declare the third-party JS/CSS they serve as vendored assets; djust renders it with Subresource Integrity, checks it at startup (`djust.B001`–`B014`), and `collectstatic` writes a CycloneDX SBOM of all of it to `DJUST_SBOM_PATH`. See the vendored assets and scanning guides.

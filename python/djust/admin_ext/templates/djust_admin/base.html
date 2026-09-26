@@ -1,3 +1,4 @@
+{% load djust_assets %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -5,8 +6,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}{{ title }} | {{ site_title }}{% endblock %}</title>
 
-    <!-- Tailwind CSS -->
-    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Tailwind CSS (vendored static build, see js/vendor/) -->
+    {% djust_asset "admin-css" %}
 
     <style>
         [x-cloak] { display: none !important; }

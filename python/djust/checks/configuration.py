@@ -197,7 +197,6 @@ def _check_missing_compiled_css(errors: list[CheckMessage]) -> None:
                     DjustInfo(
                         "Tailwind CSS configured but output.css is missing or stale (development mode).",
                         hint=(
-                            "djust will use Tailwind CDN as fallback in development. "
                             "A placeholder or empty output.css triggers this — run a "
                             "real Tailwind build for production-grade output:\n"
                             "  python manage.py djust_setup_css tailwind --watch"

@@ -714,7 +714,7 @@ info: ## Show project information
 ##@ Versioning & Releases
 
 .PHONY: version
-version: ## Bump version (usage: make version VERSION=0.2.0a1)
+version: ## Bump version and regenerate python/djust/djust.cdx.json (usage: make version VERSION=0.2.0a1)
 ifndef VERSION
 	@echo "$(RED)ERROR: VERSION not specified$(NC)"
 	@echo "Usage: make version VERSION=0.2.0a1"
@@ -738,8 +738,11 @@ endif
 	@echo "$(GREEN)Refreshing lockfile self-entries...$(NC)"
 	@uv lock
 	@cargo update --workspace --offline 2>/dev/null || cargo update --workspace
+	@# The distribution SBOM's root version comes from pyproject.toml (ADR-040).
+	@echo "$(GREEN)Regenerating python/djust/djust.cdx.json...$(NC)"
+	@PYTHONPATH=python $(PYTHON) -m djust.assets.sbom --distribution
 	@echo "$(YELLOW)Don't forget to update CHANGELOG.md!$(NC)"
-	@echo "$(YELLOW)Commit uv.lock + Cargo.lock alongside the manifest bump.$(NC)"
+	@echo "$(YELLOW)Commit uv.lock + Cargo.lock + python/djust/djust.cdx.json alongside the manifest bump.$(NC)"
 
 .PHONY: version-check
 version-check: ## Check current version in all files
@@ -859,9 +862,18 @@ endif
 test-js-coverage: ## Measure dynamic JavaScript coverage and enforce regression floors
 	@npm run test:coverage
 
-.PHONY: markdown-editor-build test-markdown-editor
-markdown-editor-build: ## Build the optional visual editor assets (Node is for contributors only)
-	cd js/markdown-editor && npm ci && npm run build
+.PHONY: vendor vendor-check test-vendor
+VENDOR_OUTPUTS := python/djust/components/djust_assets.json python/djust/admin_ext/djust_assets.json \
+	python/djust/djust.cdx.json python/djust/components/static/djust_components \
+	python/djust/admin_ext/static
 
-test-markdown-editor: ## Test Markdown/Visual conversion and native form integration
-	cd js/markdown-editor && npm ci && npm test
+vendor: ## Build vendored third-party browser assets, their manifests and python/djust/djust.cdx.json (ADR-040)
+	cd js/vendor && npm ci && npm run build
+	PYTHONPATH=python $(PYTHON) -m djust.assets.sbom --distribution
+
+vendor-check: vendor ## Fail when committed vendored assets, manifests or djust.cdx.json differ from a rebuild
+	@git diff --exit-code -- $(VENDOR_OUTPUTS) || { echo "Vendored outputs are stale: run 'make vendor' and commit."; exit 1; }
+	@test -z "$$(git status --porcelain --untracked-files=all -- $(VENDOR_OUTPUTS))" || { git status --short -- $(VENDOR_OUTPUTS); echo "Untracked vendored outputs: run 'make vendor' and commit."; exit 1; }
+
+test-vendor: ## Test the vendored bundles (Markdown/Visual conversion, manifests, licenses)
+	cd js/vendor && npm ci && npm test

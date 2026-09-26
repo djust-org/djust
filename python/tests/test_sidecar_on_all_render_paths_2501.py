@@ -1444,9 +1444,10 @@ class TestComponentMutatorsAreNeverAutoCalled:
                 if not required:
                     found.add(name)
 
-        # Exactly: the guarded mutators plus the two deliberately read-only
-        # spellings. Anything else is new and unclassified.
-        assert found == ALTERS_DATA_COMPONENT_METHODS | {"render", "get_context_data"}
+        # Exactly: the guarded mutators plus the deliberately read-only
+        # spellings (asset_tags renders a component's declared asset tags, ADR-040).
+        # Anything else is new and unclassified.
+        assert found == ALTERS_DATA_COMPONENT_METHODS | {"render", "get_context_data", "asset_tags"}
 
     def test_a_direct_python_call_is_unaffected(self):
         """`alters_data` gates TEMPLATE auto-call only. The framework's own

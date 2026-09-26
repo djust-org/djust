@@ -1,0 +1,128 @@
+{
+  "bomFormat": "CycloneDX",
+  "components": [
+    {
+      "bom-ref": "asset:chart.js",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"
+          }
+        ]
+      },
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-384",
+          "content": "c055b43a754a923e3707e55482972d0cf866aa4d7cda19e290dd849179b23e310d51c8827a7775ae360737b5e08c3090"
+        }
+      ],
+      "name": "chart.js",
+      "properties": [
+        {
+          "name": "djust:delivery",
+          "value": "external"
+        }
+      ],
+      "type": "file"
+    },
+    {
+      "bom-ref": "asset:chart.js:pkg:npm/chart.js@4.4.0",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "name": "chart.js",
+      "purl": "pkg:npm/chart.js@4.4.0",
+      "type": "library",
+      "version": "4.4.0"
+    },
+    {
+      "bom-ref": "asset:markdown-visual",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "djc/mv.js"
+          }
+        ]
+      },
+      "hashes": [
+        {
+          "alg": "SHA-384",
+          "content": "a6cc3eb179d7ee88b019bccbc3e47f67ba55772ea0a381407de1e10a1f436c9708e568635b9103571e6d27aa6d340c75"
+        }
+      ],
+      "name": "markdown-visual",
+      "type": "file"
+    },
+    {
+      "bom-ref": "asset:markdown-visual:pkg:npm/%40tiptap/core@3.31.3",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "name": "@tiptap/core",
+      "purl": "pkg:npm/%40tiptap/core@3.31.3",
+      "type": "library",
+      "version": "3.31.3"
+    },
+    {
+      "bom-ref": "asset:markdown-visual:pkg:npm/prosemirror-model@1.25.1",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "name": "prosemirror-model",
+      "purl": "pkg:npm/prosemirror-model@1.25.1",
+      "type": "library",
+      "version": "1.25.1"
+    }
+  ],
+  "dependencies": [
+    {
+      "dependsOn": [
+        "asset:chart.js:pkg:npm/chart.js@4.4.0"
+      ],
+      "ref": "asset:chart.js"
+    },
+    {
+      "dependsOn": [
+        "asset:markdown-visual:pkg:npm/%40tiptap/core@3.31.3",
+        "asset:markdown-visual:pkg:npm/prosemirror-model@1.25.1"
+      ],
+      "ref": "asset:markdown-visual"
+    }
+  ],
+  "metadata": {
+    "component": {
+      "bom-ref": "root:demo",
+      "name": "demo",
+      "type": "application",
+      "version": "1.0"
+    },
+    "properties": [
+      {
+        "name": "djust:manifest-digest",
+        "value": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      }
+    ],
+    "tools": {
+      "components": [
+        {
+          "name": "djust.assets.sbom",
+          "type": "application"
+        }
+      ]
+    }
+  },
+  "specVersion": "1.6",
+  "version": 1
+}

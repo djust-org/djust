@@ -11,9 +11,9 @@ import logging
 import threading
 import re
 import types
-from typing import Callable, Dict, Any, List, Optional, Tuple, Type, cast
+from typing import Callable, ClassVar, Dict, Any, List, Optional, Tuple, Type, cast
 from abc import ABC
-from django.utils.safestring import mark_safe
+from django.utils.safestring import SafeString, mark_safe
 
 from djust._template_guards import TemplateMutatorGuard, alters_data
 from djust.decorators import is_event_handler
@@ -305,6 +305,16 @@ class Component(TemplateMutatorGuard, ABC):
     #: is still seen, appending to it in place is not). Components that hold
     #: data declare theirs so a click never pays a ten-thousand-row walk.
     fingerprint_fields: Optional[Tuple[str, ...]] = None
+
+    #: Names of declared third-party assets this component needs (ADR-040).
+    #: Check djust.B007 fails when a name is not declared in any manifest.
+    requires_assets: ClassVar[Tuple[str, ...]] = ()
+
+    def asset_tags(self, variant: Optional[str] = None) -> SafeString:
+        """Tags for every asset in ``requires_assets``, for the component's template."""
+        from djust.assets.tags import asset_tags
+
+        return mark_safe("\n".join(asset_tags(name, variant) for name in self.requires_assets))
 
     def _create_rust_instance(self, **props: Any) -> None:
         """

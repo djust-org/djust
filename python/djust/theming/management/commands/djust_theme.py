@@ -482,7 +482,7 @@ class Command(BaseCommand):
 
             os.makedirs("templates/examples", exist_ok=True)
 
-            example_template = """{% load theme_tags theme_components %}
+            example_template = """{% load static theme_tags theme_components %}
 <!DOCTYPE html>
 <html>
 <head>
@@ -490,7 +490,7 @@ class Command(BaseCommand):
     <title>djust-theming Example</title>
     {% theme_head %}
     {% if tailwind %}
-    <link href="https://cdn.tailwindcss.com" rel="stylesheet">
+    <link rel="stylesheet" href="{% static 'css/output.css' %}">
     {% endif %}
 </head>
 <body class="bg-background text-foreground min-h-screen p-8">
@@ -536,11 +536,15 @@ class Command(BaseCommand):
         self.stdout.write("  2. Add theme context processor to settings.py:")
         self.stdout.write("     'djust.theming.context_processors.theme_context'")
         self.stdout.write("  3. Use {{ theme_head }} in your base template")
-        self.stdout.write("  4. Use {% load theme_components %} to access components\n")
+        self.stdout.write("  4. Use {% load theme_components %} to access components")
+        self.stdout.write(
+            "  5. Build static/css/output.css with the Tailwind CLI: "
+            "tailwindcss -i static/css/input.css -o static/css/output.css --minify\n"
+        )
 
         if with_examples:
             self.stdout.write(
-                "  5. Check templates/examples/theme_example.html for usage examples\n"
+                "  6. Check templates/examples/theme_example.html for usage examples\n"
             )
 
         self.stdout.write(f"\n📚 Preset: {preset}")
