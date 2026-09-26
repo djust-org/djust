@@ -5023,8 +5023,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 if self.view_instance is not view:
                     return
                 if not render:
+                    # No frame of its own (#3034): a push has no ``ref`` to
+                    # acknowledge, and a bare noop let the client end an
+                    # in-flight user event's loading state early. Queued side
+                    # effects still go out.
                     await self._flush_all_pending()
-                    await self._send_noop()
                     return
 
                 # Sync state and re-render
@@ -5159,8 +5162,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 if self.view_instance is not view:
                     return
                 if not render:
+                    # No frame of its own (#3034): a push has no ``ref`` to
+                    # acknowledge, and a bare noop let the client end an
+                    # in-flight user event's loading state early. Queued side
+                    # effects still go out.
                     await self._flush_all_pending()
-                    await self._send_noop()
                     return
                 if rendered is None:
                     return  # the view was replaced before the render
@@ -5452,8 +5458,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 # not be silently dropped (#1646 class), and the skip flag
                 # is consumed here either way.
                 if _resolve_skip_render(self.view_instance):
+                    # No noop frame for a notification (#3034), as for
+                    # server_push; queued side effects still go out.
                     await self._flush_all_pending()
-                    await self._send_noop()
                     return
 
                 rendered = await self._render_background(view)
