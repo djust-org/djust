@@ -65,11 +65,13 @@ indefinitely with no scanner ever flagging it.
    in a template all fail (or warn) at `manage.py check --tag djust`.
 6. **Three SBOM outputs, one generator
    (`djust.assets.sbom.to_cyclonedx`).**
-   - The djust distribution's own SBOM, `python/djust/djust.cdx.json`,
-     covering vendored JS and the Rust crates linked into the extension
-     (from `cargo metadata`, not `cargo cyclonedx`). It also ships in
-     `.dist-info/sboms/` per PEP 770, via `[tool.maturin.sbom].include`
-     (`maturin>=1.12.1,<2.0`).
+   - The djust distribution's own SBOM, generated from
+     `python/djust/djust.cdx.json` in djust's own source tree, covering
+     vendored JS and the Rust crates linked into the extension (from
+     `cargo metadata`, not `cargo cyclonedx`). Once djust is installed, the
+     same file ships as `djust/djust.cdx.json` inside the installed
+     package, and again at `.dist-info/sboms/` per PEP 770, via
+     `[tool.maturin.sbom].include` (`maturin>=1.12.1,<2.0`).
    - The app's SBOM, written by a `collectstatic` override to
      `DJUST_SBOM_PATH` (no default — nothing is written unless it's set).
      `djust.B011`–`B014` catch it being unset, pointed inside a served

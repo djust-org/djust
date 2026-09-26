@@ -55,6 +55,10 @@ You can also print or write the same document on demand, without running
 manage.py djust_sbom -o /var/lib/myapp/sbom/djust-assets.cdx.json
 ```
 
+The app SBOM's root component is named after `DJUST_SBOM_NAME` when it's
+set, or the first component of `ROOT_URLCONF` otherwise (for example
+`myapp`, for `myapp.urls`).
+
 ## Exact commands
 
 Use these exactly — some scanner subcommands silently ignore an embedded
@@ -78,7 +82,19 @@ osv-scanner scan source -L /var/lib/myapp/sbom/djust-assets.cdx.json
 
 djust's own CI uses the same OSV-Scanner command against
 `python/djust/djust.cdx.json`, djust's own distribution SBOM (see
-`.github/workflows/vendor.yml`). Known advisories that are accepted for
+`.github/workflows/vendor.yml`). That `python/` prefix is only djust's own
+source layout — it's where the file is generated and committed in the
+djust repository. Once you `pip install djust`, the same file ships in two
+places: inside the installed package directory (`<site-packages>/djust/djust.cdx.json`)
+and under the wheel's PEP 770 metadata
+(`<site-packages>/djust-<version>.dist-info/sboms/djust.cdx.json`). Find
+the installed copy without knowing your `site-packages` path:
+
+```bash
+python -c "import djust, pathlib; print(pathlib.Path(djust.__file__).with_name('djust.cdx.json'))"
+```
+
+Known advisories that are accepted for
 now (unmaintained, not vulnerable) are listed in `osv-scanner.toml` with a
 `reason` and an `ignoreUntil` date — the same policy `.cargo/audit.toml`
 already applies to Rust advisories: unmaintained warns, a real
