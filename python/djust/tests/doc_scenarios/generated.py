@@ -1,5 +1,7 @@
 """Generator output executed as documentation examples (ADR-037 D2)."""
 
+from django.db import models
+
 from djust.tests import _doc_examples as H
 
 from . import scenario
@@ -34,7 +36,43 @@ def _schema_examples():
     ]
 
 
-EXAMPLES = _schema_examples()
+class Item(models.Model):
+    """What the scaffold's ``from .models import Item`` resolves to."""
+
+    title = models.CharField(max_length=100)
+    body = models.TextField(blank=True)
+    owner = models.ForeignKey("auth.User", on_delete=models.CASCADE)
+
+    class Meta:
+        app_label = "demo_app"
+        db_table = "adr037_scaffold_item"
+
+
+def _scaffold_examples():
+    from djust.mcp.server import create_server
+
+    server = create_server()
+    (tool,) = [t for t in server._tool_manager._tools.values() if t.name == "scaffold_view"]
+    found = []
+    for features in ("form_edit", "form_edit,auth"):
+        code = tool.fn(name="ItemEditView", features=features)
+        found.append(
+            H.Example(
+                "scaffold-%s" % features.replace(",", "-").replace("_", "-"),
+                "scaffold-model-form-edit",
+                None,
+                "python/djust/mcp/server.py",
+                0,
+                code,
+                None,
+                (code,),
+            )
+        )
+    return found
+
+
+EXAMPLES = _schema_examples() + _scaffold_examples()
+
 
 FORM_TEMPLATE = (
     '<div dj-root><form dj-submit="submit_form">{% csrf_token %}'
@@ -88,4 +126,14 @@ def generated_model_form_edit(example):
         "author",
         "articles/<int:pk>/edit/",
         {"title": "Published", "body": "Text"},
+    )
+
+
+@scenario("scaffold-model-form-edit")
+def scaffold_model_form_edit(example):
+    view_class = H.load(
+        example, template=EDIT_TEMPLATE, package=PACKAGE, modules={"models": {"Item": Item}}
+    )
+    drive_model_form(
+        view_class, Item, "owner", "items/<int:pk>/edit/", {"title": "Published", "body": "Text"}
     )

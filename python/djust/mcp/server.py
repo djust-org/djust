@@ -1390,11 +1390,53 @@ def create_server() -> "FastMCP":
         Args:
             name: View class name (e.g., 'ProductListView')
             features: Comma-separated features: 'search', 'crud', 'pagination',
-                'form', 'presence', 'streaming', 'auth'
+                'form', 'form_edit', 'presence', 'streaming', 'auth'.
+                'form_edit' generates a ModelFormMixin view that edits one
+                record the signed-in user owns (combine with auth only).
 
         Returns complete Python code for a LiveView with the requested features.
         """
         feature_set = {f.strip().lower() for f in features.split(",") if f.strip()}
+
+        if "form_edit" in feature_set:
+            model = (
+                name[: -len("EditView")]
+                if name.endswith("EditView")
+                else (name[: -len("View")] if name.endswith("View") else name)
+            )
+            snake = "".join(
+                ("_" + c.lower()) if c.isupper() and i else c.lower() for i, c in enumerate(model)
+            )
+            edit_lines = [
+                "from django import forms",
+                "from djust import LiveView",
+                "from djust.forms import ModelFormMixin",
+                "from .models import %s" % model,
+                "",
+                "",
+                "class %sForm(forms.ModelForm):" % model,
+                "    class Meta:",
+                "        model = %s" % model,
+                '        exclude = ["owner"]',
+                "",
+                "",
+                "class %s(ModelFormMixin[%s], LiveView):" % (name, model),
+                '    template_name = "myapp/%s_edit.html"' % snake,
+                "    model = %s" % model,
+                "    form_class = %sForm" % model,
+                "    login_required = True",
+                "",
+                "    def get_queryset(self):",
+                "        # Only records the signed-in user owns can be opened. Rename",
+                "        # `owner` to your model's owner field (djust.S013 explains why).",
+                "        return super().get_queryset().filter(owner=self.request.user)",
+                "",
+                "    def form_valid(self, form):",
+                "        self.object = form.save()",
+                '        self.success_message = "Saved!"',
+                "",
+            ]
+            return "\n".join(edit_lines)
 
         # Build imports
         imports = ["from djust import LiveView"]

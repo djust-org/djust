@@ -43,3 +43,12 @@ def test_model_form_mixin_is_an_optional_mixin():
     (entry,) = [m for m in OPTIONAL_MIXINS if m["name"] == "ModelFormMixin"]
     assert entry["import"] == "from djust.forms import ModelFormMixin"
     assert "ModelFormMixin" in KNOWN_MIXINS
+
+
+def test_plain_form_scaffold_is_unchanged():
+    from djust.mcp.server import create_server
+
+    server = create_server()
+    (tool,) = [t for t in server._tool_manager._tools.values() if t.name == "scaffold_view"]
+    code = tool.fn(name="ContactView", features="form")
+    assert "FormMixin" in code and "ModelFormMixin" not in code
