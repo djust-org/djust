@@ -230,6 +230,40 @@ that fetch, or the browser blocks the file outright rather than silently
 skipping the integrity check. Check that against your CDN/S3 CORS
 configuration before you switch `STATIC_URL` to an absolute host.
 
+## Origins that can't be pinned
+
+Some third-party SDKs must load from their vendor's own origin and change
+without notice, so they can be neither vendored nor given an `integrity`:
+Stripe.js (`js.stripe.com`), Cloudflare Turnstile
+(`challenges.cloudflare.com`), Google Tag Manager
+(`www.googletagmanager.com`), the Google Fonts CSS API
+(`fonts.googleapis.com`). An external asset declaration needs an
+`integrity` (`djust.B006`), which these can't have, and leaving them
+undeclared makes `djust.B010` warn about every template that loads them.
+
+List those hosts explicitly instead:
+
+```text
+# settings.py
+DJUST_ALLOWED_EXTERNAL_ORIGINS = [
+    "js.stripe.com",
+    "challenges.cloudflare.com",
+]
+```
+
+`djust.B010` then accepts templates that load from exactly those hosts.
+The list is empty by default, and it matches whole hosts only:
+`js.stripe.com` does not cover `m.stripe.com`, and there are no wildcards.
+An entry may be a bare host (`js.stripe.com`) or an origin
+(`https://js.stripe.com`); the case doesn't matter. A value that isn't a
+list of strings is ignored, and B010 says so.
+
+This is an exception list for a security review to read, not a way to
+switch the check off: every entry is an origin whose code your pages run
+unverified and that no SBOM lists. It affects only `djust.B010`'s template
+scan. It does not declare an asset, `{% djust_asset %}` still renders only
+declared assets, and it does not change your Content-Security-Policy.
+
 ## Supported highlight.js themes
 
 `{% code_block %}` renders one of a curated set of vendored highlight.js
