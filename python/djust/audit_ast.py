@@ -328,7 +328,7 @@ class _FileContext:
         # #3093: import targets, so a decorator is judged by what it binds to.
         from djust.checks._ast_bindings import import_bindings
 
-        self.bindings: Dict[str, Optional[str]] = import_bindings(tree)
+        self.bindings: Dict[str, Any] = import_bindings(tree)
 
     def emit(
         self,
@@ -536,10 +536,9 @@ def _is_event_handler(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
 
 def _handler_has_permission_decorator(
     func: ast.FunctionDef | ast.AsyncFunctionDef,
-    bindings: Optional[Dict[str, Optional[str]]] = None,
+    bindings: Optional[Dict[str, Any]] = None,
 ) -> bool:
-    from djust.checks._ast_bindings import binds_to
-    from djust.decorators import permission_required
+    from djust.checks._ast_bindings import is_djust_permission_gate
 
     for dec in func.decorator_list:
         name = _decorator_name(dec)
@@ -554,7 +553,7 @@ def _handler_has_permission_decorator(
             return True
         # #3093: djust's gate imported under an alias (forced when the view
         # also sets the ``permission_required`` class attribute).
-        if bindings and binds_to(dec, bindings, permission_required, "permission_required"):
+        if bindings and is_djust_permission_gate(dec, bindings):
             return True
     return False
 

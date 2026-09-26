@@ -469,8 +469,12 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
   it binds to, following the module's imports — `permission_required as
   require_permission`, `decorators.permission_required(...)` and
   `djust.decorators.permission_required(...)` all count. Django's
-  `permission_required` does not. A name no absolute import binds (a relative
-  import, a star import) falls back to matching the name `permission_required`.
+  `permission_required`, and a different djust decorator imported as
+  `permission_required`, do not. Anything the check cannot decide falls back to
+  matching the name `permission_required`: a project's own wrapper, a relative
+  or star import, a name bound twice at module level (a `try`/`except` import
+  fallback), or a module that is not already loaded. Only module-level imports
+  count, and the check never imports the code it scans.
 
 ### S011 — Inline `<script>` inside a `dj-root` without a CSP
 - **Severity**: Warning

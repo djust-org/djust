@@ -592,7 +592,7 @@ def _is_event_handler_decorator(deco: ast.expr) -> bool:
 
 
 def _is_permission_required_decorator(
-    deco: ast.expr, bindings: Optional[dict[str, Optional[str]]] = None
+    deco: ast.expr, bindings: Optional[dict[str, Any]] = None
 ) -> bool:
     """True if ``deco`` is djust's ``@permission_required(...)`` per-handler gate.
 
@@ -602,12 +602,14 @@ def _is_permission_required_decorator(
     whenever the view also sets the ``permission_required`` class attribute,
     which shadows the decorator in the class body. Django's
     ``django.contrib.auth.decorators.permission_required`` is not the gate.
-    Names no import binds fall back to the local-name match.
+    Only a target that is positively not the gate is rejected; anything
+    undecidable (a project's own wrapper, a module that is not loaded, an
+    ambiguous or relative binding) keeps the name match. Never imports the
+    scanned code (see ``djust.checks._ast_bindings``).
     """
-    from djust.checks._ast_bindings import binds_to
-    from djust.decorators import permission_required
+    from djust.checks._ast_bindings import is_djust_permission_gate
 
-    return binds_to(deco, bindings or {}, permission_required, "permission_required")
+    return is_djust_permission_gate(deco, bindings or {})
 
 
 def _class_attr_is_truthy(node: "ast.ClassDef", attr_name: str) -> bool:
@@ -694,7 +696,7 @@ def _class_gates_events(node: "ast.ClassDef") -> bool:
 
 def _ungated_event_handlers(
     node: "ast.ClassDef",
-    bindings: Optional[dict[str, Optional[str]]] = None,
+    bindings: Optional[dict[str, Any]] = None,
 ) -> Iterator[Union[ast.FunctionDef, ast.AsyncFunctionDef]]:
     """Yield public ``@event_handler`` method nodes with no per-handler auth gate.
 
