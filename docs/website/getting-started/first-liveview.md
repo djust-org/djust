@@ -179,7 +179,7 @@ def delete_item(self, item_id: int = 0, **kwargs):
 Once the counter is working, the four end-to-end tutorials apply the
 same primitives to common shipping patterns:
 
-- [Build a search-as-you-type feature](../guides/tutorial-search-as-you-type.md) — debounced single-input
+- [Handle search input and debounce](../core-concepts/events.md#html-attributes-dj-debounce--dj-throttle) — debounced single-input
 - [Build a real-time comment thread](../guides/tutorial-real-time-comments.md) — multi-user broadcast
 - [Build a multi-step form wizard](../guides/tutorial-multi-step-wizard.md) — stateful step cursor
 - [Build a typeahead with @server_function](../guides/tutorial-typeahead-server-function.md) — partial-page server RPC
