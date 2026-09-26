@@ -2857,8 +2857,62 @@ fn name_exists_on(obj: &pyo3::Bound<'_, pyo3::PyAny>, name: &str) -> bool {
     {
         return false;
     }
-    let probe = || -> PyResult<bool> { obj.dir()?.contains(name) };
-    probe().unwrap_or(false)
+    name_in_dir(obj, name).unwrap_or(false)
+}
+
+/// `name in dir(obj)`, answered by membership instead of building `dir()`
+/// (#3151).
+///
+/// `dir()` iterates every class `__dict__` in the MRO. On a free-threaded
+/// build that iteration raises when another thread writes a first-use class
+/// cache (`_djust_descriptor_fields_cache`, ...) at the same moment, and the
+/// `false` it then answered let a raising `@property` render empty instead
+/// of propagating. For the default `object.__dir__` / `type.__dir__` the
+/// answer is the instance `__dict__` plus every class `__dict__` in the MRO,
+/// and a `__contains__` on each is a single atomic lookup. An object whose
+/// type overrides `__dir__` still gets `dir()` itself.
+fn name_in_dir(obj: &pyo3::Bound<'_, pyo3::PyAny>, name: &str) -> PyResult<bool> {
+    use pyo3::types::{PyDict, PyType};
+
+    let py = obj.py();
+    let dir_attr = pyo3::intern!(py, "__dir__");
+    let is_class = obj.is_instance_of::<PyType>();
+    let default_dir = if is_class {
+        py.get_type::<PyType>().getattr(dir_attr)?
+    } else {
+        py.get_type::<pyo3::PyAny>().getattr(dir_attr)?
+    };
+    if !obj.get_type().getattr(dir_attr)?.is(&default_dir) {
+        return obj.dir()?.contains(name);
+    }
+    let classes = if is_class {
+        obj.clone()
+    } else {
+        // As `object.__dir__` does: `__dict__` via ordinary attribute access,
+        // any failure meaning "no instance attributes".
+        if let Ok(own) = obj.getattr(pyo3::intern!(py, "__dict__")) {
+            if let Ok(own) = own.cast::<PyDict>() {
+                if own.contains(name)? {
+                    return Ok(true);
+                }
+            }
+        }
+        match obj.getattr(pyo3::intern!(py, "__class__")) {
+            Ok(cls) if cls.is_instance_of::<PyType>() => cls,
+            _ => return obj.dir()?.contains(name),
+        }
+    };
+    // `__mro__` is an immutable tuple; each class namespace answers
+    // `__contains__` without being iterated.
+    for klass in classes.getattr(pyo3::intern!(py, "__mro__"))?.try_iter()? {
+        if klass?
+            .getattr(pyo3::intern!(py, "__dict__"))?
+            .contains(name)?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Truthiness of an optional attribute (`getattr(obj, name, False)` +

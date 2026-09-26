@@ -13,6 +13,8 @@ import inspect
 import types
 from typing import TypeVar, Union, get_args, get_origin, get_type_hints
 
+from ._class_snapshot import namespace
+
 
 F = TypeVar("F")
 _MARKER = "_djust_component_subscriptions"
@@ -193,7 +195,9 @@ def _validate_callback(
         ):
             raise TypeError(problem)
         signature.bind(None, **dict.fromkeys(expected))
-        hints = get_type_hints(callback, localns={**vars(owner), owner.__name__: owner})
+        # A snapshot: this runs per request (interactive-component observes,
+        # snapshots) while another thread may write a first-use cache (#3151).
+        hints = get_type_hints(callback, localns={**namespace(owner), owner.__name__: owner})
         if any(not _accepts(hints.get(name), kind) for name, kind in expected.items()):
             raise TypeError(problem)
         if not _valid_result(hints.get("return")):
@@ -214,7 +218,7 @@ def compile_subscriptions(owner: type) -> tuple[SubscriptionBinding, ...]:
     effective: dict[str, object] = {}
     subscriptions: dict[tuple[str, str], SubscriptionBinding] = {}
     for cls in owner.__mro__:
-        for name, member in vars(cls).copy().items():  # snapshot (#3151)
+        for name, member in namespace(cls).items():  # #3151
             effective.setdefault(name, member)
             # Type checks only: a class attribute may be lazy (``SimpleLazyObject``
             # proxies ``__class__``, so ``isinstance`` would evaluate it).

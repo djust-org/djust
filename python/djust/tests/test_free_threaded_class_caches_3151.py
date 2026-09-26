@@ -165,6 +165,8 @@ def _hammer(make_base: Callable[[], type], read: Callable[[type], Any]) -> list[
         for t in threads:
             t.join(timeout=30)
         sys.setswitchinterval(old)
+    stuck = [t.name for t in threads if t.is_alive()]
+    assert not stuck, f"hammer threads did not stop: {stuck}"
     return errors
 
 
@@ -180,6 +182,11 @@ def _base_view() -> type:
         pass
 
     attrs["search"] = search
+
+    def boom(self: Any) -> Any:
+        raise AttributeError("boom")
+
+    attrs["boom"] = property(boom)
     return type(f"SharedBase{next(_COUNTER)}", (LiveView,), attrs)
 
 
@@ -218,6 +225,19 @@ def _mount_frame_handler_config(leaf: type) -> None:
         raise RuntimeError("handler_config dropped by a concurrent class write")
 
 
+def _raising_property_propagates(leaf: type) -> None:
+    from djust import _rust
+
+    # Django's ``bit in dir(current)`` re-raise probe (#2506), in Rust, now
+    # answers by membership. Building ``dir()`` raced a class write, answered
+    # False, and the property's error rendered as "" instead of propagating.
+    try:
+        rendered = _rust.render_template("[{{ o.boom }}]", {"o": leaf()})
+    except AttributeError:
+        return
+    raise RuntimeError(f"a raising @property rendered {rendered!r} instead of raising")
+
+
 def _attribute_names(leaf: type) -> None:
     from djust._class_snapshot import attribute_names
 
@@ -233,6 +253,7 @@ def _attribute_names(leaf: type) -> None:
         _exposure_contract,
         _handler_plan,
         _mount_frame_handler_config,
+        _raising_property_propagates,
         _attribute_names,
     ],
     ids=lambda f: f.__name__.lstrip("_"),
@@ -342,6 +363,8 @@ def _namespace_receiver(node: ast.AST) -> str | None:
 
 
 def _live_namespace_walks() -> list[tuple[str, str, str, int]]:
+    """Syntactic only: an alias (``ns = vars(C)`` then ``for k in ns``) is not
+    followed, so the gate backs up review rather than replacing it."""
     found = []
     for path in sorted(_PKG.rglob("*.py")):
         rel = path.relative_to(_PKG)
@@ -356,9 +379,21 @@ def _live_namespace_walks() -> list[tuple[str, str, str, int]]:
         for node in ast.walk(tree):
             receiver = None
             line = getattr(node, "lineno", 0)
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-                if node.func.id == "dir":
+            walks_mro = False  # dir()/getmembers() read every class dict, even for self
+            if isinstance(node, ast.Call):
+                func = node.func
+                if (isinstance(func, ast.Name) and func.id in ("dir", "getmembers")) or (
+                    isinstance(func, ast.Attribute)
+                    and func.attr == "getmembers"
+                    and isinstance(func.value, ast.Name)
+                    and func.value.id == "inspect"
+                ):
                     receiver = ast.unparse(node.args[0]) if node.args else "<scope>"
+                    walks_mro = True
+            if isinstance(node, ast.Dict):  # {**vars(X), ...} unpacks by iterating
+                for key, value in zip(node.keys, node.values):
+                    if key is None and receiver is None:
+                        receiver = _namespace_receiver(value)
             if isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
                 receiver = _namespace_receiver(node.iter)
                 line = node.iter.lineno
@@ -369,7 +404,8 @@ def _live_namespace_walks() -> list[tuple[str, str, str, int]]:
                 # ``list(ns.items())`` is atomic; ``list(ns)`` is not.
                 if name in _ITERATING_CALLS and not (name == "list" and isinstance(arg, ast.Call)):
                     receiver = receiver or _namespace_receiver(arg)
-            if receiver is None or receiver == "self":
+            # ``self.__dict__`` is the instance's own dict; ``dir(self)`` is not.
+            if receiver is None or (receiver == "self" and not walks_mro):
                 continue
             key = (rel.as_posix(), owner.get(node, "<module>"), receiver)
             if key not in _GATE_ALLOWED:
