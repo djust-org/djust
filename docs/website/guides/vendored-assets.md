@@ -230,6 +230,46 @@ that fetch, or the browser blocks the file outright rather than silently
 skipping the integrity check. Check that against your CDN/S3 CORS
 configuration before you switch `STATIC_URL` to an absolute host.
 
+## Origins that can't be pinned
+
+Some third-party SDKs must load from their vendor's own origin and change
+without notice, so they can be neither vendored nor given an `integrity`:
+Stripe.js (`js.stripe.com`), Cloudflare Turnstile
+(`challenges.cloudflare.com`), Google Tag Manager
+(`www.googletagmanager.com`), the Google Fonts CSS API
+(`fonts.googleapis.com`). An external asset declaration needs an
+`integrity` (`djust.B006`), which these can't have, and leaving them
+undeclared makes `djust.B010` warn about every template that loads them.
+
+List those hosts explicitly instead:
+
+```text
+# settings.py
+DJUST_ALLOWED_EXTERNAL_ORIGINS = [
+    "js.stripe.com",
+    "challenges.cloudflare.com",
+]
+```
+
+`djust.B010` then accepts templates that load from exactly those hosts.
+The list is empty by default, and it matches whole hosts only:
+`js.stripe.com` does not cover `m.stripe.com`, and there are no wildcards.
+Each entry is a bare host (`js.stripe.com`), optionally written as an
+origin (`https://js.stripe.com`, with or without a trailing `/`). The scheme
+is ignored, so `http://` and `https://` entries mean the same host, and case
+doesn't matter. An entry with an empty host, a port, userinfo, a path or a
+query is ignored, and B010 names it; so is the whole setting when it isn't
+a list of strings. Hosts are compared as written, with no normalisation:
+write an internationalised domain and a host with a trailing dot exactly as
+they appear in the template's URL (for example the `xn--` form if that is
+what the template uses).
+
+This is an exception list for a security review to read, not a way to
+switch the check off: every entry is an origin whose code your pages run
+unverified and that no SBOM lists. It affects only `djust.B010`'s template
+scan. It does not declare an asset, `{% djust_asset %}` still renders only
+declared assets, and it does not change your Content-Security-Policy.
+
 ## Supported highlight.js themes
 
 `{% code_block %}` renders one of a curated set of vendored highlight.js
