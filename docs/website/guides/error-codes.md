@@ -262,13 +262,13 @@ In development, pages render without Tailwind utilities until you compile the CS
 
 ---
 
-### C018: Deprecated LIVEVIEW_CONFIG key
+### C018: Removed LIVEVIEW_CONFIG key
 
 **Severity**: Warning
 
-**What causes it**: `LIVEVIEW_CONFIG` or `DJUST_CONFIG` sets one of `jit_cache_backend`, `jit_cache_dir`, `jit_redis_url`, `debug_components`, `component_wrapper_class` or `component_loading_class`. djust has defaults for these keys but never reads them, so setting one has no effect.
+**What causes it**: `LIVEVIEW_CONFIG` or `DJUST_CONFIG` sets one of `jit_cache_backend`, `jit_cache_dir`, `jit_redis_url`, `debug_components`, `component_wrapper_class` or `component_loading_class`. djust never read these keys, and 1.3 removed their defaults, so setting one has no effect.
 
-**Fix**: Remove the key. djust 1.3 removes them. Suppress with `DJUST_CONFIG = {"suppress_checks": ["C018"]}`.
+**Fix**: Remove the key. Suppress with `DJUST_CONFIG = {"suppress_checks": ["C018"]}`.
 
 ---
 
@@ -874,7 +874,7 @@ not trigger it.
 
 **What causes it**: A LiveView declares view-level auth (`login_required`, `permission_required` or a Django auth mixin) and exposes a public `@event_handler` with no per-handler authorization gate. Message: "<file>:<line> -- LiveView '<View>' declares view-level auth but exposes the public @event_handler '<handler>' with no per-handler authorization gate. A user who passes the view's mount auth can call this handler."
 
-**Fix**: If the handler needs finer authorization, add `@permission_required(...)` to it or a `check_permissions()` override that inspects the event. Rename it with a leading underscore if it isn't meant to be client-callable. If view-level auth is sufficient, suppress with `# noqa: S009` on the handler or `DJUST_CONFIG = {"suppress_checks": ["S009"]}`.
+**Fix**: If the handler needs finer authorization, add `@permission_required(...)` to it or a `check_permissions()` override that inspects the event. The check resolves the decorator through the module's imports, so an aliased import (`permission_required as require_permission`) or a dotted `decorators.permission_required(...)` counts; an alias is required whenever the view also sets the `permission_required` class attribute, which shadows the decorator in the class body. Django's `django.contrib.auth.decorators.permission_required` does not gate an event and does not count. Rename it with a leading underscore if it isn't meant to be client-callable. If view-level auth is sufficient, suppress with `# noqa: S009` on the handler or `DJUST_CONFIG = {"suppress_checks": ["S009"]}`.
 
 ---
 

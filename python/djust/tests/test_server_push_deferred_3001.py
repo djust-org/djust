@@ -23,6 +23,8 @@ from djust import LiveView
 from djust.push import view_group_name
 from djust.websocket import LiveViewConsumer
 
+from ._ws_frames import drain_extra, receive_until, wait_until
+
 SETTINGS = dict(DEBUG=False, DJUST_TENANTS=None, DJUST_CONFIG={})
 CONSUMERS = []
 
@@ -74,11 +76,16 @@ async def _push(score):
     )
 
 
-async def _frames(socket, quiet=0.4):
-    frames = []
-    while not await socket.receive_nothing(timeout=quiet):
-        frames.append(json.loads((await socket.receive_output(timeout=3))["text"]))
-    return frames
+def _broadcast(frames):
+    return any(f.get("source") == "broadcast" for f in frames)
+
+
+async def _frames(socket, until=lambda frames: True):
+    """Frames until ``until(frames)`` holds (event-driven, #3130), then any
+    others before the socket goes quiet. The trailing window can only miss a
+    late extra frame, never cut the expected one short."""
+    frames = await receive_until(socket, until)
+    return frames + await drain_extra(socket)
 
 
 @pytest.fixture(autouse=True)
@@ -95,11 +102,12 @@ async def test_push_while_lock_held_arrives_after_release():
             await consumer._render_lock.acquire()  # e.g. a slow background render
             try:
                 await _push(7)
+                await wait_until(lambda: len(consumer._deferred_pushes) == 1, what="the deferral")
                 assert await _frames(socket) == [], "nothing renders while the lock is held"
                 assert consumer.view_instance.log == []
             finally:
                 consumer._render_lock.release()
-            frames = await _frames(socket)
+            frames = await _frames(socket, _broadcast)
             broadcasts = [f for f in frames if f.get("source") == "broadcast"]
             assert len(broadcasts) == 1, frames
             assert "7" in json.dumps(broadcasts[0]["patches"])
@@ -119,7 +127,9 @@ async def test_push_during_user_event_is_deferred_and_order_is_kept():
             try:
                 for score in (1, 2, 3):
                     await _push(score)
-                await asyncio.sleep(0.3)
+                await wait_until(
+                    lambda: len(consumer._deferred_pushes) == 3, what="three deferrals"
+                )
                 assert consumer.view_instance.log == []
             finally:
                 consumer._processing_user_event = False
@@ -132,7 +142,7 @@ async def test_push_during_user_event_is_deferred_and_order_is_kept():
                 {"type": "server_push", "handler": "handle_score", "payload": {"score": 4}}
             )
             assert len(consumer._deferred_pushes) == 4
-            frames = await _frames(socket)
+            frames = await _frames(socket, _broadcast)
             assert consumer.view_instance.log == [1, 2, 3, 4]
             # The backlog is applied in one turn: one render, not four, so a
             # push stream faster than the render cannot leave a viewer behind.
@@ -206,7 +216,7 @@ async def test_disconnect_cancels_the_drain():
         await consumer._render_lock.acquire()
         try:
             await _push(9)
-            await asyncio.sleep(0.2)
+            await wait_until(lambda: consumer._push_drain_task is not None, what="the drain")
             drain = consumer._push_drain_task
             assert drain is not None and not drain.done(), "the drain waits on the lock"
             await socket.disconnect()

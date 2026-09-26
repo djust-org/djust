@@ -627,8 +627,8 @@ def _check_unknown_extensions(errors: list) -> None:
             )
 
 
-#: LIVEVIEW_CONFIG keys that have defaults but that nothing reads (#2984).
-#: Setting one has no effect; they are removed in 1.3.
+#: LIVEVIEW_CONFIG keys removed in 1.3 (#2984). Nothing ever read them; their
+#: defaults are gone, and C018 warns a project that still sets one.
 DEAD_LIVEVIEW_CONFIG_KEYS = (
     "jit_cache_backend",
     "jit_cache_dir",
@@ -640,7 +640,7 @@ DEAD_LIVEVIEW_CONFIG_KEYS = (
 
 
 def _check_dead_config_keys(errors: list) -> None:
-    """C018 -- a LIVEVIEW_CONFIG key that djust never reads is set (#2984)."""
+    """C018 -- a LIVEVIEW_CONFIG key removed in djust 1.3 is still set (#2984)."""
     from django.conf import settings
 
     if _is_check_suppressed("djust.C018"):
@@ -656,16 +656,17 @@ def _check_dead_config_keys(errors: list) -> None:
         return
     errors.append(
         DjustWarning(
-            "%s %s set but djust never reads %s; setting %s has no effect."
+            "%s %s set, but %s removed in djust 1.3 and djust never read %s; "
+            "setting %s has no effect."
             % (
                 ", ".join(found),
                 "is" if len(found) == 1 else "are",
+                "that key was" if len(found) == 1 else "those keys were",
                 "it" if len(found) == 1 else "them",
                 "it" if len(found) == 1 else "them",
             ),
             hint=(
-                "Remove the key%s from settings. These keys are deprecated and will "
-                "be removed in djust 1.3. Suppress with DJUST_CONFIG = "
+                "Remove the key%s from settings. Suppress with DJUST_CONFIG = "
                 "{'suppress_checks': ['C018']}." % ("" if len(found) == 1 else "s")
             ),
             id="djust.C018",

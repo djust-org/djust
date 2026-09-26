@@ -11,7 +11,6 @@ Ported from ``56c36d726`` (PR #2954, ADR-038 completion) without its explicit
 child-queue sweep, which depends on ADR-038.
 """
 
-import asyncio
 import json
 
 import pytest
@@ -25,6 +24,8 @@ from django.test import override_settings
 from djust import LiveView
 from djust.push import view_group_name
 from djust.websocket import LiveViewConsumer
+
+from ._ws_frames import drain_extra, receive_until
 
 SETTINGS = dict(DEBUG=False, DJUST_TENANTS=None, DJUST_CONFIG={})
 RAN = []
@@ -134,11 +135,16 @@ async def _mounted(view_class):
     return socket
 
 
-async def _frames(socket, quiet=0.6):
-    frames = []
-    while not await socket.receive_nothing(timeout=quiet):
-        frames.append(json.loads((await socket.receive_output(timeout=3))["text"]))
-    return frames
+def _async_result(frames):
+    return "work" in RAN and any(f.get("source") == "async" for f in frames)
+
+
+async def _frames(socket, until, quiet=0.3):
+    """Frames until ``until(frames)`` holds (event-driven, #3130), then any
+    others before the socket goes quiet for ``quiet`` seconds. The trailing
+    window can only miss a late extra frame, never cut the expected one short."""
+    frames = await receive_until(socket, until)
+    return frames + await drain_extra(socket, quiet=quiet)
 
 
 @pytest.fixture(autouse=True)
@@ -158,11 +164,7 @@ async def test_start_async_from_a_server_originated_turn_runs(view_class, trigge
         socket = await _mounted(view_class)
         try:
             await trigger(view_class)
-            for _ in range(60):
-                if "work" in RAN:
-                    break
-                await asyncio.sleep(0.05)
-            frames = await _frames(socket)
+            frames = await _frames(socket, _async_result)
             assert RAN[:2] == ["hook", "work"], (RAN, frames)
             results = [f for f in frames if f.get("source") == "async"]
             assert results and "21" in json.dumps(results), frames
@@ -179,7 +181,9 @@ async def test_a_failed_hook_dispatches_nothing():
         socket = await _mounted(FailingPushView)
         try:
             await _push(FailingPushView)
-            await _frames(socket)
+            # Only a miss is possible here: work that ran after the trailing
+            # window would go unseen, never fail a correct run.
+            await _frames(socket, lambda frames: "hook" in RAN, quiet=0.6)
             assert RAN == ["hook"], "work queued by a raising hook must not run"
         finally:
             await socket.disconnect()
@@ -192,11 +196,7 @@ async def test_failed_server_turn_work_without_handler_still_sends_its_frame():
         socket = await _mounted(FailingWorkPushView)
         try:
             await _push(FailingWorkPushView)
-            for _ in range(60):
-                if "work" in RAN:
-                    break
-                await asyncio.sleep(0.05)
-            frames = await _frames(socket)
+            frames = await _frames(socket, _async_result)
             assert RAN == ["hook", "work"], RAN
             assert [f for f in frames if f.get("source") == "async"], frames
         finally:
