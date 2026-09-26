@@ -2740,8 +2740,13 @@ Source: [decisions and acceptance](037-event-contract-checks-and-executable-docu
     docs/website/guides/error-codes.md                        0        0        0
     docs/website/guides/forms.md                              1        1        0
     docs/website/guides/interactive-components.md             5        0        0
-    docs/website: 665 Python blocks, 657 not executed (parse/import-checked only)
+    docs/website: 665 Python blocks — 8 executed, 467 parse/import-checked (scripts/check-doc-snippets.py, guides/*.md), 190 unchecked
     ```
+
+    Only `guides/*.md` is parse/import-checked (`scripts/check-doc-snippets.py`).
+    The spec assumed that check covered every `docs/website` block; the other 190
+    Python blocks, in core-concepts, forms, state and so on, have no check at all
+    (#3134 review).
   - **Gate-offs.** Each layer (extractor, pairing, scenario driving and drift)
     goes red when it is reverted: `docs/adr/notes/037-d2-gate-offs.md`, produced by
     `scripts/doc-examples-gateoff.py`.

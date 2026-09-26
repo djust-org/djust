@@ -24,8 +24,14 @@ def main(argv):
     for path, c in sorted(data["covered"].items()):
         sys.stdout.write("%-50s %8d %8d %8d\n" % (path, c["executed"], c["skipped"], c["unmarked"]))
     sys.stdout.write(
-        "docs/website: %d Python blocks, %d not executed (parse/import-checked only)\n"
-        % (data["docs_website_python_blocks"], data["docs_website_unexecuted"])
+        "docs/website: %d Python blocks — %d executed, %d parse/import-checked "
+        "(scripts/check-doc-snippets.py, guides/*.md), %d unchecked\n"
+        % (
+            data["docs_website_python_blocks"],
+            data["docs_website_executed"],
+            data["docs_website_parse_checked"],
+            data["docs_website_unchecked"],
+        )
     )
     return 0
 

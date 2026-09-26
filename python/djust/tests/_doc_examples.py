@@ -346,7 +346,23 @@ def problems(sections, scenarios) -> List[str]:
 
 
 def report(sections) -> Dict[str, object]:
-    """Executed, skipped and unmarked counts per covered file."""
+    """Executed, skipped and unmarked counts per covered file.
+
+    For ``docs/website`` as a whole, every Python block is exactly one of:
+    executed here; parse/import-checked by ``scripts/check-doc-snippets.py``
+    (which reads ``docs/website/guides/*.md`` only, and drops blocks under its
+    own skip marker); or unchecked.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "_doc_snippets_report", ROOT / "scripts/check-doc-snippets.py"
+    )
+    snippets = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    spec.loader.exec_module(snippets)  # type: ignore[union-attr]
+    parse_checked_files = set(snippets.collect_guides(ROOT / "docs/website/guides"))
+
+    executed_at = set()
     covered: Dict[str, Dict[str, int]] = {}
     for section in sections:
         counts = covered.setdefault(section.path, {"executed": 0, "skipped": 0, "unmarked": 0})
@@ -359,11 +375,28 @@ def report(sections) -> Dict[str, object]:
                 else "executed"
             )
             counts[key] += 1
-    website = sorted((ROOT / "docs/website").rglob("*.md"))
-    total = sum(1 for p in website for b in blocks(p) if b.language == "python")
-    executed = sum(c["executed"] for p, c in covered.items() if p.startswith("docs/website/"))
+            if key == "executed":
+                executed_at.add((section.path, example.line))
+    total = executed = parse_checked = 0
+    for path in sorted((ROOT / "docs/website").rglob("*.md")):
+        relative = str(path.relative_to(ROOT))
+        checked_lines = (
+            {line for line, _code, _marker in snippets.extract_python_blocks(path)}
+            if path in parse_checked_files
+            else set()
+        )
+        for block in blocks(path):
+            if block.language != "python":
+                continue
+            total += 1
+            if (relative, block.line) in executed_at:
+                executed += 1
+            elif block.line in checked_lines:
+                parse_checked += 1
     return {
         "covered": covered,
         "docs_website_python_blocks": total,
-        "docs_website_unexecuted": total - executed,
+        "docs_website_executed": executed,
+        "docs_website_parse_checked": parse_checked,
+        "docs_website_unchecked": total - executed - parse_checked,
     }

@@ -65,3 +65,20 @@ def test_a_renamed_heading_is_reported(tmp_path):
     path.write_text("## Renamed\n")
     found = H.problems((H.Section(str(path), "## Original"),), SCENARIOS)
     assert any("not found" in problem for problem in found), found
+
+
+def test_the_report_does_not_overstate_what_is_checked():
+    # Review of #3134: "not executed (parse/import-checked only)" was false for
+    # the 179 docs/website blocks outside guides/*.md, which check-doc-snippets
+    # never reads. The three counts partition the total.
+    data = H.report(H.COVERED)
+    total = data["docs_website_python_blocks"]
+    parts = (
+        data["docs_website_executed"],
+        data["docs_website_parse_checked"],
+        data["docs_website_unchecked"],
+    )
+    assert sum(parts) == total and all(n > 0 for n in parts), parts
+    guides = [p for p in (H.ROOT / "docs/website/guides").glob("*.md")]
+    in_guides = sum(1 for p in guides for b in H.blocks(p) if b.language == "python")
+    assert data["docs_website_parse_checked"] <= in_guides
