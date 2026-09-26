@@ -96,6 +96,17 @@ Two name shapes appear in this roadmap, with distinct meanings:
 | ~~**P1**~~ | ~~#3095 — Profile the loop thread at 160–192 players (SIGALRM sampler) and move the CPU-heavy per-frame work into the worker pool, keeping per-session order~~ ✅ (#3123: loop thread −25–30% at 128–192 clients, −15% at 256–384) | v1.3.0 |
 | ~~**P3**~~ | ~~#3095 — Evaluate several event loops per process on 3.14t (design note)~~ ✅ (design note on #3095; a 2-loop prototype held 512 clients where one loop collapsed; production mode → #3128) | v1.3.0 |
 
+### v1.3.0-6 — multiple event loops (#3128)
+
+*Kind:* performance / scalability. With the v1.3.0-5 savings, snake-arena on 1.3.0rc3 in production still saturates at about 160–192 players: the single asyncio event-loop thread reaches about 0.93 of a core while the worker pool has room. These rows run several event loops in one free-threaded process. Everything is opt-in; the default stays one loop.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| **P1** | #3128 — `djust.layers.MultiLoopInMemoryChannelLayer` (queues bound to no loop; cross-loop send and group send, per-channel order, capacity before the hand-off, loop-agnostic expiry sweep) and `djust serve --loops N` / `djust.multiloop.serve` (N uvicorn servers on one socket; GIL and channel-layer refusal; signals, lifespan per loop, shutdown) | v1.3.0 |
+| **P1** | #3128 — Audit of loop-bound state: SSE event POSTs hop to the session's loop, the `db_notify` listener is claimed by one loop, channel layers are created before the loops start; rules for app code in the scaling guide; 3.14t CI runs the multi-loop tests | v1.3.0 |
+| **P2** | #3128 — Measured guidance on N: snake-arena at 192–512 clients on 1, 2 and 4 loops (scaling guide) | v1.3.0 |
+| **P2** | snake-arena — the room clock starts under a `threading.Lock`, so two loops never start two clocks for one room (app PR after the djust PR) | v1.3.0 |
+
 ## Next: v1.2.1 — non-breaking fixes (drain)
 
 > Planned 2026-09-24 from a triage of every open issue. **Policy:** non-breaking bug fixes ship in 1.2.1; anything breaking, new features, and parser/dependency upgrades go to 1.3. Issues split into a 1.2.1 part and a 1.3 part are marked. The ADR-034–038 stack (#2944, #2954) merges after 1.2.1 is cut. Already shipped toward 1.2.1 on `main`: #3009 (inline whitespace, #2999/#3010), the CSRF resolver (#2978), SerializerCache removal (#2992), the audit gate (#2989).

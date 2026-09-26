@@ -317,6 +317,10 @@ Things to know before you turn it on:
   - The pool starts to pay off once the event loop is relieved. With scoped push added, per-session threads reached 192–224 clients, against 96–128 on the shared thread.
   - With event-loop offload and a lighter in-process channel layer as well, one process used about 5 cores and served about 4–5× the clients of stock 3.12.
 
+### More than one event loop per process: `djust serve --loops`
+
+Once the pool spreads the sync work, the asyncio event loop that handles every WebSocket frame is the next ceiling, at about one core. On free-threaded Python, `djust serve myproject.asgi:application --loops N` runs N uvicorn servers, each on its own event loop and thread, on one shared listening socket, with `djust.layers.MultiLoopInMemoryChannelLayer` as the channel layer (djust 1.3, opt-in; `--loops 1` is plain `uvicorn.run`). It changes what app code may share between sessions: see [More than one event loop per process](scaling-across-cores.md#more-than-one-event-loop-per-process) for the rules, the lifespan and shutdown behaviour, and measured numbers.
+
 ### WebSocket per-message compression (permessage-deflate)
 
 VDOM patches are highly compressible — typical gzip ratios of **60-80% reduction in wire size** for repetitive HTML fragments and JSON patch structures. Both Uvicorn (with the `websockets` library) and Daphne support the `permessage-deflate` WebSocket extension out of the box and negotiate it with any modern browser client.

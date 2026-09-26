@@ -4,7 +4,7 @@ slug: scaling-across-cores
 section: guides
 order: 13.5
 level: advanced
-description: "Use more than one CPU core per process: free-threaded Python, the worker_threads pool, scoped push and the in-process channel layer, with measured numbers and the Redis multi-process alternative."
+description: "Use more than one CPU core per process: free-threaded Python, the worker_threads pool, scoped push, the in-process channel layer and several event loops per process, with measured numbers and the Redis multi-process alternative."
 ---
 
 # Scaling a djust Process Across Cores
@@ -22,7 +22,7 @@ Three things cap a stock process:
 
 1. **All WebSocket sessions share one sync thread.** Every `mount`, event handler, hook and render goes through asgiref's `sync_to_async` with `thread_sensitive=True`, which runs them all, for all sessions, on a single thread.
 2. **The GIL.** On standard CPython only one thread runs Python at a time, so extra threads help only while they wait on I/O or run code that releases the GIL.
-3. **The asyncio event loop.** Every frame for every session is decoded, dispatched and encoded on one loop thread. Once the sync work moves elsewhere, the loop becomes the next ceiling.
+3. **The asyncio event loop.** Every frame for every session is decoded, dispatched and encoded on one loop thread. Once the sync work moves elsewhere, the loop becomes the next ceiling; see [More than one event loop per process](#more-than-one-event-loop-per-process).
 
 ## The recipe
 
@@ -163,6 +163,99 @@ What the numbers say:
   - the shared thread used 1.6 MB, and stock 3.12 1.1 MB.
 
   The extra cost comes from free-threaded CPython's per-thread allocator heaps, which is why djust uses a bounded pool rather than a thread per session.
+
+## More than one event loop per process
+
+With the recipe above, the next ceiling is the **asyncio event loop**. It decodes, dispatches and encodes every WebSocket frame on one thread, so it saturates at about one core: snake-arena on 1.3.0rc3 in production stops scaling at about 160–192 players with the loop thread at 0.93 of a core while the pool still has room. On free-threaded Python, djust 1.3 can run **several event loops in one process** (opt-in, #3128):
+
+```bash
+djust serve myproject.asgi:application --loops 4 --ws websockets --host 0.0.0.0 --port 8000
+```
+
+```python
+# settings.py: a channel layer whose queues belong to no event loop
+CHANNEL_LAYERS = {
+    "default": {"BACKEND": "djust.layers.MultiLoopInMemoryChannelLayer"},
+}
+LIVEVIEW_CONFIG = {"worker_threads": True}
+```
+
+`djust serve` runs N uvicorn servers, each with its own event loop on its own thread, all accepting on **one** listening socket. Every loop polls the socket and the kernel gives a new connection to whichever loop accepts first, so a busy loop takes fewer. A connection stays on the loop that accepted it. In-process state (rooms, caches, the channel layer) is shared by all loops, which is the reason to use loops rather than processes. The same launcher is available as `djust.multiloop.serve(app, loops=N, **uvicorn_options)`.
+
+- **`--loops 1`, the default, is plain `uvicorn.run`.** It takes the common uvicorn options (`--host`, `--port`, `--uds`, `--fd`, `--ws`, `--http`, `--loop`, `--lifespan`, `--proxy-headers`, `--forwarded-allow-ips`, `--root-path`, `--ws-per-message-deflate`, `--backlog`, `--timeout-keep-alive`, `--timeout-graceful-shutdown`, `--limit-concurrency`, `--log-level`). `--reload` and `--workers` are not offered.
+- **Free-threaded only.** With the GIL on, several loops only take turns holding it and add thread switches, so `--loops 2` or more refuses to start on a GIL build, and after importing your app if an extension re-enabled the GIL. (`--allow-gil` overrides it, for tests.)
+- **A loop-safe channel layer.** `djust serve` refuses Channels' `InMemoryChannelLayer`, djust's `InMemoryChannelLayer` and `channels_redis`' `RedisChannelLayer`: each keeps state that only one loop may touch (an `asyncio.Queue` per channel, a single receive lock). Use `djust.layers.MultiLoopInMemoryChannelLayer` for one process, or `channels_redis.pubsub.RedisPubSubChannelLayer`, which keeps a connection per loop. Other layers start with a warning.
+- **Lifespan runs once per loop**, as it runs once per worker under `uvicorn --workers`. Whatever your app creates at startup exists once per loop.
+- **Shutdown.** The main thread handles SIGINT and SIGTERM: the first asks every loop to shut down gracefully, a second forces it. If one loop stops (its lifespan startup failed, say), the others stop too, and the exit code is 3 when a loop failed to start.
+- **Per-loop limits.** `--limit-concurrency` and `limit_max_requests` count per loop.
+- **Grow the pool with the loops.** The loops hand sync work to `worker_threads`; with 2–4 loops the pool is the next limit (see the numbers below). `djust serve` warns when `worker_threads` is off.
+
+### `djust.layers.MultiLoopInMemoryChannelLayer`
+
+The layer keeps each channel in a plain `deque` under one `threading.Lock`, so no queue belongs to a loop:
+
+- `receive()` takes the oldest message, or parks a future on **its own** loop;
+- `send()` checks the channel's capacity and appends under the lock, so `ChannelFull` is raised before any hand-off, then wakes one parked receiver: directly on the same loop, through `loop.call_soon_threadsafe` from another;
+- `group_send()` appends to every member under one acquisition of the lock, so two group sends reach every member in the same order, and wakes each receiving loop once rather than once per member.
+
+Messages on one channel arrive in the order they were appended, whichever loops sent them. Everything else is `djust.layers.InMemoryChannelLayer`: the same arguments, expiry, capacity and once-a-second expiry sweep. With one loop it behaves like `InMemoryChannelLayer`, so it is safe to configure before you add loops.
+
+### What djust keeps safe across loops
+
+| State | With several loops |
+|---|---|
+| A session's render lock, tick task, deferred-push queue, presence heartbeat, `start_async` / `@background` tasks | Created and used on the session's own loop. |
+| `worker_threads` pool and `PooledHTTP` | Loop-agnostic: `run_in_executor` works from any loop. A pool thread serves sessions of every loop. |
+| `sync_to_async` / `async_to_sync` | `async_to_sync` in a session's sync code returns to **that session's** loop. From a plain thread (a Celery task, a clock thread) it runs on a temporary loop, and the layer carries the message. |
+| Presence, state, rate-limit and IP-tracker backends | Already guarded by `threading` locks for the pool. |
+| Channel layers | Created once, before the loops start, so two loops never race to create two layers. |
+| SSE sessions | The stream GET and a later event POST can land on different loops. The POST runs the dispatch on the session's loop, in a copy of its own context. |
+| `db_notify` listener | One psycopg connection on one loop. The first loop to subscribe claims it, under a lock; other loops hop to it. |
+| Hot reload | Development only; use one loop (`--reload` is not supported with `--loops`). |
+
+### Rules for app code
+
+A connection stays on one loop, but two sessions of the same room can be on different loops. So:
+
+1. **Never share an asyncio object between sessions.** A module-level or class-level `asyncio.Lock`, `Event`, `Queue`, `Condition`, `Semaphore`, `Future` or `Task` belongs to the loop that first waited on it; a session on another loop that uses it fails ("is bound to a different event loop") or silently never wakes. Guard shared state with a `threading.Lock`, and talk to other sessions through `push_to_view` / `apush_to_view` or the channel layer.
+2. **Room-wide background work is one task per room, not per loop.** Start it under a `threading.Lock` (check whether the room's task is running, create it, record it, all while holding the lock), because two sessions of one room can ask for it at the same moment on two loops. The task runs on the loop of the session that started it and reaches the room's sessions only by pushing. `loop.time()` is `time.monotonic()` on every asyncio loop, so times recorded on one loop compare with another's.
+3. **Don't cache the running loop** in module or class state (`asyncio.get_running_loop()`, `get_event_loop()`). To act on a task or future of another loop, go through that loop: `task.get_loop().call_soon_threadsafe(task.cancel)`, or `asyncio.run_coroutine_threadsafe(coro, loop)` (`djust.multiloop.run_on_loop` wraps it).
+4. **Per-loop startup state.** Anything created in a lifespan startup (an `httpx.AsyncClient`, a connection pool) exists once per loop; use it only from the loop that created it.
+5. **One process only.** The in-memory layer does not cross processes. For several processes, use Redis as before; they combine: several multi-loop processes behind a load balancer, with Redis between them.
+
+### How many loops
+
+Measured with the snake-arena game, as above, on a 12-core Apple Silicon machine (8 performance cores) that other jobs were also using: free-threaded 3.14t, `worker_threads=8`, scoped push, rooms of 4 with a bot game each, every client pressing a key every 400 ms, 45 s per step (30 s measured), the load generator on the same machine. One loop uses `djust.layers.InMemoryChannelLayer`, as in production; 2 and 4 loops use `MultiLoopInMemoryChannelLayer`. Each cell is the range over interleaved rounds. Steps where the machine's 1-minute load average was above 12 before the step or above 20 after it were left out. "Cores per loop thread" is the CPU time of each event loop's own thread.
+
+<!-- ML-TABLE-START -->
+| Clients | Loops | p95 event round trip | Frames/s | Process cores | Cores per loop thread | Clients that failed to connect | Load avg before | Rounds |
+|---|---|---|---|---|---|---|---|---|
+| 192 | 1 | 15–18 ms | 4.43–4.56 | 3.4–3.9 | 0.42–0.57 | 0 | 5.8–7.8 | 2 |
+| 192 | 2 | 8–20 ms | 4.50–4.67 | 3.4–3.6 | 0.24–0.30 | 0 | 5.3–8.0 | 2 |
+| 192 | 4 | 78 ms | 4.47 | 4.2 | 0.18–0.25 | 0 | 7.8 | 1 |
+| 256 | 1 | 8–277 ms | 4.43–4.56 | 4.2–4.8 | 0.52–0.70 | 0 | 5.9–7.8 | 3 |
+| 256 | 2 | 8–527 ms | 3.60–4.54 | 4.0–4.4 | 0.32–0.37 | 0 | 5.0–8.0 | 2 |
+| 256 | 4 | 1641 ms | 4.20 | 4.4 | 0.20–0.24 | 0 | 9.9 | 1 |
+| 384 | 1 | 280–4143 ms | 2.89–4.50 | 4.8–6.5 | 0.74–0.86 | 0 | 6.7–10.0 | 3 |
+| 384 | 2 | 188–396 ms | 3.96–4.48 | 6.4–7.3 | 0.55–0.66 | 0 | 5.8–7.5 | 2 |
+| 384 | 4 | 1984 ms | 3.06 | 5.5 | 0.26–0.33 | 0 | 8.0 | 1 |
+| 512 | 1 | 396–442 ms | 4.08–4.25 | 5.6–5.7 | 0.79 | 141–153 | 7.8–11.4 | 2 |
+| 512 | 2 | 350–1792 ms | 3.03–3.85 | 4.8–8.1 | 0.52–0.77 | 0–130 | 7.7–7.9 | 2 |
+| 512 | 4 | 7350 ms | 2.30 | 6.1 | 0.30–0.37 | 0 | 7.9 | 1 |
+<!-- ML-TABLE-END -->
+
+What the numbers say:
+
+- **2 loops relieve the loop where one loop runs out.** At 384 clients one loop thread ran at 0.74–0.86 of a core, and its p95 ranged up to 4 s; two loops ran at 0.55–0.66 each with a p95 of 0.2–0.4 s. At 512 clients the single loop could not accept every connection in the ramp (141–153 clients timed out loading the page); two loops connected them all in one of two rounds.
+- **Loop work grows with the number of loops.** For the same clients, two loops used 1.1–1.3 cores between them where one loop used 0.74–0.86, and four loops 1.0–1.5: each loop wakes for fewer events at a time, and a room's push reaches sessions on several loops.
+- **4 loops did not pay on this machine.** The process was limited by total CPU (the worker pool, the load generator and other jobs on 12 cores), not by any loop, so the extra loop work only added latency.
+- **The same layer on one loop** (`MultiLoopInMemoryChannelLayer` with `--loops 1`) measured like `djust.layers.InMemoryChannelLayer`: 4.4–4.6 frames/s at 192–256 clients.
+
+Guidance:
+
+- Add loops only when **the loop thread is the limit**: it runs above about 0.7 of a core under load while the process has cores to spare. Check the loop threads' CPU with a per-thread view: `py-spy dump` shows them as `djust-loop-N`, and so does `top -H -p <pid>` on Linux, where Python 3.14 gives threads their names.
+- **Start with 2.** Go to 4 only on a host with spare cores after the pool, and measure: each loop adds loop overhead.
+- **Grow `worker_threads` with the loops**, and leave a core per loop outside the pool.
 
 ## Memory under overload
 
