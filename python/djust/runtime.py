@@ -5175,7 +5175,7 @@ class ViewRuntime:
         # handle_params for a URL naming another record; it remounts there, so
         # the object is resolved and authorized for the URL the user sees.
         route_changed = getattr(self.view_instance, "_djust_route_changed", None)
-        if callable(route_changed) and isinstance(uri, str) and route_changed(uri):
+        if callable(route_changed) and isinstance(uri, str) and uri and route_changed(uri):
             self.view_instance.live_redirect(uri, replace=True)
             await self._flush_navigation()
             return
