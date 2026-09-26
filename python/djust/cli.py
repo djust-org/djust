@@ -18,6 +18,8 @@ Usage:
     python -m djust.cli analyze <path>    Analyze LiveView templates
     python -m djust.cli clear             Clear state backend caches
 
+    djust serve <module:app> --loops N     Serve with uvicorn on N event loops (3.14t)
+
     djust replay <blob>                    Open a bug capture in the browser
     djust replay --inspect <blob>          Print the decoded capture as JSON
     djust replay --diff <blob>             Diff state_before against state_after
@@ -37,7 +39,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -976,6 +978,105 @@ def cmd_deploy(rest: list[str]) -> int:
     return 0
 
 
+def _bool_flag(parser: argparse.ArgumentParser, name: str, default: bool, help_text: str) -> None:
+    dest = name.replace("-", "_")
+    parser.add_argument(
+        f"--{name}", dest=dest, action="store_true", default=default, help=help_text
+    )
+    parser.add_argument(f"--no-{name}", dest=dest, action="store_false", help=argparse.SUPPRESS)
+
+
+def add_serve_parser(subparsers: Any) -> argparse.ArgumentParser:
+    """``djust serve``: uvicorn on N event loops in one process (#3128)."""
+    p: argparse.ArgumentParser = subparsers.add_parser(
+        "serve",
+        help="Serve an ASGI app with uvicorn on one or more event loops",
+        description=(
+            "Run uvicorn with --loops N event loops in one process, sharing one "
+            "listening socket (free-threaded Python only for N > 1). --loops 1, "
+            "the default, is plain uvicorn. See the guide 'Scaling a djust Process "
+            "Across Cores'."
+        ),
+    )
+    p.add_argument("app", help="The ASGI app, as module:attribute (e.g. mysite.asgi:application)")
+    p.add_argument("--loops", type=int, default=1, help="Event loops (default 1)")
+    p.add_argument("--host", default="127.0.0.1", help="Bind host (default 127.0.0.1)")
+    p.add_argument("--port", type=int, default=8000, help="Bind port (default 8000)")
+    p.add_argument("--uds", default=None, help="Bind to a UNIX domain socket instead")
+    p.add_argument("--fd", type=int, default=None, help="Bind to a socket from this descriptor")
+    p.add_argument(
+        "--app-dir", dest="app_dir", default="", help="Directory added to sys.path (default: .)"
+    )
+    p.add_argument(
+        "--ws", default="auto", help="WebSocket implementation (auto, websockets, wsproto, ...)"
+    )
+    p.add_argument("--http", default="auto", help="HTTP implementation (auto, h11, httptools)")
+    p.add_argument(
+        "--loop", default="auto", help="Event loop implementation (auto, asyncio, uvloop)"
+    )
+    p.add_argument(
+        "--lifespan", default="auto", choices=["auto", "on", "off"], help="Lifespan mode"
+    )
+    p.add_argument("--log-level", dest="log_level", default=None, help="Log level (uvicorn's)")
+    _bool_flag(p, "access-log", True, "Access log (--no-access-log to disable)")
+    _bool_flag(p, "proxy-headers", True, "Trust X-Forwarded-* from --forwarded-allow-ips")
+    p.add_argument("--forwarded-allow-ips", dest="forwarded_allow_ips", default=None)
+    p.add_argument("--root-path", dest="root_path", default="")
+    p.add_argument(
+        "--ws-per-message-deflate",
+        dest="ws_per_message_deflate",
+        type=lambda v: v.lower() in ("1", "true", "yes", "on"),
+        default=True,
+        help="permessage-deflate for WebSockets (true/false, default true)",
+    )
+    p.add_argument("--backlog", type=int, default=2048)
+    p.add_argument("--timeout-keep-alive", dest="timeout_keep_alive", type=int, default=5)
+    p.add_argument(
+        "--timeout-graceful-shutdown", dest="timeout_graceful_shutdown", type=int, default=None
+    )
+    p.add_argument("--limit-concurrency", dest="limit_concurrency", type=int, default=None)
+    p.add_argument(
+        "--allow-gil",
+        dest="allow_gil",
+        action="store_true",
+        help="Allow --loops > 1 with the GIL on (for tests; no speed-up)",
+    )
+    return p
+
+
+def cmd_serve(args: argparse.Namespace) -> int:
+    """Run :func:`djust.multiloop.serve` from the command line."""
+    from djust.multiloop import MultiLoopError, serve
+
+    sys.path.insert(0, os.path.abspath(args.app_dir or "."))
+    kwargs: dict = {
+        "host": args.host,
+        "port": args.port,
+        "uds": args.uds,
+        "fd": args.fd,
+        "ws": args.ws,
+        "http": args.http,
+        "loop": args.loop,
+        "lifespan": args.lifespan,
+        "access_log": args.access_log,
+        "proxy_headers": args.proxy_headers,
+        "forwarded_allow_ips": args.forwarded_allow_ips,
+        "root_path": args.root_path,
+        "ws_per_message_deflate": args.ws_per_message_deflate,
+        "backlog": args.backlog,
+        "timeout_keep_alive": args.timeout_keep_alive,
+        "timeout_graceful_shutdown": args.timeout_graceful_shutdown,
+        "limit_concurrency": args.limit_concurrency,
+    }
+    if args.log_level:
+        kwargs["log_level"] = args.log_level
+    try:
+        return serve(args.app, loops=args.loops, allow_gil=args.allow_gil, **kwargs)
+    except (MultiLoopError, ValueError) as exc:
+        print(f"djust serve: {exc}", file=sys.stderr)
+        return 2
+
+
 def main() -> None:
     # `deploy` is detected before argparse so the Click subcommand owns its
     # own argv (flags, prompts, streaming output) without argparse interference.
@@ -1116,6 +1217,9 @@ def main() -> None:
         ),
     )
 
+    # serve command (#3128)
+    add_serve_parser(subparsers)
+
     # clear command
     clear_parser = subparsers.add_parser("clear", help="Clear state backend caches")
     clear_parser.add_argument("-f", "--force", action="store_true", help="Skip confirmation prompt")
@@ -1142,6 +1246,7 @@ def main() -> None:
         "mcp": cmd_mcp,
         "replay": cmd_replay,
         "clear": cmd_clear,
+        "serve": cmd_serve,
     }
 
     if args.command in commands:

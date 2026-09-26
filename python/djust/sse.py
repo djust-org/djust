@@ -126,6 +126,14 @@ class SSESession:
         self.session_id = session_id
         self.view_instance: Optional[Any] = None
         self.queue: asyncio.Queue = asyncio.Queue()
+        # The loop that serves the stream GET. With several event loops
+        # (djust serve --loops N, #3128) a later event POST can arrive on
+        # another loop; it hops here, because the queue, the locks and the
+        # view's background tasks belong to this loop.
+        try:
+            self._loop: Optional[asyncio.AbstractEventLoop] = asyncio.get_running_loop()
+        except RuntimeError:
+            self._loop = None
         self.active = True
         self._rate_limiter: ConnectionRateLimiter = ConnectionRateLimiter()
         self._client_ip: Optional[str] = None
@@ -295,6 +303,52 @@ class SSESession:
     async def close(self, code: int = 1000) -> None:
         """Called by rate-limit logic to force-close the transport."""
         self.shutdown()
+
+
+async def _dispatch_on_session_loop(
+    session: "SSESession", request: HttpRequest, data: dict[str, Any]
+) -> None:
+    """``session.dispatch`` on the loop that owns the session (#3128).
+
+    With one event loop, and whenever the POST arrived on the session's own
+    loop, this is ``await session.dispatch(...)``. With several loops a POST
+    accepted by another loop runs the dispatch on the session's loop, in a
+    copy of this request's context. A diagnostics restriction the dispatch
+    makes there (ADR-038 D-a) is carried back into this context, and its
+    exception is re-raised here, so the caller's value-free error handling
+    sees what it would have seen on one loop.
+    """
+    from .multiloop import is_multi_loop, run_on_loop
+
+    loop = session._loop
+    try:
+        here: Optional[asyncio.AbstractEventLoop] = asyncio.get_running_loop()
+    except RuntimeError:  # pragma: no cover - always called from a coroutine
+        here = None
+    if (
+        not is_multi_loop()
+        or loop is None
+        or loop is here
+        or loop.is_closed()
+        or not loop.is_running()
+    ):
+        await session.dispatch(request, data)
+        return
+
+    from ._exposure_diagnostics import _details_allowed
+
+    async def on_session_loop() -> tuple[Optional[Exception], bool]:
+        try:
+            await session.dispatch(request, data)
+        except Exception as exc:  # noqa: BLE001 - re-raised on the caller's loop
+            return exc, _details_allowed.get()
+        return None, _details_allowed.get()
+
+    error, allowed = await run_on_loop(loop, on_session_loop())
+    if not allowed:
+        _details_allowed.set(False)
+    if error is not None:
+        raise error
 
 
 def _get_session(session_id: str) -> Optional["SSESession"]:
@@ -783,8 +837,10 @@ class DjustSSEEventView(View):
         # Phase 2.3a) re-validates against the CURRENT POSTer's request.user — not
         # the stale mount request. Owner-binding (Finding #24) already ran above,
         # so this request is the session owner's.
-        await session.dispatch(
-            request, {"type": "event", "event": event_name, "params": params, "ref": ref}
+        await _dispatch_on_session_loop(
+            session,
+            request,
+            {"type": "event", "event": event_name, "params": params, "ref": ref},
         )
         return JsonResponse({"ok": True})
 
@@ -875,7 +931,7 @@ class DjustSSEMessageView(View):
         protected_failure = False
         with diagnostic_scope():
             try:
-                await session.dispatch(request, body)
+                await _dispatch_on_session_loop(session, request, body)
             except Exception as exc:
                 outcome = protected_http_outcome(exc)
                 if diagnostics_allowed() or outcome == "raise":
