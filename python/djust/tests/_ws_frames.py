@@ -52,21 +52,29 @@ async def receive_until(
     *,
     timeout: float = WAIT_S,
     what: str = "the expected frames",
+    allow_close: bool = False,
 ) -> List[Frame]:
     """Frames, in order, up to the one after which ``done(frames)`` holds.
 
     ``done`` is re-checked on every poll, not only when a frame arrives, so it
     may also wait on state outside the socket (a log line, a handler having
-    run). A close ends collection (nothing can follow it); ``done`` sees it as
-    a ``{"type": "websocket.close", ...}`` entry. Fails loudly, naming what it
-    waited for and what it got, if the deadline passes first.
+    run). ``done`` sees a close as a ``{"type": "websocket.close", ...}``
+    entry, so a caller that expects the socket to close says so in ``done``.
+    A close that arrives while ``done`` is still false fails loudly: nothing
+    can follow it, and returning quietly would let a caller that dropped its
+    own assertion pass on a socket that closed without the expected frame.
+    ``allow_close=True`` returns the frames instead, for a caller that reads
+    the close itself. Also fails loudly, naming what it waited for and what it
+    got, if the deadline passes first.
     """
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     frames: List[Frame] = []
     while not done(frames):
         if frames and frames[-1].get("type") == "websocket.close":
-            break
+            if allow_close:
+                break
+            raise AssertionError(f"the socket closed before {what}; received {frames!r}")
         remaining = deadline - loop.time()
         if remaining <= 0:
             raise AssertionError(f"waited {timeout}s for {what}; received {frames!r}")

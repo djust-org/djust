@@ -139,12 +139,12 @@ def _async_result(frames):
     return "work" in RAN and any(f.get("source") == "async" for f in frames)
 
 
-async def _frames(socket, until):
+async def _frames(socket, until, quiet=0.3):
     """Frames until ``until(frames)`` holds (event-driven, #3130), then any
-    others before the socket goes quiet. The trailing window can only miss a
-    late extra frame, never cut the expected one short."""
+    others before the socket goes quiet for ``quiet`` seconds. The trailing
+    window can only miss a late extra frame, never cut the expected one short."""
     frames = await receive_until(socket, until)
-    return frames + await drain_extra(socket)
+    return frames + await drain_extra(socket, quiet=quiet)
 
 
 @pytest.fixture(autouse=True)
@@ -183,7 +183,7 @@ async def test_a_failed_hook_dispatches_nothing():
             await _push(FailingPushView)
             # Only a miss is possible here: work that ran after the trailing
             # window would go unseen, never fail a correct run.
-            await _frames(socket, lambda frames: "hook" in RAN)
+            await _frames(socket, lambda frames: "hook" in RAN, quiet=0.6)
             assert RAN == ["hook"], "work queued by a raising hook must not run"
         finally:
             await socket.disconnect()

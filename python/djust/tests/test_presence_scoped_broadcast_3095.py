@@ -217,20 +217,11 @@ async def _receive_until(communicator, wanted, *, tries=8, timeout=3):
     return last
 
 
-async def _drain(communicator, marker=None):
-    """Presence-push frames, event-driven (#3130).
-
-    With a ``marker``, waits until a patch carrying it arrives; then a trailing
-    quiet window collects anything else. Without one it is only that window:
-    a "room b was not woken" check can miss a late patch on a slow machine,
-    never fail a correct run.
-    """
-    frames = []
-    if marker is not None:
-        frames = await receive_until(
-            communicator, lambda frames: marker in _text(frames), what=repr(marker)
-        )
-    return frames + await drain_extra(communicator)
+async def _until_marker(communicator, marker):
+    """Presence-push frames up to the patch carrying ``marker`` (#3130)."""
+    return await receive_until(
+        communicator, lambda frames: marker in _text(frames), what=repr(marker)
+    )
 
 
 def _text(frames):
@@ -238,8 +229,26 @@ def _text(frames):
 
 
 async def _settle(*comms, markers=None):
+    """Each socket's frames from one presence change, event-driven (#3130).
+
+    Sequential on purpose: first wait, on every socket that has a ``marker``,
+    for the patch carrying it; only then open the trailing quiet window on
+    every socket. A "room b was not woken" check (marker ``None``) therefore
+    starts after the change has provably been delivered to the rooms that
+    should see it, so a wrong wake that is as slow as the right one still
+    lands inside the window. Run concurrently, B's window used to close before
+    a delayed push reached it, and the check passed with the bug present.
+    """
     markers = markers or [None] * len(comms)
-    return await asyncio.gather(*(_drain(c, m) for c, m in zip(comms, markers)))
+    firsts = await asyncio.gather(
+        *(_until_marker(c, m) if m is not None else _nothing() for c, m in zip(comms, markers))
+    )
+    rests = await asyncio.gather(*(drain_extra(c) for c in comms))
+    return [first + rest for first, rest in zip(firsts, rests)]
+
+
+async def _nothing():
+    return []
 
 
 @pytest.fixture

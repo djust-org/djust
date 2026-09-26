@@ -283,7 +283,10 @@ class TestUploadFrameRateLimit:
             for _ in range(40):
                 await communicator.send_to(bytes_data=_cancel_frame())
             frames = await receive_until(
-                communicator, lambda frames: False, what="the flood-abuse close (4429)"
+                communicator,
+                lambda frames: False,
+                what="the flood-abuse close (4429)",
+                allow_close=True,
             )
             out = frames[-1]
             if out["type"] == "websocket.close":

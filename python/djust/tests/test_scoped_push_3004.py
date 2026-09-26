@@ -26,7 +26,7 @@ from djust.push import (
 
 pytest.importorskip("channels")
 
-from ._ws_frames import drain_extra, receive_type  # noqa: E402
+from ._ws_frames import receive_type, receive_until  # noqa: E402
 
 VIEW = f"{__name__}._RoomView"
 
@@ -34,16 +34,18 @@ VIEW = f"{__name__}._RoomView"
 class _RoomView(LiveView):
     template = (
         '<div dj-root dj-view="djust.tests.test_scoped_push_3004._RoomView">'
-        "{{ room }}:{{ pings }}</div>"
+        "{{ room }}:{{ pings }}:{{ tag }}</div>"
     )
 
     def mount(self, request, **kwargs):
         self.room = request.GET.get("room", "lobby")
         self.pings = 0
+        self.tag = ""
         self.push_scope = self.room
 
-    def handle_ping(self, **kwargs):
+    def handle_ping(self, tag: str = "", **kwargs):
         self.pings += 1
+        self.tag = tag
 
     def handle_move(self, room: str = "", **kwargs):
         self.room = room
@@ -65,12 +67,13 @@ class _OtherView(LiveView):
 class _TickView(LiveView):
     """Moves itself from room t1 to t2 on its first tick."""
 
-    template = '<div dj-root dj-view="djust.tests.test_scoped_push_3004._TickView">{{ room }}:{{ pings }}</div>'
+    template = '<div dj-root dj-view="djust.tests.test_scoped_push_3004._TickView">{{ room }}:{{ pings }}:{{ tag }}</div>'
     tick_interval = 50
 
     def mount(self, request, **kwargs):
         self.room = request.GET.get("room", "t1")
         self.pings = 0
+        self.tag = ""
         self.push_scope = self.room
 
     def handle_tick(self):
@@ -80,8 +83,9 @@ class _TickView(LiveView):
         else:
             self._skip_render = True
 
-    def handle_ping(self, **kwargs):
+    def handle_ping(self, tag: str = "", **kwargs):
         self.pings += 1
+        self.tag = tag
 
 
 class _InfoView(LiveView):
@@ -236,16 +240,31 @@ async def _pinged(communicator):
     return (await receive_type(communicator, "patch"))[-1]
 
 
-async def _not_pinged(communicator):
-    """The patch a push produced, or None when nothing arrives.
+OLD, NEW = "OLD_SCOPE_PING", "NEW_SCOPE_PING"
 
-    A trailing quiet window (#3130): on a slow machine it can miss a late
-    patch, never fail a run where the push correctly went elsewhere.
-    ``receive_nothing`` waits without cancelling the application (a
-    ``receive_json_from`` timeout would cancel it).
+
+async def _moved_away(communicator, view, old, new):
+    """Push to the session's old scope, then its new one; the session must see
+    only the new one's patch.
+
+    Each push carries a tag the view renders. The consumer handles its channel
+    messages one at a time, in order, so if the session is still in the old
+    scope's group, the OLD push is handled, and its patch sent, before the NEW
+    one. Waiting for the NEW patch is therefore a barrier: every frame the old
+    push could produce is already in hand, however slow the pushes are. The
+    plain quiet-window check it replaced was outlived by a slow push (#3130
+    review). Returns the NEW patch.
     """
-    patches = [f for f in await drain_extra(communicator) if f.get("type") == "patch"]
-    return patches[0] if patches else None
+    await apush_to_view(view, handler="handle_ping", payload={"tag": OLD}, scope=old)
+    await apush_to_view(view, handler="handle_ping", payload={"tag": NEW}, scope=new)
+    frames = await receive_until(
+        communicator,
+        lambda fs: any(f.get("type") == "patch" and NEW in _patch_text(f) for f in fs),
+        what="the new scope's patch",
+    )
+    stale = [f for f in frames if OLD in _patch_text(f)]
+    assert not stale, f"the session still got its old scope's push: {stale!r}"
+    return frames[-1]
 
 
 def _patch_text(frame):
@@ -262,18 +281,26 @@ async def test_scoped_push_reaches_only_the_sessions_in_that_scope():
         b = await _connect(VIEW, "r1")
         c = await _connect(VIEW, "r2")
         try:
-            await apush_to_view(VIEW, handler="handle_ping", scope="r1")
+            await apush_to_view(VIEW, handler="handle_ping", payload={"tag": OLD}, scope="r1")
             fa, fb = await asyncio.gather(_pinged(a), _pinged(b))
-            fc = await _not_pinged(c)
             assert fa is not None and "r1:1" in _patch_text(fa)
             assert fb is not None and "r1:1" in _patch_text(fb)
-            assert fc is None, f"a session in r2 got r1's push: {fc!r}"
 
-            # A push without scope is unchanged: every session of the view.
-            await apush_to_view(VIEW, handler="handle_ping")
-            fa, fb, fc = await asyncio.gather(_pinged(a), _pinged(b), _pinged(c))
-            assert fa and fb and fc
-            assert "r2:1" in _patch_text(fc)
+            # A push without scope is unchanged: every session of the view. It
+            # is also the barrier for c: c handles its channel messages in
+            # order, so an r1 push that wrongly reached it is in hand before
+            # this one's patch (see _moved_away).
+            await apush_to_view(VIEW, handler="handle_ping", payload={"tag": NEW})
+            fa, fb = await asyncio.gather(_pinged(a), _pinged(b))
+            assert fa and fb
+            frames = await receive_until(
+                c,
+                lambda fs: any(f.get("type") == "patch" and NEW in _patch_text(f) for f in fs),
+                what="the unscoped push's patch",
+            )
+            stale = [f for f in frames if OLD in _patch_text(f)]
+            assert not stale, f"a session in r2 got r1's push: {stale!r}"
+            assert "r2:1" in _patch_text(frames[-1])
         finally:
             for comm in (a, b, c):
                 await comm.disconnect()
@@ -291,11 +318,8 @@ async def test_a_handler_that_changes_push_scope_moves_the_session():
             moved = await _receive_until(a, "patch")
             assert "r9" in _patch_text(moved)
 
-            await apush_to_view(VIEW, handler="handle_ping", scope="r1")
-            assert await _not_pinged(a) is None, "the session still got its old scope's push"
-            await apush_to_view(VIEW, handler="handle_ping", scope="r9")
-            frame = await _pinged(a)
-            assert frame is not None and "r9:1" in _patch_text(frame)
+            frame = await _moved_away(a, VIEW, "r1", "r9")
+            assert "r9:1" in _patch_text(frame)
         finally:
             await a.disconnect()
 
@@ -334,11 +358,8 @@ async def test_a_push_hook_that_changes_push_scope_moves_the_session():
         try:
             await apush_to_view(VIEW, handler="handle_move", payload={"room": "r5"}, scope="r1")
             assert await _pinged(a) is not None
-            await apush_to_view(VIEW, handler="handle_ping", scope="r1")
-            assert await _not_pinged(a) is None
-            await apush_to_view(VIEW, handler="handle_ping", scope="r5")
-            frame = await _pinged(a)
-            assert frame is not None and "r5:1" in _patch_text(frame)
+            frame = await _moved_away(a, VIEW, "r1", "r5")
+            assert "r5:1" in _patch_text(frame)
         finally:
             await a.disconnect()
 
@@ -380,8 +401,8 @@ async def test_a_tick_that_changes_push_scope_moves_the_session():
             await apush_to_view(view, handler="handle_ping", scope="t2")
             frame = await _pinged(a)
             assert frame is not None and "t2:1" in _patch_text(frame)
-            await apush_to_view(view, handler="handle_ping", scope="t1")
-            assert await _not_pinged(a) is None
+            frame = await _moved_away(a, view, "t1", "t2")
+            assert "t2:2" in _patch_text(frame)
         finally:
             await a.disconnect()
 

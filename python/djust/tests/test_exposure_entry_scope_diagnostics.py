@@ -453,7 +453,8 @@ async def _frames(socket, expected):
 
 async def _mount(socket):
     await socket.send_json_to({"type": "mount", "view": VIEW_PATH, "url": "/entry/"})
-    await _frames(socket, "mount")
+    frames = await _frames(socket, "mount")
+    assert any(frame["type"] == "mount" for frame in frames), frames
 
 
 @pytest.mark.django_db(transaction=True)
@@ -467,7 +468,7 @@ async def test_ws_request_html_failure(monkeypatch, caplog, debug, policy):
     try:
         await _mount(socket)
         await socket.send_json_to({"type": "event", "event": "bump", "params": {}, "ref": 1})
-        await _frames(socket, "patch")
+        assert any(frame["type"] == "patch" for frame in await _frames(socket, "patch"))
         monkeypatch.setattr(EntryView, "fail_at", "recovery")
         caplog.clear()
         await socket.send_json_to({"type": "request_html"})
@@ -507,6 +508,7 @@ async def test_ws_live_redirect_mount_failure(monkeypatch, caplog, debug, policy
             {"type": "live_redirect_mount", "view": VIEW_PATH, "url": "/entry/"}
         )
         frames = await _frames(socket, "error")
+        assert "error" in [frame["type"] for frame in frames], frames
         observed = _observe(caplog, json.dumps(frames))
         if debug:
             # Every policy: the detailed DEBUG error frame, log and ring.
