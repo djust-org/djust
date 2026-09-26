@@ -949,15 +949,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             return
         from django.conf import settings as django_settings
         from django.template.exceptions import TemplateDoesNotExist
-        from django.template.loader import render_to_string
+
+        from .mixins.layout import render_pending_layout
 
         try:
-            context = (
-                self.view_instance.get_context_data()
-                if hasattr(self.view_instance, "get_context_data")
-                else {}
+            # #3178: context + render in one hop off the loop thread (the
+            # session's pinned worker with ``worker_threads``).
+            layout_html = await sync_to_async(render_pending_layout)(
+                self.view_instance, layout_path
             )
-            layout_html = render_to_string(layout_path, context)
         except TemplateDoesNotExist:
             logger.warning(
                 "set_layout(%r) — template not found; ignoring swap request",

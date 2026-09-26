@@ -322,6 +322,16 @@ In development, pages render without Tailwind utilities until you compile the CS
 
 ---
 
+### C025: Invalid DJUST_WS_PATH
+
+**Severity**: Error
+
+**What causes it**: `DJUST_WS_PATH` is set to something other than a path starting with a single `/`, such as `"ws/live/"` or `"wss://host/ws/"`. The client honors only a root-relative WebSocket path, so it ignores the value (with a `console.warn`) and connects to `/ws/live/`.
+
+**Fix**: Set it to a path such as `"/ws/live/"`, or remove it to use the script prefix plus `ws/live/`. See [Serving the app under a path prefix](deployment.md#serving-the-app-under-a-path-prefix). Suppress with `DJUST_CONFIG = {"suppress_checks": ["C025"]}`.
+
+---
+
 ### C301: Invalid VDOM cache TTL
 
 **Severity**: Error

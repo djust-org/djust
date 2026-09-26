@@ -350,10 +350,24 @@ class LiveViewWebSocket {
             return;
         }
 
+        // #3186: true when the URL came from djust.wsPath rather than a caller.
+        let derivedUrl = false;
+        const rootUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/live/`;
+        // #3186: this attempt is the one provisional try at the host root
+        // (see onclose). It is adopted only if it opens.
+        const rootFallback = this._wsRootFallbackPending === true;
+        this._wsRootFallbackPending = false;
         if (!url) {
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const host = window.location.host;
-            url = `${protocol}//${host}/ws/live/`;
+            // #3186: honor the script prefix ({% djust_client_config %} emits
+            // <meta name="djust-ws-path">); falls back to /ws/live/.
+            derivedUrl = true;
+            if (rootFallback || this._wsRootAdopted) {
+                url = rootUrl;
+            } else if (window.djust && typeof window.djust.wsUrl === 'function') {
+                url = window.djust.wsUrl();
+            } else {
+                url = rootUrl;
+            }
         }
 
         if (globalThis.djustDebug) console.log('[LiveView] Connecting to WebSocket:', url);
@@ -362,6 +376,17 @@ class LiveViewWebSocket {
 
         this.ws.onopen = (_event) => {
             if (globalThis.djustDebug) console.log('[LiveView] WebSocket connected');
+            if (rootFallback && !this._wsRootAdopted) {
+                // #3186: the host root answered where the prefixed path did not,
+                // so this page keeps using it (djust.wsPath itself is unchanged).
+                this._wsRootAdopted = true;
+                console.warn(
+                    '[LiveView] Connected at the host-root /ws/live/ after %s failed; this page '
+                    + 'keeps using it. Route <prefix>/ws/live/ to djust, or set DJUST_WS_PATH '
+                    + '= "/ws/live/" (#3186).',
+                    window.djust && window.djust.wsPath
+                );
+            }
             this.reconnectAttempts = 0;
             this._intentionalDisconnect = false;
 
@@ -436,6 +461,27 @@ class LiveViewWebSocket {
                 return;
             }
 
+            // #3186 upgrade path: a deployment under a path prefix that still
+            // routes only the host-root /ws/live/ fails the first handshake on
+            // the prefixed path. Try the host root once, provisionally: it is
+            // adopted only if that socket opens (see onopen). If it fails too,
+            // the normal backoff below goes back to the prefixed path, so a
+            // transient failure (a restart, a rollout) cannot strand the page
+            // on another app's socket.
+            if (derivedUrl && !rootFallback && !this._wsRootAdopted && url !== rootUrl
+                && this.stats.connectedAt === null && !this._wsPathFallbackTried) {
+                this._wsPathFallbackTried = true;
+                console.warn(
+                    '[LiveView] The WebSocket handshake at %s failed before opening; trying the '
+                    + 'host-root /ws/live/ once. Route <prefix>/ws/live/ to djust, or set '
+                    + 'DJUST_WS_PATH = "/ws/live/" to keep the old path (#3186).',
+                    url
+                );
+                this._wsRootFallbackPending = true;
+                this.connect();
+                return;
+            }
+
             // Sticky LiveViews (Phase B): abnormal close invalidates
             // any detached sticky subtrees. The server will re-mount
             // sticky views from scratch on reconnect (new session,
@@ -460,7 +506,9 @@ class LiveViewWebSocket {
                 document.body.style.setProperty('--dj-reconnect-attempt', String(this.reconnectAttempts));
                 this._showReconnectBanner(this.reconnectAttempts, this.maxReconnectAttempts);
 
-                setTimeout(() => this.connect(url), jitteredDelay);
+                // #3186: a derived URL is re-derived, so a failed provisional
+                // root attempt does not become the URL every retry reuses.
+                setTimeout(() => this.connect(derivedUrl ? null : url), jitteredDelay);
             } else {
                 console.warn('[LiveView] Max reconnection attempts reached.');
                 this.enabled = false;
