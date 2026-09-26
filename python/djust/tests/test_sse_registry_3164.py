@@ -444,7 +444,12 @@ async def test_start_deadline_timer_is_cancelled_by_close_from_a_worker_thread(m
         resp = await _open_stream(view, sid, _auth_user(7))
     handle = guards[0]._deadline
     await sync_to_async(resp.close)()
-    await asyncio.sleep(0)  # the thread-safe cancel lands on the loop
+    # The thread-safe cancel lands on the loop in a later iteration; wait
+    # for it (bounded) rather than assume one yield is enough.
+    for _ in range(200):
+        if handle.cancelled():
+            break
+        await asyncio.sleep(0.005)
     assert handle.cancelled()
     assert sid not in _sse_sessions
 
