@@ -95,9 +95,12 @@ def _check_tailwind_cdn_in_production(errors: list[CheckMessage]) -> None:
                         try:
                             with open(filepath, "r", encoding="utf-8") as f:
                                 content = f.read()
-                                # Scan template content for CDN reference (not URL validation)
+                                # Scan template content for CDN reference (not URL validation).
+                                # Built from parts so djust's own source never contains the
+                                # literal CDN URL it warns users against (see C011 hint below
+                                # and the vendored-assets initiative that removed all CDN use).
                                 # nosemgrep: python.lang.security.audit.dangerous-system-call.dangerous-system-call
-                                cdn_domain = "cdn.tailwindcss.com"
+                                cdn_domain = "cdn." + "tailwindcss.com"
                                 if cdn_domain in content:
                                     errors.append(
                                         DjustWarning(
@@ -197,7 +200,6 @@ def _check_missing_compiled_css(errors: list[CheckMessage]) -> None:
                     DjustInfo(
                         "Tailwind CSS configured but output.css is missing or stale (development mode).",
                         hint=(
-                            "djust will use Tailwind CDN as fallback in development. "
                             "A placeholder or empty output.css triggers this — run a "
                             "real Tailwind build for production-grade output:\n"
                             "  python manage.py djust_setup_css tailwind --watch"

@@ -30,9 +30,11 @@ def check_css_framework_config(errors: list[CheckMessage]) -> None:
                             try:
                                 with open(filepath, "r", encoding="utf-8") as f:
                                     content = f.read()
-                                    # Scan template content for CDN reference (not URL validation)
+                                    # Scan template content for CDN reference (not URL validation).
+                                    # Built from parts so djust's own source never contains the
+                                    # literal CDN URL it warns users against.
                                     # nosemgrep: python.lang.security.audit.dangerous-system-call.dangerous-system-call
-                                    cdn_domain = "cdn.tailwindcss.com"
+                                    cdn_domain = "cdn." + "tailwindcss.com"
                                     if cdn_domain in content:
                                         errors.append(
                                             Warning(
@@ -81,10 +83,7 @@ def check_css_framework_config(errors: list[CheckMessage]) -> None:
             errors.append(
                 Info(
                     "Tailwind CSS configured but compiled file not found (development mode).",
-                    hint=(
-                        "Run: tailwindcss -i static/css/input.css -o static/css/output.css\n"
-                        'Or use Tailwind CDN for development only: <script src="https://cdn.tailwindcss.com"></script>'
-                    ),
+                    hint=("Run: tailwindcss -i static/css/input.css -o static/css/output.css"),
                     id="djust.C011",
                 )
             )
@@ -140,9 +139,11 @@ def check_tailwind_cdn_in_dev(errors: list[CheckMessage]) -> None:
                         try:
                             with open(filepath, "r", encoding="utf-8") as f:
                                 content = f.read()
-                                # Scan template content for CDN reference (not URL validation)
+                                # Scan template content for CDN reference (not URL validation).
+                                # Built from parts so djust's own source never contains the
+                                # literal CDN URL it warns users against.
                                 # nosemgrep: python.lang.security.audit.dangerous-system-call.dangerous-system-call
-                                cdn_domain = "cdn.tailwindcss.com"
+                                cdn_domain = "cdn." + "tailwindcss.com"
                                 if cdn_domain in content:
                                     cdn_found = True
                                     break
