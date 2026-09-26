@@ -149,10 +149,11 @@ async def test_failed_background_save_withholds_the_success_frame(monkeypatch, c
     await runtime.dispatch_event({"type": "event", "event": "spawn", "params": {}})
     sent_before = len(transport.sent)
 
-    async def fail(view, request):
+    # The explicit save is one Django-thread hop (#3200): the sync save.
+    def fail(view, request):
         raise OSError("STORE_SENTINEL")
 
-    monkeypatch.setattr(sessions, "asave_server_state", fail)
+    monkeypatch.setattr(sessions, "save_server_state", fail)
     with caplog.at_level(logging.DEBUG):
         GATE.set()
         await _drain(view)
@@ -173,10 +174,11 @@ async def test_failed_foreground_save_withholds_the_success_frame(monkeypatch, c
     runtime, transport = await mount(request, BackgroundView)
     sent_before = len(transport.sent)
 
-    async def fail(view, request):
+    # The explicit save is one Django-thread hop (#3200): the sync save.
+    def fail(view, request):
         raise OSError("STORE_SENTINEL")
 
-    monkeypatch.setattr(sessions, "asave_server_state", fail)
+    monkeypatch.setattr(sessions, "save_server_state", fail)
     with caplog.at_level(logging.DEBUG):
         await runtime.dispatch_event({"type": "event", "event": "increment", "params": {}})
 

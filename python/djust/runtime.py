@@ -93,10 +93,97 @@ from .websocket_utils import (
 # a time-bounded operation, which makes it pass everywhere except a loaded
 # machine. Such a test should raise this bound so it exercises the save LOGIC
 # rather than racing a wall clock (#2154).
+#
+# ADR-038 explicit saves are not best-effort (a missed save withholds the
+# success frame). They use this value as the DEFAULT of a configurable
+# deadline that counts only the save's own running time, never its queueing
+# on the Django thread: see explicit_state_save_timeout / _run_explicit_save
+# (#3200).
 EVENT_STATE_SAVE_TIMEOUT_S = 0.150
 
 
 logger = logging.getLogger(__name__)
+
+
+def explicit_state_save_timeout() -> float:
+    """The storage deadline of an explicit turn's save, in seconds (#3200).
+
+    ``DJUST_EXPLICIT_STATE_SAVE_TIMEOUT`` when set to a valid value, otherwise
+    :data:`EVENT_STATE_SAVE_TIMEOUT_S` (read at call time, so tests that raise
+    the module bound raise this one too). An invalid setting falls back to the
+    default rather than failing every save; system check ``djust.C024``
+    reports it at startup.
+    """
+    from django.conf import settings
+
+    from ._exposure_sessions import valid_explicit_state_save_timeout
+
+    value = getattr(settings, "DJUST_EXPLICIT_STATE_SAVE_TIMEOUT", None)
+    if valid_explicit_state_save_timeout(value):
+        return float(value)
+    return EVENT_STATE_SAVE_TIMEOUT_S
+
+
+#: The static error an explicit turn sends when its save outran the deadline.
+#: Not "reload": the values are kept and the next turn saves them (#3200).
+_EXPLICIT_SAVE_DEFERRED_MESSAGE = (
+    "Your last change is still being saved. It will appear with your next update."
+)
+
+
+class ExplicitSaveDeferred(Exception):
+    """An explicit save outran its storage deadline (#3200).
+
+    Transient, and distinct from a refused or failed save. The turn's values
+    are still on the view, and the save itself keeps running in the Django
+    thread (sync work cannot be cancelled), so it usually lands anyway. The
+    next turn's save writes the then-current values regardless.
+    """
+
+
+async def _run_explicit_save(save: Callable[..., None], *args: Any) -> None:
+    """Run one explicit save in ONE Django-thread hop, timed from when it starts.
+
+    The old shape made two or three ``sync_to_async`` hops inside a single
+    ``asyncio.wait_for``. With the default single sync thread, those hops queue
+    behind every other session's handlers and renders, so under load the
+    150 ms budget was spent waiting for the thread, not on storage (#3200).
+
+    Here the whole save (binding check, projection, write) is one sync
+    callable, and the deadline starts only when the thread begins running it.
+    The queue wait is not bounded here; it is the same wait the turn's handler
+    and render hops already accept on that thread.
+
+    Raises :class:`ExplicitSaveDeferred` when the deadline passes, and
+    re-raises whatever ``save`` raised otherwise.
+    """
+    loop = asyncio.get_running_loop()
+    started: "asyncio.Future[None]" = loop.create_future()
+    abandoned = False
+
+    def mark_started() -> None:
+        if not started.done():
+            started.set_result(None)
+
+    def run() -> None:
+        loop.call_soon_threadsafe(mark_started)
+        save(*args)
+
+    def settle(task: "asyncio.Future[None]") -> None:
+        # Retrieve the outcome so an abandoned save never reports "exception
+        # was never retrieved". Value-free: storage errors can carry state.
+        if task.cancelled() or task.exception() is None or not abandoned:
+            return
+        logger.warning("Explicit state save failed after its deadline; the next turn saves again")
+
+    work = asyncio.ensure_future(sync_to_async(run)())
+    work.add_done_callback(settle)
+    await asyncio.wait({started, work}, return_when=asyncio.FIRST_COMPLETED)
+    try:
+        await asyncio.wait_for(asyncio.shield(work), timeout=explicit_state_save_timeout())
+    except asyncio.TimeoutError:
+        abandoned = True
+        raise ExplicitSaveDeferred("Explicit state save exceeded its storage deadline") from None
 
 
 def _diagnostics_policy_allows(owner: Any) -> bool:
@@ -5851,6 +5938,29 @@ class ViewRuntime:
         )
         await self.transport.close(code=4403)
 
+    def _save_explicit_root(self, view: Any, request: Any) -> None:
+        """Sync body of the root save: the binding check, projection and write.
+
+        One Django-thread hop (see :func:`_run_explicit_save`). A binding that
+        no longer matches the mount is a refusal, raised before any write.
+        """
+        from ._exposure import ExposureError
+        from ._exposure_sessions import request_binding, save_server_state
+
+        if request_binding(request) != self._explicit_mount_binding:
+            raise ExposureError("Explicit persistence requires current authorization")
+        save_server_state(view, request)
+
+    def _save_explicit_children(self, view: Any, request: Any) -> None:
+        """Sync body of the child-tree save; same shape as the root's."""
+        from ._exposure import ExposureError
+        from ._exposure_child_persistence import save_child_states
+        from ._exposure_sessions import request_binding
+
+        if request_binding(request) != self._explicit_mount_binding:
+            raise ExposureError("Child persistence requires current authorization")
+        save_child_states(view, request)
+
     async def commit_explicit_turn(
         self,
         view: Any,
@@ -5867,9 +5977,19 @@ class ViewRuntime:
         static ``state_error`` and the next update is full HTML, the child
         path's contract (ADR-038 E3, "failed storage without stale delivery").
         Legacy views return True untouched; their saves stay best-effort.
+
+        What withholding guarantees: the browser never shows, and never holds a
+        signed snapshot token for, a state that storage does not have. So a
+        reconnect (another process, a restart) can only restore what the user
+        last saw or something newer, never something older.
+
+        A save that outruns its storage deadline (#3200) keeps that guarantee
+        but is not a failure: the values stay on the view and the next turn
+        saves them, so the error is ``transient`` and does not tell the user
+        to reload. A refused save (identity changed) or a storage exception is
+        still the terminal ``state_error``.
         """
         from ._exposure import ExposureError, uses_legacy_exposure
-        from ._exposure_sessions import asave_server_state, request_binding
 
         if uses_legacy_exposure(view):
             return True
@@ -5885,13 +6005,19 @@ class ViewRuntime:
             extra["state_snapshot_signed"] = None
         try:
             request = getattr(view, "_djust_event_request", None)
-            if request is None or (
-                await sync_to_async(request_binding)(request) != self._explicit_mount_binding
-            ):
+            if request is None:
                 raise ExposureError("Explicit persistence requires current authorization")
-            await asyncio.wait_for(
-                asave_server_state(view, request), timeout=EVENT_STATE_SAVE_TIMEOUT_S
+            await _run_explicit_save(self._save_explicit_root, view, request)
+        except ExplicitSaveDeferred:
+            view._force_full_html = True
+            logger.warning(
+                "Explicit state save exceeded its storage deadline; success frame "
+                "withheld, the next turn saves again"
             )
+            await self.transport.send_error(
+                _EXPLICIT_SAVE_DEFERRED_MESSAGE, code="state_error", transient=True, **extra
+            )
+            return False
         except Exception as exc:  # noqa: BLE001 — storage errors can carry server-only values
             from ._exposure_diagnostics import log_failure_for
 
@@ -5918,8 +6044,6 @@ class ViewRuntime:
     ) -> bool:
         """Save the authorized child tree before acknowledging a parent event."""
         from ._exposure import ExposureError, uses_legacy_exposure
-        from ._exposure_child_persistence import asave_child_states
-        from ._exposure_sessions import request_binding
 
         if uses_legacy_exposure(view):
             return True
@@ -5935,13 +6059,23 @@ class ViewRuntime:
         try:
             if request is None:
                 request = getattr(view, "_djust_event_request", None)
-            if request is None or (
-                await sync_to_async(request_binding)(request) != self._explicit_mount_binding
-            ):
+            if request is None:
                 raise ExposureError("Child persistence requires current authorization")
-            await asyncio.wait_for(
-                asave_child_states(view, request), timeout=EVENT_STATE_SAVE_TIMEOUT_S
+            await _run_explicit_save(self._save_explicit_children, view, request)
+        except ExplicitSaveDeferred:
+            # Same contract as the root (#3200): withheld, not failed.
+            view._force_full_html = True
+            logger.warning(
+                "Explicit child state save exceeded its storage deadline; success "
+                "frame withheld, the next turn saves again"
             )
+            await self.transport.send_error(
+                _EXPLICIT_SAVE_DEFERRED_MESSAGE,
+                code="state_error",
+                transient=True,
+                **({"source": "async", "async_batch": async_batch} if async_batch else {}),
+            )
+            return False
         except Exception:  # noqa: BLE001 — no provider values or success frame on failure
             # Rendering may already have advanced the server VDOM. The browser
             # received no matching update, so the next success must send HTML.

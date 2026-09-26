@@ -520,6 +520,38 @@ def _check_server_state_max_age(errors: list[CheckMessage]) -> None:
     )
 
 
+def _check_explicit_state_save_timeout(errors: list[CheckMessage]) -> None:
+    """C024 — DJUST_EXPLICIT_STATE_SAVE_TIMEOUT must be seconds in (0, 10].
+
+    It bounds how long an ADR-038 explicit turn waits for its state save,
+    counted from when the save starts running (#3200). At runtime an invalid
+    value falls back to the 0.15 s default, so report it at startup instead
+    of letting the configured value be silently ignored.
+    """
+    from django.conf import settings
+
+    from .._exposure_sessions import valid_explicit_state_save_timeout
+
+    if _is_check_suppressed("djust.C024"):
+        return
+    if not hasattr(settings, "DJUST_EXPLICIT_STATE_SAVE_TIMEOUT"):
+        return
+    if valid_explicit_state_save_timeout(settings.DJUST_EXPLICIT_STATE_SAVE_TIMEOUT):
+        return
+    errors.append(
+        DjustError(
+            "DJUST_EXPLICIT_STATE_SAVE_TIMEOUT must be a number of seconds greater than 0 "
+            "and at most 10.",
+            hint=(
+                "It bounds how long an explicit view's turn waits for its state save. "
+                "With an invalid value the runtime uses the default of 0.15 seconds."
+            ),
+            id="djust.C024",
+            fix_hint="Set `DJUST_EXPLICIT_STATE_SAVE_TIMEOUT = 0.5` (or remove it) in your settings.",
+        )
+    )
+
+
 def _check_worker_threads(errors: list[CheckMessage]) -> None:
     """C021 — ``LIVEVIEW_CONFIG['worker_threads']`` must be a documented value.
 
@@ -1024,6 +1056,9 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
     # C020 -- DJUST_SERVER_STATE_MAX_AGE out of range (ADR-038 E2-9)
     _check_server_state_max_age(errors)
+
+    # C024 -- DJUST_EXPLICIT_STATE_SAVE_TIMEOUT out of range (#3200)
+    _check_explicit_state_save_timeout(errors)
 
     # C022 -- ADR-036 project event parameter policy
     _check_event_parameter_policy(errors)
