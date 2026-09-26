@@ -23,6 +23,7 @@ import functools
 import threading
 import time
 import traceback
+import weakref
 from collections import deque
 from collections.abc import Mapping
 from contextlib import contextmanager
@@ -55,10 +56,29 @@ def _params_allowed(scope: Dict[str, Any]) -> bool:
     from djust._exposure import uses_legacy_exposure
     from djust._exposure_diagnostics import diagnostics_allowed
 
-    owner = scope.get("owner")
-    if owner is not None and not uses_legacy_exposure(owner):
-        return False
+    owner_ref = scope.get("owner")
+    if owner_ref is not None:
+        owner = owner_ref()
+        # A collected owner (a context copy outliving the turn) cannot prove
+        # it is legacy: redact.
+        if owner is None or not uses_legacy_exposure(owner):
+            return False
     return diagnostics_allowed()
+
+
+def _owner_ref(owner: Any) -> Optional[Callable[[], Any]]:
+    """A weak reference to the scope's owner (#3116).
+
+    The scope lives in a ContextVar, so every copy of the context taken during
+    the turn (a task the handler creates, a thread started from it on 3.14+)
+    keeps it; a strong reference would keep a disconnected session alive.
+    """
+    if owner is None:
+        return None
+    try:
+        return weakref.ref(owner)
+    except TypeError:
+        return lambda: owner
 
 
 def _redact_params(params: Any, many: Any) -> Any:
@@ -160,7 +180,7 @@ def capture_for_event(
             "session_id": session_id,
             "event_id": event_id,
             "handler_name": handler_name,
-            "owner": owner,
+            "owner": _owner_ref(owner),
         }
     )
     try:
