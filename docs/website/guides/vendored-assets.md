@@ -254,9 +254,15 @@ DJUST_ALLOWED_EXTERNAL_ORIGINS = [
 `djust.B010` then accepts templates that load from exactly those hosts.
 The list is empty by default, and it matches whole hosts only:
 `js.stripe.com` does not cover `m.stripe.com`, and there are no wildcards.
-An entry may be a bare host (`js.stripe.com`) or an origin
-(`https://js.stripe.com`); the case doesn't matter. A value that isn't a
-list of strings is ignored, and B010 says so.
+Each entry is a bare host (`js.stripe.com`), optionally written as an
+origin (`https://js.stripe.com`, with or without a trailing `/`). The scheme
+is ignored, so `http://` and `https://` entries mean the same host, and case
+doesn't matter. An entry with an empty host, a port, userinfo, a path or a
+query is ignored, and B010 names it; so is the whole setting when it isn't
+a list of strings. Hosts are compared as written, with no normalisation:
+write an internationalised domain and a host with a trailing dot exactly as
+they appear in the template's URL (for example the `xn--` form if that is
+what the template uses).
 
 This is an exception list for a security review to read, not a way to
 switch the check off: every entry is an origin whose code your pages run

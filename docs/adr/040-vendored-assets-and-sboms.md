@@ -93,7 +93,10 @@ indefinitely with no scanner ever flagging it.
    opens one issue per advisory per line.
 8. **Disclosure stays narrow.** No SBOM and no served file (in particular
    `*.LICENSE.txt`) ever lists a version. The SBOM itself is never
-   collected as a static file (`djust.B008`/`B012` enforce this).
+   collected as a static file (`djust.B008`/`B012` enforce this). B008
+   lists every static file, so when djust's `collectstatic` override is
+   active it runs under `check --deploy` and before that command collects
+   anything; otherwise it runs on every check, as it did originally (#3144).
 
 ## Consequences
 

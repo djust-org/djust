@@ -88,7 +88,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | B005 | Vendored Assets | Error | External asset declared without `DJUST_ALLOW_EXTERNAL_ASSETS` |
 | B006 | Vendored Assets | Error | External asset without integrity |
 | B007 | Vendored Assets | Error | `requires_assets` names an undeclared asset |
-| B008 | Vendored Assets | Error | A manifest or SBOM file would be collected as a static file (`--deploy` and djust's `collectstatic` only) |
+| B008 | Vendored Assets | Error | A manifest or SBOM file would be collected as a static file (startup only when `collectstatic` isn't djust's; otherwise `--deploy` and djust's `collectstatic`) |
 | B009 | Vendored Assets | Warning | A declaration shadows another (override, both sources named) |
 | B010 | Vendored Assets | Warning | Undeclared external origin (`<script src="http…">`) in a template, not listed in `DJUST_ALLOWED_EXTERNAL_ORIGINS` |
 | B011 | Vendored Assets | Warning | `DJUST_SBOM_PATH` not set (`--deploy` only) |
@@ -918,8 +918,9 @@ See [Vendoring third-party JS](website/guides/vendored-assets.md), [Scanning a d
 - **False positives**: None
 
 ### B008 — a manifest or SBOM file would be collected as a static file
-- **Severity**: Error (`--deploy` only; djust's `collectstatic` also runs it before collecting)
-- **Method**: Runtime (staticfiles finder listing — a walk of every static file, which is why it no longer runs at startup, #3144)
+- **Severity**: Error
+- **When**: With `'djust'` above `'django.contrib.staticfiles'` (djust's `collectstatic` is active), only under `check --deploy` and before djust's `collectstatic` collects anything. With any other order, or another app's `collectstatic` override, on every check run, as before #3144
+- **Method**: Runtime (staticfiles finder listing — a walk of every static file, which is why it leaves the startup pass when djust's `collectstatic` can run it instead, #3144)
 - **What it detects**: A `*.cdx.json`, `*.spdx.json` or `*.bom.json` is found by a staticfiles finder — `collectstatic` would publish it
 - **Suppression**: Cannot be suppressed meaningfully — move it outside every static directory
 - **False positives**: None
@@ -934,7 +935,7 @@ See [Vendoring third-party JS](website/guides/vendored-assets.md), [Scanning a d
 ### B010 — undeclared external origin in a template
 - **Severity**: Warning
 - **Method**: Regex (template file scan)
-- **What it detects**: A literal `<script src="http…">` or a `<link>` whose `rel` loads a resource (`stylesheet`, `modulepreload`, `preload`, `prefetch`) with `href="http…"` pointing at an origin no manifest declares and `DJUST_ALLOWED_EXTERNAL_ORIGINS` doesn't list; also a malformed `DJUST_ALLOWED_EXTERNAL_ORIGINS`
+- **What it detects**: A literal `<script src="http…">` or a `<link>` whose `rel` loads a resource (`stylesheet`, `modulepreload`, `preload`, `prefetch`) with `href="http…"` pointing at an origin no manifest declares and `DJUST_ALLOWED_EXTERNAL_ORIGINS` doesn't list; also a malformed `DJUST_ALLOWED_EXTERNAL_ORIGINS` or an entry in it that isn't a bare host (empty host, port, userinfo, path or query)
 - **Suppression**: `DJUST_ALLOWED_EXTERNAL_ORIGINS = ["js.stripe.com"]` for an origin that can't be pinned, `{# noqa: B010 #}` on the line, `DJUST_CONFIG['suppress_checks'] = ['B010']`, or `SILENCED_SYSTEM_CHECKS = ["djust.B010"]`
 - **False positives**: A heuristic regex scan — an origin assembled at runtime rather than written literally in the template is not seen either way; a tag split across lines is not seen. Links that load nothing (`canonical`, `alternate`, `preconnect`, `dns-prefetch`, `icon`, `manifest`) are ignored
 
