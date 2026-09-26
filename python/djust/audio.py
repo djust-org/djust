@@ -144,6 +144,9 @@ class AudioMixin:
         stripe of ``_MANIFEST_BUILD_LOCKS`` and re-checks first, so concurrent first
         renders of one view build it once. The entry keeps the bank objects
         alive, so the ``id()`` in its key cannot be reused by a new bank.
+        The lock is held only for a build (one ``static()`` per sound): two
+        views on the same stripe that miss at the same moment wait for one
+        build, and a render that hits never waits.
         """
         # One snapshot of the inputs: the key and the build must agree even if
         # ``audio_banks`` is reassigned meanwhile.

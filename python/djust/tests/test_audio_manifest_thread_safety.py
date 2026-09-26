@@ -149,9 +149,17 @@ def test_views_on_different_stripes_build_in_parallel(monkeypatch):
     t.start()
     try:
         assert started.wait(10)
-        assert json.loads(other.get_context_data()["djust_audio_manifest"])["scope"] == (
-            other._audio_scope
+        # Render the other view on its own thread with a deadline: a lock
+        # shared with the stalled build would block it until the release, and
+        # a failure inside a thread is only a warning, so assert from here.
+        built: list = []
+        o = threading.Thread(
+            target=lambda: built.append(other.get_context_data()["djust_audio_manifest"])
         )
+        o.start()
+        o.join(2)
+        assert not o.is_alive(), "a build on another stripe waited for the stalled one"
+        assert json.loads(built[0])["scope"] == other._audio_scope
     finally:
         release.set()
         t.join(10)
