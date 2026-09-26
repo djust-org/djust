@@ -3915,11 +3915,15 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
         Node::DjustAudio => {
             // Same markup and escaping as the Python `djust_audio` tag
             // (`format_html`, which escapes the manifest like `html_escape`).
-            let manifest = context.get("djust_audio_manifest").ok_or_else(|| {
-                DjangoRustError::TemplateError(
-                    "djust_audio requires AudioMixin on the view".to_string(),
-                )
-            })?;
+            // Absent or `None` is an error, like the Python tag's `is None`.
+            let manifest = context
+                .get("djust_audio_manifest")
+                .filter(|v| !matches!(v, Value::None | Value::Missing))
+                .ok_or_else(|| {
+                    DjangoRustError::TemplateError(
+                        "djust_audio requires AudioMixin on the view".to_string(),
+                    )
+                })?;
             let escaped = filters::html_escape(&manifest.to_string());
             Ok(format!("{DJUST_AUDIO_OPEN}{escaped}{DJUST_AUDIO_CLOSE}"))
         }
@@ -7129,6 +7133,17 @@ mod tests {
         let tokens = tokenize("{% djust_audio %}").unwrap();
         let nodes = parse(&tokens).unwrap();
         let err = render_nodes(&nodes, &Context::new()).unwrap_err();
+        assert!(err.to_string().contains("AudioMixin"), "{err}");
+    }
+
+    #[test]
+    fn test_djust_audio_tag_with_a_none_manifest_is_an_error() {
+        // The Python tag raises on `manifest is None`; so must the native one.
+        let tokens = tokenize("{% djust_audio %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set("djust_audio_manifest".to_string(), Value::None);
+        let err = render_nodes(&nodes, &context).unwrap_err();
         assert!(err.to_string().contains("AudioMixin"), "{err}");
     }
 
