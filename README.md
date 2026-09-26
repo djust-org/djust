@@ -263,7 +263,7 @@ posture. Report vulnerabilities to security@djust.org (see [SECURITY.md](SECURIT
 
 ## Community
 
-- [djust.org](https://djust.org) · [Documentation](https://docs.djust.org) · [Issues](https://github.com/djust-org/djust/issues) · support@djust.org
+- [djust.org](https://djust.org) · [Documentation](https://docs.djust.org) · [Issues](https://github.com/djust-org/djust/issues) · [YouTube](https://www.youtube.com/@djustframework) · support@djust.org
 - [Sponsor on GitHub](https://github.com/sponsors/djust-org), or star the repo to help others find it.
 
 MIT licensed ([LICENSE](LICENSE)). Inspired by [Phoenix LiveView](https://hexdocs.pm/phoenix_live_view/);
