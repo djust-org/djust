@@ -24,6 +24,7 @@ DONE = "done"
 UNCHANGED = "unchanged"
 SKIPPED = "skipped"
 ATTENTION = "attention"
+PLANNED = "planned"  # --dry-run: the step would change a file
 
 _SETTINGS_MODULE_RE = re.compile(
     r"""os\.environ\.setdefault\(\s*["']DJANGO_SETTINGS_MODULE["']\s*,\s*["']([\w.]+)["']\s*\)"""
@@ -80,6 +81,8 @@ class Step:
     name: str
     status: str
     detail: str
+    # What a DONE step would do, worded for --dry-run, where nothing is done.
+    planned: str = ""
 
 
 def _read(path: Path) -> str:
@@ -152,7 +155,9 @@ def plan_settings(project: Project) -> Tuple[Optional[FileChange], Step]:
     newline = "\r\n" if "\r\n" in old else "\n"
     block = render_settings_block(project.asgi_module).replace("\n", newline)
     new = old.rstrip("\r\n") + newline * 3 + block
-    return FileChange(project.settings_path, old, new), Step(name, DONE, "djust block appended")
+    return FileChange(project.settings_path, old, new), Step(
+        name, DONE, "djust block appended", "append djust block"
+    )
 
 
 def render_asgi(project: Project) -> str:
@@ -202,14 +207,18 @@ def plan_asgi(project: Project) -> Tuple[Optional[FileChange], Step, Optional[st
     name = str(project.asgi_path.relative_to(project.root))
     new = render_asgi(project)
     if not project.asgi_path.exists():
-        return FileChange(project.asgi_path, None, new), Step(name, DONE, "created"), None
+        return FileChange(project.asgi_path, None, new), Step(name, DONE, "created", "create"), None
     old = _read(project.asgi_path)
     if "LiveViewConsumer" in old:
         return None, Step(name, UNCHANGED, "already routes LiveView WebSockets"), None
     stock_settings = _stock_asgi_settings(old)
     if stock_settings == project.settings_module:
         change = FileChange(project.asgi_path, old, new)
-        return change, Step(name, DONE, "replaced Django's default"), None
+        return (
+            change,
+            Step(name, DONE, "replaced Django's default", "replace Django's default"),
+            None,
+        )
     if stock_settings is not None:
         detail = "uses %s, not %s; merge the djust ASGI app by hand" % (
             stock_settings,
@@ -423,6 +432,10 @@ def init_project(
 
     command = shlex.join(action.command)
     if dry_run:
+        result.steps = [
+            Step(step.name, PLANNED, step.planned) if step.status == DONE else step
+            for step in result.steps
+        ]
         result.steps.append(
             Step("packages", SKIPPED, "would run: %s" % command if install else "--no-install")
         )
@@ -459,15 +472,34 @@ def init_project(
     else:
         check_cmd = [str(python), "manage.py", "check"]
     checked = _run(check_cmd, root)
+    output = (checked.stdout + checked.stderr).strip()
     if checked.returncode != 0:
         result.steps.append(Step("check", ATTENTION, "manage.py check failed"))
-        result.notes.append("manage.py check\n%s" % (checked.stdout + checked.stderr).strip())
+        result.notes.append("manage.py check\n%s" % output)
+        return result
+    # Warnings don't fail the check (exit 0), but they are still findings.
+    found = _CHECK_ISSUES_RE.search(output)
+    count = int(found.group(1)) if found else 0
+    if count:
+        noun = "issue" if count == 1 else "issues"
+        result.steps.append(Step("check", DONE, "%d %s reported (see below)" % (count, noun)))
+        result.notes.append("manage.py check\n%s" % output)
     else:
         result.steps.append(Step("check", DONE, "no issues"))
     return result
 
 
-_STATUS_LABELS = {DONE: "done", UNCHANGED: "unchanged", SKIPPED: "skipped", ATTENTION: "ATTENTION"}
+# Django's summary line, e.g. "System check identified 2 issues (0 silenced)."
+_CHECK_ISSUES_RE = re.compile(r"System check identified (\d+) issues? \(")
+
+
+_STATUS_LABELS = {
+    DONE: "done",
+    UNCHANGED: "unchanged",
+    SKIPPED: "skipped",
+    ATTENTION: "ATTENTION",
+    PLANNED: "would change",
+}
 
 
 def format_result(result: InitResult, root: Path) -> str:
@@ -476,9 +508,15 @@ def format_result(result: InitResult, root: Path) -> str:
         lines += [change.diff(root) for change in result.changes]
         lines.append("Dry run: nothing was written or installed.\n")
     width = max(len(step.name) for step in result.steps)
+    status_width = max(len(_STATUS_LABELS[step.status]) for step in result.steps)
     for step in result.steps:
         lines.append(
-            "  %s  %-9s  %s" % (step.name.ljust(width), _STATUS_LABELS[step.status], step.detail)
+            "  %s  %s  %s"
+            % (
+                step.name.ljust(width),
+                _STATUS_LABELS[step.status].ljust(status_width),
+                step.detail,
+            )
         )
     for note in result.notes:
         lines.append("\n%s" % note)
