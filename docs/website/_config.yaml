@@ -382,6 +382,104 @@ navigation:
         file: guides/scanning.md
         order: 34.5
         level: advanced
+      # Task-shaped tutorials (#3173). They lived only in docs.djust.org's
+      # content root, so links to them were dead on GitHub. Ordered from
+      # "first feature" outward rather than alphabetically.
+      - title: "Tutorial: Real-time form validation with FormMixin"
+        slug: tutorial-form-validation
+        file: guides/tutorial-form-validation.md
+        order: 40
+        level: intermediate
+      - title: "Tutorial: Build a search-as-you-type feature"
+        slug: tutorial-search-as-you-type
+        file: guides/tutorial-search-as-you-type.md
+        order: 41
+        level: beginner
+      - title: "Tutorial: Build a real-time comment thread"
+        slug: tutorial-real-time-comments
+        file: guides/tutorial-real-time-comments.md
+        order: 42
+        level: intermediate
+      - title: "Tutorial: Build a file upload with live progress"
+        slug: tutorial-file-uploads-progress
+        file: guides/tutorial-file-uploads-progress.md
+        order: 43
+        level: intermediate
+      - title: "Tutorial: Optimistic UI updates with JS Commands"
+        slug: tutorial-optimistic-updates
+        file: guides/tutorial-optimistic-updates.md
+        order: 44
+        level: intermediate
+      - title: "Tutorial: Build infinite scroll with dj-viewport-bottom"
+        slug: tutorial-infinite-scroll
+        file: guides/tutorial-infinite-scroll.md
+        order: 45
+        level: intermediate
+      - title: "Tutorial: Build a multi-step form wizard"
+        slug: tutorial-multi-step-wizard
+        file: guides/tutorial-multi-step-wizard.md
+        order: 46
+        level: intermediate
+      - title: "Tutorial: Show who's reading right now with presence"
+        slug: tutorial-presence
+        file: guides/tutorial-presence.md
+        order: 47
+        level: intermediate
+      - title: "Tutorial: Build a reusable LiveComponent"
+        slug: tutorial-live-component
+        file: guides/tutorial-live-component.md
+        order: 48
+        level: intermediate
+      - title: "Tutorial: Integrate Chart.js with a hook"
+        slug: tutorial-chart-hook
+        file: guides/tutorial-chart-hook.md
+        order: 49
+        level: intermediate
+      - title: "Tutorial: Stream an AI response token-by-token"
+        slug: tutorial-streaming-ai
+        file: guides/tutorial-streaming-ai.md
+        order: 50
+        level: intermediate
+      - title: "Tutorial: Push live UI updates from a webhook (Stripe, GitHub, etc.)"
+        slug: tutorial-webhook-push
+        file: guides/tutorial-webhook-push.md
+        order: 51
+        level: advanced
+      - title: "Tutorial: Modals and toasts without a server round-trip"
+        slug: tutorial-js-commands
+        file: guides/tutorial-js-commands.md
+        order: 52
+        level: beginner
+      - title: "Tutorial: Build a typeahead with @server_function"
+        slug: tutorial-typeahead-server-function
+        file: guides/tutorial-typeahead-server-function.md
+        order: 53
+        level: intermediate
+      - title: "Tutorial: Build a server-driven guided product tour"
+        slug: tutorial-guided-tour
+        file: guides/tutorial-guided-tour.md
+        order: 54
+        level: advanced
+      - title: "Tutorial: Auth-gated pages and per-handler permissions"
+        slug: tutorial-authentication
+        file: guides/tutorial-authentication.md
+        order: 55
+        level: intermediate
+      - title: "Tutorial: Build a multi-tenant SaaS dashboard"
+        slug: tutorial-multi-tenant
+        file: guides/tutorial-multi-tenant.md
+        order: 56
+        level: advanced
+      - title: "Tutorial: Test a LiveView with LiveViewTestClient"
+        slug: tutorial-testing
+        file: guides/tutorial-testing.md
+        order: 57
+        level: intermediate
+      - title: "Tutorial: Ship a djust app to production"
+        slug: tutorial-deployment
+        file: guides/tutorial-deployment.md
+        order: 58
+        level: intermediate
 
   - title: Testing
     slug: testing

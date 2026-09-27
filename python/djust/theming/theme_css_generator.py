@@ -735,8 +735,9 @@ class CompleteThemeCSSGenerator:
   transition: all var(--duration-fast) var(--ease-out);
 }}
 .{p}btn:hover {{
-  background: currentColor;
-  color: var(--background);
+  background: hsl(var(--foreground));
+  border-color: hsl(var(--foreground));
+  color: hsl(var(--background));
 }}""")
         elif styles["button_style"] == "ghost":
             parts.append(f"""
