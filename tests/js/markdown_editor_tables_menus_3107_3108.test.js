@@ -64,6 +64,15 @@ function setup(value = "", attrs = "", { client = false } = {}) {
   return { window, doc, field, hook, el };
 }
 const wait = (window, ms) => new Promise((r) => window.setTimeout(r, ms));
+// Tiptap shows a menu after a 250ms debounce that starts once focus lands
+// (a frame later). Poll for the shown state instead of racing that timer.
+async function until(window, condition, timeout = 3000) {
+  const deadline = Date.now() + timeout;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error("condition not met in time");
+    await wait(window, 20);
+  }
+}
 // Text position of the first text node equal to `text`.
 function posOf(editor, text) {
   let found = null;
@@ -222,7 +231,7 @@ describe("#3108 selection (bubble) and empty-line (floating) menus", () => {
 
     editor.commands.focus();
     editor.commands.setTextSelection({ from: 1, to: 6 });
-    await wait(window, 300);
+    await until(window, () => bubble.isConnected);
     expect(bubble.isConnected).toBe(true);
     expect(hook.surface.contains(bubble)).toBe(true);
 
@@ -237,11 +246,11 @@ describe("#3108 selection (bubble) and empty-line (floating) menus", () => {
     const group = hook.bubble.querySelector(".dj-markdown-table-actions");
     editor.commands.focus();
     editor.commands.setTextSelection({ from: 1, to: 6 });
-    await wait(window, 300);
+    await until(window, () => hook.bubble.isConnected);
     expect(group.hidden).toBe(true);
     const x = posOf(editor, "x");
     editor.commands.setTextSelection({ from: x, to: x + 1 });
-    await wait(window, 300);
+    await until(window, () => hook.bubble.isConnected);
     expect(hook.bubble.isConnected).toBe(true);
     expect(group.hidden).toBe(false);
     expect(button(group, "row-after").disabled).toBe(false);
@@ -252,7 +261,7 @@ describe("#3108 selection (bubble) and empty-line (floating) menus", () => {
     const editor = hook.getEditor();
     editor.commands.focus();
     editor.commands.setTextSelection({ from: 7, to: 12 });
-    await wait(window, 300);
+    await until(window, () => hook.bubble.isConnected);
     const bold = button(hook.bubble, "bold");
     const down = new window.MouseEvent("mousedown", {
       bubbles: true,
@@ -283,7 +292,7 @@ describe("#3108 selection (bubble) and empty-line (floating) menus", () => {
     expect(menu()).toBe(false);
     expect(hook.bubble.isConnected).toBe(false);
     editor.commands.setTextSelection({ from: 7, to: 12 });
-    await wait(window, 300);
+    await until(window, () => hook.bubble.isConnected);
     expect(menu()).toBe(false);
     const onMenu = new window.MouseEvent("contextmenu", {
       bubbles: true,
@@ -298,7 +307,7 @@ describe("#3108 selection (bubble) and empty-line (floating) menus", () => {
     const editor = hook.getEditor();
     editor.commands.focus();
     editor.commands.setTextSelection({ from: 1, to: 6 });
-    await wait(window, 300);
+    await until(window, () => hook.bubble.isConnected);
     const key = (target, k, extra = {}) =>
       target.dispatchEvent(
         new window.KeyboardEvent("keydown", {
@@ -319,12 +328,12 @@ describe("#3108 selection (bubble) and empty-line (floating) menus", () => {
     // Focus inside the menu keeps it open, even across an editor update
     // (e.g. a table action applied while a menu button holds focus).
     editor.commands.setTextSelection({ from: 1, to: 5 });
-    await wait(window, 300);
+    await wait(window, 600); // past the 250ms debounce: can only false-pass, never flake
     expect(doc.activeElement).toBe(button(hook.bubble, "bold"));
     expect(hook.bubble.isConnected).toBe(true);
     editor.commands.setTextSelection({ from: 1, to: 6 });
     key(doc.activeElement, "Escape");
-    await wait(window, 50); // Tiptap's focus command applies on the next frame
+    await until(window, () => doc.activeElement === editor.view.dom);
     expect(doc.activeElement).toBe(editor.view.dom);
     expect(editor.state.selection.from).toBe(1);
     expect(editor.state.selection.to).toBe(6);
@@ -353,7 +362,7 @@ describe("#3108 selection (bubble) and empty-line (floating) menus", () => {
     const editor = hook.getEditor();
     editor.commands.focus();
     editor.commands.setTextSelection({ from: 1, to: 6 });
-    await wait(window, 300);
+    await until(window, () => hook.bubble.isConnected);
     button(hook.bubble, "bold").focus();
     doc.querySelector("label").setAttribute("tabindex", "0");
     doc.querySelector("label").focus();
@@ -396,7 +405,7 @@ describe("#3108 selection (bubble) and empty-line (floating) menus", () => {
     expect(floating.isConnected).toBe(false);
     editor.commands.setTextSelection(6); // end of "Hello"
     editor.commands.splitBlock();
-    await wait(window, 300);
+    await until(window, () => floating.isConnected);
     expect(floating.isConnected).toBe(true);
   });
 
@@ -414,7 +423,7 @@ describe("#3108 selection (bubble) and empty-line (floating) menus", () => {
     const editor = hook.getEditor();
     editor.commands.focus();
     editor.commands.setTextSelection({ from: 1, to: 6 });
-    await wait(window, 300);
+    await until(window, () => hook.bubble.isConnected);
     expect(doc.querySelector(".dj-markdown-bubble")).not.toBeNull();
     hook.destroyed();
     expect(doc.querySelector(".dj-markdown-bubble")).toBeNull();
