@@ -744,6 +744,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # old view is torn down. Re-registered on the new parent after
         # its mount completes.
         self._sticky_preserved: Dict[str, Any] = {}
+        # mount_batch siblings (#3245): the views a ``mount_batch`` mounted
+        # before its last one, each with the view group it joined. The socket
+        # holds one ``view_instance``; a batch's earlier views stay mounted
+        # beside it (their groups kept) until the socket's views are replaced
+        # or it disconnects, which tears them all down.
+        self._batch_siblings: List[Tuple[Any, Optional[str]]] = []
+        self._mount_batch_active = False
         # Sticky auto-detect (ADR-014): IDs that ``{% live_render sticky=True %}``
         # already re-registered onto the new parent during template render.
         # The post-render slot-scan reads this set and skips the second
@@ -2386,8 +2393,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
     async def disconnect(self, close_code: int) -> None:
         """Handle WebSocket disconnection"""
-        from ._child_lifecycle import dispose_child_subtree
-        from ._exposure import uses_legacy_exposure
+        from ._child_lifecycle import discard_sticky_child, release_root_view
 
         self._disconnect_entered = True
         # The socket is gone — any frame a handler still tries to send from
@@ -2425,6 +2431,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # Leave per-view channel group
         if self._view_group:
             await self.channel_layer.group_discard(self._view_group, self.channel_name)
+        # ... and the groups of the views a mount_batch mounted beside it (#3245).
+        # The siblings themselves are torn down with the view below.
+        mounted_views = self._mounted_views()
+        await self._leave_batch_sibling_groups()
 
         # Leave every presence group the mounts joined (#3202)
         from .presence import leave_presence_groups
@@ -2473,42 +2483,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             except Exception as e:
                 logger.warning("Error shutting down actor: %s", e)
 
-        # Explicit roots own the whole remaining subtree, including async work.
-        explicit_disposed = self.view_instance is not None and not uses_legacy_exposure(
-            self.view_instance
-        )
-        if explicit_disposed:
-            dispose_child_subtree(self.view_instance)
-
-        # Clean up uploads
-        if (
-            not explicit_disposed
-            and self.view_instance
-            and hasattr(self.view_instance, "_cleanup_uploads")
-        ):
-            try:
-                self.view_instance._cleanup_uploads()
-            except Exception as e:
-                logger.warning("Error cleaning up uploads: %s", e)
-
-        # Cancel any pending wait_for_event waiters (ADR-002 Phase 1b).
-        # @background tasks awaiting on a waiter unblock with CancelledError
-        # and can clean up themselves — without this they'd leak the Future.
-        # Closed, not just cancelled: the view's background work keeps
-        # running and must not register a waiter nothing would cancel (#3236).
-        if self.view_instance and hasattr(self.view_instance, "_close_waiters"):
-            try:
-                self.view_instance._close_waiters(reason="view_disconnect")
-            except Exception as e:
-                logger.warning("Error cancelling waiters: %s", e)
-
-        # Clean up embedded child views
-        if self.view_instance and hasattr(self.view_instance, "_child_views"):
-            try:
-                for child_id in list(self.view_instance._child_views.keys()):
-                    self.view_instance._unregister_child(child_id)
-            except Exception as e:
-                logger.warning("Error cleaning up embedded children: %s", e)
+        # Tear each mounted view down (#3244): an explicit root is disposed with
+        # its whole subtree, including async work; a legacy root has its uploads
+        # cleaned up, its wait_for_event waiters closed (ADR-002 Phase 1b,
+        # #3236: cancelled so @background tasks awaiting one unblock with
+        # CancelledError, and later waits refused, since its background work
+        # keeps running), and its embedded children unregistered, their own
+        # waiters closed too. Either way its Rust live handles are dropped.
+        for view in mounted_views:
+            release_root_view(view, navigation=False, reason="view_disconnect")
 
         # Sticky LiveViews (Phase C Fix F2): drain any sticky children that
         # were staged on the consumer during a live_redirect but for which
@@ -2517,23 +2500,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # sticky instances alive with their background tasks still running
         # on a "zombie" consumer whose view is gone.
         if self._sticky_preserved:
-            for sticky_id, child in list(self._sticky_preserved.items()):
-                if not uses_legacy_exposure(child):
-                    dispose_child_subtree(child, navigation=True)
-                    continue
-                hook = getattr(child, "_on_sticky_unmount", None)
-                if callable(hook):
-                    try:
-                        hook()
-                    except Exception:  # noqa: BLE001 — cleanup must not raise
-                        logger.exception(
-                            "sticky %s _on_sticky_unmount during disconnect failed",
-                            sanitize_for_log(sticky_id),
-                        )
+            for child in list(self._sticky_preserved.values()):
+                discard_sticky_child(child)
             self._sticky_preserved = {}
 
-        # Clean up session state
-        _clear_live_handles(self.view_instance)
+        # Clean up session state (the live handles went with the views above)
         self.view_instance = None
         self.actor_handle = None
         # (#1919, Finding A) Also null the shared runtime's view so a later
@@ -2814,6 +2785,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
           recovery (mount establishes the baseline; it has no prior frame to
           recover to).
         """
+        # A mount on a socket that already has a view replaces it (a lazy
+        # hydration mount after the page view, #3245): tear it down first. A
+        # ``mount_batch`` entry keeps the batch's earlier views as siblings.
+        await self._release_before_mount()
         runtime = self._get_runtime()
         # (A) Null the runtime's view BEFORE dispatch so a reconnect / live_redirect
         # re-mount is never silently no-op'd by the idempotency early-return.
@@ -3025,10 +3000,51 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         client_timezone = data.get("client_timezone")
 
+        # The views mounted on this socket so far are replaced by this batch
+        # (#3245). The batch's own views are siblings, not replacements of one
+        # another: ``handle_mount`` keeps each earlier one mounted beside the
+        # next (``_batch_siblings``).
+        await self._release_before_mount()
         successes: list = []
         failures: list = []
         navigates: list = []
         all_push_events: list = []
+        self._mount_batch_active = True
+        try:
+            await self._mount_batch_entries(
+                views_list, client_timezone, successes, failures, navigates, all_push_events
+            )
+        finally:
+            self._mount_batch_active = False
+
+        response: Dict[str, Any] = {
+            "type": "mount_batch",
+            "session_id": self.session_id,
+            "views": successes,
+            "failed": failures,
+        }
+        if navigates:
+            response["navigate"] = navigates
+        await self.send_json(response)
+
+        # Fix #1295: flush push events that were captured during mount.
+        # When mount() calls push_event(), _flush_push_events fires with
+        # send_json swapped for _collect in _mount_one — so push events
+        # land in captured[] instead of being sent. We extract them in
+        # _mount_one and flush them here after the batch response.
+        for frame in all_push_events:
+            await self.send_json(frame)
+
+    async def _mount_batch_entries(
+        self,
+        views_list: List[Any],
+        client_timezone: Any,
+        successes: list,
+        failures: list,
+        navigates: list,
+        all_push_events: list,
+    ) -> None:
+        """Mount each ``mount_batch`` entry in order, sorting the outcomes."""
         for view_data in views_list:
             if not isinstance(view_data, dict):
                 failures.append(
@@ -3055,24 +3071,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             failed = dict(payload)
             failed["error"] = err or "unknown"
             failures.append(failed)
-
-        response: Dict[str, Any] = {
-            "type": "mount_batch",
-            "session_id": self.session_id,
-            "views": successes,
-            "failed": failures,
-        }
-        if navigates:
-            response["navigate"] = navigates
-        await self.send_json(response)
-
-        # Fix #1295: flush push events that were captured during mount.
-        # When mount() calls push_event(), _flush_push_events fires with
-        # send_json swapped for _collect in _mount_one — so push events
-        # land in captured[] instead of being sent. We extract them in
-        # _mount_one and flush them here after the batch response.
-        for frame in all_push_events:
-            await self.send_json(frame)
 
     async def handle_event(self, data: Dict[str, Any]) -> None:
         """Handle a client event by routing through :class:`ViewRuntime`.
@@ -3778,6 +3776,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         (``handle_mount`` / ``handle_live_redirect_mount`` / ``_mount_one``) does
         the same null+readback; this is the wire-frame twin.
         """
+        if data.get("type") == "mount":
+            # A second mount frame replaces the mounted view: tear it down
+            # first, as ``live_redirect`` does (#3245).
+            await self._release_before_mount()
         runtime = self._get_runtime()
         if data.get("type") == "mount":
             runtime.view_instance = None
@@ -3817,6 +3819,116 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         runtime.view_instance = self.view_instance
         await runtime.dispatch_url_change(data)
 
+    def _mounted_views(self) -> List[Any]:
+        """Every view mounted on this socket: the ``mount_batch`` siblings, then
+        ``view_instance``. Each once, in mount order."""
+        views: List[Any] = []
+        for view, _group in getattr(self, "_batch_siblings", None) or []:
+            if view is not None and all(view is not v for v in views):
+                views.append(view)
+        current = self.view_instance
+        if current is not None and all(current is not v for v in views):
+            views.append(current)
+        return views
+
+    async def _leave_batch_sibling_groups(self) -> None:
+        """Leave the view groups the ``mount_batch`` siblings joined, and forget
+        the siblings (#3245). The consumer's other group sets already hold every
+        group the batch joined."""
+        siblings = getattr(self, "_batch_siblings", None) or []
+        self._batch_siblings = []
+        channel_layer = getattr(self, "channel_layer", None)
+        if channel_layer is None:
+            return
+        for group in {g for _view, g in siblings if isinstance(g, str) and g}:
+            try:
+                await channel_layer.group_discard(group, self.channel_name)
+            except Exception as e:  # noqa: BLE001 — leaving is best effort
+                logger.warning("Error leaving channel group %s: %s", group, e)
+
+    async def _release_before_mount(self) -> None:
+        """Make room for a mount on this socket (#3245).
+
+        A ``mount`` frame on a socket that already has a view replaces it: the
+        stock client sends one for each lazily hydrated view
+        (13-lazy-hydration.js ``mountElement``, and its per-view fallback when a
+        server refuses ``mount_batch``). The replaced view is torn down as
+        ``live_redirect`` tears the old page down.
+
+        Inside a ``mount_batch`` the entries are siblings: the view the
+        previous entry mounted stays mounted, and is recorded with its view
+        group in ``_batch_siblings`` so that a later replacement, or the
+        disconnect, tears it down and leaves its group.
+        """
+        if getattr(self, "_mount_batch_active", False):
+            current = self.view_instance
+            if current is not None:
+                siblings = getattr(self, "_batch_siblings", None) or []
+                self._batch_siblings = [*siblings, (current, getattr(self, "_view_group", None))]
+                # The sibling keeps its group; the next entry records its own.
+                self._view_group = None
+            return
+        if self._mounted_views():
+            await self._release_mounted_views(reason="view_replaced")
+
+    async def _release_mounted_views(
+        self, *, reason: str, keep: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """Tear down every view mounted on this socket before it is replaced.
+
+        The teardown ``live_redirect`` always did, now shared with a second
+        ``mount`` / ``mount_batch`` frame (#3245): leave the channel groups the
+        views joined (view, presence, presence-scope, db_notify, scoped push),
+        stop the tick task, drop the pushes deferred for them (#3001), and tear
+        each view down (``release_root_view``: waiters, embedded children,
+        uploads, live handles; #3244). ``keep`` holds the sticky children a
+        ``live_redirect`` preserves: they are removed from the old view's
+        registry first, so they survive with their waiters and background work.
+        """
+        from ._child_lifecycle import release_root_view
+        from .runtime import leave_consumer_view_groups
+
+        views = self._mounted_views()
+        await leave_consumer_view_groups(self)
+        await self._leave_batch_sibling_groups()
+
+        # Cancel old tick task
+        if self._tick_task:
+            self._tick_task.cancel()
+            try:
+                await self._tick_task
+            except asyncio.CancelledError:
+                pass  # Expected when cancelling a running tick task
+            self._tick_task = None
+
+        # Pushes deferred for the old view must not reach the new one (#3001).
+        self._cancel_deferred_pushes()
+
+        for view in views:
+            # Drop the kept sticky children from the old view's registry first,
+            # WITHOUT ``_unregister_child`` (which would tear them down): they
+            # survive this navigation and keep running on their stash refs.
+            # A child may be registered under its auto-generated view_id OR
+            # under its sticky_id, so it is found by identity.
+            registry = getattr(view, "_child_views", None)
+            if keep and type(registry) is dict:
+                for sticky_child in keep.values():
+                    for vid, c in list(registry.items()):
+                        if c is sticky_child:
+                            registry.pop(vid, None)
+                            break
+            release_root_view(view, navigation=True, reason=reason)
+
+        self.view_instance = None
+        # (#1919, Finding A) Null the shared runtime's view too BEFORE the
+        # re-mount. ``handle_mount`` (the shim) also nulls it, but doing it
+        # here keeps the teardown self-consistent: a re-mount on this connection
+        # must never be no-op'd by ``dispatch_mount``'s idempotency early-return —
+        # this is the live_redirect re-mount landmine the Finding-A net guards.
+        runtime = getattr(self, "_runtime", None)
+        if runtime is not None:
+            runtime.view_instance = None
+
     async def handle_live_redirect_mount(self, data: Dict[str, Any]) -> None:
         """
         Handle mounting a new view via live_redirect (no WS reconnect).
@@ -3845,8 +3957,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # Reset auto-reattach tracker (ADR-014): a redirect mount starts
         # a fresh template render; any IDs the tag claims should be tracked
         # against this navigation only.
-        from ._child_lifecycle import cancel_replaced_legacy_waiters, dispose_child_subtree
-        from ._exposure import uses_legacy_exposure
+        from ._child_lifecycle import discard_sticky_child
 
         self._sticky_auto_reattached = set()
         # Reuse handle_mount — it already handles everything
@@ -3868,15 +3979,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         else []
                     ):
                         if getattr(child, "sticky", False) is True:
-                            if not uses_legacy_exposure(child):
-                                dispose_child_subtree(child, navigation=True)
-                                continue
-                            hook = getattr(child, "_on_sticky_unmount", None)
-                            if callable(hook):
-                                try:
-                                    hook()
-                                except Exception:  # noqa: BLE001
-                                    logger.exception("sticky child _on_sticky_unmount raised")
+                            discard_sticky_child(child)
                     sticky_preserved = {}
                 else:
                     # #3212: re-check as the user the explicit mount will run as.
@@ -3895,72 +3998,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # Stash on the consumer for post-mount reattachment.
         self._sticky_preserved = sticky_preserved
 
-        # Leave old view's channel group
-        if self._view_group:
-            await self.channel_layer.group_discard(self._view_group, self.channel_name)
-            self._view_group = None
-        # ... and its scoped server-push groups (#3004); the new view joins
-        # its own after its mount.
-        from .push import leave_push_scope_groups
-
-        await leave_push_scope_groups(self)
-        # ... and its presence group, which the new view's presence key may
-        # not share (#3202).
-        from .presence import leave_presence_groups
-
-        await leave_presence_groups(self)
-
-        # Cancel old tick task
-        if self._tick_task:
-            self._tick_task.cancel()
-            try:
-                await self._tick_task
-            except asyncio.CancelledError:
-                pass  # Expected when cancelling a running tick task
-            self._tick_task = None
-
-        # Pushes deferred for the old view must not reach the new one (#3001).
-        self._cancel_deferred_pushes()
-
-        # Clean up old view
-        if old_view:
-            # Before cleanup_uploads, drop sticky children from the old
-            # view's registry so the normal unregister path doesn't call
-            # their _cleanup_on_unregister hook — sticky children SURVIVE
-            # this navigation and keep running on their stash refs.
-            if hasattr(old_view, "_child_views"):
-                for sticky_id, sticky_child in sticky_preserved.items():
-                    # Child may have been registered under its auto-
-                    # generated view_id OR under its sticky_id. Find by
-                    # identity because sticky_id may differ from the
-                    # original registered view_id.
-                    for vid, c in list(old_view._child_views.items()):
-                        if c is sticky_child:
-                            # Pop WITHOUT calling _unregister_child (which
-                            # would invoke _cleanup_on_unregister). Sticky
-                            # children keep running.
-                            old_view._child_views.pop(vid, None)
-                            break
-            if not uses_legacy_exposure(old_view):
-                dispose_child_subtree(old_view, navigation=True)
-            else:
-                if hasattr(old_view, "_cleanup_uploads"):
-                    try:
-                        old_view._cleanup_uploads()
-                    except Exception:
-                        logger.warning("Failed to clean up uploads for old view", exc_info=True)
-                # A replaced legacy view's waiters, as disconnect cancels them (#3236).
-                cancel_replaced_legacy_waiters(old_view)
-
-        self.view_instance = None
-        # (#1919, Finding A) Null the shared runtime's view too BEFORE the
-        # re-mount below. ``handle_mount`` (the shim) also nulls it, but doing it
-        # here keeps the teardown self-consistent: a re-mount on this connection
-        # must never be no-op'd by ``dispatch_mount``'s idempotency early-return —
-        # this is the live_redirect re-mount landmine the Finding-A net guards.
-        runtime = getattr(self, "_runtime", None)
-        if runtime is not None:
-            runtime.view_instance = None
+        # Tear the old view down: its groups, tick and deferred pushes, and
+        # the view itself with every child that is not kept sticky (#3244).
+        await self._release_mounted_views(reason="view_navigation", keep=sticky_preserved)
 
         # Parse state_snapshot if the client sent one (v0.6.0) so it can
         # be forwarded to handle_mount for back-nav state restoration.
@@ -4031,17 +4071,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # consumer with background work still running on a
             # "zombie" instance whose parent is gone.
             for child in list(self._sticky_preserved.values()):
-                if not uses_legacy_exposure(child):
-                    dispose_child_subtree(child, navigation=True)
-                    continue
-                hook = getattr(child, "_on_sticky_unmount", None)
-                if callable(hook):
-                    try:
-                        hook()
-                    except Exception:  # noqa: BLE001 — best-effort cleanup
-                        logger.exception(
-                            "sticky child _on_sticky_unmount failed during redirect cleanup"
-                        )
+                discard_sticky_child(child)
             self._sticky_preserved = {}
             raise
 
