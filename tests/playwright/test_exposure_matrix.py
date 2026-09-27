@@ -24,11 +24,10 @@ twin is the control in each mode: its DEBUG error frame, or its production
 log, carries the error sentinel.
 
 Over real SSE (the transport is pinned and checked, #3097), an explicit view's
-``start_async`` result fails its server-state save and answers "State
-unavailable. Please reload the page." instead of rendering. That step is a
-strict expected failure: the ``explicit/sse`` run requires the error frame,
-and fails with "#3097 appears fixed: flip this expectation" once the count
-renders, so the fix for #3097 must update this script.
+``start_async`` result used to fail: the background task inherited the event
+POST's asgiref executors, which die with the POST, so its save answered "State
+unavailable. Please reload the page." The #3200 fix detaches such tasks from
+the finished request, and every run now requires count=12.
 
 Standalone, like the other scripts here: exits 0 on success and non-zero with
 the list of failures. Environment:
@@ -222,25 +221,10 @@ async def run_flow(browser, transport, policy, failures, notes):
                 found.append(frame)
         return found
 
-    async def spawn_outcome(timeout=10.0):
-        """#3097: 'rendered' (count=12), 'state_unavailable' (the known error
-        frame), or 'neither' at the deadline."""
-        deadline = asyncio.get_running_loop().time() + timeout
-        while asyncio.get_running_loop().time() < deadline:
-            if ((await text(page, "#matrix-count")) or "").strip() == "12":
-                return "rendered"
-            for frame in await error_frames():
-                if frame.get("code") == "state_error" and "State unavailable" in str(
-                    frame.get("error")
-                ):
-                    return "state_unavailable"
-            await asyncio.sleep(0.1)
-        return "neither"
-
     async def wait_for_error_frame(before=0, timeout=10.0):
         # Event-driven (#3137 shape): the failing turn's error frame, not a
         # fixed 800 ms that a freshly started server can overrun. ``before``
-        # counts error frames already received (the #3097 SSE state error).
+        # counts error frames already received.
         deadline = asyncio.get_running_loop().time() + timeout
         while len(await error_frames()) <= before:
             if asyncio.get_running_loop().time() >= deadline:
@@ -257,22 +241,7 @@ async def run_flow(browser, transport, policy, failures, notes):
     await page.click("#matrix-increment")
     await wait_text(page, "#matrix-count", "2")
     await page.click("#matrix-spawn")
-    if (policy, transport) == ("explicit", "sse"):
-        # Strict expected failure until #3097: over SSE an explicit view's
-        # start_async completion fails its server-state save and answers
-        # "State unavailable" instead of rendering count=12.
-        outcome = await spawn_outcome()
-        if outcome == "rendered":
-            failures.append(f"{label}: #3097 appears fixed: flip this expectation")
-        elif outcome != "state_unavailable":
-            failures.append(
-                f"{label}: #3097 expected a 'State unavailable' error frame for the "
-                f"background result; saw neither it nor count=12 "
-                f"(count {await text(page, '#matrix-count')!r})"
-            )
-        await page.evaluate("() => document.getElementById('djust-error-overlay')?.remove()")
-    else:
-        await wait_text(page, "#matrix-count", "12", timeout=10000)
+    await wait_text(page, "#matrix-count", "12", timeout=10000)
     await page.click("#matrix-page2")
     await wait_text(page, "#matrix-page", "2")
     errors_before = len(await error_frames())

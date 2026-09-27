@@ -158,7 +158,10 @@ describe('Connection State CSS Classes', () => {
         if (sse.eventSource.onopen) sse.eventSource.onopen({ type: 'open' });
         expect(body.classList.contains('dj-connected')).toBe(true);
 
-        // Simulate CLOSED error
+        // Simulate CLOSED error. A close before the first sse_connect ack is
+        // retried once with a fresh session id (#3164); fail the retry too.
+        sse.eventSource.readyState = 2; // CLOSED
+        if (sse.eventSource.onerror) sse.eventSource.onerror({ type: 'error' });
         sse.eventSource.readyState = 2; // CLOSED
         if (sse.eventSource.onerror) sse.eventSource.onerror({ type: 'error' });
 

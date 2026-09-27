@@ -396,7 +396,13 @@ describe('LiveViewSSE', () => {
             sse.connect('myapp.views.HomeView');
             mockEventSource.onopen();
 
-            // Simulate permanent close
+            // Simulate permanent close. A close before the stream's first
+            // sse_connect ack is retried once with a fresh session id (#3164),
+            // so the transport disables when the retry fails too. (The mock
+            // returns the same object for the retry's EventSource.)
+            mockEventSource.readyState = window.EventSource.CLOSED;
+            mockEventSource.onerror(new Event('error'));
+            expect(sse.enabled).toBe(true);
             mockEventSource.readyState = window.EventSource.CLOSED;
             mockEventSource.onerror(new Event('error'));
 

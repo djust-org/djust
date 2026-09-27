@@ -491,3 +491,142 @@ def test_djust_init_command_is_registered(tmp_path, monkeypatch, capsys):
         cli.main()
     assert exc.value.code == 0
     assert "Dry run" in capsys.readouterr().out
+
+
+def test_dry_run_reports_file_steps_as_planned_not_done(tmp_path):
+    """#3172: a dry run writes nothing, so no row may say it was done."""
+    make_project(tmp_path)
+    result = init.init_project(tmp_path, dry_run=True)
+    rows = {step.name: step for step in result.steps}
+    assert rows["mysite/settings.py"].status == init.PLANNED
+    assert rows["mysite/settings.py"].detail == "append djust block"
+    assert rows["mysite/asgi.py"].status == init.PLANNED
+    assert rows["mysite/asgi.py"].detail == "replace Django's default"
+    table = init.format_result(result, tmp_path).split("Dry run: nothing was written")[1]
+    assert " done " not in table
+    assert "appended" not in table and "replaced" not in table
+    assert "mysite/settings.py  would change  append djust block" in table
+
+
+def test_dry_run_of_a_missing_asgi_says_create(tmp_path):
+    make_project(tmp_path)
+    (tmp_path / "mysite/asgi.py").unlink()
+    result = init.init_project(tmp_path, dry_run=True, install=False)
+    row = next(step for step in result.steps if step.name == "mysite/asgi.py")
+    assert (row.status, row.detail) == (init.PLANNED, "create")
+
+
+def test_dry_run_leaves_unchanged_and_attention_rows_alone(tmp_path):
+    make_project(tmp_path, asgi=STOCK_ASGI + "\napplication = Wrapper(application)\n")
+    init.init_project(tmp_path, force=True, install=False)
+    result = init.init_project(tmp_path, dry_run=True, install=False)
+    statuses = {step.name: step.status for step in result.steps}
+    assert statuses["mysite/settings.py"] == init.UNCHANGED
+    assert statuses["mysite/asgi.py"] == init.ATTENTION
+
+
+def test_real_run_still_reports_file_steps_as_done(tmp_path):
+    make_project(tmp_path)
+    result = init.init_project(tmp_path, force=True, install=False)
+    rows = {step.name: step for step in result.steps}
+    assert (rows["mysite/settings.py"].status, rows["mysite/settings.py"].detail) == (
+        init.DONE,
+        "djust block appended",
+    )
+
+
+def test_check_warnings_are_reported_not_called_clean(tmp_path):
+    """#3170: `manage.py check` exits 0 on warnings. Run the real check on a
+    startproject tree (only the package install is stubbed) and require the
+    summary to carry the warnings instead of "no issues"."""
+    import os
+
+    subprocess.run(
+        [sys.executable, "-m", "django", "startproject", "mysite", str(tmp_path)],
+        check=True,
+        capture_output=True,
+    )
+    (tmp_path / "requirements.txt").write_text("django\n")
+    venv_python = tmp_path / ".venv/bin/python"
+    venv_python.parent.mkdir(parents=True)
+    venv_python.write_text("")
+    real_run = subprocess.run
+    pythonpath = os.pathsep.join([str(tmp_path), *sys.path])
+
+    def run(cmd, **kwargs):
+        if cmd[1:3] == ["-m", "pip"]:
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        if cmd[1:] == ["manage.py", "check"]:
+            env = {k: v for k, v in kwargs.pop("env").items() if k != "DJANGO_SETTINGS_MODULE"}
+            env["PYTHONPATH"] = pythonpath
+            return real_run([sys.executable, *cmd[1:]], env=env, **kwargs)
+        return real_run(cmd, **kwargs)
+
+    with (
+        patch.object(init.shutil, "which", return_value=None),
+        patch.object(init.subprocess, "run", side_effect=run),
+    ):
+        result = init.init_project(tmp_path, force=True)
+    check = next(step for step in result.steps if step.name == "check")
+    assert check.status == init.DONE
+    assert check.detail != "no issues"
+    assert "reported (see below)" in check.detail
+    note = next(note for note in result.notes if note.startswith("manage.py check"))
+    assert "WARNINGS:" in note
+    assert result.exit_code == 0
+
+
+@pytest.mark.parametrize(
+    "output, detail",
+    [
+        ("System check identified no issues (0 silenced).\n", "no issues"),
+        (
+            "WARNINGS:\n?: (x.W1) w\n\nSystem check identified 1 issue (0 silenced).\n",
+            "1 issue reported (see below)",
+        ),
+        (
+            "WARNINGS:\n?: (x.W1) w\n\nSystem check identified 3 issues (1 silenced).\n",
+            "3 issues reported (see below)",
+        ),
+        # #3213 review: a check message quoting the sentence mid-line must not
+        # be counted instead of the real summary line.
+        (
+            "WARNINGS:\n?: (x.W1) said: System check identified 9 issues (0 silenced).\n\n"
+            "System check identified 1 issue (0 silenced).\n",
+            "1 issue reported (see below)",
+        ),
+    ],
+)
+def test_check_summary_counts_django_issues(tmp_path, output, detail):
+    make_project(tmp_path)
+    (tmp_path / "uv.lock").write_text("")
+
+    def run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 0, "", output if "check" in cmd else "")
+
+    with (
+        patch.object(init.shutil, "which", return_value="/usr/bin/uv"),
+        patch.object(init.subprocess, "run", side_effect=run),
+    ):
+        result = init.init_project(tmp_path, force=True)
+    assert next(step for step in result.steps if step.name == "check").detail == detail
+    assert any("manage.py check" in n for n in result.notes) == (detail != "no issues")
+    assert result.exit_code == 0
+
+
+def test_dry_run_of_a_done_step_without_planned_wording_falls_back_to_its_detail(
+    tmp_path, monkeypatch
+):
+    """#3213 review 6: a future plan_* returning DONE without the planned
+    wording must not print "would change" with an empty detail."""
+    make_project(tmp_path)
+    real = init.plan_settings
+
+    def without_planned(project):
+        change, step = real(project)
+        return change, init.Step(step.name, step.status, "custom detail")
+
+    monkeypatch.setattr(init, "plan_settings", without_planned)
+    result = init.init_project(tmp_path, dry_run=True, install=False)
+    row = next(step for step in result.steps if step.name == "mysite/settings.py")
+    assert (row.status, row.detail) == (init.PLANNED, "custom detail")

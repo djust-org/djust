@@ -28,6 +28,8 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C021 | Config | Error | `LIVEVIEW_CONFIG['worker_threads']` is not `None`, `False`, `True`, `"auto"` or an integer >= 0 |
 | C022 | Config | Error | `LIVEVIEW_CONFIG['event_parameter_policy']` is not `'legacy'` or `'strict'` (ADR-036) |
 | C023 | Config | Warning | A `channels_redis` core `RedisChannelLayer` host keeps redis-py 8's 5 s `socket_timeout`, which drops idle WebSockets (#3199) |
+| C024 | Config | Error | `DJUST_EXPLICIT_STATE_SAVE_TIMEOUT` is not a number of seconds greater than 0 and at most 10 |
+| C025 | Config | Error | `DJUST_WS_PATH` is not a path starting with a single `/` (#3186) |
 | V001 | LiveView | Warning | LiveView missing template_name attribute |
 | V002 | LiveView | Info | LiveView missing mount() method |
 | V003 | LiveView | Error | mount() has wrong signature |
@@ -208,6 +210,20 @@ console.log("debug info"); // noqa: Q003
 - **What it detects**: a `CHANNEL_LAYERS` entry uses `channels_redis.core.RedisChannelLayer` (or a subclass of it), redis-py 8 or later is installed, and at least one host does not set `socket_timeout` above 5 s (or `None`). redis-py 8 lowered the default `socket_timeout` to 5 s, the same as the layer's `BZPOPMIN` timeout, so an idle consumer's read times out and its WebSocket closes every few seconds (django/channels_redis#422). The check reads the timeout the way `redis.ConnectionPool.from_url` does: a `?socket_timeout=` in the URL (a URL host or a dict's `address`) overrides the dict's `socket_timeout` key, and a bare URL, a `(host, port)` tuple or an omitted `hosts` get the 5 s default. 10 is recommended: anything just above 5 s leaves little headroom for network and event-loop latency. Settings shapes channels_redis itself rejects (a non-dict `CONFIG`, a non-list `hosts`) are skipped rather than reported. The pub/sub layer is not checked.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C023"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C023"]`
 - **False positives**: None known. A backend path that cannot be imported at check time is not checked, so a subclass in such a module is missed; pinning `redis<8` also silences the check
+
+### C024 — Invalid `DJUST_EXPLICIT_STATE_SAVE_TIMEOUT`
+- **Severity**: Error
+- **Method**: Settings inspection
+- **What it detects**: `DJUST_EXPLICIT_STATE_SAVE_TIMEOUT` is set but is not an `int` or `float` greater than 0 and at most 10 (booleans, strings, NaN and infinity are rejected). The setting is how long, in seconds, an ADR-038 explicit turn waits for its state save, counted from when the save starts running (#3200). At runtime an invalid value falls back to the 0.15 s default.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C024"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C024"]` (the runtime still uses the default)
+- **False positives**: None
+
+### C025 — Invalid `DJUST_WS_PATH`
+- **Severity**: Error
+- **Method**: Settings inspection
+- **What it detects**: `DJUST_WS_PATH` is set to something other than a path starting with a single `/` (for example `"ws/live/"`, `"//host/ws/"` or `"wss://host/ws/"`). `{% djust_client_config %}` emits the setting as the WebSocket path; the client honors only a root-relative path, so it ignores any other value with a `console.warn` and connects to `/ws/live/` instead (#3186).
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C025"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C025"]`
+- **False positives**: None
 
 ---
 

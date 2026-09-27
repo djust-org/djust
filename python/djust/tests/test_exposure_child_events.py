@@ -165,18 +165,20 @@ async def test_parent_save_failure_forces_full_html_on_next_success(monkeypatch)
 
     runtime, transport, _ = await mount()
     transport.sent.clear()
-    original = SessionStore.asave
+    original = SessionStore.save
 
-    async def failed_save(self, *args, **kwargs):
+    # The explicit save runs in one Django-thread hop (#3200), so storage
+    # failures come from the sync ``save``.
+    def failed_save(self, *args, **kwargs):
         raise OSError("STORAGE_SECRET_SENTINEL")
 
-    monkeypatch.setattr(SessionStore, "asave", failed_save)
+    monkeypatch.setattr(SessionStore, "save", failed_save)
     event = {"type": "event", "event": "change_child", "params": {}}
     await runtime.dispatch_event(event)
     assert transport.errors
     assert runtime.view_instance._force_full_html
     assert not any(frame.get("type") in ("patch", "html_update") for frame in transport.sent)
-    monkeypatch.setattr(SessionStore, "asave", original)
+    monkeypatch.setattr(SessionStore, "save", original)
     transport.sent.clear()
     await runtime.dispatch_event(event)
     assert any(frame.get("type") == "html_update" for frame in transport.sent)
@@ -223,25 +225,51 @@ async def test_parent_child_save_failure_has_no_success_ack(failure, monkeypatch
 
     from django.contrib.sessions.backends.db import SessionStore
 
+    import threading
+
+    from djust import runtime as runtime_module
+
     runtime, transport, request = await mount()
     transport.sent.clear()
+    release = threading.Event()
     if failure == "auth":
         monkeypatch.setattr(EventChild, "check_permissions", lambda self, request: False)
     elif failure == "object":
         monkeypatch.setattr(EventChild, "has_object_permission", lambda self, request, obj: False)
     else:
-        original = SessionStore.asave
+        original = SessionStore.save
+        if failure == "timeout":
+            # A deterministic slow store: the save blocks the Django thread
+            # until the test releases it, so the deadline always passes first.
+            monkeypatch.setattr(runtime_module, "EVENT_STATE_SAVE_TIMEOUT_S", 0.05)
 
-        async def failed_save(self, *args, **kwargs):
+        def failed_save(self, *args, **kwargs):
             if failure == "timeout":
-                await asyncio.Event().wait()
+                release.wait(timeout=30)
             raise OSError("STORAGE_SECRET_SENTINEL")
 
-        monkeypatch.setattr(SessionStore, "asave", failed_save)
-    await runtime.dispatch_event(
-        {"type": "event", "event": "change_child", "params": {"skip": True}}
+        monkeypatch.setattr(SessionStore, "save", failed_save)
+    dispatch = asyncio.ensure_future(
+        runtime.dispatch_event({"type": "event", "event": "change_child", "params": {"skip": True}})
     )
+    try:
+        for _ in range(1000):
+            if transport.errors or dispatch.done():
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        release.set()
+    await asyncio.wait_for(dispatch, timeout=10)
+    # The abandoned save still runs; let the Django thread finish it (FIFO).
+    await sync_to_async(lambda: None)()
+    if runtime._explicit_catch_up is not None:
+        # The catch-up turn retries once storage answers; storage still fails
+        # here, so it ends in the terminal error instead of a success frame.
+        await asyncio.wait_for(runtime._explicit_catch_up, timeout=10)
     assert transport.errors
+    # A timed-out save is transient: withheld, but no "reload" (#3200).
+    assert bool(transport.errors[0].get("transient")) is (failure == "timeout")
+    assert not any(error.get("transient") for error in transport.errors[1:])
     assert not any(
         frame.get("type") in ("noop", "patch", "html_update") for frame in transport.sent
     )
@@ -255,7 +283,7 @@ async def test_parent_child_save_failure_has_no_success_ack(failure, monkeypatch
             if key.startswith("_djust_explicit_child_")
         )
     if failure in ("storage", "timeout"):
-        monkeypatch.setattr(SessionStore, "asave", original)
+        monkeypatch.setattr(SessionStore, "save", original)
     monkeypatch.setattr(EventChild, "check_permissions", lambda self, request: True)
     monkeypatch.setattr(EventChild, "has_object_permission", lambda self, request, obj: True)
     restored, _, _ = await mount(request.session.session_key)
@@ -303,12 +331,12 @@ async def test_post_handler_failure_does_not_save_or_send_success(mode, monkeypa
 
     runtime, transport, request = await mount()
     if mode == "storage":
-        original = SessionStore.asave
+        original = SessionStore.save
 
-        async def unavailable(self, *args, **kwargs):
+        def unavailable(self, *args, **kwargs):
             raise OSError("STORAGE_SECRET_SENTINEL")
 
-        monkeypatch.setattr(SessionStore, "asave", unavailable)
+        monkeypatch.setattr(SessionStore, "save", unavailable)
     await increment(runtime, mode)
     assert runtime.view_instance._get_child_view("menu")._handler_calls == 1
     assert transport.errors
@@ -316,7 +344,7 @@ async def test_post_handler_failure_does_not_save_or_send_success(mode, monkeypa
     assert "SECRET_SENTINEL" not in json.dumps(transport.sent)
     assert "SECRET_SENTINEL" not in caplog.text
     if mode == "storage":
-        monkeypatch.setattr(SessionStore, "asave", original)
+        monkeypatch.setattr(SessionStore, "save", original)
     restored, _, _ = await mount(request.session.session_key)
     assert restored.view_instance._get_child_view("menu").count == 1
 
@@ -336,30 +364,56 @@ async def test_render_failure_never_discloses_private_exception(monkeypatch, set
     assert not any(frame.get("type") == "embedded_update" for frame in transport.sent)
 
 
-async def test_child_save_timeout_is_cancelled_without_success_update(monkeypatch):
+async def test_child_save_timeout_is_withheld_and_lands_late(monkeypatch):
+    """A slow store: the deadline passes, the turn is withheld, the save lands.
+
+    The explicit save is one Django-thread hop (#3200). Sync work cannot be
+    cancelled, so the old "cancelled" contract is gone: the deadline stops the
+    WAIT, the turn answers with a transient error and no success frame, and
+    the blocked write completes once storage responds.
+    """
     import asyncio
+    import threading
 
     from django.contrib.sessions.backends.db import SessionStore
 
     from djust import runtime as runtime_module
 
-    runtime, transport, _ = await mount()
-    # The conftest raises the save bound for exposure tests (#3130). This test
-    # needs a bound that fires: a short one, but long enough that a loaded
-    # worker still reaches the stalled save before it expires (the save never
-    # finishes, so any finite bound cancels it). The production value itself
-    # is pinned by test_sticky_child_persistence_1471.
-    monkeypatch.setattr(runtime_module, "EVENT_STATE_SAVE_TIMEOUT_S", 1.0)
-    cancelled = []
+    runtime, transport, request = await mount()
+    # The conftest raises the save bound for exposure tests (#3130). The save
+    # below blocks until released, so a short bound always fires first.
+    monkeypatch.setattr(runtime_module, "EVENT_STATE_SAVE_TIMEOUT_S", 0.05)
+    release = threading.Event()
+    saved = []
+    original = SessionStore.save
 
-    async def stalled(self, *args, **kwargs):
-        try:
-            await asyncio.Event().wait()
-        finally:
-            cancelled.append(True)
+    def slow_save(self, *args, **kwargs):
+        release.wait(timeout=30)
+        original(self, *args, **kwargs)
+        saved.append(True)
 
-    monkeypatch.setattr(SessionStore, "asave", stalled)
-    await asyncio.wait_for(increment(runtime), timeout=10)  # hang guard only
-    assert cancelled == [True]
-    assert transport.errors
+    monkeypatch.setattr(SessionStore, "save", slow_save)
+    dispatch = asyncio.ensure_future(increment(runtime))
+    try:
+        for _ in range(1000):
+            if transport.errors or dispatch.done():
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        release.set()
+    await asyncio.wait_for(dispatch, timeout=10)  # hang guard only
+    assert [error.get("transient") for error in transport.errors] == [True]
+    assert "reload" not in transport.errors[0]["error"].lower()
     assert not any(frame.get("type") == "embedded_update" for frame in transport.sent)
+    # The abandoned save still runs, and the catch-up turn follows it.
+    await asyncio.wait_for(runtime._explicit_catch_up, timeout=10)
+    # Exactly two writes: the abandoned save landing late, then the ONE
+    # catch-up turn's commit (it re-commits so it covers whichever half of the
+    # turn was deferred). A catch-up loop would add more (#3206 review B-a).
+    assert saved == [True, True], saved
+    assert any(
+        f.get("type") == "html_update" and f.get("source") == "async" for f in transport.sent
+    ), "the catch-up turn must send full HTML"
+    monkeypatch.setattr(SessionStore, "save", original)
+    restored, _, _ = await mount(request.session.session_key)
+    assert restored.view_instance._get_child_view("menu").count == 2

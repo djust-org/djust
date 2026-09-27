@@ -302,6 +302,11 @@ navigation:
         file: guides/deployment.md
         order: 13
         level: intermediate
+      - title: Scaling djust
+        slug: scaling
+        file: guides/scaling.md
+        order: 13.4
+        level: advanced
       - title: Scaling Across Cores
         slug: scaling-across-cores
         file: guides/scaling-across-cores.md

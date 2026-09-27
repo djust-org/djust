@@ -13,6 +13,7 @@ import os
 import re
 import secrets
 import subprocess
+import sys
 import tarfile
 import threading
 import time
@@ -208,6 +209,20 @@ def _api_headers(creds: dict) -> dict:
     }
 
 
+def _stdin_is_tty() -> bool:
+    """True when stdin is a terminal a prompt can read an answer from.
+
+    Without one (CI, a script, a pipe), ``click.confirm`` / ``click.prompt``
+    read EOF and click aborts with a bare ``Error:`` — so callers check
+    this first and fail with a message that names the flag to pass.
+    """
+    try:
+        return sys.stdin.isatty()
+    except (AttributeError, ValueError):
+        # stdin replaced by an object without isatty, or already closed.
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Project-slug resolution
 # ---------------------------------------------------------------------------
@@ -338,8 +353,8 @@ def _resolve_project_slug(
       3. Interactive prompt — and offer to save the answer back so future
          runs find it in pyproject.toml.
 
-    Raises ``click.ClickException`` if ``interactive=False`` and (1) and
-    (2) both miss.
+    Raises ``click.ClickException`` if (1) and (2) both miss and either
+    ``interactive=False`` or stdin is not a TTY to prompt on.
     """
     if arg:
         return arg
@@ -347,7 +362,7 @@ def _resolve_project_slug(
     if saved:
         click.echo(f"Using project slug from pyproject.toml: {saved}")
         return saved
-    if not interactive:
+    if not interactive or not _stdin_is_tty():
         raise click.ClickException(
             "No project slug provided and none found in pyproject.toml "
             "[tool.djust.deploy].project. Pass it as a positional argument."
@@ -479,6 +494,7 @@ def _ensure_project_exists(
       | 404               | True        | (n/a)  | raise (fail-fast)     |
       | 404               | False       | True   | create, no prompt     |
       | 404               | False       | False  | confirm, then create  |
+      |                   |             |        | (raise if no TTY)     |
       | other (5xx/etc)   | (n/a)       | (n/a)  | use slug + warn       |
     """
     try:
@@ -510,6 +526,13 @@ def _ensure_project_exists(
             f"Project '{project_slug}' not found on {server} and "
             "--no-create was passed. Create the project first or drop "
             "--no-create to be prompted."
+        )
+
+    if not yes and not _stdin_is_tty():
+        raise click.ClickException(
+            f"Project '{project_slug}' doesn't exist on djustlive yet, and there "
+            "is no TTY to confirm creating it: pass --yes to create the project, "
+            "or --no-create to fail without asking."
         )
 
     if not yes and not click.confirm(
@@ -1011,8 +1034,11 @@ def logout(ctx: click.Context) -> None:
 @click.pass_context
 def status(ctx: click.Context, project: Optional[str]) -> None:
     """Show current deployment status. Optionally filter by PROJECT slug."""
-    creds = load_credentials()
     server = ctx.obj["server"]
+    # Same resolver as `deploy`, so an expired OAuth access token is
+    # refreshed rather than sent as-is and 401'd. Non-interactive: a
+    # status query never opens a browser login.
+    creds = _ensure_logged_in(server, interactive=False)
 
     params = {}
     if project:
