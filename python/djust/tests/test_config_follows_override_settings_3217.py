@@ -355,6 +355,60 @@ def _reload_during(monkeypatch, write):
     assert reloads
 
 
+def test_lock_free_readers_never_see_a_write_in_progress():
+    """#3218 review: ``get()``/``as_dict()`` copy the live dict without the
+    lock. If a writer mutated it in place, a reader copying it raised
+    ``RuntimeError: dictionary changed size during iteration`` (reproduced
+    within seconds under a tiny switch interval). Writers are copy-on-write,
+    so a reader only ever copies a dict nobody is changing. Bounded: one
+    writer adds new keys for 1.5 s while two readers copy continuously."""
+    import sys
+    import threading
+    import time
+
+    from djust.config import LiveViewConfig
+
+    cfg = LiveViewConfig()
+    errors: list = []
+    stop = threading.Event()
+
+    def writer():
+        i = 0
+        while not stop.is_set():
+            cfg.set("rate_limit.extra_%d" % i, i)
+            cfg.update({"extra_top_%d" % i: i})
+            i += 1
+
+    def reader(read):
+        while not stop.is_set():
+            try:
+                read()
+            except RuntimeError as exc:  # dictionary changed size during iteration
+                errors.append(exc)
+                return
+
+    threads = [
+        threading.Thread(target=writer),
+        threading.Thread(target=reader, args=(lambda: cfg.get("rate_limit"),)),
+        threading.Thread(target=reader, args=(cfg.as_dict,)),
+    ]
+    old = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        for thread in threads:
+            thread.start()
+        deadline = time.monotonic() + 1.5
+        while time.monotonic() < deadline and not errors:
+            time.sleep(0.05)
+    finally:
+        stop.set()
+        for thread in threads:
+            thread.join(timeout=10)
+        sys.setswitchinterval(old)
+    assert not any(thread.is_alive() for thread in threads)
+    assert not errors, errors[0]
+
+
 def test_a_reload_racing_set_does_not_lose_the_value(monkeypatch):
     try:
         _reload_during(monkeypatch, lambda: config.set("css_framework", "race_probe_3218"))

@@ -437,12 +437,16 @@ class LiveViewConfig:
     def _load_from_settings(self) -> None:
         """Load configuration from Django settings, in place, if available."""
         with self._lock:
-            loaded, contrib = self._apply_settings(self._config)
+            # Copy-on-write (#3218 review): readers iterate ``_config``
+            # without the lock, so it is never mutated in place.
+            new = _detached(self._config)
+            loaded, contrib = self._apply_settings(new)
             if loaded:
                 self._settings_loaded = True
                 self._contrib = contrib
-            self._validate_config(self._config)
-            self._sync_vdom_trace(self._config)
+            self._validate_config(new)
+            self._config = new
+            self._sync_vdom_trace(new)
 
     def _apply_settings(self, target: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
         """Apply the Django settings the config reads onto ``target``.
@@ -662,10 +666,14 @@ class LiveViewConfig:
 
         The write and its record happen under one lock, so a reload on
         another thread cannot fall between them and drop the value (#3218).
+        The write is copy-on-write: a new dict is built and swapped in, so a
+        lock-free reader copying the old one never sees it change size.
         """
         with self._lock:
-            _set_path(self._config, key, _detached(value))
+            new = _detached(self._config)
+            _set_path(new, key, _detached(value))
             self._record_programmatic(key, value)
+            self._config = new
 
     def get_framework_class(self, class_type: str) -> str:
         """
@@ -740,9 +748,11 @@ class LiveViewConfig:
             })
         """
         with self._lock:
-            self._config.update(_detached(config_dict))
+            new = _detached(self._config)  # copy-on-write, as in ``set()``
+            new.update(_detached(config_dict))
             for key, value in config_dict.items():
                 self._record_programmatic(key, value)
+            self._config = new
 
     def as_dict(self) -> Dict[str, Any]:
         """Get the entire configuration as a dictionary: a copy, nested dicts
