@@ -43,6 +43,7 @@ import hashlib
 import inspect
 import json
 import logging
+import os
 import re
 import sys
 import threading
@@ -204,23 +205,73 @@ def _leave_request_executors() -> None:
     SyncToAsync.thread_sensitive_context.set(None)  # type: ignore[arg-type]
 
 
-#: The thread request-scoped saves run on (#3212); created on first use.
+#: Threads for saves made inside a request's executors (#3212). A pool, not
+#: one thread: one hung store write must not hold every other session's save
+#: (review B2). A runtime has at most one save in flight
+#: (:func:`_run_explicit_save`), so a pool keeps each view's saves ordered.
+_SAVE_POOL_SIZE = min(32, (os.cpu_count() or 1) * 4)
 _save_executor: Optional[ThreadPoolExecutor] = None
 _save_executor_lock = threading.Lock()
 
 
-def _request_save_executor() -> ThreadPoolExecutor:
-    """One long-lived thread for saves made inside a request's executors.
+def _close_old_connections_quietly() -> None:
+    from django.db import close_old_connections
 
-    Its thread is started from an EMPTY context: on Python 3.14+ a new thread
-    copies its starter's context, and this one lives as long as the process
-    (the worker pool does the same, #3114).
+    try:
+        close_old_connections()
+    except Exception:  # noqa: BLE001 - never fail a save over connection hygiene
+        # Value-free: a database error's message can carry query values.
+        logger.warning("djust state save: close_old_connections() failed")
+
+
+def _run_with_connection_hygiene(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    """One job on a long-lived save thread, bracketed like a request (#3095).
+
+    A request thread gets ``close_old_connections()`` from
+    ``request_started``/``request_finished``; these threads live as long as
+    the process, so without it ``CONN_MAX_AGE`` and ``CONN_HEALTH_CHECKS``
+    never apply and a connection broken under a thread (a failover, an idle
+    timeout) stays broken for every later save on it (review B1).
+    """
+    _close_old_connections_quietly()
+    try:
+        return fn(*args, **kwargs)
+    finally:
+        _close_old_connections_quietly()
+
+
+class _SaveExecutor(ThreadPoolExecutor):
+    """The save pool: every job runs with the connection hygiene above."""
+
+    def submit(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
+        return super().submit(_run_with_connection_hygiene, fn, *args, **kwargs)
+
+
+def _request_save_executor() -> ThreadPoolExecutor:
+    """The long-lived pool for saves made inside a request's executors.
+
+    Every thread is started here, from an EMPTY context: on Python 3.14+ a new
+    thread copies its starter's context, and these live as long as the
+    process (the worker pool does the same, #3114). ``ThreadPoolExecutor``
+    starts a thread only when none is idle, so the warm-up jobs hold a barrier
+    until all of them run at once.
     """
     global _save_executor
     with _save_executor_lock:
         if _save_executor is None:
-            executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="djust-state-save")
-            contextvars.Context().run(executor.submit, lambda: None)
+            size = _SAVE_POOL_SIZE
+            executor = _SaveExecutor(max_workers=size, thread_name_prefix="djust-state-save")
+            barrier = threading.Barrier(size)
+
+            def warm() -> None:
+                try:
+                    barrier.wait(timeout=5)
+                except threading.BrokenBarrierError:
+                    pass
+
+            empty = contextvars.Context()
+            for _ in range(size):
+                empty.run(ThreadPoolExecutor.submit, executor, warm)
             _save_executor = executor
         return _save_executor
 
@@ -233,7 +284,7 @@ def _spawn_save(run: Callable[[], None]) -> "asyncio.Future[None]":
     request's end: ``ThreadSensitiveContext.__aexit__`` waits for the executor,
     which blocked the EVENT LOOP on the SSE event POST until storage answered,
     and under sync middleware it held the request's bridge thread. Inside a
-    request's executors the save therefore runs on a dedicated thread of its
+    request's executors the save therefore runs on a dedicated pool of its
     own, so a request ends when its turn does. It is not the loop's shared
     sync thread: the request's own sync code may be running there, waiting for
     this turn. Anywhere else (a WebSocket session, a ``PooledHTTP`` request)
@@ -245,6 +296,10 @@ def _spawn_save(run: Callable[[], None]) -> "asyncio.Future[None]":
     call = sync_to_async(run, thread_sensitive=False, executor=_request_save_executor())
     return asyncio.ensure_future(call())
 
+
+#: How long a save may wait for a thread before its turn is deferred (#3212).
+#: The explicit cap, since this is not storage time.
+_SAVE_START_TIMEOUT_S = 10.0
 
 #: Consecutive deferred saves after which a deferral is reported as the terminal
 #: reload error, as before #3200: storage is not recovering (review I-a).
@@ -308,7 +363,15 @@ async def _run_explicit_save(
     owner._explicit_save_pending = work
     owner._explicit_save_started_at = loop.time()
     try:
-        await asyncio.wait({started, work}, return_when=asyncio.FIRST_COMPLETED)
+        # The wait for a thread is bounded too: a save queued past the cap
+        # (every thread busy, or the session's sync thread wedged) is deferred
+        # rather than holding the turn (#3212 review B2). It still runs when a
+        # thread frees, and the runtime's next save waits for it.
+        await asyncio.wait(
+            {started, work}, timeout=_SAVE_START_TIMEOUT_S, return_when=asyncio.FIRST_COMPLETED
+        )
+        if not started.done() and not work.done():
+            raise asyncio.TimeoutError
         await asyncio.wait_for(asyncio.shield(work), timeout=deadline)
     except asyncio.TimeoutError:
         if work.done():
@@ -5341,23 +5404,10 @@ class ViewRuntime:
             record_event_end(view, _tt_snapshot, error=_tt_error)
             await self._push_tt_event(view, _tt_snapshot)
 
-        # New concrete bindings keep their opaque lifetime IDs and state in the
-        # native component-session record. They return before the ordinary view
-        # event save below, so use the same persistence here: the bounded,
-        # opt-in save for a legacy view, and the explicit commit (E3) for an
-        # explicit one, whose output handlers can write declared fields. The
-        # snapshot flag means nothing to an explicit view (#3211).
-        if isinstance(component, ComponentDeclaration) and view is self.view_instance:
-            from ._exposure import uses_legacy_exposure
-
-            if not uses_legacy_exposure(view):
-                if not await self.commit_explicit_turn(view, source="event"):
-                    return True
-            elif getattr(view, "enable_state_snapshot", False):
-                await self._persist_state_after_event(view, event_name)
-
         # Propagate the component event to the PARENT view's waiters with the
         # component_id injected (ADR-002 Phase 1b/1c, websocket.py:3456-3479).
+        # Before the save, as the view route notifies before it commits: a
+        # failed or deferred save must not hide the event from its waiters.
         notify_kwargs = dict(coerced_event_data or {})
         notify_kwargs.setdefault("component_id", component_id)
         self._notify_waiters_safely(
@@ -5367,6 +5417,23 @@ class ViewRuntime:
             log_message="Waiter notification for component event %r on %s failed: %s",
             log_args=(event_name, component_id),
         )
+
+        # Component events return before the ordinary view event save below,
+        # so persist here. An explicit view commits (E3) on EVERY component
+        # event: a declaration's output handler, or a component's
+        # ``send_parent``, can write the view's declared fields, and the
+        # snapshot flag means nothing to it (#3211). A legacy view keeps the
+        # bounded, opt-in save for the new concrete bindings, as before.
+        if view is self.view_instance:
+            from ._exposure import uses_legacy_exposure
+
+            if not uses_legacy_exposure(view):
+                if not await self.commit_explicit_turn(view, source="event"):
+                    return True
+            elif isinstance(component, ComponentDeclaration) and getattr(
+                view, "enable_state_snapshot", False
+            ):
+                await self._persist_state_after_event(view, event_name)
 
         from ._async_batch import AsyncBatch
 

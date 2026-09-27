@@ -4161,7 +4161,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         return request
 
     async def _rederive_live_redirect_user(self, request: Any) -> None:
-        """Give the sticky re-check the user the explicit mount will run as (#3212).
+        """Give the sticky re-check the user the new mount will run as (#3212).
 
         ``_build_live_redirect_request`` takes the connect-time
         ``scope["user"]``. An explicit mount whose session has vanished runs
@@ -4169,15 +4169,27 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         (``establish_mount_session``, #3201), so the re-check does the same,
         through the same helper and the runtime's replacement map: the
         redirect's mount then reuses that replacement rather than creating
-        another. A live session keeps its user. Legacy pages keep the scope
-        user, as their mount does.
+        another. A live session keeps its user.
+
+        What decides it is the page being OPENED, as it does for the mount
+        (``dispatch_mount`` reads the new view's policy), not the page being
+        left: a legacy page redirecting to an explicit one re-checks as the
+        anonymous user, and an explicit page redirecting to a legacy one keeps
+        the scope user and mints nothing (#3229 review B3).
         """
         from ._exposure import uses_legacy_exposure
         from ._exposure_auth import establish_mount_session
 
-        view = self.view_instance
         runtime = getattr(self, "_runtime", None)
-        if request is None or view is None or runtime is None or uses_legacy_exposure(view):
+        if request is None or runtime is None:
+            return
+        match = getattr(request, "resolver_match", None)
+        target = getattr(getattr(match, "func", None), "view_class", None)
+        if target is None:
+            # Not a LiveView route: no explicit mount follows. Keep the
+            # current page's rule rather than guess.
+            target = self.view_instance
+        if target is None or uses_legacy_exposure(target):
             return
         presented = getattr(getattr(request, "session", None), "session_key", None)
         replacement = await sync_to_async(establish_mount_session)(

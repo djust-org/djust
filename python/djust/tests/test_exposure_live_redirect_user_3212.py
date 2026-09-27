@@ -51,7 +51,17 @@ class StickyChild(LiveView):
         super()._on_sticky_unmount()
 
 
-urlpatterns = [path("page/", Page.as_view()), path("next/", Page.as_view())]
+class LegacyStickyChild(LiveView):
+    exposure_policy = "legacy"
+    login_required = True
+    template = "<div dj-root></div>"
+
+
+urlpatterns = [
+    path("page/", Page.as_view()),
+    path("next/", Page.as_view()),
+    path("legacy/", LegacyPage.as_view()),
+]
 
 
 @pytest.fixture(autouse=True)
@@ -90,8 +100,8 @@ def _consumer(view, scope_session, user):
     return consumer
 
 
-async def _redirect_request(consumer):
-    request = consumer._build_live_redirect_request({"url": "/next/"})
+async def _redirect_request(consumer, url="/next/"):
+    request = consumer._build_live_redirect_request({"url": url})
     await consumer._rederive_live_redirect_user(request)
     return request
 
@@ -126,15 +136,53 @@ async def test_a_live_session_keeps_its_user(staged):
     assert consumer._runtime._replacement_sessions == {}
 
 
-async def test_a_legacy_page_is_unchanged(staged):
+async def test_a_redirect_to_a_legacy_page_keeps_the_scope_user(staged):
     """Legacy mounts do not re-derive the user (#3201 is explicit-only), so
-    neither does their sticky re-check."""
+    neither does the sticky re-check for a legacy TARGET, even from an
+    explicit page, and no replacement session is minted."""
+    user, scope_session = await sync_to_async(_user_and_session)(vanished=True)
+    consumer = _consumer(Page(), scope_session, user)
+
+    request = await _redirect_request(consumer, "/legacy/")
+
+    assert request.user == user
+    assert consumer._runtime._replacement_sessions == {}
+
+
+async def test_a_legacy_page_redirecting_to_an_explicit_page_rechecks_as_anonymous(staged):
+    """#3229 review B3: the new mount's user depends on the page being OPENED.
+    The first fix checked the page being left."""
     user, scope_session = await sync_to_async(_user_and_session)(vanished=True)
     consumer = _consumer(LegacyPage(), scope_session, user)
 
     request = await _redirect_request(consumer)
 
-    assert request.user == user
+    assert request.resolver_match.func.view_class is Page
+    assert request.user.is_authenticated is False
+
+
+async def test_legacy_login_required_sticky_does_not_survive_into_an_anonymous_explicit_page(
+    staged,
+):
+    """The reviewer's end-to-end probe: legacy sticky children reattach under
+    any parent, so a legacy page's login_required sticky child must be
+    re-checked as the user the explicit target mounts as."""
+    user, scope_session = await sync_to_async(_user_and_session)(vanished=True)
+    parent, child = LegacyPage(), LegacyStickyChild()
+    child.sticky, child.sticky_id = True, "child"
+    parent._register_child("child", child)
+    consumer = _consumer(parent, scope_session, user)
+    consumer._view_group = consumer._tick_task = None
+    consumer._flush_all_pending = AsyncMock()
+    consumer._resolve_view_path_from_url = lambda url: None
+
+    async def mount(*args, **kwargs):
+        consumer.view_instance = Page()
+
+    consumer.handle_mount = mount
+    await consumer.handle_live_redirect_mount({"url": "/next/", "view": __name__ + ".Page"})
+
+    assert not consumer._sticky_preserved
 
 
 async def test_login_required_sticky_child_does_not_survive_a_vanished_session(staged):

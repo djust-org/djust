@@ -241,3 +241,22 @@ async def test_the_shutdown_waits_for_an_event_still_being_dispatched():
     await closing
     assert view.count == 1
     assert session.active is False and session.view_instance is None
+
+
+async def test_a_turn_stuck_past_the_cap_does_not_keep_the_session_alive(monkeypatch, caplog):
+    """#3229 review I3: the wait for an in-flight turn is bounded. A turn stuck
+    in storage (here: the dispatch lock held and never released) must not
+    keep the closed session, its runtime and view alive indefinitely."""
+    monkeypatch.setattr(sse, "_CLOSE_DISPATCH_WAIT_S", 0.2)
+    key = await sync_to_async(_fresh_key)()
+    sid = str(uuid.uuid4())
+    session, stream = await _open(sid, key)
+    view = await _spawn(session, key)
+    await session._dispatch_lock.acquire()  # a turn that never finishes
+    try:
+        await asyncio.wait_for(stream.aclose(), 5)
+        assert session.active is False and session.view_instance is None
+        await _until(lambda: id(view) in CANCELLED, "the background task to be cancelled")
+        assert "still dispatching" in caplog.text
+    finally:
+        session._dispatch_lock.release()

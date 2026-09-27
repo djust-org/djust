@@ -164,14 +164,22 @@ async def test_a_save_that_really_outruns_the_bound_only_warns(caplog, monkeypat
 async def test_a_late_save_never_overwrites_a_newer_one(monkeypatch):
     """Turn N's save outruns its deadline and keeps running. Turn N+1 runs in
     another thread-sensitive context (as SSE requests do). N+1 waits for N, so
-    the order the store sees is N then N+1, never the reverse."""
+    the order the store sees is N then N+1, never the reverse.
+
+    Deterministic (the #3229 review's version): up to the save spawn, N+1
+    makes no thread hop, so a bounded number of loop yields reaches a definite
+    state, ordered (N+1 parked on N's save, which is still the pending one) or
+    unordered (N+1's save already spawned). Only the FIRST store call blocks,
+    so an unordered N+1 always lands first."""
     runtime, view, key = await _setup(count=1)
     release = threading.Event()
     written = []
+    calls = []
     original = SessionStore.save
 
     def recording_save(self, *args, **kwargs):
-        if not written:
+        calls.append(1)
+        if len(calls) == 1:
             release.wait(timeout=10)
         written.append(dict(self._session))
         return original(self, *args, **kwargs)
@@ -180,6 +188,7 @@ async def test_a_late_save_never_overwrites_a_newer_one(monkeypatch):
     monkeypatch.setattr(runtime_module, "EVENT_STATE_SAVE_TIMEOUT_S", 0.1)
     try:
         await runtime._persist_state_after_event(view, "first")  # times out, still running
+        first = runtime._explicit_save_pending
         view.count = 2
         monkeypatch.setattr(runtime_module, "EVENT_STATE_SAVE_TIMEOUT_S", 5.0)
 
@@ -188,7 +197,10 @@ async def test_a_late_save_never_overwrites_a_newer_one(monkeypatch):
                 await runtime._persist_state_after_event(view, "second")
 
         second = asyncio.ensure_future(second_turn())
-        await asyncio.sleep(0.05)  # N+1 is started and waiting, or (unordered) done
+        for _ in range(50):
+            await asyncio.sleep(0)
+        if runtime._explicit_save_pending is not first:
+            await second  # unordered: its save does not block, so it lands first
     finally:
         release.set()
     await second

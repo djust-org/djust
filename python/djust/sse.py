@@ -88,6 +88,11 @@ _STREAM_START_DEADLINE_S = 30.0
 # Allows in-flight event POSTs to still find the session briefly.
 _SESSION_LINGER_S = 5.0
 
+#: How long a closed stream waits for an event POST still being dispatched on
+#: its session before disposing it anyway (#3221 review I3): the explicit
+#: save cap.
+_CLOSE_DISPATCH_WAIT_S = 10.0
+
 # ---- Resource-exhaustion caps (Finding #25, CWE-770/CWE-400) ----------------
 # The WebSocket transport throttles abusive clients via ConnectionRateLimiter;
 # the SSE stream-GET path had no equivalent ceiling, so a scripted client could
@@ -240,6 +245,24 @@ def _unregister_sse_session(session_id: str, session: "SSESession") -> None:
             del _sse_sessions[session_id]
 
 
+def _carry_save_ordering(old_runtime: Any, new_runtime: Any) -> None:
+    """Order a new runtime's saves after an old runtime's still-running one.
+
+    Saves are ordered per runtime (``_run_explicit_save``). On SSE a
+    navigation and a reconnect each create a new runtime for the same browser
+    session, and a save writes the whole session, so an old save landing late
+    could overwrite what the new page wrote (#3212 review N3). The single
+    save thread used to order them by accident; with a pool, the new runtime
+    starts out waiting for the old one's save instead.
+    """
+    pending = getattr(old_runtime, "_explicit_save_pending", None)
+    if pending is None or pending.done():
+        return
+    if getattr(new_runtime, "_explicit_save_pending", None) is None:
+        new_runtime._explicit_save_pending = pending
+        new_runtime._explicit_save_started_at = old_runtime._explicit_save_started_at
+
+
 async def _linger() -> None:
     """The closed stream's grace period for in-flight event POSTs."""
     await asyncio.sleep(_SESSION_LINGER_S)
@@ -250,20 +273,40 @@ async def _shutdown_closed_session(session: "SSESession") -> None:
 
     Cancels its view's background work and waiters, removes upload temp files
     and runs unregister hooks. Runs after the linger and after an event POST
-    still being dispatched has finished, so no turn is torn down mid-way.
+    still being dispatched has finished (waited for up to
+    ``_CLOSE_DISPATCH_WAIT_S``), so no turn is torn down mid-way. Only an
+    explicit view is disposed (``SSESession.shutdown``). Its app hooks run
+    after the linger, so after a reconnect's mount (unlike a WebSocket
+    disconnect).
 
     Always this stream's OWN session. When a same-owner reconnect has already
     replaced it under the id, the reconnect mounted a new session with its own
     view; nothing routes to the old one any more, so it is disposed too, and
     the replacement is untouched.
     """
+    lock = session._dispatch_lock
+    acquired = False
     try:
-        async with session._dispatch_lock:
-            session.shutdown()
+        try:
+            # Bounded (review I3): a turn stuck in storage must not keep the
+            # closed session, its runtime and view alive indefinitely. By the
+            # cap the turn has finished or is wedged, and a closed stream has
+            # nobody to send its frame to.
+            acquired = await asyncio.wait_for(lock.acquire(), timeout=_CLOSE_DISPATCH_WAIT_S)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "SSE: closed session %s still dispatching after %ss; disposing it anyway",
+                sanitize_for_log(session.session_id),
+                _CLOSE_DISPATCH_WAIT_S,
+            )
+        session.shutdown()
     except Exception:  # noqa: BLE001 — view hooks are app code; values stay out of logs
         logger.warning(
             "SSE: shutting down closed session %s failed", sanitize_for_log(session.session_id)
         )
+    finally:
+        if acquired:
+            lock.release()
 
 
 class _StreamGuard:
@@ -520,6 +563,9 @@ class SSESession:
                 self.runtime = ViewRuntime(
                     SSESessionTransport(self), rate_limiter=self._rate_limiter
                 )
+                # The old page's save may still be running (#3212): the new
+                # page's saves wait for it, so it cannot land over them.
+                _carry_save_ordering(old_runtime, self.runtime)
                 watch_diagnostic_owner(self.runtime, "view_instance")
                 await self.runtime.dispatch_mount(
                     {
@@ -928,6 +974,11 @@ class DjustSSEStreamView(View):
             session._client_ip = _client_ip_from_request(request)
             session._owner_user_pk = owner_user_pk
             session._owner_session_key = owner_session_key
+            # A same-owner reconnect: order the new mount's saves after any
+            # save the previous session's view still has running (#3212).
+            previous = _sse_sessions.get(session_id)
+            if previous is not None and _owner_identity(previous) == _owner_identity(session):
+                _carry_save_ordering(previous.runtime, session.runtime)
             # Stash the REAL HTTP request so the runtime mounts against it (real
             # request.user / session / path for auth + object-perm) — the converged
             # runtime mount path reads it via SSESessionTransport.build_request
