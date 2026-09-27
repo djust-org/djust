@@ -129,6 +129,7 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         # ADR-038 E2-1: the keys registered providers rendered this pass.
         "_explicit_context_provider_keys",
         "_djust_child_disposed",
+        "_djust_waiters_closed",
         "_async_task_handles",
         "_async_tasks",
         "_async_pending",

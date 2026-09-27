@@ -80,24 +80,29 @@ def dispose_child_subtree(child: Any, *, navigation: bool = False) -> None:
 
 
 def cancel_replaced_legacy_waiters(view: Any) -> None:
-    """Cancel a legacy view's ``wait_for_event`` waiters when navigation replaces it (#3236).
+    """Close a legacy view's ``wait_for_event`` waiters when navigation replaces it (#3236).
 
     An explicit view replaced by navigation is disposed through
     :func:`dispose_child_subtree`, which cancels its waiters. A legacy view is
-    not disposed, and its waiters have no default timeout, so without this the
-    ``start_async`` / ``@background`` task blocked on one (and through it the
-    view) stays alive for the life of the connection. The WebSocket
-    disconnect and the SSE close cancel them the same way. The view's other
-    background work is left to run, as on those paths.
+    not disposed, and its waiters have no default timeout. Nothing strong
+    holds a waiter's future except the view, so the view, the future and the
+    ``start_async`` / ``@background`` task blocked on it became an unreachable
+    cycle: the garbage collector destroyed the task while it was still pending
+    ("Task was destroyed but it is pending!"), closing its coroutine with
+    ``GeneratorExit``, so its ``except CancelledError`` cleanup never ran.
 
-    Shared by both replacement paths: ``LiveViewConsumer.handle_live_redirect_mount``
-    and ``SSESession._replace_view``. Best effort: a failure is logged without
+    This cancels them, so the task gets ``CancelledError`` and runs its
+    cleanup, and closes the view to later waiters (``_close_waiters``): the
+    view's background work keeps running, as on disconnect, and a
+    ``wait_for_event`` it starts afterwards fails at once. Shared by both
+    replacement paths, ``LiveViewConsumer.handle_live_redirect_mount`` and
+    ``SSESession._replace_view``. Best effort: a failure is logged without
     its value and never breaks the navigation.
     """
-    cancel = getattr(view, "_cancel_all_waiters", None)
-    if not callable(cancel):
+    close = getattr(view, "_close_waiters", None)
+    if not callable(close):
         return
     try:
-        cancel(reason="view_navigation")
+        close(reason="view_navigation")
     except Exception:  # noqa: BLE001 — cleanup must never break a navigation
         logger.warning("Cancelling a replaced legacy view's waiters failed")

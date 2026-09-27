@@ -2494,9 +2494,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # Cancel any pending wait_for_event waiters (ADR-002 Phase 1b).
         # @background tasks awaiting on a waiter unblock with CancelledError
         # and can clean up themselves — without this they'd leak the Future.
-        if self.view_instance and hasattr(self.view_instance, "_cancel_all_waiters"):
+        # Closed, not just cancelled: the view's background work keeps
+        # running and must not register a waiter nothing would cancel (#3236).
+        if self.view_instance and hasattr(self.view_instance, "_close_waiters"):
             try:
-                self.view_instance._cancel_all_waiters(reason="view_disconnect")
+                self.view_instance._close_waiters(reason="view_disconnect")
             except Exception as e:
                 logger.warning("Error cancelling waiters: %s", e)
 

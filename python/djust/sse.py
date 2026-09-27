@@ -691,9 +691,11 @@ def _release_legacy_view(view: Any) -> None:
             view._cleanup_uploads()
         except Exception:  # noqa: BLE001
             logger.warning("SSE: cleaning up a closed legacy view's uploads failed")
-    if hasattr(view, "_cancel_all_waiters"):
+    if hasattr(view, "_close_waiters"):
         try:
-            view._cancel_all_waiters(reason="view_disconnect")
+            # Closed, not just cancelled: the view's background work keeps
+            # running and must not register a waiter nothing cancels (#3236).
+            view._close_waiters(reason="view_disconnect")
         except Exception:  # noqa: BLE001
             logger.warning("SSE: cancelling a closed legacy view's waiters failed")
     if hasattr(view, "_child_views"):

@@ -1,17 +1,26 @@
-"""#3236: navigation cancels a replaced legacy view's ``wait_for_event`` waiters.
+"""#3236: a replaced or disconnected legacy view's ``wait_for_event`` waiters are closed.
 
 When navigation replaces a view — ``live_redirect`` on the WebSocket,
 ``_replace_view`` on SSE — an explicit view is disposed through
 ``dispose_child_subtree`` (which cancels its waiters), but a legacy view only
 had its uploads (and, on SSE, its children) cleaned up. Its waiters were never
-cancelled, and they have no default timeout, so the background task blocked on
-one, and through it the whole view, stayed alive for the life of the
-connection. A disconnect cancels them; navigation now does too.
+cancelled. Nothing strong holds a waiter's future except the view, so the
+view, the future and the background task blocked on it became an unreachable
+cycle: the garbage collector destroyed the task while it was still pending
+("Task was destroyed but it is pending!"), closing its coroutine with
+``GeneratorExit``, so its ``except CancelledError`` cleanup never ran.
+
+Navigation now cancels them, so the task's own cleanup runs. It also closes the
+view to later waiters (#3242 review M2): the view's background work keeps
+running, and a ``wait_for_event`` it starts after the navigation, or after a
+disconnect, fails at once instead of registering a waiter nothing cancels.
 
 Both transports are driven through their real entry points: a
 ``WebsocketCommunicator`` against ``LiveViewConsumer``, and the SSE stream and
-message views. The waiter is awaited by the view's own ``start_async`` work,
-the realistic shape (a guided tour waiting for the user's next click).
+message views. The waiters are awaited by the view's own ``start_async`` work,
+the realistic shape (a guided tour waiting for the user's next click). Views
+are told apart by a tag set at mount, not ``id()``, which a collected view's
+successor can reuse.
 """
 
 import asyncio
@@ -33,12 +42,13 @@ from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
 
-#: Weak references to every mounted tour view, and the ids of views whose
-#: waiting task started, was cancelled, or got an answer.
+#: Weak references to every mounted tour view, and ``(what, tag)`` records of
+#: what each view's background work did: "waiting", "cleanup" (its
+#: ``except CancelledError`` block ran), "answered".
 VIEWS: list = []
-WAITING: set = set()
-CANCELLED: list = []
-ANSWERED: list = []
+EVENTS: list = []
+#: Per-tag gates that hold the late-waiter task back until the test opens them.
+GATES: dict = {}
 
 
 class TourPage(LiveView):
@@ -48,6 +58,7 @@ class TourPage(LiveView):
     template = "<div dj-root><span>tour</span></div>"
 
     def mount(self, request, **kwargs):
+        self.tag = uuid.uuid4().hex
         VIEWS.append(weakref.ref(self))
 
     @event_handler()
@@ -55,19 +66,33 @@ class TourPage(LiveView):
         self.start_async(self._wait_for_next, name="tour")
 
     @event_handler()
+    def start_late_tour(self, **kwargs):
+        GATES[self.tag] = asyncio.Event()
+        self.start_async(self._wait_later, name="late")
+
+    @event_handler()
     def next_step(self, **kwargs):
         pass
 
     async def _wait_for_next(self):
-        WAITING.add(id(self))
+        EVENTS.append(("waiting", self.tag))
         try:
             await self.wait_for_event("next_step")
         except asyncio.CancelledError:
-            CANCELLED.append(id(self))
+            EVENTS.append(("cleanup", self.tag))
             raise
-        finally:
-            WAITING.discard(id(self))
-        ANSWERED.append(id(self))
+        EVENTS.append(("answered", self.tag))
+
+    async def _wait_later(self):
+        """Some work first (the navigation happens meanwhile), then a wait."""
+        EVENTS.append(("working", self.tag))
+        await GATES[self.tag].wait()
+        try:
+            await self.wait_for_event("next_step")
+        except asyncio.CancelledError:
+            EVENTS.append(("late-refused", self.tag))
+            raise
+        EVENTS.append(("answered", self.tag))
 
     def handle_async_result(self, name, result=None, error=None):
         pass
@@ -88,9 +113,8 @@ OTHER = __name__ + ".OtherPage"
 def setup(monkeypatch):
     monkeypatch.setattr(sse, "_SESSION_LINGER_S", 0)
     VIEWS.clear()
-    WAITING.clear()
-    CANCELLED.clear()
-    ANSWERED.clear()
+    EVENTS.clear()
+    GATES.clear()
     _sse_sessions.clear()
     with override_settings(
         ROOT_URLCONF=__name__, LIVEVIEW_ALLOWED_MODULES=["djust", __name__], DEBUG=False
@@ -107,6 +131,16 @@ async def _until(predicate, what):
     raise AssertionError("timed out waiting for " + what)
 
 
+def _assert_cleaned_up(view_ref, tag):
+    """The task got ``CancelledError`` and ran its own cleanup (before the fix
+    it was destroyed pending at GC time and that block never ran)."""
+    assert ("cleanup", tag) in EVENTS
+    assert ("answered", tag) not in EVENTS
+    view = view_ref()  # the view may already be collected, which is fine
+    assert view is None or view._waiters == {}
+    del view
+
+
 async def _assert_collectable(ref, what):
     """The replaced view must be garbage once its waiting task has ended."""
     for _ in range(50):
@@ -118,8 +152,20 @@ async def _assert_collectable(ref, what):
     raise AssertionError(what + " is still alive; referrers: " + ", ".join(holders))
 
 
+async def _assert_late_wait_refused(view_ref, tag):
+    """Open the gate: the task's ``wait_for_event`` must fail at once and
+    leave no waiter registered on the discarded view."""
+    view = view_ref()
+    assert view is not None
+    GATES[tag].set()
+    await _until(lambda: ("late-refused", tag) in EVENTS, "the late wait to be refused")
+    assert ("answered", tag) not in EVENTS
+    assert view._waiters == {}
+    del view
+
+
 # --------------------------------------------------------------------------- #
-# WebSocket: live_redirect_mount
+# WebSocket
 # --------------------------------------------------------------------------- #
 
 
@@ -128,7 +174,7 @@ async def _ws_drain(communicator):
         await communicator.receive_json_from(timeout=2)
 
 
-async def test_websocket_live_redirect_cancels_the_legacy_views_waiter():
+async def _ws_mounted_tour(event):
     pytest.importorskip("channels")
     from channels.testing import WebsocketCommunicator
 
@@ -137,32 +183,54 @@ async def test_websocket_live_redirect_cancels_the_legacy_views_waiter():
     communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     connected, _ = await communicator.connect()
     assert connected
+    await communicator.receive_json_from(timeout=2)  # connect ack
+    await communicator.send_json_to({"type": "mount", "view": TOUR, "url": "/tour/"})
+    await _ws_drain(communicator)
+    assert len(VIEWS) == 1
+    view_ref = VIEWS[0]
+    tag = view_ref().tag
+    await communicator.send_json_to({"type": "event", "event": event, "params": {}})
+    return communicator, view_ref, tag
+
+
+async def _ws_redirect_away(communicator):
+    await communicator.send_json_to(
+        {"type": "live_redirect_mount", "view": OTHER, "url": "/other/", "params": {}}
+    )
+    await _ws_drain(communicator)
+
+
+async def test_websocket_live_redirect_cancels_the_legacy_views_waiter():
+    communicator, view_ref, tag = await _ws_mounted_tour("start_tour")
     try:
-        await communicator.receive_json_from(timeout=2)  # connect ack
-        await communicator.send_json_to({"type": "mount", "view": TOUR, "url": "/tour/"})
-        await _ws_drain(communicator)
-        assert len(VIEWS) == 1
-        view_ref = VIEWS[0]
-        tour_id = id(view_ref())
-        await communicator.send_json_to({"type": "event", "event": "start_tour", "params": {}})
-        await _until(lambda: tour_id in WAITING, "the tour to start waiting")
-        assert view_ref()._waiters
-
-        await communicator.send_json_to(
-            {"type": "live_redirect_mount", "view": OTHER, "url": "/other/", "params": {}}
-        )
-        await _ws_drain(communicator)
-
-        await _until(lambda: tour_id in CANCELLED, "the replaced view's waiter to be cancelled")
-        assert tour_id not in WAITING and ANSWERED == []
-        assert view_ref()._waiters == {}
+        await _until(lambda: ("waiting", tag) in EVENTS, "the tour to start waiting")
+        await _ws_redirect_away(communicator)
+        await _until(lambda: ("cleanup", tag) in EVENTS, "the replaced view's waiter cleanup")
+        _assert_cleaned_up(view_ref, tag)
         await _assert_collectable(view_ref, "the replaced legacy view")
     finally:
         await communicator.disconnect()
 
 
+async def test_websocket_a_waiter_started_after_live_redirect_is_refused():
+    communicator, view_ref, tag = await _ws_mounted_tour("start_late_tour")
+    try:
+        await _until(lambda: ("working", tag) in EVENTS, "the late task to start")
+        await _ws_redirect_away(communicator)
+        await _assert_late_wait_refused(view_ref, tag)
+    finally:
+        await communicator.disconnect()
+
+
+async def test_websocket_a_waiter_started_after_disconnect_is_refused():
+    communicator, view_ref, tag = await _ws_mounted_tour("start_late_tour")
+    await _until(lambda: ("working", tag) in EVENTS, "the late task to start")
+    await communicator.disconnect()
+    await _assert_late_wait_refused(view_ref, tag)
+
+
 # --------------------------------------------------------------------------- #
-# SSE: _replace_view
+# SSE
 # --------------------------------------------------------------------------- #
 
 
@@ -193,7 +261,7 @@ async def _post(session, key, body):
     return response
 
 
-async def test_sse_navigation_cancels_the_legacy_views_waiter(caplog):
+async def _sse_mounted_tour(event):
     key = await sync_to_async(_fresh_key)()
     sid = str(uuid.uuid4())
     request = await sync_to_async(_request)(
@@ -204,22 +272,44 @@ async def test_sse_navigation_cancels_the_legacy_views_waiter(caplog):
     stream = response._iterator
     assert "sse_connect" in await stream.__anext__()
     session = _sse_sessions[sid]
-    try:
-        view_ref = weakref.ref(session.view_instance)
-        tour_id = id(view_ref())
-        await _post(session, key, {"type": "event", "event": "start_tour", "params": {}})
-        await _until(lambda: tour_id in WAITING, "the tour to start waiting")
+    view_ref = weakref.ref(session.view_instance)
+    tag = view_ref().tag
+    await _post(session, key, {"type": "event", "event": event, "params": {}})
+    return session, key, stream, view_ref, tag
 
+
+async def test_sse_navigation_cancels_the_legacy_views_waiter(caplog):
+    session, key, stream, view_ref, tag = await _sse_mounted_tour("start_tour")
+    try:
+        await _until(lambda: ("waiting", tag) in EVENTS, "the tour to start waiting")
         await _post(session, key, {"type": "live_redirect_mount", "url": "/other/", "params": {}})
         assert type(session.view_instance) is OtherPage
         # A view without UploadMixin has no ``_cleanup_uploads``; the cleanup
         # no longer raises (and logs) on it.
         assert "SSE old view cleanup failed" not in caplog.text
 
-        await _until(lambda: tour_id in CANCELLED, "the replaced view's waiter to be cancelled")
-        assert tour_id not in WAITING and ANSWERED == []
-        assert view_ref()._waiters == {}
+        await _until(lambda: ("cleanup", tag) in EVENTS, "the replaced view's waiter cleanup")
+        _assert_cleaned_up(view_ref, tag)
         await _assert_collectable(view_ref, "the replaced legacy view")
         assert session.active is True
     finally:
         await stream.aclose()
+
+
+async def test_sse_a_waiter_started_after_navigation_is_refused():
+    session, key, stream, view_ref, tag = await _sse_mounted_tour("start_late_tour")
+    try:
+        await _until(lambda: ("working", tag) in EVENTS, "the late task to start")
+        await _post(session, key, {"type": "live_redirect_mount", "url": "/other/", "params": {}})
+        assert type(session.view_instance) is OtherPage
+        await _assert_late_wait_refused(view_ref, tag)
+    finally:
+        await stream.aclose()
+
+
+async def test_sse_a_waiter_started_after_close_is_refused():
+    session, key, stream, view_ref, tag = await _sse_mounted_tour("start_late_tour")
+    await _until(lambda: ("working", tag) in EVENTS, "the late task to start")
+    await stream.aclose()  # the client went away
+    await _until(lambda: session.view_instance is None, "the session to drop its view")
+    await _assert_late_wait_refused(view_ref, tag)
