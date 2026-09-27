@@ -40,7 +40,7 @@ The diagrammed setup is **Tier 1** (pilot / soft-launch, ≤50 concurrent active
 
 ## State Backend Configuration
 
-### In-Memory (Development Only)
+### In-Memory (one process)
 
 ```python
 DJUST_CONFIG = {
@@ -49,7 +49,13 @@ DJUST_CONFIG = {
 }
 ```
 
-Single server only. State lost on restart.
+One process only, and the cache is lost on restart. That makes it the right
+choice for development and also for production when a single process serves
+every WebSocket, such as one free-threaded process using several cores (see
+[Scaling djust](scaling.md#one-process-across-cores)). Use Redis once there is
+more than one web process. (The channel layer is a separate question: pushes
+from Celery workers or management commands need a Redis channel layer even
+with one web process; see [Channel Layer](#channel-layer-for-cross-process-push).)
 
 **Memory and `SESSION_TTL`.** The in-memory backend keeps one entry per
 (session, page): the page's compiled `RustLiveView` with its last render, which
@@ -60,8 +66,8 @@ on events. It expires once it has not been written for `SESSION_TTL` seconds
 (default 3600). Reading an expired entry is a miss, so the mount builds a fresh
 one. Writes sweep expired entries at most once every `min(SESSION_TTL, 60)`
 seconds. `SESSION_TTL = 0` means never expire. So the backend holds roughly *new
-sessions per second × `SESSION_TTL`* entries. At 5 new sessions a second with
-the default hour, that is 18,000 entries (about 5 GB at 270 KB each). Lower
+(session, page) visits per second × `SESSION_TTL`* entries. At 5 new visits a
+second with the default hour, that is 18,000 entries (about 5 GB at 270 KB each). Lower
 `SESSION_TTL` to the reconnect window you actually need, or use Redis.
 
 Before 1.2.2 and 1.3 the TTL was applied only by `djust clear` and
@@ -81,7 +87,7 @@ import os
 DJUST_CONFIG = {
     'STATE_BACKEND': 'redis',
     'REDIS_URL': os.environ.get('REDIS_URL', 'redis://localhost:6379/0'),
-    'SESSION_TTL': 7200,  # 2 hours
+    'SESSION_TTL': 120,  # your reconnect window; see Choosing SESSION_TTL
 }
 ```
 
@@ -137,10 +143,10 @@ When a VDOM patch fails on the client, djust falls back to the server-rendered "
 
 | Concern | Setting | What it does |
 |---|---|---|
-| **State backend** | `DJUST_STATE_BACKEND` (or `DJUST_CONFIG['STATE_BACKEND']`) | Stores per-view state (assigns) so a reconnecting client gets its view back. Single-process traffic. |
-| **Channel layer** | `CHANNEL_LAYERS` (Django Channels) | Routes cross-process messages — required when ANY view uses `push_to_view()`, presence, cursor tracking, or DB-change notifications. |
+| **State backend** | `DJUST_STATE_BACKEND` (or `DJUST_CONFIG['STATE_BACKEND']`) | Caches each session's compiled view (`RustLiveView`) as the diff baseline for its next WebSocket mount. It does not restore a view's state (its assigns) on another process: that needs `enable_state_snapshot` or `state(..., persist="server")` plus a session store every process shares (see [Option B](scaling.md#option-b-redis-between-processes)). |
+| **Channel layer** | `CHANNEL_LAYERS` (Django Channels) | Carries messages between sessions: `push_to_view()`, presence, cursor tracking and DB-change notifications. Messages between processes need a Redis layer. |
 
-**Required configuration** any time your app has multiple ASGI processes or uses cross-process push:
+**Required configuration** any time more than one process serves WebSockets, **or** any code calls [`push_to_view` / `apush_to_view`](../advanced/server-push.md) from another process (Celery workers, management commands, cron jobs):
 
 ```python
 # settings/prod.py
@@ -150,25 +156,42 @@ CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            "hosts": [{"address": os.environ["REDIS_CHANNEL_URL"], "socket_timeout": 10}],
+            "hosts": [{"address": os.environ["REDIS_CHANNEL_URL"], "socket_timeout": 20}],
         },
     },
 }
 ```
 
-Keep `socket_timeout` above 5 s (or `None`): redis-py 8 lowered its default `socket_timeout` to 5 s, the same as channels_redis' blocking read, so without a longer timeout idle WebSockets drop every few seconds (django/channels_redis#422).
-
 ```bash
 pip install channels_redis
 ```
 
-For small deployments, point `REDIS_URL` and `REDIS_CHANNEL_URL` at the same Redis instance — it serves both concerns fine. **Separate the instances** when:
+**Set `socket_timeout` on every host, longer than 5 s.** The core layer waits
+for messages with a blocking `BZPOPMIN` of 5 s (channels_redis'
+`brpop_timeout`), and redis-py 8 lowered its default `socket_timeout` from
+`None` to 5 s. The socket read then times out at the moment the pop is still
+legitimately waiting, and any WebSocket whose channel has nothing to deliver
+for 5 s is dropped (django/channels_redis#422). The traceback names redis
+(`redis.exceptions.TimeoutError: Timeout reading from ...`), not your channel
+layer settings.
+
+- **Use 20.** It clears the 5 s pop with room for network and event-loop
+  delays, and a production deployment held an idle WebSocket for 120 s with it
+  on redis-py 8.1 (#3210). Any value above 5 works; higher values only detect a dead connection more slowly. The multi-pod
+  measurements in [Scaling djust](scaling.md#measured-capacity) ran with 10.
+- **Don't use `None`.** It stops the drops too, but a half-open TCP connection
+  then hangs on read until TCP keepalive notices (300 s in that deployment).
+  With 20 a dead connection fails within 20 s.
+- A `?socket_timeout=` in the URL overrides the dict's key, as in redis-py.
+  System check `djust.C023` warns when a host keeps redis-py 8's default.
+
+For small deployments you can point `REDIS_URL` and `REDIS_CHANNEL_URL` at the same Redis instance, but it then needs `noeviction`, and a full Redis makes every LiveView page fail (see [Production Configuration](#production-configuration)). The recommended layout is two instances. **Separate them** in any case when:
 
 - ElastiCache memory utilization climbs past 70% (the channel layer holds short-lived messages; the state backend holds longer-lived per-view state — eviction policies want to differ).
 - You want to scale the channel layer independently (e.g., to a Redis cluster) without touching the state backend.
 - You're auditing for blast radius and want a Redis outage to fail one concern at a time.
 
-An in-memory channel layer doesn't cross processes, so with multiple workers or servers `push_to_view` silently no-ops. Use one only when **one process** serves every WebSocket, as in development. With free-threaded Python and `worker_threads`, that one process can use several cores (see [More than one core per process](#more-than-one-core-per-process-worker_threads)).
+An in-memory channel layer doesn't cross processes, so a `push_to_view` reaches only the sessions in the process that sent it, without an error. A push from a Celery task, a management command or a cron job therefore reaches nobody. Use an in-memory layer only when **one process** serves every WebSocket **and** nothing pushes from another process: in development, or in production with a single web process and no out-of-process pushes (see [Push from Celery Tasks](../advanced/server-push.md#push-from-celery-tasks)). With free-threaded Python and `worker_threads`, that one process can use several cores (see [More than one core per process](#more-than-one-core-per-process-worker_threads)).
 
 For that single-process case, prefer djust's in-memory layer over Channels' own:
 
@@ -189,6 +212,8 @@ It behaves like `channels.layers.InMemoryChannelLayer`, with one difference.
   - A queue full of expired messages keeps refusing new ones for that long. `group_send` skips a full channel, as it always has.
   - Messages expire after 60 s by default, so this only affects consumers that have not read for a minute.
 
+With several event loops in one process (`djust serve --loops N` with N > 1), the layer must not belong to one loop. Use `djust.layers.MultiLoopInMemoryChannelLayer` for one process. Of channels_redis' two layers, `djust serve` accepts only `channels_redis.pubsub.RedisPubSubChannelLayer`, which keeps a connection per loop. It refuses `channels_redis.core.RedisChannelLayer` (and subclasses), as it refuses both `InMemoryChannelLayer`s. See [More than one event loop per process](scaling-across-cores.md#more-than-one-event-loop-per-process).
+
 ## Redis Setup
 
 ### Installation
@@ -207,7 +232,14 @@ docker run -d -p 6379:6379 --name redis redis:7-alpine
 
 ### Production Configuration
 
-Edit `/etc/redis/redis.conf`:
+**Recommended layout: two Redis instances**, because the eviction policy is per instance and the two workloads need opposite ones:
+
+- **State backend** (`REDIS_URL`): its own instance with `maxmemory-policy allkeys-lru`. Its keys are a cache, so evicting one only costs a cache miss (a fresh mount and render).
+- **Channel layer and presence** (`REDIS_CHANNEL_URL`, and `DJUST_CONFIG["PRESENCE_REDIS_URL"]` pointed at the same instance): `maxmemory-policy noeviction`. Set `PRESENCE_REDIS_URL` explicitly: without it the Redis presence backend uses `REDIS_URL`, the state instance, where `allkeys-lru` could evict presence keys. Evicting a channel or group key silently loses messages and breaks broadcasts and presence. Don't use `volatile-lru` here either: channels_redis sets expiries on its own keys, so they are eligible for it.
+
+Size the state instance's `maxmemory` from the [`SESSION_TTL` sizing rule](#choosing-session_ttl) with headroom, and alert on `used_memory` approaching `maxmemory` on both instances.
+
+Edit `/etc/redis/redis.conf` (shown for the channel-layer instance; the state instance differs only in `maxmemory` and the policy):
 
 ```conf
 bind 127.0.0.1 ::1
@@ -218,14 +250,18 @@ save 900 1
 save 300 10
 save 60 10000
 
-# Memory management
+# Memory management. Channel layer + presence instance: never evict.
+# (State-backend instance: maxmemory-policy allkeys-lru, and a maxmemory
+# sized from the SESSION_TTL rule.)
 maxmemory 256mb
-maxmemory-policy allkeys-lru
+maxmemory-policy noeviction
 
 # Disable dangerous commands
 rename-command FLUSHDB ""
 rename-command FLUSHALL ""
 ```
+
+**One shared instance** is possible for small deployments, with a hard trade-off. It must use `noeviction` to protect the channel layer and presence, and then a full Redis rejects writes: the state backend's `set()` raises (`OOM command not allowed`), and every LiveView page load and WebSocket mount fails until memory is freed. If you share one instance, size `maxmemory` for the state cache (the sizing rule) plus the channel layer and presence, with generous headroom, and alert on `used_memory` well before it reaches `maxmemory`.
 
 ## ASGI Server
 
@@ -236,11 +272,19 @@ uvicorn myproject.asgi:application \
     --host 0.0.0.0 \
     --port 8000 \
     --workers 4 \
-    --loop uvloop \
     --ws websockets \
     --log-level warning \
     --access-log
 ```
+
+**`--workers 4` is four processes.** Each has its own memory, so everything in [More than one process or pod](scaling.md#more-than-one-process-or-pod) applies: a Redis channel layer (with the `socket_timeout` above), Redis state and presence backends, a session store every process shares, `enable_state_snapshot` or `persist="server"` for state that must survive a reconnect, and no in-process shared state such as a dict of rooms. The settings are listed in [Option B](scaling.md#option-b-redis-between-processes). To stay in one process instead, run one worker; on free-threaded Python it can use several cores ([One process across cores](scaling.md#one-process-across-cores)).
+
+**The event loop is uvloop by default.** uvicorn's default `--loop auto` uses uvloop whenever it is installed, and `uvicorn[standard]`, which djust installs, installs it. So do gunicorn's `UvicornWorker` and `djust serve` (its `--loop` also defaults to `auto`). Leaving the flag out does not avoid uvloop. It is a trade-off, measured once (#3095):
+
+- in one round at 256 clients, uvloop used about 13% less event-loop CPU (0.45 against 0.52 cores);
+- in one local ramp on macOS at 384 clients, it lost 201 of 384 WebSocket connections while they connected. The macOS accept backlog is the likely cause, but it has not been investigated.
+
+To use asyncio's loop instead, pass `--loop asyncio` to `uvicorn` or to `djust serve`. For gunicorn, use a worker class whose `CONFIG_KWARGS` sets `"loop": "asyncio"` (see below). Measure with your own connection bursts before choosing.
 
 #### Quantified Daphne → Uvicorn benchmark
 
@@ -269,6 +313,22 @@ gunicorn -k uvicorn.workers.UvicornWorker \
     myproject.asgi:application
 ```
 
+**Each worker is a separate process.** With `-w 2` or more, everything in [More than one process or pod](scaling.md#more-than-one-process-or-pod) applies, as for `uvicorn --workers` above.
+
+`UvicornWorker` runs uvloop when it is installed (see the uvloop note above). To run asyncio's loop, point `-k` at a subclass. uvicorn 0.42 deprecates the `uvicorn.workers` module in favour of the separate `uvicorn-worker` package (`pip install uvicorn-worker`, module `uvicorn_worker`), whose `UvicornWorker` takes the same `CONFIG_KWARGS`; `-k uvicorn_worker.UvicornWorker` replaces `-k uvicorn.workers.UvicornWorker` in the commands on this page:
+
+<!-- doc-snippet-check: skip -->
+```python
+# myproject/workers.py
+from uvicorn_worker import UvicornWorker  # pip install uvicorn-worker
+
+
+class AsyncioUvicornWorker(UvicornWorker):
+    CONFIG_KWARGS = {"loop": "asyncio", "http": "auto"}
+```
+
+and run `gunicorn -k myproject.workers.AsyncioUvicornWorker ...`.
+
 Flag rationale:
 
 - **`-w 2`** — for ASGI workers, the right rule is **`cpu_count`**, not `(2*cpu)+1` (that's for synchronous Gunicorn workers). Each Uvicorn worker is itself async-concurrent; oversubscribing thrashes the event loop. On a 1 vCPU container, `-w 2` gives you 2× headroom on a single CPU at the cost of context-switching — usually still a win for mixed workloads where one worker can be busy with `sync_to_async` while the other handles WS frames.
@@ -287,11 +347,7 @@ Worker count formula:
 
 ### More than one core per process: `worker_threads`
 
-For the whole picture, including free-threaded Python, scoped push, the in-process channel layer, measured numbers and the multi-process alternative, see [Scaling a djust Process Across Cores](scaling-across-cores.md).
-
-By default every WebSocket session's sync work — `mount`, event handlers, hooks, renders — runs on **one thread shared by all sessions** in the process (asgiref's `sync_to_async` default). One process then does LiveView work on at most about one core, and one session's slow handler or database query delays every other session's.
-
-`LIVEVIEW_CONFIG["worker_threads"]` (djust 1.3, opt-in) gives the WebSocket path a pool of threads instead:
+By default every WebSocket session's sync work (`mount`, event handlers, hooks, renders) runs on **one thread shared by all sessions** in the process, so one process does LiveView work on about one core, and one session's slow handler delays every other session's. `LIVEVIEW_CONFIG["worker_threads"]` (djust 1.3, opt-in) gives the WebSocket path a pool of threads instead, with each session pinned to one thread for its lifetime:
 
 ```python
 LIVEVIEW_CONFIG = {
@@ -299,33 +355,13 @@ LIVEVIEW_CONFIG = {
 }
 ```
 
-- Each session is assigned to the least-loaded pool thread when it connects, and **stays on that thread for its lifetime**. Thread-locals and the thread's Django database connection stay consistent for the session.
-- Different sessions' handlers run at the same time on different threads. A session's own events still run one at a time, in order.
-- HTTP requests and SSE streams are unchanged: Django gives each HTTP request its own new thread. On free-threaded CPython that is costly under overload, because each thread's allocator heap stays resident after the thread exits: a burst of 256 concurrent page loads cost about 1.2 GB in #3114. Wrap the HTTP app in `djust.worker_pool.PooledHTTP` to run requests on a bounded pool instead. See [Memory under overload](scaling-across-cores.md#memory-under-overload).
-- The default (`None`) keeps the single shared thread. An invalid value is reported by the system check `djust.C021`.
-- **With the pool on, djust also moves per-frame work off the asyncio event loop**, which becomes the next bottleneck once sessions render in parallel:
-  - the snapshot of the view's assigns taken before an event runs on the session's thread, in the same hop as a sync handler;
-  - a server push is one hop on the session's thread (Django's stale-connection check, the push hooks, the render and the diff), and the patch JSON goes into the frame without being parsed and re-serialised on the loop;
-  - Channels' separate `close_old_connections` hop before each `server_push` message is skipped, because the push turn runs that check itself before any hook can touch the database.
+Before turning it on: module-level state that handlers change needs a `threading.Lock`; each pool thread opens its own database connection (see [Database Connection Pooling](#database-connection-pooling)); and on standard CPython (3.12, 3.13) the GIL still caps Python work at about one core, so the multi-core gain needs free-threaded CPython 3.14t. An invalid value is reported by the system check `djust.C021`.
 
-  With the pool off these paths are unchanged.
-
-Things to know before you turn it on:
-
-- **Your sync handlers can now run concurrently with other sessions' handlers.** Module-level state that handlers mutate (a dict of rooms, a counter) needs a `threading.Lock`, exactly as it would under a multi-threaded WSGI server. State on the view instance (`self.…`) is per session and needs nothing.
-- **Each pool thread opens its own database connection**, so budget up to `worker_threads` extra connections per process (see [Database Connection Pooling](#database-connection-pooling)).
-- **Sessions that share a pool thread still wait on each other.** A slow handler, or a long `start_async` callback, holds up the other sessions pinned to its thread, though no longer the whole process. The [#3074](https://github.com/djust-org/djust/issues/3074) experiment measured about 80–120 ms more p95 latency at the load knee with a pool of 8–12 threads than with one thread per session, in exchange for about half the memory per session.
-- **On standard CPython (3.12, 3.13) the GIL still limits Python work to about one core.**
-  - What the pool can overlap there is waiting (database queries, HTTP calls) and djust's Rust render, which releases the GIL while it renders.
-  - For a CPU-bound app it measured no gain: the #3074 snake load test, with one thread per session on 3.12, saturated at the same 32–64 clients as stock.
-- **The multi-core gain needs free-threaded CPython 3.14t**, and more than the pool:
-  - 3.14t by itself moved the snake knee from 32–64 clients (stock, 3.12) to 64–96. Adding per-session threads left the knee there: they raised the cores in use from about 1.6 to 1.9, until the event loop saturated.
-  - The pool starts to pay off once the event loop is relieved. With scoped push added, per-session threads reached 192–224 clients, against 96–128 on the shared thread.
-  - With event-loop offload and a lighter in-process channel layer as well, one process used about 5 cores and served about 4–5× the clients of stock 3.12.
+The pool, what it moves off the event loop, `djust.worker_pool.PooledHTTP` for HTTP requests, and measured numbers are in [Scaling a djust Process Across Cores](scaling-across-cores.md#the-recipe). Where it fits among the other ways to scale is in [Scaling djust](scaling.md#one-process-across-cores).
 
 ### More than one event loop per process: `djust serve --loops`
 
-Once the pool spreads the sync work, the asyncio event loop that handles every WebSocket frame is the next ceiling, at about one core. On free-threaded Python, `djust serve myproject.asgi:application --loops N` runs N uvicorn servers, each on its own event loop and thread, on one shared listening socket, with `djust.layers.MultiLoopInMemoryChannelLayer` as the channel layer (djust 1.3, opt-in; `--loops 1` is plain `uvicorn.run`). It changes what app code may share between sessions: see [More than one event loop per process](scaling-across-cores.md#more-than-one-event-loop-per-process) for the rules, the lifespan and shutdown behaviour, and measured numbers.
+Once the pool spreads the sync work, the asyncio event loop is the next ceiling, at about one core. On free-threaded Python, `djust serve myproject.asgi:application --loops N` runs N event loops in one process on one listening socket (djust 1.3, opt-in; `--loops 1` is plain `uvicorn.run`). It needs a loop-safe channel layer (see [Channel Layer](#channel-layer-for-cross-process-push)) and changes what app code may share between sessions: see [More than one event loop per process](scaling-across-cores.md#more-than-one-event-loop-per-process).
 
 ### WebSocket per-message compression (permessage-deflate)
 
@@ -538,7 +574,7 @@ services:
     command: uvicorn myproject.asgi:application --host 0.0.0.0 --port 8000
     environment:
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
-      - SESSION_TTL=7200  # djust doesn't read this itself; see the note below
+      - SESSION_TTL=120  # djust doesn't read this itself; see the note below
     depends_on:
       - redis
     deploy:
@@ -672,8 +708,8 @@ CPU-bound prefork workers can scale on CPU as usual.
 from celery.schedules import crontab
 
 CELERY_BEAT_SCHEDULE = {
-    "cleanup-expired-sessions": {
-        "task": "myapp.tasks.cleanup_expired_sessions",
+    "clear-django-sessions": {
+        "task": "myapp.tasks.clear_django_sessions",  # below
         "schedule": crontab(minute=0, hour="*/2"),  # Every 2 hours
     },
     "sync-third-party-data": {
@@ -683,38 +719,27 @@ CELERY_BEAT_SCHEDULE = {
 }
 ```
 
+<!-- doc-snippet-check: skip -->
+```python
+# myapp/tasks.py
+from celery import shared_task
+from django.core.management import call_command
+
+
+@shared_task
+def clear_django_sessions():
+    call_command("clearsessions")
+```
+
 ## Session Management
 
-### Session TTL Guidelines
+### Choosing `SESSION_TTL`
 
-| Use Case         | Recommended TTL |
-| ---------------- | --------------- |
-| E-commerce       | 1-2 hours       |
-| Admin dashboards | 4-8 hours       |
-| Public content   | 30-60 minutes   |
-| Real-time apps   | 15-30 minutes   |
+`DJUST_CONFIG["SESSION_TTL"]` (default 3600 s) is how long the state backend keeps a session's cached view after it was last written. Set it to your **reconnect window**: how long after a disconnect a client should still find its cached view. Longer only costs memory. The multiplayer game in [Scaling djust](scaling.md#memory) uses 120 s.
 
-### Cleanup for In-Memory Backend
+Size for it: the backend keeps one entry per session **and** LiveView page, so it holds about *new (session, page) visits per second × `SESSION_TTL`* entries: sessions × the LiveView pages each visits within the TTL. That is about 270 KB each in-process in one load test (see [In-Memory](#in-memory-one-process)). At 5 new page visits a second, 120 s is 600 entries (about 160 MB) and the default hour is 18,000 (about 5 GB). Redis expires keys with the same TTL.
 
-Redis handles expiration automatically. For the memory backend, set up periodic cleanup:
-
-```python
-# management/commands/cleanup_sessions.py
-from django.core.management.base import BaseCommand
-from djust.live_view import cleanup_expired_sessions
-
-class Command(BaseCommand):
-    help = 'Clean up expired LiveView sessions'
-
-    def handle(self, *args, **options):
-        cleaned = cleanup_expired_sessions(ttl=3600)
-        self.stdout.write(f'Cleaned {cleaned} expired sessions')
-```
-
-```bash
-# Cron: run every hour
-0 * * * * cd /path/to/project && python manage.py cleanup_sessions
-```
+No cleanup job is needed. The in-memory backend has applied `SESSION_TTL` by itself since 1.2.2 and 1.3 (#3080), and Redis expires keys on its own. Django's own sessions are separate: with the `db` or `cached_db` session engine, run Django's `clearsessions` command periodically (see the [beat schedule example](#beat-schedule-example)).
 
 ## Health Check Endpoint
 
@@ -784,7 +809,7 @@ How it works:
 1. User loads any page → Django's `SessionMiddleware` sets `sessionid` on the response.
 2. Browser opens WebSocket → upgrade request includes the `sessionid` cookie.
 3. ALB routes the upgrade by `sessionid` hash → pinned to the same task.
-4. If the task dies and the client reconnects, ALB picks a healthy task and the cookie now hashes to the new one — state survives via the Redis state backend.
+4. If the task dies and the client reconnects, ALB picks a healthy task and the cookie now hashes to the new one. The view's state comes back only if it is persisted (`enable_state_snapshot` or `state(..., persist="server")` with a shared session store); otherwise the view mounts again. See [Option B](scaling.md#option-b-redis-between-processes), which also found stickiness unnecessary in its measured setup.
 
 Caveat: pages that open a WebSocket WITHOUT a prior session-creating request won't have the cookie set yet → the first WS connect goes to whichever target ALB picks. After that, subsequent reconnects have `sessionid` and pin correctly. This is fine when `SessionMiddleware` is in `MIDDLEWARE` (default for any Django app); if you've removed it, you'll want to set a fresh cookie on the WS upgrade response yourself.
 
@@ -885,10 +910,10 @@ The 8-line copy-pasteable recipe. Each line links to the relevant subsection of 
 
 ```
 ☐ ASGI server: gunicorn -k uvicorn.workers.UvicornWorker -w <cpu_count> (see rationale)
-☐ Channel layer: channels_redis.core.RedisChannelLayer (not InMemoryChannelLayer)
+☐ Channel layer (several processes or out-of-process pushes): channels_redis.core.RedisChannelLayer, host socket_timeout 20
 ☐ State backend: DJUST_CONFIG["STATE_BACKEND"] = "redis"
 ☐ State key invalidation: auto-derived from template hash (no env var needed since v0.9.4)
-☐ ALB sticky sessions: app_cookie on "sessionid"
+☐ ALB sticky sessions (optional): app_cookie on "sessionid"
 ☐ CONN_MAX_AGE = 60, CONN_HEALTH_CHECKS = True
 ☐ App Auto Scaling registered; aws_ecs_service has lifecycle ignore_changes = [desired_count]
 ☐ Celery: --pool=gevent --concurrency=N for I/O work; queue-depth autoscaling
@@ -900,7 +925,7 @@ Where each line is covered:
 - **Channel layer** → [Channel Layer (for cross-process push)](#channel-layer-for-cross-process-push).
 - **State backend** → [Redis (Production)](#redis-production).
 - **State key invalidation** → [Deploy-time state invalidation](#deploy-time-state-invalidation).
-- **ALB sticky sessions** → [WebSocket stickiness on AWS ALB](#websocket-stickiness-on-aws-alb).
+- **ALB sticky sessions** → [WebSocket stickiness on AWS ALB](#websocket-stickiness-on-aws-alb). Optional: the measured multi-pod setup in [Scaling djust](scaling.md#option-b-redis-between-processes) needed no session affinity.
 - **`CONN_MAX_AGE` / `CONN_HEALTH_CHECKS`** → [Layer 1: Django connection reuse (`CONN_MAX_AGE`)](#layer-1-django-connection-reuse-conn_max_age).
 - **Auto Scaling + `lifecycle ignore_changes`** → [Sizing and Scaling Tiers](#sizing-and-scaling-tiers) (Tier 2).
 - **Celery `gevent` + queue-depth autoscaling** → [Pool choice: prefork vs gevent](#pool-choice-prefork-vs-gevent) and [Worker auto-scaling: scale on queue depth, not CPU](#worker-auto-scaling-scale-on-queue-depth-not-cpu).
@@ -918,11 +943,11 @@ Where each line is covered:
 
 ### Application
 
-- [ ] Session cleanup configured (cron or Celery)
+- [ ] Django's `clearsessions` scheduled if you use `db` or `cached_db` sessions (djust's state backends expire entries themselves)
 - [ ] Health check endpoint added
 - [ ] Logging configured for `djust.state_backends`
 - [ ] CSRF protection enabled
-- [ ] `SESSION_TTL` tuned for your use case
+- [ ] `SESSION_TTL` set to your reconnect window ([Choosing `SESSION_TTL`](#choosing-session_ttl))
 
 ### Verification
 
@@ -934,7 +959,7 @@ Where each line is covered:
 
 ## Sizing and Scaling Tiers
 
-Three tiers indexed to concurrent active users. The numbers are heuristics for typical mixed-workload djust apps; CPU-heavy apps (large VDOM diffs, complex template rendering) and I/O-heavy apps (lots of `push_to_view`, presence, third-party APIs) shift the curves. Use these as a starting point and adjust based on your own load testing.
+Three tiers indexed to concurrent active users. For measured per-pod capacity (clients per pod, CPU per frame, memory per client) and the settings several pods need, see [Scaling djust](scaling.md): its [Capacity reference](scaling.md#capacity-reference) and [Measured capacity](scaling.md#measured-capacity). The numbers below are heuristics for typical mixed-workload djust apps; CPU-heavy apps (large VDOM diffs, complex template rendering) and I/O-heavy apps (lots of `push_to_view`, presence, third-party APIs) shift the curves. Use these as a starting point and adjust based on your own load testing.
 
 **Don't pre-build for higher tiers** — usage data should justify each escalation. Premature scaling adds cost and operational surface area without improving the user experience.
 
@@ -994,8 +1019,8 @@ Set CloudWatch alarms (or equivalents) for each trigger. Don't escalate on a hun
 
 Anti-recommendation list. Things you should NOT re-evaluate on every deployment — they're canonical patterns built into the framework:
 
-- **djust state in Redis** is the canonical multi-server pattern (`DJUST_STATE_BACKEND = redis://...`). View state survives container replacement; reconnects within `SESSION_TTL` get the user's view back.
-- **`channels_redis` is required (not optional)** when any view uses `push_to_view`, presence, cursor tracking, or any cross-process feature. Don't try to make it work with `InMemoryChannelLayer` in production.
+- **djust state in Redis** is the canonical multi-server pattern (`DJUST_CONFIG["STATE_BACKEND"] = "redis"`). It caches each session's compiled view as the diff baseline for its next mount, on any process. It does not bring a view's state back after a reconnect to another process: that takes `enable_state_snapshot` or `state(..., persist="server")` and a shared session store ([Option B](scaling.md#option-b-redis-between-processes)).
+- **`channels_redis` is required for more than one process** when any view uses `push_to_view`, presence, cursor tracking, or any other cross-process feature, and whenever a Celery worker, management command or cron job pushes to views. An in-memory layer reaches only the sessions of its own process. With exactly one process and no out-of-process pushes, `djust.layers.InMemoryChannelLayer` is the right production choice (`djust.layers.MultiLoopInMemoryChannelLayer` under `djust serve --loops`).
 - **`sync_to_async` for ORM** in event handlers is handled by djust's event dispatcher: sync handlers run via `sync_to_async`, so no manual wrapping is needed in your view code.
 - **`transaction.on_commit()` for Celery enqueue** is the right pattern; never `.delay(...)` directly from a view.
 - **WebSocket Origin check (`check_origin`)** is on by default since v0.4.1 (CSWSH protection). Don't disable.
@@ -1011,6 +1036,6 @@ If you find yourself building infrastructure to work around any of these (e.g., 
 
 **Session not found after restart**: Ensure `STATE_BACKEND='redis'` and Redis persistence is enabled (`save` directives in `redis.conf`).
 
-**Memory issues**: Increase `maxmemory`, enable `allkeys-lru` eviction, reduce `SESSION_TTL`, run cleanup more frequently.
+**Memory issues**: Put the state backend on its own Redis with `allkeys-lru`, where eviction only costs a cache miss, and keep `noeviction` on the instance carrying the channel layer and presence (see [Production Configuration](#production-configuration)). On a single shared `noeviction` instance, a full Redis makes every LiveView page load fail: raise `maxmemory` and alert on `used_memory`. In the djust process, lower `SESSION_TTL` to your reconnect window, and see [Memory](scaling.md#memory) and the [troubleshooting checklist](scaling.md#troubleshooting-checklist) in Scaling djust (RSS that levels off rather than falls, `PooledHTTP`, idle-time collection).
 
 **Serialization errors**: Ensure djust version matches across all servers, clear Redis cache, and verify Rust extension is compiled for the correct Python version.

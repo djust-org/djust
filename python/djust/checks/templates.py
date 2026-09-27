@@ -361,7 +361,7 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                     "%s -- template uses dj-* event directives but has no dj-root or dj-view attribute."
                     % relpath,
                     hint=(
-                        'Add dj-root to the root element (e.g. <div dj-root>), '
+                        "Add dj-root to the root element (e.g. <div dj-root>), "
                         "or this template won't be connected to a LiveView. "
                         "If this template is an intentional fragment included from "
                         "a parent LiveView root, add a `{# djust:partial #}` "
@@ -1061,7 +1061,7 @@ def _check_legacy_root_attrs(
     djust 1.0 renamed the LiveView root markers from ``data-djust-root`` /
     ``data-djust-view`` to ``dj-root`` / ``dj-view`` (the ``data-`` prefix is
     no longer required). When a template still uses the old spelling, the
-    generic T012 ("dj-* directives but no dj-view") doesn't recognise that a
+    generic T012 ("dj-* directives but no dj-root or dj-view") doesn't recognise that a
     view IS declared — just with the deprecated name — so the path from symptom
     (the LiveView never connects over WebSocket) to fix is non-obvious. T015
     names the rename explicitly.

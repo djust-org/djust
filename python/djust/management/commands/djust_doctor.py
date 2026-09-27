@@ -256,7 +256,7 @@ def check_redis() -> "Optional[_CheckResult]":
     # channels_redis falls back to localhost:6379 for a missing or empty list.
     hosts = default.get("CONFIG", {}).get("hosts") or [("localhost", 6379)]
     host = hosts[0]
-    # The dict form ({"address": url, "socket_timeout": 10}) is what the
+    # The dict form ({"address": url, "socket_timeout": 20}) is what the
     # deployment guide recommends (#3199); probe the address it names.
     if isinstance(host, dict) and isinstance(host.get("address"), str):
         host_label = _redact_redis_url(host["address"])
