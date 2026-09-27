@@ -820,13 +820,15 @@ def test_the_event_save_is_still_bounded():
     )
 
     src = _inspect.getsource(runtime)
-    assert "timeout=EVENT_STATE_SAVE_TIMEOUT_S" in src, (
-        "the save must be wrapped in asyncio.wait_for with the named bound — "
-        "an unbounded save hangs the event path on a slow session backend"
+    # #3212: the legacy saves pass the named bound to the shared one-hop helper
+    # (``_run_explicit_save``), which waits with it as its ``deadline``.
+    assert "deadline=EVENT_STATE_SAVE_TIMEOUT_S" in src, (
+        "the save must be bounded by the named constant — an unbounded save "
+        "hangs the event path on a slow session backend"
     )
-    # Exact, not a prefix match: `timeout=EVENT_STATE_SAVE_TIMEOUT_S * 200`
+    # Exact, not a prefix match: `deadline=EVENT_STATE_SAVE_TIMEOUT_S * 200`
     # contains the substring and yields an effective 30s bound in production.
-    assert not re.search(r"timeout=EVENT_STATE_SAVE_TIMEOUT_S\s*[*/+-]", src), (
+    assert not re.search(r"(timeout|deadline)=EVENT_STATE_SAVE_TIMEOUT_S\s*[*/+-]", src), (
         "arithmetic on the bound at the call site defeats it — change the "
         "constant instead, where the pin above can see it"
     )
@@ -840,12 +842,10 @@ def test_the_event_save_is_still_bounded():
     bounded_sites = {
         method.name: sum(
             isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id == "asyncio"
-            and node.func.attr == "wait_for"
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_run_explicit_save"
             and any(
-                keyword.arg == "timeout"
+                keyword.arg == "deadline"
                 and isinstance(keyword.value, ast.Name)
                 and keyword.value.id == "EVENT_STATE_SAVE_TIMEOUT_S"
                 for keyword in node.keywords
@@ -863,8 +863,9 @@ def test_the_event_save_is_still_bounded():
     # ADR-038 E3 explicit saves (the root commit shared by foreground events,
     # root background work and server-originated turns, and the child tree)
     # go through ONE bounded helper whose deadline starts when the save starts
-    # running on the Django thread, not when it is queued (#3200). Pin the
-    # helper's bound and that both explicit sites use it.
+    # running on the Django thread, not when it is queued (#3200). The legacy
+    # best-effort saves use it too, with the fixed bound (#3212). Pin the
+    # helper's bound and its exact caller set.
     helper = next(
         node
         for node in ast.parse(src).body
@@ -910,6 +911,8 @@ def test_the_event_save_is_still_bounded():
     assert explicit_callers == {
         "commit_explicit_turn",
         "_persist_explicit_children_after_event",
+        "_persist_state_after_event",
+        "_persist_sticky_child_after_event",
     }, explicit_callers
     # With no setting, the explicit deadline IS the pinned production bound.
     from django.test import override_settings
@@ -946,7 +949,8 @@ def test_a_save_that_exceeds_the_bound_is_dropped_not_raised():
     # explicit helper (_run_explicit_save, #3200) re-raises a timeout on
     # purpose: an explicit turn withholds its success frame instead.
     src = _inspect.getsource(runtime.ViewRuntime)
-    segments = src.split("except asyncio.TimeoutError:")[1:]
+    # #3212: the legacy sites catch the shared helper's deadline too.
+    segments = src.split("except (asyncio.TimeoutError, ExplicitSaveDeferred):")[1:]
     assert len(segments) == 2, (
         f"expected exactly 2 bounded save sites, found {len(segments)}. If a "
         f"third was added, bound it too and update this count; if the two were "

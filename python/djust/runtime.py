@@ -61,7 +61,7 @@ from typing import (
     runtime_checkable,
 )
 
-from asgiref.sync import sync_to_async
+from asgiref.sync import async_to_sync, sync_to_async
 
 if TYPE_CHECKING:
     from ._async_batch import AsyncBatch
@@ -146,7 +146,7 @@ def _log_unobserved_save_failure(work: "asyncio.Future[None]") -> None:
     """Report a save failure nobody is waiting for any more (value-free)."""
     if work.cancelled() or work.exception() is None:
         return
-    logger.warning("Explicit state save failed after its turn stopped waiting")
+    logger.warning("State save failed after its turn stopped waiting")
 
 
 def _detach_from_finished_request() -> None:
@@ -200,7 +200,9 @@ async def _run_explicit_save(
     running at the deadline, this save does not start and is deferred too.
 
     ``deadline`` overrides the configured bound; the catch-up turn passes the
-    10 s cap, since nobody waits on its save interactively.
+    10 s cap, since nobody waits on its save interactively, and the legacy
+    best-effort saves pass their fixed ``EVENT_STATE_SAVE_TIMEOUT_S`` (#3212),
+    so every event-path session save of a runtime shares one ordering.
 
     Raises :class:`ExplicitSaveDeferred` when the deadline passes, and
     re-raises whatever ``save`` raised otherwise.
@@ -4706,10 +4708,12 @@ class ViewRuntime:
     #     snapshot captures unrecoverably — the djustlive 0.9.7rc2 production
     #     block).
     #
-    # The save body is bounded by a 150ms ``asyncio.wait_for`` (#1475) so even
-    # opt-in views can't extend close-time tail latency under backend
-    # backpressure. Saves must never break event handling — timeout + exception
-    # are both caught and logged.
+    # The save is bounded by 150ms (#1475) so even opt-in views can't extend
+    # close-time tail latency under backend backpressure. It runs through
+    # ``_run_explicit_save`` like the explicit saves: one Django-thread hop,
+    # the deadline counted from when it starts running (#3200, #3212), saves
+    # of one runtime ordered. Saves must never break event handling — timeout
+    # + exception are both caught and logged.
     # ------------------------------------------------------------------ #
 
     async def _persist_state_after_event(self, target_view: Any, event_name: Optional[str]) -> None:
@@ -4718,10 +4722,17 @@ class ViewRuntime:
         Caller MUST have already verified top-level view identity and legacy
         snapshot opt-in. Legacy views only: an explicit view is refused before
         any write and commits through :meth:`commit_explicit_turn` instead
-        (#3211). Bounded by a 150ms timeout, mirroring the WS save block
-        (websocket.py:3704-3804)."""
+        (#3211).
 
-        async def _save() -> None:
+        Best effort, bounded by 150ms (#1475). The whole save is one sync
+        call in one Django-thread hop, and the deadline starts when that call
+        starts running, so time spent queueing behind other sessions' work on
+        the sync thread is not counted (#3212, as #3200 did for explicit
+        saves). A save that outruns the deadline is logged and not waited
+        for; it keeps running and may still land, and the runtime's next save
+        waits for it, so it can never overwrite a newer one."""
+
+        def _save() -> None:
             # Discover the session the same way the WS save block does
             # (websocket.py:3710-3720): prefer the stashed mount request's
             # session (carries the save-key namespace + path); fall back to the
@@ -4754,23 +4765,19 @@ class ViewRuntime:
             # Save order mirrors HTTP path (mixins/request.py:593-609): private
             # attrs FIRST, then public via get_context_data().
             if hasattr(target_view, "_get_private_state"):
-                _priv = await sync_to_async(target_view._get_private_state)()
+                _priv = target_view._get_private_state()
                 if _priv:
-                    await save_session.aset(
-                        f"{save_view_key}__private",
-                        _normalize(_priv, state_roundtrip=True),
+                    save_session[f"{save_view_key}__private"] = _normalize(
+                        _priv, state_roundtrip=True
                     )
                 else:
-                    try:
-                        await save_session.apop(f"{save_view_key}__private", None)
-                    except AttributeError:
-                        await sync_to_async(save_session.pop)(f"{save_view_key}__private", None)
+                    save_session.pop(f"{save_view_key}__private", None)
 
             _gcd_save = target_view.get_context_data
             if inspect.iscoroutinefunction(_gcd_save):
-                save_context = await _gcd_save()
+                save_context = async_to_sync(_gcd_save)()
             else:
-                save_context = await sync_to_async(_gcd_save)()
+                save_context = _gcd_save()
 
             from .mixins.context import legacy_render_only_keys
 
@@ -4784,29 +4791,26 @@ class ViewRuntime:
                 and not is_component_collection(v)
                 and k not in render_only
             }
-            await save_session.aset(save_view_key, _normalize(save_state, state_roundtrip=True))
+            save_session[save_view_key] = _normalize(save_state, state_roundtrip=True)
 
-            # Components — sync helper, wrap with sync_to_async.
             if mount_request is not None and hasattr(target_view, "_save_components_to_session"):
-                await sync_to_async(target_view._save_components_to_session)(
-                    mount_request, save_context
-                )
+                target_view._save_components_to_session(mount_request, save_context)
 
-            await save_session.asave()
+            save_session.save()
 
         try:
-            await asyncio.wait_for(_save(), timeout=EVENT_STATE_SAVE_TIMEOUT_S)
-        except asyncio.TimeoutError:
+            await _run_explicit_save(self, _save, deadline=EVENT_STATE_SAVE_TIMEOUT_S)
+        except (asyncio.TimeoutError, ExplicitSaveDeferred):
             logger.warning(
                 "Runtime event state save exceeded 150ms for %r — session backend "
-                "backpressure; skipping this event's save. Subsequent events will retry.",
+                "backpressure; not waiting for it (it may still land). "
+                "Subsequent events will retry.",
                 sanitize_for_log(event_name or ""),
             )
         except Exception as exc:  # noqa: BLE001 — saves must never break event handling
             from ._exposure_diagnostics import log_failure
 
-            # Explicit saves project persist="server" values and storage
-            # exceptions propagate, so the exception can carry server-only data.
+            # A storage exception can carry session values.
             log_failure(
                 logger,
                 exc,
@@ -4825,10 +4829,14 @@ class ViewRuntime:
         keeps it a separate ``if`` — so the child saves under its stable sticky
         key (Decision 1) gated on the both-opt-in predicate
         (:func:`sticky_child_should_persist`, Decision 5). Bounded by the same
-        150ms timeout. Caller MUST have verified the gate."""
+        150ms, counted the same way: one Django-thread hop whose deadline starts
+        when it starts running (#3212). Caller MUST have verified the gate."""
 
-        async def _save() -> None:
-            from .mixins.sticky import save_sticky_child_state, write_sticky_index_and_prune
+        def _save_sticky() -> None:
+            from .mixins.sticky import (
+                save_sticky_child_state_sync,
+                write_sticky_index_and_prune_sync,
+            )
 
             parent = self.view_instance
             mount_request = getattr(parent, "_djust_mount_request", None)
@@ -4842,24 +4850,23 @@ class ViewRuntime:
 
             parent_path = mount_request.path if mount_request is not None else "/"
 
-            await save_sticky_child_state(target_view, save_session, parent_path)
-            await write_sticky_index_and_prune(parent, save_session, parent_path)
-            await save_session.asave()
+            save_sticky_child_state_sync(target_view, save_session, parent_path)
+            write_sticky_index_and_prune_sync(parent, save_session, parent_path)
+            save_session.save()
 
         try:
-            await asyncio.wait_for(_save(), timeout=EVENT_STATE_SAVE_TIMEOUT_S)
-        except asyncio.TimeoutError:
+            await _run_explicit_save(self, _save_sticky, deadline=EVENT_STATE_SAVE_TIMEOUT_S)
+        except (asyncio.TimeoutError, ExplicitSaveDeferred):
             logger.warning(
                 "Runtime event sticky-child state save exceeded 150ms for %r — "
-                "session backend backpressure; skipping this event's save. "
-                "Subsequent events will retry.",
+                "session backend backpressure; not waiting for it (it may still "
+                "land). Subsequent events will retry.",
                 sanitize_for_log(event_name or ""),
             )
         except Exception as exc:  # noqa: BLE001 — saves must never break event handling
             from ._exposure_diagnostics import log_failure
 
-            # Explicit saves project persist="server" values and storage
-            # exceptions propagate, so the exception can carry server-only data.
+            # A storage exception can carry session values.
             log_failure(
                 logger,
                 exc,

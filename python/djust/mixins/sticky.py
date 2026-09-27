@@ -27,7 +27,7 @@ import itertools
 import logging
 from typing import Any, Dict, Optional
 
-from asgiref.sync import sync_to_async
+from asgiref.sync import async_to_sync, sync_to_async
 
 logger = logging.getLogger(__name__)
 
@@ -235,7 +235,10 @@ def save_sticky_child_state_sync(child: Any, session: Any, parent_path: str) -> 
         else:
             session.pop(f"{key}__private", None)
 
-    context = child.get_context_data()
+    # Coroutine-aware like the async variant: the runtime's event save also
+    # runs this in a Django thread (#3212).
+    gcd = child.get_context_data
+    context = async_to_sync(gcd)() if inspect.iscoroutinefunction(gcd) else gcd()
     state = _collect_sticky_child_state(child, context)
     session[key] = _normalize(state, state_roundtrip=True)
 

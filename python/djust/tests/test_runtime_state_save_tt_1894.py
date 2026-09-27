@@ -434,20 +434,20 @@ def test_runtime_save_block_present_and_gated():
     # --- Body (in _persist_state_after_event): key shape + writes ---
     # Mirrors WS pin lines 301-303.
     assert 'save_view_key = f"liveview_{save_path}"' in body_collapsed
-    assert "await save_session.aset(save_view_key" in body_collapsed
-    assert "await save_session.asave()" in body_collapsed
+    # #3212: one sync Django-thread hop, so the sync session API.
+    assert "save_session[save_view_key] = _normalize(" in body_collapsed
+    assert "save_session.save()" in body_collapsed
     # Private + components paths (WS pin lines 305-308).
     assert "_get_private_state" in body_collapsed
     assert 'f"{save_view_key}__private"' in body_collapsed
     assert "_save_components_to_session" in body_collapsed
     # Failure handling + 150ms bound (WS pin lines 310 + 329-331).
     assert "Failed to save LiveView state after runtime event" in body_collapsed
-    assert "asyncio.wait_for" in body_collapsed
-    # #2154 named this bound EVENT_STATE_SAVE_TIMEOUT_S so tests that assert a
-    # save LANDED can raise it instead of racing a 150ms wall clock. Accept
-    # either spelling — what matters is that the save is bounded at all.
-    assert (
-        "timeout=0.150" in body_collapsed or "timeout=EVENT_STATE_SAVE_TIMEOUT_S" in body_collapsed
+    # #3212: bounded through the shared one-hop helper, whose deadline starts
+    # when the save starts running (the bound itself is pinned in
+    # test_sticky_child_persistence_1471::test_the_event_save_is_still_bounded).
+    assert "_run_explicit_save(self, _save, deadline=EVENT_STATE_SAVE_TIMEOUT_S)" in (
+        body_collapsed
     )
     assert "asyncio.TimeoutError" in body_collapsed
 
@@ -603,9 +603,8 @@ def test_runtime_sticky_save_present_and_gated():
     # Helper body: the two ADR-018 sticky helpers + asave + 150ms bound.
     assert "save_sticky_child_state" in helper_src
     assert "write_sticky_index_and_prune" in helper_src
-    assert "await save_session.asave()" in helper_src
-    assert "asyncio.wait_for" in helper_src
-    # #2154 named this bound EVENT_STATE_SAVE_TIMEOUT_S so tests that assert a
-    # save LANDED can raise it instead of racing a 150ms wall clock. Accept
-    # either spelling — what matters is that the save is bounded at all.
-    assert "timeout=0.150" in helper_src or "timeout=EVENT_STATE_SAVE_TIMEOUT_S" in helper_src
+    assert "save_session.save()" in helper_src
+    # #3212: one Django-thread hop through the shared bounded helper.
+    assert "_run_explicit_save(self, _save_sticky, deadline=EVENT_STATE_SAVE_TIMEOUT_S)" in (
+        helper_src
+    )

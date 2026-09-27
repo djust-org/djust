@@ -341,16 +341,17 @@ async def test_post_event_state_save_failure_is_value_free_for_explicit_views(
     values and "storage exceptions propagate" (``_exposure_sessions``), so a
     storage error can carry server-only data. The trigger is synthetic: the
     store write raises after mount. A legacy view writes through the session's
-    ``aset``. An explicit view, even with ``enable_state_snapshot`` set, commits
-    through ``commit_explicit_turn`` (#3211), so its failing write is the
-    explicit save, and the turn is not acknowledged."""
+    item assignment (one sync hop since #3212). An explicit view, even with
+    ``enable_state_snapshot`` set, commits through ``commit_explicit_turn``
+    (#3211), so its failing write is the explicit save, and the turn is not
+    acknowledged."""
     from django.contrib.sessions.backends.base import SessionBase
 
     from djust import _exposure_sessions
 
     writes = []
 
-    async def failing_aset(self, key, value):
+    def failing_setitem(self, key, value):
         writes.append(key)
         raise ValueError("SESSION_STORE_SENTINEL")
 
@@ -379,7 +380,7 @@ async def test_post_event_state_save_failure_is_value_free_for_explicit_views(
                 {"type": "mount", "view": __name__ + ".PersistFailureView", "url": "/s/"}
             )
             await _drain(socket)
-            monkeypatch.setattr(SessionBase, "aset", failing_aset)
+            monkeypatch.setattr(SessionBase, "__setitem__", failing_setitem)
             monkeypatch.setattr(_exposure_sessions, "save_server_state", failing_explicit_save)
             caplog.clear()
             with caplog.at_level(logging.DEBUG):
