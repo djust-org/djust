@@ -1896,10 +1896,15 @@ mod release_3228 {
             .unwrap();
         while handle.sender.try_send(ViewMsg::Reset).is_ok() {}
 
-        // The child now blocks forwarding into the full queue.
-        child_handle
-            .send_to_parent("ping".to_string(), HashMap::new())
-            .await;
+        // The child now blocks forwarding into the full queue. Two forwards:
+        // the view's receiving the Shutdown frees one slot, which lets the
+        // first through; the second must still be blocked when the view
+        // starts waiting on the child.
+        for _ in 0..2 {
+            child_handle
+                .send_to_parent("ping".to_string(), HashMap::new())
+                .await;
+        }
         for _ in 0..10 {
             tokio::task::yield_now().await;
         }
