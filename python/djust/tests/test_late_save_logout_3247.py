@@ -45,6 +45,10 @@ pytestmark = pytest.mark.django_db(transaction=True)
 DB = "django.contrib.sessions.backends.db"
 CACHE = "django.contrib.sessions.backends.cache"
 BACKENDS = [DB, CACHE]
+CACHED_DB = "django.contrib.sessions.backends.cached_db"
+FILE = "django.contrib.sessions.backends.file"
+#: The unit cases cover every server-side backend ``_stored_session`` branches on.
+ALL_BACKENDS = [DB, CACHE, CACHED_DB, FILE]
 _MOD = __name__
 VALVE_S = 10.0
 
@@ -74,7 +78,7 @@ def _as_pool_save(fn):
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.parametrize("engine", BACKENDS)
+@pytest.mark.parametrize("engine", ALL_BACKENDS)
 def test_a_session_flushed_by_another_request_is_not_written_or_recreated(engine):
     save = _persisted(engine, {SESSION_KEY: "1", "seed": 1})
     key = save.session_key
@@ -92,7 +96,7 @@ def test_a_session_flushed_by_another_request_is_not_written_or_recreated(engine
     assert save.session_key == key, "the save must not have created a replacement"
 
 
-@pytest.mark.parametrize("engine", BACKENDS)
+@pytest.mark.parametrize("engine", ALL_BACKENDS)
 def test_a_session_that_now_names_another_user_is_not_written(engine):
     save = _persisted(engine, {SESSION_KEY: "1"})
     key = save.session_key
@@ -106,7 +110,7 @@ def test_a_session_that_now_names_another_user_is_not_written(engine):
     assert _store(engine)(key).load().get("liveview_/x/") is None
 
 
-@pytest.mark.parametrize("engine", BACKENDS)
+@pytest.mark.parametrize("engine", ALL_BACKENDS)
 def test_a_lazily_loaded_session_that_vanished_is_not_recreated(engine):
     """The save's object has not loaded yet: its first write loads, finds the
     row gone and resets the key to None, and ``save()`` would then CREATE a new
@@ -127,7 +131,7 @@ def test_a_lazily_loaded_session_that_vanished_is_not_recreated(engine):
     assert not _exists(engine, key)
 
 
-@pytest.mark.parametrize("engine", BACKENDS)
+@pytest.mark.parametrize("engine", ALL_BACKENDS)
 def test_a_login_rotating_the_saves_own_session_still_saves(engine):
     """``login()`` in a handler on the object the save writes: ``cycle_key()``
     stored the pre-login copy (no user) under the new key, and the object
@@ -152,7 +156,7 @@ def test_a_login_rotating_the_saves_own_session_still_saves(engine):
     assert not _exists(engine, old_key)
 
 
-@pytest.mark.parametrize("engine", BACKENDS)
+@pytest.mark.parametrize("engine", ALL_BACKENDS)
 def test_a_same_user_key_rotation_still_saves(engine):
     """``update_session_auth_hash`` / a re-login of the same user rotate the key
     and keep the user."""
@@ -169,7 +173,7 @@ def test_a_same_user_key_rotation_still_saves(engine):
     assert _store(engine)(new_key).load().get("liveview_/x/") == {"count": 2}
 
 
-@pytest.mark.parametrize("engine", BACKENDS)
+@pytest.mark.parametrize("engine", ALL_BACKENDS)
 def test_a_login_in_another_request_drops_the_old_sessions_save(engine):
     """Another tab logs in: ``cycle_key()`` there moves the data to a new key
     and deletes the old one. The late save for the old key must neither
@@ -190,7 +194,7 @@ def test_a_login_in_another_request_drops_the_old_sessions_save(engine):
     assert stored.get(SESSION_KEY) == "9" and "liveview_/x/" not in stored
 
 
-@pytest.mark.parametrize("engine", BACKENDS)
+@pytest.mark.parametrize("engine", ALL_BACKENDS)
 def test_off_the_pool_the_check_costs_nothing(engine, monkeypatch):
     """A WebSocket or ``PooledHTTP`` save is still awaited by its turn: no lookup."""
     save = _persisted(engine)
@@ -563,3 +567,168 @@ async def test_an_explicit_turn_whose_save_finds_the_session_logged_out_asks_for
         if r.levelno >= logging.WARNING and r.name.startswith("djust")
     ]
     assert not warned, warned
+
+
+# --------------------------------------------------------------------------- #
+# Review Y1: a lookup ERROR is not a logout
+# --------------------------------------------------------------------------- #
+
+from django.core.cache.backends.locmem import LocMemCache  # noqa: E402
+
+
+class FlakyCache(LocMemCache):
+    """A cache whose next ``failures`` reads raise, as Redis or memcached do
+    during a blip. Class-level, because each thread builds its own instance."""
+
+    failures = 0
+
+    def _maybe_fail(self):
+        if FlakyCache.failures > 0:
+            FlakyCache.failures -= 1
+            raise ConnectionError("cache unavailable")
+
+    def get(self, *args, **kwargs):
+        self._maybe_fail()
+        return super().get(*args, **kwargs)
+
+    def has_key(self, *args, **kwargs):
+        self._maybe_fail()
+        return super().has_key(*args, **kwargs)
+
+
+_FLAKY = override_settings(
+    CACHES={
+        "default": {
+            "BACKEND": f"{_MOD}.FlakyCache",
+            "LOCATION": "late-save-3247-flaky",
+        }
+    },
+    SESSION_ENGINE=CACHE,
+)
+
+
+def _lookup_warnings(caplog):
+    return [
+        r
+        for r in caplog.records
+        if r.levelno == logging.WARNING and "session lookup failed" in r.getMessage()
+    ]
+
+
+@pytest.mark.parametrize("engine", [CACHE, CACHED_DB])
+def test_a_cache_error_during_the_lookup_does_not_drop_the_save(engine, caplog):
+    """Django's cache backend swallows the error in ``load()`` and reports the
+    session as missing. The lookup must not: the save goes ahead, and the error
+    is a warning with its traceback."""
+    with _FLAKY:
+        FlakyCache.failures = 0
+        save = _persisted(engine, {SESSION_KEY: "1"})
+        key = save.session_key
+        save["liveview_/x/"] = {"count": 3}
+        FlakyCache.failures = 1
+        caplog.set_level(logging.DEBUG)
+
+        def body():
+            check_session(save, key)
+            save.save()
+
+        _as_pool_save(body)  # not LateSaveDropped
+        FlakyCache.failures = 0
+        assert _store(engine)(key).load().get("liveview_/x/") == {"count": 3}
+    messages = [r.getMessage() for r in caplog.records]
+    assert not any("Late state save dropped" in m for m in messages), messages
+    if engine == CACHE:
+        [warning] = _lookup_warnings(caplog)
+        assert warning.exc_info and warning.exc_info[0] is ConnectionError
+    else:
+        # cached_db treats its cache as optional and asks the database.
+        assert not _lookup_warnings(caplog)
+
+
+@pytest.mark.asyncio
+async def test_a_cache_blip_on_a_legacy_pool_save_keeps_the_save(monkeypatch, caplog):
+    """The runtime's legacy save on the pool, with the cache failing once, for
+    the lookup: the save lands and the failure is a warning, not a logout."""
+    from djust.tests.test_legacy_save_deadline_3212 import Counter
+
+    from djust.runtime import ViewRuntime
+    from djust.tests.test_runtime_state_save_tt_1894 import MockTransport
+
+    with _FLAKY:
+        FlakyCache.failures = 0
+        key = (await sync_to_async(_persisted)(CACHE)).session_key
+        request = RequestFactory().get("/legacy-3212/")
+        request.session = _store(CACHE)(key)
+        await sync_to_async(request.session.get)("seed")  # loaded, as after mount
+        view = Counter()
+        view.count = 4
+        view._djust_mount_request = request
+        runtime = ViewRuntime(MockTransport())
+        runtime.view_instance = view
+
+        caplog.set_level(logging.DEBUG)
+        FlakyCache.failures = 1
+        async with ThreadSensitiveContext():
+            assert await runtime._persist_state_after_event(view, "increment") is True
+        FlakyCache.failures = 0
+        stored = await sync_to_async(lambda: _store(CACHE)(key).load())()
+    assert stored.get("liveview_/legacy-3212/") == {"count": 4}, stored
+    assert _lookup_warnings(caplog)
+    messages = [r.getMessage() for r in caplog.records]
+    assert not any("Late state save dropped" in m for m in messages), messages
+
+
+# --------------------------------------------------------------------------- #
+# Review Y3: the key is read when the save body starts, on the real save path
+# --------------------------------------------------------------------------- #
+
+
+def _session_rows():
+    from django.contrib.sessions.models import Session
+
+    return Session.objects.count()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("site", ["root", "sticky"])
+async def test_an_unloaded_session_that_vanished_is_not_recreated_by_the_runtime_save(
+    site, monkeypatch
+):
+    """The save's session object has not been loaded when the save body starts.
+    The body's first write loads it, finds the row gone and resets the key to
+    ``None``; checked at write time, ``None`` reads as "never persisted" and
+    ``save()`` creates a new session. The key read at the start of the body
+    prevents that.
+
+    The stock runtime mount loads the session (its restore reads it), so this
+    is defence in depth for a session that reaches the save still lazy.
+    """
+    from djust.tests.test_legacy_save_deadline_3212 import Counter, StickyChild
+
+    from djust.runtime import ViewRuntime
+    from djust.tests.test_runtime_state_save_tt_1894 import MockTransport
+
+    key = (await sync_to_async(_persisted)(DB)).session_key
+    request = RequestFactory().get("/legacy-3212/")
+    request.session = _store(DB)(key)  # lazy: never loaded
+    parent = Counter()
+    parent.count = 4
+    parent._djust_mount_request = request
+    runtime = ViewRuntime(MockTransport())
+    runtime.view_instance = parent
+
+    await sync_to_async(lambda: _store(DB)(key).flush())()  # logout elsewhere
+    rows = await sync_to_async(_session_rows)()
+    writes = _pool_writes(DB, monkeypatch)
+
+    async with ThreadSensitiveContext():
+        if site == "root":
+            assert await runtime._persist_state_after_event(parent, "increment") is False
+        else:
+            child = StickyChild()
+            child.clicks = 3
+            parent._register_child("side", child)
+            await runtime._persist_sticky_child_after_event(child, "click")
+    assert request.session.session_key is None, "precondition: the body's load reset the key"
+    assert writes == [], writes
+    assert await sync_to_async(_session_rows)() == rows, "the save created a new session"

@@ -223,6 +223,9 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         "_websocket_secure",
         "_django_session_key",
         "_djust_mount_view_path",
+        # The SSE transport's stream id (``on_view_mounted``), the twin of
+        # ``_websocket_session_id`` (#3248 review).
+        "_sse_session_id",
     }
 )
 

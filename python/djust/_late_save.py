@@ -26,6 +26,13 @@ Only a stored user that DIFFERS from the object's is a mismatch; a stored
 anonymous session is not. Without that the login itself would never be
 saved, because nothing else writes that object again.
 
+A lookup that FAILS (a Redis or memcached blip, a database error) is not a
+logout: Django's ``cache`` backend swallows such errors in ``load()`` and
+reports the session as missing, so the lookup reads the store directly and
+lets the error surface. The save then goes ahead as before, and the error is
+logged as a warning with its traceback. Only a definite "session gone" or
+"another user" drops a save.
+
 The check narrows the window; it cannot close it. A logout that lands between
 the lookup and the write still races the write, as it would for any concurrent
 Django request. ``db`` refuses that write by itself; ``cache`` checks and then
@@ -70,25 +77,75 @@ def _auth_user(data: Any) -> Optional[str]:
     return None if value is None else str(value)
 
 
+class _LookupFailed(Exception):
+    """The store could not say whether the session exists."""
+
+
+def _stored_session(backend: type, key: str) -> Optional[Any]:
+    """The stored session data for ``key``; ``None`` only when it is definitely gone.
+
+    Raises on a storage error instead of reporting it as a missing session,
+    as ``load()`` does for the ``cache`` and ``file`` backends. One lookup for
+    the stock ``db``, ``cache`` and ``cached_db`` backends.
+    """
+    from django.contrib.sessions.backends import cache as cache_backend
+    from django.contrib.sessions.backends import cached_db
+    from django.contrib.sessions.backends import db as db_backend
+
+    fresh = backend(session_key=key)
+    if issubclass(backend, cached_db.SessionStore):
+        try:
+            data = fresh._cache.get(fresh.cache_key)
+        except Exception:  # noqa: BLE001 — the database is the authority; cached_db does the same
+            data = None
+        if data is not None:
+            return data
+        row = fresh._get_session_from_db()  # a database error propagates
+        return None if row is None else fresh.decode(row.session_data)
+    if issubclass(backend, cache_backend.SessionStore):
+        return fresh._cache.get(fresh.cache_key)  # a cache error propagates
+    if issubclass(backend, db_backend.SessionStore):
+        row = fresh._get_session_from_db()  # a database error propagates
+        return None if row is None else fresh.decode(row.session_data)
+    # ``file`` and custom backends: ``exists()`` answers presence, and a
+    # ``load()`` that then loses the key could not read what exists.
+    if not fresh.exists(key):
+        return None
+    data = fresh.load()
+    if fresh.session_key is None:
+        raise _LookupFailed("the session exists but could not be read")
+    return data
+
+
 def check_session(session: Any, expected_key: Optional[str]) -> None:
     """Raise :class:`LateSaveDropped` when a pool save's session is gone.
 
     ``expected_key`` is the key the save body started with, read before the
     body touched the session: a lazy load of a deleted session resets the
     object's key to ``None``, and ``save()`` would then create a new session.
-    ``None`` means the session was never persisted, so there is no stored
-    session another request could have logged out: the save may create it.
+    ``None`` means the session was never persisted before this save, or the
+    save's own handler flushed it (``logout()`` on the object the save writes):
+    either way there is no stored session another request could have logged
+    out, so the check does not apply. (After an in-handler ``logout()`` the
+    save creates a new, cookie-less session row holding the logged-out page's
+    state, which expires unread; that predates this check.)
 
-    One store lookup, only on the save pool.
+    One store lookup, only on the save pool. A lookup error lets the save go
+    ahead and is logged as a warning.
     """
     if not getattr(_state, "active", False) or not expected_key or session is None:
         return
+    from django.contrib.sessions.backends import signed_cookies
+
     backend = type(session)
-    if backend.__module__.endswith("signed_cookies"):
+    if issubclass(backend, signed_cookies.SessionStore):
         return  # the browser holds the whole session; the server has nothing to flush
-    fresh = backend(session_key=expected_key)
-    stored = fresh.load()
-    if fresh.session_key is None:
+    try:
+        stored = _stored_session(backend, expected_key)
+    except Exception:  # noqa: BLE001 — an unreadable store is not a logout
+        logger.warning("Late state save: the session lookup failed; saving anyway", exc_info=True)
+        return
+    if stored is None:
         _drop("its session no longer exists")
     stored_user = _auth_user(stored)
     if stored_user is not None and stored_user != _auth_user(session):

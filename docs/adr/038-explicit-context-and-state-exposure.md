@@ -199,8 +199,9 @@ Implemented (E2-9, D-i, D-j):
   which a logout in another request does not change. So before writing, a pool
   save looks its session key up once and is dropped, with a debug line and no
   write, when the key no longer exists or the stored session names a different
-  authenticated user (#3247). A still-waiting explicit turn then answers the
-  reload `state_error`. A key rotation made through the save's own session
+  authenticated user (#3247); a still-waiting explicit turn then answers the
+  reload `state_error`. A lookup that fails (a cache or database error) is not
+  a logout: the save goes ahead and the error is logged as a warning. A key rotation made through the save's own session
   object (`login()` calling `cycle_key()` in a legacy handler) is not a
   mismatch: the store holds the pre-login copy under the new key, and the save
   is what persists the login. The lookup narrows the window; it does not close

@@ -4910,8 +4910,10 @@ class ViewRuntime:
         for; it keeps running and may still land, and the runtime's next save
         waits for it, so it can never overwrite a newer one.
 
-        Returns True only when the save landed within its deadline: a skip-render
-        noop refreshes the client's token only then (#3246)."""
+        Returns False when the save failed, was deferred or was dropped (#3247),
+        and True otherwise, including when there is no session to save into: a
+        skip-render noop refreshes the client's token only then (#3246), since
+        the token is then either backed by the session copy or the only source."""
 
         def _save() -> None:
             # Discover the session the same way the WS save block does
@@ -6250,8 +6252,10 @@ class ViewRuntime:
         change it, and without a refresh the client keeps the older token, so
         Back or a reconnect restores the state from before the event whenever
         the token is the source. Refreshed only when the state changed and the
-        session save landed: after a failed or deferred save the held token is
-        the copy that matches storage, and it must not be replaced.
+        session save did not fail (``saved``): after a failed, deferred or
+        dropped save the held token is the copy that matches storage, and it
+        must not be replaced. With no session at all the token is the only
+        source, so it is refreshed.
         """
         if not saved or not self._legacy_snapshot_root(view):
             return {}

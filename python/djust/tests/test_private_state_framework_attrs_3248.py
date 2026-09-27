@@ -27,6 +27,7 @@ event save and the real reconnect restore.
 
 from __future__ import annotations
 
+import asyncio
 import pytest
 from asgiref.sync import sync_to_async
 from django.test import RequestFactory, override_settings
@@ -55,6 +56,7 @@ CONNECTION_ATTRS = (
     "_websocket_secure",
     "_django_session_key",
     "_djust_mount_view_path",
+    "_sse_session_id",
 )
 #: Every instance that rendered, so a test can inspect the one a mount built.
 RENDERED: list = []
@@ -234,3 +236,51 @@ async def test_the_reconnect_restore_does_not_set_framework_attributes():
                 assert flag not in view.__dict__, flag
         finally:
             await communicator.disconnect()
+
+
+def test_every_per_connection_name_is_framework_internal():
+    """The full list of names a transport sets per connection. A name added
+    here without joining ``_FRAMEWORK_INTERNAL_ATTRS`` would be saved and
+    restored across connections; the real-path tests below derive the saved
+    set instead, so a name missing from this list still fails there."""
+    missing = [name for name in CONNECTION_ATTRS if name not in _FRAMEWORK_INTERNAL_ATTRS]
+    assert not missing, missing
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_the_sse_event_save_does_not_write_framework_attributes():
+    """The SSE twin of the WebSocket case: the stream's mount stamps
+    ``_sse_session_id`` and the other identity names before ``mount()``."""
+    import uuid
+
+    from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
+    from djust.tests.test_exposure_sse_resilience_3200 import _request
+
+    with _SETTINGS:
+        session_key = await sync_to_async(_new_session)()
+        sid = str(uuid.uuid4())
+        try:
+            get = await sync_to_async(_request)(
+                "GET", f"/djust/sse/{sid}/", {"view": VIEW, "_djust_url": URL}, session_key
+            )
+            assert (await DjustSSEStreamView().get(get, session_id=sid)).status_code == 200
+            view = _sse_sessions[sid].view_instance
+            assert view._sse_session_id, "precondition: the stream stamped its id"
+            post = await sync_to_async(_request)(
+                "POST",
+                f"/djust/sse/{sid}/message/",
+                {"type": "event", "event": "bump", "params": {}},
+                session_key,
+            )
+            assert (await DjustSSEMessageView().post(post, session_id=sid)).status_code == 200
+            for _ in range(200):
+                stored = await sync_to_async(_stored)(session_key)
+                private = stored.get(f"liveview_{URL}__private")
+                if private and private.get("_mine") == 2:
+                    break
+                await asyncio.sleep(0.01)
+        finally:
+            _sse_sessions.clear()
+    assert private is not None, "the event save never wrote the private state; vacuous"
+    assert set(private) == {"_mine", "_action_state"}, sorted(private)
