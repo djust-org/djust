@@ -142,8 +142,18 @@ def check_session(session: Any, expected_key: Optional[str]) -> None:
         return  # the browser holds the whole session; the server has nothing to flush
     try:
         stored = _stored_session(backend, expected_key)
-    except Exception:  # noqa: BLE001 — an unreadable store is not a logout
-        logger.warning("Late state save: the session lookup failed; saving anyway", exc_info=True)
+    except Exception as exc:  # noqa: BLE001 — an unreadable store is not a logout
+        from ._exposure_diagnostics import log_failure
+
+        # A storage error can carry session values: value-free where the
+        # turn's diagnostics are restricted, as every other save failure.
+        log_failure(
+            logger,
+            exc,
+            "Late state save: the session lookup failed; saving anyway",
+            level="warning",
+            traceback=True,
+        )
         return
     if stored is None:
         _drop("its session no longer exists")
