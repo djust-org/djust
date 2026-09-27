@@ -5451,12 +5451,20 @@ class ViewRuntime:
         # ``send_parent``, can write the view's declared fields, and the
         # snapshot flag means nothing to it (#3211). A legacy view keeps the
         # bounded, opt-in save for the new concrete bindings, as before.
+        #
+        # After the commit, every component frame carries the refreshed signed
+        # client snapshot, as the view route's frames do: the commit moved the
+        # ``persist="server"`` fields to this turn, and a reconnect with the
+        # client's older token would restore them next to ``persist="client"``
+        # fields from an earlier turn (#3231).
+        snapshot_fields: Dict[str, Any] = {}
         if view is self.view_instance:
             from ._exposure import uses_legacy_exposure
 
             if not uses_legacy_exposure(view):
                 if not await self.commit_explicit_turn(view, source="event"):
                     return True
+                snapshot_fields = await self._explicit_event_snapshot(view)
             elif isinstance(component, ComponentDeclaration) and getattr(
                 view, "enable_state_snapshot", False
             ):
@@ -5474,7 +5482,7 @@ class ViewRuntime:
         from .websocket import _resolve_skip_render
 
         if _resolve_skip_render(view):
-            await self._send_component_noop(event_name, event_ref, async_batch)
+            await self._send_component_noop(event_name, event_ref, async_batch, snapshot_fields)
             return True
 
         # ADR-032 D5: the scoped path first. Same helper as the runtime event
@@ -5487,7 +5495,7 @@ class ViewRuntime:
             # ``html_update`` (#2922). ``_flush_all_pending`` below drains any
             # push events before the noop goes out, as on the view route.
             if not changed:
-                await self._send_component_noop(event_name, event_ref, async_batch)
+                await self._send_component_noop(event_name, event_ref, async_batch, snapshot_fields)
                 return True
             if _scoped_component_for(view, changed) is component:
                 _scoped_start = time.perf_counter()
@@ -5500,6 +5508,7 @@ class ViewRuntime:
                         event_name=event_name,
                         event_ref=event_ref,
                         async_batch=async_batch,
+                        snapshot_fields=snapshot_fields,
                     )
                     await self._flush_all_pending()
                     self._dispatch_async_work(event_name, async_batch)
@@ -5533,6 +5542,7 @@ class ViewRuntime:
         if event_ref is not None:
             msg["ref"] = event_ref
         msg.update(async_batch.fields())
+        msg.update(snapshot_fields)
         await self._send_render_frame(msg)
         await self._flush_all_pending()
 
@@ -5541,13 +5551,19 @@ class ViewRuntime:
         return True
 
     async def _send_component_noop(
-        self, event_name: str, event_ref: Optional[int], async_batch: "AsyncBatch"
+        self,
+        event_name: str,
+        event_ref: Optional[int],
+        async_batch: "AsyncBatch",
+        snapshot_fields: Optional[Dict[str, Any]] = None,
     ) -> None:
         """End a ``component_id`` turn that renders nothing: drain the queued
         side effects, answer ``noop`` (advertising the captured background
         batch) and start that batch — the view route's skip shape (#2922,
-        #2924)."""
-        await self._flush_all_pending()
+        #2924). An explicit view's noop carries the refreshed client snapshot,
+        and its queued side effects follow it, as on the view route (#3231)."""
+        if not snapshot_fields:
+            await self._flush_all_pending()
         noop_msg: Dict[str, Any] = {
             "type": "noop",
             "source": "event",
@@ -5556,7 +5572,13 @@ class ViewRuntime:
         if event_ref is not None:
             noop_msg["ref"] = event_ref
         noop_msg.update(async_batch.fields())
+        if snapshot_fields:
+            noop_msg.update(snapshot_fields)
         await self.transport.send(noop_msg)
+        if snapshot_fields:
+            # Publish (or invalidate) navigation state before a queued
+            # redirect triggers before-navigate, as the view route does.
+            await self._flush_all_pending()
         self._dispatch_async_work(event_name, async_batch)
         await self._flush_deferred_activity_events()
 
@@ -6973,10 +6995,13 @@ class ViewRuntime:
         event_name: str,
         event_ref: Optional[int],
         async_batch: Optional["AsyncBatch"] = None,
+        snapshot_fields: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Emit the ``patch`` frame for a scoped render on the component
         dispatch path — the same shape ``_render_and_send`` emits (D4), with
-        the wire version stamped from the page markup so recovery is current."""
+        the wire version stamped from the page markup so recovery is current.
+        ``snapshot_fields`` is an explicit view's refreshed client snapshot
+        (#3231)."""
         html, patches, version = triple
         wire_version = self.transport.next_client_version(html, version)
         msg: Dict[str, Any] = {
@@ -6990,6 +7015,8 @@ class ViewRuntime:
             msg["ref"] = event_ref
         if async_batch is not None:
             msg.update(async_batch.fields())
+        if snapshot_fields:
+            msg.update(snapshot_fields)
         await self._send_render_frame(
             self._stamp_event_frame(
                 view,
