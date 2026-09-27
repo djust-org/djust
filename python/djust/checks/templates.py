@@ -27,6 +27,7 @@ from djust.checks.utils import (
     _LIVE_RENDER_STICKY_FALSY_RE,
 )
 from djust.checks.components import _routed_liveview_classes
+from djust._template_bindings import DIRECTIVES as _CLIENT_EVENT_DIRECTIVES
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,10 @@ logger = logging.getLogger(__name__)
 # (``{{ view_path }}`` set in a shared base template, #395) is not matched.
 _PHANTOM_VIEW_VAR_RE = re.compile(r"^\s*\{\{\s*(dj_view_id|view_name|view_id)\s*\}\}\s*$")
 
-_DJ_VIEW_RE = re.compile(r"dj-view")
+# Attribute-name boundaries (#3225): a bare ``dj-view`` substring also matched
+# ``dj-viewport-bottom`` and ``dj-view-transitions``, so an infinite-scroll
+# template counted as having a ``dj-view`` and T012 stayed silent.
+_DJ_VIEW_RE = re.compile(r"(?<![\w-])dj-view(?![\w-])")
 
 
 # ---------------------------------------------------------------------------
@@ -64,7 +68,7 @@ _DJ_ACTIVITY_TAG_RE = re.compile(r"\{%\s*dj_activity\b([^%]*?)%\}", re.DOTALL)
 _DJ_ACTIVITY_NAME_RE = re.compile(
     r"""^\s*(?:name\s*=\s*)?(?:"([^"]+)"|'([^']+)'|([A-Za-z_][\w.]*))\s*(?:$|\s)"""
 )
-_DJ_ROOT_RE = re.compile(r"dj-root")
+_DJ_ROOT_RE = re.compile(r"(?<![\w-])dj-root(?![\w-])")
 _INCLUDE_RE = re.compile(r"\{%\s*include\s+")
 _LIVEVIEW_CONTENT_RE = re.compile(r"\{\{\s*liveview_content\s*\|\s*safe\s*\}\}")
 # S007 (#1821) — `{{ <expr>.client_name|safe }}` stored-XSS scanner. Upload
@@ -115,10 +119,90 @@ _DOC_DISPATCHED_DJUST_EVENTS = frozenset(
     }
 )
 _NAV_DATA_ATTRS = re.compile(r"data-(view|tab|page|section)")  # Navigation-style data attributes
-_DJ_EVENT_DIRECTIVES_RE = re.compile(
-    r"dj-(click|input|change|submit|blur|focus|keydown|keyup|mouseenter|mouseleave|window-\w+|document-\w+|click-away|shortcut)="
+# T012 (#3225) — the attributes that only work inside a connected LiveView.
+# Derived from the client's directive table in ``djust._template_bindings``:
+# every server-event directive (``DIRECTIVES``: dj-click, dj-viewport-bottom,
+# dj-poll, dj-mounted, ...) plus the non-event attributes that bind to the
+# view (a model field, a hook, an upload slot, a patched or streamed
+# container). Every other attribute the client reads is listed in
+# ``_T012_EXEMPT_ATTRIBUTES``; ``python/tests/test_checks_t002_t012_3225.py``
+# scans the client source and fails when an attribute is in neither set.
+_T012_LIVE_NON_EVENT_ATTRIBUTES = frozenset(
+    {"dj-model", "dj-hook", "dj-upload", "dj-upload-drop", "dj-update", "dj-stream-mode"}
 )
-_DJ_COMPONENT_RE = re.compile(r"dj-component")
+_T012_TRIGGER_ATTRIBUTES = frozenset(_CLIENT_EVENT_DIRECTIVES) | _T012_LIVE_NON_EVENT_ATTRIBUTES
+_T012_EXEMPT_ATTRIBUTES = frozenset(
+    {
+        # The root markers themselves, and server-stamped or root-level markers.
+        "dj-root",
+        "dj-view",
+        "dj-liveview-root",
+        "dj-lazy",
+        "dj-id",
+        "dj-key",
+        "dj-sticky-root",
+        "dj-sticky-slot",
+        "dj-sticky-view",
+        # Page-level behaviour that is valid in a layout outside any root
+        # (T010/T016 cover navigation separately).
+        "dj-navigate",
+        "dj-patch",
+        "dj-patch-reload",
+        "dj-prefetch",
+        "dj-cloak",
+        "dj-offline-hide",
+        "dj-track-static",
+        "dj-view-transitions",
+        "dj-loading",
+        # Client-only behaviour that sends no server event.
+        "dj-audio",
+        "dj-copy",
+        "dj-copy-class",
+        "dj-copy-feedback",
+        "dj-dialog",
+        "dj-flip",
+        "dj-remove",
+        "dj-remove-duration",
+        "dj-transition",
+        "dj-scroll-into-view",
+        "dj-sticky-scroll",
+        "dj-ignore-attrs",
+        "dj-force-value",
+        "dj-virtual",
+        "dj-virtual-key-attr",
+        "dj-viewport",
+        # Modifiers of a trigger directive; they do not appear on their own.
+        "dj-confirm",
+        "dj-debounce",
+        "dj-throttle",
+        "dj-disable-with",
+        "dj-form-pending",
+        "dj-lock",
+        "dj-no-recover",
+        "dj-no-submit",
+        "dj-params",
+        "dj-paste-suppress",
+        "dj-poll-interval",
+        "dj-shortcut-in-input",
+        "dj-target",
+        "dj-trigger-action",
+        "dj-mutation-attr",
+        "dj-mutation-debounce",
+    }
+)
+# A trigger attribute, optionally with ``.modifier`` suffixes (``dj-model.lazy``,
+# ``dj-keydown.enter``), followed by ``=``; plus the open ``dj-window-*`` /
+# ``dj-document-*`` families. The name boundaries keep ``dj-click-away`` from
+# reading as ``dj-click`` and ``data-dj-click`` from matching at all.
+_DJ_EVENT_DIRECTIVES_RE = re.compile(
+    r"(?<![\w-])(?:%s|dj-(?:window|document)-[a-z]+)(?![\w-])(?:\.[\w.-]*)?\s*="
+    % "|".join(re.escape(n) for n in sorted(_T012_TRIGGER_ATTRIBUTES, key=len, reverse=True))
+)
+# Component templates render inside the parent view's root, so T012 skips
+# them: the legacy ``dj-component`` marker, and ``data-component-id`` — the
+# attribute a ``template_name`` LiveComponent puts on its own root, which the
+# client reads to route events (08-event-parsing.js, 11-event-handler.js).
+_DJ_COMPONENT_RE = re.compile(r"dj-component|(?<![\w-])data-component-id\s*=")
 # T016 (#1733) — dj-navigate directive. Used to warn when SPA navigation is
 # requested but the URLconf-derived route map is empty (so dj-navigate would
 # silently full-reload instead of navigating over the WebSocket).
@@ -253,25 +337,26 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                     )
                 )
 
-        # T002 -- LiveView template missing dj-root (informational)
-        # Since PR #297, dj-root is auto-inferred from dj-view on both
-        # client (autoStampRootAttributes) and server (template.py fallback).
-        # This is now an INFO-level hint rather than a warning.
-        has_dj_attrs = re.search(r"dj-(click|input|change|submit|model)", content)
+        # T002 -- template declares dj-view but no dj-root (informational).
+        # Since PR #297, dj-root is auto-inferred from dj-view on both client
+        # (autoStampRootAttributes) and server (template.py fallback), so the
+        # page still connects. #3225: that is the ONLY case T002 covers. A
+        # template with dj-* directives and neither attribute never connects;
+        # T012 warns about it, and T002 must not call it "OK".
         has_djust_view = _DJ_VIEW_RE.search(content)
         has_djust_root = _DJ_ROOT_RE.search(content)
-        if (has_dj_attrs or has_djust_view) and not has_djust_root:
+        if has_djust_view and not has_djust_root:
             # Check if it extends a base template (in which case root is likely in the base)
             if not re.search(r"\{%\s*extends\s+", content) and not _is_check_suppressed(
                 "djust.T002"
             ):
                 errors.append(
                     DjustInfo(
-                        "%s -- LiveView template does not have explicit 'dj-root' attribute. "
-                        "This is OK — dj-root is auto-inferred from dj-view." % relpath,
+                        "%s -- template declares dj-view but no dj-root. The page still "
+                        "connects: djust infers dj-root from dj-view." % relpath,
                         hint=(
-                            "You can optionally add dj-root for clarity: "
-                            '<div dj-root dj-view="myapp.views.MyView">. '
+                            "Write dj-root on the root element instead: <div dj-root>. "
+                            "djust stamps dj-view onto it when it renders the page. "
                             "Suppress this check with DJUST_CONFIG = {'suppress_checks': ['T002']}."
                         ),
                         id="djust.T002",
@@ -347,9 +432,9 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
         # T012 -- template uses dj-* event directives but missing dj-root or dj-view (#3171)
         if (
             _DJ_EVENT_DIRECTIVES_RE.search(content)
-            and not _DJ_VIEW_RE.search(content)
-            and not _DJ_ROOT_RE.search(content)
-            # Component templates (dj-component) don't need dj-view / dj-root
+            and not has_djust_view
+            and not has_djust_root
+            # Component templates (dj-component / data-component-id) need no root
             and not _DJ_COMPONENT_RE.search(content)
             # #1096: partial-template opt-out marker
             and not _DJ_PARTIAL_MARKER_RE.search(content)
@@ -358,7 +443,8 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
         ):
             errors.append(
                 DjustWarning(
-                    "%s -- template uses dj-* event directives but has no dj-root or dj-view attribute."
+                    "%s -- template uses dj-* directives that need a connected LiveView "
+                    "but has no dj-root or dj-view attribute, so the page never connects."
                     % relpath,
                     hint=(
                         "Add dj-root to the root element (e.g. <div dj-root>), "

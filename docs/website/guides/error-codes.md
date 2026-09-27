@@ -950,21 +950,23 @@ not trigger it.
 
 ---
 
-### T002: Missing dj-root
+### T002: dj-view without dj-root
 
 **Severity**: Info
 
-**What causes it**: A template contains djust directives (`dj-click`, `dj-input`, `dj-change`, `dj-submit`, `dj-model`) or a `dj-view` attribute, but no element has the `dj-root` attribute. The check skips templates that use `{% extends %}` since the root may be in a parent template.
+**What causes it**: A template has a `dj-view` attribute but no element has the `dj-root` attribute. The check skips templates that use `{% extends %}` since the root may be in a parent template.
 
-**What you see**: Nothing breaks. `dj-root` is auto-inferred from `dj-view` on both the client and the server, so this is informational.
+**What you see**: Nothing breaks. `dj-root` is inferred from `dj-view` on both the client and the server, so this is informational.
 
-**Fix**: Optionally add `dj-root` next to `dj-view` for clarity, or suppress the check with `DJUST_CONFIG = {"suppress_checks": ["T002"]}`:
+**Fix**: Write `dj-root` on the root element instead of `dj-view`. djust stamps `dj-view` onto it when it renders the page. Or suppress the check with `DJUST_CONFIG = {"suppress_checks": ["T002"]}`:
 
 ```html
-<div dj-view="myapp.views.MyView" dj-root>
+<div dj-root>
     <!-- content -->
 </div>
 ```
+
+A template with `dj-*` directives and **neither** `dj-root` nor `dj-view` is not a T002 case: nothing is inferred there and the page never connects. That is T012, below. Before #3225, T002 fired on it too and said "This is OK".
 
 **Related**: [Template Requirements Guide](template-requirements.md)
 
@@ -1089,7 +1091,11 @@ class MyView(LiveView):
 
 **Severity**: Warning
 
-**What causes it**: A template uses `dj-*` event directives but has no `dj-root` or `dj-view` attribute. Message: "<file> -- template uses dj-* event directives but has no dj-root or dj-view attribute."
+**What causes it**: A template uses `dj-*` directives that need a connected LiveView but has no `dj-root` or `dj-view` attribute. Message: "<file> -- template uses dj-* directives that need a connected LiveView but has no dj-root or dj-view attribute, so the page never connects."
+
+**What you see**: The page renders as static HTML. djust stamps `dj-view` only onto a `dj-root` element and the client mounts only `[dj-view]`, so no event fires and nothing updates.
+
+The directives covered are every server-event directive the client binds (`dj-click`, `dj-input`, `dj-submit`, `dj-keydown`, `dj-poll`, `dj-mounted`, `dj-viewport-top`, `dj-viewport-bottom`, `dj-window-*`, `dj-document-*` and the rest) plus `dj-model`, `dj-hook`, `dj-upload`, `dj-upload-drop`, `dj-update` and `dj-stream-mode` (#3225). Component templates (`dj-component`, or a root with `data-component-id`) are skipped.
 
 **Fix**: Add `dj-root` to the root element (e.g. `<div dj-root>`), or explicitly add `dj-view="yourapp.views.YourView"`. If the template is an intentional fragment included from a parent LiveView root, add a `{# djust:partial #}` comment, or suppress with `DJUST_CONFIG = {"suppress_checks": ["T012"]}`.
 
