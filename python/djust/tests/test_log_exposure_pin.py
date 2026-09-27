@@ -94,7 +94,7 @@ FRAMEWORK_ONLY = {
         "channel-layer group_discard; the channel name is an identifier, not state"
     ),
     ("disconnect", "Error cancelling waiters: %s"): (
-        "_cancel_all_waiters only schedules future cancellation; no hook runs"
+        "_close_waiters sets a flag and schedules future cancellation; no hook runs"
     ),
     ("disconnect", "Error cleaning up embedded children: %s"): (
         "_unregister_child disposes nonlegacy children and catches legacy hooks itself"

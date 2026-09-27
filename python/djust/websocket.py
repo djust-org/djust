@@ -2494,9 +2494,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # Cancel any pending wait_for_event waiters (ADR-002 Phase 1b).
         # @background tasks awaiting on a waiter unblock with CancelledError
         # and can clean up themselves — without this they'd leak the Future.
-        if self.view_instance and hasattr(self.view_instance, "_cancel_all_waiters"):
+        # Closed, not just cancelled: the view's background work keeps
+        # running and must not register a waiter nothing would cancel (#3236).
+        if self.view_instance and hasattr(self.view_instance, "_close_waiters"):
             try:
-                self.view_instance._cancel_all_waiters(reason="view_disconnect")
+                self.view_instance._close_waiters(reason="view_disconnect")
             except Exception as e:
                 logger.warning("Error cancelling waiters: %s", e)
 
@@ -3843,7 +3845,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # Reset auto-reattach tracker (ADR-014): a redirect mount starts
         # a fresh template render; any IDs the tag claims should be tracked
         # against this navigation only.
-        from ._child_lifecycle import dispose_child_subtree
+        from ._child_lifecycle import cancel_replaced_legacy_waiters, dispose_child_subtree
         from ._exposure import uses_legacy_exposure
 
         self._sticky_auto_reattached = set()
@@ -3941,11 +3943,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             break
             if not uses_legacy_exposure(old_view):
                 dispose_child_subtree(old_view, navigation=True)
-            elif hasattr(old_view, "_cleanup_uploads"):
-                try:
-                    old_view._cleanup_uploads()
-                except Exception:
-                    logger.warning("Failed to clean up uploads for old view", exc_info=True)
+            else:
+                if hasattr(old_view, "_cleanup_uploads"):
+                    try:
+                        old_view._cleanup_uploads()
+                    except Exception:
+                        logger.warning("Failed to clean up uploads for old view", exc_info=True)
+                # A replaced legacy view's waiters, as disconnect cancels them (#3236).
+                cancel_replaced_legacy_waiters(old_view)
 
         self.view_instance = None
         # (#1919, Finding A) Null the shared runtime's view too BEFORE the

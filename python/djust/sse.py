@@ -550,15 +550,22 @@ class SSESession:
                 self.view_instance = None
                 if old_view is not None:
                     try:
-                        from ._child_lifecycle import dispose_child_subtree
+                        from ._child_lifecycle import (
+                            cancel_replaced_legacy_waiters,
+                            dispose_child_subtree,
+                        )
                         from ._exposure import uses_legacy_exposure
 
                         if not uses_legacy_exposure(old_view):
                             await sync_to_async(dispose_child_subtree)(old_view, navigation=True)
                         else:
+                            cancel_replaced_legacy_waiters(old_view)
                             for child_id in list(old_view._get_all_child_views()):
                                 await sync_to_async(old_view._unregister_child)(child_id)
-                            await sync_to_async(old_view._cleanup_uploads)()
+                            # Only a view with UploadMixin has upload temp files;
+                            # an unguarded call raised for every other view (#3236).
+                            if hasattr(old_view, "_cleanup_uploads"):
+                                await sync_to_async(old_view._cleanup_uploads)()
                     except Exception:
                         logger.warning("SSE old view cleanup failed during navigation")
                 self._request = target_request
@@ -620,14 +627,16 @@ class SSESession:
 
         Disposes the session's view, as a WebSocket disconnect does. An
         explicit view goes through ``dispose_child_subtree`` (which cancels its
-        background work); a legacy view gets the WebSocket disconnect's legacy
-        teardown, and its background work runs to completion as on the
-        WebSocket (#3232). Either way the session and runtime drop the view, so
-        a late background result is discarded by the runtime's identity guard
-        instead of rendering into a closed queue.
+        background work) and drops its Rust live handles (#3239); a legacy
+        view gets the WebSocket disconnect's legacy teardown, and its
+        background work runs to completion as on the WebSocket (#3232).
+        Either way the session and runtime drop the view, so a late background
+        result is discarded by the runtime's identity guard instead of
+        rendering into a closed queue.
         """
         from ._child_lifecycle import dispose_child_subtree
         from ._exposure import uses_legacy_exposure
+        from .websocket import _clear_live_handles
 
         self.active = False
         view = self.view_instance
@@ -636,6 +645,9 @@ class SSESession:
                 _release_legacy_view(view)
             else:
                 dispose_child_subtree(view)
+                # The subtree disposal has no live-handle step; the WebSocket
+                # disconnect drops them for every view (#3239).
+                _clear_live_handles(view)
             self.view_instance = None
             self.runtime.view_instance = None
         self._put(None)  # None is the sentinel value
@@ -679,9 +691,11 @@ def _release_legacy_view(view: Any) -> None:
             view._cleanup_uploads()
         except Exception:  # noqa: BLE001
             logger.warning("SSE: cleaning up a closed legacy view's uploads failed")
-    if hasattr(view, "_cancel_all_waiters"):
+    if hasattr(view, "_close_waiters"):
         try:
-            view._cancel_all_waiters(reason="view_disconnect")
+            # Closed, not just cancelled: the view's background work keeps
+            # running and must not register a waiter nothing cancels (#3236).
+            view._close_waiters(reason="view_disconnect")
         except Exception:  # noqa: BLE001
             logger.warning("SSE: cancelling a closed legacy view's waiters failed")
     if hasattr(view, "_child_views"):
