@@ -81,10 +81,54 @@ async def _post(session, key, body=None):
         return await DjustSSEMessageView().post(request, session_id=session.session_id)
 
 
+@pytest.fixture(autouse=True)
+async def settled_saves(monkeypatch):
+    """Every save a test starts has finished before the database is flushed (#3241).
+
+    A deferred save runs on after its turn, by design (#3212), and a deferred
+    turn schedules a catch-up that saves again. Both outlive the test body
+    here: ``hung_store`` releases its saves only at teardown. Left running,
+    they write ``django_session`` on a pool thread while the transactional
+    teardown flushes the shared in-memory database, and SQLite's shared cache
+    answers "database table is locked". So this records each save and each
+    catch-up, and awaits them all after the test's own fixtures have
+    released them. It is set up first, so it is torn down after
+    ``hung_store`` and before the database flush.
+    """
+    saves = []
+    catch_ups = []
+    spawn = runtime_module._spawn_save
+    schedule = runtime_module.ViewRuntime._schedule_explicit_catch_up
+
+    def recording_spawn(run):
+        future = spawn(run)
+        saves.append(future)
+        return future
+
+    def recording_schedule(self, view):
+        schedule(self, view)
+        if self._explicit_catch_up is not None:
+            catch_ups.append(self._explicit_catch_up)
+
+    monkeypatch.setattr(runtime_module, "_spawn_save", recording_spawn)
+    monkeypatch.setattr(
+        runtime_module.ViewRuntime, "_schedule_explicit_catch_up", recording_schedule
+    )
+    yield
+    # A catch-up can start one more save, so settle until nothing new appears.
+    settled = 0
+    while settled < len(saves) + len(catch_ups):
+        settled = len(saves) + len(catch_ups)
+        await asyncio.wait_for(
+            asyncio.gather(*catch_ups, *saves, return_exceptions=True), timeout=30
+        )
+
+
 @pytest.fixture
 def hung_store(monkeypatch):
     """Saves of the given session keys block until released (a valve releases
-    them after a few seconds so a regression cannot hang the run)."""
+    them after a few seconds so a regression cannot hang the run). Released
+    saves finish before the flush: see ``settled_saves``."""
     release = threading.Event()
     blocked = set()
     original = SessionStore.save
