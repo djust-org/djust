@@ -1098,7 +1098,7 @@ only `dj-view` works.
 ```
 
 **Related:**
-- System check: `djust.T002` hints when `dj-root` is absent (INFO severity — it is auto-inferred from `dj-view`)
+- System check: `djust.T002` hints when a template has `dj-view` but no `dj-root` (INFO severity — it is auto-inferred from `dj-view`); `djust.T012` warns when a template has `dj-*` directives and neither attribute
 - System check: `djust.T005` detects when attributes are on different elements
 - Guide: [Template Requirements](template-requirements.md)
 

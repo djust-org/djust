@@ -821,6 +821,17 @@ MIXIN_TABLES = {
                 "check_undefined_template_vars",
                 "T018: failed to statically check template contex",
             ): "static template check",
+            # #3225: T002/T012 parse templates with the project engine; each
+            # logs only the exception's type name, at DEBUG, and falls back.
+            (
+                "_embedded_view_templates",
+                "T012: cannot import live_render view %s (%s)",
+            ): "static template check",
+            ("load", "T002/T012: cannot load %s (%s)"): "static template check",
+            (
+                "check_templates",
+                "T002/T012: no Django template engine (%s)",
+            ): "static template check",
         },
     ),
     "cli.py": (

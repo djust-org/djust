@@ -58,13 +58,13 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | S012 | Security | Error | LiveView gates auth via `@method_decorator(..., name="dispatch")` or an overridden `dispatch()` — not enforced over WebSocket (#14; reallocated from a duplicate S004, #2070) |
 | S013 | Security | Warning | A `ModelFormMixin` edit view overrides neither `get_queryset()` nor `has_object_permission()` (ADR-035) |
 | T001 | Templates | Warning | Deprecated @click/@input syntax |
-| T002 | Templates | Info | LiveView template missing dj-root |
+| T002 | Templates | Info | Template declares `dj-view` but no `dj-root` (the root is inferred; the page connects) |
 | T003 | Templates | Info | wrapper_template uses {% include %} instead of liveview_content |
 | T004 | Templates | Warning | document.addEventListener for djust events (use window) |
 | T005 | Templates | Warning | dj-view and dj-root on different elements |
 | T010 | Templates | Warning | dj-click used for navigation instead of dj-patch |
 | T011 | Templates | Warning | Unsupported Django template tags (silently ignored by Rust renderer) |
-| T012 | Templates | Warning | Template with dj-* directives but no `dj-root` or `dj-view` (`dj-root` accepted since #3171) |
+| T012 | Templates | Warning | Template with dj-* directives but no `dj-root` or `dj-view`, so the page never connects (`dj-root` accepted since #3171; every client directive covered since #3225) |
 | T013 | Templates | Warning | dj-view with empty or dynamic value |
 | T014 | Templates | Warning | Deprecated data-dj-id attribute |
 | T015 | Templates | Warning | Legacy data-djust-root / data-djust-view root attributes |
@@ -591,12 +591,13 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Suppression**: `SILENCED_SYSTEM_CHECKS = ["djust.T001"]`
 - **False positives**: None; the old syntax is deprecated
 
-### T002 — LiveView template missing dj-root
+### T002 — dj-view without dj-root
 - **Severity**: Info
-- **Method**: Regex (template scan)
-- **What it detects**: A LiveView template has no element with `dj-root`
-- **Suppression**: `SILENCED_SYSTEM_CHECKS = ["djust.T002"]`
-- **False positives**: Partial templates and base templates that intentionally omit `dj-root` (djust can infer the root automatically)
+- **Method**: Template parse, shared with T012 (real attributes; `{% extends %}` parents followed)
+- **What it detects**: A template's own markup declares `dj-view`, and no element of the rendered page, parents included, has `dj-root`. The page still connects: djust infers `dj-root` from `dj-view` on the client and the server. The hint suggests writing `<div dj-root>` instead, since djust stamps `dj-view` itself. A child whose `{% extends %}` parent cannot be loaded is skipped, as T012 skips it
+- **Not covered (#3225)**: A template with `dj-*` directives and neither `dj-root` nor `dj-view`. Before #3225, T002 fired on that template too and called it "OK", but nothing is inferred there and the page never connects. That case is T012's warning
+- **Suppression**: `SILENCED_SYSTEM_CHECKS = ["djust.T002"]` or `DJUST_CONFIG = {"suppress_checks": ["T002"]}`
+- **False positives**: None known
 
 ### T003 — wrapper_template uses {% include %}
 - **Severity**: Info
@@ -638,9 +639,18 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 
 ### T012 — Template with dj-* directives but no dj-root or dj-view
 - **Severity**: Warning
-- **Method**: Regex (template scan)
-- **What it detects**: Template uses `dj-*` attributes but has neither a `dj-root` nor a `dj-view` attribute to bind to a LiveView. Before #3171 only `dj-view` satisfied the check, so a template written the documented way (`<div dj-root>`, with djust stamping `dj-view` server-side) was flagged
-- **Suppression**: `SILENCED_SYSTEM_CHECKS = ["djust.T012"]`
+- **Method**: Template parse (#3225). The template is read with Django's template lexer. Its constant `{% extends %}` parent and `{% include %}`s are loaded with the project's Django engine and flattened by `djust._template_bindings`: the parent is followed for the root, and includes count as part of the template. Only real attributes of real elements count, so prose such as `<code>dj-click="save"</code>` or a string in a `<script>` does not. Each parent and include is loaded and parsed once per check run, however many pages share it. Without a Django engine, extends children are skipped and includes are not followed
+- **What it detects**: Template uses `dj-*` attributes that need a connected LiveView but has neither a `dj-root` nor a `dj-view` attribute. djust stamps `dj-view` only onto a `dj-root` element, and the client mounts only `[dj-view]`, so such a page renders but never connects: no event fires and nothing updates. Before #3171 only `dj-view` satisfied the check, so a template written the documented way (`<div dj-root>`, with djust stamping `dj-view` server-side) was flagged
+- **Which attributes (#3225)**: every server-event directive in the client's directive table (`djust._template_bindings.DIRECTIVES`: `dj-click`, `dj-input`, `dj-submit`, `dj-keydown.enter`, `dj-poll`, `dj-mounted`, `dj-viewport-top`/`-bottom`, `dj-paste`, `dj-window-*`/`dj-document-*` and the rest), plus `dj-model`, `dj-upload` and `dj-upload-drop`. Before #3225 the check knew ten event names, so a template driven only by `dj-viewport-bottom`, `dj-model`, `dj-poll` or `dj-upload` got no warning. A test scans the client source and fails when the client reads an attribute the check has not classified, or when a classified one is stale
+- **Not flagged**:
+  - attributes that work without a connection: `dj-hook` (the client mounts hooks page-wide; only `pushEvent` needs the socket), `dj-update` and `dj-stream-mode`;
+  - layout-level attributes that are valid outside a LiveView root (`dj-navigate`, `dj-patch`, `dj-prefetch`, `dj-loading`, `dj-cloak`, `dj-offline-hide`, ...);
+  - a child whose root is in the base it `{% extends %}`, or whose parent cannot be loaded (T002 skips it too);
+  - a partial another template `{% include %}`s: the includer is checked with it inlined. An include inside `{# #}` or `{% comment %}`, or a template including itself, does not count;
+  - the template of a view a `{% live_render "dotted.View" %}` embeds, which renders inside the tag's `dj-view` wrapper. The path must be a string literal that imports when the check runs; `{% live_render view_path %}` with a variable is not followed, so its child template is checked on its own;
+  - component templates: an element with a real `dj-component` or `data-component-id` attribute;
+  - templates marked `{# djust:partial #}`
+- **Suppression**: `SILENCED_SYSTEM_CHECKS = ["djust.T012"]` or `DJUST_CONFIG = {"suppress_checks": ["T012"]}`
 - **False positives**: Partial templates that intentionally omit `dj-root` / `dj-view` because the parent/wrapper template provides it (mark them with `{# djust:partial #}`)
 
 ### T013 — dj-view with empty or dynamic value

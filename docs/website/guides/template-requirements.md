@@ -191,7 +191,7 @@ Relevant checks:
 | Check ID | What It Detects |
 |----------|-----------------|
 | `djust.T001` | Deprecated `@click` syntax (should be `dj-click`) |
-| `djust.T002` | (Info) Template has no explicit `dj-root`. Harmless: `dj-root` is inferred from `dj-view` |
+| `djust.T002` | (Info) Template has `dj-view` but no `dj-root`. Harmless: `dj-root` is inferred from `dj-view`. Without either attribute the page never connects, which is T012 |
 | `djust.T003` | Wrapper template using `{% include %}` instead of `{{ liveview_content\|safe }}` |
 | `djust.T004` | `document.addEventListener` for djust events (should be `window`) |
 | `djust.T005` | `dj-view` and `dj-root` on different elements (must be on same element) |

@@ -1972,10 +1972,16 @@ class TestT002MissingDjustRoot:
     """T002 -- LiveView template missing dj-root."""
 
     def test_t002_dj_attrs_no_root(self, tmp_path, settings):
-        """T002 fires for template with dj-click but no dj-root and no extends."""
+        """T002 fires for a template with dj-view but no dj-root and no extends.
+
+        #3225: directives without dj-view no longer get T002 ("This is OK");
+        that template never connects, and T012 warns about it instead.
+        """
         tpl_dir = tmp_path / "templates"
         tpl_dir.mkdir()
-        (tpl_dir / "no_root.html").write_text('<div><button dj-click="go">Go</button></div>')
+        (tpl_dir / "no_root.html").write_text(
+            '<div dj-view="app.views.V"><button dj-click="go">Go</button></div>'
+        )
         settings.TEMPLATES = [
             {
                 "DIRS": [str(tpl_dir)],
@@ -3022,7 +3028,9 @@ class TestT002Enhanced:
         """T002 should be Info severity (since dj-root is now auto-inferred from dj-view)."""
         tpl_dir = tmp_path / "templates"
         tpl_dir.mkdir()
-        (tpl_dir / "no_root.html").write_text('<div><button dj-click="go">Go</button></div>')
+        (tpl_dir / "no_root.html").write_text(
+            '<div dj-view="app.views.V"><button dj-click="go">Go</button></div>'
+        )
         settings.TEMPLATES = [
             {
                 "DIRS": [str(tpl_dir)],
@@ -3060,10 +3068,12 @@ class TestT002Enhanced:
         assert "dj-root" in t002[0].msg
 
     def test_t002_improved_message(self, tmp_path, settings):
-        """T002 message should mention auto-inferred dj-root."""
+        """T002 message should say dj-root is inferred from dj-view."""
         tpl_dir = tmp_path / "templates"
         tpl_dir.mkdir()
-        (tpl_dir / "no_root.html").write_text('<div><button dj-click="go">Go</button></div>')
+        (tpl_dir / "no_root.html").write_text(
+            '<div dj-view="app.views.V"><button dj-click="go">Go</button></div>'
+        )
         settings.TEMPLATES = [
             {
                 "DIRS": [str(tpl_dir)],
@@ -3076,7 +3086,7 @@ class TestT002Enhanced:
         errors = check_templates(None)
         t002 = [e for e in errors if e.id == "djust.T002"]
         assert len(t002) == 1
-        assert "auto-inferred" in t002[0].msg
+        assert "infers dj-root from dj-view" in t002[0].msg
 
 
 class TestT010ClickForNavigation:

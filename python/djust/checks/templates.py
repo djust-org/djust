@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import textwrap
+from functools import lru_cache
 from typing import Any, Optional
 
 from django.core.checks import CheckMessage, register
@@ -37,7 +38,10 @@ logger = logging.getLogger(__name__)
 # (``{{ view_path }}`` set in a shared base template, #395) is not matched.
 _PHANTOM_VIEW_VAR_RE = re.compile(r"^\s*\{\{\s*(dj_view_id|view_name|view_id)\s*\}\}\s*$")
 
-_DJ_VIEW_RE = re.compile(r"dj-view")
+# Attribute-name boundaries (#3225): a bare ``dj-view`` substring also matched
+# ``dj-viewport-bottom`` and ``dj-view-transitions``, so an infinite-scroll
+# template counted as having a ``dj-view`` and T012 stayed silent.
+_DJ_VIEW_RE = re.compile(r"(?<![\w-])dj-view(?![\w-])")
 
 
 # ---------------------------------------------------------------------------
@@ -64,7 +68,7 @@ _DJ_ACTIVITY_TAG_RE = re.compile(r"\{%\s*dj_activity\b([^%]*?)%\}", re.DOTALL)
 _DJ_ACTIVITY_NAME_RE = re.compile(
     r"""^\s*(?:name\s*=\s*)?(?:"([^"]+)"|'([^']+)'|([A-Za-z_][\w.]*))\s*(?:$|\s)"""
 )
-_DJ_ROOT_RE = re.compile(r"dj-root")
+_DJ_ROOT_RE = re.compile(r"(?<![\w-])dj-root(?![\w-])")
 _INCLUDE_RE = re.compile(r"\{%\s*include\s+")
 _LIVEVIEW_CONTENT_RE = re.compile(r"\{\{\s*liveview_content\s*\|\s*safe\s*\}\}")
 # S007 (#1821) — `{{ <expr>.client_name|safe }}` stored-XSS scanner. Upload
@@ -115,10 +119,375 @@ _DOC_DISPATCHED_DJUST_EVENTS = frozenset(
     }
 )
 _NAV_DATA_ATTRS = re.compile(r"data-(view|tab|page|section)")  # Navigation-style data attributes
-_DJ_EVENT_DIRECTIVES_RE = re.compile(
-    r"dj-(click|input|change|submit|blur|focus|keydown|keyup|mouseenter|mouseleave|window-\w+|document-\w+|click-away|shortcut)="
+# T012 (#3225) — the attributes that only work inside a connected LiveView.
+# Derived from the client's directive table in ``djust._template_bindings``:
+# every server-event directive (``DIRECTIVES``: dj-click, dj-viewport-bottom,
+# dj-poll, dj-mounted, ...) plus the non-event attributes that send to the
+# view (a model field, an upload slot). Every other attribute the client
+# reads is listed in ``_T012_EXEMPT_ATTRIBUTES``;
+# ``python/tests/test_checks_t002_t012_3225.py`` scans the client source and
+# fails when an attribute is in neither set, or an exempt entry is stale.
+_T012_LIVE_NON_EVENT_ATTRIBUTES = frozenset({"dj-model", "dj-upload", "dj-upload-drop"})
+_T012_EXEMPT_ATTRIBUTES = frozenset(
+    {
+        # The root markers themselves, and server-stamped or root-level markers.
+        "dj-root",
+        "dj-view",
+        "dj-liveview-root",
+        "dj-lazy",
+        "dj-id",
+        "dj-key",
+        "dj-sticky-root",
+        "dj-sticky-slot",
+        "dj-sticky-view",
+        # Page-level behaviour that is valid in a layout outside any root
+        # (T010/T016 cover navigation separately).
+        "dj-navigate",
+        "dj-patch",
+        "dj-patch-reload",
+        "dj-prefetch",
+        "dj-cloak",
+        "dj-offline-hide",
+        "dj-track-static",
+        "dj-view-transitions",
+        "dj-loading",
+        # Client-only behaviour that sends no server event. A hook mounts
+        # page-wide without a connection (14-init.js calls mountHooks() on the
+        # document); only its pushEvent needs the socket. dj-update and
+        # dj-stream-mode shape patches, and a page without patches is merely
+        # static, not broken.
+        "dj-hook",
+        "dj-update",
+        "dj-stream-mode",
+        "dj-audio",
+        "dj-copy",
+        "dj-copy-class",
+        "dj-copy-feedback",
+        "dj-dialog",
+        "dj-flip",
+        "dj-remove",
+        "dj-remove-duration",
+        "dj-transition",
+        "dj-scroll-into-view",
+        "dj-sticky-scroll",
+        "dj-ignore-attrs",
+        "dj-force-value",
+        "dj-virtual",
+        "dj-virtual-key-attr",
+        "dj-viewport",
+        # Modifiers of a trigger directive; they do not appear on their own.
+        "dj-confirm",
+        "dj-debounce",
+        "dj-throttle",
+        "dj-disable-with",
+        "dj-form-pending",
+        "dj-lock",
+        "dj-no-recover",
+        "dj-no-submit",
+        "dj-params",
+        "dj-paste-suppress",
+        "dj-poll-interval",
+        "dj-shortcut-in-input",
+        "dj-target",
+        "dj-trigger-action",
+        "dj-mutation-attr",
+        "dj-mutation-debounce",
+    }
 )
-_DJ_COMPONENT_RE = re.compile(r"dj-component")
+# A trigger attribute, optionally with ``.modifier`` suffixes (``dj-model.lazy``,
+# ``dj-keydown.enter``), followed by ``=``; plus the open ``dj-window-*`` /
+# ``dj-document-*`` families. The name boundaries keep ``dj-click-away`` from
+# reading as ``dj-click`` and ``data-dj-click`` from matching at all.
+#
+# Built on first use rather than at import: ``djust._template_bindings`` is not
+# in the ``django.setup()`` import footprint (test_lazy_package_init_2559.py).
+
+
+@lru_cache(maxsize=None)
+def _t012_trigger_attributes() -> frozenset:
+    from djust._template_bindings import DIRECTIVES
+
+    return frozenset(DIRECTIVES) | _T012_LIVE_NON_EVENT_ATTRIBUTES
+
+
+@lru_cache(maxsize=None)
+def _dj_event_directives_re() -> "re.Pattern[str]":
+    names = sorted(_t012_trigger_attributes(), key=len, reverse=True)
+    return re.compile(
+        r"(?<![\w-])(?:%s|dj-(?:window|document)-[a-z]+)(?![\w-])(?:\.[\w.-]*)?\s*="
+        % "|".join(re.escape(n) for n in names)
+    )
+
+
+# Component templates render inside the parent view's root, so T012 skips
+# them: an element carrying the legacy ``dj-component`` attribute, or
+# ``data-component-id`` — the attribute a component's root carries, which the
+# client reads to route events (08-event-parsing.js, 11-event-handler.js).
+# Matched as real attributes of parsed elements (``_page_markup``), not text.
+_T012_COMPONENT_ATTRIBUTES = ("dj-component", "data-component-id")
+_INCLUDE_NAME_RE = re.compile(r"""\{%\s*include\s+["']([^"']+)["']""")
+_LIVE_RENDER_VIEW_RE = re.compile(r"""\{%\s*live_render\s+["']([\w.]+)["']""")
+
+
+def _embedded_view_templates(source: str) -> set:
+    """``template_name`` of each view a ``{% live_render "dotted.View" %}`` embeds.
+
+    Such a view's template renders inside the wrapper the tag emits (which
+    carries ``dj-view``), so it needs no root of its own. A path that does not
+    import is skipped; T013/T018 report bad ``live_render`` paths.
+    """
+    from django.utils.module_loading import import_string
+
+    names = set()
+    for path in _LIVE_RENDER_VIEW_RE.findall(source):
+        try:
+            view = import_string(path)
+        except Exception as exc:  # noqa: BLE001 -- an unimportable path embeds nothing
+            logger.debug("T012: cannot import live_render view %s (%s)", path, type(exc).__name__)
+            continue
+        name = getattr(view, "template_name", None)
+        if isinstance(name, str):
+            names.add(name)
+    return names
+
+
+_EXTENDS_TAG_RE = re.compile(r"\{%\s*extends\s+")
+_TEMPLATE_COMMENT_RE = re.compile(
+    r"\{#.*?#\}|\{%\s*comment\b.*?%\}.*?\{%\s*endcomment\s*%\}", re.DOTALL
+)
+
+
+def _included_elsewhere(real: str, real_dirs: list, included_by: dict) -> bool:
+    """Whether another template ``{% include %}``s (or live_renders) this one.
+
+    ``real`` is the template's realpath; ``real_dirs`` the template dirs'.
+    """
+    if not included_by:
+        return False
+    return any(
+        includer != real
+        for base in real_dirs
+        if real.startswith(base + os.sep)
+        for includer in included_by.get(os.path.relpath(real, base).replace(os.sep, "/"), ())
+    )
+
+
+class _PageMarkup:
+    """The attribute names a template renders, for T002 and T012 (#3225).
+
+    ``own`` holds the attribute names of the template's own elements and of
+    the constant ``{% include %}``s it reaches; for a ``{% extends %}`` child,
+    only its blocks. ``page`` holds the whole page's, parents followed.
+    ``resolved`` is False when the template extends a parent this scan could
+    not follow; both checks then skip it, since its root may be in that
+    parent. Only real attributes of parsed elements count, never text.
+    """
+
+    def __init__(self, resolved: bool, own: frozenset, page: frozenset) -> None:
+        self.resolved = resolved
+        self.own = own
+        self.page = page
+
+    @staticmethod
+    def has(names: frozenset, *wanted: str) -> bool:
+        return any(name in names for name in wanted)
+
+
+def _attribute_names(flat: Any) -> frozenset:
+    from djust._template_bindings import _Markup
+
+    text = "".join(flat.text)
+    parser = _Markup(text)
+    parser.feed(text)
+    parser.close()
+    return frozenset(name for element in parser.elements for name, _ in element.attrs)
+
+
+class _EmptyBlock:
+    """Stands in for a block a child overrides, when flattening its parent."""
+
+    nodelist: list = []
+
+
+_EMPTY_BLOCK = _EmptyBlock()
+
+
+class _T012Scan:
+    """One check run's template cache for T002/T012 (#3238 review).
+
+    Every template is loaded, flattened and parsed at most once per run: a
+    loaded template is kept by name, and an included template is reduced to
+    the attribute names it renders (its own and, recursively, its includes').
+    Without this a project whose pages share a base and partials re-flattened
+    them for every page, which took seconds on each ``runserver`` reload.
+    """
+
+    def __init__(self, engine: Any) -> None:
+        self.engine = engine
+        self._templates: dict = {}
+        self._summaries: dict = {}
+        self._parents: dict[tuple, tuple[bool, frozenset]] = {}
+        #: How often each name was loaded from the engine (pinned by a test).
+        self.loads: dict = {}
+
+    def load(self, name: str) -> Any:
+        if self.engine is None:
+            return None
+        if name not in self._templates:
+            self.loads[name] = self.loads.get(name, 0) + 1
+            try:
+                self._templates[name] = self.engine.get_template(name)
+            except Exception as exc:  # noqa: BLE001 -- an unloadable template renders nothing we can see
+                logger.debug("T002/T012: cannot load %s (%s)", name, type(exc).__name__)
+                self._templates[name] = None
+        return self._templates[name]
+
+    def included(self, names: list) -> frozenset:
+        """Attribute names the given included templates render."""
+        found: frozenset = frozenset()
+        for name in names:
+            if name not in self._summaries:
+                self._summaries[name] = frozenset()  # an include cycle adds nothing
+                template = self.load(name)
+                if template is not None:
+                    flattener = self.flattener()
+                    flattener.template(template, "", {}, 1)
+                    self._summaries[name] = _attribute_names(flattener.flat) | self.included(
+                        flattener.includes
+                    )
+            found |= self._summaries[name]
+        return found
+
+    def parent(self, name: str, overridden: frozenset) -> tuple[bool, frozenset]:
+        """``(resolved, attribute names)`` a parent adds around a child's blocks.
+
+        The child's own blocks are parsed separately; here they are empty, so
+        the result depends only on the parent and which blocks the child
+        overrides, and is shared by every child with the same pair.
+        """
+        key = (name, overridden)
+        if key not in self._parents:
+            template = self.load(name)
+            if template is None:
+                self._parents[key] = (False, frozenset())
+            else:
+                flattener = self.flattener()
+                flattener.template(template, "", dict.fromkeys(overridden, _EMPTY_BLOCK), 1)
+                self._parents[key] = (
+                    # Include loads are recorded, not flattened: every gap here
+                    # is an ancestor that could not be followed.
+                    not flattener.flat.gaps,
+                    _attribute_names(flattener.flat) | self.included(flattener.includes),
+                )
+        return self._parents[key]
+
+    def flattener(self) -> Any:
+        from djust._template_bindings import OPAQUE, Gap, _Flat, _Flattener
+
+        scan = self
+
+        class _Recording(_Flattener):
+            """Flattens a template, recording constant includes instead of inlining them."""
+
+            def __init__(self) -> None:
+                super().__init__(scan.engine, _Flat())
+                self.includes: list = []
+
+            def load(self, name: str, file: str, line: int) -> Any:
+                template = scan.load(name)
+                if template is None:
+                    self.flat.gaps.append(Gap(file, line, "cannot load %r" % name))
+                return template
+
+            def include(self, node: Any, file: str, line: int, depth: int) -> None:
+                expression = node.template
+                name = getattr(expression, "var", None)
+                if isinstance(name, str) and not expression.filters:
+                    self.includes.append(name)
+                self.flat.emit(OPAQUE)
+
+        return _Recording()
+
+
+_CONSTANT_TAG_ARG_RE = re.compile(r"""^\w+\s+["']([^"']+)["']""")
+
+
+def _page_markup(content: str, scan: _T012Scan) -> _PageMarkup:
+    """Parse a template into attribute names, following extends and includes.
+
+    The template itself is lexed, not compiled: its text is kept, every tag is
+    a boundary, and its constant ``{% include %}`` / ``{% extends %}`` names
+    are read from the tags. Those templates are loaded through ``scan``, which
+    compiles and parses each one once per run.
+    """
+    from django.template.base import Lexer, TokenType
+
+    from djust._template_bindings import BRANCH, OPAQUE, VALUE, _Flat
+
+    flat = _Flat()
+    includes: list = []
+    blocks: set = set()
+    extends = False
+    parent: Optional[str] = None
+    skip_until: Optional[str] = None
+    for token in Lexer(content).tokenize():
+        contents = token.contents.strip()
+        if skip_until is not None:
+            if token.token_type == TokenType.BLOCK and contents == skip_until:
+                skip_until = None
+            continue
+        if token.token_type == TokenType.TEXT:
+            flat.emit(token.contents)
+        elif token.token_type == TokenType.VAR:
+            flat.emit(VALUE)
+        elif token.token_type == TokenType.BLOCK:
+            bits = contents.split()
+            tag = bits[0] if bits else ""
+            constant = _CONSTANT_TAG_ARG_RE.match(contents)
+            if tag == "comment":
+                skip_until = "endcomment"
+            elif tag == "extends":
+                extends = True
+                parent = constant.group(1) if constant and len(bits) == 2 else None
+            elif tag == "block" and len(bits) > 1:
+                blocks.add(bits[1])
+                flat.emit(BRANCH)
+            elif tag == "include":
+                if constant:
+                    includes.append(constant.group(1))
+                flat.emit(OPAQUE)
+            else:
+                flat.emit(BRANCH)
+    own = _attribute_names(flat) | scan.included(includes)
+    if not extends:
+        return _PageMarkup(True, own, own)
+    if parent is None or scan.engine is None:
+        return _PageMarkup(False, own, own)  # {% extends variable %}, or nothing to load it
+    resolved, around = scan.parent(parent, frozenset(blocks))
+    return _PageMarkup(resolved, own, own | around)
+
+
+class _LazyPage:
+    """Parse a template at most once, and only when T002/T012 need it."""
+
+    def __init__(self, content: str, scan: _T012Scan) -> None:
+        self._content = content
+        self._scan = scan
+        self._markup: Optional[_PageMarkup] = None
+
+    def __call__(self) -> _PageMarkup:
+        if self._markup is None:
+            self._markup = _page_markup(self._content, self._scan)
+        return self._markup
+
+
+def _is_t012_trigger(attribute: str) -> bool:
+    name = attribute.split(".", 1)[0]
+    return name in _t012_trigger_attributes() or bool(
+        re.fullmatch(r"dj-(?:window|document)-[a-z]+", name)
+    )
+
+
 # T016 (#1733) — dj-navigate directive. Used to warn when SPA navigation is
 # requested but the URLconf-derived route map is empty (so dj-navigate would
 # silently full-reload instead of navigating over the WebSocket).
@@ -194,13 +563,34 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     # silently full-reloads).
     dj_navigate_hits: list[tuple[str, int]] = []
 
+    # T012 (#3225) — a partial ``{% include %}``d by another template renders
+    # inside the includer's root, and the includer is checked with it inlined.
+    # A view ``{% live_render %}`` embeds renders inside the tag's wrapper.
+    # An include inside a comment renders nothing, and a template that
+    # includes itself is still checked on its own.
+    included_by: dict = {}
+    sources: dict = {}
     for filepath in _iter_template_files(tpl_dirs):
         try:
             with open(filepath, "r", encoding="utf-8", errors="replace") as fh:
-                content = fh.read()
+                sources[filepath] = fh.read()
         except OSError:
             continue
+        source = _TEMPLATE_COMMENT_RE.sub("", sources[filepath])
+        if "include" in source or "live_render" in source:
+            for name in set(_INCLUDE_NAME_RE.findall(source)) | _embedded_view_templates(source):
+                included_by.setdefault(name, set()).add(os.path.realpath(filepath))
+    from djust._template_bindings import django_engine
 
+    try:
+        engine = django_engine()
+    except Exception as exc:  # noqa: BLE001 -- no engine: templates are scanned as tokens
+        logger.debug("T002/T012: no Django template engine (%s)", type(exc).__name__)
+        engine = None
+    scan = _T012Scan(engine)
+    real_dirs = [os.path.realpath(d) for d in tpl_dirs]
+
+    for filepath, content in sources.items():
         relpath = os.path.relpath(filepath)
 
         # T001 -- deprecated @click/@input syntax
@@ -253,25 +643,33 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                     )
                 )
 
-        # T002 -- LiveView template missing dj-root (informational)
-        # Since PR #297, dj-root is auto-inferred from dj-view on both
-        # client (autoStampRootAttributes) and server (template.py fallback).
-        # This is now an INFO-level hint rather than a warning.
-        has_dj_attrs = re.search(r"dj-(click|input|change|submit|model)", content)
+        # T002 -- template declares dj-view but no dj-root (informational).
+        # Since PR #297, dj-root is auto-inferred from dj-view on both client
+        # (autoStampRootAttributes) and server (template.py fallback), so the
+        # page still connects. #3225: that is the ONLY case T002 covers. A
+        # template with dj-* directives and neither attribute never connects;
+        # T012 warns about it, and T002 must not call it "OK".
+        # T002 and T012 read the same parsed page (``_page_markup``): real
+        # attributes, the parent of an ``{% extends %}`` followed, and a child
+        # whose parent cannot be followed skipped by both.
         has_djust_view = _DJ_VIEW_RE.search(content)
         has_djust_root = _DJ_ROOT_RE.search(content)
-        if (has_dj_attrs or has_djust_view) and not has_djust_root:
-            # Check if it extends a base template (in which case root is likely in the base)
-            if not re.search(r"\{%\s*extends\s+", content) and not _is_check_suppressed(
-                "djust.T002"
+        page = _LazyPage(content, scan)
+
+        if has_djust_view and not _is_check_suppressed("djust.T002"):
+            markup = page()
+            if (
+                markup.resolved
+                and markup.has(markup.own, "dj-view")
+                and not markup.has(markup.page, "dj-root")
             ):
                 errors.append(
                     DjustInfo(
-                        "%s -- LiveView template does not have explicit 'dj-root' attribute. "
-                        "This is OK — dj-root is auto-inferred from dj-view." % relpath,
+                        "%s -- template declares dj-view but no dj-root. The page still "
+                        "connects: djust infers dj-root from dj-view." % relpath,
                         hint=(
-                            "You can optionally add dj-root for clarity: "
-                            '<div dj-root dj-view="myapp.views.MyView">. '
+                            "Write dj-root on the root element instead: <div dj-root>. "
+                            "djust stamps dj-view onto it when it renders the page. "
                             "Suppress this check with DJUST_CONFIG = {'suppress_checks': ['T002']}."
                         ),
                         id="djust.T002",
@@ -346,19 +744,26 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
         # T012 -- template uses dj-* event directives but missing dj-root or dj-view (#3171)
         if (
-            _DJ_EVENT_DIRECTIVES_RE.search(content)
-            and not _DJ_VIEW_RE.search(content)
-            and not _DJ_ROOT_RE.search(content)
-            # Component templates (dj-component) don't need dj-view / dj-root
-            and not _DJ_COMPONENT_RE.search(content)
+            # Cheap text gate; an {% include %} may inline a partial's directives
+            (_dj_event_directives_re().search(content) or _INCLUDE_RE.search(content))
             # #1096: partial-template opt-out marker
             and not _DJ_PARTIAL_MARKER_RE.search(content)
+            # A partial another template includes: checked inlined there
+            and not _included_elsewhere(os.path.realpath(filepath), real_dirs, included_by)
             # Global suppression via DJUST_CONFIG['suppress_checks']
             and not _is_check_suppressed("djust.T012")
+            # Real attributes of the template's own elements, not text: prose
+            # in <code> or a <script> string is not a directive.
+            and any(_is_t012_trigger(name) for name in page().own)
+            and page().resolved
+            and not page().has(page().page, "dj-root", "dj-view")
+            # Component templates render inside the parent view's root
+            and not page().has(page().own, *_T012_COMPONENT_ATTRIBUTES)
         ):
             errors.append(
                 DjustWarning(
-                    "%s -- template uses dj-* event directives but has no dj-root or dj-view attribute."
+                    "%s -- template uses dj-* directives that need a connected LiveView "
+                    "but has no dj-root or dj-view attribute, so the page never connects."
                     % relpath,
                     hint=(
                         "Add dj-root to the root element (e.g. <div dj-root>), "
