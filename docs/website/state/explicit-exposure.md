@@ -115,6 +115,14 @@ page = state(1, persist="client", client=True)   # restorable on back-navigation
   save has been running for 10 seconds, the error is the reload error instead.
   At mount there is no page to update yet, so a slow save there is also the
   reload error.
+- **A save still running after a logout is dropped.** Over SSE a save can
+  outlive the request that started it. Before it writes, it looks the session
+  up once, and it writes nothing if the session was logged out, flushed or
+  rotated away in another request, or now belongs to another user. Legacy
+  `enable_state_snapshot` saves do the same. With `cache` sessions a logout
+  that lands in the moment between that lookup and the write can still be
+  overwritten, as with any two concurrent Django requests; `db`, `cached_db`
+  and `file` sessions refuse that write themselves.
 - **Errors follow Django.** With `DEBUG = True`, an explicit view's failure
   shows its exception and traceback, as Django's development output does: the
   technical 500 page, detailed error frames and dev overlay, and full log lines.

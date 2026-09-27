@@ -73,6 +73,7 @@ if TYPE_CHECKING:
     from ._exposure_children import ChildStateSession
 
 from ._class_snapshot import attribute_names
+from ._late_save import LateSaveDropped
 from .rate_limit import ConnectionRateLimiter
 from .security import handle_exception, sanitize_for_log
 from .serialization import fast_json_loads
@@ -151,6 +152,8 @@ def _log_unobserved_save_failure(work: "asyncio.Future[None]") -> None:
     """Report a save failure nobody is waiting for any more (value-free)."""
     if work.cancelled() or work.exception() is None:
         return
+    if isinstance(work.exception(), LateSaveDropped):
+        return  # a logged-out session, already reported at debug (#3247)
     logger.warning("State save failed after its turn stopped waiting")
 
 
@@ -291,10 +294,16 @@ def _spawn_save(run: Callable[[], None]) -> "asyncio.Future[None]":
     this turn. Anywhere else (a WebSocket session, a ``PooledHTTP`` request)
     the thread is unchanged. Saves of one runtime stay ordered either way
     (:func:`_run_explicit_save`).
+
+    A pool save can still be running after its request ended, when another
+    request may have logged the user out. Its session writes re-check the
+    session first (:mod:`djust._late_save`, #3247).
     """
     if not _in_request_scoped_executor():
         return asyncio.ensure_future(sync_to_async(run)())
-    call = sync_to_async(run, thread_sensitive=False, executor=_request_save_executor())
+    from ._late_save import detached
+
+    call = sync_to_async(detached(run), thread_sensitive=False, executor=_request_save_executor())
     return asyncio.ensure_future(call())
 
 
@@ -4460,12 +4469,13 @@ class ViewRuntime:
 
         target_view = self.view_instance
         legacy_target = uses_legacy_exposure(target_view)
+        legacy_saved = False
         if (
             target_view is self.view_instance
             and legacy_target
             and getattr(self.view_instance, "enable_state_snapshot", False)
         ):
-            await self._persist_state_after_event(target_view, event_name)
+            legacy_saved = await self._persist_state_after_event(target_view, event_name)
         elif target_view is self.view_instance and not legacy_target:
             # A failed explicit save withholds the success frame (E3); the
             # child tree is saved on the render/noop branches below.
@@ -4521,6 +4531,10 @@ class ViewRuntime:
         if skip_render:
             if not await self._persist_explicit_children_after_event(view):
                 return
+            # A handler that changed state and asked for no render still moved
+            # the legacy view to a new state: refresh its token (#3246).
+            if not snapshot_fields:
+                snapshot_fields = await self._legacy_noop_snapshot(view, legacy_saved, pre_assigns)
             # (_skip_render was already consumed by _resolve_skip_render
             # above — it is the single owner of that reset, #2834.)
             # Legacy: drain ALL queued side-effects BEFORE the noop, matching the WS
@@ -4890,7 +4904,7 @@ class ViewRuntime:
     # + exception are both caught and logged.
     # ------------------------------------------------------------------ #
 
-    async def _persist_state_after_event(self, target_view: Any, event_name: Optional[str]) -> None:
+    async def _persist_state_after_event(self, target_view: Any, event_name: Optional[str]) -> bool:
         """Persist the top-level view's post-event state to the Django session.
 
         Caller MUST have already verified top-level view identity and legacy
@@ -4904,7 +4918,12 @@ class ViewRuntime:
         the sync thread is not counted (#3212, as #3200 did for explicit
         saves). A save that outruns the deadline is logged and not waited
         for; it keeps running and may still land, and the runtime's next save
-        waits for it, so it can never overwrite a newer one."""
+        waits for it, so it can never overwrite a newer one.
+
+        Returns False when the save failed, was deferred or was dropped (#3247),
+        and True otherwise, including when there is no session to save into: a
+        skip-render noop refreshes the client's token only then (#3246), since
+        the token is then either backed by the session copy or the only source."""
 
         def _save() -> None:
             # Discover the session the same way the WS save block does
@@ -4930,6 +4949,8 @@ class ViewRuntime:
             )
             if save_session is None:
                 return
+            # Read before anything loads the session (#3247, see _late_save).
+            expected_key = getattr(save_session, "session_key", None)
 
             from .serialization import normalize_django_value as _normalize
 
@@ -4970,6 +4991,9 @@ class ViewRuntime:
             if mount_request is not None and hasattr(target_view, "_save_components_to_session"):
                 target_view._save_components_to_session(mount_request, save_context)
 
+            from ._late_save import check_session
+
+            check_session(save_session, expected_key)
             save_session.save()
 
         try:
@@ -4981,6 +5005,9 @@ class ViewRuntime:
                 "Subsequent events will retry.",
                 sanitize_for_log(event_name or ""),
             )
+            return False
+        except LateSaveDropped:
+            return False  # its session was logged out; reported at debug (#3247)
         except Exception as exc:  # noqa: BLE001 — saves must never break event handling
             from ._exposure_diagnostics import log_failure
 
@@ -4992,6 +5019,8 @@ class ViewRuntime:
                 sanitize_for_log(event_name or ""),
                 traceback=True,
             )
+            return False
+        return True
 
     async def _persist_sticky_child_after_event(
         self, target_view: Any, event_name: Optional[str]
@@ -5021,11 +5050,16 @@ class ViewRuntime:
             )
             if save_session is None:
                 return
+            # Read before anything loads the session (#3247, see _late_save).
+            expected_key = getattr(save_session, "session_key", None)
 
             parent_path = mount_request.path if mount_request is not None else "/"
 
             save_sticky_child_state_sync(target_view, save_session, parent_path)
             write_sticky_index_and_prune_sync(parent, save_session, parent_path)
+            from ._late_save import check_session
+
+            check_session(save_session, expected_key)
             save_session.save()
 
         try:
@@ -5037,6 +5071,8 @@ class ViewRuntime:
                 "land). Subsequent events will retry.",
                 sanitize_for_log(event_name or ""),
             )
+        except LateSaveDropped:
+            pass  # its session was logged out; reported at debug (#3247)
         except Exception as exc:  # noqa: BLE001 — saves must never break event handling
             from ._exposure_diagnostics import log_failure
 
@@ -5418,6 +5454,12 @@ class ViewRuntime:
             if isinstance(component, (BoundComponent, ComponentDeclaration))
             else None
         )
+        # Whether the turn changed a legacy opt-in root's state, for the
+        # skip-render noop's token (#3246). Kept apart from ``pre_assigns``,
+        # which also decides the scoped and noop branches below.
+        legacy_pre_assigns = pre_assigns
+        if legacy_pre_assigns is None and self._legacy_snapshot_root(view):
+            legacy_pre_assigns = _snapshot_assigns(view)
 
         try:
             try:
@@ -5474,6 +5516,7 @@ class ViewRuntime:
         # client's older token would restore them next to ``persist="client"``
         # fields from an earlier turn (#3231).
         snapshot_fields: Dict[str, Any] = {}
+        legacy_saved = False
         if view is self.view_instance:
             from ._exposure import uses_legacy_exposure
 
@@ -5482,7 +5525,7 @@ class ViewRuntime:
                     return True
                 snapshot_fields = await self._explicit_event_snapshot(view)
             elif getattr(view, "enable_state_snapshot", False):
-                await self._persist_state_after_event(view, event_name)
+                legacy_saved = await self._persist_state_after_event(view, event_name)
 
         from ._async_batch import AsyncBatch
 
@@ -5496,6 +5539,12 @@ class ViewRuntime:
         from .websocket import _resolve_skip_render
 
         if _resolve_skip_render(view):
+            # The handler may have changed state and asked for no render: a
+            # legacy view's token is refreshed then, as on the view route (#3246).
+            if not snapshot_fields:
+                snapshot_fields = await self._legacy_noop_snapshot(
+                    view, legacy_saved, legacy_pre_assigns
+                )
             await self._send_component_noop(event_name, event_ref, async_batch, snapshot_fields)
             return True
 
@@ -6193,6 +6242,40 @@ class ViewRuntime:
                 rules[event] = rule
         return rules
 
+    def _legacy_snapshot_root(self, view: Any) -> bool:
+        """Whether ``view`` is the mounted legacy root that opted into snapshots."""
+        from ._exposure import uses_legacy_exposure
+
+        return (
+            view is self.view_instance
+            and uses_legacy_exposure(view)
+            and bool(getattr(view, "enable_state_snapshot", False))
+        )
+
+    async def _legacy_noop_snapshot(
+        self, view: Any, saved: bool, pre_assigns: Optional[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """The refreshed token for a legacy root's ``noop``, or ``{}`` (#3246).
+
+        A noop usually changed nothing, so the token the client holds is
+        current. A handler that changed state and set ``_skip_render`` did
+        change it, and without a refresh the client keeps the older token, so
+        Back or a reconnect restores the state from before the event whenever
+        the token is the source. Refreshed only when the state changed and the
+        session save did not fail (``saved``): after a failed, deferred or
+        dropped save the held token is the copy that matches storage, and it
+        must not be replaced. With no session at all the token is the only
+        source, so it is refreshed.
+        """
+        if not saved or not self._legacy_snapshot_root(view):
+            return {}
+        if pre_assigns is not None:
+            from .websocket import _snapshot_assigns
+
+            if _snapshot_assigns(view) == pre_assigns:
+                return {}
+        return await self._legacy_event_snapshot(view)
+
     async def _legacy_event_snapshot(self, view: Any) -> Dict[str, Any]:
         """The refreshed signed snapshot for a legacy opt-in root view (#3098).
 
@@ -6389,6 +6472,15 @@ class ViewRuntime:
             )
         except ExplicitSaveDeferred:
             await self._explicit_save_deferred(view, extra, child=False)
+            return False
+        except LateSaveDropped:
+            # Another request logged the session out while this save ran: the
+            # save was dropped before writing (#3247). The page's session is
+            # gone, so this is the reload error, without a failure traceback.
+            view._force_full_html = True
+            await self.transport.send_error(
+                "State unavailable. Please reload the page.", code="state_error", **extra
+            )
             return False
         except Exception as exc:  # noqa: BLE001 — storage errors can carry server-only values
             from ._exposure_diagnostics import log_failure_for
