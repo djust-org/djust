@@ -827,7 +827,7 @@ MIXIN_TABLES = {
                 "_embedded_view_templates",
                 "T012: cannot import live_render view %s (%s)",
             ): "static template check",
-            ("_page_markup", "T002/T012: template does not compile (%s)"): "static template check",
+            ("load", "T002/T012: cannot load %s (%s)"): "static template check",
             (
                 "check_templates",
                 "T002/T012: no Django template engine (%s)",

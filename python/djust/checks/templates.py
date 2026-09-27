@@ -252,47 +252,185 @@ def _embedded_view_templates(source: str) -> set:
 
 
 _EXTENDS_TAG_RE = re.compile(r"\{%\s*extends\s+")
+_TEMPLATE_COMMENT_RE = re.compile(
+    r"\{#.*?#\}|\{%\s*comment\b.*?%\}.*?\{%\s*endcomment\s*%\}", re.DOTALL
+)
+
+
+def _included_elsewhere(real: str, real_dirs: list, included_by: dict) -> bool:
+    """Whether another template ``{% include %}``s (or live_renders) this one.
+
+    ``real`` is the template's realpath; ``real_dirs`` the template dirs'.
+    """
+    if not included_by:
+        return False
+    return any(
+        includer != real
+        for base in real_dirs
+        if real.startswith(base + os.sep)
+        for includer in included_by.get(os.path.relpath(real, base).replace(os.sep, "/"), ())
+    )
 
 
 class _PageMarkup:
-    """The elements a template renders, for T002 and T012 (#3225).
+    """The attribute names a template renders, for T002 and T012 (#3225).
 
-    ``own`` is the template's own markup with its constant ``{% include %}``s
-    inlined; for a ``{% extends %}`` child, only its blocks. ``page`` is the
-    whole page, parents followed. ``resolved`` is False when the template
-    extends a parent this scan could not follow; both checks then skip it,
-    since its root may be in that parent.
+    ``own`` holds the attribute names of the template's own elements and of
+    the constant ``{% include %}``s it reaches; for a ``{% extends %}`` child,
+    only its blocks. ``page`` holds the whole page's, parents followed.
+    ``resolved`` is False when the template extends a parent this scan could
+    not follow; both checks then skip it, since its root may be in that
+    parent. Only real attributes of parsed elements count, never text.
     """
 
-    def __init__(self, resolved: bool, own: list, page: list) -> None:
+    def __init__(self, resolved: bool, own: frozenset, page: frozenset) -> None:
         self.resolved = resolved
         self.own = own
         self.page = page
 
     @staticmethod
-    def has(elements: list, *names: str) -> bool:
-        return any(element.has(name) for element in elements for name in names)
+    def has(names: frozenset, *wanted: str) -> bool:
+        return any(name in names for name in wanted)
 
 
-def _parse_flat(flat: Any) -> list:
+def _attribute_names(flat: Any) -> frozenset:
     from djust._template_bindings import _Markup
 
     text = "".join(flat.text)
     parser = _Markup(text)
     parser.feed(text)
     parser.close()
-    return parser.elements
+    return frozenset(name for element in parser.elements for name, _ in element.attrs)
 
 
-def _token_flat(source: str) -> Any:
-    """Markup of a template that is not compiled: text kept, tags as boundaries."""
+class _EmptyBlock:
+    """Stands in for a block a child overrides, when flattening its parent."""
+
+    nodelist: list = []
+
+
+_EMPTY_BLOCK = _EmptyBlock()
+
+
+class _T012Scan:
+    """One check run's template cache for T002/T012 (#3238 review).
+
+    Every template is loaded, flattened and parsed at most once per run: a
+    loaded template is kept by name, and an included template is reduced to
+    the attribute names it renders (its own and, recursively, its includes').
+    Without this a project whose pages share a base and partials re-flattened
+    them for every page, which took seconds on each ``runserver`` reload.
+    """
+
+    def __init__(self, engine: Any) -> None:
+        self.engine = engine
+        self._templates: dict = {}
+        self._summaries: dict = {}
+        self._parents: dict[tuple, tuple[bool, frozenset]] = {}
+        #: How often each name was loaded from the engine (pinned by a test).
+        self.loads: dict = {}
+
+    def load(self, name: str) -> Any:
+        if self.engine is None:
+            return None
+        if name not in self._templates:
+            self.loads[name] = self.loads.get(name, 0) + 1
+            try:
+                self._templates[name] = self.engine.get_template(name)
+            except Exception as exc:  # noqa: BLE001 -- an unloadable template renders nothing we can see
+                logger.debug("T002/T012: cannot load %s (%s)", name, type(exc).__name__)
+                self._templates[name] = None
+        return self._templates[name]
+
+    def included(self, names: list) -> frozenset:
+        """Attribute names the given included templates render."""
+        found: frozenset = frozenset()
+        for name in names:
+            if name not in self._summaries:
+                self._summaries[name] = frozenset()  # an include cycle adds nothing
+                template = self.load(name)
+                if template is not None:
+                    flattener = self.flattener()
+                    flattener.template(template, "", {}, 1)
+                    self._summaries[name] = _attribute_names(flattener.flat) | self.included(
+                        flattener.includes
+                    )
+            found |= self._summaries[name]
+        return found
+
+    def parent(self, name: str, overridden: frozenset) -> tuple[bool, frozenset]:
+        """``(resolved, attribute names)`` a parent adds around a child's blocks.
+
+        The child's own blocks are parsed separately; here they are empty, so
+        the result depends only on the parent and which blocks the child
+        overrides, and is shared by every child with the same pair.
+        """
+        key = (name, overridden)
+        if key not in self._parents:
+            template = self.load(name)
+            if template is None:
+                self._parents[key] = (False, frozenset())
+            else:
+                flattener = self.flattener()
+                flattener.template(template, "", dict.fromkeys(overridden, _EMPTY_BLOCK), 1)
+                self._parents[key] = (
+                    # Include loads are recorded, not flattened: every gap here
+                    # is an ancestor that could not be followed.
+                    not flattener.flat.gaps,
+                    _attribute_names(flattener.flat) | self.included(flattener.includes),
+                )
+        return self._parents[key]
+
+    def flattener(self) -> Any:
+        from djust._template_bindings import OPAQUE, Gap, _Flat, _Flattener
+
+        scan = self
+
+        class _Recording(_Flattener):
+            """Flattens a template, recording constant includes instead of inlining them."""
+
+            def __init__(self) -> None:
+                super().__init__(scan.engine, _Flat())
+                self.includes: list = []
+
+            def load(self, name: str, file: str, line: int) -> Any:
+                template = scan.load(name)
+                if template is None:
+                    self.flat.gaps.append(Gap(file, line, "cannot load %r" % name))
+                return template
+
+            def include(self, node: Any, file: str, line: int, depth: int) -> None:
+                expression = node.template
+                name = getattr(expression, "var", None)
+                if isinstance(name, str) and not expression.filters:
+                    self.includes.append(name)
+                self.flat.emit(OPAQUE)
+
+        return _Recording()
+
+
+_CONSTANT_TAG_ARG_RE = re.compile(r"""^\w+\s+["']([^"']+)["']""")
+
+
+def _page_markup(content: str, scan: _T012Scan) -> _PageMarkup:
+    """Parse a template into attribute names, following extends and includes.
+
+    The template itself is lexed, not compiled: its text is kept, every tag is
+    a boundary, and its constant ``{% include %}`` / ``{% extends %}`` names
+    are read from the tags. Those templates are loaded through ``scan``, which
+    compiles and parses each one once per run.
+    """
     from django.template.base import Lexer, TokenType
 
-    from djust._template_bindings import BRANCH, VALUE, _Flat
+    from djust._template_bindings import BRANCH, OPAQUE, VALUE, _Flat
 
     flat = _Flat()
+    includes: list = []
+    blocks: set = set()
+    extends = False
+    parent: Optional[str] = None
     skip_until: Optional[str] = None
-    for token in Lexer(source).tokenize():
+    for token in Lexer(content).tokenize():
         contents = token.contents.strip()
         if skip_until is not None:
             if token.token_type == TokenType.BLOCK and contents == skip_until:
@@ -303,59 +441,43 @@ def _token_flat(source: str) -> Any:
         elif token.token_type == TokenType.VAR:
             flat.emit(VALUE)
         elif token.token_type == TokenType.BLOCK:
-            tag = contents.split()[0] if contents else ""
+            bits = contents.split()
+            tag = bits[0] if bits else ""
+            constant = _CONSTANT_TAG_ARG_RE.match(contents)
             if tag == "comment":
                 skip_until = "endcomment"
+            elif tag == "extends":
+                extends = True
+                parent = constant.group(1) if constant and len(bits) == 2 else None
+            elif tag == "block" and len(bits) > 1:
+                blocks.add(bits[1])
+                flat.emit(BRANCH)
+            elif tag == "include":
+                if constant:
+                    includes.append(constant.group(1))
+                flat.emit(OPAQUE)
             else:
                 flat.emit(BRANCH)
-    return flat
-
-
-def _page_markup(content: str, engine: Any) -> _PageMarkup:
-    """Parse a template into real elements, following extends and includes."""
-    from djust._template_bindings import _Flat, _Flattener
-
-    has_extends = bool(_EXTENDS_TAG_RE.search(content))
-    template = None
-    if engine is not None:
-        try:
-            template = engine.from_string(content)
-        except Exception as exc:  # noqa: BLE001 -- an uncompilable template is scanned as tokens
-            logger.debug("T002/T012: template does not compile (%s)", type(exc).__name__)
-    if template is None:
-        own = _parse_flat(_token_flat(content))
-        return _PageMarkup(not has_extends, own, own)
-
-    from django.template.loader_tags import ExtendsNode
-
-    extends = next((n for n in template.nodelist if isinstance(n, ExtendsNode)), None)
-    own_flat = _Flat()
-    flattener = _Flattener(engine, own_flat)
-    if extends is None:
-        flattener.nodes(template.nodelist, "", {}, 0)
-        own = _parse_flat(own_flat)
+    own = _attribute_names(flat) | scan.included(includes)
+    if not extends:
         return _PageMarkup(True, own, own)
-    for block in extends.blocks.values():
-        flattener.nodes(block.nodelist, "", {}, 1)
-    page_flat = _Flat()
-    _Flattener(engine, page_flat).template(template, "", {}, 0)
-    resolved = not any(
-        "extends" in gap.reason or gap.reason.startswith("cannot load") for gap in page_flat.gaps
-    )
-    return _PageMarkup(resolved, _parse_flat(own_flat), _parse_flat(page_flat))
+    if parent is None or scan.engine is None:
+        return _PageMarkup(False, own, own)  # {% extends variable %}, or nothing to load it
+    resolved, around = scan.parent(parent, frozenset(blocks))
+    return _PageMarkup(resolved, own, own | around)
 
 
 class _LazyPage:
     """Parse a template at most once, and only when T002/T012 need it."""
 
-    def __init__(self, content: str, engine: Any) -> None:
+    def __init__(self, content: str, scan: _T012Scan) -> None:
         self._content = content
-        self._engine = engine
+        self._scan = scan
         self._markup: Optional[_PageMarkup] = None
 
     def __call__(self) -> _PageMarkup:
         if self._markup is None:
-            self._markup = _page_markup(self._content, self._engine)
+            self._markup = _page_markup(self._content, self._scan)
         return self._markup
 
 
@@ -364,17 +486,6 @@ def _is_t012_trigger(attribute: str) -> bool:
     return name in _t012_trigger_attributes() or bool(
         re.fullmatch(r"dj-(?:window|document)-[a-z]+", name)
     )
-
-
-def _template_names(filepath: str, tpl_dirs: list) -> set:
-    """The names a template file loads as (its path under each template dir)."""
-    names = set()
-    real = os.path.realpath(filepath)
-    for directory in tpl_dirs:
-        base = os.path.realpath(directory)
-        if real.startswith(base + os.sep):
-            names.add(os.path.relpath(real, base).replace(os.sep, "/"))
-    return names
 
 
 # T016 (#1733) — dj-navigate directive. Used to warn when SPA navigation is
@@ -455,15 +566,20 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     # T012 (#3225) — a partial ``{% include %}``d by another template renders
     # inside the includer's root, and the includer is checked with it inlined.
     # A view ``{% live_render %}`` embeds renders inside the tag's wrapper.
-    included_names: set = set()
+    # An include inside a comment renders nothing, and a template that
+    # includes itself is still checked on its own.
+    included_by: dict = {}
+    sources: dict = {}
     for filepath in _iter_template_files(tpl_dirs):
         try:
             with open(filepath, "r", encoding="utf-8", errors="replace") as fh:
-                source = fh.read()
+                sources[filepath] = fh.read()
         except OSError:
             continue
-        included_names.update(_INCLUDE_NAME_RE.findall(source))
-        included_names.update(_embedded_view_templates(source))
+        source = _TEMPLATE_COMMENT_RE.sub("", sources[filepath])
+        if "include" in source or "live_render" in source:
+            for name in set(_INCLUDE_NAME_RE.findall(source)) | _embedded_view_templates(source):
+                included_by.setdefault(name, set()).add(os.path.realpath(filepath))
     from djust._template_bindings import django_engine
 
     try:
@@ -471,14 +587,10 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     except Exception as exc:  # noqa: BLE001 -- no engine: templates are scanned as tokens
         logger.debug("T002/T012: no Django template engine (%s)", type(exc).__name__)
         engine = None
+    scan = _T012Scan(engine)
+    real_dirs = [os.path.realpath(d) for d in tpl_dirs]
 
-    for filepath in _iter_template_files(tpl_dirs):
-        try:
-            with open(filepath, "r", encoding="utf-8", errors="replace") as fh:
-                content = fh.read()
-        except OSError:
-            continue
-
+    for filepath, content in sources.items():
         relpath = os.path.relpath(filepath)
 
         # T001 -- deprecated @click/@input syntax
@@ -542,7 +654,7 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
         # whose parent cannot be followed skipped by both.
         has_djust_view = _DJ_VIEW_RE.search(content)
         has_djust_root = _DJ_ROOT_RE.search(content)
-        page = _LazyPage(content, engine)
+        page = _LazyPage(content, scan)
 
         if has_djust_view and not _is_check_suppressed("djust.T002"):
             markup = page()
@@ -637,13 +749,13 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
             # #1096: partial-template opt-out marker
             and not _DJ_PARTIAL_MARKER_RE.search(content)
             # A partial another template includes: checked inlined there
-            and not (_template_names(filepath, tpl_dirs) & included_names)
+            and not _included_elsewhere(os.path.realpath(filepath), real_dirs, included_by)
             # Global suppression via DJUST_CONFIG['suppress_checks']
             and not _is_check_suppressed("djust.T012")
-            and page().resolved
             # Real attributes of the template's own elements, not text: prose
             # in <code> or a <script> string is not a directive.
-            and any(_is_t012_trigger(name) for e in page().own for name, _ in e.attrs)
+            and any(_is_t012_trigger(name) for name in page().own)
+            and page().resolved
             and not page().has(page().page, "dj-root", "dj-view")
             # Component templates render inside the parent view's root
             and not page().has(page().own, *_T012_COMPONENT_ATTRIBUTES)

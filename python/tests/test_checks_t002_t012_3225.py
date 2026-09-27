@@ -356,3 +356,84 @@ def test_live_render_child_template_is_not_warned(tmp_path, settings):
     assert _run(tmp_path, settings, "sticky/child.html", child, page__html=parent) == []
     # Unembedded, the same template is warned.
     assert _ids(_run(tmp_path, settings, "sticky/other.html", child)) == ["djust.T012"]
+
+
+# -- Review of #3238 (M-new-1): each template is loaded once per check run -----------
+
+
+def test_each_template_is_loaded_and_parsed_once_per_run(tmp_path, settings, monkeypatch):
+    """Pages sharing a base and partials must not reload or re-parse them per page.
+
+    Before the per-run cache, a 1500-page tree with shared includes took
+    13.7 s against 0.15 s on main. Two pins:
+
+    - engine loads, counted by name: at most one each. Half the pages
+      override a different set of blocks, so the base is flattened for two
+      block sets and only the load cache keeps it at one load;
+    - markup parses: one per checked template, plus one per shared template
+      and per (parent, block set). Without the parent or include caches the
+      shared ones would be parsed again for every page.
+    """
+    from django.template.engine import Engine
+
+    import djust.checks.templates as templates
+
+    loads: dict = {}
+    real_get_template = Engine.get_template
+
+    def counting(self, name):
+        loads[name] = loads.get(name, 0) + 1
+        return real_get_template(self, name)
+
+    parses = []
+    real_attribute_names = templates._attribute_names
+
+    def counting_parse(flat):
+        parses.append(1)
+        return real_attribute_names(flat)
+
+    monkeypatch.setattr(Engine, "get_template", counting)
+    monkeypatch.setattr(templates, "_attribute_names", counting_parse)
+    pages = {}
+    for i in range(30):
+        blocks = "{% block c %}" if i % 2 else "{% block d %}"
+        pages["page%d__html" % i] = (
+            '{% extends "base.html" %}' + blocks + '{% include "p/mid.html" %}'
+            '{% include "p/leaf.html" %}<button dj-click="x">x</button>{% endblock %}'
+        )
+    found = _run(
+        tmp_path,
+        settings,
+        "page_first.html",
+        '{% extends "base.html" %}{% block c %}{% include "p/mid.html" %}{% endblock %}',
+        base__html="<div dj-root>{% block c %}{% endblock %}{% block d %}{% endblock %}"
+        '{% include "p/leaf.html" %}</div>',
+        p__mid__html='{% include "p/leaf.html" %}<input dj-model="q">',
+        p__leaf__html='<span dj-click="a">x</span>',
+        **pages,
+    )
+    assert found == []
+    # Non-vacuous: the shared templates were loaded, and only once each.
+    assert {"base.html", "p/mid.html", "p/leaf.html"} <= set(loads)
+    assert {name: n for name, n in loads.items() if n > 1} == {}
+    # Checked templates: the 30 pages, page_first and base.html (its include
+    # passes the text gate). Shared: mid and leaf, and base under two block sets.
+    checked = len(pages) + 2
+    shared = 2 + 2
+    assert len(parses) <= checked + shared, len(parses)
+
+
+def test_commented_out_and_self_includes_do_not_hide_a_template(tmp_path, settings):
+    """Review of #3238 (L-new-1): only a real include by another template counts."""
+    body = '<ul dj-viewport-bottom="more"></ul>'
+    found = _run(
+        tmp_path,
+        settings,
+        "rec.html",
+        body + '{% if deep %}{% include "rec.html" %}{% endif %}',
+        other__html='{# {% include "feed.html" %} #}'
+        '{% comment %}{% include "feed.html" %}{% endcomment %}<p>x</p>',
+    )
+    assert _ids(found) == ["djust.T012"]
+    found = _run(tmp_path, settings, "feed.html", body)
+    assert _ids(found) == ["djust.T012"]
