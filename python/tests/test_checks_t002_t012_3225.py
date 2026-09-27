@@ -166,7 +166,9 @@ def _client_attributes():
 
 def test_every_client_attribute_is_classified_for_t012():
     from djust._template_bindings import DIRECTIVES, NON_EVENT_ATTRIBUTES
-    from djust.checks.templates import _T012_EXEMPT_ATTRIBUTES, _T012_TRIGGER_ATTRIBUTES
+    from djust.checks.templates import _T012_EXEMPT_ATTRIBUTES, _t012_trigger_attributes
+
+    _T012_TRIGGER_ATTRIBUTES = _t012_trigger_attributes()
 
     known = _client_attributes() | set(DIRECTIVES) | set(NON_EVENT_ATTRIBUTES)
     assert not _T012_TRIGGER_ATTRIBUTES & _T012_EXEMPT_ATTRIBUTES
@@ -180,7 +182,7 @@ def test_every_client_attribute_is_classified_for_t012():
 
 
 def test_every_trigger_attribute_is_matched_by_the_regex():
-    from djust.checks.templates import _DJ_EVENT_DIRECTIVES_RE, _T012_TRIGGER_ATTRIBUTES
+    from djust.checks.templates import _dj_event_directives_re, _t012_trigger_attributes
 
-    for name in sorted(_T012_TRIGGER_ATTRIBUTES):
-        assert _DJ_EVENT_DIRECTIVES_RE.search('<div %s="x">' % name), name
+    for name in sorted(_t012_trigger_attributes()):
+        assert _dj_event_directives_re().search('<div %s="x">' % name), name

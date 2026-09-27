@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import textwrap
+from functools import lru_cache
 from typing import Any, Optional
 
 from django.core.checks import CheckMessage, register
@@ -27,7 +28,6 @@ from djust.checks.utils import (
     _LIVE_RENDER_STICKY_FALSY_RE,
 )
 from djust.checks.components import _routed_liveview_classes
-from djust._template_bindings import DIRECTIVES as _CLIENT_EVENT_DIRECTIVES
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +130,6 @@ _NAV_DATA_ATTRS = re.compile(r"data-(view|tab|page|section)")  # Navigation-styl
 _T012_LIVE_NON_EVENT_ATTRIBUTES = frozenset(
     {"dj-model", "dj-hook", "dj-upload", "dj-upload-drop", "dj-update", "dj-stream-mode"}
 )
-_T012_TRIGGER_ATTRIBUTES = frozenset(_CLIENT_EVENT_DIRECTIVES) | _T012_LIVE_NON_EVENT_ATTRIBUTES
 _T012_EXEMPT_ATTRIBUTES = frozenset(
     {
         # The root markers themselves, and server-stamped or root-level markers.
@@ -194,10 +193,27 @@ _T012_EXEMPT_ATTRIBUTES = frozenset(
 # ``dj-keydown.enter``), followed by ``=``; plus the open ``dj-window-*`` /
 # ``dj-document-*`` families. The name boundaries keep ``dj-click-away`` from
 # reading as ``dj-click`` and ``data-dj-click`` from matching at all.
-_DJ_EVENT_DIRECTIVES_RE = re.compile(
-    r"(?<![\w-])(?:%s|dj-(?:window|document)-[a-z]+)(?![\w-])(?:\.[\w.-]*)?\s*="
-    % "|".join(re.escape(n) for n in sorted(_T012_TRIGGER_ATTRIBUTES, key=len, reverse=True))
-)
+#
+# Built on first use rather than at import: ``djust._template_bindings`` is not
+# in the ``django.setup()`` import footprint (test_lazy_package_init_2559.py).
+
+
+@lru_cache(maxsize=None)
+def _t012_trigger_attributes() -> frozenset:
+    from djust._template_bindings import DIRECTIVES
+
+    return frozenset(DIRECTIVES) | _T012_LIVE_NON_EVENT_ATTRIBUTES
+
+
+@lru_cache(maxsize=None)
+def _dj_event_directives_re() -> "re.Pattern[str]":
+    names = sorted(_t012_trigger_attributes(), key=len, reverse=True)
+    return re.compile(
+        r"(?<![\w-])(?:%s|dj-(?:window|document)-[a-z]+)(?![\w-])(?:\.[\w.-]*)?\s*="
+        % "|".join(re.escape(n) for n in names)
+    )
+
+
 # Component templates render inside the parent view's root, so T012 skips
 # them: the legacy ``dj-component`` marker, and ``data-component-id`` — the
 # attribute a ``template_name`` LiveComponent puts on its own root, which the
@@ -431,7 +447,7 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
         # T012 -- template uses dj-* event directives but missing dj-root or dj-view (#3171)
         if (
-            _DJ_EVENT_DIRECTIVES_RE.search(content)
+            _dj_event_directives_re().search(content)
             and not has_djust_view
             and not has_djust_root
             # Component templates (dj-component / data-component-id) need no root
