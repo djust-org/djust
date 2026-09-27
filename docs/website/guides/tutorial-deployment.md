@@ -17,7 +17,8 @@ deployment needs shared durable Django sessions and a cross-process
 channel layer. A Redis state backend can share the compiled-view
 cache used as a diff baseline, but it does not transfer a LiveView's
 Python state to another process. Persist state that must survive a
-reconnect, or use stickiness for state that must remain process-local.
+reconnect, and use stickiness only for app-level state that lives in one
+process's memory (a dict of rooms, a game clock).
 Then put Nginx in front and serve the WebSocket upgrade over HTTPS.
 
 By the end of this tutorial you'll have:
@@ -27,8 +28,8 @@ By the end of this tutorial you'll have:
   about state that must survive reconnects.
 - An **Nginx config** that proxies HTTP and upgrades WebSocket
   connections.
-- A clear answer on **sticky sessions**: when persisted state makes
-  them optional and when process-local state requires them.
+- A clear answer on **sticky sessions**: why a view's state never needs
+  them, and when app-level in-process state does.
 - **Healthcheck endpoints** that load balancers can probe.
 - The **four production checks** every team adds in week 2 and
   wishes they'd added on day one: graceful shutdown, error
@@ -281,8 +282,9 @@ can land on a different worker. Shared sessions and the channel
 layer let the request authenticate and communicate across workers;
 they do not preserve arbitrary view state by themselves. Rebuild
 state from durable app data, or opt into the persistence described
-below. If state must remain only in a worker's memory, configure
-stickiness so reconnects return to that worker.
+below. Stickiness does not preserve a view's own state: a reconnect
+runs `mount()` again even on the same worker. It only helps app-level
+state your code keeps in one process's memory, such as a dict of rooms.
 
 One thing the Redis state backend does **not** do is carry a view's
 state to another worker. A default LiveView that reconnects to a
@@ -295,9 +297,10 @@ the session:
 - [explicit exposure](../state/explicit-exposure.md) views: declare
   the fields with `state(..., persist="server")`.
 
-So: **sticky sessions depend on your state model**. Leave them off
-when each process can rebuild state or the state is persisted; use
-them when the page depends on process-local state. See
+So: **a view's state never needs sticky sessions**; persist it or
+rebuild it in `mount()`. Use stickiness only when your app keeps
+shared state in one process's memory (for example rooms hashed to a
+process, as in Scaling djust's sharded option). See
 [Scaling djust](scaling.md#more-than-one-process-or-pod) for the
 measured multi-process setup.
 

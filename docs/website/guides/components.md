@@ -894,7 +894,8 @@ nested interactive descendants (`<a>`, `<button>`, `<input>`,
 `<tr>` fires a djust event with `data-value=row[row_click_value_key]`.
 Your `@event_handler` receives the row's value via `**kwargs` and can
 use `self.live_redirect(...)` to navigate over the existing LiveView
-connection (or do anything else):
+connection (the target must be a LiveView; for any other page, render a
+normal link instead), or do anything else:
 
 ```python
 from djust import LiveView
