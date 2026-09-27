@@ -43,6 +43,7 @@ def _make_view():
         "stream_done",
         "_send_stream_ops",
         "_flush_stream_batch",
+        "_send_terminal_stream_op",
     ):
         setattr(view, name, getattr(StreamingMixin, name).__get__(view))
     return view

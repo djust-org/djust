@@ -58,6 +58,7 @@ class StreamingMixin:
         self._stream_batch: Dict[str, List[dict]] = {}  # Pending ops by stream name
         self._last_stream_time: float = 0.0
         self._stream_flush_task: Optional[asyncio.Task] = None
+        self._stream_flush_sending: bool = False  # the flush task is sending its batch
 
     async def stream_to(
         self,
@@ -206,7 +207,7 @@ class StreamingMixin:
             "target": target or f"[dj-stream='{stream_name}']",
             "error": error,
         }
-        await self._send_stream_ops(stream_name, [op])
+        await self._send_terminal_stream_op(stream_name, op)
 
     async def stream_start(
         self,
@@ -248,7 +249,7 @@ class StreamingMixin:
             "op": "done",
             "target": target or f"[dj-stream='{stream_name}']",
         }
-        await self._send_stream_ops(stream_name, [op])
+        await self._send_terminal_stream_op(stream_name, op)
 
     async def stream_delete(
         self,
@@ -432,12 +433,63 @@ class StreamingMixin:
         )
 
     async def _flush_stream_batch(self, delay: float) -> None:
-        """Flush batched stream operations after a delay."""
+        """Flush batched stream operations after a delay.
+
+        The batch is taken as a whole before the first send, so an op queued
+        while a send is awaited lands in a fresh batch (flushed by the next
+        task) instead of mutating the dict being iterated. The flag marks the
+        send phase for ``_send_terminal_stream_op`` (#3227).
+        """
         await asyncio.sleep(delay)
 
-        for stream_name, ops in self._stream_batch.items():
-            if ops:
-                await self._send_stream_ops(stream_name, ops)
+        batch = self._stream_batch
+        self._stream_batch = {}
+        self._stream_flush_sending = True
+        try:
+            for stream_name, ops in batch.items():
+                if ops:
+                    await self._send_stream_ops(stream_name, ops)
+        finally:
+            self._stream_flush_sending = False
+            self._last_stream_time = time.monotonic()
+        if self._stream_batch:
+            # Queued while this task was sending: no new task was scheduled
+            # (this one was still pending), so schedule it now.
+            self._stream_flush_task = asyncio.ensure_future(
+                self._flush_stream_batch(MIN_STREAM_INTERVAL_S)
+            )
 
-        self._stream_batch.clear()
-        self._last_stream_time = time.monotonic()
+    async def _send_terminal_stream_op(self, stream_name: str, op: dict) -> None:
+        """Send a terminal op (``done``, ``error``) after the stream's queued ops (#3227).
+
+        ``stream_to``/``stream_text`` queue an op that lands inside the rate
+        window and flush it from a task. A terminal op sent directly would
+        overtake that op, so the client would get content for a stream it has
+        already finalised. Before the terminal op:
+
+        - If the flush task is sending, it owns a batch taken before this
+          call, possibly holding this stream's op: wait for it (shielded, so
+          cancelling this caller doesn't cut the batch short), then look
+          again, since it may have scheduled a successor.
+        - Otherwise take this stream's queued ops out of the batch and send
+          them here. If no other stream has queued ops, the sleeping flush
+          task has nothing left to do and is cancelled; if others do, it
+          keeps running for them.
+        """
+        while True:
+            task = self._stream_flush_task
+            if task is None or task.done() or task is asyncio.current_task():
+                break
+            if getattr(self, "_stream_flush_sending", False):
+                await asyncio.shield(task)
+                continue
+            if not any(ops for name, ops in self._stream_batch.items() if name != stream_name):
+                task.cancel()
+                self._stream_flush_task = None
+            break
+
+        queued = self._stream_batch.pop(stream_name, None)
+        if queued:
+            await self._send_stream_ops(stream_name, queued)
+            self._last_stream_time = time.monotonic()
+        await self._send_stream_ops(stream_name, [op])
