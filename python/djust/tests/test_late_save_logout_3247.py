@@ -732,3 +732,42 @@ async def test_an_unloaded_session_that_vanished_is_not_recreated_by_the_runtime
     assert request.session.session_key is None, "precondition: the body's load reset the key"
     assert writes == [], writes
     assert await sync_to_async(_session_rows)() == rows, "the save created a new session"
+
+
+# --------------------------------------------------------------------------- #
+# Review N1: an expired ``file`` session is gone, and the lookup writes nothing
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("corrupt", [False, True])
+def test_an_expired_or_corrupt_file_session_lookup_writes_no_file(
+    tmp_path, corrupt, caplog, monkeypatch
+):
+    """``file.load()`` deletes an expired or corrupt session and CREATES a new
+    one, so a lookup through it wrote an orphan file and did not drop the save.
+    An expired session is gone; a corrupt one exists with no user."""
+    import os
+
+    # The file backend caches its storage path on the class.
+    monkeypatch.setattr(_store(FILE), "_storage_path", str(tmp_path))
+    with override_settings(SESSION_FILE_PATH=str(tmp_path), SESSION_ENGINE=FILE):
+        save = _store(FILE)()
+        save[SESSION_KEY] = "1"
+        if not corrupt:
+            save.set_expiry(-10)  # already expired
+        save.create()
+        key = save.session_key
+        if corrupt:
+            path = save._key_to_file(key)
+            with open(path, "w", encoding="ascii") as fh:
+                fh.write("not-a-signed-session")
+        before = sorted(os.listdir(tmp_path))
+        assert len(before) == 1, before
+
+        caplog.set_level(logging.DEBUG)
+        if corrupt:
+            _as_pool_save(lambda: check_session(save, key))  # exists, no user
+        else:
+            with pytest.raises(LateSaveDropped):
+                _as_pool_save(lambda: check_session(save, key))
+        assert sorted(os.listdir(tmp_path)) == before, "the lookup wrote a session file"

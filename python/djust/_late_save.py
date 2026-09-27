@@ -86,11 +86,13 @@ def _stored_session(backend: type, key: str) -> Optional[Any]:
 
     Raises on a storage error instead of reporting it as a missing session,
     as ``load()`` does for the ``cache`` and ``file`` backends. One lookup for
-    the stock ``db``, ``cache`` and ``cached_db`` backends.
+    each stock backend (``db``, ``cache``, ``cached_db``, ``file``), and never a write:
+    an expired session counts as gone.
     """
     from django.contrib.sessions.backends import cache as cache_backend
     from django.contrib.sessions.backends import cached_db
     from django.contrib.sessions.backends import db as db_backend
+    from django.contrib.sessions.backends import file as file_backend
 
     fresh = backend(session_key=key)
     if issubclass(backend, cached_db.SessionStore):
@@ -107,7 +109,22 @@ def _stored_session(backend: type, key: str) -> Optional[Any]:
     if issubclass(backend, db_backend.SessionStore):
         row = fresh._get_session_from_db()  # a database error propagates
         return None if row is None else fresh.decode(row.session_data)
-    # ``file`` and custom backends: ``exists()`` answers presence, and a
+    if issubclass(backend, file_backend.SessionStore):
+        # Read the file as ``load()`` does, without its side effects: for an
+        # expired or corrupt file ``load()`` deletes it and CREATES a new
+        # session file, so the lookup itself would write (#3251 review N1).
+        try:
+            with open(fresh._key_to_file(key), encoding="ascii") as session_file:
+                raw = session_file.read()
+        except FileNotFoundError:
+            return None
+        if not raw:
+            return {}  # the placeholder an unsaved create() leaves
+        data = fresh.decode(raw)
+        if fresh.get_expiry_age(expiry=fresh._expiry_date(data)) <= 0:
+            return None  # expired: gone, as ``load()`` would treat it
+        return data
+    # Custom backends: ``exists()`` answers presence, and a
     # ``load()`` that then loses the key could not read what exists.
     if not fresh.exists(key):
         return None
