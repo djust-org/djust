@@ -260,3 +260,34 @@ async def test_a_turn_stuck_past_the_cap_does_not_keep_the_session_alive(monkeyp
         assert "still dispatching" in caplog.text
     finally:
         session._dispatch_lock.release()
+
+
+class _RustViewRecorder:
+    """Stands in for the view's Rust state to record the live-handle release."""
+
+    def __init__(self):
+        self.calls = []
+
+    def clear_live_handles(self):
+        self.calls.append("clear_live_handles")
+
+    def set_raw_py_values(self, values):
+        self.calls.append(("set_raw_py_values", values))
+
+
+async def test_a_normal_close_releases_an_explicit_views_live_handles():
+    """#3239: the explicit branch of ``shutdown()`` disposed the subtree but
+    never dropped the Rust live handles, which the WebSocket disconnect (and,
+    since #3232, the SSE legacy branch) does for every view. The Rust state
+    keeps strong references the garbage collector cannot see."""
+    key = await sync_to_async(_fresh_key)()
+    sid = str(uuid.uuid4())
+    session, stream = await _open(sid, key)
+    view = await _spawn(session, key)
+    rust = view._rust_view = _RustViewRecorder()
+
+    await stream.aclose()  # the client went away
+
+    await _until(lambda: session.view_instance is None, "the session to drop its view")
+    assert view._djust_child_disposed is True
+    assert rust.calls == ["clear_live_handles", ("set_raw_py_values", {})]

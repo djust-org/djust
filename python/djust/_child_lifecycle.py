@@ -77,3 +77,27 @@ def dispose_child_subtree(child: Any, *, navigation: bool = False) -> None:
                     hook()
             except Exception:  # noqa: BLE001
                 logger.error("Child lifecycle cleanup failed")
+
+
+def cancel_replaced_legacy_waiters(view: Any) -> None:
+    """Cancel a legacy view's ``wait_for_event`` waiters when navigation replaces it (#3236).
+
+    An explicit view replaced by navigation is disposed through
+    :func:`dispose_child_subtree`, which cancels its waiters. A legacy view is
+    not disposed, and its waiters have no default timeout, so without this the
+    ``start_async`` / ``@background`` task blocked on one (and through it the
+    view) stays alive for the life of the connection. The WebSocket
+    disconnect and the SSE close cancel them the same way. The view's other
+    background work is left to run, as on those paths.
+
+    Shared by both replacement paths: ``LiveViewConsumer.handle_live_redirect_mount``
+    and ``SSESession._replace_view``. Best effort: a failure is logged without
+    its value and never breaks the navigation.
+    """
+    cancel = getattr(view, "_cancel_all_waiters", None)
+    if not callable(cancel):
+        return
+    try:
+        cancel(reason="view_navigation")
+    except Exception:  # noqa: BLE001 — cleanup must never break a navigation
+        logger.warning("Cancelling a replaced legacy view's waiters failed")
