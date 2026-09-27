@@ -38,13 +38,16 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import hashlib
 import inspect
 import json
 import logging
 import re
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 from typing import (
     TYPE_CHECKING,
@@ -161,15 +164,86 @@ def _detach_from_finished_request() -> None:
     a thread that never runs it (#3200 review: the SSE catch-up and background
     turns). Called at the start of tasks that outlive their turn, it routes
     their sync work to the loop's default sync thread instead, which is where
-    a WebSocket session's work runs. A WebSocket task has no bridge executor,
-    so its worker-pool context (#3074) is left alone.
+    a WebSocket session's work runs.
+
+    Without a bridge (an all-async middleware stack) the task kept the
+    request's ``ThreadSensitiveContext``, so its sync work ran on the
+    request's executor, and a callback still running when the POST ended
+    blocked the event loop in that context's ``__aexit__`` (#3212). That case
+    is detached too. A WebSocket worker-pool slot (#3074) and a
+    ``PooledHTTP`` slot are long-lived and left alone.
     """
+    if _in_request_scoped_executor():
+        _leave_request_executors()
+
+
+def _in_request_scoped_executor() -> bool:
+    """Whether thread-sensitive calls made here run on executors a request owns.
+
+    Django's ASGI handler serves every HTTP request inside a per-request
+    ``ThreadSensitiveContext``, whose single-thread executor is shut down, and
+    WAITED for, when the request ends. Under a sync middleware stack the
+    calls go to the ``async_to_sync`` bridge thread of the request instead.
+    A WebSocket session's worker-pool slot (#3074) and a ``PooledHTTP`` slot
+    (#3114) are long-lived and never shut down, so they do not count.
+    """
+    from asgiref.sync import AsyncToSync, SyncToAsync, ThreadSensitiveContext
+
+    if getattr(AsyncToSync.executors, "current", None) is not None:
+        return True
+    return isinstance(SyncToAsync.thread_sensitive_context.get(None), ThreadSensitiveContext)
+
+
+def _leave_request_executors() -> None:
+    """Route this context's thread-sensitive calls to the loop's default sync
+    thread. Both writes are context-local (an asgiref ``Local`` and a
+    contextvar), so only the context this runs in is changed."""
     from asgiref.sync import AsyncToSync, SyncToAsync
 
-    if getattr(AsyncToSync.executors, "current", None) is None:
-        return
     AsyncToSync.executors.current = None
     SyncToAsync.thread_sensitive_context.set(None)  # type: ignore[arg-type]
+
+
+#: The thread request-scoped saves run on (#3212); created on first use.
+_save_executor: Optional[ThreadPoolExecutor] = None
+_save_executor_lock = threading.Lock()
+
+
+def _request_save_executor() -> ThreadPoolExecutor:
+    """One long-lived thread for saves made inside a request's executors.
+
+    Its thread is started from an EMPTY context: on Python 3.14+ a new thread
+    copies its starter's context, and this one lives as long as the process
+    (the worker pool does the same, #3114).
+    """
+    global _save_executor
+    with _save_executor_lock:
+        if _save_executor is None:
+            executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="djust-state-save")
+            contextvars.Context().run(executor.submit, lambda: None)
+            _save_executor = executor
+        return _save_executor
+
+
+def _spawn_save(run: Callable[[], None]) -> "asyncio.Future[None]":
+    """Start ``run`` in a Django thread, outside any request's executors (#3212).
+
+    A save can outlive the turn that started it (its deadline passed, or the
+    turn was cancelled). Run on a request's executor, it then held the
+    request's end: ``ThreadSensitiveContext.__aexit__`` waits for the executor,
+    which blocked the EVENT LOOP on the SSE event POST until storage answered,
+    and under sync middleware it held the request's bridge thread. Inside a
+    request's executors the save therefore runs on a dedicated thread of its
+    own, so a request ends when its turn does. It is not the loop's shared
+    sync thread: the request's own sync code may be running there, waiting for
+    this turn. Anywhere else (a WebSocket session, a ``PooledHTTP`` request)
+    the thread is unchanged. Saves of one runtime stay ordered either way
+    (:func:`_run_explicit_save`).
+    """
+    if not _in_request_scoped_executor():
+        return asyncio.ensure_future(sync_to_async(run)())
+    call = sync_to_async(run, thread_sensitive=False, executor=_request_save_executor())
+    return asyncio.ensure_future(call())
 
 
 #: Consecutive deferred saves after which a deferral is reported as the terminal
@@ -230,7 +304,7 @@ async def _run_explicit_save(
         loop.call_soon_threadsafe(mark_started)
         save()
 
-    work = asyncio.ensure_future(sync_to_async(run)())
+    work = _spawn_save(run)
     owner._explicit_save_pending = work
     owner._explicit_save_started_at = loop.time()
     try:
