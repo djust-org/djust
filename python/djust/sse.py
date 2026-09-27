@@ -240,6 +240,32 @@ def _unregister_sse_session(session_id: str, session: "SSESession") -> None:
             del _sse_sessions[session_id]
 
 
+async def _linger() -> None:
+    """The closed stream's grace period for in-flight event POSTs."""
+    await asyncio.sleep(_SESSION_LINGER_S)
+
+
+async def _shutdown_closed_session(session: "SSESession") -> None:
+    """Dispose a closed stream's own session, as a WebSocket disconnect does (#3221).
+
+    Cancels its view's background work and waiters, removes upload temp files
+    and runs unregister hooks. Runs after the linger and after an event POST
+    still being dispatched has finished, so no turn is torn down mid-way.
+
+    Always this stream's OWN session. When a same-owner reconnect has already
+    replaced it under the id, the reconnect mounted a new session with its own
+    view; nothing routes to the old one any more, so it is disposed too, and
+    the replacement is untouched.
+    """
+    try:
+        async with session._dispatch_lock:
+            session.shutdown()
+    except Exception:  # noqa: BLE001 — view hooks are app code; values stay out of logs
+        logger.warning(
+            "SSE: shutting down closed session %s failed", sanitize_for_log(session.session_id)
+        )
+
+
 class _StreamGuard:
     """Unregisters a mounted SSE session whose stream never started (#3164).
 
@@ -1032,12 +1058,15 @@ class DjustSSEStreamView(View):
                 # Closing: another owner may now take this id (#3164).
                 session._stream_closed = True
                 if mounted:
-                    # Linger briefly so in-flight event POSTs can still find the
-                    # session (only meaningful for registered/mounted sessions).
-                    await asyncio.sleep(_SESSION_LINGER_S)
-                    # Only our own session: a same-owner reconnect may have
-                    # replaced it under this id (#3164).
-                    _unregister_sse_session(session_id, session)
+                    try:
+                        # Linger briefly so in-flight event POSTs can still find
+                        # the session (only meaningful for registered sessions).
+                        await _linger()
+                    finally:
+                        # Only our own session: a same-owner reconnect may have
+                        # replaced it under this id (#3164).
+                        _unregister_sse_session(session_id, session)
+                        await _shutdown_closed_session(session)
                 logger.debug("SSE: session %s closed", sanitize_for_log(session_id))
 
         response = StreamingHttpResponse(
