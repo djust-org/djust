@@ -270,13 +270,13 @@ async def _linger() -> None:
 async def _shutdown_closed_session(session: "SSESession") -> None:
     """Dispose a closed stream's own session, as a WebSocket disconnect does (#3221).
 
-    Cancels its view's background work and waiters, removes upload temp files
+    Cancels its waiters (and an explicit view's background work), removes upload temp files
     and runs unregister hooks. Runs after the linger and after an event POST
     still being dispatched has finished (waited for up to
-    ``_CLOSE_DISPATCH_WAIT_S``), so no turn is torn down mid-way. Only an
-    explicit view is disposed (``SSESession.shutdown``). Its app hooks run
-    after the linger, so after a reconnect's mount (unlike a WebSocket
-    disconnect).
+    ``_CLOSE_DISPATCH_WAIT_S``), so no turn is torn down mid-way. Explicit and
+    legacy views are both disposed (``SSESession.shutdown``, #3232). The app
+    hooks run after the linger, so after a reconnect's mount (unlike a
+    WebSocket disconnect).
 
     Always this stream's OWN session. When a same-owner reconnect has already
     replaced it under the id, the reconnect mounted a new session with its own
@@ -425,6 +425,9 @@ class SSESession:
         self.session_id = session_id
         self.view_instance: Optional[Any] = None
         self.queue: asyncio.Queue = asyncio.Queue()
+        # Set once shutdown() queued the close sentinel: the stream reads
+        # nothing after it, so later pushes are dropped (#3232).
+        self._closed_sentinel_queued = False
         # The loop that serves the stream GET. With several event loops
         # (djust serve --loops N, #3128) a later event POST can arrive on
         # another loop; it hops here, because the queue, the locks and the
@@ -582,7 +585,14 @@ class SSESession:
                     await self.runtime._flush_all_pending()
 
     def push(self, msg: Dict[str, Any]) -> None:
-        """Enqueue a message to be sent to the SSE client."""
+        """Enqueue a message to be sent to the SSE client.
+
+        Dropped once ``shutdown()`` has queued the close sentinel: the stream
+        stops at the sentinel, so a later frame (a legacy view's background
+        work finishing after the close, #3232) would only sit in the queue.
+        """
+        if self._closed_sentinel_queued:
+            return
         self._put(msg)
 
     def _put(self, msg: Optional[Dict[str, Any]]) -> None:
@@ -606,17 +616,30 @@ class SSESession:
         self.queue.put_nowait(msg)
 
     def shutdown(self) -> None:
-        """Signal the SSE stream generator to close the connection."""
+        """Signal the SSE stream generator to close the connection.
+
+        Disposes the session's view, as a WebSocket disconnect does. An
+        explicit view goes through ``dispose_child_subtree`` (which cancels its
+        background work); a legacy view gets the WebSocket disconnect's legacy
+        teardown, and its background work runs to completion as on the
+        WebSocket (#3232). Either way the session and runtime drop the view, so
+        a late background result is discarded by the runtime's identity guard
+        instead of rendering into a closed queue.
+        """
         from ._child_lifecycle import dispose_child_subtree
         from ._exposure import uses_legacy_exposure
 
         self.active = False
         view = self.view_instance
-        if view is not None and not uses_legacy_exposure(view):
-            dispose_child_subtree(view)
+        if view is not None:
+            if uses_legacy_exposure(view):
+                _release_legacy_view(view)
+            else:
+                dispose_child_subtree(view)
             self.view_instance = None
             self.runtime.view_instance = None
         self._put(None)  # None is the sentinel value
+        self._closed_sentinel_queued = True
 
     # ------------------------------------------------------------------ #
     # Interface for _validate_event_security
@@ -629,6 +652,45 @@ class SSESession:
     async def close(self, code: int = 1000) -> None:
         """Called by rate-limit logic to force-close the transport."""
         self.shutdown()
+
+
+def _release_legacy_view(view: Any) -> None:
+    """Tear down a legacy root view whose SSE session is closing (#3232).
+
+    The WebSocket disconnect's legacy steps (``LiveViewConsumer.disconnect``),
+    in its order: remove upload temp files, cancel ``wait_for_event`` waiters,
+    unregister embedded children (``_unregister_child`` runs each legacy
+    child's ``_cleanup_on_unregister`` and disposes an explicit one), and drop
+    the Rust live handles. The root's own ``_cleanup_on_unregister`` does not
+    run, as on the WebSocket.
+
+    As on the WebSocket, the view's ``start_async`` / ``@background`` work is
+    NOT cancelled: it runs to completion. ``shutdown`` then detaches the view
+    from the session and runtime, so the runtime's identity guard discards the
+    late result (no completion handler, no render into the closed queue).
+
+    Each step is best effort. The framework's own failures are logged without
+    their values; ``_clear_live_handles`` logs its own, as on the WebSocket.
+    """
+    from .websocket import _clear_live_handles
+
+    if hasattr(view, "_cleanup_uploads"):
+        try:
+            view._cleanup_uploads()
+        except Exception:  # noqa: BLE001
+            logger.warning("SSE: cleaning up a closed legacy view's uploads failed")
+    if hasattr(view, "_cancel_all_waiters"):
+        try:
+            view._cancel_all_waiters(reason="view_disconnect")
+        except Exception:  # noqa: BLE001
+            logger.warning("SSE: cancelling a closed legacy view's waiters failed")
+    if hasattr(view, "_child_views"):
+        try:
+            for child_id in list(view._child_views.keys()):
+                view._unregister_child(child_id)
+        except Exception:  # noqa: BLE001
+            logger.warning("SSE: cleaning up a closed legacy view's children failed")
+    _clear_live_handles(view)
 
 
 async def _dispatch_on_session_loop(

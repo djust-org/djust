@@ -79,6 +79,7 @@ impl SessionActor {
     pub async fn run(mut self) {
         info!(session_id = %self.session_id, "SessionActor started");
 
+        let mut acks = Vec::new();
         while let Some(msg) = self.receiver.recv().await {
             self.last_activity = Instant::now();
 
@@ -221,12 +222,37 @@ impl SessionActor {
                     let _ = reply.send(());
                 }
 
-                SessionMsg::Shutdown => {
+                SessionMsg::Shutdown { reply } => {
                     info!(session_id = %self.session_id, "Shutting down");
-                    self.shutdown().await;
+                    acks.push(reply);
                     break;
                 }
             }
+        }
+
+        self.stop(acks).await;
+    }
+
+    /// Tear the session down, then acknowledge every `Shutdown` (#3228).
+    ///
+    /// Runs on an explicit `Shutdown` and also when every handle has been
+    /// dropped: either way each view is shut down and awaited, so no
+    /// ViewActor outlives its session holding a Python view. Any `Py<...>`
+    /// a queued message carries (a Mount's view, a CreateComponent's
+    /// component) is dropped with the interpreter attached.
+    async fn stop(mut self, mut acks: Vec<tokio::sync::oneshot::Sender<()>>) {
+        self.receiver.close();
+        self.shutdown().await;
+
+        let mut unhandled = Vec::new();
+        while let Ok(msg) = self.receiver.try_recv() {
+            match msg {
+                SessionMsg::Shutdown { reply } => acks.push(reply),
+                other => unhandled.push(other),
+            }
+        }
+        if !unhandled.is_empty() {
+            super::drop_attached(unhandled);
         }
 
         let lifetime_secs = self.created_at.elapsed().as_secs();
@@ -235,6 +261,10 @@ impl SessionActor {
             lifetime_secs = lifetime_secs,
             "SessionActor stopped"
         );
+
+        for ack in acks {
+            let _ = ack.send(());
+        }
     }
 
     /// Handle mount request - creates a new ViewActor (Phase 6: Now uses UUID)
@@ -261,13 +291,18 @@ impl SessionActor {
         // cannot leave an unregistered actor running. Generic ViewActor callers
         // remain independent of the Django package.
         let parameter_contract_module = if python_view.is_some() {
-            Some(
-                pyo3::Python::attach(|py| {
-                    py.import("djust._parameter_metadata")
-                        .map(|module| module.unbind().into())
-                })
-                .map_err(|_| ActorError::RenderContractsUnavailable)?,
-            )
+            match pyo3::Python::attach(|py| {
+                py.import("djust._parameter_metadata")
+                    .map(|module| module.unbind().into())
+            }) {
+                Ok(module) => Some(module),
+                Err(_) => {
+                    // The view is never handed to an actor; release it now
+                    // rather than in pyo3's deferred pool (#3228).
+                    super::drop_attached(python_view);
+                    return Err(ActorError::RenderContractsUnavailable);
+                }
+            }
         } else {
             None
         };
@@ -363,7 +398,12 @@ impl SessionActor {
                 view_id = %view_id,
                 "Unmounting view"
             );
-            view_handle.shutdown().await;
+            // Do not wait here (#3228): this runs inside the session's loop,
+            // and the view's teardown can run arbitrary Python finalizers;
+            // every other message for the session (and the supervisor's
+            // health-check ping) would queue behind them. The view releases
+            // its Python objects attached on its own task (`ViewActor::stop`).
+            tokio::spawn(async move { view_handle.shutdown().await });
             Ok(())
         } else {
             Err(ActorError::ViewNotFound(format!(
@@ -385,10 +425,15 @@ impl SessionActor {
         initial_props: HashMap<String, Value>,
         python_component: Option<pyo3::Py<pyo3::PyAny>>, // Phase 8.2
     ) -> Result<String, ActorError> {
-        let view_handle = self
-            .views
-            .get(&view_id)
-            .ok_or_else(|| ActorError::ViewNotFound(format!("View not found: {view_id}")))?;
+        let Some(view_handle) = self.views.get(&view_id) else {
+            if python_component.is_some() {
+                // Released now, not queued in pyo3's deferred pool (#3228).
+                super::drop_attached(python_component);
+            }
+            return Err(ActorError::ViewNotFound(format!(
+                "View not found: {view_id}"
+            )));
+        };
 
         view_handle
             .create_component(
@@ -521,7 +566,7 @@ impl SessionActorHandle {
                 reply: tx,
             })
             .await
-            .map_err(|_| ActorError::Shutdown)?;
+            .map_err(super::send_failed)?;
 
         rx.await.map_err(|_| ActorError::Shutdown)?
     }
@@ -631,7 +676,7 @@ impl SessionActorHandle {
                 reply: tx,
             })
             .await
-            .map_err(|_| ActorError::Shutdown)?;
+            .map_err(super::send_failed)?;
 
         rx.await.map_err(|_| ActorError::Shutdown)?
     }
@@ -770,11 +815,27 @@ impl SessionActorHandle {
         Ok(())
     }
 
-    /// Shutdown the session gracefully
+    /// Shut the session down and wait until it has stopped (#3228).
     ///
-    /// Shuts down all child ViewActors and then the SessionActor itself.
+    /// Shuts down and awaits every child ViewActor, then the SessionActor
+    /// itself; returns once all of them have dropped their Python objects.
+    /// Returns at once if the session has already stopped.
+    ///
+    /// The wait includes any Python finalizer the views' teardown runs. Must
+    /// not be awaited while the awaiting thread holds the interpreter: the
+    /// teardown attaches to drop the views.
     pub async fn shutdown(&self) {
-        let _ = self.sender.send(SessionMsg::Shutdown).await;
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        if self
+            .sender
+            .send(SessionMsg::Shutdown { reply: tx })
+            .await
+            .is_ok()
+        {
+            // An Err means the actor dropped the ack without replying, which
+            // only happens once it has already stopped.
+            let _ = rx.await;
+        }
     }
 
     /// Get the session ID
@@ -1097,5 +1158,122 @@ mod tests {
         }
 
         handle.shutdown().await;
+    }
+}
+
+/// #3228: the session's teardown paths free the Python views they own (see
+/// `view::release_3228` for the harness shape).
+#[cfg(test)]
+mod release_3228 {
+    use super::*;
+    use crate::actors::test_support::{is_released, released_probe};
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+
+    /// A session whose one registered view holds a probe.
+    async fn session_holding_a_probe() -> (SessionActor, SessionActorHandle, Arc<AtomicBool>) {
+        let (view, released) = released_probe();
+        let (mut session, handle) = SessionActor::new("s3228".to_string());
+        let (view_actor, view_handle) = ViewActor::new("t3228.V".to_string());
+        tokio::spawn(view_actor.run());
+        view_handle.set_python_view(view).await.unwrap();
+        session.views.insert("v3228".to_string(), view_handle);
+        (session, handle, released)
+    }
+
+    #[tokio::test]
+    async fn shutdown_returns_after_every_view_is_released() {
+        let (session, handle, released) = session_holding_a_probe().await;
+        tokio::spawn(session.run());
+        assert!(!is_released(&released), "premise: the view holds it");
+
+        handle.shutdown().await;
+
+        assert!(is_released(&released));
+    }
+
+    #[tokio::test]
+    async fn dropping_every_handle_shuts_the_views_down() {
+        // No explicit Shutdown: the session's channel closes. Its views used
+        // to keep running, each holding its Python view, for good.
+        let (session, handle, released) = session_holding_a_probe().await;
+        let task = tokio::spawn(session.run());
+        drop(handle);
+        tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await
+            .expect("the session stopped once its handles were gone")
+            .unwrap();
+        assert!(is_released(&released));
+    }
+
+    #[tokio::test]
+    async fn a_failed_mount_has_released_its_view_when_it_returns() {
+        // The contract module is made unimportable, so a mount with a Python
+        // view fails before an actor is spawned (the `[import]` shape of
+        // #3222); the Python suite covers `[discovery]` end to end.
+        let _blocked = crate::actors::test_support::ImportBlocked::new("djust._parameter_metadata");
+        let (view, released) = released_probe();
+        let (actor, handle) = SessionActor::new("s3228".to_string());
+        tokio::spawn(actor.run());
+
+        let mounted = handle
+            .mount("t3228.V".to_string(), HashMap::new(), Some(view))
+            .await;
+
+        assert!(matches!(
+            mounted,
+            Err(ActorError::RenderContractsUnavailable)
+        ));
+        assert!(is_released(&released));
+        handle.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_slow_finalizer_on_unmount_does_not_stall_the_session() {
+        // The view's `__del__` takes 1 s. Unmount runs inside the session's
+        // loop, so waiting there for the view's teardown would hold every
+        // other message -- here a ping, the supervisor's health check --
+        // behind the finalizer.
+        let (view, released) = crate::actors::test_support::released_probe_with_slow_finalizer(1.0);
+        let (mut session, handle) = SessionActor::new("s3228".to_string());
+        let (view_actor, view_handle) = ViewActor::new("t3228.V".to_string());
+        tokio::spawn(view_actor.run());
+        view_handle.set_python_view(view).await.unwrap();
+        session.views.insert("v3228".to_string(), view_handle);
+        tokio::spawn(session.run());
+
+        let started = Instant::now();
+        handle.unmount("v3228".to_string()).await.unwrap();
+        let unmounted_in = started.elapsed();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let started = Instant::now();
+        handle.ping().await.unwrap();
+        let pinged_in = started.elapsed();
+
+        let bound = std::time::Duration::from_millis(300);
+        assert!(unmounted_in < bound, "unmount took {unmounted_in:?}");
+        assert!(
+            pinged_in < bound,
+            "a ping waited {pinged_in:?} behind unmount"
+        );
+        // The view is still released, on its own task.
+        assert!(
+            crate::actors::test_support::released_within(
+                &released,
+                std::time::Duration::from_secs(5)
+            )
+            .await
+        );
+        handle.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn shutdown_of_a_stopped_session_returns_at_once() {
+        let (actor, handle) = SessionActor::new("s3228".to_string());
+        tokio::spawn(actor.run());
+        handle.shutdown().await;
+        tokio::time::timeout(std::time::Duration::from_secs(5), handle.shutdown())
+            .await
+            .expect("a second shutdown() returned");
     }
 }
