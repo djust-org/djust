@@ -185,7 +185,7 @@ layer settings.
 - A `?socket_timeout=` in the URL overrides the dict's key, as in redis-py.
   System check `djust.C023` warns when a host keeps redis-py 8's default.
 
-For small deployments, point `REDIS_URL` and `REDIS_CHANNEL_URL` at the same Redis instance — it serves both concerns fine. **Separate the instances** when:
+For small deployments you can point `REDIS_URL` and `REDIS_CHANNEL_URL` at the same Redis instance, but it then needs `noeviction`, and a full Redis makes every LiveView page fail (see [Production Configuration](#production-configuration)). The recommended layout is two instances. **Separate them** in any case when:
 
 - ElastiCache memory utilization climbs past 70% (the channel layer holds short-lived messages; the state backend holds longer-lived per-view state — eviction policies want to differ).
 - You want to scale the channel layer independently (e.g., to a Redis cluster) without touching the state backend.
@@ -232,7 +232,14 @@ docker run -d -p 6379:6379 --name redis redis:7-alpine
 
 ### Production Configuration
 
-Edit `/etc/redis/redis.conf`:
+**Recommended layout: two Redis instances**, because the eviction policy is per instance and the two workloads need opposite ones:
+
+- **State backend** (`REDIS_URL`): its own instance with `maxmemory-policy allkeys-lru`. Its keys are a cache, so evicting one only costs a cache miss (a fresh mount and render).
+- **Channel layer and presence** (`REDIS_CHANNEL_URL`, and `DJUST_CONFIG["PRESENCE_REDIS_URL"]` pointed at the same instance): `maxmemory-policy noeviction`. Set `PRESENCE_REDIS_URL` explicitly: without it the Redis presence backend uses `REDIS_URL`, the state instance, where `allkeys-lru` could evict presence keys. Evicting a channel or group key silently loses messages and breaks broadcasts and presence. Don't use `volatile-lru` here either: channels_redis sets expiries on its own keys, so they are eligible for it.
+
+Size the state instance's `maxmemory` from the [`SESSION_TTL` sizing rule](#choosing-session_ttl) with headroom, and alert on `used_memory` approaching `maxmemory` on both instances.
+
+Edit `/etc/redis/redis.conf` (shown for the channel-layer instance; the state instance differs only in `maxmemory` and the policy):
 
 ```conf
 bind 127.0.0.1 ::1
@@ -243,9 +250,9 @@ save 900 1
 save 300 10
 save 60 10000
 
-# Memory management. On a Redis that also carries the channel layer or
-# presence, evicting keys silently breaks broadcasts and presence: use
-# noeviction and size maxmemory, or give the state backend its own instance.
+# Memory management. Channel layer + presence instance: never evict.
+# (State-backend instance: maxmemory-policy allkeys-lru, and a maxmemory
+# sized from the SESSION_TTL rule.)
 maxmemory 256mb
 maxmemory-policy noeviction
 
@@ -253,6 +260,8 @@ maxmemory-policy noeviction
 rename-command FLUSHDB ""
 rename-command FLUSHALL ""
 ```
+
+**One shared instance** is possible for small deployments, with a hard trade-off. It must use `noeviction` to protect the channel layer and presence, and then a full Redis rejects writes: the state backend's `set()` raises (`OOM command not allowed`), and every LiveView page load and WebSocket mount fails until memory is freed. If you share one instance, size `maxmemory` for the state cache (the sizing rule) plus the channel layer and presence, with generous headroom, and alert on `used_memory` well before it reaches `maxmemory`.
 
 ## ASGI Server
 
@@ -306,12 +315,12 @@ gunicorn -k uvicorn.workers.UvicornWorker \
 
 **Each worker is a separate process.** With `-w 2` or more, everything in [More than one process or pod](scaling.md#more-than-one-process-or-pod) applies, as for `uvicorn --workers` above.
 
-`UvicornWorker` runs uvloop when it is installed (see the uvloop note above). To run asyncio's loop, point `-k` at a subclass:
+`UvicornWorker` runs uvloop when it is installed (see the uvloop note above). To run asyncio's loop, point `-k` at a subclass. uvicorn 0.42 deprecates the `uvicorn.workers` module in favour of the separate `uvicorn-worker` package (`pip install uvicorn-worker`, module `uvicorn_worker`), whose `UvicornWorker` takes the same `CONFIG_KWARGS`; `-k uvicorn_worker.UvicornWorker` replaces `-k uvicorn.workers.UvicornWorker` in the commands on this page:
 
 <!-- doc-snippet-check: skip -->
 ```python
 # myproject/workers.py
-from uvicorn.workers import UvicornWorker
+from uvicorn_worker import UvicornWorker  # pip install uvicorn-worker
 
 
 class AsyncioUvicornWorker(UvicornWorker):
@@ -901,7 +910,7 @@ The 8-line copy-pasteable recipe. Each line links to the relevant subsection of 
 
 ```
 ☐ ASGI server: gunicorn -k uvicorn.workers.UvicornWorker -w <cpu_count> (see rationale)
-☐ Channel layer (several processes): channels_redis.core.RedisChannelLayer, host socket_timeout 20
+☐ Channel layer (several processes or out-of-process pushes): channels_redis.core.RedisChannelLayer, host socket_timeout 20
 ☐ State backend: DJUST_CONFIG["STATE_BACKEND"] = "redis"
 ☐ State key invalidation: auto-derived from template hash (no env var needed since v0.9.4)
 ☐ ALB sticky sessions (optional): app_cookie on "sessionid"
@@ -1027,6 +1036,6 @@ If you find yourself building infrastructure to work around any of these (e.g., 
 
 **Session not found after restart**: Ensure `STATE_BACKEND='redis'` and Redis persistence is enabled (`save` directives in `redis.conf`).
 
-**Memory issues**: In Redis, increase `maxmemory`. Don't enable `allkeys-lru` on a Redis that also holds the channel layer or presence: evicting their keys silently breaks broadcasts and presence. Use `noeviction` there, or move the state backend to its own instance, where eviction only costs a cache miss. In the djust process, lower `SESSION_TTL` to your reconnect window, and see [Memory](scaling.md#memory) and the [troubleshooting checklist](scaling.md#troubleshooting-checklist) in Scaling djust (RSS that levels off rather than falls, `PooledHTTP`, idle-time collection).
+**Memory issues**: Put the state backend on its own Redis with `allkeys-lru`, where eviction only costs a cache miss, and keep `noeviction` on the instance carrying the channel layer and presence (see [Production Configuration](#production-configuration)). On a single shared `noeviction` instance, a full Redis makes every LiveView page load fail: raise `maxmemory` and alert on `used_memory`. In the djust process, lower `SESSION_TTL` to your reconnect window, and see [Memory](scaling.md#memory) and the [troubleshooting checklist](scaling.md#troubleshooting-checklist) in Scaling djust (RSS that levels off rather than falls, `PooledHTTP`, idle-time collection).
 
 **Serialization errors**: Ensure djust version matches across all servers, clear Redis cache, and verify Rust extension is compiled for the correct Python version.
