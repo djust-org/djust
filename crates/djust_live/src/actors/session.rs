@@ -398,7 +398,12 @@ impl SessionActor {
                 view_id = %view_id,
                 "Unmounting view"
             );
-            view_handle.shutdown().await;
+            // Do not wait here (#3228): this runs inside the session's loop,
+            // and the view's teardown can run arbitrary Python finalizers;
+            // every other message for the session (and the supervisor's
+            // health-check ping) would queue behind them. The view releases
+            // its Python objects attached on its own task (`ViewActor::stop`).
+            tokio::spawn(async move { view_handle.shutdown().await });
             Ok(())
         } else {
             Err(ActorError::ViewNotFound(format!(
@@ -815,6 +820,10 @@ impl SessionActorHandle {
     /// Shuts down and awaits every child ViewActor, then the SessionActor
     /// itself; returns once all of them have dropped their Python objects.
     /// Returns at once if the session has already stopped.
+    ///
+    /// The wait includes any Python finalizer the views' teardown runs. Must
+    /// not be awaited while the awaiting thread holds the interpreter: the
+    /// teardown attaches to drop the views.
     pub async fn shutdown(&self) {
         let (tx, rx) = tokio::sync::oneshot::channel();
         if self
@@ -1199,14 +1208,10 @@ mod release_3228 {
 
     #[tokio::test]
     async fn a_failed_mount_has_released_its_view_when_it_returns() {
-        // Outside Django the contract module does not import, so a mount with
-        // a Python view fails before an actor is spawned (the `[import]`
-        // shape of #3222); the Python suite covers `[discovery]` end to end.
-        pyo3::Python::initialize();
-        let importable = pyo3::Python::attach(|py| py.import("djust._parameter_metadata").is_ok());
-        if importable {
-            return; // this environment exercises the other branch
-        }
+        // The contract module is made unimportable, so a mount with a Python
+        // view fails before an actor is spawned (the `[import]` shape of
+        // #3222); the Python suite covers `[discovery]` end to end.
+        let _blocked = crate::actors::test_support::ImportBlocked::new("djust._parameter_metadata");
         let (view, released) = released_probe();
         let (actor, handle) = SessionActor::new("s3228".to_string());
         tokio::spawn(actor.run());
@@ -1220,6 +1225,45 @@ mod release_3228 {
             Err(ActorError::RenderContractsUnavailable)
         ));
         assert!(is_released(&released));
+        handle.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_slow_finalizer_on_unmount_does_not_stall_the_session() {
+        // The view's `__del__` takes 1 s. Unmount runs inside the session's
+        // loop, so waiting there for the view's teardown would hold every
+        // other message -- here a ping, the supervisor's health check --
+        // behind the finalizer.
+        let (view, released) = crate::actors::test_support::released_probe_with_slow_finalizer(1.0);
+        let (mut session, handle) = SessionActor::new("s3228".to_string());
+        let (view_actor, view_handle) = ViewActor::new("t3228.V".to_string());
+        tokio::spawn(view_actor.run());
+        view_handle.set_python_view(view).await.unwrap();
+        session.views.insert("v3228".to_string(), view_handle);
+        tokio::spawn(session.run());
+
+        let started = Instant::now();
+        handle.unmount("v3228".to_string()).await.unwrap();
+        let unmounted_in = started.elapsed();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let started = Instant::now();
+        handle.ping().await.unwrap();
+        let pinged_in = started.elapsed();
+
+        let bound = std::time::Duration::from_millis(300);
+        assert!(unmounted_in < bound, "unmount took {unmounted_in:?}");
+        assert!(
+            pinged_in < bound,
+            "a ping waited {pinged_in:?} behind unmount"
+        );
+        // The view is still released, on its own task.
+        assert!(
+            crate::actors::test_support::released_within(
+                &released,
+                std::time::Duration::from_secs(5)
+            )
+            .await
+        );
         handle.shutdown().await;
     }
 

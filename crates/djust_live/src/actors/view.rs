@@ -781,8 +781,12 @@ impl ViewActor {
         // Use shift_remove to preserve IndexMap insertion order
         let result = match self.components.shift_remove(&component_id) {
             Some(handle) => {
-                // Shutdown the component
-                handle.shutdown().await;
+                // Do not wait here (#3228): this runs inside the view's loop,
+                // and a component blocked forwarding into this view's full
+                // queue could not reach its Shutdown while the view waits.
+                // The component releases its Python instance attached on its
+                // own task (`ComponentActor::stop`).
+                tokio::spawn(async move { handle.shutdown().await });
                 Ok(())
             }
             None => Err(ActorError::ComponentNotFound(format!(
@@ -1767,6 +1771,11 @@ mod tests {
 /// `shutdown()` returns before the actor has run at all. The probe's flag is
 /// read without entering pyo3, so a decref pyo3 queued (a drop on a detached
 /// thread) leaves it false.
+///
+/// Under a parallel `cargo test`, any other test entering pyo3 flushes pyo3's
+/// global decref pool and can free a probe even with the bug present, so a
+/// single test's regression detection is probabilistic there; the modules
+/// together catch it every run, and `--test-threads=1` makes each one exact.
 #[cfg(test)]
 mod release_3228 {
     use super::*;
@@ -1867,6 +1876,64 @@ mod release_3228 {
         tokio::time::timeout(std::time::Duration::from_secs(5), handle.shutdown())
             .await
             .expect("a second shutdown() returned");
+    }
+
+    #[tokio::test]
+    async fn remove_component_does_not_deadlock_on_a_child_forwarding_to_it() {
+        // The review probe for M1: the same shape as the teardown test
+        // below, with RemoveComponent in place of Shutdown. The view keeps
+        // running, so it cannot close its queue; it must not wait inside
+        // its loop for a child that is blocked forwarding into that queue.
+        let (component, released) = released_probe();
+        let (mut actor, handle) = ViewActor::new("t3228.V".to_string());
+        let (child, child_handle) = ComponentActor::new(
+            "c3228".to_string(),
+            "<p>c</p>".to_string(),
+            HashMap::new(),
+            Some(handle.clone()),
+        )
+        .unwrap();
+        actor
+            .components
+            .insert("c3228".to_string(), child_handle.clone());
+        tokio::spawn(child.run());
+        child_handle.set_python_component(component).await.unwrap();
+
+        let (reply, removed) = tokio::sync::oneshot::channel();
+        handle
+            .sender
+            .try_send(ViewMsg::RemoveComponent {
+                component_id: "c3228".to_string(),
+                reply,
+            })
+            .unwrap();
+        while handle.sender.try_send(ViewMsg::Reset).is_ok() {}
+        for _ in 0..2 {
+            child_handle
+                .send_to_parent("ping".to_string(), HashMap::new())
+                .await;
+        }
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+
+        tokio::spawn(actor.run());
+        tokio::time::timeout(std::time::Duration::from_secs(5), removed)
+            .await
+            .expect("RemoveComponent deadlocked on its child")
+            .unwrap()
+            .unwrap();
+        // The component still stops and releases its Python instance.
+        assert!(
+            crate::actors::test_support::released_within(
+                &released,
+                std::time::Duration::from_secs(5)
+            )
+            .await
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(5), handle.shutdown())
+            .await
+            .expect("view shutdown returned");
     }
 
     #[tokio::test]

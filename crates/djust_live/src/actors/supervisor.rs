@@ -217,11 +217,17 @@ impl ActorSupervisor {
 
             let mut failed = Vec::new();
 
-            // Check health of all sessions
-            for entry in self.sessions.iter() {
-                let session_id = entry.key().clone();
-                let handle = entry.value().handle.clone();
+            // Snapshot the handles first: holding a DashMap read guard across
+            // `ping().await` would block `get_or_create_session`'s writers on
+            // that shard for up to the 5-second timeout.
+            let sessions: Vec<(String, SessionActorHandle)> = self
+                .sessions
+                .iter()
+                .map(|entry| (entry.key().clone(), entry.value().handle.clone()))
+                .collect();
 
+            // Check health of all sessions
+            for (session_id, handle) in sessions {
                 // Ping with timeout
                 let result = tokio::time::timeout(Duration::from_secs(5), handle.ping()).await;
 
