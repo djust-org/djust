@@ -96,9 +96,9 @@ CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            # socket_timeout > 5 s: redis-py 8's 5 s default drops idle
-            # WebSockets (django/channels_redis#422).
-            "hosts": [{"address": "redis://127.0.0.1:6379", "socket_timeout": 10}],
+            # socket_timeout > 5 s (20 recommended): redis-py 8's 5 s default
+            # drops idle WebSockets (django/channels_redis#422, see C023).
+            "hosts": [{"address": "redis://127.0.0.1:6379", "socket_timeout": 20}],
         },
     }
 }
@@ -320,7 +320,7 @@ In development, pages render without Tailwind utilities until you compile the CS
 
 **What causes it**: `CHANNEL_LAYERS` uses `channels_redis.core.RedisChannelLayer` with redis-py 8 or later installed, and a host does not set `socket_timeout` above 5 s. redis-py 8's default `socket_timeout` is 5 s, the same as the layer's blocking read, so idle LiveView WebSockets are dropped every few seconds (django/channels_redis#422).
 
-**Fix**: Use the dict host form with a longer timeout (10 is recommended): `"hosts": [{"address": REDIS_URL, "socket_timeout": 10}]`. A `?socket_timeout=` in the URL overrides the key, as in redis-py (see [Deployment: Channel Layer](deployment.md)). Pinning `redis<8` also works. Suppress with `DJUST_CONFIG = {"suppress_checks": ["C023"]}`.
+**Fix**: Use the dict host form with a longer timeout (20 is recommended): `"hosts": [{"address": REDIS_URL, "socket_timeout": 20}]`. It must be above the layer's 5 s blocking read; any value above 5 works, and higher values only detect a dead connection more slowly. Don't use `None`: a half-open TCP connection then hangs on read until TCP keepalive notices, where 20 fails it within 20 s. A `?socket_timeout=` in the URL overrides the key, as in redis-py (see [Deployment: Channel Layer](deployment.md#channel-layer-for-cross-process-push)). Pinning `redis<8` also works. Suppress with `DJUST_CONFIG = {"suppress_checks": ["C023"]}`.
 
 ---
 
