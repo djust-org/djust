@@ -17,7 +17,7 @@
     "@vitest/istanbul-lib-instrument": "^1.0.1",
     "@vitest/istanbul-lib-source-maps": "^1.0.1",
     "@vitest/ui": "^5.0.0",
-    "eslint": "^10.10.0",
+    "eslint": "^10.11.0",
     "eslint-plugin-security": "^4.0.1",
     "happy-dom": "^20.14.5",
     "jsdom": "^30.0.1",
