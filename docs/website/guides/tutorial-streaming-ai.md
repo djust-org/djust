@@ -109,21 +109,20 @@ class ChatView(LiveView):
     def stop(self, **kwargs):
         self.cancel_async(_STREAM)  # name must match start_async(name=...)
         self.streaming = False      # the stream loop sees this and stops
-
-    # Retry calls submit() directly, which bypasses submit's rate limit,
-    # so it carries the same limit itself.
-    @rate_limit(rate=0.1, burst=3)
-    @action
-    def retry(self, **kwargs):
-        # Re-fire submit with the prompt that's already in state.
-        self.submit(prompt=self.prompt)
 ```
+
+There is deliberately no `retry` handler. The Retry button in Step 3
+sends the stored prompt back to `submit` itself
+(`dj-click="submit" dj-value-prompt="{{ prompt }}"`), so every prompt,
+first try or retry, spends the one budget. `@rate_limit` keeps a
+separate bucket per handler name, so a second `retry` handler, even with
+the same numbers, would double the allowance to a burst of 6.
 
 Four things to call out:
 
 1. **`login_required` and `@rate_limit`** guard your API bill. Without
-   them any visitor can spend your tokens. `@rate_limit` is a per-caller
-   token bucket enforced on the server: an event over the limit is
+   them any visitor can spend your tokens. `@rate_limit` is a token
+   bucket per caller and per handler, enforced on the server: an event over the limit is
    dropped, and repeated abuse closes the WebSocket. Pair it with a
    per-user quota (see "Where to go next") for real cost control.
 2. **`start_async()` / `cancel_async()`** come with every `LiveView`
@@ -282,7 +281,7 @@ What happens at runtime:
 {% if error %}
   <section class="failure" role="alert">
     <p>The model returned an error: <strong>{{ error }}</strong></p>
-    <button type="button" dj-click="retry">Retry</button>
+    <button type="button" dj-click="submit" dj-value-prompt="{{ prompt }}">Retry</button>
   </section>
 {% endif %}
 </div>

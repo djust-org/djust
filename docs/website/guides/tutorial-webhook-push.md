@@ -151,6 +151,10 @@ logger = logging.getLogger(__name__)
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
+# Balances are kept in one currency (the page renders them in dollars).
+# Stripe reports currencies as lower-case ISO codes.
+ACCOUNT_CURRENCY = "usd"
+
 
 @csrf_exempt   # Webhooks come from Stripe, not your form. CSRF
 @require_POST  # cookie won't be present. Verify the signature instead.
@@ -184,6 +188,15 @@ def stripe_webhook(request):
         # retry a no-op instead of a second credit.
         _, created = ProcessedWebhookEvent.objects.get_or_create(event_id=event["id"])
         if not created:
+            return HttpResponse(status=200)
+        # 1000 in cents is $10.00 but ¥1000 in yen: never add an amount in
+        # another currency to the balance. The event id is already
+        # recorded, so a redelivery is skipped too.
+        if intent.get("currency") != ACCOUNT_CURRENCY:
+            logger.warning(
+                "Stripe event %s is in %r, not %r; not credited",
+                event["id"], intent.get("currency"), ACCOUNT_CURRENCY,
+            )
             return HttpResponse(status=200)
         account = Account.objects.select_for_update().filter(pk=account_id).first()
         if account is None:
@@ -233,7 +246,10 @@ Five things to call out:
 5. **Always acknowledge what you can't process.** Any non-2xx response
    makes Stripe retry. An event naming an account you don't have will
    never succeed, so the view logs it and returns 200 instead of
-   raising `DoesNotExist` (a 500 Stripe would keep retrying).
+   raising `DoesNotExist` (a 500 Stripe would keep retrying). A payment
+   in a currency other than `ACCOUNT_CURRENCY` gets the same treatment:
+   logged, not credited, acknowledged. If you take several currencies,
+   store a currency per account and compare against that instead.
 
 ---
 

@@ -100,15 +100,19 @@ class Issue(models.Model):
 ```python
 # myapp/views.py
 from djust import LiveView, state, action
-from djust.decorators import server_function
+from djust.decorators import rate_limit, server_function
 
 from .models import Issue, Tag
 
 MAX_SUGGESTIONS = 20
+TITLE_MAX = Issue._meta.get_field("title").max_length  # 200
 
 
 class NewIssueView(LiveView):
     template_name = "new_issue.html"
+    # Anonymous visitors can't file issues, and can't query tags either:
+    # server functions run the view's own auth.
+    login_required = True
 
     # Required for djust.call() to address this view from the client
     api_name = "issues.new"
@@ -117,6 +121,10 @@ class NewIssueView(LiveView):
     description = state("")
     selected_tags = state(default_factory=list)  # list of {id, name}
 
+    # One query per settled keystroke is a few per second at most. A
+    # caller past that gets HTTP 429, which fetchSuggestions treats as
+    # "no suggestions".
+    @rate_limit(rate=5, burst=10)
     @server_function
     def search_tags(self, q: str = "", limit: int = 8, **kwargs) -> list[dict]:
         q = q.strip()[:64]
@@ -145,17 +153,20 @@ class NewIssueView(LiveView):
     def remove_tag(self, id: int = 0, **kwargs):
         self.selected_tags = [t for t in self.selected_tags if t["id"] != id]
 
+    @rate_limit(rate=0.2, burst=5)  # 5 issues, then one every 5 seconds
     @action
     def submit(self, title: str = "", description: str = "", **kwargs):
         # dj-submit sends the form's named fields as kwargs.
+        title = title.strip()
         self.title = title
         self.description = description
-        if not title.strip():
+        if not title:
             raise ValueError("Title is required")
-        issue = Issue.objects.create(
-            title=title.strip(),
-            description=description,
-        )
+        # Check the length here: the browser's maxlength is only a hint,
+        # and an over-long title would fail in the database instead.
+        if len(title) > TITLE_MAX:
+            raise ValueError(f"Title must be at most {TITLE_MAX} characters")
+        issue = Issue.objects.create(title=title, description=description)
         if self.selected_tags:
             # The ids came from add_tag's lookups; filter again anyway so a
             # tag deleted meanwhile is skipped rather than raising.
@@ -172,7 +183,9 @@ Two things to call out:
    `/djust/api/call/issues.new/search_tags/`. Each call runs over HTTP
    with CSRF and the view's own auth (`login_required`,
    `permission_required`); server functions are not authenticated by
-   default.
+   default, which is why this view sets `login_required = True`. An
+   anonymous call gets HTTP 401. `@rate_limit` works on a server
+   function too: over the limit, the call gets HTTP 429.
 2. **`search_tags` is a `@server_function`, but `add_tag` /
    `remove_tag` / `submit` are `@action`.** That's deliberate: tag
    suggestions don't change the LiveView's state, but adding /
@@ -211,8 +224,11 @@ below turns into an empty dropdown.
 <form dj-submit="submit">
   <label>
     Title
-    <input name="title" value="{{ title }}" required />
+    <input name="title" value="{{ title }}" required maxlength="200" />
   </label>
+  {% if submit.error %}
+    <p role="alert" class="err">{{ submit.error }}</p>
+  {% endif %}
 
   <label>
     Description
