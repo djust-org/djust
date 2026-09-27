@@ -426,8 +426,20 @@
 .alert-close { position: absolute; top: var(--space-3); right: var(--space-3); display: inline-flex; align-items: center; justify-content: center; width: var(--space-6); height: var(--space-6); background: transparent; border: none; border-radius: var(--radius-sm); color: hsl(var(--muted-foreground)); cursor: pointer; transition: all var(--duration-fast) var(--ease-in-out, ease); }
 .alert-close:hover { color: hsl(var(--accent-foreground)); background: hsl(var(--accent)); }
 
-/* Button */
+/* Button
+   The plain `.btn` rules sit in `@layer components`, the layer the theme's
+   generated button rules use (#3230). Unlayered, this `color` beat the
+   theme's `.btn:hover` colour whatever the specificity, while the theme's
+   hover background still applied: bauhaus, swiss, retro and the other
+   inverted designs hovered as text on its own colour. In the same layer the
+   more specific `.btn:hover` wins. The background is zero-specificity
+   (`:where`) so a theme's own `.btn` background still wins; without it a
+   `<button>` kept the browser's light `buttonface` under light dark-mode
+   text. The `.btn-*` variants below stay unlayered and override both. */
+@layer components {
+:where(.btn) { background: hsl(var(--muted)); }
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2); padding: var(--space-2) var(--space-4); border-radius: var(--radius-md); font-size: var(--text-sm); font-weight: var(--font-medium); border: 1px solid transparent; color: hsl(var(--foreground)); cursor: pointer; transition: all var(--duration-normal) var(--ease-in-out, ease); text-decoration: none; white-space: nowrap; user-select: none; }
+}
 .btn:focus-visible { outline: none; box-shadow: 0 0 0 3px hsl(var(--ring) / 0.4); }
 .btn:hover:not(:disabled) { transform: translateY(var(--hover-translate-y, 0)) scale(var(--hover-scale, 1)); box-shadow: var(--hover-glow, none); }
 .btn-primary { background: hsl(var(--primary)); border-color: hsl(var(--primary)); color: hsl(var(--primary-foreground)); }
