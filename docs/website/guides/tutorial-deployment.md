@@ -4,7 +4,7 @@ slug: tutorial-deployment
 section: guides
 order: 58
 level: intermediate
-description: "Take a working LiveView from `make dev` to a real production deploy: ASGI server, Redis state backend, Nginx WebSocket proxy, sticky sessions (or how to do without), and the four production checks every team eventually wishes they'd added on day one."
+description: "Take a working LiveView from `make dev` to a real production deploy: ASGI server, shared sessions and channel layer, Redis VDOM cache, Nginx WebSocket proxy, and how to persist view state across workers."
 ---
 
 # Tutorial: Ship a djust app to production
@@ -12,19 +12,23 @@ description: "Take a working LiveView from `make dev` to a real production deplo
 Going from `make dev` to a real production deploy is where djust
 apps trip people up. The dev server (`uvicorn --reload`) runs a
 single process with in-memory state — perfect for local hacking,
-fatal in production where one process can't hold all your users'
-state. The fix is a small set of swap-outs: Redis for state,
-multiple uvicorn workers, an Nginx in front, sticky sessions (or
-not — see below), HTTPS for the WebSocket upgrade.
+which can be too small for production traffic. A multi-process
+deployment needs shared durable Django sessions and a cross-process
+channel layer. A Redis state backend can share the compiled-view
+cache used as a diff baseline, but it does not transfer a LiveView's
+Python state to another process. Persist state that must survive a
+reconnect, or use stickiness for state that must remain process-local.
+Then put Nginx in front and serve the WebSocket upgrade over HTTPS.
 
 By the end of this tutorial you'll have:
 
 - A **production-ready ASGI app** behind multiple uvicorn workers
-  that share Redis-backed state.
+  with shared sessions and a channel layer, plus an explicit choice
+  about state that must survive reconnects.
 - An **Nginx config** that proxies HTTP and upgrades WebSocket
   connections.
-- A clear answer on **sticky sessions**: what djust needs so it
-  works without them, and how to turn them on if you want them.
+- A clear answer on **sticky sessions**: when persisted state makes
+  them optional and when process-local state requires them.
 - **Healthcheck endpoints** that load balancers can probe.
 - The **four production checks** every team adds in week 2 and
   wishes they'd added on day one: graceful shutdown, error
@@ -32,7 +36,7 @@ By the end of this tutorial you'll have:
 
 | You'll learn | Documented in |
 |---|---|
-| `DJUST_CONFIG['STATE_BACKEND'] = 'redis'` + a Redis channel layer | [Production Deployment](deployment.md) |
+| Redis VDOM cache + a Redis channel layer | [Production Deployment](deployment.md) |
 | Uvicorn worker count + reload behavior | [Deployment](deployment.md) |
 | Nginx WebSocket proxy directives | [Deployment](deployment.md) |
 | What several processes need from each other | [Scaling djust](scaling.md) |
@@ -75,7 +79,7 @@ DJUST_CONFIG = {
     "STATE_BACKEND": "redis",
     "PRESENCE_BACKEND": "redis",
     "REDIS_URL": os.environ["REDIS_URL"],   # required, not optional
-    "SESSION_TTL": 7200,                    # 2h — match your auth session
+    "SESSION_TTL": 120,  # cached-view reconnect window; separate from Django auth-session expiry
 }
 
 # Cross-process messages (push_to_view, presence, broadcasts). An
@@ -113,7 +117,7 @@ The production swap-outs:
 |---|---|---|
 | `DEBUG = True` | `DEBUG = False` | Stack traces are info disclosure; templates cache; auto-reload off |
 | `SECRET_KEY` in settings.py | `SECRET_KEY` from the environment | Signs sessions, CSRF and password-reset tokens; a key checked into the repository is a key an attacker has |
-| `STATE_BACKEND='memory'` | `STATE_BACKEND='redis'` | Workers share one state backend instead of each holding its own |
+| `STATE_BACKEND='memory'` | `STATE_BACKEND='redis'` | Workers share the compiled-view diff cache; persist view state separately if it must survive a reconnect on another process |
 | In-memory channel layer | `RedisChannelLayer` with `socket_timeout` > 5 | Pushes and presence reach clients on every worker |
 | Per-process sessions (`locmem` cache, files) | `db` or `cached_db` sessions | The page load and the WebSocket may hit different workers |
 | `ALLOWED_HOSTS=['*']` | Real domain list | Defense against host-header attacks |
@@ -182,7 +186,9 @@ Three production-relevant flags:
 
 - **`--workers 4`** — one process per CPU core is the standard
   starting point. Each worker has its own memory; they share
-  sessions, the channel layer and the Redis state backend. More workers = more concurrent connections
+  the configured session store and channel layer. The Redis state
+  backend shares the compiled-view diff cache, not live view state.
+  Persist state that must survive a reconnect to another worker. More workers = more concurrent connections
   but also more memory.
 - **`--proxy-headers --forwarded-allow-ips="127.0.0.1"`** — trust
   `X-Forwarded-For` / `X-Real-IP` headers from the local Nginx,
@@ -271,9 +277,12 @@ same browser session.
 
 If sticky sessions are OFF (default for most load balancers), the
 page load and the WebSocket, or a reconnect after a network blip,
-can land on a different worker. djust works that way as long as
-the settings from Step 1 are in place: shared sessions, the Redis
-channel layer, and the Redis state backend.
+can land on a different worker. Shared sessions and the channel
+layer let the request authenticate and communicate across workers;
+they do not preserve arbitrary view state by themselves. Rebuild
+state from durable app data, or opt into the persistence described
+below. If state must remain only in a worker's memory, configure
+stickiness so reconnects return to that worker.
 
 One thing the Redis state backend does **not** do is carry a view's
 state to another worker. A default LiveView that reconnects to a
@@ -286,9 +295,9 @@ the session:
 - [explicit exposure](../state/explicit-exposure.md) views: declare
   the fields with `state(..., persist="server")`.
 
-So: **sticky sessions are optional**. djust doesn't need them; turn
-them on only if something else in your stack does, and leave them
-off for easier load distribution. See
+So: **sticky sessions depend on your state model**. Leave them off
+when each process can rebuild state or the state is persisted; use
+them when the page depends on process-local state. See
 [Scaling djust](scaling.md#more-than-one-process-or-pod) for the
 measured multi-process setup.
 

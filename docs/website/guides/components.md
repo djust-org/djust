@@ -893,7 +893,8 @@ nested interactive descendants (`<a>`, `<button>`, `<input>`,
 **Option B — `row_click_event` (preferred, LiveView-idiomatic)**: each
 `<tr>` fires a djust event with `data-value=row[row_click_value_key]`.
 Your `@event_handler` receives the row's value via `**kwargs` and can
-`self.redirect(...)` (or do anything else):
+use `self.live_redirect(...)` to navigate over the existing LiveView
+connection (or do anything else):
 
 ```python
 from djust import LiveView
@@ -912,7 +913,7 @@ class ClaimsListView(LiveView):
 
     @event_handler()
     def open_claim(self, value: str = "", **kwargs):
-        self.redirect(reverse("claims:detail", kwargs={"claim_id": value}))
+        self.live_redirect(reverse("claims:detail", kwargs={"claim_id": value}))
 ```
 
 ```django

@@ -878,7 +878,8 @@ What's the interaction pattern?
 
 Search input?          → @debounce(wait=0.5)
 Scroll tracking?       → @throttle(interval=1.0)
-Like button?           → @optimistic
+Like button?           → @event_handler (server round-trip);
+                         JS Command chain for immediate feedback
 Autocomplete?          → @cache(ttl=300)
 Multi-component sync?  → one handler updating both; the single server
                          re-render carries both. (@client_state is INERT, #2680.)
@@ -1078,5 +1079,7 @@ DATABASES = {"default": dj_database_url.config(default=os.environ["DATABASE_URL"
 **Quick pattern matching:**
 - Search/filter → @debounce + private QuerySet + JIT
 - Forms → FormMixin + validation
-- Real-time → @optimistic + client state
+- Server-authoritative real-time → @event_handler (server round-trip)
+- Immediate visual feedback for a server action → JS Commands +
+  `@event_handler`; `@optimistic` is inert
 - Autocomplete → @cache + @debounce

@@ -28,7 +28,9 @@ A pushed `handler` must start with `handle_` or be decorated with `@event_handle
 
 ## Push from Celery Tasks
 
-The most common use case is pushing updates from background workers. Since `push_to_view` is synchronous, it works directly inside any Celery task.
+The most common use case is pushing updates from background workers. Install
+Celery in your project (`pip install celery`) before using this example. Since
+`push_to_view` is synchronous, it works directly inside any Celery task.
 
 ```python
 from celery import shared_task
