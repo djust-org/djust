@@ -5487,6 +5487,7 @@ class ViewRuntime:
 
         # ADR-032 D5: the scoped path first. Same helper as the runtime event
         # path; the frame is the ``patch`` frame that path emits.
+        changed = None
         if pre_assigns is not None and not getattr(view, "_force_full_html", False):
             changed = _compute_changed_keys(pre_assigns, _snapshot_assigns(view))
             # A click whose handler changed nothing (close on a closed sheet,
@@ -5497,22 +5498,34 @@ class ViewRuntime:
             if not changed:
                 await self._send_component_noop(event_name, event_ref, async_batch, snapshot_fields)
                 return True
-            if _scoped_component_for(view, changed) is component:
-                _scoped_start = time.perf_counter()
-                scoped = await self._render_scoped_component(view, component)
-                if scoped is not None:
-                    await self._send_scoped_patch_frame(
-                        view,
-                        scoped,
-                        (time.perf_counter() - _scoped_start) * 1000,
-                        event_name=event_name,
-                        event_ref=event_ref,
-                        async_batch=async_batch,
-                        snapshot_fields=snapshot_fields,
-                    )
-                    await self._flush_all_pending()
-                    self._dispatch_async_work(event_name, async_batch)
-                    return True
+
+        # #3237: a legacy opt-in view's signed back-navigation snapshot is
+        # refreshed on a component event that renders, as the view route
+        # refreshes it (#3098) and as explicit views' component frames carry
+        # theirs (#3231). The noops above changed nothing, so the token the
+        # client holds is still current there, as on the view route.
+        if not snapshot_fields and view is self.view_instance:
+            from ._exposure import uses_legacy_exposure
+
+            if uses_legacy_exposure(view):
+                snapshot_fields = await self._legacy_event_snapshot(view)
+
+        if changed and _scoped_component_for(view, changed) is component:
+            _scoped_start = time.perf_counter()
+            scoped = await self._render_scoped_component(view, component)
+            if scoped is not None:
+                await self._send_scoped_patch_frame(
+                    view,
+                    scoped,
+                    (time.perf_counter() - _scoped_start) * 1000,
+                    event_name=event_name,
+                    event_ref=event_ref,
+                    async_batch=async_batch,
+                    snapshot_fields=snapshot_fields,
+                )
+                await self._flush_all_pending()
+                self._dispatch_async_work(event_name, async_batch)
+                return True
 
         # Component VDOM is separate from the parent's, so re-render the parent
         # to full HTML and emit a ``component_event`` frame (websocket.py:4024-4032).
