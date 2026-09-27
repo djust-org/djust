@@ -153,7 +153,8 @@ image policy and sanitization remain application/framework responsibilities.
 
 **Insert table** (`table`) is an ordinary toolbar action. In Visual mode it
 inserts a 3 × 3 table with a header row. In Markdown mode it inserts a GFM
-skeleton on its own block and selects the first header cell.
+skeleton as its own block after the line holding the caret (it never splits a
+line) and selects the first header cell.
 
 While the selection is inside a table, Visual mode shows a **Table** group:
 
@@ -167,28 +168,42 @@ While the selection is inside a table, Visual mode shows a **Table** group:
 | `table-delete` | Delete the table |
 
 Each button is enabled only when the action applies at the selection
-(`editor.can()`), and `header-row` reports its state with `aria-pressed`.
-Markdown source mode hides the group.
+(`editor.can()`); for example, **Delete column** is disabled in a single-column
+table. Markdown source mode hides the group.
 
-Every table must still be valid GFM when it is saved, so three things are
-deliberately unavailable:
+Every table must still be valid GFM when it is saved, and the editor enforces
+that itself rather than relying on which buttons it shows:
 
-- **Blocks inside a cell.** Headings, lists, quotes, code blocks and nested
-  tables are disabled inside a table: a GFM row can hold only inline content.
-- **Removing the header row.** A GFM table always has one, so a removed header
-  would come back as an empty row on the next load. `header-row` can only add
-  one, for example after the old header row was deleted.
+- **A cell holds one line of inline text.** The editor's schema allows exactly
+  one paragraph per cell, so no path can put a heading, list, quote, code
+  block, rule or nested table in one: not the toolbar, not a keyboard shortcut
+  or a Markdown input rule such as `# ` or `---` (these stay literal text),
+  not `getEditor()` commands, and not a selection that spans a table (only the
+  blocks around the table change). Pasted blocks land in the cell as text,
+  joined by line breaks. Formatting inside a cell (bold, italic, code, link)
+  works as usual.
+- **Line breaks.** Shift+Enter in a cell is saved as `<br>`, the only line
+  break a table row can hold, and reopens in Visual mode. Raw HTML anywhere
+  else still keeps a document in Markdown mode.
+- **`|` in a cell** is saved as `\|`, so the cell reloads whole.
+- **The header row.** A GFM table always has one. `header-row` is an action,
+  not a toggle: it is available only when the first row is not a header, which
+  happens after **Delete row** removes the header row; it then promotes the
+  new first row. Deleting the header row keeps the table valid, with the next
+  row's cells as body cells until you promote one.
 - **Merged cells.** GFM has no spelling for them.
-
-A line break inside a cell (Shift+Enter) is saved as `<br>`, the only line break
-a table row can hold, and reopens in Visual mode. Raw HTML anywhere else still
-keeps a document in Markdown mode.
 
 ## Selection and empty-line menus
 
 In Visual mode, selecting text opens a small formatting menu next to the
 selection: bold, italic, inline code and link, plus the table actions when the
-selection is inside a table. Turn it off with `bubble_menu=False`.
+selection is inside a table. **It is on by default**, including for editors
+that existed before it was added; turn it off with `bubble_menu=False` (the
+component and template tag), `bubble_menu=False` on the
+`markdown_controls.html` include, or `data-bubble-menu="false"` on a
+hand-written host. The menu sits above the selection, or below it when above
+would cover the toolbar; it follows the editor's own scrolling and hides while
+the selection is scrolled out of view.
 `floating_menu=True` adds a second menu on an empty line, with the block
 actions: heading, quote, the three lists, code block and insert table.
 
@@ -203,6 +218,12 @@ actions: heading, quote, the three lists, code block and insert table.
   menu closes when focus leaves it.
 - Both menus are `role="toolbar"` with an accessible name, and their buttons
   use the same `data-markdown-action` names and states as the toolbar.
+  `data-actions` filters them too; a menu it leaves without buttons is not
+  shown at all.
+- **Flag spellings.** `true`/`1`/`yes`/`on` and `false`/`0`/`no`/`off`, in
+  any case, as Python values or template strings; anything else keeps the
+  default. The component, both template tags and the include read them the
+  same way.
 
 ## Reaching the editor from app code
 
