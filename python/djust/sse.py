@@ -273,10 +273,10 @@ async def _shutdown_closed_session(session: "SSESession") -> None:
     Cancels its view's background work and waiters, removes upload temp files
     and runs unregister hooks. Runs after the linger and after an event POST
     still being dispatched has finished (waited for up to
-    ``_CLOSE_DISPATCH_WAIT_S``), so no turn is torn down mid-way. Only an
-    explicit view is disposed (``SSESession.shutdown``). Its app hooks run
-    after the linger, so after a reconnect's mount (unlike a WebSocket
-    disconnect).
+    ``_CLOSE_DISPATCH_WAIT_S``), so no turn is torn down mid-way. Explicit and
+    legacy views are both disposed (``SSESession.shutdown``, #3232). The app
+    hooks run after the linger, so after a reconnect's mount (unlike a
+    WebSocket disconnect).
 
     Always this stream's OWN session. When a same-owner reconnect has already
     replaced it under the id, the reconnect mounted a new session with its own
@@ -606,14 +606,25 @@ class SSESession:
         self.queue.put_nowait(msg)
 
     def shutdown(self) -> None:
-        """Signal the SSE stream generator to close the connection."""
+        """Signal the SSE stream generator to close the connection.
+
+        Disposes the session's view, as a WebSocket disconnect does. An
+        explicit view goes through ``dispose_child_subtree``; a legacy view
+        gets the WebSocket disconnect's legacy teardown plus a cancel of its
+        background work (#3232). Either way the session and runtime drop the
+        view, so a late background result is discarded by the runtime's
+        identity guard instead of rendering into a closed queue.
+        """
         from ._child_lifecycle import dispose_child_subtree
         from ._exposure import uses_legacy_exposure
 
         self.active = False
         view = self.view_instance
-        if view is not None and not uses_legacy_exposure(view):
-            dispose_child_subtree(view)
+        if view is not None:
+            if uses_legacy_exposure(view):
+                _release_legacy_view(view)
+            else:
+                dispose_child_subtree(view)
             self.view_instance = None
             self.runtime.view_instance = None
         self._put(None)  # None is the sentinel value
@@ -629,6 +640,47 @@ class SSESession:
     async def close(self, code: int = 1000) -> None:
         """Called by rate-limit logic to force-close the transport."""
         self.shutdown()
+
+
+def _release_legacy_view(view: Any) -> None:
+    """Tear down a legacy root view whose SSE session is closing (#3232).
+
+    The WebSocket disconnect's legacy steps (``LiveViewConsumer.disconnect``),
+    in its order: remove upload temp files, cancel ``wait_for_event`` waiters,
+    unregister embedded children (``_unregister_child`` runs each legacy
+    child's ``_cleanup_on_unregister`` and disposes an explicit one), and drop
+    the Rust live handles. Before them, the view's ``start_async`` /
+    ``@background`` work is cancelled, as ``dispose_child_subtree`` does for an
+    explicit view: a WebSocket's late result is dropped by the consumer, but an
+    SSE session's would render into a queue nobody reads. The root's own
+    ``_cleanup_on_unregister`` does not run, as on the WebSocket.
+
+    Each step is best effort; failures are logged without their values.
+    """
+    from .mixins.async_work import AsyncWorkMixin
+    from .websocket import _clear_live_handles
+
+    try:
+        AsyncWorkMixin.cancel_async_all(view)
+    except Exception:  # noqa: BLE001 — teardown must not raise
+        logger.warning("SSE: cancelling a closed legacy view's background work failed")
+    if hasattr(view, "_cleanup_uploads"):
+        try:
+            view._cleanup_uploads()
+        except Exception:  # noqa: BLE001
+            logger.warning("SSE: cleaning up a closed legacy view's uploads failed")
+    if hasattr(view, "_cancel_all_waiters"):
+        try:
+            view._cancel_all_waiters(reason="view_disconnect")
+        except Exception:  # noqa: BLE001
+            logger.warning("SSE: cancelling a closed legacy view's waiters failed")
+    if hasattr(view, "_child_views"):
+        try:
+            for child_id in list(view._child_views.keys()):
+                view._unregister_child(child_id)
+        except Exception:  # noqa: BLE001
+            logger.warning("SSE: cleaning up a closed legacy view's children failed")
+    _clear_live_handles(view)
 
 
 async def _dispatch_on_session_loop(
