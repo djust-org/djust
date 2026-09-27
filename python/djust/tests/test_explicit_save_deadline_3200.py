@@ -476,7 +476,7 @@ async def test_a_catch_up_that_cannot_send_withdraws_the_promise(staged, monkeyp
     assert "AUTH_SENTINEL" not in json.dumps(transport.sent)
 
 
-async def test_a_save_running_past_the_cap_escalates_at_once(staged, monkeypatch):
+async def test_a_save_running_past_the_cap_escalates_at_once(staged):
     """Review I-a, the wall-time arm: a pending save older than the cap means
     storage is not recovering, so the next deferral is already terminal."""
     from asgiref.sync import SyncToAsync, ThreadSensitiveContext
@@ -507,12 +507,19 @@ async def test_a_save_running_past_the_cap_escalates_at_once(staged, monkeypatch
             var.reset(token)
             await _until(lambda: transport.errors or first.done(), "the first deferral")
             await asyncio.wait_for(first, 10)
-            # The hung save is now older than the (lowered) cap.
-            monkeypatch.setattr(sessions, "MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S", 0.0)
+            # Age ONLY the hung save past the cap: backdate when it started
+            # running. Lowering the shared cap instead raced the first
+            # deferral's catch-up, which reads the cap too, and under load
+            # gave up on storage and sent a third error (#3240).
+            hung = runtime._explicit_save_pending
+            assert hung is not None and not hung.done()
+            assert hung in runtime_module._save_started_at, "the hung save never started"
+            runtime_module._save_started_at[hung] = (
+                asyncio.get_running_loop().time() - sessions.MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S - 1
+            )
             await runtime.dispatch_event(dict(event))
             assert [bool(e.get("transient")) for e in transport.errors] == [True, False]
         finally:
-            monkeypatch.setattr(sessions, "MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S", 10.0)
             release.set()
             SessionStore.save = original
         await asyncio.wait_for(runtime._explicit_catch_up, timeout=10)
