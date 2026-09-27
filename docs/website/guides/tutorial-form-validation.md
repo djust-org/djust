@@ -2,7 +2,7 @@
 title: "Tutorial: Real-time form validation with FormMixin"
 slug: tutorial-form-validation
 section: guides
-order: 76
+order: 40
 level: intermediate
 description: "Build a sign-up form that validates each field as the user types — username availability, password strength, email format — using Django Forms inside FormMixin. Errors appear inline within ~80 ms; no full-form re-renders, no JavaScript validation library."
 ---
@@ -76,12 +76,6 @@ class SignUpForm(forms.Form):
             raise ValidationError("That username is taken.")
         return username
 
-    def clean_email(self):
-        email = self.cleaned_data["email"]
-        if User.objects.filter(email__iexact=email).exists():
-            raise ValidationError("An account with that email already exists.")
-        return email
-
     def clean_password(self):
         password = self.cleaned_data["password"]
         try:
@@ -91,12 +85,22 @@ class SignUpForm(forms.Form):
         return password
 ```
 
-Three field validators, each a regular Django `clean_<field>`
-method. **The same code runs on per-keystroke validation, on
-blur, and on full-form submit.** (Per-field validation runs the
-field's own checks and its `clean_<field>()`; the form-wide
-`clean()` runs on submit.) That's the contract: write the
-validation once; the framework picks the right moment to run it.
+Field validators are regular Django `clean_<field>` methods. **The
+same code runs on per-keystroke validation, on blur, and on full-form
+submit.** (Per-field validation runs the field's own checks and its
+`clean_<field>()`; the form-wide `clean()` runs on submit.) That's the
+contract: write the validation once; the framework picks the right
+moment to run it.
+
+> **No "email already registered" check here.** A live validator that
+> answers "an account with that email exists" lets anyone test
+> addresses against your user table, one keystroke at a time. The
+> email field checks only the *format* live (`EmailField` does that);
+> Step 2 handles an existing address on submit without revealing it.
+> Usernames are different: they are usually public (they appear on
+> profiles and in URLs), so the live "That username is taken" check is
+> a deliberate trade-off. If your usernames are private, move that
+> check out of `clean_username()` in the same way.
 
 ---
 
@@ -108,8 +112,10 @@ validation once; the framework picks the right moment to run it.
 ```python
 # myapp/views.py
 from django.contrib.auth.models import User
+from django.core.mail import send_mail
 
 from djust import LiveView
+from djust.decorators import event_handler, rate_limit
 from djust.forms import FormMixin
 
 from .forms import SignUpForm
@@ -119,21 +125,42 @@ class SignUpView(FormMixin, LiveView):
     template_name = "signup.html"
     form_class = SignUpForm
 
+    # FormMixin's built-in handlers, re-declared only to rate-limit them:
+    # both run database queries for anonymous visitors.
+    @event_handler
+    @rate_limit(rate=5, burst=20, on_exceed="drop")
+    def validate_field(self, **kwargs):
+        super().validate_field(**kwargs)
+
+    @event_handler
+    @rate_limit(rate=0.2, burst=5)  # 5 tries, then one every 5 seconds
+    def submit_form(self, **kwargs):
+        super().submit_form(**kwargs)
+
     def form_valid(self, form):
         # submit_form() already ran form.is_valid() — every clean_*
         # method again, on the whole form — before calling this.
         data = form.cleaned_data
-        User.objects.create_user(
-            username=data["username"],
-            email=data["email"],
-            password=data["password"],
-        )
+        if User.objects.filter(email__iexact=data["email"]).exists():
+            # Answer exactly as for a new address, so the form can't be
+            # used to find out who has an account. Tell the owner instead.
+            send_mail(
+                "Sign-up attempt with your email address",
+                "Someone tried to create an account with this address. "
+                "If it was you, sign in or reset your password instead.",
+                None,
+                [data["email"]],
+            )
+        else:
+            User.objects.create_user(
+                username=data["username"],
+                email=data["email"],
+                password=data["password"],
+            )
         # reset_form() clears the fields AND the messages, so reset
         # first and set the message after.
         self.reset_form()
-        self.success_message = (
-            f"Welcome, {data['username']}! Check {data['email']} for confirmation."
-        )
+        self.success_message = f"Thanks! Check {data['email']} to finish signing up."
 
     def form_invalid(self, form):
         self.error_message = "Please fix the errors below."
@@ -162,6 +189,13 @@ That's the whole view. `FormMixin` supplies the rest:
    template.
 4. **`reset_form()`** — clears the values and errors after a
    successful sign-up.
+
+The two overrides only add `@rate_limit` to the built-in handlers.
+`validate_field` uses `on_exceed="drop"`, so a fast typist loses an
+occasional check instead of their connection. `submit_form` keeps the
+default, which counts refusals toward djust's abuse disconnect: sign-up
+is a brute-force target. An existing email gets the same success
+message as a new one; the owner gets an email instead of an account.
 
 `can_submit` is ours: `is_valid` only reflects the last submit, so
 the "enable the button" rule is computed from the live field state.
@@ -239,6 +273,9 @@ the "enable the button" rule is computed from the live field state.
   {% if error_message %}
     <p role="alert" class="err">{{ error_message }}</p>
   {% endif %}
+  {% for err in form_errors %}
+    <p role="alert" class="err">{{ err }}</p>
+  {% endfor %}
 </form>
 ```
 
@@ -304,17 +341,21 @@ feel polished.
 
 Visit `/signup/`:
 
-1. Type `ab` in username → red "Ensure this value has at least 3 characters."
+1. Type `ab` in username → red "Ensure this value has at least 3 characters (it has 2)."
 2. Type `abc` → field flips green (assuming `abc` isn't taken).
 3. Type `admin` → red "That username is taken."
 4. Type `alice@` in email — no error yet (didn't blur).
-5. Tab out of email → red if invalid format.
-6. Type `pass` in password → red password-strength errors from
-   Django's `validate_password`.
+5. Tab out of email → red "Enter a valid email address." An address
+   that is already registered does NOT go red.
+6. Type `pass` in password → red "Ensure this value has at least 8
+   characters (it has 4)." The field's `min_length` runs before
+   `clean_password()`. Type `password` → red "This password is too
+   common." from Django's `validate_password`.
 7. Submit button stays disabled until all three fields are
    filled in and green. Click → `submit_form` validates the whole
-   form, `form_valid` creates the user, and the success message
-   renders.
+   form, `form_valid` creates the user (or emails the owner of an
+   existing address), and the same success message renders either
+   way.
 
 Each per-field validation: ~80 ms round-trip. With debouncing,
 the DB sees one validation per pause, not one per keystroke. The

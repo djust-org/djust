@@ -2,7 +2,7 @@
 title: "Tutorial: Ship a djust app to production"
 slug: tutorial-deployment
 section: guides
-order: 75
+order: 58
 level: intermediate
 description: "Take a working LiveView from `make dev` to a real production deploy: ASGI server, Redis state backend, Nginx WebSocket proxy, sticky sessions (or how to do without), and the four production checks every team eventually wishes they'd added on day one."
 ---
@@ -57,6 +57,20 @@ import os
 
 DEBUG = os.environ.get("DEBUG", "False").lower() == "true"
 
+# Never ship the key from your dev settings. A KeyError at startup is the
+# point: a production process without a real key should not boot.
+SECRET_KEY = os.environ["DJANGO_SECRET_KEY"]
+
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": os.environ.get("DB_NAME", "myapp"),
+        "USER": os.environ.get("DB_USER", "myapp"),
+        "PASSWORD": os.environ["DB_PASSWORD"],
+        "HOST": os.environ.get("DB_HOST", "localhost"),
+    },
+}
+
 DJUST_CONFIG = {
     "STATE_BACKEND": "redis",
     "PRESENCE_BACKEND": "redis",
@@ -97,6 +111,7 @@ The production swap-outs:
 | In dev | In prod | Why |
 |---|---|---|
 | `DEBUG = True` | `DEBUG = False` | Stack traces are info disclosure; templates cache; auto-reload off |
+| `SECRET_KEY` in settings.py | `SECRET_KEY` from the environment | Signs sessions, CSRF and password-reset tokens; a key checked into the repository is a key an attacker has |
 | `STATE_BACKEND='memory'` | `STATE_BACKEND='redis'` | Workers share one state backend instead of each holding its own |
 | In-memory channel layer | `RedisChannelLayer` with `socket_timeout` > 5 | Pushes and presence reach clients on every worker |
 | Per-process sessions (`locmem` cache, files) | `db` or `cached_db` sessions | The page load and the WebSocket may hit different workers |
@@ -120,9 +135,10 @@ User=myapp
 Group=myapp
 WorkingDirectory=/opt/myapp
 Environment="DJANGO_SETTINGS_MODULE=myproject.settings"
-Environment="REDIS_URL=redis://localhost:6379/0"
-Environment="DATABASE_URL=postgres://myapp:..."
-Environment="DEBUG=False"
+# Secrets live in a root-owned file only root can read, not in this
+# unit: unit files are world-readable and `systemctl show` prints every
+# Environment= line to any local user.
+EnvironmentFile=/etc/myapp/env
 ExecStart=/opt/myapp/.venv/bin/uvicorn \
     myproject.asgi:application \
     --host 127.0.0.1 \
@@ -137,6 +153,29 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 ```
+
+Put the secrets in `/etc/myapp/env`, one `KEY=value` per line:
+
+```ini
+# /etc/myapp/env  (owner root, mode 0600)
+DJANGO_SECRET_KEY=<50+ random characters>
+DB_PASSWORD=<database password>
+REDIS_URL=redis://localhost:6379/0
+DEBUG=False
+```
+
+```bash
+sudo install -d -m 0755 /etc/myapp
+sudo touch /etc/myapp/env
+sudo chown root:root /etc/myapp/env
+sudo chmod 0600 /etc/myapp/env
+# Generate a key:
+python -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"
+```
+
+systemd reads `EnvironmentFile=` as root before it drops to
+`User=myapp`, so the file can stay root-only. After editing it, run
+`sudo systemctl restart myapp`.
 
 Three production-relevant flags:
 
@@ -332,10 +371,11 @@ if not DEBUG and (dsn := os.environ.get("SENTRY_DSN")):
 ```
 
 Catches the 500s your error pages render and the unhandled
-exceptions in event handlers. The `send_default_pii=False` is
-specific to Sentry — by default it ships
-`request.user.username`. Turn that off unless your privacy
-policy explicitly allows it.
+exceptions in event handlers. `send_default_pii=False` is already
+Sentry's default; it is spelled out so nobody flips it casually. Set
+to `True`, the SDK attaches user details (id, username, email), IP
+addresses, cookies and request bodies to events. Leave it off
+unless your privacy policy explicitly allows it.
 
 ### Structured logging
 
@@ -346,7 +386,7 @@ LOGGING = {
     "disable_existing_loggers": False,
     "formatters": {
         "json": {
-            "()": "pythonjsonlogger.jsonlogger.JsonFormatter",
+            "()": "pythonjsonlogger.json.JsonFormatter",  # python-json-logger 3.x
             "format": "%(asctime)s %(levelname)s %(name)s %(message)s",
         },
     },
@@ -368,8 +408,15 @@ tracebacks are not. Worth the 5 minutes of setup.
 
 ```python
 # settings.py
+# HSTS is sticky: browsers remember it for SECURE_HSTS_SECONDS, and
+# lowering the value later does not reach browsers that already cached
+# it. Start small (e.g. 3600) and raise it once HTTPS works everywhere.
 SECURE_HSTS_SECONDS = 31536000          # 1 year
+# Only if EVERY subdomain serves HTTPS: this covers them all.
 SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+# Preloading ships your domain in browsers' built-in lists, and removal
+# takes months. Enable it only after the two settings above have run
+# cleanly, then submit the domain at hstspreload.org.
 SECURE_HSTS_PRELOAD = True
 SECURE_SSL_REDIRECT = True              # enforce HTTPS at app level too
 SECURE_CONTENT_TYPE_NOSNIFF = True

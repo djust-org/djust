@@ -2,7 +2,7 @@
 title: "Tutorial: Build a search-as-you-type feature"
 slug: tutorial-search-as-you-type
 section: guides
-order: 60
+order: 41
 level: beginner
 description: "Build a debounced live search box that calls the server, shows a spinner while in flight, and renders results as the user types — five framework features tied together in ~80 lines of Python and HTML."
 ---
@@ -142,9 +142,13 @@ What each djust attribute does:
 Add an `event_handler` to `SearchView`:
 
 ```python
+import logging
+
 from django.db.models import Q
 
 from .models import Document
+
+logger = logging.getLogger(__name__)
 
 
 class SearchView(LiveView):
@@ -169,9 +173,12 @@ class SearchView(LiveView):
                 Q(title__icontains=q) | Q(body__icontains=q)
             ).order_by("-updated_at")[:20]
             self.results = [{"id": d.id, "title": d.title} for d in qs]
-        except Exception as exc:
+        except Exception:
+            # Log the details for yourself; show the user a generic message.
+            # A raw database error can reveal table and column names.
+            logger.exception("Document search failed for %r", q)
             self.results = []
-            self.error = f"Search failed: {exc}"
+            self.error = "Search is unavailable right now. Please try again."
 ```
 
 Three reactive assignments (`self.query`, `self.results`, `self.error`)
@@ -270,7 +277,11 @@ A few framework-level guarantees worth understanding:
   fill in when ready. See [Loading States & Background
   Work](loading-states.md).
 - **Highlight the match:** wrap matching substrings in `<mark>` on
-  the server before sending the patch.
+  the server before sending the patch. Both the query and the titles
+  are user text, so escape each piece before adding markup: build the
+  string with `format_html("{}<mark>{}</mark>{}", before, match, after)`,
+  which escapes its arguments. Never call `mark_safe` on a string that
+  contains user text.
 - **Server-side cancellation:** if the user types 'foo' then 'bar'
   before the 'foo' search returns, you don't want to render stale
   'foo' results. Use a per-LiveView `_search_seq` counter and only

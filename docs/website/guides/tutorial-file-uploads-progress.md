@@ -2,7 +2,7 @@
 title: "Tutorial: Build a file upload with live progress"
 slug: tutorial-file-uploads-progress
 section: guides
-order: 64
+order: 43
 level: intermediate
 description: "Build an avatar uploader with drag-and-drop, a real-time progress bar, server-side validation, and a confirmation card — using only djust's UploadMixin and a few template directives. Files chunk over the WebSocket, so you don't ship a multipart form or a separate upload endpoint."
 ---
@@ -39,7 +39,9 @@ By the end of this tutorial you'll have an avatar uploader that:
   `cute.png` is rejected).
 - Renders the saved avatar inline on success, with size and
   filename, and a "Replace" button to start over.
-- Surfaces a typed error message for any of the rejection cases
+- Stores one avatar per signed-in user, replacing (and deleting) the
+  previous file.
+- Surfaces a clear error message for each rejection case
   (too big, wrong type, magic-byte mismatch).
 
 | You'll learn | Documented in |
@@ -58,6 +60,21 @@ By the end of this tutorial you'll have an avatar uploader that:
 
 ## Step 1 — Configure the upload
 
+The avatar belongs to a user, so store it on a per-user profile:
+
+```python
+# myapp/models.py
+from django.conf import settings
+from django.db import models
+
+
+class Profile(models.Model):
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="profile"
+    )
+    avatar = models.FileField(upload_to="avatars/", blank=True)
+```
+
 Create the LiveView. The mixin is `UploadMixin`; configuration
 happens in `mount()` via `allow_upload()`:
 
@@ -65,15 +82,20 @@ happens in `mount()` via `allow_upload()`:
 # myapp/views.py
 from uuid import uuid4
 
-from django.core.files.storage import default_storage
+from django.core.files.base import ContentFile
 
 from djust import LiveView, state
 from djust.decorators import event_handler
 from djust.uploads import UploadMixin, validate_magic_bytes
 
+from .models import Profile
+
 
 class AvatarView(UploadMixin, LiveView):
     template_name = "avatar.html"
+    # Uploads write to your storage: never accept them from anonymous
+    # visitors. Anonymous requests are redirected to LOGIN_URL.
+    login_required = True
 
     avatar_url = state("")
     avatar_name = state("")
@@ -87,6 +109,11 @@ class AvatarView(UploadMixin, LiveView):
             max_entries=1,
             max_file_size=5_000_000,  # 5 MB
         )
+        profile = Profile.objects.filter(user=request.user).first()
+        if profile and profile.avatar:
+            self.avatar_url = profile.avatar.url
+            self.avatar_name = profile.avatar.name.rsplit("/", 1)[-1]
+            self.avatar_size = profile.avatar.size
 ```
 
 `allow_upload(name, ...)` registers an upload slot keyed by `name`.
@@ -136,19 +163,38 @@ server to keep what already arrived.
   {% if error %}
     <p role="alert" class="err">{{ error }}</p>
   {% endif %}
+  <!-- Filled by the script below for files refused before they upload. -->
+  <p id="avatar-upload-error" role="alert" class="err" dj-update="ignore"></p>
 </form>
 ```
 
-And the few lines that drive the progress bar. Put them in your base
-template, after the `dj-root` element, because a `<script>` inside
-the reactive root doesn't run when the page arrives by `dj-navigate`:
+And the few lines that drive the progress bar and the early-rejection
+message. Put them in your base template, after the `dj-root` element,
+because a `<script>` inside the reactive root doesn't run when the page
+arrives by `dj-navigate`:
 
 ```html
 <script>
+  function avatarUploadError(text) {
+    const el = document.getElementById("avatar-upload-error");
+    if (el) el.textContent = text;  // textContent: file names are user input
+  }
   window.addEventListener("djust:upload:progress", (e) => {
     const bar = document.getElementById("avatar-progress");
     if (bar && e.detail.uploadName === "avatar") {
       bar.value = e.detail.progress;
+      avatarUploadError("");
+    }
+  });
+  // Over max_file_size: the client refuses the file before sending it.
+  window.addEventListener("djust:upload:error", (e) => {
+    avatarUploadError(e.detail.file + " is larger than 5 MB.");
+  });
+  // Wrong extension, MIME type or active content (SVG, HTML): the server
+  // refuses to register the upload and answers with an error frame.
+  window.addEventListener("djust:error", (e) => {
+    if (e.detail && String(e.detail.error).startsWith("Upload rejected")) {
+      avatarUploadError("Only .jpg, .png and .webp images up to 5 MB are accepted.");
     }
   });
 </script>
@@ -163,6 +209,8 @@ What each upload-specific piece does:
 | `dj-upload-preview="avatar"` | Container the client fills with a preview thumbnail for image files. |
 | `djust:upload:progress` | Window event fired as the server acknowledges chunks; `e.detail` carries `uploadName`, `progress` (0–100) and `status`. |
 | `dj-update="ignore"` + `id` on the `<progress>` | Keeps server re-renders from resetting the `value` the script sets. |
+| `djust:upload:error` | Window event fired when the client refuses a file itself: `e.detail.file` and `e.detail.error` (`"File too large"`). |
+| `djust:error` with `"Upload rejected …"` | The server refused to register the file (extension or MIME type outside `accept`, active content, or `max_entries` reached). No upload entry exists, so the view never sees it. |
 
 **The upload starts when the file is picked or dropped**, and the
 progress bar fills as the chunks stream. Clicking "Save avatar"
@@ -185,10 +233,13 @@ class AvatarView(UploadMixin, LiveView):
     @event_handler
     def save_avatar(self, **kwargs):
         self.error = ""
-        saved = False
+        latest = None
 
-        # Read each entry INSIDE the loop: the entry's temp file is
-        # deleted once the loop moves past it.
+        # Read each entry's bytes INSIDE the loop: the temp files are
+        # deleted when the generator is exhausted. Drain it fully, so every
+        # completed entry is cleaned up, and keep only the newest valid
+        # file: a user who picks a second file before saving has two
+        # completed entries, and only one of them is their avatar.
         for entry in self.consume_uploaded_entries("avatar"):
             data = entry.data
             # Magic-byte check: decide the type from the content, not
@@ -197,17 +248,25 @@ class AvatarView(UploadMixin, LiveView):
             if kind is None:
                 self.error = "That doesn't look like a JPEG, PNG or WebP image."
                 continue
-            path = default_storage.save(
-                f"avatars/{uuid4().hex}/{entry.safe_client_name}", entry.file
-            )
-            self.avatar_url = default_storage.url(path)
-            self.avatar_name = entry.client_name
-            self.avatar_size = len(data)
-            saved = True
+            latest = (data, entry.safe_client_name, entry.client_name)
 
-        if not saved and not self.error:
-            rejected = [e.error for e in self.get_uploads("avatar") if e.error]
-            self.error = rejected[0] if rejected else "No file uploaded yet."
+        if latest is None:
+            if not self.error:
+                rejected = [e.error for e in self.get_uploads("avatar") if e.error]
+                self.error = rejected[0] if rejected else "No file uploaded yet."
+            return
+
+        data, safe_name, display_name = latest
+        profile, _ = Profile.objects.get_or_create(user=self.request.user)
+        if profile.avatar:
+            profile.avatar.delete(save=False)  # one avatar per user
+        # upload_to="avatars/" + a server-generated directory: the stored
+        # path never comes from the client.
+        profile.avatar.save(f"{uuid4().hex}/{safe_name}", ContentFile(data), save=True)
+        self.error = ""
+        self.avatar_url = profile.avatar.url
+        self.avatar_name = display_name
+        self.avatar_size = len(data)
 
     @event_handler
     def reset_avatar(self, **kwargs):
@@ -217,26 +276,33 @@ class AvatarView(UploadMixin, LiveView):
         self.error = ""
 ```
 
-Three things to call out:
+Four things to call out:
 
 1. **`consume_uploaded_entries("avatar")`** is the way to read
    the bytes. It is a generator over the completed entries; each
-   entry is yielded once and cleaned up after the loop moves on —
-   calling it again returns nothing, which prevents accidental
-   double-saves. Don't `list()` it and read the entries afterwards:
-   by then their temp files are gone and `entry.data` is empty.
-2. **`entry.client_name` is hostile input.** Build storage paths from
+   entry is yielded once, and all of them are removed and their temp
+   files deleted when the generator is exhausted — calling it again
+   returns nothing, which prevents accidental double-saves. Don't
+   `list()` it and read the entries afterwards: by then their temp
+   files are gone and `entry.data` is empty.
+2. **`max_entries=1` limits uploads in flight, not completed ones.**
+   Once the first file finishes, the user can pick another before
+   pressing Save, so the handler can see two entries. It keeps the
+   newest valid one, and deletes the previously stored avatar.
+3. **`entry.client_name` is hostile input.** Build storage paths from
    `entry.safe_client_name` (a path-safe basename) under a
    server-generated directory, never from `client_name`, which can
    carry `../` segments. Use `client_name` only for display.
-3. **Content decides the type.** djust already rejects files over
-   `max_file_size`, extensions outside `accept`, and content whose
-   magic bytes don't match the declared type (so `evil.exe` renamed
-   to `cute.png` never completes). Rejected files never reach
-   `consume_uploaded_entries()`; their message is on the entry's
-   `error`, which the handler shows. The explicit
-   `validate_magic_bytes` check keeps the decision about what you
-   store in your own code.
+4. **Where each rejection shows up.** A file over `max_file_size` is
+   refused by the client (`djust:upload:error`), and an extension or
+   MIME type outside `accept` by the server at registration
+   (`djust:error`, "Upload rejected …"). Neither creates an upload
+   entry, so the view never hears about them; the Step 2 script shows
+   the message. A file whose magic bytes don't match its declared type
+   (`evil.exe` renamed to `cute.png`) uploads but never completes; its
+   message is on the entry's `error`, which `save_avatar` shows. The
+   explicit `validate_magic_bytes` check keeps the decision about what
+   you store in your own code.
 
 ---
 
@@ -311,7 +377,7 @@ state activates without any JS from you).
       │ ─── dj-submit ─────────►│  → calls save_avatar()
       │                         │     ↓ consume_uploaded_entries()
       │                         │     ↓ magic-byte check
-      │                         │     ↓ default_storage.save()
+      │                         │     ↓ profile.avatar.save()
       │                         │     ↓ self.avatar_url = ...
       │ ◄── HTML diff ──────────│  (drop zone replaced with preview card)
 ```
@@ -335,9 +401,9 @@ card via the standard diff cycle.
   thumbnail plus a "Looks good?" submit button is already a
   confirm step; `window.djust.uploads.cancelUpload(ref)` stops a
   transfer the user changes their mind about.
-- **External storage (S3, GCS, Azure):** swap `default_storage` for
-  a configured backend. `entry.file` is a file-like object
-  (`BytesIO`), so any storage backend that accepts one works. To
+- **External storage (S3, GCS, Azure):** set the `FileField`'s
+  `storage=` (or Django's default storage) to a configured backend;
+  `ContentFile(data)` works with any of them. To
   stream chunks straight to the store instead, pass a `writer=` to
   `allow_upload()` (see [Uploads](uploads.md)).
 - **Resumable uploads for very large files:** pass

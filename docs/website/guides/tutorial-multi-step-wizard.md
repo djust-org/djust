@@ -2,7 +2,7 @@
 title: "Tutorial: Build a multi-step form wizard"
 slug: tutorial-multi-step-wizard
 section: guides
-order: 62
+order: 46
 level: intermediate
 description: "Build a 3-step signup wizard with per-step validation, back/next navigation, and a final review screen — using only state(), @event_handler, and conditional rendering. No state machines, no router, no JavaScript."
 ---
@@ -61,7 +61,7 @@ class SignupWizardView(LiveView):
     errors = state(default_factory=dict)
 ```
 
-Five fields total. `step` starts at 1, the rest start empty. The
+Six fields total. `step` starts at 1, `cycle` defaults to monthly, and the rest start empty. The
 `errors` dict is reset on every advance attempt so old errors don't
 linger.
 
@@ -78,9 +78,10 @@ import re
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 VALID_PLANS = {"hobby", "team", "enterprise"}
+VALID_CYCLES = {"monthly", "annual"}
 
 
-def _validate_step_1(name: str, email: str) -> dict:
+def _validate_step_1(name: str, email: str, **_) -> dict:
     errors = {}
     if not name.strip():
         errors["name"] = "Tell us your name."
@@ -89,11 +90,23 @@ def _validate_step_1(name: str, email: str) -> dict:
     return errors
 
 
-def _validate_step_2(plan: str) -> dict:
+def _validate_step_2(plan: str, cycle: str, **_) -> dict:
+    errors = {}
     if plan not in VALID_PLANS:
-        return {"plan": "Pick a plan to continue."}
-    return {}
+        errors["plan"] = "Pick a plan to continue."
+    if cycle not in VALID_CYCLES:
+        errors["cycle"] = "Pick a billing cycle."
+    return errors
+
+
+# Which fields each step owns, and the validator that checks them.
+STEP_FIELDS = {1: ("name", "email"), 2: ("plan", "cycle")}
+STEP_VALIDATORS = {1: _validate_step_1, 2: _validate_step_2}
 ```
+
+Every field belongs to exactly one step, and every field has a
+validator, including `cycle`. The radio buttons only offer choices;
+the server accepts nothing it hasn't checked.
 
 ---
 
@@ -105,22 +118,21 @@ Two `@event_handler`s plus the final `@action` for submit:
 class SignupWizardView(LiveView):
     # ... state as above ...
 
+    def _values(self) -> dict:
+        return {f: getattr(self, f) for fields in STEP_FIELDS.values() for f in fields}
+
     @event_handler
     def next_step(self, **kwargs):
-        # Pull current values out of kwargs so a quick edit doesn't
-        # require the user to re-tab through the form.
-        for field in ("name", "email", "plan", "cycle"):
+        # Accept only the fields the CURRENT step owns. A crafted event
+        # sent at step 2 can't overwrite the email validated at step 1.
+        for field in STEP_FIELDS.get(self.step, ()):
             if field in kwargs:
-                setattr(self, field, kwargs[field])
+                setattr(self, field, str(kwargs[field]))
 
-        if self.step == 1:
-            self.errors = _validate_step_1(self.name, self.email)
-        elif self.step == 2:
-            self.errors = _validate_step_2(self.plan)
-        else:
-            self.errors = {}
+        validator = STEP_VALIDATORS.get(self.step)
+        self.errors = validator(**self._values()) if validator else {}
 
-        if not self.errors:
+        if not self.errors and self.step < 3:
             self.step += 1
 
     @event_handler
@@ -131,24 +143,35 @@ class SignupWizardView(LiveView):
 
     @action
     def submit(self, **kwargs):
-        # All earlier steps already validated. Worst case is the
-        # user never reached step 3 — guard anyway.
         if self.step != 3:
             raise ValueError("Wizard incomplete.")
+        # Re-run EVERY step's validator on the final values. Don't trust
+        # that the steps were validated on the way here: the client
+        # chooses which events it sends.
+        for step, validator in STEP_VALIDATORS.items():
+            errors = validator(**self._values())
+            if errors:
+                self.errors = errors
+                self.step = step
+                raise ValueError("Please fix the highlighted fields.")
         # Real signup: create user, send welcome email, etc.
         # For the tutorial we just acknowledge.
         return {"signup": {"name": self.name, "email": self.email}}
 ```
 
-Three things worth pulling out:
+Four things worth pulling out:
 
 - **Validation is the source of truth for step transitions.** The
   step only advances when `self.errors` is empty after running the
   current step's validator.
-- **Form values flow through kwargs.** Every event payload includes
-  the form field values; we copy them into `self.*` so the next
-  render shows what the user typed. Without this, switching steps
-  would clear the inputs.
+- **Each step writes only its own fields.** `next_step` copies from
+  kwargs only the fields in `STEP_FIELDS[self.step]`. The values the
+  user typed are kept for the next render, so Back shows them, but an
+  event sent at step 2 can't smuggle in a new `email`.
+- **`submit` re-validates everything.** The per-step checks are for
+  the user's convenience; the final check is the one that protects
+  your data. If an earlier step fails, the wizard jumps back to it
+  with the errors shown.
 - **Final submit uses `@action`**, not `@event_handler`, so the
   template can read `submit.error` / `submit.result` for the
   success-screen UX.
@@ -159,7 +182,7 @@ Three things worth pulling out:
 
 ```html
 <!-- myapp/templates/signup_wizard.html -->
-<section class="wizard">
+<section class="wizard" dj-root>
   <ol class="wizard-steps" aria-label="Signup progress">
     <li {% if step == 1 %}aria-current="step"{% endif %}>1. About you</li>
     <li {% if step == 2 %}aria-current="step"{% endif %}>2. Plan</li>
@@ -192,6 +215,7 @@ Three things worth pulling out:
         <legend>Billing cycle</legend>
         <label><input type="radio" name="cycle" value="monthly" {% if cycle == "monthly" %}checked{% endif %} /> Monthly</label>
         <label><input type="radio" name="cycle" value="annual"  {% if cycle == "annual" %}checked{% endif %} /> Annual (save 20%)</label>
+        {% if errors.cycle %}<span class="err">{{ errors.cycle }}</span>{% endif %}
       </fieldset>
 
     {% elif step == 3 %}
@@ -229,10 +253,11 @@ Three things worth pulling out:
 </section>
 ```
 
-Three template patterns at work:
+Four template patterns at work:
 
 | Pattern | Why |
 |---|---|
+| `dj-root` on the outer `<section>` | Marks the reactive region. djust stamps `dj-view` onto it when it renders the page, and the client connects to that element. Without it the page renders but never connects, and no button does anything. |
 | `{% if step == N %}` per step | Only one step's inputs are mounted at a time. djust's diffing means switching steps is a single patch, not a re-render of the whole form. |
 | `value="{{ name }}"` / `checked` reflectors | Echo the current state so users see what they previously typed when they navigate Back. |
 | `dj-loading.disable` on the button, `dj-loading.show` / `.hide` with `dj-loading.for="submit"` on its labels | Standard loading-state UX: the button stays disabled until `submit` completes. The spans need `dj-loading.for` because a `dj-loading.*` attribute only follows the event on its own element, and the spans have none. |

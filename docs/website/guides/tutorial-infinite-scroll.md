@@ -2,7 +2,7 @@
 title: "Tutorial: Build infinite scroll with dj-viewport-bottom"
 slug: tutorial-infinite-scroll
 section: guides
-order: 68
+order: 45
 level: intermediate
 description: "Add bidirectional infinite scroll to any list in 20 lines — a server event fires the moment the last row crosses into the viewport, the handler appends the next page, and the framework's per-row diff patches just the new rows in. No JavaScript, no IntersectionObserver wiring, no scroll listeners."
 ---
@@ -164,9 +164,16 @@ Three patterns to call out:
 
 ## Step 3 — The template
 
+`dj-root` on the outer element marks the region djust patches; djust
+stamps `dj-view` onto it when it renders the page, which is what
+connects the page to its LiveView. Without it the page renders but
+never connects, and `load_more` never fires. Put the fragment inside
+the page skeleton from
+[your first LiveView](../getting-started/first-liveview.md).
+
 ```html
 <!-- myapp/templates/feed.html -->
-<section class="feed">
+<section class="feed" dj-root>
   <h1>Activity</h1>
 
   <ul class="feed-list" dj-viewport-bottom="load_more">

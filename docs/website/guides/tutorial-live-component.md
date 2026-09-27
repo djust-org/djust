@@ -2,7 +2,7 @@
 title: "Tutorial: Build a reusable LiveComponent"
 slug: tutorial-live-component
 section: guides
-order: 72
+order: 48
 level: intermediate
 description: "Build a star-rating widget once, drop it onto any page, and have parent views react to its events. LiveComponents have their own state, lifecycle, and event handlers — like a LiveView but composable. Includes the right way for child components to talk back to their parents."
 ---
@@ -218,9 +218,18 @@ class MovieDetailView(LiveView):
             self.user_rating = value
 ```
 
+The page's outer element carries `dj-root`. It marks the region
+djust patches, and djust stamps `dj-view` onto it when it renders
+the page, which is what connects the page to `MovieDetailView`.
+Without it the stars render but never respond. Put the fragment
+inside the page skeleton from
+[your first LiveView](../getting-started/first-liveview.md). The
+component template above has no `dj-root`: it renders inside the
+parent's root.
+
 ```html
 <!-- myapp/templates/movie_detail.html -->
-<article class="movie">
+<article class="movie" dj-root>
   <h1>{{ movie.title }}</h1>
   <p>{{ movie.tagline }}</p>
 
@@ -259,7 +268,7 @@ template:
 
 ```html
 <!-- myapp/templates/restaurant_detail.html -->
-<article class="restaurant">
+<article class="restaurant" dj-root>
   <h1>{{ restaurant.name }}</h1>
 
   {{ my_rating }}

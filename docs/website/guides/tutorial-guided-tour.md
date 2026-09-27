@@ -2,7 +2,7 @@
 title: "Tutorial: Build a server-driven guided product tour"
 slug: tutorial-guided-tour
 section: guides
-order: 77
+order: 54
 level: advanced
 description: "Build an in-app tour that walks new users through your dashboard step-by-step — highlighting buttons, scrolling to sections, popping tooltips — with the entire script written in Python on the server. Uses self.push_commands() to send JS Command chains down the WebSocket. The DOM dances; you never touch JavaScript."
 ---
@@ -252,8 +252,16 @@ Five things to call out:
 
 ## Step 3 — The template
 
+The whole page sits inside one `<div dj-root>`. That attribute marks
+the region djust patches, and djust stamps `dj-view` onto it when it
+renders the page, which is what connects the page to `DashboardView`.
+Without it the dashboard renders but never connects, and none of the
+tour buttons do anything. Put the fragment inside the page skeleton
+from [your first LiveView](../getting-started/first-liveview.md).
+
 ```html
 <!-- myapp/templates/dashboard.html -->
+<div dj-root>
 <header class="dash-head">
   <h1>Dashboard</h1>
   <input id="search-box" type="search" placeholder="Search…" />
@@ -287,10 +295,10 @@ Five things to call out:
   </div>
 {% endif %}
 
-{# Toast that flashes after tour completion. Hidden by default,
-   shown by the _finish_tour chain. #}
+{# Toast shown by the _finish_tour chain; hidden by default. #}
 <div id="tour-complete-toast" class="toast" hidden>
   Tour complete. Welcome aboard!
+</div>
 </div>
 ```
 

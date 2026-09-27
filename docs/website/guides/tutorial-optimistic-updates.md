@@ -2,7 +2,7 @@
 title: "Tutorial: Optimistic UI updates with JS Commands"
 slug: tutorial-optimistic-updates
 section: guides
-order: 66
+order: 44
 level: intermediate
 description: "Build a todo list where toggling a todo's done state flips the UI instantly — before the server has even seen the click. The server still authoritatively confirms, or rolls the guess back, on the next round-trip. Uses a JS Command chain with push() and explains the reconciliation model."
 ---
@@ -29,9 +29,8 @@ djust does this with a [JS Command](js-commands.md) chain on
 
 > **Not `@optimistic`.** `djust.decorators.optimistic` exists, but
 > it is a marker only: no client code reads it, so decorating a
-> handler with it changes nothing at runtime (tracked in
-> [#2699](https://github.com/djust-org/djust/issues/2699)). Use a JS
-> Command chain as shown here.
+> handler with it changes nothing at runtime. Use a JS Command chain
+> as shown here.
 
 By the end of this tutorial you'll have a todo list where:
 
@@ -145,7 +144,16 @@ class TodoListView(LiveView):
 
     @event_handler
     def toggle_todo(self, todo_id: int = 0, **kwargs):
-        todo = Todo.objects.get(id=todo_id, user=self.request.user)
+        # Scoped to the user: another user's todo id is "not found",
+        # the same as an id that doesn't exist.
+        todo = Todo.objects.filter(id=todo_id, user=self.request.user).first()
+        if todo is None:
+            # The browser flipped a row the server won't change. Put
+            # every row back to what the server knows.
+            self.push_commands(self._resync())
+            self.put_flash("error", "That todo no longer exists.")
+            self._refresh()
+            return
         if todo.locked:
             # The browser already flipped the row. Nothing on the
             # server changed, so the re-render won't touch it: undo
@@ -157,6 +165,15 @@ class TodoListView(LiveView):
         todo.done = not todo.done
         todo.save()
         self._refresh()
+
+    def _resync(self):
+        # One command chain that sets every row's class to the
+        # server's value, whatever the browser guessed.
+        chain = JS.remove_class("is-done", to=".todo")
+        for t in self.todos:
+            if t["done"]:
+                chain = chain.add_class("is-done", to=f"#todo-{t['id']}")
+        return chain
 ```
 
 Three pieces:
@@ -169,11 +186,15 @@ Three pieces:
    saves and re-renders; the server's new `class` for that row
    matches what the browser already shows, and the row's next chain
    points the other way.
-3. **The failure path must undo the guess itself.** A class that a
-   JS Command set stays set until something changes it. When the
-   server's state didn't change, the re-render sends no patch for
+3. **The failure paths must undo the guess themselves.** A class
+   that a JS Command set stays set until something changes it. When
+   the server's state didn't change, the re-render sends no patch for
    that row, so the handler sends the inverse operation with
-   `push_commands()`.
+   `push_commands()`. A locked todo gets its one row flipped back. An
+   id that isn't one of the user's todos (deleted in another tab, or
+   a forged event) is looked up with `filter(...).first()` rather
+   than `get()`, so it can't raise, and `_resync()` resets every row
+   to the server's state.
 
 ---
 
@@ -181,6 +202,7 @@ Three pieces:
 
 ```html
 <!-- myapp/templates/todos.html -->
+<div dj-root>
 {% load djust_flash %}
 {% dj_flash %}
 
@@ -200,12 +222,14 @@ Three pieces:
     </li>
   {% endfor %}
 </ul>
+</div>
 ```
 
 The pieces that make the optimistic flip work:
 
 | Piece | Role |
 |---|---|
+| `dj-root` on the outer `<div>` | Marks the reactive region. djust stamps `dj-view` onto it when it renders the page, and the client connects to that element. Without it the page renders but never connects, and no click reaches the server. |
 | `dj-click="{{ todo.toggle }}"` | `dj-click` recognises a JSON command list and runs it in the browser instead of sending a plain event. The chain ends in `push`, so the server still hears about the click. |
 | `class="todo {% if todo.done %}is-done{% endif %}"` | The CSS state hook. The chain flips it with `closest=".todo"`; the server's render sets it authoritatively. |
 | `id="todo-{{ todo.id }}"` | The target for the rollback command the handler sends. |

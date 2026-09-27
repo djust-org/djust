@@ -2,7 +2,7 @@
 title: "Tutorial: Test a LiveView with LiveViewTestClient"
 slug: tutorial-testing
 section: guides
-order: 73
+order: 57
 level: intermediate
 description: "Write end-to-end tests for a counter, a form, and a list — without a real WebSocket. The synchronous LiveViewTestClient runs the same code path as the consumer minus the transport, so you get fast, deterministic tests of mount → handler → re-render. Plus the right way to test pushed events, redirects, and validation errors."
 ---
@@ -185,13 +185,15 @@ def test_search_handles_db_error_gracefully(monkeypatch):
 
     state = client.get_state()
     assert state["results"] == []
-    assert "connection lost" in state["error"]
+    assert state["error"]  # the user sees a message...
+    assert "connection lost" not in state["error"]  # ...but not the raw error
 ```
 
 The `monkeypatch` fixture is pytest's standard way to swap a
 callable inline; here we make `Document.objects.filter` raise
-unconditionally and confirm the handler catches the error and
-sets `self.error`.
+unconditionally and confirm the handler catches the error, sets
+`self.error`, and keeps the exception text out of it (the view logs
+it instead).
 
 ---
 

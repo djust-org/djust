@@ -2,7 +2,7 @@
 title: "Tutorial: Modals and toasts without a server round-trip"
 slug: tutorial-js-commands
 section: guides
-order: 70
+order: 52
 level: beginner
 description: "Build a modal dialog and a toast notification system using JS Commands — chained DOM operations that run client-side, without ever pinging the server. Then pair with a server push for the actual save. The right tool for ephemeral UI state the server doesn't care about."
 ---
@@ -147,8 +147,16 @@ Three chains, two important patterns:
 
 ## Step 2 — The template
 
+The page sits inside one `<div dj-root>`. That attribute marks the
+region djust patches, and djust stamps `dj-view` onto it when it
+renders the page, which is what connects the page to `ProfileView`.
+Without it the chains still run (they are client-side), but **Save**
+never reaches the server. Put the fragment inside the page skeleton
+from [your first LiveView](../getting-started/first-liveview.md).
+
 ```html
 <!-- myapp/templates/profile.html -->
+<div dj-root>
 <section class="profile">
   <h1>Your profile</h1>
   <dl>
@@ -186,6 +194,7 @@ Three chains, two important patterns:
     <button type="button" dj-click="{{ dismiss_toast }}" aria-label="Dismiss">&times;</button>
   </div>
 {% endif %}
+</div>
 ```
 
 Two patterns to call out:

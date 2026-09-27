@@ -2,7 +2,7 @@
 title: "Tutorial: Integrate Chart.js with a hook"
 slug: tutorial-chart-hook
 section: guides
-order: 71
+order: 49
 level: intermediate
 description: "Drop a third-party JavaScript library (Chart.js, Mapbox, CodeMirror, anything) into a LiveView with a hook. Five lifecycle callbacks (mounted/updated/destroyed/disconnected/reconnected) cover every integration shape. Plus the right way to ship live data updates without re-mounting the chart on every patch."
 ---
@@ -77,7 +77,12 @@ data payload.
 
 ```html
 <!-- templates/base.html: loaded once, OUTSIDE the per-page dj-root -->
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<!-- Pin an exact version with Subresource Integrity, so a changed or
+     compromised CDN file is refused instead of run. -->
+<script
+  src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"
+  integrity="sha384-jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ"
+  crossorigin="anonymous"></script>
 <script>
   window.djust.hooks = window.djust.hooks || {};
   window.djust.hooks.RevenueChart = {
@@ -130,6 +135,12 @@ a `<script>` inside the reactive root does not run when the page
 arrives by `dj-navigate`, so the chart would stay blank after SPA
 navigation (see [Hooks](hooks.md#integrating-third-party-libraries-chartjs-maps-editors)).
 
+The CDN tag keeps the tutorial short. For production, prefer serving
+Chart.js from your own static files so no third party sits in your
+page's trust chain; [Vendoring third-party JS](vendored-assets.md) shows
+how, with a checksum and an SBOM entry. If you keep the CDN, bump the
+version and the `integrity` hash together.
+
 Three lifecycle callbacks cover the entire integration:
 
 | Callback | When | What to do |
@@ -168,6 +179,10 @@ RANGE_PRESETS = {
 
 class RevenueDashboardView(LiveView):
     template_name = "dashboard.html"
+    # Revenue is not public: anonymous visitors are sent to LOGIN_URL.
+    # Add `permission_required = "myapp.view_revenue"` (or a
+    # has_object_permission() check) if only some staff may see it.
+    login_required = True
 
     points_json = state("[]")
     selected_range = state("7d")

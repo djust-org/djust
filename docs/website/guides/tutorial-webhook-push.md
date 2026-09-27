@@ -2,7 +2,7 @@
 title: "Tutorial: Push live UI updates from a webhook (Stripe, GitHub, etc.)"
 slug: tutorial-webhook-push
 section: guides
-order: 78
+order: 51
 level: advanced
 description: "Receive a webhook from Stripe (or GitHub, or any external service) and surface the event in connected users' dashboards within ~50ms — no polling, no client-side fetching. Uses push_to_view() to ship state updates from a plain Django view straight into every connected LiveView session."
 ---
@@ -56,7 +56,31 @@ By the end of this tutorial you'll have:
 
 ---
 
-## Step 1 — The LiveView (no webhook code yet)
+## Step 1 — The models and the LiveView (no webhook code yet)
+
+Two models: the account whose balance the dashboard shows, and a record
+of every webhook event already applied, which Step 2 uses to ignore
+retries.
+
+```python
+# myapp/models.py
+from django.conf import settings
+from django.db import models
+
+
+class Account(models.Model):
+    owner = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    balance_cents = models.BigIntegerField(default=0)
+
+
+class ProcessedWebhookEvent(models.Model):
+    # The provider's event id (Stripe's evt_..., GitHub's delivery id).
+    # unique=True is what makes a replayed delivery a no-op.
+    event_id = models.CharField(max_length=255, unique=True)
+    received_at = models.DateTimeField(auto_now_add=True)
+```
+
+The view:
 
 ```python
 # myapp/views.py
@@ -110,6 +134,8 @@ client-driven events; `handle_*` methods for server-driven
 ```python
 # myapp/webhooks.py
 import json
+import logging
+
 import stripe
 from django.conf import settings
 from django.db import transaction
@@ -119,8 +145,9 @@ from django.views.decorators.http import require_POST
 
 from djust import push_to_view
 
-from .models import Account
+from .models import Account, ProcessedWebhookEvent
 
+logger = logging.getLogger(__name__)
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
@@ -135,35 +162,52 @@ def stripe_webhook(request):
         event = stripe.Webhook.construct_event(
             payload, sig_header, settings.STRIPE_WEBHOOK_SECRET,
         )
-    except (ValueError, stripe.error.SignatureVerificationError):
+    except (ValueError, stripe.SignatureVerificationError):
         return HttpResponseBadRequest("Invalid signature")
 
-    if event["type"] == "payment_intent.succeeded":
-        intent = event["data"]["object"]
-        account_id = int(intent["metadata"].get("account_id", 0))
-        amount = intent["amount"]  # in cents
+    if event["type"] != "payment_intent.succeeded":
+        return HttpResponse(status=200)
 
-        # Persist (select_for_update needs a transaction)
-        with transaction.atomic():
-            account = Account.objects.select_for_update().get(pk=account_id)
-            account.balance_cents += amount
-            account.save()
+    intent = event["data"]["object"]
+    amount = intent["amount"]  # in cents
+    try:
+        account_id = int(intent["metadata"].get("account_id", ""))
+    except (TypeError, ValueError):
+        # A 4xx/5xx makes Stripe retry for days; this event will never
+        # succeed, so log it and acknowledge it.
+        logger.warning("Stripe event %s has no usable account_id", event["id"])
+        return HttpResponse(status=200)
 
-        # Push to the AccountView sessions of this account only
-        push_to_view(
-            "myapp.views.AccountView",
-            handler="handle_balance_changed",
-            scope=f"account-{account.id}",
-            payload={
-                "new_balance_cents": account.balance_cents,
-                "description": f"Payment received: ${amount / 100:.2f}",
-            },
-        )
+    with transaction.atomic():
+        # Stripe delivers at least once and retries on timeouts. Recording
+        # the event id in the same transaction as the credit makes a
+        # retry a no-op instead of a second credit.
+        _, created = ProcessedWebhookEvent.objects.get_or_create(event_id=event["id"])
+        if not created:
+            return HttpResponse(status=200)
+        account = Account.objects.select_for_update().filter(pk=account_id).first()
+        if account is None:
+            logger.warning(
+                "Stripe event %s names unknown account %s", event["id"], account_id
+            )
+            return HttpResponse(status=200)
+        account.balance_cents += amount
+        account.save(update_fields=["balance_cents"])
 
+    # Push to the AccountView sessions of this account only
+    push_to_view(
+        "myapp.views.AccountView",
+        handler="handle_balance_changed",
+        scope=f"account-{account.id}",
+        payload={
+            "new_balance_cents": account.balance_cents,
+            "description": f"Payment received: ${amount / 100:.2f}",
+        },
+    )
     return HttpResponse(status=200)
 ```
 
-Three things to call out:
+Five things to call out:
 
 1. **`@csrf_exempt`** is required because the request comes from
    Stripe, not your form. Don't worry — `stripe.Webhook.construct_event`
@@ -179,6 +223,17 @@ Three things to call out:
    `account-<id>` in `mount()` by setting `push_scope`, so the push
    reaches only the paying customer's open dashboards. Without
    `scope`, it would reach every `AccountView` session.
+4. **Idempotency.** Stripe delivers each event at least once and
+   retries when your endpoint is slow or fails, so the same
+   `payment_intent.succeeded` can arrive twice. The
+   `ProcessedWebhookEvent` row is written in the same transaction as
+   the credit, and its `unique` event id makes a second delivery (even a
+   concurrent one) find the existing row and return without crediting
+   again.
+5. **Always acknowledge what you can't process.** Any non-2xx response
+   makes Stripe retry. An event naming an account you don't have will
+   never succeed, so the view logs it and returns 200 instead of
+   raising `DoesNotExist` (a 500 Stripe would keep retrying).
 
 ---
 
@@ -206,6 +261,7 @@ or [ngrok](https://ngrok.com/) to tunnel.
 
 ```html
 <!-- myapp/templates/account.html -->
+<div dj-root>
 <section class="account">
   <h1>Your account</h1>
   <p class="balance">
@@ -215,10 +271,11 @@ or [ngrok](https://ngrok.com/) to tunnel.
     <p class="last-event" role="status">{{ last_event }}</p>
   {% endif %}
 </section>
+</div>
 ```
 
-Standard LiveView template (inside the page's `<div dj-root>`).
-`balance` is the dollars string `get_context_data()` builds from
+`dj-root` marks the region djust keeps live; without it the page renders
+once and never connects, so pushes have nowhere to land. `balance` is the dollars string `get_context_data()` builds from
 `balance_cents`. The user opens `/account/`, sees
 their current balance. They make a payment in another tab (or
 elsewhere). Stripe POSTs to `/webhooks/stripe/`. The webhook
@@ -279,9 +336,17 @@ def github_webhook(request):
         return HttpResponseBadRequest("Invalid signature")
 
     event_type = request.META.get("HTTP_X_GITHUB_EVENT", "")
+    delivery_id = request.META.get("HTTP_X_GITHUB_DELIVERY", "")
     payload = json.loads(request.body)
 
-    if event_type == "pull_request" and payload["action"] == "opened":
+    if event_type == "pull_request" and payload.get("action") == "opened":
+        # GitHub redelivers too; skip a delivery id we've already handled.
+        if delivery_id:
+            _, created = ProcessedWebhookEvent.objects.get_or_create(
+                event_id=f"github:{delivery_id}"
+            )
+            if not created:
+                return HttpResponse(status=200)
         repo = payload["repository"]["full_name"]
         pr_number = payload["number"]
         push_to_view(
@@ -370,10 +435,9 @@ Two transports: HTTP for the webhook in (one direction, Stripe
 - **Several views, one event:** scopes belong to one view path.
   If a payment should also update, say, an admin view, push to
   each view path separately.
-- **Idempotency:** Stripe (and most webhook providers) retry
-  failed deliveries. Your handler MUST be idempotent — same
-  event delivered twice should produce the same final state.
-  Track event IDs in a `WebhookEvent` table; refuse duplicates.
+- **Pruning processed events:** `ProcessedWebhookEvent` grows by
+  one row per event. Stripe stops retrying after about three days, so
+  a periodic job can delete rows older than a week.
 - **Replay tools:** during dev / debugging, store every
   received webhook (raw body + headers) so you can re-fire it
   into the handler without coordinating with Stripe again.

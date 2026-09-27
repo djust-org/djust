@@ -2,7 +2,7 @@
 title: "Tutorial: Build a typeahead with @server_function"
 slug: tutorial-typeahead-server-function
 section: guides
-order: 63
+order: 53
 level: intermediate
 description: "Build an autocomplete dropdown that fetches suggestions from the server on every keystroke without re-rendering anything else on the page. Uses @server_function for browser-to-Python RPC — the right primitive when you want server data without a VDOM diff."
 ---
@@ -97,15 +97,14 @@ class Issue(models.Model):
 
 ## Step 2 — The LiveView with the `@server_function`
 
-<!-- Imports the reader's own myapp models, which the doc checker
-     cannot load. -->
-<!-- doc-snippet-check: skip -->
 ```python
 # myapp/views.py
 from djust import LiveView, state, action
 from djust.decorators import server_function
 
 from .models import Issue, Tag
+
+MAX_SUGGESTIONS = 20
 
 
 class NewIssueView(LiveView):
@@ -120,21 +119,27 @@ class NewIssueView(LiveView):
 
     @server_function
     def search_tags(self, q: str = "", limit: int = 8, **kwargs) -> list[dict]:
-        q = q.strip()
+        q = q.strip()[:64]
         if not q:
             return []
+        # limit comes from the browser: clamp it so a caller can't ask
+        # for the whole table.
+        limit = max(1, min(limit, MAX_SUGGESTIONS))
         hits = Tag.objects.filter(name__istartswith=q).order_by(
             "-usage_count", "name"
         )[:limit]
         return [{"id": t.id, "name": t.name} for t in hits]
 
     @action
-    def add_tag(self, id: int = 0, name: str = "", **kwargs):
-        if not id or not name:
-            raise ValueError("Tag missing")
-        if any(t["id"] == id for t in self.selected_tags):
+    def add_tag(self, id: int = 0, **kwargs):
+        # Look the tag up by id. The browser also knows the name, but a
+        # caller can send any name it likes.
+        tag = Tag.objects.filter(pk=id).first()
+        if tag is None:
+            raise ValueError("Unknown tag")
+        if any(t["id"] == tag.id for t in self.selected_tags):
             return  # already added
-        self.selected_tags.append({"id": id, "name": name})
+        self.selected_tags.append({"id": tag.id, "name": tag.name})
 
     @action
     def remove_tag(self, id: int = 0, **kwargs):
@@ -152,7 +157,11 @@ class NewIssueView(LiveView):
             description=description,
         )
         if self.selected_tags:
-            issue.tags.set([t["id"] for t in self.selected_tags])
+            # The ids came from add_tag's lookups; filter again anyway so a
+            # tag deleted meanwhile is skipped rather than raising.
+            issue.tags.set(
+                Tag.objects.filter(pk__in=[t["id"] for t in self.selected_tags])
+            )
         return {"id": issue.id}
 ```
 
@@ -170,6 +179,27 @@ Two things to call out:
    removing a tag *does* (it changes `self.selected_tags`, which is
    reflected in the chip list). Use `@server_function` only when
    you genuinely don't want a re-render.
+
+---
+
+The HTTP endpoint `djust.call()` posts to is not mounted automatically.
+Add djust's API routes to your root URLconf, next to the view:
+
+```python
+# myproject/urls.py
+from django.urls import path
+
+from djust.api import api_patterns
+from myapp.views import NewIssueView
+
+urlpatterns = [
+    path("issues/new/", NewIssueView.as_view(), name="new_issue"),
+    api_patterns(),  # mounts /djust/api/, including /djust/api/call/<slug>/<fn>/
+]
+```
+
+Without it every `djust.call()` gets a 404, which `fetchSuggestions`
+below turns into an empty dropdown.
 
 ---
 
@@ -269,9 +299,9 @@ Two things to call out:
       const li = ev.target.closest('li[data-id]');
       if (!li) return;
       // Tell the LiveView to add the tag (this DOES re-render)
+      // Send only the id: the view looks the tag up itself.
       window.djust.handleEvent('add_tag', {
         id: parseInt(li.dataset.id, 10),
-        name: li.dataset.name,
       });
       input.value = '';
       dropdown.hidden = true;
@@ -332,8 +362,13 @@ registered" inline checks, async price calculators, and any other
   already registered" — `@server_function` returns `{available: bool,
   reason?: str}`, the JS toggles a small icon next to the field.
   No re-render, so the password field below isn't re-mounted.
-- **Result cache:** for hot autocomplete (e.g. country picker), wrap
-  the `@server_function` body in `@functools.lru_cache` keyed on `q`.
+- **Result cache:** for hot autocomplete (e.g. a country picker),
+  keep results in Django's cache, keyed on the normalised query and the
+  clamped limit: `key = f"tag-search:{q.lower()}:{limit}"`, then
+  `cache.get(key)` and, on a miss, `cache.set(key, hits, timeout=60)`
+  (`from django.core.cache import cache`). Don't put
+  `functools.lru_cache` on the method: it keys on `self`, so a new view
+  instance never hits it, and it keeps every instance it saw alive.
   djust does *not* cache `@server_function` responses for you.
 
 The decision between `@event_handler` and `@server_function` is one

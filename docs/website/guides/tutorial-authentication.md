@@ -2,7 +2,7 @@
 title: "Tutorial: Auth-gated pages and per-handler permissions"
 slug: tutorial-authentication
 section: guides
-order: 69
+order: 55
 level: intermediate
 description: "Wire login + role-based authorization into a LiveView with three primitives: LoginRequiredMixin for the page itself, get_object() + has_object_permission() for team membership, and @permission_required on each event handler. Plus the right way to handle 'session expired mid-WebSocket' so the user doesn't see a half-broken UI."
 ---
@@ -85,9 +85,18 @@ class TeamMembership(models.Model):
         unique_together = [("team", "user")]
 ```
 
-The `manage_team_members` Django permission is what we'll gate
-the destructive button on. Assign it to admins via a Django
-signal, the admin site, or your team-creation flow.
+Two layers decide who may remove a member:
+
+- `TeamMembership.role` says who is an admin **of this team**. This is the
+  check that matters: it is per team.
+- The `manage_team_members` Django permission is a site-wide switch: "this
+  account may manage team rosters at all". Grant it to team admins (via a
+  signal, the admin site, or your team-creation flow), and revoke it to
+  lock an account out of every roster at once.
+
+A Django permission alone is never enough here. It is global, so a user
+who holds it because they admin team A would pass it on team B, where
+they are only a member. Step 3 checks both.
 
 ---
 
@@ -118,10 +127,18 @@ class TeamAdminView(LoginRequiredMixin, LiveView):
         # Logged in is not enough: the user must belong to this team.
         return obj.memberships.filter(user=request.user).exists()
 
+    def _is_team_admin(self):
+        # Per-team role, read fresh from the database on every call.
+        team = self._object
+        return team is not None and team.memberships.filter(
+            user=self.request.user, role="admin"
+        ).exists()
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         team = self._object  # fetched and verified for this render
         if team is not None:
+            context["is_team_admin"] = self._is_team_admin()
             context["team_name"] = team.name
             context["invite_code"] = team.invite_code
             context["members"] = [
@@ -161,6 +178,11 @@ class TeamAdminView(LoginRequiredMixin, LiveView):
     @event_handler
     @permission_required("myapp.manage_team_members")
     def remove_member(self, member_id: int = 0, **kwargs):
+        # The global permission above is not per team. This is the check
+        # that stops an admin of team A from editing team B's roster.
+        if not self._is_team_admin():
+            self.error = "Only this team's admins can remove members."
+            return
         if not member_id:
             return
         try:
@@ -176,18 +198,24 @@ class TeamAdminView(LoginRequiredMixin, LiveView):
         self.error = ""
 ```
 
-Three things to call out:
+Four things to call out:
 
 1. **`@permission_required("myapp.manage_team_members")`** is checked
-   server-side BEFORE the handler runs. A non-admin who fires
-   this event from the JS console gets a "Permission denied" error
-   from the framework — `remove_member` is never invoked, no DB
+   server-side BEFORE the handler runs. A user without the permission
+   who fires this event from the JS console gets a "Permission denied"
+   error from the framework — `remove_member` is never invoked, no DB
    changes happen.
-2. **Decorator order doesn't change behaviour.** `@permission_required`
+2. **`_is_team_admin()` scopes it to this team.** The permission is
+   global, so on its own it would let an admin of any team remove members
+   of every team they belong to. The role check runs first in the
+   handler, against `self._object` (the team `has_object_permission()`
+   verified for this event), and reads the role from the database each
+   time, so a demotion takes effect on the next click.
+3. **Decorator order doesn't change behaviour.** `@permission_required`
    only records metadata that the dispatcher reads, so either order
    works. By convention `@event_handler` goes outside and
    `@permission_required` inside (closer to `def`).
-3. **Self-protection** (`membership.user_id == self.request.user.id`) is
+4. **Self-protection** (`membership.user_id == self.request.user.id`) is
    business logic, not auth — it stays inside the handler. The
    framework's auth layer doesn't know about your team rules.
 
@@ -230,7 +258,7 @@ so the removed row disappears without any manual refresh.
           <td>{{ member.username }}</td>
           <td>{{ member.role|capfirst }}</td>
           <td>
-            {% if perms.myapp.manage_team_members %}
+            {% if is_team_admin %}
               <button
                 type="button"
                 dj-click="remove_member"
@@ -246,16 +274,16 @@ so the removed row disappears without any manual refresh.
 </section>
 ```
 
-The `{% if perms.myapp.manage_team_members %}` is a Django
-template feature — `perms` is auto-injected by
-`django.contrib.auth.context_processors.auth`. **It hides the
+`is_team_admin` comes from `get_context_data()`, so the button follows
+the per-team role, not the global `perms.myapp.manage_team_members` (which
+would show the button on every team the user belongs to). **It hides the
 button visually for non-admins, but it does NOT enforce auth.**
-The `@permission_required` decorator on the handler is what
-actually blocks the action; the template guard is a UX nicety
+The role check and `@permission_required` in the handler are what
+actually block the action; the template guard is a UX nicety
 (don't taunt the user with a button that wouldn't work).
 
 > **Defence in depth.** Always have BOTH: the template guard
-> for UX, the decorator for actual security. Without the decorator,
+> for UX, the server-side checks for actual security. Without them,
 > any non-admin can trigger the event by typing a few lines into
 > their console — the template hide is browser-controlled.
 
@@ -268,8 +296,11 @@ mid-session by another admin. The "Remove" button is still visible
 in their DOM (the page hasn't re-rendered) but the server now
 rejects their `remove_member` events.
 
-The handler never runs, so there is no server-side hook to catch
-this in: the framework rejects the event before dispatch and sends a
+A demotion to `member` on this team is caught by `_is_team_admin()`:
+the handler sets `error`, and the re-render shows the message and drops
+the button. Losing the site-wide `manage_team_members` permission is
+different. The handler never runs, so there is no server-side hook to
+catch it in: the framework rejects the event before dispatch and sends a
 `{"type": "error", "error": "Permission denied"}` frame back. The
 client turns every error frame into a `djust:error` window event,
 so listen for that and show a banner:
@@ -331,14 +362,16 @@ it with a `permission_denied` error frame.
         │                                       │                            │ click Remove
         │                                       │                            │ ─────────────►
         │                                       │                            │ @permission_required ✓
+        │                                       │                            │ role on team 42 = admin ✓
         │                                       │                            │ membership.delete()
         │                                       │                            │ ◄ patch: row gone
         │                                       │                            │
         │                                       │ console: dispatch          │
         │                                       │ ('remove_member', {id})    │
         │                                       │ ─────────────►             │
-        │                                       │ @permission_required ✗     │
-        │                                       │ ◄ "Permission denied"      │
+        │                                       │ role on team 42 ✗          │
+        │                                       │ ◄ "Only this team's        │
+        │                                       │    admins can remove..."   │
         │                                       │   (no DB change)           │
 ```
 
@@ -349,17 +382,6 @@ refuses to run the handler. Defense at the layer that matters.
 
 ## Where to go next
 
-- **Per-team roles:** `@permission_required` checks Django's
-  permission strings, which are usually granted globally. For "this
-  admin can manage *this* team but not that one," check the
-  membership role inside the handler (`self._object` is the team
-  `has_object_permission()` just verified):
-  <!-- doc-snippet-check: skip -->
-  ```python
-  membership = self._object.memberships.get(user=self.request.user)
-  if membership.role != "admin":
-      raise PermissionDenied
-  ```
 - **Rate-limit destructive actions:** stack
   `@rate_limit(rate=0.1, burst=5)` (a burst of 5, then one every
   10 seconds; see the [optimistic-updates
@@ -376,7 +398,7 @@ refuses to run the handler. Defense at the layer that matters.
   pattern.
 
 The recipe (`LoginRequiredMixin` plus `has_object_permission()` for
-page-level, `@permission_required` for action-level, template
-`{% if perms.X %}` for UX-only hide) is the entire auth surface for ~95% of LiveViews.
+page-level, a per-object role check plus `@permission_required` for
+action-level, a template `{% if %}` for UX-only hide) is the entire auth surface for ~95% of LiveViews.
 Everything beyond that is business-logic checks inside the handler
 body — and those are just regular Python.

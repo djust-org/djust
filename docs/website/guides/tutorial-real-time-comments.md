@@ -2,7 +2,7 @@
 title: "Tutorial: Build a real-time comment thread"
 slug: tutorial-real-time-comments
 section: guides
-order: 61
+order: 42
 level: intermediate
 description: "Build a comment thread that streams new posts to every reader the moment they're written — no polling, no manual refresh. Combines @action for the post handler, dj-form-pending for the submit UX, a keyed list for rendering, and database notifications for the live broadcast."
 ---
@@ -173,7 +173,7 @@ class CommentThreadView(LiveView):
 
 ```html
 <!-- myapp/templates/comment_thread.html -->
-<section>
+<section dj-root>
   <h2>Comments on this post ({{ comments|length }})</h2>
   <hr />
 
@@ -211,6 +211,7 @@ What's doing what:
 
 | Element | Behavior |
 |---|---|
+| `dj-root` on the outer `<section>` | Marks the reactive region. djust stamps `dj-view` onto it when it renders the page, and the client connects to that element. Without it the page renders but never connects: the form does a plain browser submit and no comment ever streams in. |
 | `{% for %}` with `dj-key="{{ comment.id }}"` | Keyed diffing: when `self.comments` grows by one, only that one `<li>` is inserted into the DOM. The other rows are matched by key and left alone. |
 | `<form dj-submit="post_comment">` | Submit fires the `post_comment` event, sending `name="body"` as a kwarg. |
 | `dj-form-pending="disabled"` on the textarea & button | Both get `disabled` while the submit is in flight. No prop drilling. |

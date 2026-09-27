@@ -2,7 +2,7 @@
 title: "Tutorial: Build a multi-tenant SaaS dashboard"
 slug: tutorial-multi-tenant
 section: guides
-order: 74
+order: 56
 level: advanced
 description: "Spin up a SaaS dashboard where every customer is on their own subdomain (acme.example.com, contoso.example.com), querysets are auto-scoped to the right tenant, and one user can never see another tenant's data — even if they tamper with URLs. Uses TenantScopedMixin for the hard part: defense against accidental leaks."
 ---
@@ -237,6 +237,7 @@ Three protective layers in this view:
 
 ```html
 <!-- myapp/templates/dashboard.html -->
+<div dj-root>
 <header class="dash-head">
   <h1>{{ tenant.name }} dashboard</h1>
   <p>{{ tenant.settings.plan|capfirst }} plan</p>
@@ -256,7 +257,13 @@ Three protective layers in this view:
     {% endfor %}
   </ul>
 </section>
+</div>
 ```
+
+`dj-root` on the outer `<div>` marks the reactive region. djust
+stamps `dj-view` onto it when it renders the page, and the client
+connects to that element; without it the page renders but never
+connects, and clicking an account does nothing.
 
 `tenant` is added to the template context by `TenantScopedMixin`
 (it's the `TenantInfo` the resolver returned), so the dashboard
