@@ -87,9 +87,10 @@ CHANNEL_LAYERS = {
         "CONFIG": {
             # socket_timeout above 5 s: redis-py 8 defaults it to 5 s, the
             # same as channels_redis' receive timeout, which drops idle
-            # WebSockets every few seconds (#3199). System check
-            # djust.C023 warns when this is missing.
-            "hosts": [{"address": os.environ["REDIS_URL"], "socket_timeout": 10}],
+            # WebSockets every few seconds (#3199). 20 leaves headroom and
+            # still fails a dead connection fast; don't use None. System
+            # check djust.C023 warns when this is missing.
+            "hosts": [{"address": os.environ["REDIS_URL"], "socket_timeout": 20}],
         },
     },
 }
