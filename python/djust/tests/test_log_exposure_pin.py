@@ -36,15 +36,6 @@ LEGACY_GATED = {
     ("render_embedded_child_html", "Failed to render embedded child %s: %s"): (
         "a nonlegacy child raises a value-free ExposureError from None first"
     ),
-    ("disconnect", "sticky %s _on_sticky_unmount during disconnect f"): (
-        "nonlegacy children go to dispose_child_subtree before the hook runs"
-    ),
-    ("handle_live_redirect_mount", "sticky child _on_sticky_unmount raised"): (
-        "nonlegacy children go to dispose_child_subtree before the hook runs"
-    ),
-    ("handle_live_redirect_mount", "sticky child _on_sticky_unmount failed during re"): (
-        "nonlegacy children go to dispose_child_subtree before the hook runs"
-    ),
     ("_handle_time_travel_jump_locked", "time_travel_jump: re-render failed"): (
         "restore_snapshot returns False for a nonlegacy view before re-rendering"
     ),
@@ -58,15 +49,13 @@ LEGACY_GATED = {
     ("_handle_forward_replay_locked", "forward_replay: re-render failed"): (
         "replay_event returns False for a nonlegacy view before re-rendering"
     ),
-    ("disconnect", "Error cleaning up uploads: %s"): (
-        "runs only when not explicit_disposed; a nonlegacy view is disposed instead"
-    ),
     ("_mount_one", "mount_batch: _mount_one raised for view %s"): (
         "legacy branch only; the owner is the resolved class, fail-closed if unresolvable"
     ),
 }
 
 FRAMEWORK_ONLY = {
+    ("disconnect", "Error leaving channel group %s: %s"): ("channel-layer group_discard"),
     ("_find_sticky_slot_ids", "sticky-slot parse failed; returning empty set"): "slot markup parse",
     ("_clear_live_handles", "%s failed during teardown"): (
         "teardown step names; confirm no application hook runs there"
@@ -86,18 +75,11 @@ FRAMEWORK_ONLY = {
     ("_clear_template_caches", "Could not clear template cache for %s: %s"): "cache clear",
     ("hotreload", "Template not found for hot reload: %s"): "dev-only, file-derived",
     ("hotreload", "Failed to parse patches JSON: %s"): "dev-only, file-derived",
-    ("handle_live_redirect_mount", "Failed to clean up uploads for old view"): "upload cleanup",
     ("handle_live_redirect_mount", "sticky children staging failed; proceeding witho"): (
         "outer catch of the staging block; hooks inside it are legacy-gated"
     ),
     ("disconnect", "Error leaving db_notify group for %s: %s"): (
         "channel-layer group_discard; the channel name is an identifier, not state"
-    ),
-    ("disconnect", "Error cancelling waiters: %s"): (
-        "_close_waiters sets a flag and schedules future cancellation; no hook runs"
-    ),
-    ("disconnect", "Error cleaning up embedded children: %s"): (
-        "_unregister_child disposes nonlegacy children and catches legacy hooks itself"
     ),
 }
 
@@ -126,12 +108,6 @@ RUNTIME_LEGACY_GATED = {
     ("_settle_cancelled_async", "Runtime: error settling cancelled async task for"): (
         "inside `if uses_legacy_exposure(view)`"
     ),
-    ("on_mount_render_ready", "sticky child _on_sticky_unmount raised"): (
-        "inside `elif ... and uses_legacy_exposure(child)` (reattach collision)"
-    ),
-    ("on_mount_render_ready", "sticky child _on_sticky_unmount raised", 1): (
-        "inside `if uses_legacy_exposure(child)`"
-    ),
     ("dispatch_actor_event", "dj_activity: deferred-event flush raised (actor "): (
         "actor events are refused for nonlegacy views before this transport hook"
     ),
@@ -153,7 +129,9 @@ RUNTIME_FRAMEWORK_ONLY = {
     ("_join_listen_channels", "Error joining db_notify group for %s: %s"): (
         "channel-layer group_add"
     ),
-    ("_leave_view_groups", "Error leaving channel group %s: %s"): "channel-layer group_discard",
+    ("leave_consumer_view_groups", "Error leaving channel group %s: %s"): (
+        "channel-layer group_discard"
+    ),
     ("on_render_emitted", "DJE-053 diagnostic emit failed"): "diagnostic formatting",
     ("on_event_frame", "on_event_frame debug decoration failed"): (
         "debug payload built from the redacted debug projection"
@@ -183,13 +161,17 @@ MIXIN_TABLES = {
             ("__init__", "time_travel: failed to allocate buffer"): "buffer allocation",
         },
     ),
+    "_child_lifecycle.py": (
+        {
+            ("discard_sticky_child", "sticky child %s raised"): (
+                "after `if not uses_legacy_exposure(child)` disposes and returns"
+            ),
+        },
+    ),
     "mixins/sticky.py": (
         {
             ("_on_sticky_unmount", "sticky _on_sticky_unmount: cancel_async_all() fa"): (
                 "inside `if uses_legacy_exposure(self)`"
-            ),
-            ("_preserve_sticky_children", "sticky child %s _on_sticky_unmount raised"): (
-                "nonlegacy auth-denied children go to dispose_child_subtree first"
             ),
             ("_unregister_child", "child view %s _cleanup_on_unregister raised"): (
                 "nonlegacy children go to dispose_child_subtree and return first"
@@ -311,9 +293,6 @@ MIXIN_TABLES = {
             ("live_render", "live_render: sticky restore for %r failed; mount"): (
                 "inside `if sticky_kwarg and not explicit_child`"
             ),
-            ("_discard_sticky_child", "sticky child %r _on_sticky_unmount raised"): (
-                "inside `if callable(hook) and uses_legacy_exposure(child)`"
-            ),
         },
         {
             ("_resolve_css_class", "config.get_framework_class lookup failed: %s"): (
@@ -324,9 +303,6 @@ MIXIN_TABLES = {
             ),
             ("render", "dj_activity: _register_activity failed for %s"): (
                 "activity registration with a template-supplied name"
-            ),
-            ("_discard_sticky_child", "live_render: unregistering sticky child %r faile"): (
-                "_unregister_child disposes nonlegacy children and catches legacy hooks itself"
             ),
         },
     ),

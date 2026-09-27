@@ -484,6 +484,62 @@ def _consume_async_cancel(view: Any, task_name: str) -> bool:
     return False
 
 
+def take_consumer_view_groups(consumer: Any) -> List[str]:
+    """Hand over the channel-layer groups the consumer's current view joined.
+
+    Its server-push view group, presence and presence-scope groups, db_notify
+    groups and scoped server-push groups, as group names. The consumer's group
+    attributes are reset, so they describe the next mounted view only, but no
+    group is left: the caller either leaves them
+    (:func:`leave_consumer_view_groups`) or keeps them on record for the view
+    they belong to (a ``mount_batch`` sibling, #3245).
+    """
+    groups: List[str] = []
+    from .presence import presence_groups_of
+
+    groups.extend(presence_groups_of(consumer))
+    consumer._presence_groups = set()
+    consumer._presence_group = None
+    for attr in ("_view_group", "_presence_scope_group"):
+        group = getattr(consumer, attr, None)
+        if isinstance(group, str) and group:
+            groups.append(group)
+            setattr(consumer, attr, None)
+    channels = getattr(consumer, "_db_notify_channels", None)
+    if isinstance(channels, set) and channels:
+        groups.extend(f"djust_db_notify_{ch}" for ch in channels)
+        consumer._db_notify_channels = set()
+    scoped = getattr(consumer, "_push_scope_groups", None)
+    if isinstance(scoped, dict) and scoped:
+        groups.extend(scoped.values())
+        consumer._push_scope_groups = {}
+    return groups
+
+
+async def leave_consumer_view_groups(consumer: Any, groups: Any = None) -> None:
+    """Leave every channel-layer group the consumer's current view joined.
+
+    Used when a mount is refused after it joined, and when a mounted view is
+    replaced by ``live_redirect`` or a second ``mount`` / ``mount_batch`` frame
+    (#3245). ``groups`` adds names to leave as well (the groups a
+    ``mount_batch`` sibling joined). Resets the consumer's group attributes so
+    ``disconnect`` does not discard them a second time. Discard failures are
+    logged, never raised.
+    """
+    names = take_consumer_view_groups(consumer)
+    for group in groups or ():
+        if group not in names:
+            names.append(group)
+    channel_layer = getattr(consumer, "channel_layer", None)
+    if channel_layer is None:
+        return
+    for group in names:
+        try:
+            await channel_layer.group_discard(group, consumer.channel_name)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Error leaving channel group %s: %s", group, e)
+
+
 def maybe_start_tick_task(consumer: Any, view_class: Any) -> bool:
     """Start the periodic tick task for ``view_class`` if it opted in.
 
@@ -2153,6 +2209,7 @@ class WSConsumerTransport:
         registration + emits a frame, it does not rewrite the mount HTML. No-op
         (returns ``html``) when no stickys were staged.
         """
+        from ._child_lifecycle import discard_sticky_child
         from ._exposure import uses_legacy_exposure
         from .websocket import _find_sticky_slot_ids
 
@@ -2190,27 +2247,11 @@ class WSConsumerTransport:
                                 "sticky_id %s collided with new child on reattach",
                                 sticky_id,
                             )
-                            hook = getattr(child, "_on_sticky_unmount", None)
-                            if callable(hook):
-                                try:
-                                    hook()
-                                except Exception:  # noqa: BLE001
-                                    logger.exception("sticky child _on_sticky_unmount raised")
+                            discard_sticky_child(child)
                 else:
-                    if not uses_legacy_exposure(child):
-                        from ._child_lifecycle import dispose_child_subtree
-
-                        dispose_child_subtree(child, navigation=True)
-                        continue
-                    hook = getattr(child, "_on_sticky_unmount", None)
-                    if callable(hook):
-                        try:
-                            hook()
-                        except Exception:  # noqa: BLE001
-                            if uses_legacy_exposure(child):
-                                logger.exception("sticky child _on_sticky_unmount raised")
-                            else:
-                                logger.error("Explicit child unmount cleanup failed")
+                    # No slot on the new page (or an explicit child the tag
+                    # did not reattach): drop it, waiters included (#3244).
+                    discard_sticky_child(child)
             consumer._sticky_preserved = survivors_final
             await consumer.send_json(
                 {
@@ -2305,39 +2346,8 @@ class WSConsumerTransport:
             consumer._tick_task = None
 
     async def _leave_view_groups(self) -> None:
-        """Leave the view / presence / db_notify groups the mount joined.
-
-        Resets the consumer's group attributes so ``disconnect`` does not
-        discard them a second time. Discard failures are logged, never raised.
-        """
-        consumer = self._consumer
-        groups: List[str] = []
-        from .presence import presence_groups_of
-
-        groups.extend(presence_groups_of(consumer))
-        consumer._presence_groups = set()
-        consumer._presence_group = None
-        for attr in ("_view_group", "_presence_scope_group"):
-            group = getattr(consumer, attr, None)
-            if isinstance(group, str) and group:
-                groups.append(group)
-                setattr(consumer, attr, None)
-        channels = getattr(consumer, "_db_notify_channels", None)
-        if isinstance(channels, set) and channels:
-            groups.extend(f"djust_db_notify_{ch}" for ch in channels)
-            consumer._db_notify_channels = set()
-        scoped = getattr(consumer, "_push_scope_groups", None)
-        if isinstance(scoped, dict) and scoped:
-            groups.extend(scoped.values())
-            consumer._push_scope_groups = {}
-        channel_layer = getattr(consumer, "channel_layer", None)
-        if channel_layer is None:
-            return
-        for group in groups:
-            try:
-                await channel_layer.group_discard(group, consumer.channel_name)
-            except Exception as e:  # noqa: BLE001
-                logger.warning("Error leaving channel group %s: %s", group, e)
+        """Leave the view / presence / db_notify groups the mount joined."""
+        await leave_consumer_view_groups(self._consumer)
 
     @property
     def mounting_in_batch(self) -> bool:
@@ -6292,13 +6302,23 @@ class ViewRuntime:
         return request
 
     async def deny_explicit_turn(self) -> None:
-        """The foreground event denial, for a turn whose authority was revoked."""
+        """The foreground event denial, for a turn whose authority was revoked.
+
+        The view is torn down with the shared teardown once the socket is
+        closed (#3250 review L1): nulling it alone left its background work,
+        waiters and live handles to a disconnect that no longer saw it.
+        """
+        from ._child_lifecycle import release_root_view
+
+        view = self.view_instance
         self.view_instance = None
         await self.transport.send_error(
             "Event authorization failed. Please reload the page.",
             code="permission_denied",
         )
         await self.transport.close(code=4403)
+        if view is not None:
+            release_root_view(view, navigation=False, reason="view_disconnect")
 
     def _save_explicit_root(self, view: Any, request: Any) -> None:
         """Sync body of the root save: the binding check, projection and write.

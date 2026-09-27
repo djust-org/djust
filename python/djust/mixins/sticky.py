@@ -472,10 +472,13 @@ class StickyChildRegistry:
     # ------------------------------------------------------------------
 
     def _unregister_child(self, view_id: str) -> None:
-        """Drop ``view_id`` from the registry and run the child's cleanup hook.
+        """Drop ``view_id`` from the registry and tear the child down.
 
-        The cleanup hook (optional on the child) is wrapped so a buggy
-        hook can't break the disconnect loop — we log and continue.
+        An explicit child is disposed with its subtree. A legacy child has its
+        waiters closed and its own embedded children unregistered
+        (``release_legacy_child``, #3244), then its cleanup hook runs. The hook
+        (optional on the child) is wrapped so a buggy hook can't break the
+        disconnect loop — we log and continue.
         """
         if not hasattr(self, "_child_views"):
             return
@@ -489,6 +492,10 @@ class StickyChildRegistry:
 
             dispose_child_subtree(child)
             return
+        from .._child_lifecycle import release_legacy_child
+
+        # Its waiters and nested children first (#3244), then the app hook.
+        release_legacy_child(child)
         cleanup = getattr(child, "_cleanup_on_unregister", None)
         if callable(cleanup):
             try:
@@ -592,23 +599,15 @@ class StickyChildRegistry:
                 continue
             sticky_id = getattr(child, "sticky_id", None) or _view_id
             if not _authorized(child):
+                from .._child_lifecycle import discard_sticky_child
                 from .._exposure import uses_legacy_exposure
 
-                if not uses_legacy_exposure(child):
-                    from .._child_lifecycle import dispose_child_subtree
-
-                    dispose_child_subtree(child, navigation=True)
-                    continue
-                logger.info(
-                    "Sticky child %s auth denied for new request; discarding",
-                    sticky_id,
-                )
-                hook = getattr(child, "_on_sticky_unmount", None)
-                if callable(hook):
-                    try:
-                        hook()
-                    except Exception:  # noqa: BLE001 — defensive
-                        logger.exception("sticky child %s _on_sticky_unmount raised", sticky_id)
+                if uses_legacy_exposure(child):
+                    logger.info(
+                        "Sticky child %s auth denied for new request; discarding",
+                        sticky_id,
+                    )
+                discard_sticky_child(child)
                 continue
             # ``_authorized`` already set ``child.request`` to the new request
             # (a child that refuses it is denied above, #1380).

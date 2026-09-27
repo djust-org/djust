@@ -79,30 +79,159 @@ def dispose_child_subtree(child: Any, *, navigation: bool = False) -> None:
                 logger.error("Child lifecycle cleanup failed")
 
 
-def cancel_replaced_legacy_waiters(view: Any) -> None:
-    """Close a legacy view's ``wait_for_event`` waiters when navigation replaces it (#3236).
+def _close_view_waiters(view: Any, reason: str) -> None:
+    """``view._close_waiters(reason)``: cancel its waiters and refuse later ones.
 
-    An explicit view replaced by navigation is disposed through
-    :func:`dispose_child_subtree`, which cancels its waiters. A legacy view is
-    not disposed, and its waiters have no default timeout. Nothing strong
-    holds a waiter's future except the view, so the view, the future and the
-    ``start_async`` / ``@background`` task blocked on it became an unreachable
-    cycle: the garbage collector destroyed the task while it was still pending
-    ("Task was destroyed but it is pending!"), closing its coroutine with
-    ``GeneratorExit``, so its ``except CancelledError`` cleanup never ran.
-
-    This cancels them, so the task gets ``CancelledError`` and runs its
-    cleanup, and closes the view to later waiters (``_close_waiters``): the
-    view's background work keeps running, as on disconnect, and a
-    ``wait_for_event`` it starts afterwards fails at once. Shared by both
-    replacement paths, ``LiveViewConsumer.handle_live_redirect_mount`` and
-    ``SSESession._replace_view``. Best effort: a failure is logged without
-    its value and never breaks the navigation.
+    Nothing strong holds a waiter's future except the view, so a discarded
+    view, the future and the ``start_async`` / ``@background`` task blocked on
+    it become an unreachable cycle, and the garbage collector destroys the
+    task while it is still pending ("Task was destroyed but it is pending!"),
+    closing its coroutine with ``GeneratorExit``: its ``except
+    CancelledError`` cleanup never runs (#3236). Cancelling gives the task
+    ``CancelledError``; closing makes a later ``wait_for_event`` fail at once
+    (#3242 review M2). Best effort: a failure is logged without its value.
     """
     close = getattr(view, "_close_waiters", None)
     if not callable(close):
         return
     try:
-        close(reason="view_navigation")
-    except Exception:  # noqa: BLE001 — cleanup must never break a navigation
-        logger.warning("Cancelling a replaced legacy view's waiters failed")
+        close(reason=reason)
+    except Exception:  # noqa: BLE001 — cleanup must never break a teardown
+        logger.warning("Closing a discarded view's waiters failed")
+
+
+def release_legacy_child(child: Any) -> None:
+    """The framework half of unregistering a legacy embedded child (#3244).
+
+    Closes the child's ``wait_for_event`` waiters (a waiting ``start_async``
+    task gets ``CancelledError`` and runs its own cleanup; a later wait is
+    refused) and unregisters the child's own embedded children, descendant
+    first. Before #3244 a legacy child's waiters were cancelled on no path, so
+    its waiting task was destroyed pending by the garbage collector. As for a
+    legacy root, the child's other background work runs to completion.
+
+    Called by ``StickyChildRegistry._unregister_child`` before the child's
+    ``_cleanup_on_unregister`` hook, and by :func:`discard_sticky_child`. Each
+    step is best effort.
+    """
+    _close_view_waiters(child, "child_unregistered")
+    registry = getattr(child, "_child_views", None)
+    unregister = getattr(child, "_unregister_child", None)
+    if type(registry) is dict and callable(unregister):
+        for view_id in list(registry):
+            try:
+                unregister(view_id)
+            except Exception:  # noqa: BLE001
+                logger.warning("Unregistering a legacy child's embedded view failed")
+
+
+def discard_sticky_child(child: Any, *, navigation: bool = True) -> None:
+    """Drop a sticky child that a navigation does not keep (#3244).
+
+    The one teardown for every place a live_redirect discards a sticky child:
+    its auth re-check failed, the destination has no slot for it, the redirect
+    could not be resolved or failed, or the socket closed mid-redirect; and
+    ``{% live_render %}`` refusing a reused sticky child at render
+    (``navigation=False``). It is detached from the page it was registered on,
+    if it still is. An explicit child is disposed (``dispose_child_subtree``);
+    a legacy child gets :func:`release_legacy_child` (waiters and nested
+    children) and then its ``_on_sticky_unmount`` hook (which cancels its
+    background work), and outside a navigation its ``_cleanup_on_unregister``
+    hook too, as unregistering it would.
+    """
+    from ._exposure import uses_legacy_exposure
+
+    if not uses_legacy_exposure(child):
+        dispose_child_subtree(child, navigation=navigation)
+        return
+    # Still registered on the page being left: detach it, so that page's own
+    # teardown does not unregister it a second time.
+    owner_registry = getattr(getattr(child, "_parent_view", None), "_child_views", None)
+    slot = getattr(child, "_view_id", None)
+    if type(owner_registry) is dict and owner_registry.get(slot) is child:
+        owner_registry.pop(slot)
+    release_legacy_child(child)
+    hooks = (
+        ("_on_sticky_unmount",) if navigation else ("_on_sticky_unmount", "_cleanup_on_unregister")
+    )
+    for name in hooks:
+        hook = getattr(child, name, None)
+        if callable(hook):
+            try:
+                hook()
+            except Exception:  # noqa: BLE001 — legacy child only; cleanup must not raise
+                logger.exception("sticky child %s raised", name)
+
+
+def untrack_view_presence(view: Any) -> None:
+    """Stop tracking a discarded view's presence (#3250 review M3).
+
+    Before, only the view mounted when the socket disconnected was untracked,
+    so a view replaced by navigation or by a second mount, and a
+    ``mount_batch`` sibling, stayed in the presence list until
+    ``PRESENCE_TIMEOUT``. ``untrack_presence`` broadcasts to peers through the
+    synchronous channel-layer API, so async callers run this on a thread
+    (``sync_to_async``). Best effort: a failure is logged under the view's
+    diagnostics policy.
+    """
+    untrack = getattr(view, "untrack_presence", None)
+    if not callable(untrack):
+        return
+    try:
+        untrack()
+    except Exception as exc:  # noqa: BLE001 — application hooks run inside
+        from ._exposure_diagnostics import log_failure_for
+
+        log_failure_for(
+            logger, (view,), exc, "Error cleaning up presence: %s", exc, level="warning"
+        )
+
+
+def release_root_view(view: Any, *, navigation: bool, reason: str) -> None:
+    """Tear down a root view its transport discards (#3244, #3245).
+
+    The one view teardown shared by every place a transport lets go of its
+    mounted view: a WebSocket ``live_redirect``, a second ``mount`` or
+    ``mount_batch`` frame on a mounted socket, the WebSocket disconnect, SSE
+    navigation (``_replace_view``) and SSE close (``shutdown``). The transport
+    work (leaving channel groups, stopping the tick task) stays with the
+    transport.
+
+    * An explicit view is disposed with its whole owned subtree
+      (``dispose_child_subtree``), which cancels its background work and
+      waiters.
+    * A legacy view gets the legacy steps: its upload temp files are removed,
+      its waiters are closed (``_close_waiters``: cancelled, and later waits
+      refused, #3236), and every embedded child still registered is
+      unregistered (``_unregister_child``: a legacy child's waiters are closed
+      and its ``_cleanup_on_unregister`` runs; an explicit child is disposed).
+      Its other background work runs to completion, as it always has; the
+      transport drops the view, so a late result is discarded.
+    * Either way its Rust live handles are dropped (``_clear_live_handles``,
+      #2539): the handles hold application objects, which the GC cannot see.
+
+    Sticky children that navigation keeps must be removed from the view's
+    registry BEFORE this runs; everything still registered is torn down.
+    Every step is best effort, and a failure is logged without its value.
+    """
+    from ._exposure import uses_legacy_exposure
+    from .websocket import _clear_live_handles
+
+    if not uses_legacy_exposure(view):
+        dispose_child_subtree(view, navigation=navigation)
+    else:
+        if hasattr(view, "_cleanup_uploads"):
+            try:
+                view._cleanup_uploads()
+            except Exception:  # noqa: BLE001
+                logger.warning("Cleaning up a released legacy view's uploads failed")
+        _close_view_waiters(view, reason)
+        registry = getattr(view, "_child_views", None)
+        unregister = getattr(view, "_unregister_child", None)
+        if type(registry) is dict and callable(unregister):
+            for view_id in list(registry):
+                try:
+                    unregister(view_id)
+                except Exception:  # noqa: BLE001
+                    logger.warning("Unregistering a released legacy view's child failed")
+    _clear_live_handles(view)

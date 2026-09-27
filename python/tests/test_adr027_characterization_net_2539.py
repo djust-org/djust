@@ -1470,14 +1470,27 @@ class TestTheHandleNeverReachesTheWire2539:
         clear nothing calls protects nothing, and the suite would have stayed
         green if routing never reached it (#1859)."""
         consumer = (PYTHON_DIR / "djust" / "websocket.py").read_text(encoding="utf-8")
-        assert consumer.count("_clear_live_handles(") == 2, (
-            "expected exactly one definition and one call site of the teardown helper"
+        assert consumer.count("_clear_live_handles(") == 1, (
+            "expected the definition only: the teardown calls it via release_root_view"
         )
-        # And the call is at the disconnect teardown, immediately before the
-        # view reference it drains is dropped.
-        assert "_clear_live_handles(self.view_instance)\n        self.view_instance = None" in (
-            consumer
-        ), "the clear is not wired at the disconnect teardown"
+        # Since #3244 the call is in the one view teardown every transport
+        # shares, ``release_root_view``, as its last step...
+        lifecycle = (PYTHON_DIR / "djust" / "_child_lifecycle.py").read_text(encoding="utf-8")
+        release = lifecycle.split("def release_root_view", 1)[1]
+        assert release.rstrip().endswith("_clear_live_handles(view)"), (
+            "the clear is not the last step of the shared view teardown"
+        )
+        # ...which the disconnect runs for every mounted view before dropping
+        # the view reference it drains.
+        disconnect = consumer.split("    async def disconnect(", 1)[1].split("\n    async def ", 1)[
+            0
+        ]
+        assert (
+            'release_root_view(view, navigation=False, reason="view_disconnect")' in disconnect
+        ), "the shared teardown is not wired at the disconnect"
+        assert disconnect.index("release_root_view(view,") < disconnect.index(
+            "self.view_instance = None"
+        )
 
 
 class TestTheStrictHelpersAreTheSinksOwn2539:
