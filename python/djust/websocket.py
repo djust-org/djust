@@ -3877,6 +3877,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                     logger.exception("sticky child _on_sticky_unmount raised")
                     sticky_preserved = {}
                 else:
+                    # #3212: re-check as the user the explicit mount will run as.
+                    await self._rederive_live_redirect_user(new_request, data)
                     # #2998: sticky children are re-stamped with this request;
                     # bind the browser's CSRF cookie, as _build_request does.
                     from .security.csrf import abind_csrf_cookie
@@ -3987,11 +3989,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # "/") and resolve to an unrelated view. Skip the URL-override whenever a
         # snapshot is present so back-nav restores the snapshot's view, not
         # whatever the URL happens to map to.
-        resolved_view = (
-            None
-            if data.get("state_snapshot")
-            else self._resolve_view_path_from_url(data.get("url", ""))
-        )
+        resolved_view = self._live_redirect_url_view(data)
         if resolved_view and resolved_view != data.get("view"):
             logger.debug(
                 "live_redirect_mount: server-resolved target view %s from URL %s (client sent %s)",
@@ -4157,6 +4155,55 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             )
             return None
         return request
+
+    def _live_redirect_url_view(self, data: Dict[str, Any]) -> Optional[str]:
+        """The view path the URL overrides the client's ``view`` with, if any.
+
+        The single rule both the mount and the sticky re-check use (#3229):
+        no override when a ``state_snapshot`` is present (back-navigation
+        restores the snapshot's view), otherwise the LiveView the URL maps to.
+        """
+        if data.get("state_snapshot"):
+            return None
+        return self._resolve_view_path_from_url(data.get("url", ""))
+
+    async def _rederive_live_redirect_user(self, request: Any, data: Dict[str, Any]) -> None:
+        """Give the sticky re-check the user the new mount will run as (#3212).
+
+        ``_build_live_redirect_request`` takes the connect-time
+        ``scope["user"]``. An explicit mount whose session has vanished runs
+        as anonymous under a replacement session instead
+        (``establish_mount_session``, #3201), so the re-check does the same,
+        through the same helper and the runtime's replacement map: the
+        redirect's mount then reuses that replacement rather than creating
+        another. A live session keeps its user.
+
+        What decides it is the class that will actually be MOUNTED, chosen the
+        way ``handle_live_redirect_mount`` chooses it (the URL's view, or the
+        client's ``view`` for a back-navigation with a snapshot) and resolved
+        through the mount's own resolver. Not the page being left (#3229 B3),
+        and not the URL alone (#3229 re-review R2). A target that does not
+        resolve is treated as explicit: re-checking as anonymous can only drop
+        sticky children, never keep one the mount would refuse.
+        """
+        from ._exposure import uses_legacy_exposure
+        from ._exposure_auth import establish_mount_session
+        from .security.mount import resolve_view_class
+
+        runtime = getattr(self, "_runtime", None)
+        if request is None or runtime is None:
+            return
+        view_path = self._live_redirect_url_view(data) or data.get("view")
+        resolution = resolve_view_class(view_path) if isinstance(view_path, str) else None
+        target = resolution.view_class if resolution else None
+        if target is not None and uses_legacy_exposure(target):
+            return
+        presented = getattr(getattr(request, "session", None), "session_key", None)
+        replacement = await sync_to_async(establish_mount_session)(
+            request, runtime._replacement_sessions.get(presented or ""), ephemeral=True
+        )
+        if replacement and presented:
+            runtime._replacement_sessions[presented] = replacement
 
     async def handle_presence_heartbeat(self, data: Dict[str, Any]) -> None:
         """Handle presence heartbeat from client."""

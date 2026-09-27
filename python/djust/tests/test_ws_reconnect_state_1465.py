@@ -285,7 +285,8 @@ def test_save_block_present_in_handle_event_source():
     - Fall back to ``self.scope.get("session")`` when no mount_request
     - Build ``save_view_key = f"liveview_{save_path}"``
     - Filter LiveComponents out of the saved state
-    - Call ``save_session.aset(...)`` then ``save_session.asave()``
+    - Write ``save_session[...]`` then ``save_session.save()`` (one sync
+      Django-thread hop since #3212)
     - Wrap everything in try/except so saves never break event handling
     """
     import djust.runtime as rt_mod
@@ -298,8 +299,8 @@ def test_save_block_present_in_handle_event_source():
     assert "getattr(" in source and "_djust_mount_request" in source
     assert 'self.scope.get("session")' in source
     assert 'save_view_key = f"liveview_{save_path}"' in source
-    assert "await save_session.aset(save_view_key" in source_collapsed
-    assert "await save_session.asave()" in source
+    assert "save_session[save_view_key] = _normalize(" in source_collapsed
+    assert "save_session.save()" in source
     # Private-state path:
     assert "_get_private_state" in source
     assert 'f"{save_view_key}__private"' in source
@@ -309,9 +310,10 @@ def test_save_block_present_in_handle_event_source():
     assert "Failed to save LiveView state after runtime event" in source
     # #1475: 150ms timeout MUST wrap the save body. Even opt-in views
     # need close-time tail latency bounded so a stalled session backend
-    # can't recreate the snapshot-poisoning failure mode.
-    assert "asyncio.wait_for" in source
-    assert "timeout=0.150" in source or "timeout=EVENT_STATE_SAVE_TIMEOUT_S" in source
+    # can't recreate the snapshot-poisoning failure mode. Since #3212 the
+    # bound is applied by the shared one-hop helper, counted from when the
+    # save starts running.
+    assert "_run_explicit_save(self, _save, deadline=EVENT_STATE_SAVE_TIMEOUT_S)" in source
     assert "asyncio.TimeoutError" in source
 
     # The GATE (top-level identity + enable_state_snapshot opt-in) lives at the
@@ -643,21 +645,24 @@ def test_save_block_gates_on_enable_state_snapshot_source():
     assert "enable_state_snapshot" in source
     assert "target_view is self.view_instance" in source_collapsed
     # Both gate conditions must co-occur in an AND expression.
+    # #3211: the legacy-policy clause joins them. The flag is the legacy
+    # opt-in; an explicit view commits through ``commit_explicit_turn``.
     assert (
-        'iftarget_viewisself.view_instanceandgetattr(self.view_instance,"enable_state_snapshot",False)'
-        in source_nospaces
-    ), "Both gates must be AND'd in the save-block condition for #1475 fix."
+        "if(target_viewisself.view_instanceandlegacy_target"
+        'andgetattr(self.view_instance,"enable_state_snapshot",False))' in source_nospaces
+    ), "All gates must be AND'd in the save-block condition (#1475, #3211)."
 
 
 class _WSSlowOptInCounter(LiveView):
-    """Opt-in view whose ``mount`` injects a slow async session so the
-    save block exceeds the 150ms timeout — end-to-end fixture for the
-    wrapper's TimeoutError → log → continue path.
+    """Opt-in view whose ``mount`` injects a slow session so the save
+    block exceeds the 150ms timeout — end-to-end fixture for the wrapper's
+    TimeoutError → log → continue path.
 
     The save block looks up ``save_session`` via ``mount_request.session``
     (see ``handle_event`` save block). Replacing ``request.session`` in
-    ``mount()`` routes the save's ``aset``/``asave`` calls through the
-    slow stub.
+    ``mount()`` routes the save's writes through the slow stub. Since #3212
+    the save is one sync Django-thread hop, so the slow part is storage
+    itself (the sync API), not queueing.
     """
 
     template = (
@@ -667,22 +672,22 @@ class _WSSlowOptInCounter(LiveView):
     enable_state_snapshot = True
 
     def mount(self, request, **kwargs):
-        import asyncio as _asyncio
+        import time as _time
 
         class _SlowSession:
-            async def aget(self, key, default=None):
+            def get(self, key, default=None):
                 return default
 
-            async def aset(self, key, value):
-                # 250ms > 150ms wrapper timeout → triggers TimeoutError
-                # in the save body's first ``aset`` call.
-                await _asyncio.sleep(0.25)
+            def __setitem__(self, key, value):
+                # 250ms > 150ms wrapper timeout → the deadline passes in
+                # the save body's first write.
+                _time.sleep(0.25)
 
-            async def apop(self, key, default=None):
+            def pop(self, key, default=None):
                 return default
 
-            async def asave(self):
-                await _asyncio.sleep(0.25)
+            def save(self):
+                _time.sleep(0.25)
 
         request.session = _SlowSession()
         self.count = 0
