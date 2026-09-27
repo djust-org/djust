@@ -1,5 +1,8 @@
 # Breadcrumb Component Implementation Summary
 
+> **Status:** Historical implementation summary. Verify current availability and performance claims against the current package before use.
+
+
 ## Overview
 
 Successfully implemented a **Breadcrumb** navigation component for djust following the established component patterns. The component provides hierarchical navigation showing the current page's location in the site structure.

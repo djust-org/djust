@@ -1,5 +1,8 @@
 # Radio Component Implementation Summary
 
+> **Status:** Historical implementation summary. Verify current availability and performance claims against the current package before use.
+
+
 ## Overview
 
 Successfully implemented a Radio component for djust following the djust-components patterns. The component provides a group of radio buttons with single selection, following Bootstrap 5 form-check styles.
@@ -201,7 +204,7 @@ Or simply:
 
 ### Why Python-only Implementation?
 
-The Radio component uses loops to iterate over options, which makes it a good candidate for Python's `_render_custom()` method rather than template_string or Rust implementation. This follows the djust component design guidelines:
+The Radio component uses loops to iterate over options, which makes it a good candidate for Python's `_render_custom()` method rather than template or Rust implementation. This follows the djust component design guidelines:
 
 > "Uses loops, so prefer Python _render_custom() method."
 

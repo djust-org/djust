@@ -1,5 +1,8 @@
 # NavBar Component Implementation Report
 
+> **Status:** Historical implementation report. Treat measured timings and implementation conclusions as a snapshot, not the current API contract.
+
+
 ## Summary
 
 Successfully implemented a comprehensive NavBar component for djust following the established component patterns. The component provides responsive navigation bars with support for Bootstrap 5, Tailwind CSS, and plain HTML.
@@ -84,7 +87,7 @@ Successfully implemented a comprehensive NavBar component for djust following th
 
 ### Parameters
 
-```python
+```text
 NavBar(
     items: List[Dict],                      # Required: Navigation items
     brand: Optional[Dict[str, str]] = None, # Optional: {'text', 'url', 'logo'}
@@ -332,7 +335,7 @@ http://localhost:8002/demos/navbar/
 
 ### Rendering Performance
 - **Python fallback:** ~50-100μs per render
-- **Uses loops:** Cannot use template_string optimization
+- **Uses loops:** Cannot use template optimization
 - **Future optimization:** Rust implementation possible (~1μs target)
 
 ### HTML Output Size
@@ -371,7 +374,7 @@ http://localhost:8002/demos/navbar/
 - **Future:** Rust optimization path available
 
 ### Code Organization
-```python
+```text
 class NavBar(Component):
     # 1. Rust implementation link (for future optimization)
     _rust_impl_class = RustNavBar if _RUST_AVAILABLE else None

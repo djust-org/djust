@@ -26,14 +26,17 @@ djust provides two types of components, optimized for different use cases:
 
 ```python
 from djust.components.base import Component
+from django.utils.html import format_html
 
 class Badge(Component):
     def __init__(self, text, variant="primary"):
-        self.text = text
-        self.variant = variant
+        super().__init__(text=text, variant=variant)
 
-    def render(self):
-        return f'<span class="badge bg-{self.variant}">{self.text}</span>'
+    def _render_custom(self):
+        return format_html('<span class="badge bg-{}">{}</span>', self.variant, self.text)
+
+badge = Badge("<script>alert(1)</script>", "danger")
+assert "&lt;script&gt;" in badge.render()
 ```
 
 **Use for**: Buttons, badges, icons, cards - anything that just displays data.
@@ -52,7 +55,7 @@ class Badge(Component):
 from djust import LiveComponent
 
 class TodoList(LiveComponent):
-    template_string = """
+    template = """
         <ul>
         {% for item in items %}
             <li>
@@ -108,9 +111,9 @@ badge = Badge("New", variant="primary")
 html = badge.render()
 
 # Behind the scenes, Component base class chooses:
-# 1. Pure Rust (if available) → ~1μs per render (fastest)
-# 2. Hybrid template_string → ~5μs per render (fast)
-# 3. Python render() → ~50μs per render (flexible)
+# 1. A configured Rust component implementation, if available
+# 2. The component's `template` rendered by the Rust engine with Django fallback
+# 3. The Python `_render_custom()` hook
 ```
 
 **Core components in Rust** (automatically optimized):
@@ -119,7 +122,7 @@ html = badge.render()
 - Transparent to developers - same API
 
 **Custom components use hybrid** (when Rust not available):
-- `template_string` for Rust template rendering (10x faster than Python)
+- `template` for the hybrid template rendering path
 - `_render_custom()` for full Python control (maximum flexibility)
 
 **Example with automatic optimization:**
@@ -130,7 +133,7 @@ class StatusBadge(Component):
     _rust_impl_class = RustBadge  # Automatically used if Rust built
 
     # Fallback: hybrid rendering
-    template_string = '<span class="badge bg-{{ variant }}">{{ text }}</span>'
+    template = '<span class="badge bg-{{ variant }}">{{ text }}</span>'
 
     def get_context_data(self):
         return {'text': self.text, 'variant': self.variant}
@@ -178,7 +181,7 @@ For detailed information:
 
 - **[COMPONENT_PERFORMANCE_OPTIMIZATION.md](COMPONENT_PERFORMANCE_OPTIMIZATION.md)** - Performance guide
   - Three-tier performance spectrum (Python → Hybrid → Rust)
-  - Optional `template_string` for Rust rendering
+  - Optional `template` for Rust rendering
   - Pure Rust components via PyO3
   - Benchmarks and migration paths
 
@@ -189,7 +192,7 @@ For detailed information:
 In `settings.py`:
 
 ```python
-DJUST = {
+LIVEVIEW_CONFIG = {
     'css_framework': 'bootstrap5',  # or 'tailwind', 'plain'
 }
 ```
@@ -328,6 +331,7 @@ class NavbarComponent(LiveComponent):
 For presentational components without state:
 
 ```python
+from django.utils.html import format_html
 from djust.components.base import Component
 from djust.config import config
 
@@ -335,21 +339,18 @@ class StatusBadge(Component):
     """A simple status badge component"""
 
     def __init__(self, status: str, label: str = None):
-        self.status = status
-        self.label = label or status.title()
+        super().__init__(status=status, label=label or status.title())
 
-    def render(self) -> str:
+    def _render_custom(self) -> str:
         """Render with framework-specific styling"""
-        from django.utils.safestring import mark_safe
-
         framework = config.get('css_framework', 'bootstrap5')
 
         if framework == 'bootstrap5':
-            return mark_safe(self._render_bootstrap())
+            return self._render_bootstrap()
         elif framework == 'tailwind':
-            return mark_safe(self._render_tailwind())
+            return self._render_tailwind()
         else:
-            return mark_safe(self._render_plain())
+            return self._render_plain()
 
     def _render_bootstrap(self) -> str:
         variants = {
@@ -359,7 +360,7 @@ class StatusBadge(Component):
             'info': 'info',
         }
         variant = variants.get(self.status, 'secondary')
-        return f'<span class="badge bg-{variant}">{self.label}</span>'
+        return format_html('<span class="badge bg-{}">{}</span>', variant, self.label)
 
     def _render_tailwind(self) -> str:
         colors = {
@@ -369,10 +370,10 @@ class StatusBadge(Component):
             'info': 'bg-blue-100 text-blue-800',
         }
         classes = colors.get(self.status, 'bg-gray-100 text-gray-800')
-        return f'<span class="px-2 py-1 rounded text-xs font-semibold {classes}">{self.label}</span>'
+        return format_html('<span class="px-2 py-1 rounded text-xs font-semibold {}">{}</span>', classes, self.label)
 
     def _render_plain(self) -> str:
-        return f'<span class="badge badge-{self.status}">{self.label}</span>'
+        return format_html('<span class="badge badge-{}">{}</span>', self.status, self.label)
 ```
 
 **Usage**:
@@ -395,7 +396,7 @@ from djust.config import config
 class FilterWidget(LiveComponent):
     """A filterable list component with state"""
 
-    template_string = """
+    template = """
         <div class="filter-widget">
             <input
                 type="text"
@@ -544,9 +545,10 @@ class MyView(LiveView):
 ### 1. Start Simple, Upgrade When Needed
 
 ```python
+from django.utils.html import format_html
 # ✅ Start with inline template
 class SimpleView(LiveView):
-    template_string = '<button dj-click="increment">{{ count }}</button>'
+    template = '<button dj-click="increment">{{ count }}</button>'
 
     def mount(self, request):
         self.count = 0
@@ -557,14 +559,14 @@ class SimpleView(LiveView):
 # ✅ Upgrade to Component when you need reusability
 class CounterButton(Component):
     def __init__(self, count):
-        self.count = count
+        super().__init__(count=count)
 
-    def render(self):
-        return f'<button>Count: {self.count}</button>'
+    def _render_custom(self):
+        return format_html('<button>Count: {}</button>', self.count)
 
 # ✅ Upgrade to LiveComponent when you need state + interactivity
 class CounterWidget(LiveComponent):
-    template_string = '<button dj-click="increment">{{ count }}</button>'
+    template = '<button dj-click="increment">{{ count }}</button>'
 
     def mount(self, initial_count=0):
         self.count = initial_count
@@ -598,15 +600,16 @@ class DashboardView(LiveView):
 ### 3. Use Simple Components for Presentation
 
 ```python
+from django.utils.html import format_html
 # ✅ Good: Simple component for status display
 class StatusBadge(Component):
     def __init__(self, status):
-        self.status = status
+        super().__init__(status=status)
 
-    def render(self):
+    def _render_custom(self):
         colors = {'active': 'green', 'pending': 'yellow', 'inactive': 'red'}
         color = colors.get(self.status, 'gray')
-        return f'<span class="badge bg-{color}">{self.status}</span>'
+        return format_html('<span class="badge bg-{}">{}</span>', color, self.status)
 
 # ❌ Bad: LiveComponent for simple presentation
 class StatusBadge(LiveComponent):  # Unnecessary overhead!
@@ -671,7 +674,7 @@ class MyCustomNavbar(BaseNavbar):
 
 ```python
 # settings.py
-DJUST = {
+LIVEVIEW_CONFIG = {
     'css_framework': 'tailwind',
 
     # Framework-specific class mappings
@@ -730,12 +733,15 @@ export function Navbar({ items }) {
 ### djust Components (Python)
 
 ```python
+from djust.components.base import Component
+from djust.config import config
+
 # Simple Component (stateless, for presentation)
 class StatusBadge(Component):
     def __init__(self, status):
-        self.status = status
+        super().__init__(status=status)
 
-    def render(self):
+    def _render_custom(self):
         framework = config.get('css_framework')
         if framework == 'bootstrap5':
             return self._render_bootstrap()
@@ -743,7 +749,7 @@ class StatusBadge(Component):
 
 # LiveComponent (stateful, for interactivity)
 class FilterWidget(LiveComponent):
-    template_string = """
+    template = """
         <input dj-input="on_search" value="{{ query }}" />
         <p>{{ results_count }} results</p>
     """
@@ -770,18 +776,22 @@ Want to switch from Bootstrap to Tailwind? Just change one setting:
 
 ```python
 # settings.py
-DJUST = {
+LIVEVIEW_CONFIG = {
     'css_framework': 'tailwind',  # Changed from 'bootstrap5'
 }
 ```
 
-All components automatically adapt! No template changes needed.
+Components with framework-aware renderers read this setting at render time;
+support differs by component. Check that component's API page before expecting
+the selected framework to change its output. Django form rendering uses the
+configured framework adapter.
 
 ## Advanced: Custom Framework Adapters
 
 You can even create adapters for other CSS frameworks:
 
 ```python
+from django.utils.html import format_html
 from djust.frameworks import FrameworkAdapter, register_adapter
 
 class BulmaAdapter(FrameworkAdapter):
@@ -789,10 +799,10 @@ class BulmaAdapter(FrameworkAdapter):
 
     def render_field(self, field, field_name, value, errors, **kwargs):
         # Bulma-specific rendering
-        return f'<div class="field">...</div>'
+        return format_html('<div class="field">...</div>')
 
     def render_errors(self, errors, **kwargs):
-        return f'<p class="help is-danger">{errors[0]}</p>'
+        return format_html('<p class="help is-danger">{}</p>', errors[0])
 
 # Register your adapter
 register_adapter('bulma', BulmaAdapter())
@@ -801,7 +811,7 @@ register_adapter('bulma', BulmaAdapter())
 Then use it:
 
 ```python
-DJUST = {
+LIVEVIEW_CONFIG = {
     'css_framework': 'bulma',
 }
 ```

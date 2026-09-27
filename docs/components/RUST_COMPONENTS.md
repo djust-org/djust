@@ -4,21 +4,19 @@ High-performance UI components backed by Rust with a Pythonic API, similar to Ju
 
 ## Overview
 
-Rust components provide:
-- **Faster rendering** through Rust implementation — the template engine
-  measures roughly 7-11x on variable- and filter-heavy templates (see the
-  README's Performance section); component rendering specifically is unmeasured
-- **Type-safe HTML generation** with auto-escaping
-- **Framework-agnostic** - renders to Bootstrap5, Tailwind, or Plain HTML
-- **Pythonic API** with both kwargs and builder pattern
-- **LiveView integration** for reactive updates
+The current public Rust-backed component path is the stateless
+`djust.components.ui.Button`. The native implementation escapes button text and
+renders Bootstrap classes; component-specific speedups have not been
+benchmarked. Interactive behavior is bound by LiveView template attributes.
 
-> **Availability:** only `Button` is currently importable from
-`djust.rust_components` (plus `ComponentNotAvailableError`). The other
-> components below (`Input`, `Text`, `Card`, `Alert`, `Modal`, `Dropdown`,
-> `Tabs`) exist Rust-side in the `djust_components` crate (an `rlib`, so `import djust._rust_components` raises `ModuleNotFoundError`) but
-> are **not yet wrapped/exposed** — their sections are kept as the target
-> API design. Importing them raises `ImportError`.
+> **Availability:** `djust.rust_components.Button` is importable, but its
+> constructor currently does not match the compiled extension and raises
+> `TypeError`. For a working Rust-backed button, use
+> `djust.components.ui.Button`; that public component uses the Rust renderer
+> when available and falls back to Python rendering. The `Input`, `Text`,
+> `Card`, `Alert`, `Modal`, `Dropdown`, and `Tabs` sections below describe a
+> target API that is not currently exposed to Python; treat their snippets as
+> design examples, not runnable code.
 
 ## Architecture
 
@@ -43,149 +41,61 @@ Rust components provide:
 ### Basic Usage
 
 ```python
-from djust.rust_components import Button
+from djust.components.ui import Button
 
 # Simple button
-btn = Button("my-btn", "Click Me")
+btn = Button("Click Me")
 html = btn.render()
-# Output: <button class="btn btn-primary" type="button" id="my-btn">Click Me</button>
+# Output: <button type="button" class="btn btn-primary">Click Me</button>
 
 # With options
 btn = Button(
-    "submit-btn",
     "Submit Form",
     variant="success",
-    size="large",
-    on_click="handleSubmit"
+    size="lg",
+    disabled=True,
 )
 ```
 
-### Builder Pattern
+### Set Options in the Constructor
 
 ```python
-btn = Button("builder-btn", "Save") \
-    .with_variant("success") \
-    .with_size("lg") \
-    .with_icon("💾")
+btn = Button("Save", variant="success", size="lg")
 
 html = btn.render()
 ```
 
-### Framework-Specific Rendering
-
-```python
-btn = Button("fw-btn", "Test", variant="primary")
-
-# Render with specific framework
-bootstrap_html = btn.render_with_framework("bootstrap5")
-tailwind_html = btn.render_with_framework("tailwind")
-plain_html = btn.render_with_framework("plain")
-```
+The supported `djust.components.ui.Button` API does not expose
+`render_with_framework()`. Its Python fallback follows djust's configured CSS
+framework; the current native Rust button renderer emits Bootstrap classes.
 
 ## Components
 
 ### Button
 
-A versatile button component with multiple variants and states.
-
-#### Parameters
-
-- **id** (str, required): Unique component ID
-- **label** (str, required): Button text
-- **variant** (str, default="primary"): Button style
-  - Options: `primary`, `secondary`, `success`, `danger`, `warning`, `info`, `light`, `dark`, `link`
-- **size** (str, default="medium"): Button size
-  - Options: `sm`/`small`, `md`/`medium`, `lg`/`large`
-- **outline** (bool, default=False): Use outline style
-- **disabled** (bool, default=False): Disable the button
-- **full_width** (bool, default=False): Make button full width
-- **icon** (str, optional): Icon HTML or text to prepend
-- **on_click** (str, optional): Click event handler name
-- **button_type** (str, default="button"): HTML button type
-
-#### Properties
+A versatile stateless button with variants and sizes. The supported API is
+`djust.components.ui.Button(text, variant="primary", size="md",
+disabled=False, outline=False)`. It renders with the Rust implementation when
+the extension is available and otherwise falls back to Python.
 
 ```python
-# Get/set label
-btn.label = "New Label"
-print(btn.label)
+from djust.components.ui import Button
 
-# Get/set disabled state
-btn.disabled = True
-print(btn.disabled)
+primary = Button("Primary Button")
+success = Button("Save", variant="success", size="lg")
+disabled = Button("Delete", variant="danger", disabled=True)
+outline = Button("Outline", variant="info", outline=True)
 
-# Get component ID (read-only)
-print(btn.id)
+assert 'btn btn-primary' in primary.render()
+assert 'btn btn-success btn-lg' in success.render()
+assert 'disabled' in disabled.render()
+assert 'btn-outline-info' in outline.render()
 ```
 
-#### Methods
-
-```python
-# Render methods
-btn.render()  # Auto-detects framework from config
-btn.render_with_framework("bootstrap5")
-
-# Variant setter
-btn.set_variant("danger")
-
-# Builder methods (chainable)
-btn.with_variant("success")
-btn.with_size("lg")
-btn.with_outline(True)
-btn.with_disabled(False)
-btn.with_icon("✓")
-btn.with_on_click("handleClick")
-```
-
-#### Examples
-
-**Primary Button**
-```python
-btn = Button("primary", "Primary Button", variant="primary")
-# <button class="btn btn-primary" type="button" id="primary">Primary Button</button>
-```
-
-**Success Button with Icon**
-```python
-btn = Button("save", "Save", variant="success", icon="💾", size="lg")
-# <button class="btn btn-success btn-lg" type="button" id="save">💾 Save</button>
-```
-
-**Disabled Danger Button**
-```python
-btn = Button("delete", "Delete", variant="danger", disabled=True)
-# <button class="btn btn-danger" type="button" id="delete" disabled="disabled">Delete</button>
-```
-
-**Full Width Submit**
-```python
-btn = Button(
-    "submit",
-    "Submit Form",
-    variant="primary",
-    size="large",
-    full_width=True,
-    on_click="submitForm",
-    button_type="submit"
-)
-# <button class="btn btn-primary btn-lg w-100" type="submit" id="submit" dj-click="submitForm">Submit Form</button>
-```
-
-**Outline Button**
-```python
-btn = Button("outline", "Outline", variant="info", outline=True)
-# <button class="btn btn-outline-info" type="button" id="outline">Outline</button>
-```
-
-**Builder Pattern**
-```python
-btn = Button("chain", "Chained") \
-    .with_variant("warning") \
-    .with_size("sm") \
-    .with_icon("⚠️") \
-    .with_on_click("showWarning")
-# <button class="btn btn-warning btn-sm" type="button" id="chain" dj-click="showWarning">⚠️ Chained</button>
-```
+`Button.render()` returns safe HTML. It does not accept an `id`, icon,
+`on_click`, `full_width`, or `button_type` argument and has no builder methods.
+Add event bindings in LiveView markup, such as
+`<button dj-click="save">Save</button>`.
 
 ### Input
 
@@ -243,7 +153,7 @@ input.set_disabled(True)
 #### Examples
 
 **Basic Text Input**
-```python
+```text
 from djust.rust_components import Input
 
 input = Input("username", placeholder="Enter username")
@@ -251,7 +161,7 @@ input = Input("username", placeholder="Enter username")
 ```
 
 **Email Input with Value**
-```python
+```text
 input = Input(
     "email",
     inputType="email",
@@ -263,7 +173,7 @@ input = Input(
 ```
 
 **Password Input**
-```python
+```text
 input = Input(
     "password",
     inputType="password",
@@ -275,7 +185,7 @@ input = Input(
 ```
 
 **Number Input with Range**
-```python
+```text
 input = Input(
     "age",
     inputType="number",
@@ -288,7 +198,7 @@ input = Input(
 ```
 
 **Large Search Input**
-```python
+```text
 input = Input(
     "search",
     inputType="search",
@@ -300,7 +210,7 @@ input = Input(
 ```
 
 **Disabled Input**
-```python
+```text
 input = Input(
     "readonly-field",
     value="Cannot edit this",
@@ -354,7 +264,7 @@ text.set_content("New content")
 #### Examples
 
 **Basic Paragraph**
-```python
+```text
 from djust.rust_components import Text
 
 text = Text("Hello, World!", element="p")
@@ -362,31 +272,31 @@ text = Text("Hello, World!", element="p")
 ```
 
 **Heading**
-```python
+```text
 text = Text("Page Title", element="h1")
 # <h1>Page Title</h1>
 ```
 
 **Label for Input**
-```python
+```text
 label = Text("Email Address", element="label", forInput="email-input")
 # <label for="email-input">Email Address</label>
 ```
 
 **Colored Text**
-```python
+```text
 text = Text("Success message", color="success")
 # <span class="text-success">Success message</span>
 ```
 
 **Bold Text**
-```python
+```text
 text = Text("Important!", weight="bold", color="danger")
 # <span class="fw-bold text-danger">Important!</span>
 ```
 
 **Lead Text**
-```python
+```text
 text = Text(
     "This is a lead paragraph that stands out.",
     element="p",
@@ -396,7 +306,7 @@ text = Text(
 ```
 
 **Centered Heading**
-```python
+```text
 text = Text(
     "Welcome",
     element="h2",
@@ -407,7 +317,7 @@ text = Text(
 ```
 
 **Muted Caption**
-```python
+```text
 text = Text(
     "Posted 5 minutes ago",
     element="span",
@@ -453,7 +363,7 @@ card.render_with_framework("bootstrap5")
 #### Examples
 
 **Simple Card**
-```python
+```text
 from djust.rust_components import Card
 
 card = Card(body="Card content")
@@ -461,7 +371,7 @@ card = Card(body="Card content")
 ```
 
 **Card with Header and Footer**
-```python
+```text
 card = Card(
     body="Main content here",
     header="Card Title",
@@ -470,7 +380,7 @@ card = Card(
 ```
 
 **Success Card with Shadow**
-```python
+```text
 card = Card(
     body="Operation completed successfully!",
     header="Success",
@@ -480,7 +390,7 @@ card = Card(
 ```
 
 **Primary Card**
-```python
+```text
 card = Card(
     body="Important information",
     header="Notice",
@@ -523,7 +433,7 @@ alert.render_with_framework("bootstrap5")
 #### Examples
 
 **Basic Info Alert**
-```python
+```text
 from djust.rust_components import Alert
 
 alert = Alert(message="This is an info message")
@@ -531,12 +441,12 @@ alert = Alert(message="This is an info message")
 ```
 
 **Success Alert**
-```python
+```text
 alert = Alert(message="Saved successfully!", variant="success")
 ```
 
 **Danger Alert with Icon**
-```python
+```text
 alert = Alert(
     message="An error occurred",
     variant="danger",
@@ -545,7 +455,7 @@ alert = Alert(
 ```
 
 **Dismissible Warning**
-```python
+```text
 alert = Alert(
     message="Please review your changes",
     variant="warning",
@@ -554,7 +464,7 @@ alert = Alert(
 ```
 
 **Alert with ID**
-```python
+```text
 alert = Alert(
     message="Custom alert",
     variant="primary",
@@ -598,14 +508,14 @@ modal.render_with_framework("bootstrap5")
 #### Examples
 
 **Simple Modal**
-```python
+```text
 from djust.rust_components import Modal
 
 modal = Modal(id="simpleModal", body="Modal content")
 ```
 
 **Modal with Title**
-```python
+```text
 modal = Modal(
     id="titleModal",
     title="Confirmation",
@@ -614,7 +524,7 @@ modal = Modal(
 ```
 
 **Modal with Footer Buttons**
-```python
+```text
 modal = Modal(
     id="confirmModal",
     title="Delete Item",
@@ -624,7 +534,7 @@ modal = Modal(
 ```
 
 **Large Centered Modal**
-```python
+```text
 modal = Modal(
     id="largeModal",
     title="Terms and Conditions",
@@ -635,7 +545,7 @@ modal = Modal(
 ```
 
 **Scrollable Modal**
-```python
+```text
 modal = Modal(
     id="scrollModal",
     title="Privacy Policy",
@@ -645,7 +555,7 @@ modal = Modal(
 ```
 
 **Complete Modal Example**
-```python
+```text
 modal = Modal(
     id="completeModal",
     title="Edit Profile",
@@ -704,7 +614,7 @@ dropdown.render_with_framework("bootstrap5")
 #### Examples
 
 **Basic Dropdown**
-```python
+```text
 from djust.rust_components import Dropdown
 
 dropdown = Dropdown("myDropdown") \
@@ -714,7 +624,7 @@ dropdown = Dropdown("myDropdown") \
 ```
 
 **Dropdown with Selection**
-```python
+```text
 dropdown = Dropdown("myDropdown") \
     .item("Red", "red") \
     .item("Green", "green") \
@@ -723,7 +633,7 @@ dropdown = Dropdown("myDropdown") \
 ```
 
 **Success Dropdown**
-```python
+```text
 dropdown = Dropdown("statusDropdown") \
     .item("Active", "active") \
     .item("Inactive", "inactive") \
@@ -731,7 +641,7 @@ dropdown = Dropdown("statusDropdown") \
 ```
 
 **Large Dropdown with Placeholder**
-```python
+```text
 dropdown = Dropdown("largeDropdown") \
     .item("Item 1", "1") \
     .item("Item 2", "2") \
@@ -740,7 +650,7 @@ dropdown = Dropdown("largeDropdown") \
 ```
 
 **Disabled Dropdown**
-```python
+```text
 dropdown = Dropdown("disabledDropdown") \
     .item("Option", "opt") \
     .disabled(True)
@@ -780,7 +690,7 @@ tabs.render_with_framework("bootstrap5")
 #### Examples
 
 **Basic Tabs**
-```python
+```text
 from djust.rust_components import Tabs
 
 tabs = Tabs("myTabs") \
@@ -790,7 +700,7 @@ tabs = Tabs("myTabs") \
 ```
 
 **Pills Variant**
-```python
+```text
 tabs = Tabs("pillsTabs") \
     .tab("tab1", "First", "Content 1") \
     .tab("tab2", "Second", "Content 2") \
@@ -798,7 +708,7 @@ tabs = Tabs("pillsTabs") \
 ```
 
 **Vertical Tabs**
-```python
+```text
 tabs = Tabs("verticalTabs") \
     .tab("overview", "Overview", "<h3>Overview</h3><p>Details...</p>") \
     .tab("details", "Details", "<h3>Details</h3><p>More info...</p>") \
@@ -806,7 +716,7 @@ tabs = Tabs("verticalTabs") \
 ```
 
 **Tabs with Active Selection**
-```python
+```text
 tabs = Tabs("activeTabs") \
     .tab("tab1", "Tab 1", "Content 1") \
     .tab("tab2", "Tab 2", "Content 2") \
@@ -815,7 +725,7 @@ tabs = Tabs("activeTabs") \
 ```
 
 **Underline Tabs**
-```python
+```text
 tabs = Tabs("underlineTabs") \
     .tab("code", "Code", "<pre>code here</pre>") \
     .tab("preview", "Preview", "<p>Preview here</p>") \
@@ -1413,55 +1323,36 @@ Rust components can be used directly in Django templates with JSX-like syntax:
 </div>
 ```
 
-## Using with LiveView
+## Interactive Buttons in a LiveView
 
-Rust components integrate seamlessly with djust's LiveView system:
+Use djust's template bindings for interaction. The stateless display Button
+component does not add event attributes:
 
 ```python
 from djust import LiveView
-from djust.rust_components import Button
 
 class MyView(LiveView):
-    template_string = """
+    template = """
     <div>
-        {{ button_html | safe }}
+        <button type="button" class="btn btn-primary" dj-click="increment">
+            Clicked {{ count }} times
+        </button>
     </div>
     """
 
     def mount(self, request, **kwargs):
         self.count = 0
 
-    def get_context_data(self, **kwargs):
-        # Render button in Python
-        btn = Button(
-            "counter-btn",
-            f"Clicked {self.count} times",
-            variant="primary",
-            on_click="increment"
-        )
-
-        return {
-            'button_html': btn.render(),
-            'count': self.count
-        }
-
     def increment(self):
-        """Event handler called by button click"""
         self.count += 1
 ```
 
 ## Performance
 
-Rust components are significantly faster than pure Python implementations:
-
-| Operation | Python | Rust | Speedup |
-|-----------|--------|------|---------|
-| Button render | ~100μs | ~1μs | 100x |
-| Form render | ~1ms | ~10μs | 100x |
-| Complex page | ~10ms | ~100μs | 100x |
-
-Benefits:
-- Sub-microsecond rendering
+The template engine benchmark in the README measures template rendering, not
+these UI components. No current component-specific benchmark supports the
+historical timing figures from earlier versions of this page. Benchmark your
+own page with realistic data and the extension you deploy.
 - Zero-copy HTML generation
 - No GIL contention
 - Efficient memory usage
@@ -1485,25 +1376,22 @@ Python benefits from this through runtime validation in the PyO3 bindings.
 All component content is automatically HTML-escaped to prevent XSS:
 
 ```python
-btn = Button("xss", "<script>alert('xss')</script>")
+from djust.components.ui import Button
+
+btn = Button("<script>alert('xss')</script>")
 html = btn.render()
-# Output: <button ...>&lt;script&gt;alert('xss')&lt;/script&gt;</button>
+assert "&lt;script&gt;" in html
+assert "<script>" not in html
 ```
 
-The `icon` parameter also escapes content unless you use raw HTML from trusted sources.
+The supported button API has no icon parameter.
 
 ## Error Handling
 
-```python
-from djust.rust_components import ComponentNotAvailableError
-
-try:
-    btn = Button("test", "Test")
-except ComponentNotAvailableError:
-    # Rust components not compiled
-    # Fall back to Python components or show error
-    print("Please build with: maturin develop --features python")
-```
+`djust.components.ui.Button` falls back to Python rendering if the Rust
+extension or Rust button class is unavailable. `ComponentNotAvailableError`
+belongs to the separate `djust.rust_components` wrapper API, whose current
+constructor mismatch is noted above.
 
 ## Extending Components
 
@@ -1549,7 +1437,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
 ```
 
 4. **Create Python Wrapper** (`python/djust/rust_components.py`):
-```python
+```text
 class MyComponent:
     def __init__(self, id: str, ...):
         self._inner = RustMyComponent(id, ...)
@@ -1560,14 +1448,16 @@ class MyComponent:
 
 ## Best Practices
 
-### 1. Use for Performance-Critical Components
+### 1. Render Collections
 
-Rust components excel when rendering many instances:
+Use ordinary Python collections and render each component where needed. No
+component-specific performance claim is made here:
 
 ```python
-# Render 1000 buttons - ~1ms total
+from djust.components.ui import Button
+
 buttons = [
-    Button(f"btn-{i}", f"Button {i}", variant="primary")
+    Button(f"Button {i}", variant="primary")
     for i in range(1000)
 ]
 html = "\n".join(btn.render() for btn in buttons)
@@ -1577,48 +1467,24 @@ html = "\n".join(btn.render() for btn in buttons)
 
 ```python
 class DynamicButtons(LiveView):
+    template = """
+    <button dj-click="add_button">Add button</button>
+    <ul>{% for label in buttons %}<li>{{ label }}</li>{% endfor %}</ul>
+    """
+
     def mount(self, request, **kwargs):
         self.buttons = []
 
     def add_button(self):
-        btn_id = f"btn-{len(self.buttons)}"
-        self.buttons.append(
-            Button(btn_id, f"Button {len(self.buttons)}", variant="success")
-        )
-
-    def get_context_data(self, **kwargs):
-        return {
-            'buttons_html': [btn.render() for btn in self.buttons]
-        }
+        self.buttons.append(f"Button {len(self.buttons) + 1}")
 ```
 
-### 3. Cache Component Instances When Possible
+### 3. Configure Buttons Directly
 
 ```python
-class CachedView(LiveView):
-    def mount(self, request, **kwargs):
-        # Create button once
-        self._submit_btn = Button(
-            "submit",
-            "Submit",
-            variant="primary",
-            on_click="submit"
-        )
+from djust.components.ui import Button
 
-    def get_context_data(self, **kwargs):
-        # Render is fast, but instance creation has overhead
-        return {'submit_btn': self._submit_btn.render()}
-```
-
-### 4. Use Builder Pattern for Complex Configuration
-
-```python
-btn = Button("complex", "Complex Button") \
-    .with_variant("success") \
-    .with_size("lg") \
-    .with_icon("✓") \
-    .with_on_click("handleClick") \
-    .with_outline(False)
+btn = Button("Complex Button", variant="success", size="lg", outline=True)
 ```
 
 ## Troubleshooting

@@ -1,5 +1,8 @@
 # Range (Slider) Component Implementation Summary
 
+> **Status:** Historical implementation summary. Verify current availability and performance claims against the current package before use.
+
+
 ## Overview
 Successfully implemented a Range (Slider) component for djust following the djust-components skill patterns. The component provides both Python and Rust implementations with automatic optimization.
 

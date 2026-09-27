@@ -75,7 +75,7 @@ Before migrating, ensure you have:
 
 Run through each component and check:
 
-```python
+```text
 # For each component, ask:
 
 1. Does it have instance variables that change? (self.foo = ...)
@@ -166,43 +166,42 @@ class BadgeComponent(LiveComponent):
 **After (simplified):**
 ```python
 from djust.components import Component
-from django.utils.safestring import mark_safe
+from django.utils.html import format_html
 
 class BadgeComponent(Component):
     """Simple stateless badge - no lifecycle needed"""
 
     def __init__(self, text, variant="primary"):
-        self.text = text
-        self.variant = variant
+        super().__init__(text=text, variant=variant)
 
-    def render(self) -> str:
-        return mark_safe(f'<span class="badge bg-{self.variant}">{self.text}</span>')
+    def _render_custom(self) -> str:
+        return format_html('<span class="badge bg-{}">{}</span>', self.variant, self.text)
 ```
 
 **Changes:**
 1. Inherit from `Component` instead of `LiveComponent`
 2. Remove `template_name`
-3. Change `mount()` to `__init__()`
-4. Change `get_context_data()` to `render()`
-5. Return HTML string directly
+3. Move initialization from `mount()` to `__init__()` and call
+   `super().__init__(...)`
+4. Implement `_render_custom()` or set `template` and provide
+   `get_context_data()`; keep the base `render()` method
 
 **Benefits:**
-- ⬇️ 50% less code
-- ⚡ Faster (no VDOM overhead)
-- 🔧 Easier to test
-- 📝 More Pythonic
+- No separate component VDOM lifecycle
+- Easier to test
 
 ### Pattern 2: From Component to Template Syntax
 
 **Before (component):**
-```python
+```text
+from django.utils.html import format_html
 class BadgeComponent(Component):
     def __init__(self, text, variant="primary"):
         self.text = text
         self.variant = variant
 
     def render(self):
-        return f'<span class="badge bg-{self.variant}">{self.text}</span>'
+        return format_html('<span class="badge bg-{}">{}</span>', self.variant, self.text)
 
 # Usage in view
 def get_context_data(self):
@@ -215,7 +214,7 @@ def get_context_data(self):
 ```
 
 **After (template syntax):**
-```python
+```text
 # Remove component entirely!
 
 # Usage in view
@@ -242,10 +241,9 @@ def get_context_data(self):
 ```python
 class TabsComponent(Component):
     def __init__(self, tabs, active):
-        self.tabs = tabs
-        self.active = active
+        super().__init__(tabs=tabs, active=active)
 
-    def render(self):
+    def _render_custom(self):
         # Returns HTML but loses state on parent re-render
         return '...'
 
@@ -261,7 +259,7 @@ def get_context_data(self):
 class TabsComponent(LiveComponent):
     """Stateful tabs with persistent state"""
 
-    template_string = """
+    template = """
         <ul class="nav nav-tabs">
             {% for tab in tabs %}
             <li class="nav-item">
@@ -298,7 +296,7 @@ def mount(self, request):
 ```
 
 **Key Changes:**
-1. Add `template_string` (or keep `template_name`)
+1. Add `template` (or keep `template_name`)
 2. Change `__init__` to `mount()`
 3. Add event handlers (`switch_tab`)
 4. Add `send_parent()` calls
@@ -539,14 +537,14 @@ class BadgeComponent(LiveComponent):
 
 **Migrated:**
 ```python
+from django.utils.html import format_html
 # Option A: Simple Component
 class BadgeComponent(Component):
     def __init__(self, text, variant="primary"):
-        self.text = text
-        self.variant = variant
+        super().__init__(text=text, variant=variant)
 
-    def render(self):
-        return f'<span class="badge bg-{self.variant}">{self.text}</span>'
+    def _render_custom(self):
+        return format_html('<span class="badge bg-{}">{}</span>', self.variant, self.text)
 
 # Option B: Template Syntax (recommended)
 # Just use: <span class="badge bg-{{ variant }}">{{ text }}</span>
@@ -573,7 +571,7 @@ class TabsComponent(LiveComponent):
 **Migrated:**
 ```python
 class TabsComponent(LiveComponent):
-    template_string = """
+    template = """
         <ul class="nav nav-tabs">
             {% for tab in tabs %}
             <button dj-click="switch_tab" data-tab="{{ tab.id }}"
@@ -599,7 +597,7 @@ class TabsComponent(LiveComponent):
 **Changes:**
 - Removed `activate_tab()` (called by parent) → Changed to `switch_tab()` (called by user)
 - Added `send_parent()` to notify parent
-- Added `template_string` (optional - could keep template file)
+- Added `template` (optional - could keep template file)
 
 ### Scenario 3: Form Component
 
@@ -751,18 +749,19 @@ class UserDetailComponent(LiveComponent):
 
 **Symptom:** Full page refresh instead of patches
 
-**Cause:** Template structure changed (dynamic template_string)
+**Cause:** Template structure changed (dynamic template)
 
-**Fix:** Use static `template_string`, not `@property`
+**Fix:** Use static `template`, not `@property`
 
 ```python
+from django.utils.html import format_html
 # ❌ Wrong - dynamic template breaks VDOM
 @property
-def template_string(self):
-    return f"""<div>{self.build_html()}</div>"""
+def template(self):
+    return format_html("""<div>{}</div>""", self.build_html())
 
 # ✅ Correct - static template
-template_string = """
+template = """
     <div>
         {% for item in items %}
         <li>{{ item }}</li>

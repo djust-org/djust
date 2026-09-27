@@ -1,5 +1,8 @@
 # Toast Component Implementation Report
 
+> **Status:** Historical implementation report. Verify current availability and performance claims against the current package before use.
+
+
 ## Summary
 
 Successfully implemented a high-performance Toast notification component for djust following the established 3-tier component pattern (Pure Rust, Hybrid Template, Pure Python fallback).

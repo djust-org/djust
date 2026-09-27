@@ -1,15 +1,21 @@
 # ListGroup Component Documentation
 
+> **Current API:** This page's constructor and rendering examples match
+> `djust.components.ui.ListGroup`. The test counts, implementation history,
+> performance estimates, and file paths near the end are historical notes, not
+> current release guarantees. `RustListGroup` is not currently exported by the
+> compiled extension; ListGroup uses its Python renderer.
+
 ## Overview
 
-The `ListGroup` component is a stateless, high-performance component for displaying lists of items with optional actions, active highlighting, and color variants. It follows the djust component patterns with automatic Rust optimization.
+The `ListGroup` component is a stateless component for displaying lists of items with optional actions, active highlighting, and color variants.
 
 ## Component Details
 
 - **File**: `python/djust/components/ui/list_group_simple.py`
 - **Type**: Stateless Component (uses `_render_custom()` method)
 - **Complexity**: Medium (uses loops, Python-based)
-- **Performance**: ~50-100μs per render (Python), ~1μs with future Rust implementation
+- **Rendering**: Python `_render_custom()` implementation
 
 ## Features
 
@@ -59,8 +65,12 @@ nav_list = ListGroup(items=[
     {'label': 'Settings', 'url': '/settings'},
 ])
 
-# In template
-{{ nav_list.render|safe }}
+```
+
+In a Django template:
+
+```django
+{{ nav_list }}
 ```
 
 Output (Bootstrap 5):
@@ -190,7 +200,7 @@ Template:
     <div class="card mb-3">
         <div class="card-header">Navigation</div>
         <div class="card-body p-0">
-            {{ nav_list.render|safe }}
+            {{ nav_list }}
         </div>
     </div>
 
@@ -198,7 +208,7 @@ Template:
     <div class="card">
         <div class="card-header">System Status</div>
         <div class="card-body">
-            {{ status_list.render|safe }}
+            {{ status_list }}
         </div>
     </div>
 </div>
@@ -232,7 +242,7 @@ Uses semantic HTML with custom CSS classes:
 - `list-group-item-{variant}` for colors
 - `list-group-item-active`, `list-group-item-disabled` for states
 
-## Test Results
+## Historical Test Report
 
 All 12 tests passed successfully:
 
@@ -249,12 +259,12 @@ All 12 tests passed successfully:
 11. ✓ Tailwind framework support
 12. ✓ Plain HTML framework support
 
-## Performance Notes
+## Rendering Notes
 
-- **Current**: Python rendering using loops (~50-100μs per render)
-- **Why Python**: Lists with loops are more reliable in Python than in the Rust template engine (forloop.counter0, forloop.last issues)
-- **Future**: Can add pure Rust implementation (`RustListGroup`) for ~1μs rendering
-- **Optimization Path**: Python → Rust (when needed for high-frequency rendering)
+- **Current**: Python rendering using loops.
+- Component-specific render timings have not been measured in the current
+  benchmark suite. The compiled extension does not currently export a
+  `RustListGroup` implementation.
 
 ## Common Use Cases
 
@@ -281,30 +291,23 @@ ListGroup works well with:
 The component includes proper ARIA attributes:
 - `aria-current="true"` for active items
 - `aria-disabled="true"` for disabled items
-- `aria-label="breadcrumb"` on navigation lists
 - Semantic HTML (`<ul>`, `<ol>`, `<li>`, `<a>`)
 
 ## Export Status
 
-✓ Added to `python/djust/components/ui/__init__.py`:
+Available from `djust.components.ui`:
 - Import: `from .list_group_simple import ListGroup`
 - Export: Added to `__all__` list
 
-## Files Created/Modified
+## Historical Implementation Notes
 
-1. **Created**: `/Users/tip/Dropbox/online_projects/ai/djust/python/djust/components/ui/list_group_simple.py`
-2. **Modified**: `/Users/tip/Dropbox/online_projects/ai/djust/python/djust/components/ui/__init__.py`
-3. **Created**: `/Users/tip/Dropbox/online_projects/ai/djust/test_list_group.py` (test file)
-4. **Created**: `/Users/tip/Dropbox/online_projects/ai/djust/LIST_GROUP_COMPONENT.md` (this file)
+The original implementation report and test counts describe an earlier checkout;
+they are retained as project history and are not a statement about the current
+test suite or repository layout.
 
 ## Next Steps
 
-1. ✓ Component implemented and tested
-2. ✓ Exports configured
-3. ✓ All tests passing
-4. Ready to use in projects
-5. Optional: Add Rust implementation later for performance boost
-6. Optional: Add to demo_project components showcase
+`ListGroup` is available to import from `djust.components.ui`.
 
 ## Code Quality
 
@@ -312,6 +315,6 @@ The component includes proper ARIA attributes:
 - Uses type hints for better IDE support
 - Comprehensive docstrings
 - Framework-agnostic implementation
-- Proper HTML escaping via Django's mark_safe
+- Dynamic text, classes, and URLs are escaped by the current renderer.
 - Semantic HTML structure
 - Accessibility attributes included

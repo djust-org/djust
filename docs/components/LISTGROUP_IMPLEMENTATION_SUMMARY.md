@@ -1,5 +1,8 @@
 # ListGroup Component Implementation Summary
 
+> **Status:** Historical implementation summary. Verify current availability and performance claims against the current package before use.
+
+
 ## Task Completion Report
 
 **Date**: 2025-11-11
@@ -184,7 +187,7 @@ Following the djust component architecture:
 4. **Type Safe**: Uses type hints for better IDE support
 
 ### Why Python Loops?
-The component uses Python's `_render_custom()` method instead of `template_string` because:
+The component uses Python's `_render_custom()` method instead of `template` because:
 - Lists with loops are more reliable in Python
 - Rust template engine has issues with `forloop.counter0` and `forloop.last`
 - Complex item attributes (badges, variants) easier to handle in Python

@@ -1,5 +1,8 @@
 # Icon Component Implementation Report
 
+> **Status:** Historical implementation notes. Verify current availability and performance claims against the current package before use.
+
+
 ## Overview
 
 Successfully implemented a high-performance Icon component for djust following the Pure Rust simple component pattern. The component renders icons in ~1μs with support for multiple icon libraries and accessibility features.
@@ -259,7 +262,7 @@ from djust import LiveView
 from djust.components.ui import Icon
 
 class DashboardView(LiveView):
-    template_string = """
+    template = """
         <div class="dashboard">
             <h1>{{ title_icon.render|safe }} {{ title }}</h1>
             <div class="status">

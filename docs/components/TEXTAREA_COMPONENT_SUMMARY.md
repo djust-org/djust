@@ -1,5 +1,8 @@
 # TextArea Component Implementation Summary
 
+> **Status:** Historical implementation summary. Verify current availability and performance claims against the current package before use.
+
+
 ## Overview
 Successfully implemented a TextArea component for djust following the component pattern with both Python and Rust implementations.
 

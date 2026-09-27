@@ -1,5 +1,8 @@
 # Tooltip Component Implementation Report
 
+> **Status:** Historical implementation report. Verify current availability and performance claims against the current package before use.
+
+
 ## Summary
 Successfully implemented a Tooltip component for djust following the established 3-tier pattern (Pure Rust → Hybrid Template → Python Fallback).
 

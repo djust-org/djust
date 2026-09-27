@@ -33,7 +33,7 @@ class TodoListComponent(LiveComponent):
     - Computed properties
     """
 
-    template_string = """
+    template = """
         <div class="todo-list card">
             <div class="card-header">
                 <h3>My Todos ({{ active_count }}/{{ total_count }})</h3>
@@ -46,7 +46,7 @@ class TodoListComponent(LiveComponent):
                            class="form-control"
                            placeholder="Add new todo..."
                            id="new-todo-{{ component_id }}"
-                           @keyup.enter="add_todo">
+                           dj-input="set_new_todo">
                     <button class="btn btn-primary" dj-click="add_todo">
                         Add
                     </button>
@@ -117,6 +117,7 @@ class TodoListComponent(LiveComponent):
         """Initialize todo list"""
         self.items = items or []
         self.filter = "all"
+        self.new_todo = ""
         self.next_id = max([item['id'] for item in self.items], default=0) + 1
 
     def get_context_data(self):
@@ -140,18 +141,9 @@ class TodoListComponent(LiveComponent):
 
     def add_todo(self, **kwargs):
         """Add new todo item"""
-        # In real app, would get value from JavaScript
-        # For demo, generate placeholder
-        import random
-        todos = [
-            "Buy groceries",
-            "Walk the dog",
-            "Write documentation",
-            "Review pull requests",
-            "Learn djust components"
-        ]
-
-        text = random.choice(todos)
+        text = self.new_todo.strip()
+        if not text:
+            return
 
         new_item = {
             'id': self.next_id,
@@ -161,9 +153,14 @@ class TodoListComponent(LiveComponent):
 
         self.items.append(new_item)
         self.next_id += 1
+        self.new_todo = ""
 
         # Notify parent
         self.send_parent("todo_added", {"item": new_item})
+
+    def set_new_todo(self, value: str = "", **kwargs):
+        """Keep the input value on the server until the button is clicked."""
+        self.new_todo = value
 
     def toggle_todo(self, id: str = None, **kwargs):
         """Toggle todo completion status"""
@@ -220,7 +217,7 @@ class TodoAppView(LiveView):
     - Minimal parent coordination
     """
 
-    template_string = """
+    template = """
         <!DOCTYPE html>
         <html>
         <head>
@@ -310,7 +307,7 @@ class UserListComponent(LiveComponent):
     - Props reactivity
     """
 
-    template_string = """
+    template = """
         <div class="card">
             <div class="card-header">
                 <h5>Users</h5>
@@ -401,7 +398,7 @@ class UserDetailComponent(LiveComponent):
     - Action buttons
     """
 
-    template_string = """
+    template = """
         <div class="card">
             <div class="card-header">
                 <h5>User Details</h5>
@@ -520,7 +517,7 @@ class UserDashboardView(LiveView):
     - Event-based communication
     """
 
-    template_string = """
+    template = """
         <div class="container-fluid my-4">
             <h1 class="mb-4">User Management</h1>
 
@@ -604,7 +601,7 @@ class ProductGridComponent(LiveComponent):
     - Add to cart action
     """
 
-    template_string = """
+    template = """
         <div class="products">
             <!-- Filters -->
             <div class="card mb-4">
