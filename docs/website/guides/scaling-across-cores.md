@@ -4,19 +4,14 @@ slug: scaling-across-cores
 section: guides
 order: 13.5
 level: advanced
-description: "Use more than one CPU core per process: free-threaded Python, the worker_threads pool, scoped push, the in-process channel layer and several event loops per process, with measured numbers and the Redis multi-process alternative."
+description: "Use more than one CPU core per process: free-threaded Python, the worker_threads pool, scoped push, the in-process channel layer and several event loops per process, with measured numbers. For several processes or pods, see Scaling djust."
 ---
 
 # Scaling a djust Process Across Cores
 
-By default one djust process does its LiveView work on about **one CPU core**, however many cores the host has. This guide covers the two ways past that:
+By default one djust process does its LiveView work on about **one CPU core**, however many cores the host has. This guide covers making **one process** use several: free-threaded CPython plus djust's opt-in settings. In-process state such as game rooms and caches keeps working.
 
-- **A bigger process:** free-threaded CPython plus djust's opt-in settings. One process uses several cores, and in-process state such as game rooms and caches keeps working.
-- **More processes:** stock CPython, several workers, and Redis for everything shared.
-
-They combine: you can run several free-threaded processes.
-
-This guide is the in-depth reference for one process. To decide what to scale first, and for running several processes or pods (the settings they need, measured numbers, failover and rolling deploys), start with [Scaling djust](scaling.md).
+The other way past one core is more processes, with Redis for everything shared; the two combine. To decide what to scale first, and for running several processes or pods (the settings they need, measured numbers, failover and rolling deploys), start with [Scaling djust](scaling.md). This guide is the in-depth reference for one process.
 
 ## Why one process uses one core
 
@@ -102,12 +97,15 @@ With the pool on, djust also moves per-frame work off the event loop:
 
 Some per-event savings apply with or without the pool: the handler-permission and object-permission checks make no thread hop when there is nothing to check (no `@permission_required`, no `get_object` override), the handler's signature and type hints are worked out once per function, and `djust.layers.InMemoryChannelLayer` delivers a group send without creating a task per session.
 
-What to know before turning it on (details in [Deployment](deployment.md#more-than-one-core-per-process-worker_threads)):
+What to know before turning it on:
 
-- **Shared state needs locks.** Sync handlers now run concurrently with other sessions' handlers, so module-level state they mutate needs a `threading.Lock`.
-- **Database connections.** Each pool thread holds its own database connection.
-- **Sessions on one thread wait on each other**, though no longer on the whole process.
-- **Pool size.** Start at about the core count. On 3.14t, pools of 8–12 threads on a 12-core machine cost 2.2–2.7 MB per session. One thread per session cost 5.4 MB and gave lower tail latency.
+- **Which thread.** A session goes to the least-loaded pool thread when it connects, and stays there.
+- **Shared state needs locks.** Sync handlers now run concurrently with other sessions' handlers, so module-level state they mutate needs a `threading.Lock`. State on the view instance (`self.…`) is per session and needs nothing.
+- **Database connections.** Each pool thread holds its own database connection, so budget up to `worker_threads` extra connections per process (see [Database Connection Pooling](deployment.md#database-connection-pooling)).
+- **Sessions on one thread wait on each other**, though no longer on the whole process. A slow handler or a long `start_async` callback holds up the other sessions pinned to its thread.
+- **Pool size.** Start at about the core count. On 3.14t, pools of 8–12 threads on a 12-core machine cost 2.2–2.7 MB per session. One thread per session cost 5.4 MB and gave lower tail latency: about 80–120 ms less p95 at the load knee in the [#3074](https://github.com/djust-org/djust/issues/3074) experiment.
+- **Standard CPython.** On 3.12 and 3.13 the GIL still limits Python work to about one core. The pool overlaps waiting (database queries, HTTP calls) and djust's Rust render, which releases the GIL; for a CPU-bound app it measured no gain.
+- **Invalid values** are reported by the system check `djust.C021`.
 
 ### 3. Scoped push
 
@@ -324,44 +322,19 @@ The snake-arena process was stepped 64 → 192 → 256 clients, 60 s each, then 
 
 The timings come from a shared 12-core machine: load average 5–24 for the first run and 4–7 for the second. The memory numbers are much less sensitive to that.
 
-- **Sessions.** Expect about **2–3 MB of RSS per connected client** on 3.14t with a pinned pool (252 MB at 64 clients above, up from 116 MB idle: 2.1 MB each). That covers the view, its Rust render state and the Django session.
-- **The state backend.** `InMemoryStateBackend` keeps about 270 KB per session for `SESSION_TTL` (see [Deployment](deployment.md#in-memory-development-only)).
+- **Sessions.** Expect about **2–3 MB of RSS per connected client** on 3.14t with a pinned pool: 252 MB at 64 clients in the run above, which started at 81 MB before any client connected, is about 2.7 MB each. That covers the view, its Rust render state and the Django session.
+- **The state backend.** `InMemoryStateBackend` keeps about 270 KB per session for `SESSION_TTL` (see [Deployment](deployment.md#in-memory-one-process)).
 - **RSS levels off; it does not fall.** Freed memory stays with the allocator, both CPython's mimalloc heaps and the C allocator used by the Rust engine, and is reused for the next load. Size the container for the peak.
   - On Linux, glibc also creates an arena per thread, which is one more reason to bound threads. `MALLOC_ARENA_MAX=2` caps it.
-- **Disconnected sessions wait for the cyclic collector.** A consumer and its view reference each other, so they are freed by `gc`, not the moment the socket closes. Free-threaded CPython runs the collector when allocation grows, so on a server that goes idle after a burst, dead sessions can stay alive until traffic returns. That memory is reused, not leaked.
+- **Disconnected sessions wait for the cyclic collector.** A consumer and its view reference each other, so they are freed by `gc`, not the moment the socket closes. Free-threaded CPython runs the collector when allocation grows, so on a server that goes idle after a burst, dead sessions can stay alive until traffic returns. That memory is reused, not leaked. To hand it back sooner, run `gc.collect()` from a housekeeping thread while the process is idle, then, on Linux, glibc's `malloc_trim(0)`. In the game's container tests, that plus `PooledHTTP` and a 120 s `SESSION_TTL` took RSS after 3 idle minutes from 651–687 MB to 272–363 MB; the settings and measurements are in [Memory](scaling.md#memory) in Scaling djust.
 - **Queues stay bounded.** In the overloaded runs:
   - deferred server pushes stayed at 0, because pushes that arrive while a session is busy coalesce into one render and are capped at 64;
   - the in-memory channel layer held at most 53 messages per channel, against its `capacity` of 100, after which Channels drops new messages;
   - transport write buffers stayed empty;
   - the websockets inbound queue stayed at its limit of 32 per connection or less.
 
-## The multi-process alternative: Redis
+## More than one process
 
-Stock CPython scales out with more processes:
+For more cores than one process can use, or more than one host, run several processes or pods with Redis between them. That is covered in [Scaling djust](scaling.md): the settings every process needs ([Option B](scaling.md#option-b-redis-between-processes), including shared sessions and the channel layer's `socket_timeout`), measured capacity per pod, failover and rolling deploys, and room-affine routing as an alternative ([Option A](scaling.md#option-a-route-each-room-to-one-process-not-built)).
 
-```bash
-uvicorn myproject.asgi:application --workers 8
-```
-
-```python
-CHANNEL_LAYERS = {"default": {"BACKEND": "channels_redis.core.RedisChannelLayer",
-                              "CONFIG": {"hosts": [{"address": REDIS_URL, "socket_timeout": 10}]}}}
-DJUST_CONFIG = {"STATE_BACKEND": "redis", "PRESENCE_BACKEND": "redis", "REDIS_URL": REDIS_URL}
-```
-
-The channel-layer host sets `socket_timeout` above 5 s on purpose: redis-py 8 lowered its default `socket_timeout` to 5 s, the same as channels_redis' blocking read, so without a longer timeout idle WebSockets drop every few seconds (django/channels_redis#422).
-
-This scales about linearly with workers. The #3074 estimate was roughly 40 clients per core per process for the snake game on 3.12. It costs:
-
-- **Redis** for the channel layer, state and presence;
-- **no shared in-process state.** A room object in one process is invisible to the others, so either keep all shared state in Redis or the database, or route every session of a room to the same worker, for example by hashing the room in the URL path at the load balancer;
-- **scoped push still matters.** Without it, Redis carries the rooms × sessions fan-out instead of the event loop.
-
-| | One 3.14t process | Several 3.12 processes |
-|---|---|---|
-| Cores used | several per process | one per process |
-| In-process state (rooms, caches) | works | needs Redis or sticky routing |
-| Extra infrastructure | none | Redis |
-| Total capacity | bounded by one host | scales with workers and hosts |
-
-Both approaches combine: several free-threaded processes, each using several cores, with Redis between them.
+The two approaches combine: several free-threaded processes, each using several cores, with Redis between them.
