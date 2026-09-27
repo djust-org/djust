@@ -428,4 +428,5 @@ Full list:
 ## Markdown editor
 
 See the [Markdown Editor guide](../guides/markdown-editor.md) for optional Visual/Markdown editing,
-native form integration, asset loading, theme variables and editing limitations.
+native form integration, asset loading, table actions, the `bubble_menu` and `floating_menu`
+options, theme variables and editing limitations.

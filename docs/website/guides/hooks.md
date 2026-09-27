@@ -260,6 +260,21 @@ this.handleEvent('highlight', (payload) => {
 });
 ```
 
+### Reaching a hook from page code
+
+`window.djust.getHook(el)` returns the instance mounted on an element — the
+same object its callbacks receive as `this` — or `null` when no hook is
+mounted there (never mounted, or already destroyed). It also accepts a CSS
+selector, resolved with `document.querySelector`:
+
+```javascript
+const chart = window.djust.getHook('#sales-chart');
+chart?.highlight(3);   // any method or state the hook defines
+```
+
+Call it when you need the instance, rather than keeping the result: a hook
+whose element the server replaces is destroyed and a new instance mounted.
+
 ## Typed values & targets
 
 Passing data to a hook used to mean raw `dataset` strings and hand-rolled

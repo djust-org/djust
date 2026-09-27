@@ -1287,4 +1287,5 @@ yields `assigns["slots"]["col"]` as a 3-element list. The inline tag `{% render_
 ## Markdown editor
 
 See the [Markdown Editor guide](markdown-editor.md) for optional Visual/Markdown editing,
-native form integration, asset loading, theme variables and editing limitations.
+native form integration, asset loading, table actions, the `bubble_menu` and `floating_menu`
+options, theme variables and editing limitations.

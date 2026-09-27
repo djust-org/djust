@@ -43,6 +43,9 @@ rendered fields:
 {% include "djust_components/markdown_controls.html" with field="body" mode="visual" %}
 ```
 
+The include also takes `bubble_menu=False` and `floating_menu=True`; see
+[Selection and empty-line menus](#selection-and-empty-line-menus).
+
 The host must be inside the same semantic form as the field. Keep the usual
 CSRF token and `dj-submit="submit_form"`. Put body last when rendering an entire
 form so its label and controls are adjacent. To choose a different placement,
@@ -93,6 +96,11 @@ MarkdownEditor(
 | `value` | Update this in the bound native event to refresh the sanitized server preview. |
 | `preview=False` | Omit the server preview. |
 | `toolbar=False` | Keep the plain textarea. |
+| `bubble_menu=False` | Turn off the formatting menu over a selection (Visual mode; on by default). |
+| `floating_menu=True` | Add the block menu on an empty line (Visual mode; off by default). |
+
+The template tag takes the same names, e.g.
+`{% markdown_editor name="body" mode="visual" floating_menu=True %}`.
 
 All three renderers — the Python component, Django tag and Rust tag handler —
 use the same Markdown sanitizer:
@@ -107,8 +115,8 @@ djust.markdown.render_markdown(..., provisional=False)
   bytes untouched. An edit may normalize Markdown spelling or whitespace while
   retaining supported content.
 - **Supported content.** Visual mode supports emphasis, headings, links, nested
-  lists, quotes, task lists, tables, images and fenced code. The toolbar exposes the common actions;
-  tables and images already in Markdown can be edited in place.
+  lists, quotes, task lists, tables, images and fenced code. The toolbar exposes the common actions,
+  including inserting and editing tables; images already in Markdown can be edited in place.
 - **Unsupported content.** Unsupported HTML, footnotes, directives and
   unsafe/unrecognized URLs stay in Markdown mode with an explanation.
   Raw source is never silently replaced just
@@ -135,9 +143,82 @@ index paths. The editor does not depend on `beforeUpdate` being called. It
 cleans up editor resources and field listeners through `destroyed()`.
 
 An optional space-separated `data-actions` attribute on the host limits toolbar
-actions to those the application publishes. For example, applications whose
-Markdown policy does not render tasks can omit `task`. Server authorization,
+and menu actions to those the application publishes. For example, applications whose
+Markdown policy does not render tasks can omit `task`. The action names are
+`bold italic heading quote list ordered task code block link table undo redo`
+and the table actions below. Server authorization,
 image policy and sanitization remain application/framework responsibilities.
+
+## Tables
+
+**Insert table** (`table`) is an ordinary toolbar action. In Visual mode it
+inserts a 3 × 3 table with a header row. In Markdown mode it inserts a GFM
+skeleton on its own block and selects the first header cell.
+
+While the selection is inside a table, Visual mode shows a **Table** group:
+
+| Action | Button |
+| --- | --- |
+| `row-before` / `row-after` | Add a row above / below |
+| `row-delete` | Delete the row |
+| `column-before` / `column-after` | Add a column left / right |
+| `column-delete` | Delete the column |
+| `header-row` | Make the first row the header |
+| `table-delete` | Delete the table |
+
+Each button is enabled only when the action applies at the selection
+(`editor.can()`), and `header-row` reports its state with `aria-pressed`.
+Markdown source mode hides the group.
+
+Every table must still be valid GFM when it is saved, so three things are
+deliberately unavailable:
+
+- **Blocks inside a cell.** Headings, lists, quotes, code blocks and nested
+  tables are disabled inside a table: a GFM row can hold only inline content.
+- **Removing the header row.** A GFM table always has one, so a removed header
+  would come back as an empty row on the next load. `header-row` can only add
+  one, for example after the old header row was deleted.
+- **Merged cells.** GFM has no spelling for them.
+
+A line break inside a cell (Shift+Enter) is saved as `<br>`, the only line break
+a table row can hold, and reopens in Visual mode. Raw HTML anywhere else still
+keeps a document in Markdown mode.
+
+## Selection and empty-line menus
+
+In Visual mode, selecting text opens a small formatting menu next to the
+selection: bold, italic, inline code and link, plus the table actions when the
+selection is inside a table. Turn it off with `bubble_menu=False`.
+`floating_menu=True` adds a second menu on an empty line, with the block
+actions: heading, quote, the three lists, code block and insert table.
+
+- **The selection survives.** Pressing a menu button does not move focus, so
+  the format applies to the selected text.
+- **The browser's context menu is untouched.** The editor never handles
+  right-click, with or without a selection, so spelling suggestions stay
+  where the browser puts them.
+- **Keyboard.** Alt+F10 moves focus from the editor to the open menu (or to
+  the toolbar when none is open). Arrow keys, Home and End move between
+  buttons, Escape returns to the editor with the selection intact, and the
+  menu closes when focus leaves it.
+- Both menus are `role="toolbar"` with an accessible name, and their buttons
+  use the same `data-markdown-action` names and states as the toolbar.
+
+## Reaching the editor from app code
+
+The hook exposes the live Tiptap editor through `getEditor()`, and
+`window.djust.getHook()` returns the hook for an element
+(see [Reaching a hook from page code](hooks.md#reaching-a-hook-from-page-code)):
+
+```javascript
+const hook = window.djust.getHook(document.querySelector('[dj-hook="MarkdownEditor"]'));
+const editor = hook?.getEditor();  // null until Visual mode has been entered
+if (editor?.can().addRowAfter()) editor.chain().focus().addRowAfter().run();
+```
+
+Edits made this way update the native field and fire its input event like any
+other Visual edit. Prefer the built-in actions where they exist, and keep to
+commands whose result is valid Markdown.
 
 ## Theme and contribution development
 
@@ -158,7 +239,7 @@ rendering code.
 | `--dj-md-editor-toolbar-bg` | Toolbar background (`components.css`) |
 | `--dj-font-mono` | Monospace font |
 
-The optional visual bundle is approximately 155 KiB gzip and does not enter the
+The optional visual bundle is approximately 165 KiB gzip and does not enter the
 core djust client. Its pinned MIT dependencies and license notices live with the
 vendored-asset build in `js/vendor/` and the generated static assets.
 

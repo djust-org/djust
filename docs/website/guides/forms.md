@@ -547,4 +547,5 @@ Each radio input carries the attribute; the CSS finds its wrapper with `:has()`.
 ## Markdown editor
 
 See the [Markdown Editor guide](markdown-editor.md) for optional Visual/Markdown editing,
-native form integration, asset loading, theme variables and editing limitations.
+native form integration, asset loading, table actions, the `bubble_menu` and `floating_menu`
+options, theme variables and editing limitations.
