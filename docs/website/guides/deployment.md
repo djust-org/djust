@@ -266,7 +266,7 @@ uvicorn myproject.asgi:application \
 
 **`--workers 4` is four processes.** Each has its own memory, so everything in [More than one process or pod](scaling.md#more-than-one-process-or-pod) applies: a Redis channel layer (with the `socket_timeout` above), Redis state and presence backends, a session store every process shares, `enable_state_snapshot` or `persist="server"` for state that must survive a reconnect, and no in-process shared state such as a dict of rooms. The settings are listed in [Option B](scaling.md#option-b-redis-between-processes). To stay in one process instead, run one worker; on free-threaded Python it can use several cores ([One process across cores](scaling.md#one-process-across-cores)).
 
-Measure before switching to `--loop uvloop`. In one local ramp on macOS it lost 201 of 384 WebSocket connections while they connected, probably at the accept backlog; that has not been investigated (#3095).
+Measure before switching to `--loop uvloop`. In one local ramp on macOS it lost 201 of 384 WebSocket connections while they connected. The macOS accept backlog is the likely cause, but it has not been investigated (#3095).
 
 #### Quantified Daphne → Uvicorn benchmark
 
