@@ -316,13 +316,36 @@ describe("#3108 selection (bubble) and empty-line (floating) menus", () => {
     expect(doc.activeElement).toBe(button(hook.bubble, "link"));
     key(doc.activeElement, "ArrowRight");
     expect(doc.activeElement).toBe(button(hook.bubble, "bold"));
-    await wait(window, 50);
-    expect(hook.bubble.isConnected).toBe(true); // focus inside keeps it open
+    // Focus inside the menu keeps it open, even across an editor update
+    // (e.g. a table action applied while a menu button holds focus).
+    editor.commands.setTextSelection({ from: 1, to: 5 });
+    await wait(window, 300);
+    expect(doc.activeElement).toBe(button(hook.bubble, "bold"));
+    expect(hook.bubble.isConnected).toBe(true);
+    editor.commands.setTextSelection({ from: 1, to: 6 });
     key(doc.activeElement, "Escape");
     await wait(window, 50); // Tiptap's focus command applies on the next frame
     expect(doc.activeElement).toBe(editor.view.dom);
     expect(editor.state.selection.from).toBe(1);
     expect(editor.state.selection.to).toBe(6);
+  });
+
+  it("Alt+F10 falls back to the toolbar when no menu is open", () => {
+    const { hook, window, doc } = setup("Hello world");
+    const editor = hook.getEditor();
+    editor.commands.focus();
+    editor.commands.setTextSelection(3);
+    expect(hook.bubble.isConnected).toBe(false);
+    editor.view.dom.dispatchEvent(
+      new window.KeyboardEvent("keydown", {
+        key: "F10",
+        altKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(hook.toolbar.contains(doc.activeElement)).toBe(true);
+    expect(doc.activeElement.disabled).toBe(false);
   });
 
   it("closes when keyboard focus leaves the menu for the page", async () => {

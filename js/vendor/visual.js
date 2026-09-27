@@ -12,15 +12,13 @@ import FloatingMenu from "@tiptap/extension-floating-menu";
 // stays open, so Tab/arrow navigation into it does not dismiss it.
 const focused = (view, element) =>
   view.hasFocus() || element.contains(document.activeElement);
-// Shown over a non-empty selection (or a table cell selection). The upstream
-// default also hides over an empty-text selection; a whitespace-only one has
-// nothing to format either.
+// Shown over a selection with text in it, or a table cell selection. A caret
+// (empty selection) or a whitespace-only selection has nothing to format.
 const bubbleShouldShow =
   (element) =>
   ({ editor, view, state, from, to }) => {
     const { selection } = state;
-    if (!focused(view, element) || selection.empty || !editor.isEditable)
-      return false;
+    if (!focused(view, element) || !editor.isEditable) return false;
     return (
       "$anchorCell" in selection ||
       state.doc.textBetween(from, to, " ").trim() !== ""
