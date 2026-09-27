@@ -24,6 +24,8 @@ from djust import LiveView
 from djust.decorators import event_handler
 from djust.presence import PresenceManager, PresenceMixin
 
+from ._ws_frames import drain_extra, has_frame, has_type, receive_settled
+
 pytest.importorskip("channels")
 
 pytestmark = pytest.mark.django_db
@@ -85,14 +87,19 @@ async def _mount(room: str):
     raise AssertionError("no mount frame")
 
 
-async def _drain(communicator) -> list:
-    """Every frame that arrives until the socket goes quiet."""
-    frames = []
-    # receive_nothing() does not cancel the application on a timeout, unlike
-    # receive_json_from().
-    while not await communicator.receive_nothing(timeout=0.5):
-        frames.append(await communicator.receive_json_from(timeout=2))
-    return frames
+def _waves(frames):
+    return [f for f in frames if f.get("type") == "presence_event"]
+
+
+async def _wave_reaches(communicator) -> list:
+    """The frames up to the wave broadcast, then any that follow it.
+
+    Waits for the broadcast instead of stopping at a quiet window, which
+    returned before it when a loaded runner was slow to deliver it (#3256).
+    """
+    return await receive_settled(
+        communicator, has_frame("presence_event", event="wave"), what="the wave broadcast"
+    )
 
 
 async def _close(communicator) -> None:
@@ -116,14 +123,15 @@ async def test_broadcast_reaches_only_the_same_rooms_sessions():
             assert _members(_group("chat:{room}")) == []
 
             for socket in (a, b, c):
-                await _drain(socket)
+                await drain_extra(socket)
 
             await a.send_json_to({"type": "event", "event": "wave", "params": {}, "ref": 1})
 
-            def _waves(frames):
-                return [f for f in frames if f.get("type") == "presence_event"]
-
-            got_a, got_b, got_c = [_waves(await _drain(s)) for s in (a, b, c)]
+            got_a = _waves(await _wave_reaches(a))
+            got_b = _waves(await _wave_reaches(b))
+            # c must get nothing: a bounded quiet window, read only after the
+            # broadcast has reached a and b, so a missing frame is not a slow one.
+            got_c = _waves(await drain_extra(c))
             assert [f["payload"] for f in got_a] == [{"room": "w1"}]
             assert [f["payload"] for f in got_b] == [{"room": "w1"}]
             assert got_c == []
@@ -166,15 +174,18 @@ async def test_live_redirect_leaves_the_old_rooms_group():
             for _ in range(8):
                 if (await a.receive_json_from(timeout=3)).get("type") == "mount":
                     break
-            await _drain(a)
+            await drain_extra(a)
             assert _members(_group("chat:r1")) == []
             assert len(_members(_group("chat:r2"))) == 1
 
             peer = await _mount("r1")
-            await _drain(a)
-            await _drain(peer)
+            await drain_extra(a)
+            await drain_extra(peer)
             await peer.send_json_to({"type": "event", "event": "wave", "params": {}, "ref": 1})
-            got = [f for f in await _drain(a) if f.get("type") == "presence_event"]
+            # The broadcast has gone out once it reaches the sender's own
+            # socket; only then does a quiet window on ``a`` mean "not sent".
+            await _wave_reaches(peer)
+            got = _waves(await drain_extra(a))
             assert got == [], "the session that moved to r2 still gets r1's broadcasts"
         finally:
             await _close(a)
@@ -208,7 +219,7 @@ async def test_mount_batch_with_two_presence_views_leaves_both_groups():
                     ],
                 }
             )
-            await _drain(a)
+            await receive_settled(a, has_type("mount_batch", "error"), what="the batch mount")
             assert len(_members(_group("chat:b1"))) == 1
             assert len(_members(_group("chat:b2"))) == 1
         finally:
