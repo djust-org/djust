@@ -14,6 +14,7 @@ the two ran in that order on one worker:
 
 from __future__ import annotations
 
+import pytest
 from django.test import override_settings
 
 from djust.config import config
@@ -116,19 +117,130 @@ def test_an_explicit_reset_still_discards_code_set_values():
         assert config.get("css_framework") == before
 
 
+#: Settings ``djust/config.py`` reads that deliberately do NOT reload the
+#: config, each with the reason. Anything else it reads must be in
+#: ``_CONFIG_SETTINGS``.
+_READ_WITHOUT_RELOAD = {
+    "DEBUG": "_validate_config: only decides whether to log production warnings",
+}
+
+
+def _settings_reads(source: str) -> set:
+    """Every Django setting ``source`` reads, whatever function it is in (#3218).
+
+    Covers ``settings.X``, ``getattr(settings, "X")`` and ``hasattr(settings,
+    "X")`` under any alias ``django.conf.settings`` is imported as, and a
+    ``getattr(settings, name)`` whose ``name`` is the loop variable of a
+    ``for`` over a module-level literal table (``_SERVICE_WORKER_ALIASES``).
+    Any other non-literal read fails, because the scan cannot tell what it
+    reads.
+    """
+    import ast
+
+    tree = ast.parse(source)
+    aliases = {
+        alias.asname or alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module == "django.conf"
+        for alias in node.names
+        if alias.name == "settings"
+    }
+    assert aliases, "the scan found no `from django.conf import settings`"
+    tables = {
+        node.targets[0].id: node.value
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+    }
+    # loop variable -> the names it takes, for `for a, b, c in <TABLE>:` loops
+    loop_values: dict = {}
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.For) and isinstance(node.iter, ast.Name)):
+            continue
+        table = tables.get(node.iter.id)
+        if not isinstance(table, (ast.Tuple, ast.List)):
+            continue
+        targets = node.target.elts if isinstance(node.target, ast.Tuple) else [node.target]
+        for position, target in enumerate(targets):
+            if not isinstance(target, ast.Name):
+                continue
+            cells = [
+                row.elts[position] if isinstance(row, (ast.Tuple, ast.List)) else row
+                for row in table.elts
+            ]
+            loop_values[target.id] = {
+                cell.value
+                for cell in cells
+                if isinstance(cell, ast.Constant) and isinstance(cell.value, str)
+            }
+
+    read: set = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id in aliases
+            and node.attr.isupper()
+        ):
+            read.add(node.attr)
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in ("getattr", "hasattr")
+            and len(node.args) >= 2
+            and isinstance(node.args[0], ast.Name)
+            and node.args[0].id in aliases
+        ):
+            name = node.args[1]
+            if isinstance(name, ast.Constant) and isinstance(name.value, str):
+                read.add(name.value)
+            elif isinstance(name, ast.Name) and name.id in loop_values:
+                read |= {v for v in loop_values[name.id] if isinstance(v, str)}
+            else:
+                raise AssertionError(
+                    "unresolvable settings read at line %d: %s" % (node.lineno, ast.unparse(node))
+                )
+    return read
+
+
 def test_every_setting_the_config_reads_triggers_a_reload():
-    """The key set is derived from the loader's source, not restated: a new
-    ``settings.X`` read that is not in ``_CONFIG_SETTINGS`` fails here."""
+    """The key set is derived from the source, not restated: a new settings
+    read anywhere in ``djust/config.py`` (a helper included, #3218) that is
+    neither in ``_CONFIG_SETTINGS`` nor listed above fails here."""
     import inspect
-    import re
 
     from djust import config as config_module
 
-    source = inspect.getsource(config_module.LiveViewConfig._apply_settings)
-    read = set(re.findall(r"(?:getattr|hasattr)\(settings, \"([A-Z_]+)\"", source))
-    read |= set(re.findall(r"settings\.([A-Z][A-Z_]+)", source))
-    read |= {name for name, _, _ in config_module._SERVICE_WORKER_ALIASES}
-    assert read == config_module._CONFIG_SETTINGS
+    read = _settings_reads(inspect.getsource(config_module))
+    assert read - set(_READ_WITHOUT_RELOAD) == config_module._CONFIG_SETTINGS
+    assert not config_module._CONFIG_SETTINGS & set(_READ_WITHOUT_RELOAD)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        # a read moved into a helper
+        "from django.conf import settings\n"
+        "def _helper():\n    return getattr(settings, 'DJUST_NEW_3218', None)\n",
+        # an aliased import
+        "from django.conf import settings as s\ndef f():\n    return s.DJUST_NEW_3218\n",
+        "from django.conf import settings\ndef f():\n    return hasattr(settings, 'DJUST_NEW_3218')\n",
+        # a new row in a literal alias table
+        "from django.conf import settings\n"
+        "_TABLE = (('DJUST_NEW_3218', 'key', bool),)\n"
+        "def f():\n    for name, key, cast in _TABLE:\n        getattr(settings, name)\n",
+    ],
+)
+def test_the_scan_finds_a_read_wherever_it_is(source):
+    """Canary for the scan above: each shape of read is found."""
+    assert "DJUST_NEW_3218" in _settings_reads(source)
+
+
+def test_the_scan_refuses_a_read_it_cannot_resolve():
+    source = "from django.conf import settings\ndef f(name):\n    return getattr(settings, name)\n"
+    with pytest.raises(AssertionError, match="unresolvable settings read"):
+        _settings_reads(source)
 
 
 def test_a_flat_alias_override_reaches_the_config_and_is_undone():
@@ -179,3 +291,135 @@ def test_debug_vdom_trace_set_by_the_environment_is_left_alone(monkeypatch):
     with override_settings(LIVEVIEW_CONFIG={"debug_vdom": True}):
         pass
     assert os.environ.get("DJUST_VDOM_TRACE") == "1"
+
+
+# --- #3218: follow-ups from the #3213 re-review ------------------------------
+
+
+def test_editing_a_returned_dict_in_place_does_not_change_the_config():
+    """#3218 item 2: an in-place edit of a dict ``get()`` returned used to
+    change the live config without being recorded, so the first reload
+    (any ``override_settings`` of a config setting) silently undid it.
+    ``get()`` now returns a copy of container values; ``set()`` is the way."""
+    rate = config.get("rate_limit.rate")
+    returned = config.get("rate_limit")
+    returned["rate"] = rate + 4242
+    assert config.get("rate_limit.rate") == rate
+    classes = config.get("loading_grouping_classes")
+    classes.append("probe-3218")
+    assert "probe-3218" not in config.get("loading_grouping_classes")
+
+
+def test_editing_as_dict_in_place_does_not_change_the_config():
+    rate = config.get("rate_limit.rate")
+    config.as_dict()["rate_limit"]["rate"] = rate + 4242
+    assert config.get("rate_limit.rate") == rate
+
+
+def test_set_copies_the_value_it_stores():
+    """The other half of item 2: a caller keeping the dict it passed to
+    ``set()`` must not be able to edit the live config through it."""
+    value = {"rate": 7, "burst": 8}
+    config.set("probe_3218", value)
+    try:
+        value["rate"] = 999
+        assert config.get("probe_3218.rate") == 7
+    finally:
+        config.reset()
+
+
+def _reload_during(monkeypatch, write):
+    """Run ``write()`` while another thread reloads the config in the window
+    between the write to the live dict and the recording of the value
+    (#3218 item 3). The reload thread is given 0.5 s; a writer that holds
+    the config's lock for the whole write makes it wait until the write is
+    done."""
+    import threading
+
+    real = config._record_programmatic
+    reloads = []
+
+    def reload_in_the_window(key, value):
+        thread = threading.Thread(target=config.reload_from_settings)
+        thread.start()
+        thread.join(timeout=0.5)
+        reloads.append(thread)
+        real(key, value)
+
+    monkeypatch.setattr(config, "_record_programmatic", reload_in_the_window)
+    write()
+    monkeypatch.undo()
+    for thread in reloads:
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+    assert reloads
+
+
+def test_lock_free_readers_never_see_a_write_in_progress():
+    """#3218 review: ``get()``/``as_dict()`` copy the live dict without the
+    lock. If a writer mutated it in place, a reader copying it raised
+    ``RuntimeError: dictionary changed size during iteration`` (reproduced
+    within seconds under a tiny switch interval). Writers are copy-on-write,
+    so a reader only ever copies a dict nobody is changing. Bounded: one
+    writer adds new keys for 1.5 s while two readers copy continuously."""
+    import sys
+    import threading
+    import time
+
+    from djust.config import LiveViewConfig
+
+    cfg = LiveViewConfig()
+    errors: list = []
+    stop = threading.Event()
+
+    def writer():
+        i = 0
+        while not stop.is_set():
+            cfg.set("rate_limit.extra_%d" % i, i)
+            cfg.update({"extra_top_%d" % i: i})
+            i += 1
+
+    def reader(read):
+        while not stop.is_set():
+            try:
+                read()
+            except RuntimeError as exc:  # dictionary changed size during iteration
+                errors.append(exc)
+                return
+
+    threads = [
+        threading.Thread(target=writer),
+        threading.Thread(target=reader, args=(lambda: cfg.get("rate_limit"),)),
+        threading.Thread(target=reader, args=(cfg.as_dict,)),
+    ]
+    old = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        for thread in threads:
+            thread.start()
+        deadline = time.monotonic() + 1.5
+        while time.monotonic() < deadline and not errors:
+            time.sleep(0.05)
+    finally:
+        stop.set()
+        for thread in threads:
+            thread.join(timeout=10)
+        sys.setswitchinterval(old)
+    assert not any(thread.is_alive() for thread in threads)
+    assert not errors, errors[0]
+
+
+def test_a_reload_racing_set_does_not_lose_the_value(monkeypatch):
+    try:
+        _reload_during(monkeypatch, lambda: config.set("css_framework", "race_probe_3218"))
+        assert config.get("css_framework") == "race_probe_3218"
+    finally:
+        config.reset()
+
+
+def test_a_reload_racing_update_does_not_lose_the_value(monkeypatch):
+    try:
+        _reload_during(monkeypatch, lambda: config.update({"css_framework": "race_probe_3218"}))
+        assert config.get("css_framework") == "race_probe_3218"
+    finally:
+        config.reset()

@@ -9,13 +9,13 @@
     font-weight: var(--font-weight-bold, 700);
     line-height: var(--line-height-tight, 1.25);
     margin: 0 0 var(--space-2, 0.5rem) 0;
-    color: var(--foreground);
+    color: hsl(var(--foreground));
   }
 
   /* Page description */
   .page-description {
     font-size: var(--font-size-sm, 0.875rem);
-    color: var(--muted-foreground);
+    color: hsl(var(--muted-foreground));
     margin: 0 0 var(--space-4, 1rem) 0;
     line-height: var(--line-height-relaxed, 1.625);
   }
@@ -67,7 +67,7 @@
   }
 
   .page-link {
-    color: var(--link, var(--primary));
+    color: hsl(var(--link, var(--primary)));
     text-decoration: none;
     font-size: var(--font-size-sm, 0.875rem);
   }
@@ -79,12 +79,12 @@
   .page-footer-text {
     text-align: center;
     font-size: var(--font-size-sm, 0.875rem);
-    color: var(--muted-foreground);
+    color: hsl(var(--muted-foreground));
     margin: 0;
   }
 
   .page-footer-text a {
-    color: var(--link, var(--primary));
+    color: hsl(var(--link, var(--primary)));
     text-decoration: none;
   }
 
@@ -99,19 +99,19 @@
   }
 
   .page-back-link a {
-    color: var(--muted-foreground);
+    color: hsl(var(--muted-foreground));
     text-decoration: none;
   }
 
   .page-back-link a:hover {
     text-decoration: underline;
-    color: var(--foreground);
+    color: hsl(var(--foreground));
   }
 
   .page-social {
     margin-top: var(--space-4, 1rem);
     padding-top: var(--space-4, 1rem);
-    border-top: 1px solid var(--border);
+    border-top: 1px solid hsl(var(--border));
   }
 
   /* -----------------------------------------------------------------------
@@ -127,7 +127,7 @@
     font-size: 6rem;
     font-weight: var(--font-weight-extrabold, 800);
     line-height: 1;
-    color: var(--muted-foreground);
+    color: hsl(var(--muted-foreground));
     opacity: 0.3;
     margin-bottom: var(--space-4, 1rem);
   }
@@ -162,7 +162,7 @@
   .page-eta {
     margin-top: var(--space-4, 1rem);
     font-size: var(--font-size-sm, 0.875rem);
-    color: var(--muted-foreground);
+    color: hsl(var(--muted-foreground));
   }
 
   .page-progress {
