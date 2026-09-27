@@ -260,3 +260,34 @@ test("createVisual wires the selection and empty-line menu elements", () => {
   );
   plain.destroy();
 });
+test("a | in cell text is escaped and reloads into the same cell", () => {
+  const { hook } = setup("| A | B |\n| --- | --- |\n| x | y |");
+  const visual = hook.visual;
+  visual.editor.commands.setTextSelection(cellPos(visual.editor, "x") + 1);
+  visual.editor.commands.insertContent("a|b");
+  const md = visual.value();
+  assert.match(md, /\| xa\\\|b \| y +\|/);
+  const json = visual.editor.getJSON();
+  assert.equal(visual.load(md), "");
+  assert.deepEqual(visual.editor.getJSON(), json);
+  hook.destroyed();
+});
+test("cells hold one paragraph: block commands cannot split a table", () => {
+  const source = "| A | B |\n| --- | --- |\n| x | y |";
+  for (const run of [
+    (c) => c.setHeading({ level: 2 }),
+    (c) => c.toggleBulletList(),
+    (c) => c.setCodeBlock(),
+    (c) => c.setHorizontalRule(),
+    (c) => c.insertTable({ rows: 2, cols: 2 }),
+  ]) {
+    const { hook } = setup(source);
+    const { editor } = hook.visual;
+    editor.commands.setTextSelection(cellPos(editor, "x") + 1);
+    run(editor.chain());
+    const tables = editor.getJSON().content.filter((n) => n.type === "table");
+    assert.equal(tables.length, 1, String(run));
+    assert.equal(hook.visual.load(hook.visual.value()), "", String(run));
+    hook.destroyed();
+  }
+});

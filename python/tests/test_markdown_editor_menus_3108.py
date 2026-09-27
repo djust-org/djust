@@ -126,16 +126,35 @@ def test_component_keeps_resolved_booleans():
         (False, True, False),
         (0, True, False),
         ("False", True, False),
-        (" OFF ", True, False),
+        ("OFF", True, False),
         ("no", True, False),
         ("0", True, False),
         (True, False, True),
         ("true", False, True),
         ("1", False, True),
+        ("maybe", False, False),
+        ("maybe", True, True),
+        (2, False, False),
     ],
 )
 def test_menu_flag_reads_template_and_python_spellings(value, default, expected):
     assert menu_flag(value, default) is expected
+
+
+SPELLINGS = [None, "", True, False, 0, 1, 2, "true", "True", "TRUE", "false", "False",
+             "0", "1", "yes", "no", "on", "off", "OFF", " off ", "maybe"]  # fmt: skip
+
+
+@pytest.mark.parametrize("render", RENDERERS.values(), ids=RENDERERS.keys())
+@pytest.mark.parametrize("value", SPELLINGS, ids=repr)
+def test_every_renderer_reads_a_spelling_exactly_as_menu_flag_does(render, value):
+    """The include parses flags in template syntax; the others call menu_flag.
+    The expected value is derived from menu_flag, so the two cannot drift."""
+    expected = (
+        "true" if menu_flag(value, True) else "false",
+        "true" if menu_flag(value, False) else "false",
+    )
+    assert _host(render(bubble_menu=value, floating_menu=value)) == expected
 
 
 HOSTILE = ['" onmouseover="alert(1)', "<script>alert(1)</script>", "' autofocus onfocus='x"]

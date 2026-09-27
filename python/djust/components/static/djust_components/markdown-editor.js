@@ -25,7 +25,9 @@
     ["column-before", "Add column left", "Col ←"],
     ["column-after", "Add column right", "Col →"],
     ["column-delete", "Delete column", "− Col"],
-    ["header-row", "Header row", "Header"],
+    // An action, not a toggle: a GFM table always keeps its header row, so
+    // this is enabled only after the header row was deleted.
+    ["header-row", "Make first row the header", "Header"],
     ["table-delete", "Delete table", "✕ Table"],
   ];
   // Selection (bubble) menu formats and empty-line (floating) menu blocks.
@@ -43,17 +45,20 @@
 
   function replacement(action, value, start, end) {
     if (action === "table") {
-      // Source mode inserts a GFM skeleton after the selection, on its own
-      // blank-line-separated block, and selects the first header cell.
-      const lead = value.slice(0, end).match(/\n*$/)[0].length;
-      const trail = value.slice(end).match(/^\n*/)[0].length;
-      const before = end === 0 ? "" : "\n".repeat(Math.max(0, 2 - lead));
+      // Source mode inserts a GFM skeleton after the line holding the
+      // selection (never mid-line), on its own blank-line-separated block,
+      // and selects the first header cell.
+      let at = value.indexOf("\n", end);
+      if (at < 0) at = value.length;
+      const lead = value.slice(0, at).match(/\n*$/)[0].length;
+      const trail = value.slice(at).match(/^\n*/)[0].length;
+      const before = at === 0 ? "" : "\n".repeat(Math.max(0, 2 - lead));
       const after =
-        end === value.length ? "" : "\n".repeat(Math.max(0, 2 - trail));
-      const from = end + before.length + 2;
+        at === value.length ? "" : "\n".repeat(Math.max(0, 2 - trail));
+      const from = at + before.length + 2;
       return {
-        start: end,
-        end,
+        start: at,
+        end: at,
         text: before + TABLE_SKELETON + after,
         from,
         to: from + "Column".length,
@@ -227,23 +232,49 @@
           }
           return element;
         };
+        // A menu that data-actions leaves without buttons is not built at
+        // all, so Tiptap never shows an empty box.
+        const built = (element) =>
+          element.querySelector("button") ? element : undefined;
         if (this.el.dataset.bubbleMenu !== "false") {
-          this.bubble = menu("dj-markdown-bubble", "Formatting", bubbleActions);
-          tableGroup(this.bubble);
+          const bubble = menu(
+            "dj-markdown-bubble",
+            "Formatting",
+            bubbleActions,
+          );
+          tableGroup(bubble);
+          this.bubble = built(bubble);
         }
         if (this.el.dataset.floatingMenu === "true")
-          this.floating = menu(
-            "dj-markdown-floating",
-            "Insert block",
-            floatingActions,
+          this.floating = built(
+            menu("dj-markdown-floating", "Insert block", floatingActions),
           );
+        this.actionButtons = this.actionButtons.filter(
+          (b) =>
+            !b.closest(".dj-markdown-menu") ||
+            [this.bubble, this.floating].includes(
+              b.closest(".dj-markdown-menu"),
+            ),
+        );
+        this.tableGroups = this.tableGroups.filter(
+          (g) =>
+            !g.closest(".dj-markdown-menu") ||
+            g.closest(".dj-markdown-menu") === this.bubble,
+        );
         for (const element of [this.bubble, this.floating]) {
           if (!element) continue;
           element.addEventListener("keydown", (event) => this.menuKey(event));
           element.addEventListener("focusout", (event) => {
             const next = event.relatedTarget;
-            if (!next || !this.surface.contains(next))
-              this.visual?.hideMenu(element === this.bubble);
+            if (next && this.surface.contains(next)) return;
+            // Tiptap removes the menu while one of its buttons has focus
+            // (e.g. Enter on "Delete table"), and Chrome fires this focusout
+            // synchronously inside that removal. Hiding again from here
+            // re-enters the removal and throws; decide after it finishes.
+            queueMicrotask(() => {
+              if (!element.contains(document.activeElement))
+                this.visual?.hideMenu(element === this.bubble);
+            });
           });
         }
       }
@@ -394,11 +425,6 @@
           // column delete in a single-column table.
           if (action !== "link" && !button.disabled)
             button.disabled = !this.visual.can(action);
-          if (action === "header-row")
-            button.setAttribute(
-              "aria-pressed",
-              String(this.visual.hasHeaderRow()),
-            );
           const names = {
             bold: "bold",
             italic: "italic",
@@ -422,6 +448,12 @@
             button.disabled = disabled || !this.visual.editor.can().redo();
         } else button.removeAttribute("aria-pressed");
       }
+      // A selection menu whose only buttons are the (hidden) table group
+      // has nothing to offer outside a table.
+      if (this.bubble)
+        this.bubble.hidden = !Array.from(
+          this.bubble.querySelectorAll("button"),
+        ).some((b) => !b.closest(".dj-markdown-table-actions")?.hidden);
     },
     updated() {
       if (!this.textarea) return;

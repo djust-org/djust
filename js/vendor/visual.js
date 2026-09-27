@@ -1,7 +1,15 @@
-import { Editor } from "@tiptap/core";
+import { Editor, Extension } from "@tiptap/core";
+import { Plugin } from "@tiptap/pm/state";
+import { Fragment, Slice } from "@tiptap/pm/model";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "@tiptap/markdown";
-import { TableKit } from "@tiptap/extension-table";
+import {
+  Table,
+  TableCell,
+  TableHeader,
+  TableKit,
+  renderTableToMarkdown,
+} from "@tiptap/extension-table";
 import Image from "@tiptap/extension-image";
 import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
@@ -39,12 +47,96 @@ const floatingShouldShow =
       $anchor.parent.childCount === 0
     );
   };
+// A GFM table cell holds one line of inline content. Restricting the cell
+// schema to a single paragraph makes every path that could put a block in a
+// cell (toolbar, shortcuts, input rules, paste, a selection spanning a table)
+// fail at the schema instead of writing Markdown that reloads differently.
+// The Markdown parser already builds exactly one paragraph per cell.
+const CELL = { content: "paragraph" };
+// The schema alone cannot stop ProseMirror from *fitting* a block into a
+// cell by splitting the table in two around it (an `---` input rule, an
+// inserted heading). Such a step starts or ends inside a cell and leaves more
+// tables than it found; refuse it. Paste is flattened first (below), so a
+// pasted block lands in the cell as text instead of being refused.
+const inCell = ($pos) => {
+  for (let depth = $pos.depth; depth > 0; depth--)
+    if (/cell/.test($pos.node(depth).type.spec.tableRole || "")) return true;
+  return false;
+};
+const countTables = (doc) => {
+  let count = 0;
+  doc.descendants((node) => {
+    if (node.type.name === "table") count++;
+  });
+  return count;
+};
+const splitsTable = (tr) =>
+  tr.steps.some((step, i) => {
+    const before = tr.docs[i];
+    if (typeof step.from !== "number") return false;
+    if (!inCell(before.resolve(step.from)) && !inCell(before.resolve(step.to)))
+      return false;
+    const after = i + 1 < tr.docs.length ? tr.docs[i + 1] : tr.doc;
+    return countTables(after) > countTables(before);
+  });
+const CellsStayInline = Extension.create({
+  name: "djustCellsStayInline",
+  addProseMirrorPlugins() {
+    return [
+      new Plugin({
+        filterTransaction: (tr) => !tr.docChanged || !splitsTable(tr),
+        props: {
+          // Paste into a cell: keep the text and inline marks, join the
+          // pasted blocks with line breaks (written as <br> in the cell).
+          transformPasted(slice, view) {
+            if (!inCell(view.state.selection.$from)) return slice;
+            const { schema } = view.state;
+            const inline = [];
+            slice.content.descendants((node) => {
+              if (!node.isTextblock) return true;
+              if (inline.length) inline.push(schema.nodes.hardBreak.create());
+              node.forEach((child) => inline.push(child));
+              return false;
+            });
+            if (!inline.length) return slice;
+            const paragraph = schema.nodes.paragraph.create(null, inline);
+            return new Slice(Fragment.from(paragraph), 1, 1);
+          },
+        },
+      }),
+    ];
+  },
+});
+// A `|` in cell text must be written `\|`, or the next load splits the cell.
+// Only a pipe after an even number of backslashes is a delimiter, so escape
+// exactly those.
+export const escapeCellPipes = (text) =>
+  text.replace(/(^|[^\\])((?:\\\\)*)\|/g, "$1$2\\|");
+const GfmTable = Table.extend({
+  renderMarkdown(node, h) {
+    const cellHelpers = {
+      ...h,
+      renderChildren: (...args) => escapeCellPipes(h.renderChildren(...args)),
+    };
+    // Upstream pads a table with extra blank lines; the block joiner already
+    // separates blocks with one.
+    return renderTableToMarkdown(node, cellHelpers).replace(/^\n+|\n+$/g, "");
+  },
+});
 // Menus use fixed positioning so the editor frame's overflow (components.css
-// .dj-md-editor) cannot clip them.
+// .dj-md-editor) cannot clip them. `boundary` is the visual surface: the
+// selection menu flips below a selection when above it would leave the
+// surface (and cover the toolbar), and a menu hides when its anchor scrolls
+// out of the surface.
+const SHIFT = { padding: 8 };
 const extensions = (menus = {}) => [
   StarterKit.configure({ underline: false, link: { openOnClick: false } }),
   Markdown,
-  TableKit,
+  TableKit.configure({ table: false, tableCell: false, tableHeader: false }),
+  GfmTable,
+  TableCell.extend(CELL),
+  TableHeader.extend(CELL),
+  CellsStayInline,
   Image.configure({ allowBase64: false }),
   TaskList,
   TaskItem.configure({ nested: true }),
@@ -56,8 +148,9 @@ const extensions = (menus = {}) => [
           options: {
             strategy: "fixed",
             placement: "top",
-            flip: {},
-            shift: { padding: 8 },
+            flip: { boundary: menus.boundary },
+            shift: SHIFT,
+            hide: { boundary: menus.boundary },
           },
         }),
       ]
@@ -71,7 +164,8 @@ const extensions = (menus = {}) => [
             strategy: "fixed",
             placement: "left",
             flip: {},
-            shift: { padding: 8 },
+            shift: SHIFT,
+            hide: { boundary: menus.boundary },
           },
         }),
       ]
@@ -137,32 +231,24 @@ export function unsupported(editor, source) {
   return reason;
 }
 
-// A GFM table cell holds inline content only. A block inside a cell (heading,
-// list, quote, code block, nested table) has no Markdown table spelling, so
-// these actions are unavailable while the selection is inside a table.
-const BLOCK_ACTIONS = new Set([
-  "heading",
-  "quote",
-  "list",
-  "ordered",
-  "task",
-  "block",
-  "table",
-]);
+// The table around the selection, or null.
+function currentTable(editor) {
+  const { $from } = editor.state.selection;
+  for (let depth = $from.depth; depth > 0; depth--) {
+    const node = $from.node(depth);
+    if (node.type.name === "table") return node;
+  }
+  return null;
+}
 // A GFM table always has a header row, so "header-row" can only add one (the
 // case after the old header row was deleted); removing it would write an
 // empty header row that reappears on the next load.
 function hasHeaderRow(editor) {
-  const { $from } = editor.state.selection;
-  for (let depth = $from.depth; depth > 0; depth--) {
-    const node = $from.node(depth);
-    if (node.type.name === "table")
-      return node.firstChild?.firstChild?.type.name === "tableHeader";
-  }
-  return false;
+  const table = currentTable(editor);
+  return table?.firstChild?.firstChild?.type.name === "tableHeader";
 }
 function command(editor, chain, action, href) {
-  if (BLOCK_ACTIONS.has(action) && editor.isActive("table")) return null;
+  const table = currentTable(editor);
   switch (action) {
     case "bold":
       return chain.toggleBold();
@@ -191,7 +277,11 @@ function command(editor, chain, action, href) {
     case "redo":
       return chain.redo();
     case "table":
-      return chain.insertTable({ rows: 3, cols: 3, withHeaderRow: true });
+      // No nested tables. can() evaluates commands without dispatching, so
+      // it cannot see the CellsStayInline filter; say so here.
+      return table
+        ? null
+        : chain.insertTable({ rows: 3, cols: 3, withHeaderRow: true });
     case "row-before":
       return chain.addRowBefore();
     case "row-after":
@@ -203,9 +293,13 @@ function command(editor, chain, action, href) {
     case "column-after":
       return chain.addColumnAfter();
     case "column-delete":
-      return chain.deleteColumn();
+      // prosemirror-tables reports the last column as deletable but then
+      // leaves the table unchanged.
+      return table && table.firstChild.childCount > 1
+        ? chain.deleteColumn()
+        : null;
     case "header-row":
-      return hasHeaderRow(editor) ? null : chain.toggleHeaderRow();
+      return table && !hasHeaderRow(editor) ? chain.toggleHeaderRow() : null;
     case "table-delete":
       return chain.deleteTable();
   }
@@ -222,7 +316,7 @@ export function createVisual(
   const editor = new Editor({
     element,
     injectCSS: false,
-    extensions: extensions(menus),
+    extensions: extensions({ boundary: element, ...menus }),
     content: "",
     editorProps: {
       attributes: {
@@ -235,6 +329,24 @@ export function createVisual(
     onTransaction: onSelection,
     onUpdate: ({ editor }) => onChange(editor.getMarkdown()),
   });
+  // The editor scrolls inside its own fixed-height box, and a scroll event
+  // does not bubble to the window the menus listen on. Reposition (or, via
+  // the `hide` middleware, hide) the open menus on that inner scroll too.
+  let frame = 0;
+  const onScroll = () => {
+    if (frame || editor.isDestroyed) return;
+    frame = requestAnimationFrame(() => {
+      frame = 0;
+      if (editor.isDestroyed) return;
+      editor.view.dispatch(
+        editor.state.tr
+          .setMeta("bubbleMenu", "updatePosition")
+          .setMeta("floatingMenu", "updatePosition"),
+      );
+    });
+  };
+  if (menus.bubble || menus.floating)
+    editor.view.dom.addEventListener("scroll", onScroll, { passive: true });
   return {
     editor,
     load(value) {
@@ -249,7 +361,11 @@ export function createVisual(
     value: () => editor.getMarkdown(),
     focus: () => editor.commands.focus(undefined, { scrollIntoView: false }),
     editable: (value) => editor.setEditable(value, false),
-    destroy: () => editor.destroy(),
+    destroy() {
+      editor.view.dom.removeEventListener("scroll", onScroll);
+      cancelAnimationFrame(frame);
+      editor.destroy();
+    },
     format(action, href) {
       const chain = command(editor, editor.chain().focus(), action, href);
       return chain ? chain.run() : false;

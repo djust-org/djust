@@ -39,6 +39,13 @@ function setup(value = "", attrs = "", { client = false } = {}) {
     },
   );
   const { window } = dom;
+  // jsdom has no layout: give Range the geometry methods ProseMirror and
+  // floating-ui call when scrolling a selection into view or placing a menu.
+  const empty = () => new window.DOMRect(0, 0, 0, 0);
+  window.Range.prototype.getClientRects ??= () => [];
+  window.Range.prototype.getBoundingClientRect ??= empty;
+  // ProseMirror's view.pasteHTML builds a ClipboardEvent, which jsdom lacks.
+  window.ClipboardEvent ??= class extends window.Event {};
   const doc = window.document;
   const field = doc.querySelector("textarea");
   field.value = value;
@@ -115,10 +122,10 @@ describe("#3107 table actions", () => {
     expect(group.hidden).toBe(false);
     for (const action of TABLE_ACTIONS.filter((a) => a !== "header-row"))
       expect(button(group, action).disabled, action).toBe(false);
-    // A GFM table always has a header: it is shown pressed, and cannot be
-    // removed (that would reappear as an empty header row on reload).
-    expect(button(group, "header-row").getAttribute("aria-pressed")).toBe(
-      "true",
+    // A GFM table always has a header, so "Make first row the header" is an
+    // action (never a pressed toggle), unavailable while a header exists.
+    expect(button(group, "header-row").hasAttribute("aria-pressed")).toBe(
+      false,
     );
     expect(button(group, "header-row").disabled).toBe(true);
     // Block formats have no spelling inside a GFM cell.
@@ -168,12 +175,102 @@ describe("#3107 table actions", () => {
     editor.commands.setTextSelection(posOf(editor, "A"));
     button(hook.toolbar, "row-delete").click();
     const header = button(hook.toolbar, "header-row");
-    expect(header.getAttribute("aria-pressed")).toBe("false");
     expect(header.disabled).toBe(false);
     header.click();
     expect(field.value).toContain("| x   | y   |\n| --- | --- |");
-    expect(header.getAttribute("aria-pressed")).toBe("true");
+    expect(header.disabled).toBe(true);
+    expect(header.hasAttribute("aria-pressed")).toBe(false);
     expect(hook.visual.load(field.value)).toBe("");
+  });
+
+  it("disables column delete in a single-column table (it would do nothing)", () => {
+    const { hook, field } = setup("| B |\n| --- |\n| y |");
+    const editor = hook.getEditor();
+    editor.commands.setTextSelection(posOf(editor, "y"));
+    expect(button(hook.toolbar, "column-delete").disabled).toBe(true);
+    expect(button(hook.toolbar, "column-after").disabled).toBe(false);
+    const before = field.value;
+    hook.format("column-delete");
+    expect(field.value).toBe(before);
+  });
+
+  it("escapes a | typed in a cell so the next load keeps the cell whole", () => {
+    const { hook, field } = setup(TABLE);
+    const editor = hook.getEditor();
+    editor.commands.setTextSelection(posOf(editor, "x") + 1);
+    editor.commands.insertContent("a|b");
+    expect(field.value).toContain("| xa\\|b | y   |");
+    const json = editor.getJSON();
+    expect(hook.visual.load(field.value)).toBe("");
+    expect(editor.getJSON()).toEqual(json);
+    expect(editor.getText()).toContain("xa|b");
+    // Pipes outside a table are left alone.
+    editor.commands.setTextSelection(3);
+    editor.commands.insertContent("|");
+    expect(field.value.startsWith("In|tro\n\n|")).toBe(true);
+  });
+
+  it("writes one blank line around a table, not two", () => {
+    const { hook, field } = setup(TABLE);
+    const editor = hook.getEditor();
+    editor.commands.setTextSelection(posOf(editor, "x") + 1);
+    editor.commands.insertContent("z");
+    expect(field.value).toBe(
+      "Intro\n\n| A   | B   |\n| --- | --- |\n| xz  | y   |\n\nOutro",
+    );
+  });
+
+  it("keeps blocks out of cells on every path, not only the buttons", async () => {
+    const T = "| A | B |\n| --- | --- |\n| x | y |";
+    const { hook, field, window } = setup(T);
+    const editor = hook.getEditor();
+    const inCell = () =>
+      editor.commands.setTextSelection(posOf(editor, "x") + 1);
+    const tables = () =>
+      editor.getJSON().content.filter((n) => n.type === "table").length;
+    // Keyboard shortcuts and commands an app could call.
+    for (const run of [
+      (c) => c.setHeading({ level: 2 }),
+      (c) => c.toggleBulletList(),
+      (c) => c.toggleOrderedList(),
+      (c) => c.toggleBlockquote(),
+      (c) => c.setCodeBlock(),
+      (c) => c.setHorizontalRule(),
+      (c) => c.insertContent("<h1>big</h1>"),
+      (c) => c.insertTable({ rows: 2, cols: 2 }),
+    ]) {
+      hook.visual.load(T);
+      inCell();
+      run(editor.chain());
+      expect(tables(), String(run)).toBe(1);
+      expect(
+        editor.getJSON().content[0].content[1].content[0].content,
+        String(run),
+      ).toHaveLength(1);
+      expect(hook.visual.load(hook.visual.value()), String(run)).toBe("");
+    }
+    // Enter does not split a cell into two paragraphs.
+    hook.visual.load(T);
+    inCell();
+    expect(editor.commands.splitBlock()).toBe(false);
+    // A selection spanning the table formats only the blocks around it.
+    hook.visual.load("Intro\n\n" + T + "\n\nOutro");
+    editor.commands.setTextSelection({
+      from: 2,
+      to: editor.state.doc.content.size - 3,
+    });
+    editor.commands.toggleHeading({ level: 2 });
+    expect(hook.visual.value().trimEnd()).toBe(
+      "## Intro\n\n| A   | B   |\n| --- | --- |\n| x   | y   |\n\n## Outro",
+    );
+    // A pasted block lands in the cell as text joined by line breaks.
+    hook.visual.load(T);
+    inCell();
+    editor.view.pasteHTML("<h2>one</h2><ul><li>two</li></ul>");
+    await wait(window, 0);
+    expect(tables()).toBe(1);
+    expect(hook.visual.value()).toContain("| xone<br>two | y   |");
+    expect(hook.visual.load(hook.visual.value())).toBe("");
   });
 
   it("inserts a table in Visual mode and a Markdown skeleton in source mode", () => {
@@ -181,7 +278,7 @@ describe("#3107 table actions", () => {
     hook.getEditor().commands.setTextSelection(6);
     button(hook.toolbar, "table").click();
     expect(field.value).toMatch(
-      /^Hello\n\n\n\| +\| +\| +\|\n\| --- \| --- \| --- \|/,
+      /^Hello\n\n\| +\| +\| +\|\n\| --- \| --- \| --- \|/,
     );
     expect(hook.visual.load(field.value)).toBe("");
 
@@ -194,6 +291,13 @@ describe("#3107 table actions", () => {
     );
     expect(field.value.slice(field.selectionStart, field.selectionEnd)).toBe(
       "Column",
+    );
+    // Mid-line, the skeleton goes after the line instead of splitting it.
+    field.value = "Intro paragraph\nNext";
+    field.setSelectionRange(5, 5);
+    button(hook.toolbar, "table").click();
+    expect(field.value).toBe(
+      "Intro paragraph\n\n| Column | Column |\n| --- | --- |\n|  |  |\n\nNext",
     );
     // Source mode never shows the contextual table actions.
     expect(
@@ -366,7 +470,78 @@ describe("#3108 selection (bubble) and empty-line (floating) menus", () => {
     button(hook.bubble, "bold").focus();
     doc.querySelector("label").setAttribute("tabindex", "0");
     doc.querySelector("label").focus();
+    // Decided after the focus change settles (a microtask), see M1 below.
+    await Promise.resolve();
     expect(hook.bubble.isConnected).toBe(false);
+  });
+
+  it("an action that closes its own menu while a menu button has focus does not re-enter the close", async () => {
+    // Chrome fires focusout synchronously while Tiptap removes the menu; a
+    // hide from inside that handler removed the element twice and threw
+    // (review M1). Reproduce the synchronous focusout here: jsdom does not.
+    const { hook, window, doc } = setup(TABLE);
+    const editor = hook.getEditor();
+    const errors = [];
+    window.addEventListener("error", (e) => errors.push(e.error));
+    editor.commands.focus();
+    const x = posOf(editor, "x");
+    editor.commands.setTextSelection({ from: x, to: x + 1 });
+    await until(window, () => hook.bubble.isConnected);
+    const del = button(hook.bubble, "table-delete");
+    del.focus();
+    const remove = window.Element.prototype.remove;
+    let reentered = false;
+    hook.bubble.remove = function () {
+      if (!this.isConnected) reentered = true;
+      const focusedButton = this.contains(doc.activeElement);
+      remove.call(this);
+      if (focusedButton)
+        this.dispatchEvent(
+          new window.FocusEvent("focusout", {
+            bubbles: true,
+            relatedTarget: null,
+          }),
+        );
+    };
+    del.click();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(reentered).toBe(false);
+    expect(errors).toEqual([]);
+    expect(hook.visual.value()).not.toContain("|");
+    expect(hook.bubble.isConnected).toBe(false);
+  });
+
+  it("builds no menu that data-actions leaves empty, and hides a table-only bubble outside tables", async () => {
+    let { hook } = setup("Hello", ' data-actions="heading list"');
+    expect(hook.bubble).toBeUndefined();
+    hook.destroyed();
+    let window;
+    ({ hook, window } = setup(TABLE, ' data-actions="row-after"'));
+    const editor = hook.getEditor();
+    editor.commands.focus();
+    editor.commands.setTextSelection({ from: 1, to: 6 });
+    expect(hook.bubble.hidden).toBe(true);
+    const x = posOf(editor, "x");
+    editor.commands.setTextSelection({ from: x, to: x + 1 });
+    expect(hook.bubble.hidden).toBe(false);
+    await until(window, () => hook.bubble.isConnected);
+  });
+
+  it("repositions the open menu when the editor scrolls internally", async () => {
+    const { hook, window } = setup("Hello world");
+    const editor = hook.getEditor();
+    editor.commands.focus();
+    editor.commands.setTextSelection({ from: 1, to: 6 });
+    await until(window, () => hook.bubble.isConnected);
+    const metas = [];
+    const dispatch = editor.view.dispatch.bind(editor.view);
+    editor.view.dispatch = (tr) => {
+      metas.push(tr.getMeta("bubbleMenu"));
+      dispatch(tr);
+    };
+    editor.view.dom.dispatchEvent(new window.Event("scroll"));
+    await until(window, () => metas.includes("updatePosition"));
   });
 
   it('bubble_menu=false (data-bubble-menu="false") builds no bubble menu', () => {

@@ -6,21 +6,28 @@ from django.utils.html import conditional_escape
 from djust import Component
 from typing import Any
 
+_ON = frozenset({"true", "1", "yes", "on"})
 _OFF = frozenset({"false", "0", "no", "off"})
 
 
 def menu_flag(value: object, default: bool) -> bool:
     """Read a ``bubble_menu`` / ``floating_menu`` option from any renderer.
 
-    ``None`` and ``""`` (an unset template variable) keep the default; the
-    strings ``"false"``, ``"0"``, ``"no"`` and ``"off"`` (any case) are off,
-    so a template literal ``bubble_menu="false"`` means what it says.
+    The value's text, lower-cased, decides: ``true``/``1``/``yes``/``on``
+    is on and ``false``/``0``/``no``/``off`` is off, so ``True``,
+    ``"False"`` and a template literal ``bubble_menu="off"`` all mean what
+    they say. Anything else, including ``None`` and ``""`` (an unset
+    template variable), keeps the default. ``markdown_controls.html``
+    applies the same rule with ``|lower``, so every renderer agrees.
     """
-    if value is None or value == "":
+    if value is None:
         return default
-    if isinstance(value, str):
-        return value.strip().lower() not in _OFF
-    return bool(value)
+    text = str(value).lower()
+    if text in _ON:
+        return True
+    if text in _OFF:
+        return False
+    return default
 
 
 def menu_attrs(bubble_menu: object = True, floating_menu: object = False) -> str:
