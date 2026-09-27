@@ -104,19 +104,7 @@ class StreamingMixin:
             )
 
         # Batch or send immediately
-        if elapsed >= MIN_STREAM_INTERVAL_S:
-            # Send immediately
-            await self._send_stream_ops(stream_name, [op])
-            self._last_stream_time = now
-        else:
-            # Batch: queue the op and schedule a flush
-            if stream_name not in self._stream_batch:
-                self._stream_batch[stream_name] = []
-            self._stream_batch[stream_name] = [op]  # Replace: only latest matters
-
-            if not self._stream_flush_task or self._stream_flush_task.done():
-                delay = MIN_STREAM_INTERVAL_S - elapsed
-                self._stream_flush_task = asyncio.ensure_future(self._flush_stream_batch(delay))
+        await self._send_or_queue_stream_op(stream_name, op, now, elapsed)
 
     async def stream_insert(
         self,
@@ -172,18 +160,7 @@ class StreamingMixin:
 
         now = time.monotonic()
         elapsed = now - self._last_stream_time
-
-        if elapsed >= MIN_STREAM_INTERVAL_S:
-            await self._send_stream_ops(stream_name, [op])
-            self._last_stream_time = now
-        else:
-            if stream_name not in self._stream_batch:
-                self._stream_batch[stream_name] = []
-            self._stream_batch[stream_name] = [op]
-
-            if not self._stream_flush_task or self._stream_flush_task.done():
-                delay = MIN_STREAM_INTERVAL_S - elapsed
-                self._stream_flush_task = asyncio.ensure_future(self._flush_stream_batch(delay))
+        await self._send_or_queue_stream_op(stream_name, op, now, elapsed)
 
     async def stream_error(
         self,
@@ -431,6 +408,30 @@ class StreamingMixin:
                 "ops": ops,
             }
         )
+
+    async def _send_or_queue_stream_op(
+        self, stream_name: str, op: dict, now: float, elapsed: float
+    ) -> None:
+        """Send ``op`` now if the rate window has passed, otherwise queue it.
+
+        Ops of one stream reach the client in the order they were made
+        (#3227). The window can pass while an older op of the stream is still
+        queued: the flush's deadline has come but it has not run yet (the
+        coroutine did synchronous work without yielding), or it is still
+        sending a batch it already took. So an immediate send first sends the
+        stream's queued ops, and while the flush is sending the new op is
+        queued instead; the flush schedules a successor for it. Only the
+        latest op of a stream is kept in the queue, as before.
+        """
+        if elapsed >= MIN_STREAM_INTERVAL_S and not getattr(self, "_stream_flush_sending", False):
+            queued = self._stream_batch.pop(stream_name, None) or []
+            await self._send_stream_ops(stream_name, queued + [op])
+            self._last_stream_time = now
+            return
+        self._stream_batch[stream_name] = [op]  # Replace: only latest matters
+        if not self._stream_flush_task or self._stream_flush_task.done():
+            delay = max(MIN_STREAM_INTERVAL_S - elapsed, 0.0)
+            self._stream_flush_task = asyncio.ensure_future(self._flush_stream_batch(delay))
 
     async def _flush_stream_batch(self, delay: float) -> None:
         """Flush batched stream operations after a delay.

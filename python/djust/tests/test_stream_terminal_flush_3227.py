@@ -271,3 +271,57 @@ def test_the_new_flag_is_framework_state():
     """``_stream_flush_sending`` is set in ``__init__`` before the snapshot (#1393)."""
     view = _View()
     assert "_stream_flush_sending" in view._framework_attrs
+
+
+# ── #3234 review H1: a newer op must not overtake the stream's queued op ──
+
+
+@pytest.mark.asyncio
+async def test_single_stream_settle_then_done_when_flush_deadline_passed_unrun():
+    """Real timer, no patching. The provisional update is queued, then the
+    coroutine does synchronous work without yielding, so the flush's deadline
+    passes but it has not run. The settle takes the immediate path; the older
+    queued op must go out before it, never between it and ``done``."""
+    view = _view()
+    consumer = view._ws_consumer
+    await view.stream_start("a")
+    await view.stream_to("a", html="p1")  # sent at once (nothing sent before)
+    view._last_stream_time = time.monotonic()  # p2 lands inside the window
+    await view.stream_to("a", html="p2")
+    assert view._stream_batch.get("a"), "p2 must be queued for this case"
+    time.sleep(0.03)  # sync work past the 16 ms deadline, no yield
+    await view.stream_to("a", html="FINAL")
+    await view.stream_done("a")
+
+    assert [(op[1], op[2]) for op in consumer.ops()] == [
+        ("start", None),
+        ("replace", "p1"),
+        ("replace", "p2"),
+        ("replace", "FINAL"),
+        ("done", None),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_an_op_made_while_the_flush_sends_is_queued_behind_it():
+    """Two streams. The flush owns ``{b: b1, a: a_old}`` and is sending ``b``.
+    A newer ``stream_to(a)`` outside the window must not go out before
+    ``a_old``: it is queued, and ``done`` follows it."""
+    view = _view()
+    consumer = view._ws_consumer
+    _inside_window(view)
+    await view.stream_to("b", html="b1")
+    await view.stream_to("a", html="a_old")
+    gate = consumer.gate = asyncio.Event()
+    while not view._stream_flush_sending:
+        await asyncio.sleep(0)
+    view._last_stream_time = 0.0  # the window has passed; the flush stamps later
+    await view.stream_to("a", html="a_final")
+    done = asyncio.ensure_future(view.stream_done("a"))
+    await asyncio.sleep(0)
+    gate.set()
+    await done
+
+    a_ops = [(op[1], op[2]) for op in consumer.ops() if op[0] == "a"]
+    assert a_ops == [("replace", "a_old"), ("replace", "a_final"), ("done", None)]
+    assert ("b", "replace", "b1") in consumer.ops()
