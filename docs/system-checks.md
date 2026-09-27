@@ -27,6 +27,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C020 | Config | Error | `DJUST_SERVER_STATE_MAX_AGE` is not an integer from 1 to 86400 |
 | C021 | Config | Error | `LIVEVIEW_CONFIG['worker_threads']` is not `None`, `False`, `True`, `"auto"` or an integer >= 0 |
 | C022 | Config | Error | `LIVEVIEW_CONFIG['event_parameter_policy']` is not `'legacy'` or `'strict'` (ADR-036) |
+| C023 | Config | Warning | A `channels_redis` core `RedisChannelLayer` host keeps redis-py 8's 5 s `socket_timeout`, which drops idle WebSockets (#3199) |
 | C024 | Config | Error | `DJUST_EXPLICIT_STATE_SAVE_TIMEOUT` is not a number of seconds greater than 0 and at most 10 |
 | C025 | Config | Error | `DJUST_WS_PATH` is not a path starting with a single `/` (#3186) |
 | V001 | LiveView | Warning | LiveView missing template_name attribute |
@@ -202,6 +203,13 @@ console.log("debug info"); // noqa: Q003
 - **What it detects**: `LIVEVIEW_CONFIG['event_parameter_policy']` (or the same key in `DJUST_CONFIG`) is set to something other than `'legacy'` or `'strict'`. Every handler without its own `parameter_policy` inherits the value, and dispatch rejects each of their events while it is invalid. An absent key is the `'legacy'` default and never reports. The ADR-036 strict policy is opt-in; legacy remains the default.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C022"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C022"]` (the runtime still rejects the events)
 - **False positives**: None
+
+### C023 — channels_redis socket timeout at redis-py 8's default
+- **Severity**: Warning
+- **Method**: Settings inspection plus the installed `redis` distribution's version (read from package metadata; redis is never imported). When a `BACKEND` is not the core layer's exact path, the check imports `channels_redis.core` and that backend's module to test for a subclass; an import failure means the layer is not checked
+- **What it detects**: a `CHANNEL_LAYERS` entry uses `channels_redis.core.RedisChannelLayer` (or a subclass of it), redis-py 8 or later is installed, and at least one host does not set `socket_timeout` above 5 s (or `None`). redis-py 8 lowered the default `socket_timeout` to 5 s, the same as the layer's `BZPOPMIN` timeout, so an idle consumer's read times out and its WebSocket closes every few seconds (django/channels_redis#422). The check reads the timeout the way `redis.ConnectionPool.from_url` does: a `?socket_timeout=` in the URL (a URL host or a dict's `address`) overrides the dict's `socket_timeout` key, and a bare URL, a `(host, port)` tuple or an omitted `hosts` get the 5 s default. 10 is recommended: anything just above 5 s leaves little headroom for network and event-loop latency. Settings shapes channels_redis itself rejects (a non-dict `CONFIG`, a non-list `hosts`) are skipped rather than reported. The pub/sub layer is not checked.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C023"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C023"]`
+- **False positives**: None known. A backend path that cannot be imported at check time is not checked, so a subclass in such a module is missed; pinning `redis<8` also silences the check
 
 ### C024 — Invalid `DJUST_EXPLICIT_STATE_SAVE_TIMEOUT`
 - **Severity**: Error
