@@ -36,6 +36,8 @@ Mark a method as callable from the client. **Required** on all event handlers �
 
 ```python
 @event_handler(params=None, description="", coerce_types=True, expose_api=False, serialize=None)
+def handle_event(self, **kwargs):
+    ...
 ```
 
 **Parameters:**
@@ -91,7 +93,10 @@ def raw_handler(self, value: str = "", **kwargs):
 Debounce the handler on the client. The browser delays the SEND until `wait` seconds after the last event, so a burst of keystrokes reaches the server as one event carrying the last payload. Implemented in `static/djust/src/05-handler-rate-limit.js`; the config rides the mount frame as `handler_config`.
 
 ```python
+@event_handler()
 @debounce(wait=0.3, max_wait=None)
+def search(self, value: str = "", **kwargs):
+    ...
 ```
 
 **Parameters:**
@@ -124,7 +129,10 @@ By convention it is applied **inside** `@event_handler()` (closer to the functio
 Cap how often the handler is SENT — at most once per `interval`. With both edges on (the default) the first event of a window goes immediately and everything inside the window collapses into one trailing send carrying the last payload. Useful for scroll, resize, or mouse-move events. When a handler carries both `@debounce` and `@throttle`, `@debounce` wins.
 
 ```python
+@event_handler()
 @throttle(interval=0.1, leading=True, trailing=True)
+def on_scroll(self, position: int = 0, **kwargs):
+    ...
 ```
 
 **Parameters:**
@@ -151,6 +159,8 @@ def on_scroll(self, position: int = 0, **kwargs):
 
 ```python
 @optimistic
+def toggle_like(self, item_id: int = 0, **kwargs):
+    ...
 ```
 
 No arguments — apply directly.
@@ -173,7 +183,10 @@ def toggle_like(self, item_id: int = 0, **kwargs):
 Cache handler responses client-side. The response is stored in the browser indexed by the specified key parameters.
 
 ```python
+@event_handler()
 @cache(ttl=60, key_params=None)
+def search(self, value: str = "", **kwargs):
+    ...
 ```
 
 **Parameters:**
@@ -199,10 +212,15 @@ def search(self, value: str = "", **kwargs):
 > decorated handler behaves exactly like an undecorated one. The `StateBus` it
 > named was deleted in #2680.
 
-Share state via a client-side pub/sub bus. When specified keys change, other components subscribed to those keys update automatically.
+`@client_state` is inert in current releases: it records metadata, but no
+client-side pub/sub bus reads it. It does not synchronize state between
+components; use an explicit JS Command or event for that behavior.
 
 ```python
-@client_state(keys)
+@event_handler()
+@client_state(keys=["filter"])
+def update_filter(self, filter: str = "all", **kwargs):
+    ...
 ```
 
 **Parameters:**
@@ -216,7 +234,8 @@ Share state via a client-side pub/sub bus. When specified keys change, other com
 @client_state(keys=["filter", "sort"])
 def update_filter(self, filter: str = "all", **kwargs):
     self.filter = filter
-    # Other components listening for 'filter' update automatically
+    # This decorator is inert; it does not notify other components.
+    # Use a JS Command or another explicit event for cross-component updates.
 ```
 
 ---
@@ -241,7 +260,10 @@ full set — `.show`, `.hide`, `.disable`, `.class`, and `.for` scoping.
 Check Django permissions before the handler executes. Returns an error if the user lacks the required permission(s).
 
 ```python
-@permission_required(perm)
+@event_handler()
+@permission_required("myapp.can_delete")
+def delete_item(self, item_id: int = 0, **kwargs):
+    ...
 ```
 
 **Parameters:**
@@ -295,7 +317,10 @@ System check `djust.S009` follows the import, so both spellings count as a per-h
 Run the entire event handler in a background thread after flushing current state. The view re-renders and sends patches when the handler completes.
 
 ```python
+@event_handler()
 @background
+def generate_content(self, **kwargs):
+    ...
 ```
 
 No arguments — apply directly.
@@ -368,7 +393,10 @@ See also: [Loading States & Background Work guide](../guides/loading-states.md)
 Rate-limit a handler on the server with a per-handler token bucket. When the limit is exceeded, the event is dropped and the client is warned.
 
 ```python
+@event_handler()
 @rate_limit(rate=10, burst=5)
+def expensive_operation(self, **kwargs):
+    ...
 ```
 
 **Parameters:**

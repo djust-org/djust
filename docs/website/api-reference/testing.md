@@ -249,6 +249,10 @@ Decorator that enforces performance budgets on test methods.
 
 ```python
 @performance_test(max_time_ms=50, max_queries=3)
+def test_search_page_renders():
+    client = LiveViewTestClient(SearchView)
+    client.mount()
+    assert "Search" in client.render()
 ```
 
 **Parameters:**
