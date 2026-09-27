@@ -164,6 +164,10 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         # mechanism (and made the "setting _changed_keys directly is
         # ineffective" doc claim false).
         "_changed_keys",
+        # The handler's no-render request (#3246): consumed to False by
+        # ``_resolve_skip_render``, so a first ``_skip_render`` left a key the
+        # pre-handler snapshot lacked and read as a state change.
+        "_skip_render",
         # Lazily-assigned framework bookkeeping (#2664). These are written
         # AFTER ``__init__`` (first render / first event / first dirty
         # baseline), so they are NOT in the ``_framework_attrs`` snapshot
