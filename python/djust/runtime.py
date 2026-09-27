@@ -48,6 +48,7 @@ import re
 import sys
 import threading
 import time
+import weakref
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 from typing import (
@@ -297,9 +298,30 @@ def _spawn_save(run: Callable[[], None]) -> "asyncio.Future[None]":
     return asyncio.ensure_future(call())
 
 
-#: How long a save may wait for a thread before its turn is deferred (#3212).
-#: The explicit cap, since this is not storage time.
-_SAVE_START_TIMEOUT_S = 10.0
+#: How long a REQUEST-SCOPED save (the SSE/HTTP pool) may wait for a thread
+#: before its turn is deferred (#3212). Strictly below the 10 s stuck cap, so a
+#: first deferral is transient. WebSocket saves keep #3206's unbounded queue
+#: wait on their session's thread (#3229 re-review R1).
+_SAVE_START_TIMEOUT_S = 5.0
+
+#: When each save started RUNNING (loop time), keyed by its future. "Stuck"
+#: (the terminal escalation) counts from here, not from when it was queued,
+#: and the entry follows the future when a new runtime inherits it (SSE
+#: navigation or reconnect).
+_save_started_at: "weakref.WeakKeyDictionary[asyncio.Future[None], float]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _save_running_for(pending: "Optional[asyncio.Future[None]]") -> float:
+    """Seconds ``pending`` has been running; 0 while queued or when done."""
+    if pending is None or pending.done():
+        return 0.0
+    started = _save_started_at.get(pending)
+    if started is None:
+        return 0.0
+    return asyncio.get_running_loop().time() - started
+
 
 #: Consecutive deferred saves after which a deferral is reported as the terminal
 #: reload error, as before #3200: storage is not recovering (review I-a).
@@ -351,7 +373,11 @@ async def _run_explicit_save(
     loop = asyncio.get_running_loop()
     started: "asyncio.Future[None]" = loop.create_future()
 
+    work: "Optional[asyncio.Future[None]]" = None
+
     def mark_started() -> None:
+        if work is not None:
+            _save_started_at[work] = loop.time()
         if not started.done():
             started.set_result(None)
 
@@ -359,16 +385,18 @@ async def _run_explicit_save(
         loop.call_soon_threadsafe(mark_started)
         save()
 
+    # Only a request-scoped save waits for a pool thread with a bound (#3212
+    # review B2): the pool is shared by every SSE session. A WebSocket save
+    # keeps the unbounded wait described above (#3229 re-review R1).
+    start_bound = _SAVE_START_TIMEOUT_S if _in_request_scoped_executor() else None
     work = _spawn_save(run)
     owner._explicit_save_pending = work
-    owner._explicit_save_started_at = loop.time()
     try:
-        # The wait for a thread is bounded too: a save queued past the cap
-        # (every thread busy, or the session's sync thread wedged) is deferred
-        # rather than holding the turn (#3212 review B2). It still runs when a
-        # thread frees, and the runtime's next save waits for it.
+        # Bounded for a request-scoped save: queued past the bound (every pool
+        # thread busy), it is deferred rather than holding the turn. It still
+        # runs when a thread frees, and the runtime's next save waits for it.
         await asyncio.wait(
-            {started, work}, timeout=_SAVE_START_TIMEOUT_S, return_when=asyncio.FIRST_COMPLETED
+            {started, work}, timeout=start_bound, return_when=asyncio.FIRST_COMPLETED
         )
         if not started.done() and not work.done():
             raise asyncio.TimeoutError
@@ -2883,7 +2911,6 @@ class ViewRuntime:
         # per runtime), the count of committed explicit turns, and the pending
         # catch-up turn scheduled after a deferred save.
         self._explicit_save_pending: Optional["asyncio.Future[None]"] = None
-        self._explicit_save_started_at = 0.0
         self._explicit_commits = 0
         self._explicit_deferrals = 0
         self._explicit_catch_up: Optional["asyncio.Task[None]"] = None
@@ -6370,12 +6397,9 @@ class ViewRuntime:
         view._force_full_html = True
         self._explicit_deferrals += 1
         pending = self._explicit_save_pending
-        stuck = (
-            pending is not None
-            and not pending.done()
-            and asyncio.get_running_loop().time() - self._explicit_save_started_at
-            >= MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S
-        )
+        # Stuck counts from when the save started RUNNING: one that is only
+        # queued for a thread has not used any storage time (#3229 R1).
+        stuck = _save_running_for(pending) >= MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S
         if (
             self._in_explicit_catch_up
             or self._explicit_deferrals >= _EXPLICIT_MAX_DEFERRALS

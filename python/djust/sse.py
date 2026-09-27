@@ -260,7 +260,6 @@ def _carry_save_ordering(old_runtime: Any, new_runtime: Any) -> None:
         return
     if getattr(new_runtime, "_explicit_save_pending", None) is None:
         new_runtime._explicit_save_pending = pending
-        new_runtime._explicit_save_started_at = old_runtime._explicit_save_started_at
 
 
 async def _linger() -> None:

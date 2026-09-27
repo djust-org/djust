@@ -28,8 +28,10 @@ from django.contrib.sessions.backends.db import SessionStore
 from django.test import override_settings
 from django.urls import path
 
-from djust import LiveView
+from djust import LiveView, event_handler
+from djust import _exposure_sessions
 from djust import runtime as runtime_module
+from djust.decorators import state
 from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
 from djust.tests.test_exposure_sse_resilience_3200 import BackgroundPage, _fresh_key, _request
 
@@ -137,7 +139,6 @@ async def test_a_save_that_cannot_get_a_thread_is_deferred(monkeypatch):
 
     class Owner:
         _explicit_save_pending = None
-        _explicit_save_started_at = 0.0
 
     owner = Owner()
     try:
@@ -282,3 +283,115 @@ async def test_a_navigation_is_ordered_after_the_old_pages_running_save(hung_sto
     assert response.status_code == 200
     assert session.runtime is not old_runtime
     assert session.runtime._explicit_save_pending is pending
+
+
+# ---- #3229 re-review R1 ---------------------------------------------------
+
+
+class CountPage(LiveView):
+    exposure_policy = "explicit"
+    template = "<div dj-root><span>{{ count }}</span></div>"
+    count = state(0, persist="server")
+
+    def get_context_data(self, **kwargs):
+        return super().get_context_data(count=self.count, **kwargs)
+
+    @event_handler()
+    def increment(self, **kwargs):
+        self.count += 1
+
+
+async def _mount_runtime(view_class):
+    from djust.runtime import ViewRuntime
+    from djust.tests.test_exposure_runtime import make_request
+    from djust.tests.test_runtime_state_save_tt_1894 import MockTransport
+
+    request = await sync_to_async(make_request)()
+    transport = MockTransport()
+    transport.build_request = lambda: request
+
+    async def fresh_event_request(view):
+        return await sync_to_async(make_request)(request.session.session_key)
+
+    transport.explicit_event_request = fresh_event_request
+    runtime = ViewRuntime(transport)
+    await runtime.dispatch_mount(
+        {"type": "mount", "view": __name__ + "." + view_class.__name__, "url": request.path}
+    )
+    assert not transport.errors, transport.errors
+    transport.sent.clear()
+    return runtime, transport
+
+
+INCREMENT = {"type": "event", "event": "increment", "params": {}}
+
+
+async def test_a_pool_queued_deferral_is_transient_not_terminal(monkeypatch):
+    """R1: the save only QUEUED for a pool thread has used no storage time, so
+    its deferral is the transient one. Stuck counts from when a save starts
+    running; the start bound and the stuck cap are made EQUAL here to show
+    they are independent (the review's probe)."""
+    one = runtime_module._SaveExecutor(max_workers=1, thread_name_prefix="test-3212-r1")
+    monkeypatch.setattr(runtime_module, "_save_executor", one)
+    monkeypatch.setattr(runtime_module, "_SAVE_START_TIMEOUT_S", 0.3)
+    monkeypatch.setattr(_exposure_sessions, "MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S", 0.3)
+    runtime, transport = await _mount_runtime(CountPage)
+    gate = threading.Event()
+    one.submit(gate.wait, 30)  # every pool thread busy (a hung store elsewhere)
+    try:
+        async with ThreadSensitiveContext():
+            await runtime.dispatch_event(dict(INCREMENT))
+        [error] = transport.errors
+        assert error["code"] == "state_error"
+        assert error.get("transient") is True, error
+    finally:
+        gate.set()
+    one.shutdown()
+
+
+def test_the_start_bound_is_below_the_stuck_cap():
+    assert (
+        runtime_module._SAVE_START_TIMEOUT_S < _exposure_sessions.MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S
+    )
+
+
+async def test_a_websocket_save_keeps_its_unbounded_queue_wait(monkeypatch):
+    """R1: outside a request's executors (a WebSocket session) there is no
+    start bound, as #3206 defined: a save queued behind the session's busy
+    sync thread waits, and is acknowledged once it runs."""
+    monkeypatch.setattr(runtime_module, "_SAVE_START_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(_exposure_sessions, "MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S", 0.05)
+    runtime, transport = await _mount_runtime(CountPage)
+    gate = threading.Event()
+    holding = threading.Event()
+    original = runtime_module._spawn_save
+    blockers = []
+
+    def hold():
+        holding.set()
+        gate.wait(30)
+
+    def spawn(run):
+        # Occupy the shared sync thread just before the save queues on it.
+        blockers.append(asyncio.ensure_future(sync_to_async(hold)()))
+        return original(run)
+
+    monkeypatch.setattr(runtime_module, "_spawn_save", spawn)
+    dispatch = asyncio.ensure_future(runtime.dispatch_event(dict(INCREMENT)))
+    try:
+        for _ in range(500):
+            if holding.is_set():
+                break
+            await asyncio.sleep(0.01)
+        assert holding.is_set()
+        # Well past the (lowered) start bound: still waiting, not deferred.
+        for _ in range(20):
+            await asyncio.sleep(0.01)
+        assert not transport.errors, transport.errors
+        assert not dispatch.done()
+    finally:
+        gate.set()
+    await asyncio.wait_for(dispatch, 10)
+    await asyncio.gather(*blockers)
+    assert not transport.errors, transport.errors
+    assert any(f.get("type") in {"patch", "html_update"} for f in transport.sent)

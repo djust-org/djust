@@ -66,7 +66,7 @@ urlpatterns = [
 
 @pytest.fixture(autouse=True)
 def urls():
-    with override_settings(ROOT_URLCONF=__name__):
+    with override_settings(ROOT_URLCONF=__name__, LIVEVIEW_ALLOWED_MODULES=[__name__]):
         yield
 
 
@@ -102,7 +102,7 @@ def _consumer(view, scope_session, user):
 
 async def _redirect_request(consumer, url="/next/"):
     request = consumer._build_live_redirect_request({"url": url})
-    await consumer._rederive_live_redirect_user(request)
+    await consumer._rederive_live_redirect_user(request, {"url": url})
     return request
 
 
@@ -208,7 +208,47 @@ async def test_login_required_sticky_child_does_not_survive_a_vanished_session(s
 
 async def test_a_request_the_helper_could_not_build_is_left_alone(staged):
     consumer = _consumer(Page(), None, AnonymousUser())
-    await consumer._rederive_live_redirect_user(None)
+    await consumer._rederive_live_redirect_user(None, {})
     stub = SimpleNamespace(user=AnonymousUser())
-    await consumer._rederive_live_redirect_user(stub)
+    await consumer._rederive_live_redirect_user(stub, {"view": __name__ + ".Page"})
     assert consumer._runtime._replacement_sessions == {}
+
+
+async def test_back_navigation_rechecks_as_the_user_of_the_view_actually_mounted(staged):
+    """#3229 re-review R2: with a ``state_snapshot`` the mount keeps the
+    client's ``view`` and ignores what the URL maps to. The re-check must
+    decide from that view too: url=<legacy page> + view=<explicit page>
+    mounts the explicit page anonymous, so a legacy login_required sticky
+    child must not survive (the reviewer's probe)."""
+    user, scope_session = await sync_to_async(_user_and_session)(vanished=True)
+    parent, child = LegacyPage(), LegacyStickyChild()
+    child.sticky, child.sticky_id = True, "child"
+    parent._register_child("child", child)
+    consumer = _consumer(parent, scope_session, user)
+    consumer._view_group = consumer._tick_task = None
+    consumer._flush_all_pending = AsyncMock()
+    mounted = []
+
+    async def mount(data, **kwargs):
+        mounted.append(data["view"])
+        consumer.view_instance = Page()
+
+    consumer.handle_mount = mount
+    await consumer.handle_live_redirect_mount(
+        {"url": "/legacy/", "view": __name__ + ".Page", "state_snapshot": {"view_slug": "x"}}
+    )
+
+    assert mounted == [__name__ + ".Page"]
+    assert not consumer._sticky_preserved
+
+
+async def test_an_unresolvable_target_rechecks_as_anonymous(staged):
+    """A view path the mount's resolver refuses is treated as explicit: the
+    re-check can then only drop sticky children, never keep one."""
+    user, scope_session = await sync_to_async(_user_and_session)(vanished=True)
+    consumer = _consumer(LegacyPage(), scope_session, user)
+    request = consumer._build_live_redirect_request({"url": "/legacy/"})
+    await consumer._rederive_live_redirect_user(
+        request, {"url": "/legacy/", "view": "not.allowed.View", "state_snapshot": {"v": 1}}
+    )
+    assert request.user.is_authenticated is False
