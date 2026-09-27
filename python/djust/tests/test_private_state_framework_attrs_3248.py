@@ -37,6 +37,8 @@ from djust import LiveView
 from djust.decorators import event_handler
 from djust.live_view import _FRAMEWORK_INTERNAL_ATTRS
 
+from ._ws_frames import has_type, receive_settled
+
 pytest.importorskip("channels")
 
 _MOD = __name__
@@ -177,11 +179,17 @@ async def _connect(session_key):
     return communicator
 
 
-async def _frames(communicator):
-    frames = []
-    while not await communicator.receive_nothing(timeout=0.3):
-        frames.append(await communicator.receive_json_from(timeout=2))
-    return frames
+#: The frames that answer an event: its reply, or a refusal.
+EVENT_REPLIES = ("noop", "patch", "html_update", "error")
+
+
+async def _frames(communicator, *expected):
+    """The frames up to the first of type ``expected``, then any that follow.
+
+    Waits for the expected frame instead of stopping at a quiet window, which
+    returned ``[]`` when a loaded runner was slow to send the first one (#3256).
+    """
+    return await receive_settled(communicator, has_type(*expected), what=f"a {expected} frame")
 
 
 @pytest.mark.asyncio
@@ -192,9 +200,9 @@ async def test_the_event_save_does_not_write_framework_attributes():
         communicator = await _connect(session_key)
         try:
             await communicator.send_json_to({"type": "mount", "view": VIEW, "url": URL})
-            await _frames(communicator)
+            await _frames(communicator, "mount", "error")
             await communicator.send_json_to({"type": "event", "event": "bump", "params": {}})
-            frames = await _frames(communicator)
+            frames = await _frames(communicator, *EVENT_REPLIES)
             assert not [f for f in frames if f.get("type") == "error"], frames
         finally:
             await communicator.disconnect()
@@ -223,7 +231,7 @@ async def test_the_reconnect_restore_does_not_set_framework_attributes():
         communicator = await _connect(session_key)
         try:
             await communicator.send_json_to({"type": "mount", "view": VIEW, "url": URL})
-            frames = await _frames(communicator)
+            frames = await _frames(communicator, "mount", "error")
             assert [f for f in frames if f.get("type") == "mount"], frames
             # Read while connected: the disconnect closes the waiters and so
             # sets ``_djust_waiters_closed`` itself.

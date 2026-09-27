@@ -11,6 +11,8 @@ The shape here:
 * :func:`receive_until` blocks until a CONDITION holds (the expected frame
   arrived, or a log line was written), with a generous deadline that only a
   hung turn can reach. It never returns early because the machine was slow.
+* :func:`receive_settled` is the two together: wait for the expected frame
+  (:func:`has_frame` matches on type, ``ref``, ``source``...), then drain.
 * :func:`drain_extra` keeps the "and nothing else arrived" check as a trailing
   quiet window. A late frame can make it MISS an extra frame; it can never make
   a correct run fail.
@@ -96,6 +98,45 @@ def has_type(*types: str) -> Callable[[List[Frame]], bool]:
 async def receive_type(socket, *types: str, timeout: float = WAIT_S) -> List[Frame]:
     """Frames up to and including the first one whose type is in ``types``."""
     return await receive_until(socket, has_type(*types), timeout=timeout, what=f"a {types} frame")
+
+
+def has_frame(*types: str, **fields: Any) -> Callable[[List[Frame]], bool]:
+    """``done`` predicate: a frame matching ``types`` and ``fields`` has arrived.
+
+    ``types`` limits the frame's ``type`` (any type when empty); each keyword
+    must equal the frame's value, e.g. ``has_frame("noop", "patch", ref=3)`` or
+    ``has_frame("patch", source="event")``.
+    """
+    wanted = set(types)
+
+    def matches(frame: Frame) -> bool:
+        if wanted and frame.get("type") not in wanted:
+            return False
+        return all(frame.get(key) == value for key, value in fields.items())
+
+    return lambda frames: any(matches(frame) for frame in frames)
+
+
+async def receive_settled(
+    socket,
+    done: Callable[[List[Frame]], bool],
+    *,
+    what: str = "the expected frames",
+    timeout: float = WAIT_S,
+    quiet: float = TRAILING_QUIET_S,
+) -> List[Frame]:
+    """The frames up to the expected one, then whatever else follows it (#3256).
+
+    The replacement for "read until the socket is quiet for 0.3 s": that loop
+    returns ``[]`` when a loaded runner takes longer than the window to send
+    the FIRST frame. Here the wait for the expected frame has a deadline only a
+    hung turn reaches, and the quiet window runs only after it arrived, to
+    collect trailing frames for a caller that asserts nothing else came.
+    """
+    frames = await receive_until(socket, done, timeout=timeout, what=what)
+    if frames and frames[-1].get("type") == "websocket.close":
+        return frames
+    return frames + await drain_extra(socket, quiet)
 
 
 async def drain_extra(socket, quiet: float = TRAILING_QUIET_S) -> List[Frame]:

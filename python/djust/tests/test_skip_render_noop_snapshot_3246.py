@@ -35,6 +35,8 @@ from djust import LiveView
 from djust.components.descriptors.base import LiveComponent as DescriptorComponent
 from djust.decorators import event_handler, state
 
+from ._ws_frames import has_type, receive_settled
+
 pytest.importorskip("channels")
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
@@ -159,11 +161,17 @@ async def _connect(session_key=None):
     return communicator, session_key
 
 
-async def _frames(communicator):
-    frames = []
-    while not await communicator.receive_nothing(timeout=0.3):
-        frames.append(await communicator.receive_json_from(timeout=2))
-    return frames
+#: The frames that answer an event: its reply, or a refusal.
+EVENT_REPLIES = ("noop", "patch", "html_update", "error")
+
+
+async def _frames(communicator, *expected):
+    """The frames up to the first of type ``expected``, then any that follow.
+
+    Waits for the expected frame instead of stopping at a quiet window, which
+    returned ``[]`` when a loaded runner was slow to send the first one (#3256).
+    """
+    return await receive_settled(communicator, has_type(*expected), what=f"a {expected} frame")
 
 
 def _mount_frame(frames):
@@ -189,7 +197,7 @@ async def _mounted(communicator, state_snapshot=None):
     if state_snapshot is not None:
         message["state_snapshot"] = {"view_slug": VIEW, "state_json": state_snapshot}
     await communicator.send_json_to(message)
-    frames = await _frames(communicator)
+    frames = await _frames(communicator, "mount", "error")
     assert isinstance(_mount_frame(frames).get(TOKEN), str)
     return frames
 
@@ -203,7 +211,7 @@ def _component_ids(frames):
 async def _send(communicator, name, component_id=None):
     params = {"component_id": component_id} if component_id else {}
     await communicator.send_json_to({"type": "event", "event": name, "params": params})
-    return await _frames(communicator)
+    return await _frames(communicator, *EVENT_REPLIES)
 
 
 def _noop(frames):
@@ -260,7 +268,7 @@ async def _back(communicator, token):
     await communicator.send_json_to(
         {"type": "live_redirect_mount", "view": OTHER, "url": "/q3246-other/"}
     )
-    await _frames(communicator)
+    await _frames(communicator, "mount", "error")
     await communicator.send_json_to(
         {
             "type": "live_redirect_mount",
@@ -269,7 +277,7 @@ async def _back(communicator, token):
             "state_snapshot": {"view_slug": VIEW, "state_json": token},
         }
     )
-    return _mount_frame(await _frames(communicator))
+    return _mount_frame(await _frames(communicator, "mount", "error"))
 
 
 @pytest.mark.parametrize("session_copy", ["kept", "gone"])
