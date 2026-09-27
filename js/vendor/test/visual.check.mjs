@@ -161,3 +161,102 @@ test("HTML and custom syntax inside fenced code remains editable visually", () =
   assert.equal(hook.surface.querySelector("details"), null);
   hook.destroyed();
 });
+const cellPos = (editor, text) => {
+  let found = null;
+  editor.state.doc.descendants((node, pos) => {
+    if (found === null && node.isText && node.text === text) found = pos;
+  });
+  return found;
+};
+test("table commands keep a GFM table that reloads to the same document (#3107)", () => {
+  const source = "| A | B |\n| --- | --- |\n| x | y |";
+  for (const action of [
+    "row-before",
+    "row-after",
+    "row-delete",
+    "column-before",
+    "column-after",
+    "column-delete",
+    "table-delete",
+  ]) {
+    const { hook } = setup(source);
+    const visual = hook.visual;
+    visual.editor.commands.setTextSelection(cellPos(visual.editor, "x"));
+    assert.equal(visual.inTable(), true);
+    assert.equal(visual.can(action), true, action);
+    assert.equal(visual.format(action), true, action);
+    const json = visual.editor.getJSON();
+    assert.equal(visual.load(visual.value()), "", action);
+    assert.deepEqual(visual.editor.getJSON(), json, action);
+    hook.destroyed();
+  }
+});
+test("block formats and header removal are refused inside a table cell", () => {
+  const { hook } = setup("| A | B |\n| --- | --- |\n| x | y |");
+  const visual = hook.visual;
+  visual.editor.commands.setTextSelection(cellPos(visual.editor, "x"));
+  for (const action of [
+    "heading",
+    "quote",
+    "list",
+    "ordered",
+    "task",
+    "block",
+    "table",
+    "header-row",
+  ]) {
+    assert.equal(visual.can(action), false, action);
+    assert.equal(visual.format(action), false, action);
+  }
+  assert.equal(visual.hasHeaderRow(), true);
+  assert.equal(visual.can("bold"), true);
+  hook.destroyed();
+});
+test("a hard break in a cell reloads visually; raw HTML elsewhere still does not", () => {
+  const { hook } = setup("");
+  assert.equal(
+    hook.visual.load("| A | B |\n| --- | --- |\n| x<br>z | y |"),
+    "",
+  );
+  assert.equal(
+    hook.visual.editor.getJSON().content[0].content[1].content[0].content[0]
+      .content[1].type,
+    "hardBreak",
+  );
+  assert.notEqual(hook.visual.load("x<br>z"), "");
+  assert.notEqual(hook.visual.load("| A |\n| --- |\n| <br onclick=x> |"), "");
+  assert.notEqual(hook.visual.load("| A |\n| --- |\n| <b>x</b> |"), "");
+  hook.destroyed();
+});
+test("createVisual wires the selection and empty-line menu elements", () => {
+  const bubble = document.createElement("div");
+  const floating = document.createElement("div");
+  const host = document.createElement("div");
+  document.querySelector("main").appendChild(host);
+  const visual = window.djust.createMarkdownVisual(
+    host,
+    "",
+    () => {},
+    "Body",
+    () => {},
+    {
+      bubble,
+      floating,
+    },
+  );
+  const keys = visual.editor.state.plugins.map((plugin) => plugin.key);
+  assert.ok(
+    keys.some((key) => key.startsWith("bubbleMenu")),
+    keys.join(" "),
+  );
+  assert.ok(
+    keys.some((key) => key.startsWith("floatingMenu")),
+    keys.join(" "),
+  );
+  visual.destroy();
+  const plain = window.djust.createMarkdownVisual(host, "", () => {}, "Body");
+  assert.ok(
+    !plain.editor.state.plugins.some((plugin) => /Menu/.test(plugin.key)),
+  );
+  plain.destroy();
+});

@@ -431,3 +431,55 @@ describe('hooks', () => {
         });
     });
 });
+
+describe('getHook (#3107)', () => {
+    it('returns the instance a hook callback receives as `this`', () => {
+        const { window, document } = createEnv(
+            '<div id="a" dj-hook="Probe" dj-view="test"></div><div id="b" dj-hook="Probe" dj-view="test"></div>',
+        );
+        const seen = [];
+        window.djust.hooks = {
+            Probe: {
+                mounted() { seen.push(this); this.count = 0; },
+                bump() { this.count += 1; },
+            },
+        };
+        window.djust.mountHooks(document);
+        const a = window.djust.getHook(document.getElementById('a'));
+        const b = window.djust.getHook('#b');
+        expect(a).toBe(seen[0]);
+        expect(b).toBe(seen[1]);
+        expect(a).not.toBe(b);
+        a.bump();
+        expect(a.count).toBe(1);
+        expect(b.count).toBe(0);
+    });
+
+    it('returns null for an element without a mounted hook', () => {
+        const { window, document } = createEnv('<div id="plain"></div><div id="h" dj-hook="Missing"></div>');
+        window.djust.hooks = {};
+        window.djust.mountHooks(document);
+        expect(window.djust.getHook(document.getElementById('plain'))).toBeNull();
+        expect(window.djust.getHook(document.getElementById('h'))).toBeNull();
+        expect(window.djust.getHook('#nope')).toBeNull();
+        expect(window.djust.getHook(null)).toBeNull();
+    });
+
+    it('returns null after the hook is destroyed', () => {
+        const { window, document } = createEnv('<div id="a" dj-hook="Probe" dj-view="test"></div>');
+        window.djust.hooks = { Probe: { mounted() {} } };
+        window.djust.mountHooks(document);
+        const el = document.getElementById('a');
+        expect(window.djust.getHook(el)).not.toBeNull();
+        el.remove();
+        window.djust.updateHooks(document);
+        expect(window.djust.getHook(el)).toBeNull();
+        const again = document.createElement('div');
+        again.setAttribute('dj-hook', 'Probe');
+        document.body.appendChild(again);
+        window.djust.mountHooks(document);
+        expect(window.djust.getHook(again)).not.toBeNull();
+        window.djust.destroyAllHooks();
+        expect(window.djust.getHook(again)).toBeNull();
+    });
+});

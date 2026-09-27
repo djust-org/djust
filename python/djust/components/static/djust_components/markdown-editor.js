@@ -15,9 +15,50 @@
     ["code", "Inline code", "</>", "`", "`"],
     ["block", "Code block", "```", "```\n", "\n```"],
     ["link", "Link", "Link", "[", "](https://)"],
+    ["table", "Insert table", "Table"],
   ];
+  // Visual mode only, shown while the selection is inside a table (#3107).
+  const tableActions = [
+    ["row-before", "Add row above", "Row ↑"],
+    ["row-after", "Add row below", "Row ↓"],
+    ["row-delete", "Delete row", "− Row"],
+    ["column-before", "Add column left", "Col ←"],
+    ["column-after", "Add column right", "Col →"],
+    ["column-delete", "Delete column", "− Col"],
+    ["header-row", "Header row", "Header"],
+    ["table-delete", "Delete table", "✕ Table"],
+  ];
+  // Selection (bubble) menu formats and empty-line (floating) menu blocks.
+  const bubbleActions = ["bold", "italic", "code", "link"];
+  const floatingActions = [
+    "heading",
+    "quote",
+    "list",
+    "ordered",
+    "task",
+    "block",
+    "table",
+  ];
+  const TABLE_SKELETON = "| Column | Column |\n| --- | --- |\n|  |  |";
 
   function replacement(action, value, start, end) {
+    if (action === "table") {
+      // Source mode inserts a GFM skeleton after the selection, on its own
+      // blank-line-separated block, and selects the first header cell.
+      const lead = value.slice(0, end).match(/\n*$/)[0].length;
+      const trail = value.slice(end).match(/^\n*/)[0].length;
+      const before = end === 0 ? "" : "\n".repeat(Math.max(0, 2 - lead));
+      const after =
+        end === value.length ? "" : "\n".repeat(Math.max(0, 2 - trail));
+      const from = end + before.length + 2;
+      return {
+        start: end,
+        end,
+        text: before + TABLE_SKELETON + after,
+        from,
+        to: from + "Column".length,
+      };
+    }
     const item = actions.find((row) => row[0] === action);
     if (!item) return null;
     let [, , , before, after, lines] = item;
@@ -89,17 +130,29 @@
       this.surface.hidden = true;
       this.ui.appendChild(this.surface);
       this.surface.addEventListener("keydown", (event) => {
+        if (event.isComposing) return;
         if (
-          !event.isComposing &&
           !event.altKey &&
           (event.metaKey || event.ctrlKey) &&
           event.key.toLowerCase() === "k"
         ) {
           event.preventDefault();
           this.editLink();
+        } else if (
+          event.altKey &&
+          event.key === "F10" &&
+          !event.target.closest(".dj-markdown-menu")
+        ) {
+          // Alt+F10 moves focus from the editor to the open selection or
+          // empty-line menu (the common editor convention), else the toolbar.
+          event.preventDefault();
+          const menu = [this.bubble, this.floating].find((m) => m?.isConnected);
+          this.focusFirst(menu || this.toolbar);
         }
       });
-      const button = (label, text, callback) => {
+      // Every control is a button: pressing one must not move focus, or the
+      // editor selection collapses before the click applies (#3108).
+      const button = (label, text, callback, parent = this.toolbar) => {
         const item = document.createElement("button");
         item.type = "button";
         item.textContent = text;
@@ -107,8 +160,38 @@
         item.setAttribute("aria-label", label);
         item.addEventListener("mousedown", (event) => event.preventDefault());
         item.addEventListener("click", callback);
-        this.toolbar.appendChild(item);
+        parent.appendChild(item);
         return item;
+      };
+      const allowed = (action) =>
+        !this.el.dataset.actions ||
+        this.el.dataset.actions.split(" ").includes(action);
+      const actionButton = (action, label, text, parent) => {
+        const item = button(
+          label,
+          text,
+          () => (action === "link" ? this.editLink() : this.format(action)),
+          parent,
+        );
+        item.dataset.markdownAction = action;
+        this.actionButtons.push(item);
+        return item;
+      };
+      const label = (action) =>
+        [...actions, ...tableActions].find((row) => row[0] === action);
+      this.tableGroups = [];
+      const tableGroup = (parent) => {
+        const group = document.createElement("div");
+        group.className = "dj-markdown-table-actions";
+        group.setAttribute("role", "group");
+        group.setAttribute("aria-label", "Table");
+        group.hidden = true;
+        for (const [action, text, glyph] of tableActions)
+          if (allowed(action)) actionButton(action, text, glyph, group);
+        if (group.childElementCount) {
+          parent.appendChild(group);
+          this.tableGroups.push(group);
+        }
       };
       if (window.djust.createMarkdownVisual) {
         this.visualButton = button("Visual mode", "Visual", () =>
@@ -119,32 +202,49 @@
         );
       }
       this.actionButtons = [];
-      for (const [action, label, text] of actions) {
-        if (
-          this.el.dataset.actions &&
-          !this.el.dataset.actions.split(" ").includes(action)
-        )
-          continue;
-        const item = button(label, text, () =>
-          action === "link" ? this.editLink() : this.format(action),
-        );
-        item.dataset.markdownAction = action;
-        this.actionButtons.push(item);
-      }
+      for (const [action, text, glyph] of actions)
+        if (allowed(action)) actionButton(action, text, glyph);
       if (this.visualButton) {
         for (const action of ["undo", "redo"]) {
-          if (
-            this.el.dataset.actions &&
-            !this.el.dataset.actions.split(" ").includes(action)
-          )
-            continue;
-          const item = button(
+          if (!allowed(action)) continue;
+          actionButton(
+            action,
             action === "undo" ? "Undo" : "Redo",
             action === "undo" ? "↶" : "↷",
-            () => this.format(action),
           );
-          item.dataset.markdownAction = action;
-          this.actionButtons.push(item);
+        }
+        tableGroup(this.toolbar);
+        // Tiptap attaches a menu element to the editor only while it is
+        // shown. Buttons carry the same data-markdown-action contract.
+        const menu = (className, ariaLabel, names) => {
+          const element = document.createElement("div");
+          element.className = "dj-markdown-menu " + className;
+          element.setAttribute("role", "toolbar");
+          element.setAttribute("aria-label", ariaLabel);
+          for (const action of names) {
+            const row = label(action);
+            if (allowed(action)) actionButton(action, row[1], row[2], element);
+          }
+          return element;
+        };
+        if (this.el.dataset.bubbleMenu !== "false") {
+          this.bubble = menu("dj-markdown-bubble", "Formatting", bubbleActions);
+          tableGroup(this.bubble);
+        }
+        if (this.el.dataset.floatingMenu === "true")
+          this.floating = menu(
+            "dj-markdown-floating",
+            "Insert block",
+            floatingActions,
+          );
+        for (const element of [this.bubble, this.floating]) {
+          if (!element) continue;
+          element.addEventListener("keydown", (event) => this.menuKey(event));
+          element.addEventListener("focusout", (event) => {
+            const next = event.relatedTarget;
+            if (!next || !this.surface.contains(next))
+              this.visual?.hideMenu(element === this.bubble);
+          });
         }
       }
       this.onKey = (event) => {
@@ -203,7 +303,10 @@
             },
             label + " (visual editor)",
             () => this.updateButtons(),
+            { bubble: this.bubble, floating: this.floating },
           );
+          for (const element of [this.bubble, this.floating])
+            if (element) element.tabIndex = -1;
         }
         if (this.mode !== "visual" && this.lastValue !== this.textarea.value) {
           const reason = this.visual.load(this.textarea.value);
@@ -239,15 +342,63 @@
           ? this.visual.focus()
           : this.textarea.focus({ preventScroll: true });
     },
+    /**
+     * The live Tiptap editor (`chain()`, `can()`, `isActive()`, `commands`),
+     * or null until Visual mode has been entered once. This is the supported
+     * way for an app to reach it, via `window.djust.getHook(el).getEditor()`.
+     */
+    getEditor() {
+      return this.visual ? this.visual.editor : null;
+    },
+    focusFirst(container) {
+      const target = Array.from(container.querySelectorAll("button")).find(
+        (b) => !b.disabled && !b.closest("[hidden]"),
+      );
+      target?.focus();
+    },
+    menuKey(event) {
+      // WAI-ARIA toolbar: arrows move between enabled buttons, Escape
+      // returns to the editor with its selection intact.
+      if (event.key === "Escape") {
+        event.preventDefault();
+        this.visual?.focus();
+        return;
+      }
+      const step = { ArrowRight: 1, ArrowLeft: -1 }[event.key];
+      const items = Array.from(
+        event.currentTarget.querySelectorAll("button"),
+      ).filter((b) => !b.disabled && !b.closest("[hidden]"));
+      const at = items.indexOf(document.activeElement);
+      let next = null;
+      if (step) next = items[(at + step + items.length) % items.length];
+      else if (event.key === "Home") next = items[0];
+      else if (event.key === "End") next = items[items.length - 1];
+      if (next) {
+        event.preventDefault();
+        next.focus();
+      }
+    },
     updateButtons() {
       const disabled = this.textarea.disabled || this.textarea.readOnly;
       this.visual?.editable(!disabled);
+      const inTable =
+        this.mode === "visual" && !!this.visual && this.visual.inTable();
+      for (const group of this.tableGroups || []) group.hidden = !inTable;
       for (const button of this.actionButtons || []) {
         const action = button.dataset.markdownAction;
         button.disabled =
           disabled ||
           (this.mode !== "visual" && ["undo", "redo"].includes(action));
         if (this.mode === "visual" && this.visual) {
+          // editor.can(): e.g. no block formats inside a table cell, and no
+          // column delete in a single-column table.
+          if (action !== "link" && !button.disabled)
+            button.disabled = !this.visual.can(action);
+          if (action === "header-row")
+            button.setAttribute(
+              "aria-pressed",
+              String(this.visual.hasHeaderRow()),
+            );
           const names = {
             bold: "bold",
             italic: "italic",
@@ -399,6 +550,8 @@
       this.textarea?.removeEventListener("invalid", this.onInvalid);
       this.form?.removeEventListener("reset", this.onReset);
       this.visual?.destroy();
+      this.bubble?.remove();
+      this.floating?.remove();
       this.toolbar?.remove();
       this.status?.remove();
       this.surface?.remove();

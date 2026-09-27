@@ -611,6 +611,18 @@ interface Djust {
   destroyAllHooks(): void;
 
   /**
+   * The hook instance mounted on an element — the same `this` its
+   * callbacks receive — or `null` when no hook is mounted there (never
+   * mounted, or already destroyed). A string is resolved with
+   * `document.querySelector` (first match).
+   *
+   * @example
+   * const hook = window.djust.getHook(document.querySelector('[dj-hook="MarkdownEditor"]'));
+   * hook?.getEditor()?.chain().focus().addRowAfter().run();
+   */
+  getHook(el: Element | string | null): (DjustHook & DjustHookContext) | null;
+
+  /**
    * Map of currently active hook instances, keyed by an internal element ID.
    * Read-only; managed by the hook system.
    */

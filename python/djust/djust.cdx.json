@@ -164,11 +164,47 @@
       "hashes": [
         {
           "alg": "SHA-384",
-          "content": "1ea404e1ef3cbeaa48153c4921748f863c421bb986234f93305a8c89795c6298d3d00c0d2f2c68674f3352ede29b2ed3"
+          "content": "d6a7eb96e9bf87df4c7a97979c3e92f5bd2e21f9905f4f746c9a8fedb2ba136b5984a75b2c59662af8cbf4934a4caf0b"
         }
       ],
       "name": "markdown-visual",
       "type": "file"
+    },
+    {
+      "bom-ref": "asset:markdown-visual:pkg:npm/%40floating-ui/core@1.8.0",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "name": "@floating-ui/core",
+      "purl": "pkg:npm/%40floating-ui/core@1.8.0",
+      "type": "library",
+      "version": "1.8.0"
+    },
+    {
+      "bom-ref": "asset:markdown-visual:pkg:npm/%40floating-ui/dom@1.8.0",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "name": "@floating-ui/dom",
+      "purl": "pkg:npm/%40floating-ui/dom@1.8.0",
+      "type": "library",
+      "version": "1.8.0"
+    },
+    {
+      "bom-ref": "asset:markdown-visual:pkg:npm/%40floating-ui/utils@0.2.12",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "name": "@floating-ui/utils",
+      "purl": "pkg:npm/%40floating-ui/utils@0.2.12",
+      "type": "library",
+      "version": "0.2.12"
     },
     {
       "bom-ref": "asset:markdown-visual:pkg:npm/%40tiptap/core@3.31.3",
@@ -207,6 +243,18 @@
       "version": "3.31.3"
     },
     {
+      "bom-ref": "asset:markdown-visual:pkg:npm/%40tiptap/extension-bubble-menu@3.31.3",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "name": "@tiptap/extension-bubble-menu",
+      "purl": "pkg:npm/%40tiptap/extension-bubble-menu@3.31.3",
+      "type": "library",
+      "version": "3.31.3"
+    },
+    {
       "bom-ref": "asset:markdown-visual:pkg:npm/%40tiptap/extension-code-block@3.31.3",
       "licenses": [
         {
@@ -239,6 +287,18 @@
       ],
       "name": "@tiptap/extension-document",
       "purl": "pkg:npm/%40tiptap/extension-document@3.31.3",
+      "type": "library",
+      "version": "3.31.3"
+    },
+    {
+      "bom-ref": "asset:markdown-visual:pkg:npm/%40tiptap/extension-floating-menu@3.31.3",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "name": "@tiptap/extension-floating-menu",
+      "purl": "pkg:npm/%40tiptap/extension-floating-menu@3.31.3",
       "type": "library",
       "version": "3.31.3"
     },
@@ -2347,12 +2407,17 @@
     },
     {
       "dependsOn": [
+        "asset:markdown-visual:pkg:npm/%40floating-ui/core@1.8.0",
+        "asset:markdown-visual:pkg:npm/%40floating-ui/dom@1.8.0",
+        "asset:markdown-visual:pkg:npm/%40floating-ui/utils@0.2.12",
         "asset:markdown-visual:pkg:npm/%40tiptap/core@3.31.3",
         "asset:markdown-visual:pkg:npm/%40tiptap/extension-blockquote@3.31.3",
         "asset:markdown-visual:pkg:npm/%40tiptap/extension-bold@3.31.3",
+        "asset:markdown-visual:pkg:npm/%40tiptap/extension-bubble-menu@3.31.3",
         "asset:markdown-visual:pkg:npm/%40tiptap/extension-code-block@3.31.3",
         "asset:markdown-visual:pkg:npm/%40tiptap/extension-code@3.31.3",
         "asset:markdown-visual:pkg:npm/%40tiptap/extension-document@3.31.3",
+        "asset:markdown-visual:pkg:npm/%40tiptap/extension-floating-menu@3.31.3",
         "asset:markdown-visual:pkg:npm/%40tiptap/extension-hard-break@3.31.3",
         "asset:markdown-visual:pkg:npm/%40tiptap/extension-heading@3.31.3",
         "asset:markdown-visual:pkg:npm/%40tiptap/extension-horizontal-rule@3.31.3",
@@ -2408,7 +2473,7 @@
     "properties": [
       {
         "name": "djust:manifest-digest",
-        "value": "b1b2b4ab0a47da7049018272e96b4c6d1bc0a36271f7f5db12684e9622099d3b"
+        "value": "e9c4b4e9d42474640c6e274522b1026ea354339ac4a4d7fccee88a4d1e2a9366"
       }
     ],
     "tools": {

@@ -85,11 +85,23 @@
       "files": [
         {
           "path": "djust_components/markdown-visual.js",
-          "integrity": "sha384-HqQE4e88vqpIFTxJIXSPhjxCG7mGI0+TMFqMiXlcYpjT0AwNLyxoZ08zUu3imy7T"
+          "integrity": "sha384-1qfrlum/h99MepeXnD6S9b0uIfmQX090bJqP7bK6E2tZhKdbLFlmKvjL9JNKTK8L"
         }
       ],
       "license_file": "djust_components/markdown-visual.LICENSE.txt",
       "packages": [
+        {
+          "purl": "pkg:npm/%40floating-ui/core@1.8.0",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/%40floating-ui/dom@1.8.0",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/%40floating-ui/utils@0.2.12",
+          "license": "MIT"
+        },
         {
           "purl": "pkg:npm/%40tiptap/core@3.31.3",
           "license": "MIT"
@@ -103,6 +115,10 @@
           "license": "MIT"
         },
         {
+          "purl": "pkg:npm/%40tiptap/extension-bubble-menu@3.31.3",
+          "license": "MIT"
+        },
+        {
           "purl": "pkg:npm/%40tiptap/extension-code@3.31.3",
           "license": "MIT"
         },
@@ -112,6 +128,10 @@
         },
         {
           "purl": "pkg:npm/%40tiptap/extension-document@3.31.3",
+          "license": "MIT"
+        },
+        {
+          "purl": "pkg:npm/%40tiptap/extension-floating-menu@3.31.3",
           "license": "MIT"
         },
         {

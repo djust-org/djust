@@ -1,2 +1,2 @@
-{# Include beside native FormMixin fields; field is the form field name. #}
-<div class="dj-markdown-controls" dj-hook="MarkdownEditor" dj-update="ignore" data-field="{{ field|default:'body' }}" data-mode="{{ mode|default:'markdown' }}"></div>
+{# Include beside native FormMixin fields; field is the form field name. bubble_menu=False turns off the selection menu; floating_menu=True adds the empty-line menu (#3108). #}
+<div class="dj-markdown-controls" dj-hook="MarkdownEditor" dj-update="ignore" data-field="{{ field|default:'body' }}" data-mode="{{ mode|default:'markdown' }}" data-bubble-menu="{% if bubble_menu == False or bubble_menu == 'false' %}false{% else %}true{% endif %}" data-floating-menu="{% if floating_menu == True or floating_menu == 'true' %}true{% else %}false{% endif %}"></div>
