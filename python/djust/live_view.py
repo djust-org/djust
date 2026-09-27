@@ -207,6 +207,18 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         # sticky child was mounted with, and the last set a warning named.
         "_djust_sticky_mount_kwargs",
         "_djust_sticky_kwargs_warned",
+        # Per-connection identity the transports write before ``mount()``
+        # (``runtime.py`` ``dispatch_mount`` / ``on_view_mounted``). Not in the
+        # init-time ``_framework_attrs``, so the legacy private-state save
+        # carried them, and a reconnect's session restore then overwrote the
+        # new connection's values with the previous connection's (#3248).
+        "_websocket_session_id",
+        "_websocket_path",
+        "_websocket_query_string",
+        "_websocket_host",
+        "_websocket_secure",
+        "_django_session_key",
+        "_djust_mount_view_path",
     }
 )
 
@@ -1154,6 +1166,12 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         but was NOT present after ``__init__`` is a user-defined private attr.
         Later render-cycle attrs won't be included because they haven't been
         set yet.
+
+        A framework attribute first set DURING mount (``start_async()``'s
+        ``_async_tasks``, a lifecycle flag such as ``_djust_waiters_closed``)
+        is not in the init-time ``_framework_attrs``; the
+        ``_FRAMEWORK_INTERNAL_ATTRS`` list every other capture path honours
+        excludes it here too (#3248).
         """
         framework: frozenset[str] = getattr(self, "_framework_attrs", frozenset())
         # Exclude the tracking attrs themselves — they are infrastructure, not
@@ -1162,7 +1180,10 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         self._user_private_keys = {
             k
             for k in self.__dict__
-            if k.startswith("_") and k not in framework and k not in meta_attrs
+            if k.startswith("_")
+            and k not in framework
+            and k not in meta_attrs
+            and k not in _FRAMEWORK_INTERNAL_ATTRS
         }
 
     def _framework_storage_slots(self) -> Set[str]:
@@ -1211,7 +1232,9 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         # ``_user_private_keys``; they are still not re-saved.
         not_private = self._framework_storage_slots()
         for key in user_keys:
-            if key not in self.__dict__:
+            # A framework attribute is never user private state, even when a
+            # session written before #3248 restored it into the tracked set.
+            if key not in self.__dict__ or key in _FRAMEWORK_INTERNAL_ATTRS:
                 continue
             value = self.__dict__[key]
             if key in not_private and not (key != "_reactive_state" and _holds_model(value)):
@@ -1264,7 +1287,14 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
             if key in DANGEROUS_ATTRIBUTES or (key.startswith("__") and key.endswith("__")):
                 logger.warning("Skipping restore of reserved private attribute %r", key)
                 continue
-            if key.startswith("_") and key not in framework and key not in meta_attrs:
+            if (
+                key.startswith("_")
+                and key not in framework
+                and key not in meta_attrs
+                # A framework attribute set during mount is not in the
+                # init-time ``framework`` set; never restore one (#3248).
+                and key not in _FRAMEWORK_INTERNAL_ATTRS
+            ):
                 # #1994: re-hydrate model refs back to model instances (fresh DB
                 # fetch) so a private model attr comes back a MODEL, not a dict.
                 value = decode_private_model_refs(value)
