@@ -177,6 +177,8 @@ _CHANNEL_LAYER_DOCS = (
     "docs/website/guides/deployment.md",
     "docs/website/advanced/server-push.md",
     "docs/website/guides/error-codes.md",
+    "examples/demo_project/templates/docs.html",
+    "examples/demo_project/djust_docs/templates/docs/docs.html",
 )
 
 

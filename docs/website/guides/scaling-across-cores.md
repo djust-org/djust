@@ -322,7 +322,7 @@ The snake-arena process was stepped 64 → 192 → 256 clients, 60 s each, then 
 
 The timings come from a shared 12-core machine: load average 5–24 for the first run and 4–7 for the second. The memory numbers are much less sensitive to that.
 
-- **Sessions.** Expect about **2–3 MB of RSS per connected client** on 3.14t with a pinned pool: 252 MB at 64 clients in the run above, which started at 81 MB before any client connected, is about 2.7 MB each. That covers the view, its Rust render state and the Django session.
+- **Sessions.** Expect about **2–3 MB of RSS per connected client** on 3.14t with a pinned pool: 252 MB at 64 clients in the `PooledHTTP` run above. That run's idle RSS wasn't recorded; the same process started at about 81 MB idle in the #3114 runs, which puts it at about 2.7 MB each. These runs were on a Mac, not in a container. That covers the view, its Rust render state and the Django session.
 - **The state backend.** `InMemoryStateBackend` keeps about 270 KB per session for `SESSION_TTL` (see [Deployment](deployment.md#in-memory-one-process)).
 - **RSS levels off; it does not fall.** Freed memory stays with the allocator, both CPython's mimalloc heaps and the C allocator used by the Rust engine, and is reused for the next load. Size the container for the peak.
   - On Linux, glibc also creates an arena per thread, which is one more reason to bound threads. `MALLOC_ARENA_MAX=2` caps it.
