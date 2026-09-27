@@ -777,7 +777,7 @@ def _check_presence_backend(errors: list) -> None:
 _REDIS_CORE_LAYER = "channels_redis.core.RedisChannelLayer"
 # channels_redis' core layer blocks on BZPOPMIN for this many seconds
 # (``RedisChannelLayer.brpop_timeout``); redis-py 8's default socket_timeout
-# is the same 5 s, so a host must set a longer one (10 is recommended).
+# is the same 5 s, so a host must set a longer one (20 is recommended, #3210).
 _REDIS_BLOCKING_READ_SECONDS = 5
 
 
@@ -904,16 +904,16 @@ def _check_redis_channel_layer_socket_timeout(errors: list) -> None:
             "timeout, so idle WebSockets are dropped every few seconds."
             % (", ".join(repr(a) for a in affected), redis_version),
             hint=(
-                "Use the dict host form with a longer timeout (10 is recommended), e.g. "
-                '"hosts": [{"address": REDIS_URL, "socket_timeout": 10}] '
+                "Use the dict host form with a longer timeout (20 is recommended), e.g. "
+                '"hosts": [{"address": REDIS_URL, "socket_timeout": 20}] '
                 "(see django/channels_redis#422), or pin redis<8. Suppress with "
                 "DJUST_CONFIG = {'suppress_checks': ['C023']}."
             ),
             id="djust.C023",
             fix_hint=(
                 "In CHANNEL_LAYERS, give every channels_redis host a socket_timeout "
-                'above 5 s (10 is recommended): "hosts": [{"address": REDIS_URL, '
-                '"socket_timeout": 10}].'
+                'above 5 s (20 is recommended): "hosts": [{"address": REDIS_URL, '
+                '"socket_timeout": 20}].'
             ),
         )
     )

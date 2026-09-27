@@ -179,13 +179,13 @@ CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            "hosts": [{"address": "redis://127.0.0.1:6379", "socket_timeout": 10}],
+            "hosts": [{"address": "redis://127.0.0.1:6379", "socket_timeout": 20}],
         },
     },
 }
 ```
 
-Keep `socket_timeout` above 5 s (or `None`): redis-py 8 lowered its default `socket_timeout` to 5 s, the same as channels_redis' blocking read, so without a longer timeout idle WebSockets drop every few seconds (django/channels_redis#422).
+Keep `socket_timeout` above 5 s; 20 is recommended. redis-py 8 lowered its default `socket_timeout` to 5 s, the same as channels_redis' blocking read, so without a longer timeout idle WebSockets drop every few seconds (django/channels_redis#422). Don't use `None`: a half-open connection then hangs until TCP keepalive notices. See [Deployment: Channel Layer](../guides/deployment.md#channel-layer-for-cross-process-push).
 
 ## API Reference
 
