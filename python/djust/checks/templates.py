@@ -1061,7 +1061,7 @@ def _check_legacy_root_attrs(
     djust 1.0 renamed the LiveView root markers from ``data-djust-root`` /
     ``data-djust-view`` to ``dj-root`` / ``dj-view`` (the ``data-`` prefix is
     no longer required). When a template still uses the old spelling, the
-    generic T012 ("dj-* directives but no dj-view") doesn't recognise that a
+    generic T012 ("dj-* directives but no dj-root or dj-view") doesn't recognise that a
     view IS declared — just with the deprecated name — so the path from symptom
     (the LiveView never connects over WebSocket) to fix is non-obvious. T015
     names the rename explicitly.

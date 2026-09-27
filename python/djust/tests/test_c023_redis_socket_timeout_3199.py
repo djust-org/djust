@@ -11,6 +11,9 @@ effective ``socket_timeout`` is 5 s or less.
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import pytest
 from django.test import override_settings
 
@@ -163,3 +166,48 @@ def test_subclasses_of_the_core_layer_are_checked(redis_version, monkeypatch):
     assert _run(["redis://x:6379"], backend="c023_custom_layers.MyLayer") == ["djust.C023"]
     assert _run(["redis://x:6379"], backend="c023_custom_layers.Unrelated") == []
     assert _run(["redis://x:6379"], backend="c023_custom_layers.Missing") == []
+
+
+# --- #3210: one recommended socket_timeout, everywhere ---------------------
+
+_REPO = Path(__file__).resolve().parents[3]
+_SNIPPET_TIMEOUT = re.compile(r'"socket_timeout":\s*(\w+)')
+# Every page that shows a channels_redis host snippet with the recommendation.
+_CHANNEL_LAYER_DOCS = (
+    "docs/website/guides/deployment.md",
+    "docs/website/advanced/server-push.md",
+    "docs/website/guides/error-codes.md",
+    "examples/demo_project/templates/docs.html",
+    "examples/demo_project/djust_docs/templates/docs/docs.html",
+)
+
+
+def _hint_timeouts():
+    errors: list = []
+    with override_settings(
+        CHANNEL_LAYERS={"default": {"BACKEND": CORE, "CONFIG": {"hosts": ["redis://x:6379"]}}}
+    ):
+        _check_redis_channel_layer_socket_timeout(errors)
+    (warning,) = errors
+    return {
+        int(v) for text in (warning.hint, warning.fix_hint) for v in _SNIPPET_TIMEOUT.findall(text)
+    }
+
+
+def test_the_hint_recommends_one_value_that_passes_the_check(redis_version):
+    """The value C023's hint recommends must itself silence C023 (#3210)."""
+    (recommended,) = _hint_timeouts()
+    assert recommended > configuration._REDIS_BLOCKING_READ_SECONDS
+    assert _run([{"address": "redis://x:6379", "socket_timeout": recommended}]) == []
+
+
+@pytest.mark.parametrize("page", _CHANNEL_LAYER_DOCS)
+def test_doc_snippets_recommend_the_hints_value(redis_version, page):
+    """Every channel-layer snippet shows the value the C023 hint recommends (#3210).
+
+    Derived from the hint at run time, so changing the recommendation in one
+    place and not the other fails here."""
+    (recommended,) = _hint_timeouts()
+    shown = _SNIPPET_TIMEOUT.findall((_REPO / page).read_text(encoding="utf-8"))
+    assert shown, "%s shows no channels_redis host snippet" % page
+    assert set(shown) == {str(recommended)}, (page, shown)
