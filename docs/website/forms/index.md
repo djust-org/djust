@@ -127,7 +127,7 @@ See [guides/wizards.md](../guides/wizards.md) for the full wizard guide.
 See [guides/forms.md](../guides/forms.md) for:
 
 - Real-time validation details
-- `form.as_live` auto-rendering
+- `as_live()` / `as_live_field()` auto-rendering (FormMixin methods on the view)
 - Confirmation dialogs (`dj-confirm`)
 - `dj-model` vs `dj-submit` comparison
 - Draft mode auto-save (see [State Management](../state/index.md))

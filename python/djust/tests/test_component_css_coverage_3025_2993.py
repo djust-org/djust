@@ -22,6 +22,7 @@ from django.template import engines
 from djust.components.components.alert import Alert
 from djust.components.components.avatar import Avatar
 from djust.components.components.progress import Progress
+from djust.components.components.toast import Toast
 from djust.theming.gallery.catalogue import _classes_in, styles_for
 
 #: What ``{% theme_head %}`` links (``theme_head.html``): the theming app's
@@ -111,6 +112,9 @@ def _cases() -> list[tuple[str, str]]:
         cases.append((f"Avatar-{size}", Avatar(initials="AL", size=size).render()))
     for status in ("online", "offline", "busy", "away"):
         cases.append((f"Avatar-img-{status}", Avatar(src="/a.png", status=status).render()))
+    # The Python Toast class renders single-dash names (#3166).
+    for kind in sorted(Toast.ALLOWED_TYPES):
+        cases.append((f"Toast-{kind}", Toast("m", type=kind, action="x").render()))
     return cases
 
 
@@ -149,6 +153,9 @@ def test_the_cases_cover_every_variant_class_the_components_emit():
         "dj-progress-sm",
         "dj-avatar-xl",
         "dj-avatar-status-busy",
+        "dj-toast-error",
+        "dj-toast-message",
+        "dj-toast-dismiss",
     ):
         assert expected in emitted, expected
 
@@ -294,7 +301,28 @@ def test_labels_stay_on_the_foreground_token():
         '.dj-badge:where([class*="dj-badge--"])',
         ".dj-alert",
         ".dj-toast",
+        ".dj-toast-info",
+        ".dj-toast-success",
+        ".dj-toast-warning",
+        ".dj-toast-error",
     ):
         block = re.search(re.escape(selector) + r"\s*\{([^}]*)\}", css).group(1)
         color = re.search(r"(?<![\w-])color:\s*([^;]+);", block).group(1)
         assert "--foreground" in color or "--card-foreground" in color, (selector, color)
+
+
+def test_the_toast_class_properties_are_read_by_the_stylesheet():
+    """Every ``--dj-toast-*`` property the ``Toast`` docstring lists is read by
+    a declaration in the linked stylesheet, and each type's properties sit on
+    that type's rule (#3166). Until then no stylesheet read any of them."""
+    names = set(re.findall(r"--dj-toast-[\w-]+", Toast.__doc__ or ""))
+    kinds = sorted(Toast.ALLOWED_TYPES)
+    assert {"--dj-toast-bg", "--dj-toast-shadow"} <= names
+    assert {"--dj-toast-%s-%s" % (k, p) for k in kinds for p in ("bg", "fg", "border")} <= names
+    css = re.sub(r"/\*.*?\*/", "", LINKED_CSS.read_text(), flags=re.S)
+    unread = sorted(n for n in names if "var(" + n + "," not in css and "var(" + n + ")" not in css)
+    assert not unread, unread
+    for kind in kinds:
+        rule = re.search(r"\.dj-toast-%s\s*\{([^}]*)\}" % kind, css).group(1)
+        for prop in ("bg", "fg", "border"):
+            assert "var(--dj-toast-%s-%s," % (kind, prop) in rule, (kind, prop)
