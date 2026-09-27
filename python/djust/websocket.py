@@ -3877,6 +3877,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                     logger.exception("sticky child _on_sticky_unmount raised")
                     sticky_preserved = {}
                 else:
+                    # #3212: re-check as the user the explicit mount will run as.
+                    await self._rederive_live_redirect_user(new_request)
                     # #2998: sticky children are re-stamped with this request;
                     # bind the browser's CSRF cookie, as _build_request does.
                     from .security.csrf import abind_csrf_cookie
@@ -4157,6 +4159,32 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             )
             return None
         return request
+
+    async def _rederive_live_redirect_user(self, request: Any) -> None:
+        """Give the sticky re-check the user the explicit mount will run as (#3212).
+
+        ``_build_live_redirect_request`` takes the connect-time
+        ``scope["user"]``. An explicit mount whose session has vanished runs
+        as anonymous under a replacement session instead
+        (``establish_mount_session``, #3201), so the re-check does the same,
+        through the same helper and the runtime's replacement map: the
+        redirect's mount then reuses that replacement rather than creating
+        another. A live session keeps its user. Legacy pages keep the scope
+        user, as their mount does.
+        """
+        from ._exposure import uses_legacy_exposure
+        from ._exposure_auth import establish_mount_session
+
+        view = self.view_instance
+        runtime = getattr(self, "_runtime", None)
+        if request is None or view is None or runtime is None or uses_legacy_exposure(view):
+            return
+        presented = getattr(getattr(request, "session", None), "session_key", None)
+        replacement = await sync_to_async(establish_mount_session)(
+            request, runtime._replacement_sessions.get(presented or ""), ephemeral=True
+        )
+        if replacement and presented:
+            runtime._replacement_sessions[presented] = replacement
 
     async def handle_presence_heartbeat(self, data: Dict[str, Any]) -> None:
         """Handle presence heartbeat from client."""
