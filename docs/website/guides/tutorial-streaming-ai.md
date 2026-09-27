@@ -148,14 +148,12 @@ Four things to call out:
      does not install. -->
 <!-- doc-snippet-check: skip -->
 ```python
-import asyncio
 import logging
 import re
 
 from openai import AsyncOpenAI
 
 from djust import render_markdown
-from djust.streaming import MIN_STREAM_INTERVAL_S
 
 logger = logging.getLogger(__name__)
 client = AsyncOpenAI()  # picks up OPENAI_API_KEY
@@ -213,10 +211,8 @@ class ChatView(LiveView):
                 html=_render_reply(self.response, provisional=False),
             )
             # stream_to batches to about 60 updates a second, so the settle
-            # above may still be queued, and stream_done does not flush that
-            # queue. A queued update goes out at most one batch window after
-            # it was queued; wait two so it reaches the browser before "done".
-            await asyncio.sleep(2 * MIN_STREAM_INTERVAL_S)
+            # above may still be queued. stream_done sends it first, so the
+            # browser gets the final text before "done".
             await self.stream_done(_STREAM)
 ```
 
@@ -350,7 +346,9 @@ slow pulse. Cosmetic — drop it if you find it distracting.
 ```
 
 `stream_to` batches rapid updates to about 60 frames a second, so a
-chatty model does not saturate the WebSocket.
+chatty model does not saturate the WebSocket. `stream_done` and
+`stream_error` send a stream's still-queued update before their own op, so
+the last text always arrives before the stream is marked finished.
 
 ---
 
