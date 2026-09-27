@@ -17,6 +17,43 @@ pub use session::{SessionActor, SessionActorHandle};
 pub use supervisor::{ActorSupervisor, SupervisorStats};
 pub use view::{ViewActor, ViewActorHandle};
 
+/// Drop `value` while attached to the interpreter (#3228).
+///
+/// Actors run on tokio workers that are not attached to Python. pyo3 cannot
+/// decref a `Py<...>` dropped on such a thread: it queues the decref and
+/// applies it at the next pyo3 entry on any thread, so the object outlives
+/// the Rust owner for an unbounded time. Every actor-owned value that can hold
+/// a `Py<...>` (a view, a component, the contract module, or a buffered
+/// message carrying one) is dropped through here, so the decref, and any
+/// `__del__` it triggers, happens before this returns.
+///
+/// `try_attach` never initializes the interpreter, and refuses to attach during
+/// a GC traversal; in those cases it returns without attaching and the value
+/// is dropped detached, as before (its decref, if any, is queued in pyo3's
+/// pool). On Python 3.13+ pyo3 also refuses while `Py_IsFinalizing()` reports
+/// the interpreter is shutting down, though the check races finalization. On
+/// 3.10-3.12 pyo3 0.29 does not check it at all: a teardown that races
+/// interpreter finalization calls `PyGILState_Ensure`, and CPython terminates
+/// the calling tokio worker thread (`PyThread_exit_thread`) instead of
+/// returning. That is the same hazard every `Python::attach` an actor makes
+/// already carries; it does not panic, but the value is not dropped.
+///
+/// A future cancelled while parked sending a message that carries a `Py<...>`
+/// (e.g. a Python-cancelled `mount`) still drops that message detached with
+/// the future; `send_failed` covers only a send that completes with an error.
+pub(crate) fn drop_attached<T>(value: T) {
+    let mut value = Some(value);
+    let _ = pyo3::Python::try_attach(|_| drop(value.take()));
+    drop(value);
+}
+
+/// `map_err` target for a send to a stopped actor whose message may carry a
+/// `Py<...>`: the undelivered message is dropped attached (#3228).
+pub(crate) fn send_failed<T>(error: tokio::sync::mpsc::error::SendError<T>) -> ActorError {
+    drop_attached(error);
+    ActorError::Shutdown
+}
+
 /// Native actors can run bare Python objects without initializing Django. Once
 /// the Python framework is loaded, use its single parameter boundary. Never
 /// fall back after a framework validation/import/lookup failure.
@@ -53,4 +90,113 @@ pub(super) fn prepare_python_handler_call<'py>(
         .and_then(|prepare| prepare.call1((handler, params)))
         .and_then(|prepared| prepared.extract())
         .map_err(|_| ActorError::InvalidParameters)
+}
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    use pyo3::prelude::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    /// A Python object whose `__del__` sets the returned flag (#3228).
+    ///
+    /// Reading the flag does not enter pyo3, so a decref pyo3 queued instead
+    /// of applying leaves it `false`: the flag is true only once the object
+    /// has really been freed. The object has `get_context_data` so it can
+    /// stand in for a view.
+    pub(crate) fn released_probe() -> (Py<PyAny>, Arc<AtomicBool>) {
+        released_probe_with_slow_finalizer(0.0)
+    }
+
+    /// `released_probe` whose `__del__` first sleeps `delay_s` seconds, the
+    /// shape of a view with an expensive finalizer.
+    pub(crate) fn released_probe_with_slow_finalizer(delay_s: f64) -> (Py<PyAny>, Arc<AtomicBool>) {
+        Python::initialize();
+        let flag = Arc::new(AtomicBool::new(false));
+        let set = flag.clone();
+        let probe = Python::attach(|py| {
+            let module = pyo3::types::PyModule::from_code(
+                py,
+                c"import time\nclass Probe:\n    delay = 0.0\n    def get_context_data(self):\n        return {}\n    def __del__(self):\n        time.sleep(self.delay)\n        self.on_release()\n",
+                c"probe3228.py",
+                c"probe3228",
+            )
+            .expect("probe compiles");
+            let probe = module
+                .getattr("Probe")
+                .and_then(|cls| cls.call0())
+                .expect("probe instantiates");
+            let on_release = pyo3::types::PyCFunction::new_closure(
+                py,
+                None,
+                None,
+                move |_args, _kwargs| -> PyResult<()> {
+                    set.store(true, Ordering::SeqCst);
+                    Ok(())
+                },
+            )
+            .expect("callback builds");
+            probe
+                .setattr("on_release", on_release)
+                .expect("callback attaches");
+            probe.setattr("delay", delay_s).expect("delay attaches");
+            probe.unbind()
+        });
+        (probe, flag)
+    }
+
+    pub(crate) fn is_released(flag: &AtomicBool) -> bool {
+        flag.load(Ordering::SeqCst)
+    }
+
+    /// Wait (without entering pyo3) until `flag` is set, or give up.
+    pub(crate) async fn released_within(flag: &AtomicBool, limit: std::time::Duration) -> bool {
+        let start = std::time::Instant::now();
+        while start.elapsed() < limit {
+            if is_released(flag) {
+                return true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        is_released(flag)
+    }
+
+    /// Makes `import <module>` fail while alive, by mapping the module to
+    /// `None` in `sys.modules`; restores the previous entry on drop.
+    pub(crate) struct ImportBlocked {
+        module: &'static str,
+        previous: Option<Py<PyAny>>,
+    }
+
+    impl ImportBlocked {
+        pub(crate) fn new(module: &'static str) -> Self {
+            Python::initialize();
+            let previous = Python::attach(|py| {
+                let modules = py.import("sys")?.getattr("modules")?;
+                let previous = modules.call_method1("get", (module,))?;
+                modules.set_item(module, py.None())?;
+                PyResult::Ok(if previous.is_none() {
+                    None
+                } else {
+                    Some(previous.unbind())
+                })
+            })
+            .expect("sys.modules is writable");
+            ImportBlocked { module, previous }
+        }
+    }
+
+    impl Drop for ImportBlocked {
+        fn drop(&mut self) {
+            let previous = self.previous.take();
+            Python::attach(|py| {
+                if let Ok(modules) = py.import("sys").and_then(|sys| sys.getattr("modules")) {
+                    let _ = match previous {
+                        Some(module) => modules.set_item(self.module, module),
+                        None => modules.del_item(self.module),
+                    };
+                }
+            });
+        }
+    }
 }

@@ -138,6 +138,7 @@ impl ViewActor {
     pub async fn run(mut self) {
         info!(view_path = %self.view_path, "ViewActor started");
 
+        let mut acks = Vec::new();
         while let Some(msg) = self.receiver.recv().await {
             match msg {
                 ViewMsg::UpdateState { updates, reply } => {
@@ -275,19 +276,54 @@ impl ViewActor {
                     self.backend.reset_rust();
                 }
 
-                ViewMsg::Shutdown => {
+                ViewMsg::Shutdown { reply } => {
                     info!(view_path = %self.view_path, "Shutting down");
-                    // Shutdown all child components
-                    for (component_id, component_handle) in self.components.drain(..) {
-                        debug!(component_id = %component_id, "Shutting down component");
-                        component_handle.shutdown().await;
-                    }
+                    acks.push(reply);
                     break;
                 }
             }
         }
 
-        info!(view_path = %self.view_path, "ViewActor stopped");
+        self.stop(acks).await;
+    }
+
+    /// Tear the actor down, then acknowledge every `Shutdown` (#3228).
+    ///
+    /// The acknowledgements are sent only after everything the actor owns has
+    /// been dropped, with the interpreter attached, so a caller that awaits
+    /// `ViewActorHandle::shutdown` knows the Python view is released (not
+    /// queued in pyo3's deferred-decref pool) when the await returns.
+    async fn stop(mut self, mut acks: Vec<tokio::sync::oneshot::Sender<()>>) {
+        // Refuse new messages first. This also wakes any sender blocked on a
+        // full channel -- a child's `SendToParent` forward -- with an error,
+        // so waiting on the children below cannot deadlock against them.
+        self.receiver.close();
+
+        for (component_id, component_handle) in self.components.drain(..) {
+            debug!(component_id = %component_id, "Shutting down component");
+            component_handle.shutdown().await;
+        }
+
+        // Messages queued behind the Shutdown are never handled. Their reply
+        // senders drop, so their callers see `ActorError::Shutdown`; a queued
+        // Shutdown is acknowledged with the rest once teardown is done.
+        let mut unhandled = Vec::new();
+        while let Ok(msg) = self.receiver.try_recv() {
+            match msg {
+                ViewMsg::Shutdown { reply } => acks.push(reply),
+                other => unhandled.push(other),
+            }
+        }
+
+        let view_path = std::mem::take(&mut self.view_path);
+        // The view, the contract module and any `Py<...>` a queued message
+        // carries (SetPythonView, CreateComponent) are released here.
+        super::drop_attached((self, unhandled));
+        info!(view_path = %view_path, "ViewActor stopped");
+
+        for ack in acks {
+            let _ = ack.send(());
+        }
     }
 
     /// Handle UpdateState message.
@@ -397,8 +433,17 @@ impl ViewActor {
         parameter_contract_module: Option<Py<PyAny>>,
         reply: tokio::sync::oneshot::Sender<Result<(), ActorError>>,
     ) {
-        self.python_view = Some(view);
-        self.parameter_contract_module = parameter_contract_module;
+        // A replaced view is released now, not queued in pyo3's pool (#3228).
+        let replaced = (
+            self.python_view.replace(view),
+            std::mem::replace(
+                &mut self.parameter_contract_module,
+                parameter_contract_module,
+            ),
+        );
+        if replaced.0.is_some() || replaced.1.is_some() {
+            super::drop_attached(replaced);
+        }
         self.parameter_contracts_active = false;
         let _ = reply.send(Ok(()));
     }
@@ -662,7 +707,14 @@ impl ViewActor {
 
                 html_result
             }
-            Err(e) => Err(e),
+            Err(e) => {
+                // The component never started; release its Python instance
+                // here rather than in pyo3's deferred pool (#3228).
+                if python_component.is_some() {
+                    super::drop_attached(python_component);
+                }
+                Err(e)
+            }
         };
 
         let _ = reply.send(response);
@@ -729,8 +781,12 @@ impl ViewActor {
         // Use shift_remove to preserve IndexMap insertion order
         let result = match self.components.shift_remove(&component_id) {
             Some(handle) => {
-                // Shutdown the component
-                handle.shutdown().await;
+                // Do not wait here (#3228): this runs inside the view's loop,
+                // and a component blocked forwarding into this view's full
+                // queue could not reach its Shutdown while the view waits.
+                // The component releases its Python instance attached on its
+                // own task (`ComponentActor::stop`).
+                tokio::spawn(async move { handle.shutdown().await });
                 Ok(())
             }
             None => Err(ActorError::ComponentNotFound(format!(
@@ -942,7 +998,7 @@ impl ViewActorHandle {
                 reply: tx,
             })
             .await
-            .map_err(|_| ActorError::Shutdown)?;
+            .map_err(super::send_failed)?;
 
         rx.await.map_err(|_| ActorError::Shutdown)?
     }
@@ -1028,7 +1084,7 @@ impl ViewActorHandle {
                 reply: tx,
             })
             .await
-            .map_err(|_| ActorError::Shutdown)?;
+            .map_err(super::send_failed)?;
 
         rx.await.map_err(|_| ActorError::Shutdown)?
     }
@@ -1159,11 +1215,28 @@ impl ViewActorHandle {
             .await;
     }
 
-    /// Shutdown the actor gracefully
+    /// Shut the actor down and wait until it has stopped (#3228).
     ///
-    /// Note: This is a fire-and-forget operation (no response).
+    /// Returns once the actor's loop has ended and everything it owns -- the
+    /// Python view, the contract module, every child component -- has been
+    /// dropped with the interpreter attached. Returns at once if the actor
+    /// has already stopped.
+    ///
+    /// Must not be awaited from the actor's own task (it would wait on
+    /// itself), nor while the awaiting thread holds the interpreter: the
+    /// teardown attaches to drop the view.
     pub async fn shutdown(&self) {
-        let _ = self.sender.send(ViewMsg::Shutdown).await;
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        if self
+            .sender
+            .send(ViewMsg::Shutdown { reply: tx })
+            .await
+            .is_ok()
+        {
+            // An Err means the actor dropped the ack without replying, which
+            // only happens once it has already stopped.
+            let _ = rx.await;
+        }
     }
 
     /// Get the view path
@@ -1689,5 +1762,224 @@ mod tests {
             "the parent's env did not reach the child component's render"
         );
         rt.shutdown_timeout(std::time::Duration::from_secs(5));
+    }
+}
+
+/// #3228: `shutdown()` returns only after the actor has stopped and released
+/// every Python object it owned. Each test runs on a current-thread runtime,
+/// so the actor makes progress only while the test awaits; a fire-and-forget
+/// `shutdown()` returns before the actor has run at all. The probe's flag is
+/// read without entering pyo3, so a decref pyo3 queued (a drop on a detached
+/// thread) leaves it false.
+///
+/// Under a parallel `cargo test`, any other test entering pyo3 flushes pyo3's
+/// global decref pool and can free a probe even with the bug present, so a
+/// single test's regression detection is probabilistic there; the modules
+/// together catch it every run, and `--test-threads=1` makes each one exact.
+#[cfg(test)]
+mod release_3228 {
+    use super::*;
+    use crate::actors::test_support::{is_released, released_probe};
+
+    #[tokio::test]
+    async fn shutdown_returns_after_the_python_view_is_released() {
+        let (view, released) = released_probe();
+        let (actor, handle) = ViewActor::new("t3228.V".to_string());
+        tokio::spawn(actor.run());
+        handle.set_python_view(view).await.unwrap();
+        assert!(!is_released(&released), "premise: the actor holds the view");
+
+        handle.shutdown().await;
+
+        assert!(
+            is_released(&released),
+            "shutdown() returned while the view was still alive"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_contract_render_releases_the_view_by_the_time_shutdown_returns() {
+        // The #3222 shape without Django: contract discovery raises, so the
+        // render fails the way a failed `[discovery]` mount does, and the
+        // caller shuts the actor down.
+        let (view, released) = released_probe();
+        let module = Python::attach(|py| {
+            pyo3::types::PyModule::from_code(
+                py,
+                c"def parameter_contract_manifest(owner):\n    raise ValueError('discovery')\n",
+                c"contracts3228.py",
+                c"contracts3228",
+            )
+            .unwrap()
+            .into_any()
+            .unbind()
+        });
+        let (actor, handle) = ViewActor::new("t3228.V".to_string());
+        tokio::spawn(actor.run());
+        handle
+            .set_python_view_with_contracts(view, Some(module))
+            .await
+            .unwrap();
+        assert!(matches!(
+            handle.render_with_diff().await,
+            Err(ActorError::RenderContractsUnavailable)
+        ));
+
+        handle.shutdown().await;
+
+        assert!(is_released(&released));
+    }
+
+    #[tokio::test]
+    async fn a_replaced_view_is_released_when_the_replacement_is_set() {
+        let (first, first_released) = released_probe();
+        let (second, second_released) = released_probe();
+        let (actor, handle) = ViewActor::new("t3228.V".to_string());
+        tokio::spawn(actor.run());
+        handle.set_python_view(first).await.unwrap();
+
+        handle.set_python_view(second).await.unwrap();
+
+        assert!(is_released(&first_released));
+        assert!(!is_released(&second_released));
+        handle.shutdown().await;
+        assert!(is_released(&second_released));
+    }
+
+    #[tokio::test]
+    async fn view_shutdown_waits_for_its_components_to_release_theirs() {
+        let (component, released) = released_probe();
+        let (actor, handle) = ViewActor::new("t3228.V".to_string());
+        tokio::spawn(actor.run());
+        handle
+            .create_component(
+                "c3228".to_string(),
+                "<p>c</p>".to_string(),
+                HashMap::new(),
+                Some(component),
+            )
+            .await
+            .unwrap();
+        assert!(!is_released(&released), "premise: the component holds it");
+
+        handle.shutdown().await;
+
+        assert!(is_released(&released));
+    }
+
+    #[tokio::test]
+    async fn shutdown_of_a_stopped_actor_returns_at_once() {
+        let (actor, handle) = ViewActor::new("t3228.V".to_string());
+        tokio::spawn(actor.run());
+        handle.shutdown().await;
+        // A second caller must not hang on an actor that is already gone.
+        tokio::time::timeout(std::time::Duration::from_secs(5), handle.shutdown())
+            .await
+            .expect("a second shutdown() returned");
+    }
+
+    #[tokio::test]
+    async fn remove_component_does_not_deadlock_on_a_child_forwarding_to_it() {
+        // The review probe for M1: the same shape as the teardown test
+        // below, with RemoveComponent in place of Shutdown. The view keeps
+        // running, so it cannot close its queue; it must not wait inside
+        // its loop for a child that is blocked forwarding into that queue.
+        let (component, released) = released_probe();
+        let (mut actor, handle) = ViewActor::new("t3228.V".to_string());
+        let (child, child_handle) = ComponentActor::new(
+            "c3228".to_string(),
+            "<p>c</p>".to_string(),
+            HashMap::new(),
+            Some(handle.clone()),
+        )
+        .unwrap();
+        actor
+            .components
+            .insert("c3228".to_string(), child_handle.clone());
+        tokio::spawn(child.run());
+        child_handle.set_python_component(component).await.unwrap();
+
+        let (reply, removed) = tokio::sync::oneshot::channel();
+        handle
+            .sender
+            .try_send(ViewMsg::RemoveComponent {
+                component_id: "c3228".to_string(),
+                reply,
+            })
+            .unwrap();
+        while handle.sender.try_send(ViewMsg::Reset).is_ok() {}
+        for _ in 0..2 {
+            child_handle
+                .send_to_parent("ping".to_string(), HashMap::new())
+                .await;
+        }
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+
+        tokio::spawn(actor.run());
+        tokio::time::timeout(std::time::Duration::from_secs(5), removed)
+            .await
+            .expect("RemoveComponent deadlocked on its child")
+            .unwrap()
+            .unwrap();
+        // The component still stops and releases its Python instance.
+        assert!(
+            crate::actors::test_support::released_within(
+                &released,
+                std::time::Duration::from_secs(5)
+            )
+            .await
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(5), handle.shutdown())
+            .await
+            .expect("view shutdown returned");
+    }
+
+    #[tokio::test]
+    async fn view_shutdown_does_not_deadlock_on_a_child_forwarding_to_it() {
+        // A child's `SendToParent` forward blocks while the parent's channel
+        // is full. The view waits on each child during teardown, so it must
+        // close its channel first: that fails the blocked forward instead of
+        // leaving parent and child waiting on each other.
+        let (mut actor, handle) = ViewActor::new("t3228.V".to_string());
+        let (child, child_handle) = ComponentActor::new(
+            "c3228".to_string(),
+            "<p>c</p>".to_string(),
+            HashMap::new(),
+            Some(handle.clone()),
+        )
+        .unwrap();
+        actor
+            .components
+            .insert("c3228".to_string(), child_handle.clone());
+        tokio::spawn(child.run());
+
+        // Fill the view's queue, Shutdown first, before the view runs.
+        let (ack, acked) = tokio::sync::oneshot::channel();
+        handle
+            .sender
+            .try_send(ViewMsg::Shutdown { reply: ack })
+            .unwrap();
+        while handle.sender.try_send(ViewMsg::Reset).is_ok() {}
+
+        // The child now blocks forwarding into the full queue. Two forwards:
+        // the view's receiving the Shutdown frees one slot, which lets the
+        // first through; the second must still be blocked when the view
+        // starts waiting on the child.
+        for _ in 0..2 {
+            child_handle
+                .send_to_parent("ping".to_string(), HashMap::new())
+                .await;
+        }
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+
+        tokio::spawn(actor.run());
+        tokio::time::timeout(std::time::Duration::from_secs(5), acked)
+            .await
+            .expect("view shutdown deadlocked on its child")
+            .unwrap();
     }
 }

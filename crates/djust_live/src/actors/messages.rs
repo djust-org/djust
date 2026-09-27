@@ -94,8 +94,9 @@ pub enum SessionMsg {
     /// Health check ping
     Ping { reply: oneshot::Sender<()> },
 
-    /// Graceful shutdown
-    Shutdown,
+    /// Graceful shutdown. `reply` fires after every view has stopped and the
+    /// session actor's loop has ended (#3228).
+    Shutdown { reply: oneshot::Sender<()> },
 }
 
 /// Response from mounting a view
@@ -230,8 +231,10 @@ pub enum ViewMsg {
     /// Reset state
     Reset,
 
-    /// Shutdown this view
-    Shutdown,
+    /// Shutdown this view. `reply` fires after the actor's loop has ended and
+    /// its state (the Python view, the contract module and every child
+    /// component) has been dropped (#3228).
+    Shutdown { reply: oneshot::Sender<()> },
 }
 
 /// Result from rendering with VDOM diff

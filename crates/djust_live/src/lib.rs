@@ -3185,9 +3185,11 @@ impl SessionActorHandlePy {
         })
     }
 
-    /// Shutdown the session gracefully
+    /// Shut the session down and wait until it has stopped (#3228).
     ///
-    /// Shuts down all child ViewActors and then the SessionActor itself.
+    /// Shuts down all child ViewActors and then the SessionActor itself; the
+    /// returned awaitable resolves only after every view has dropped its
+    /// Python objects, including any `__del__` that runs as a result.
     fn shutdown<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let handle = self.handle.clone();
 
