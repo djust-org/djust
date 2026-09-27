@@ -5449,8 +5449,14 @@ class ViewRuntime:
         # so persist here. An explicit view commits (E3) on EVERY component
         # event: a declaration's output handler, or a component's
         # ``send_parent``, can write the view's declared fields, and the
-        # snapshot flag means nothing to it (#3211). A legacy view keeps the
-        # bounded, opt-in save for the new concrete bindings, as before.
+        # snapshot flag means nothing to it (#3211). A legacy view that opts
+        # in (``enable_state_snapshot``) saves on EVERY component event too,
+        # as the view route does on every event. The save used to run only for
+        # a ``ComponentDeclaration``; a ``send_parent`` from any other
+        # component can change the view's state just the same, and on Back
+        # the session save wins over the signed token (``dispatch_mount``
+        # restores from the session first), so a save left one event behind
+        # restored the state from before the component event (#3237).
         #
         # After the commit, every component frame carries the refreshed signed
         # client snapshot, as the view route's frames do: the commit moved the
@@ -5465,9 +5471,7 @@ class ViewRuntime:
                 if not await self.commit_explicit_turn(view, source="event"):
                     return True
                 snapshot_fields = await self._explicit_event_snapshot(view)
-            elif isinstance(component, ComponentDeclaration) and getattr(
-                view, "enable_state_snapshot", False
-            ):
+            elif getattr(view, "enable_state_snapshot", False):
                 await self._persist_state_after_event(view, event_name)
 
         from ._async_batch import AsyncBatch

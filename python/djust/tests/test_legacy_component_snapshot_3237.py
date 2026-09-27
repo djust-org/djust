@@ -1,4 +1,4 @@
-"""#3237: a legacy opt-in view refreshes its back-navigation snapshot on component events.
+"""#3237: a legacy opt-in view keeps its back-navigation state current on component events.
 
 #3098 made the view-event route refresh a legacy ``enable_state_snapshot``
 view's signed snapshot on every state-changing event, and #3231 (fixed in
@@ -7,12 +7,19 @@ legacy view's component-event frames still carried nothing, so after a
 component event the client kept the token from before it, and Back restored
 the stale state.
 
+Back has two sources, and the session save wins (``dispatch_mount`` restores
+from it first and uses the signed token only when there is none). So the
+component route now does both: it refreshes the token on the frames that
+render, and it saves to the session on every component event of an opt-in
+view, as the view route does on every event. Before, the save ran only for a
+``ComponentDeclaration``, so after any earlier view event Back restored that
+older save.
+
 Harness: a real ``WebsocketCommunicator`` against ``LiveViewConsumer`` and a
-real DB session. The flow is the user's: a component event, navigate away with
+real DB session. The flow is the user's: events, navigate away with
 ``live_redirect``, then Back, which echoes the latest token the client holds
 (``storeSignedSnapshot`` keeps the last one a primary-view ``source="event"``
-frame carried). The server-saved state is dropped before Back, so the signed
-snapshot is the path taken, as in the #3098 test.
+frame carried). The session save is left in place, as it is in production.
 """
 
 from __future__ import annotations
@@ -91,6 +98,10 @@ class Stepper3237Page(LiveView):
     def handle_component_event(self, component_id, event, data):
         self.count += 1
 
+    @event_handler()
+    def bump(self, **kwargs):
+        self.count += 10
+
 
 class Elsewhere3237(LiveView):
     exposure_policy = "legacy"
@@ -156,14 +167,6 @@ def _held_token(frames, token=None):
     return token
 
 
-def _drop_saved_state(session_key, url):
-    from django.contrib.sessions.backends.db import SessionStore
-
-    s = SessionStore(session_key=session_key)
-    s.pop(f"liveview_{url}", None)
-    s.save()
-
-
 async def _mounted(communicator, url):
     await communicator.send_json_to({"type": "mount", "view": VIEW, "url": url})
     frames = await _frames(communicator)
@@ -187,10 +190,27 @@ def _component_ids(frames):
     return re.findall(r'data-component-id="([^"]+)"', html)
 
 
+async def _back(communicator, url, token):
+    """Navigate away, then Back with the token the client holds."""
+    await communicator.send_json_to(
+        {"type": "live_redirect_mount", "view": OTHER, "url": "/c3237-other/"}
+    )
+    await _frames(communicator)
+    await communicator.send_json_to(
+        {
+            "type": "live_redirect_mount",
+            "view": VIEW,
+            "url": url,
+            "state_snapshot": {"view_slug": VIEW, "state_json": token},
+        }
+    )
+    return _mount_frame(await _frames(communicator))
+
+
 async def test_back_after_a_component_event_restores_the_events_change():
     url = "/c3237-back/"
     with _SETTINGS:
-        communicator, session_key = await _connect()
+        communicator, _ = await _connect()
         try:
             mounted = await _mounted(communicator, url)
             token = _held_token(mounted)
@@ -200,22 +220,32 @@ async def test_back_after_a_component_event_restores_the_events_change():
             assert any("count=1" in f.get("html", "") for f in frames), frames
             token = _held_token(frames, token)
 
-            # Navigate away, then Back with the token the client holds.
-            await communicator.send_json_to(
-                {"type": "live_redirect_mount", "view": OTHER, "url": "/c3237-other/"}
-            )
-            await _frames(communicator)
-            await sync_to_async(_drop_saved_state)(session_key, url)
-            await communicator.send_json_to(
-                {
-                    "type": "live_redirect_mount",
-                    "view": VIEW,
-                    "url": url,
-                    "state_snapshot": {"view_slug": VIEW, "state_json": token},
-                }
-            )
-            restored = _mount_frame(await _frames(communicator))
+            restored = await _back(communicator, url, token)
             assert "count=1" in restored["html"], restored["html"]
+        finally:
+            await communicator.disconnect()
+
+
+async def test_back_after_a_view_event_then_a_component_event_restores_both():
+    """The review's probe (#3242): a view event saves ``count=10`` to the
+    session, then a component event makes it 11. The session save wins on
+    Back, so it must have been refreshed by the component event too."""
+    url = "/c3237-back/"
+    with _SETTINGS:
+        communicator, _ = await _connect()
+        try:
+            mounted = await _mounted(communicator, url)
+            token = _held_token(mounted)
+            pinger_id = _component_ids(mounted)[0]
+
+            await communicator.send_json_to({"type": "event", "event": "bump", "params": {}})
+            token = _held_token(await _frames(communicator), token)
+            frames = await _component_event(communicator, pinger_id, "step")
+            assert any("count=11" in f.get("html", "") for f in frames), frames
+            token = _held_token(frames, token)
+
+            restored = await _back(communicator, url, token)
+            assert "count=11" in restored["html"], restored["html"]
         finally:
             await communicator.disconnect()
 
