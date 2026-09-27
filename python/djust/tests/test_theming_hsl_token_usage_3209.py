@@ -36,6 +36,11 @@ _TRIPLET_DECL = re.compile(r"--([\w-]+):\s*-?[\d.]+(?:deg)?\s+[\d.]+%\s+[\d.]+%\
 # line end so prose (a docstring's ``Properties:`` list) is never read as CSS.
 _DECL_CSS = re.compile(r"(?<![\w-])(-{0,2}[a-zA-Z][\w-]*)\s*:\s*([^;{}]*)[;}]")
 _DECL_EMBEDDED = re.compile(r"(?<![\w-])(-{0,2}[a-zA-Z][\w-]*)\s*:\s*([^;{}\"'\n]*)[;}\"']")
+# A quoted key holding a quoted value: ``{"color": "var(--primary)"}`` in a
+# Python or JS mapping that ends up in a ``style`` attribute (#3209 review,
+# ``components/meter.py``'s docstring example).
+_DECL_QUOTED_KEY = re.compile(r"[\"']([\w-]+)[\"']\s*:\s*[\"']([^\"'\n]*)[\"']")
+_STYLE_BLOCK = re.compile(r"<style\b[^>]*>(.*?)</style>", re.S | re.I)
 _VAR = re.compile(r"var\(\s*--([\w-]+)")
 _COMMENT = re.compile(r"/\*.*?\*/", re.S)
 
@@ -75,8 +80,21 @@ def bare_token_uses(
     """Return ``(line, declaration)`` for each unwrapped HSL-token colour use."""
     # Blank comments out but keep their newlines so line numbers stay right.
     css = _COMMENT.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), css)
+    if stylesheet:
+        decls = list(_DECL_CSS.finditer(css))
+    else:
+        decls = list(_DECL_EMBEDDED.finditer(css)) + list(_DECL_QUOTED_KEY.finditer(css))
+        # Inside an inline ``<style>`` block a value may span lines, as in a
+        # stylesheet. Blank everything outside the blocks, keeping newlines,
+        # so line numbers stay those of the file.
+        only_styles = "".join(
+            re.sub(r"[^\n]", " ", css[prev : m.start(1)]) + m.group(1)
+            for prev, m in _pairs_with_previous_end(_STYLE_BLOCK.finditer(css))
+        )
+        decls += list(_DECL_CSS.finditer(only_styles))
     found = []
-    for decl in (_DECL_CSS if stylesheet else _DECL_EMBEDDED).finditer(css):
+    seen = set()
+    for decl in decls:
         prop, value = decl.group(1), decl.group(2)
         if prop.startswith("--"):
             # Aliasing a token (``--x: var(--primary)``) keeps it a triplet;
@@ -86,15 +104,26 @@ def bare_token_uses(
             if use.group(1) not in tokens:
                 continue
             if _enclosing_function(value, use.start()) not in ("hsl", "hsla"):
-                line = css.count("\n", 0, decl.start()) + 1
-                found.append((line, f"{prop}: {value.strip()}"))
+                line = decl.string.count("\n", 0, decl.start()) + 1
+                if (line, prop) not in seen:
+                    seen.add((line, prop))
+                    found.append((line, f"{prop}: {value.strip()}"))
                 break
-    return found
+    return sorted(found)
+
+
+def _pairs_with_previous_end(matches):
+    """``(end of the previous match, match)`` for each match, starting at 0."""
+    prev = 0
+    for match in matches:
+        yield prev, match
+        prev = match.end(1)
 
 
 def _shipped_css_sources() -> list[Path]:
     sources = [p for p in PACKAGE_ROOT.rglob("*.css")]
     sources += [p for p in PACKAGE_ROOT.rglob("*.html")]
+    sources += [p for p in PACKAGE_ROOT.rglob("*.js")]
     sources += [
         p for p in PACKAGE_ROOT.rglob("*.py") if "tests" not in p.relative_to(PACKAGE_ROOT).parts
     ]
@@ -115,6 +144,9 @@ def test_token_list_comes_from_the_generator():
         ".a { box-shadow: 0 0 20px rgba(var(--primary) / 0.3); }",
         ".a { color: var(--muted-foreground, var(--color-text-secondary)); }",
         '<div style="color: var(--primary)">',
+        '{"value": 40, "color": "var(--primary)", "label": "Used"}',
+        "el.style = {'background': 'var(--warning)'};",
+        "<style>\n.a {\n  box-shadow:\n    0 0 4px var(--primary);\n}\n</style>",
     ],
 )
 def test_scanner_flags_bare_token_colours(css):
@@ -136,6 +168,9 @@ def test_scanner_reads_a_stylesheet_value_across_lines():
         ".a { --x: var(--primary); }",
         ".a { padding: var(--space-4, 1rem); }",
         "/* color: var(--primary); */",
+        '{"color": "hsl(var(--primary))"}',
+        '{"rounded": "var(--radius)"}',
+        "Properties:\n    --dj-x: toggle colour (default: var(--primary, #2563eb))\n",
     ],
 )
 def test_scanner_accepts_wrapped_or_non_colour_uses(css):

@@ -16,8 +16,8 @@ class Meter(Component):
 
         self.usage = Meter(
             segments=[
-                {"value": 40, "color": "var(--primary)", "label": "Used"},
-                {"value": 20, "color": "var(--warning)", "label": "Reserved"},
+                {"value": 40, "color": "hsl(var(--primary))", "label": "Used"},
+                {"value": 20, "color": "hsl(var(--warning))", "label": "Reserved"},
             ],
             total=100,
         )
