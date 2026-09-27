@@ -95,18 +95,26 @@ def _registered_globally(name: str) -> bool:
     return bool(registry_entry_is_local(name, "filter"))
 
 
-def _loader_owned_filters() -> frozenset:
-    """Filter names a ``{% load %}`` has bridged in the active registry
-    namespace (callers hold ``_global_registry_namespace``)."""
+def _loader_owned_filters() -> dict:
+    """``{name: callable}`` for each filter a ``{% load %}`` has bridged in the
+    active registry namespace (callers hold ``_global_registry_namespace``),
+    taken from the library that owns the name (#3218). A name whose owning
+    library is no longer recorded maps to ``None``."""
     from . import template_libraries as tl
 
-    return frozenset(tl._engine_state("_filter_owner", tl._filter_owner))
+    loaded = tl._engine_state("_loaded", tl._loaded)
+    owned: dict = {}
+    for name, label in tl._engine_state("_filter_owner", tl._filter_owner).items():
+        library = loaded.get(label)
+        owned[name] = (getattr(library, "filters", None) or {}).get(name)
+    return owned
 
 
 def _restore_missing_bridged_filters() -> None:
     """Re-register, in the global registry, exactly the bootstrap filters
     that are no longer there, each with the callable the bootstrap
-    registered (#3208 review).
+    registered (#3208 review), or, for a name a ``{% load %}`` bridged since,
+    with the loaded library's callable (#3218).
 
     Never a whole re-walk: a name still present may have been registered
     since by a ``{% load %}`` of another library that defines the same name,
@@ -132,8 +140,12 @@ def _restore_missing_bridged_filters() -> None:
                 # A ``{% load %}`` bridged this name since: its library, not
                 # the bootstrap's, is the owner. Restoring the bootstrap's
                 # callable would satisfy the loader's presence check and it
-                # would never re-bridge its own (#3213 re-review).
-                continue
+                # would never re-bridge its own (#3213 re-review); skipping
+                # it left a template that uses the name without ``{% load %}``
+                # failing with "Invalid filter" (#3218). Restore the owner's.
+                callable_obj = loader_owned[name]
+                if callable_obj is None:
+                    continue
             try:
                 restored = register_django_filter(name, callable_obj) or restored
             except Exception:  # noqa: BLE001 — defensive; never block render

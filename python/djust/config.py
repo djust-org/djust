@@ -12,6 +12,7 @@ Provides centralized configuration for:
 import copy
 import logging
 import os
+import threading
 from typing import Any, ClassVar, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,25 @@ _SERVICE_WORKER_ALIASES = (
     ("DJUST_VDOM_CACHE_MAX_ENTRIES", "vdom_cache_max_entries", int),
     ("DJUST_STATE_SNAPSHOT_ENABLED", "state_snapshot_enabled", bool),
 )
+
+
+def _detached(value: Any) -> Any:
+    """``value`` with every dict, list and set in it copied, leaves shared (#3218).
+
+    What ``get()``/``as_dict()`` hand out and what ``set()``/``update()`` store:
+    an in-place edit of a returned container must not reach the live config,
+    where it would be unrecorded and silently undone by the next reload, and a
+    caller keeping the container it passed in must not edit the config through
+    it. Leaves are shared rather than deep-copied, so a config value that is an
+    arbitrary object (a class, a callable) is returned as itself.
+    """
+    if isinstance(value, dict):
+        return {k: _detached(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_detached(v) for v in value]
+    if isinstance(value, set):
+        return set(value)
+    return value
 
 
 def _set_path(target: Dict[str, Any], key: str, value: Any) -> None:
@@ -390,6 +410,10 @@ class LiveViewConfig:
 
     def __init__(self) -> None:
         self._config: Dict[str, Any] = copy.deepcopy(self._defaults)
+        # Serializes every write to ``_config`` / ``_programmatic`` against a
+        # reload (#3218): a reload on another thread between ``set()``'s write
+        # and its record used to rebuild without the value.
+        self._lock = threading.RLock()
         # Values written in code (``set`` / ``update``), in write order, each
         # with the settings contribution in force when it was written (#3217).
         # A reload from settings replays them, so reloading on
@@ -412,12 +436,13 @@ class LiveViewConfig:
 
     def _load_from_settings(self) -> None:
         """Load configuration from Django settings, in place, if available."""
-        loaded, contrib = self._apply_settings(self._config)
-        if loaded:
-            self._settings_loaded = True
-            self._contrib = contrib
-        self._validate_config(self._config)
-        self._sync_vdom_trace(self._config)
+        with self._lock:
+            loaded, contrib = self._apply_settings(self._config)
+            if loaded:
+                self._settings_loaded = True
+                self._contrib = contrib
+            self._validate_config(self._config)
+            self._sync_vdom_trace(self._config)
 
     def _apply_settings(self, target: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
         """Apply the Django settings the config reads onto ``target``.
@@ -431,7 +456,9 @@ class LiveViewConfig:
 
             live_cfg = getattr(settings, "LIVEVIEW_CONFIG", None) or {}
             if live_cfg:
-                target.update(live_cfg)
+                # Copied: the aliases below write into nested dicts, which
+                # must not be the settings module's own objects (#3218).
+                target.update(_detached(live_cfg))
                 contrib.update(live_cfg)
             # #1993: also honor LiveView runtime keys set in the similarly-named
             # ``DJUST_CONFIG`` dict as a fallback. The two dicts are defined in
@@ -448,7 +475,7 @@ class LiveViewConfig:
             if isinstance(djust_cfg, dict):
                 for key, value in djust_cfg.items():
                     if key in self._defaults and key not in live_cfg:
-                        target[key] = value
+                        target[key] = _detached(value)
                         contrib[key] = value
                         logger.debug(
                             "djust: applied LiveView config key %r from "
@@ -508,22 +535,23 @@ class LiveViewConfig:
         the value was written: an ``override_settings`` that sets a key wins
         inside the override, and the code-set value returns when it exits.
         """
-        new: Dict[str, Any] = copy.deepcopy(self._defaults)
-        loaded, contrib = self._apply_settings(new)
-        self._validate_config(new)
-        if keep_programmatic:
-            for key, (value, contrib_at_write) in self._programmatic.items():
-                now = _overlapping(contrib, key)
-                if now and now != _overlapping(contrib_at_write, key):
-                    continue  # the settings in force set this path themselves
-                _set_path(new, key, copy.deepcopy(value))
-        else:
-            self._programmatic = {}
-        self._config = new
-        self._settings_loaded = loaded
-        if loaded:
-            self._contrib = contrib
-        self._sync_vdom_trace(new)
+        with self._lock:
+            new: Dict[str, Any] = copy.deepcopy(self._defaults)
+            loaded, contrib = self._apply_settings(new)
+            self._validate_config(new)
+            if keep_programmatic:
+                for key, (value, contrib_at_write) in self._programmatic.items():
+                    now = _overlapping(contrib, key)
+                    if now and now != _overlapping(contrib_at_write, key):
+                        continue  # the settings in force set this path themselves
+                    _set_path(new, key, copy.deepcopy(value))
+            else:
+                self._programmatic = {}
+            self._config = new
+            self._settings_loaded = loaded
+            if loaded:
+                self._contrib = contrib
+            self._sync_vdom_trace(new)
 
     def _record_programmatic(self, key: str, value: Any) -> None:
         # Latest write last; a write to ``a`` supersedes earlier ``a.b`` writes.
@@ -598,7 +626,9 @@ class LiveViewConfig:
             default: Default value if key not found
 
         Returns:
-            Configuration value or default
+            Configuration value or default. A dict, list or set value is a
+            copy: editing it in place does not change the configuration
+            (#3218). Use :meth:`set` or :meth:`update` to change a value.
 
         Example:
             config.get('css_framework')  # 'bootstrap5'
@@ -616,7 +646,7 @@ class LiveViewConfig:
             else:
                 return default
 
-        return value if value is not None else default
+        return _detached(value) if value is not None else default
 
     def set(self, key: str, value: Any) -> None:
         """
@@ -629,9 +659,13 @@ class LiveViewConfig:
         Example:
             config.set('css_framework', 'tailwind')
             config.set('bootstrap5.field_class', 'custom-control')
+
+        The write and its record happen under one lock, so a reload on
+        another thread cannot fall between them and drop the value (#3218).
         """
-        _set_path(self._config, key, value)
-        self._record_programmatic(key, value)
+        with self._lock:
+            _set_path(self._config, key, _detached(value))
+            self._record_programmatic(key, value)
 
     def get_framework_class(self, class_type: str) -> str:
         """
@@ -705,21 +739,25 @@ class LiveViewConfig:
                 'render_labels': False,
             })
         """
-        self._config.update(config_dict)
-        for key, value in config_dict.items():
-            self._record_programmatic(key, value)
+        with self._lock:
+            self._config.update(_detached(config_dict))
+            for key, value in config_dict.items():
+                self._record_programmatic(key, value)
 
     def as_dict(self) -> Dict[str, Any]:
-        """Get the entire configuration as a dictionary"""
-        return self._config.copy()
+        """Get the entire configuration as a dictionary: a copy, nested dicts
+        included, so editing it does not change the configuration (#3218)."""
+        detached: Dict[str, Any] = _detached(self._config)
+        return detached
 
 
 # Global configuration instance
 config = LiveViewConfig()
 
-#: Every Django setting ``_apply_settings`` reads. A change to any of them
-#: reloads the config; pinned against the source by
-#: ``test_config_follows_override_settings_3217``.
+#: Every Django setting the config is built from. A change to any of them
+#: reloads the config. Pinned against every settings read in this module,
+#: helpers included (#3218), by ``test_config_follows_override_settings_3217``,
+#: which lists the reads that deliberately do not reload (``DEBUG``).
 _CONFIG_SETTINGS = frozenset(
     {"LIVEVIEW_CONFIG", "DJUST_CONFIG", "DJUST_WS_COMPRESSION"}
     | {setting_name for setting_name, _, _ in _SERVICE_WORKER_ALIASES}

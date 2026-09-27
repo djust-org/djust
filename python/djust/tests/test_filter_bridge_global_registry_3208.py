@@ -145,12 +145,9 @@ def test_clearing_the_registry_restores_only_the_missing_names_once():
         first = register.call_count
         tf._ensure_custom_filters_bridged()
     assert boot.call_count == 0, "restoring must not re-walk every library"
-    # Names a {% load %} owns are the loader's to restore, not the bootstrap's
-    # (#3213 re-review e). Earlier tests on the worker decide which those are,
-    # so derive the expected set rather than assume it is every bridged name.
-    with tf._global_registry_namespace():
-        loader_owned = tf._loader_owned_filters()
-    expected = sorted(set(tf._BRIDGED_FILTERS) - loader_owned)
+    # Every bridged name comes back, a name a {% load %} owns included: that
+    # one from the library that owns it (#3218).
+    expected = sorted(tf._BRIDGED_FILTERS)
     assert expected
     assert sorted(c.args[0] for c in register.call_args_list) == expected
     assert register.call_count == first, "a second call restored again"
@@ -205,38 +202,74 @@ def test_restoring_never_overwrites_a_same_name_filter_a_load_registered():
         _fresh_bootstrap()
 
 
-def test_a_missing_name_the_loader_owns_is_left_to_the_loader():
-    """#3213 re-review e: when the name a ``{% load %}`` bridged is itself
-    unregistered, restoring the bootstrap's callable would satisfy the
-    loader's owner+presence check, and it would never re-bridge its own. The
-    restore leaves that name to the loader; the next ``{% load %}`` puts the
-    loaded library's filter back."""
-    from django.template import Library, engines
+def _installed_engine():
+    from django.template import engines
+
+    return next(
+        e.engine for e in engines.all() if hasattr(getattr(e, "engine", None), "template_libraries")
+    )
+
+
+def test_a_missing_name_the_loader_owns_is_restored_from_the_loaded_library():
+    """#3218 (#3213 re-review e): when the name a ``{% load %}`` bridged is
+    itself unregistered, the restore puts back the LOADED library's filter,
+    not the bootstrap's. The bootstrap's would satisfy the loader's
+    owner+presence check and serve the wrong callable; skipping the name (the
+    #3213 behaviour) left a template that uses it without ``{% load %}``
+    failing with ``Invalid filter``."""
+    from django.template import Library
 
     from djust import template_libraries as tl
 
     first, second = Library(), Library()
     first.filter("dup_3213", lambda value: "FIRST")
     second.filter("dup_3213", lambda value: "SECOND")
-    engine = next(
-        e.engine for e in engines.all() if hasattr(getattr(e, "engine", None), "template_libraries")
-    )
+    engine = _installed_engine()
     engine.template_libraries["dup_second_3213"] = second
     try:
         _fresh_bootstrap()
         tl._bridge_library("dup_first_3213", first)
         _rust.unregister_custom_filter("dup_3213")
         tf._ensure_custom_filters_bridged()
-        assert not _rust.registry_entry_is_local("dup_3213", "filter"), (
+        assert _rust.registry_entry_is_local("dup_3213", "filter"), (
+            "the name the loader owns was skipped, not restored"
+        )
+        assert _rust.render_template("{{ x|dup_3213 }}", {"x": 1}) == "FIRST", (
             "the bootstrap's SECOND was restored over the loader's name"
         )
-        tl._bridge_library("dup_first_3213", first)  # the next {% load first %}
-        assert _rust.render_template("{{ x|dup_3213 }}", {"x": 1}) == "FIRST"
     finally:
         engine.template_libraries.pop("dup_second_3213", None)
         _rust.unregister_custom_filter("dup_3213")
         tl._filter_owner.pop("dup_3213", None)
         tl._loaded.pop("dup_first_3213", None)
+        _fresh_bootstrap()
+
+
+def test_a_loaded_project_filter_survives_a_clear_without_a_load():
+    """#3218, the re-review's exact sequence: bootstrap, ``{% load owned_lib %}``
+    in the global namespace, ``clear_custom_filters()``, then a render that
+    uses the filter WITHOUT ``{% load %}``. Before, it failed with
+    ``Invalid filter: 'owned_3218'``."""
+    from django.template import Library
+
+    from djust import template_libraries as tl
+
+    owned = Library()
+    owned.filter("owned_3218", lambda value: "OWNED:%s" % value)
+    engine = _installed_engine()
+    engine.template_libraries["owned_lib_3218"] = owned
+    try:
+        _fresh_bootstrap()
+        assert "owned_3218" in tf._BRIDGED_FILTERS
+        tl._bridge_library("owned_lib_3218", owned)  # {% load owned_lib_3218 %}
+        _rust.clear_custom_filters()
+        tf._ensure_custom_filters_bridged()
+        assert _rust.render_template("{{ x|owned_3218 }}", {"x": 1}) == "OWNED:1"
+    finally:
+        engine.template_libraries.pop("owned_lib_3218", None)
+        _rust.unregister_custom_filter("owned_3218")
+        tl._filter_owner.pop("owned_3218", None)
+        tl._loaded.pop("owned_lib_3218", None)
         _fresh_bootstrap()
 
 
