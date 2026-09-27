@@ -173,7 +173,7 @@ Plus a Redis channel layer, `channels_redis.core.RedisChannelLayer`, as in [Chan
 Each item below caused a failure in a multi-pod test when it was missing.
 
 1. **Shared, durable sessions.** The page GET and the WebSocket can land on different processes, so sessions kept per process (a `locmem` cache, files on each pod's disk) share nothing. Use the database (`db`), `cached_db` with a cache every process shares, or a `cache` session on a Redis that persists. With sessions in a Redis without persistence, a Redis restart logs everyone out. In the test, on 1.3.0rc4, every user of an explicit-exposure view was also stuck until they reloaded the page; since [#3201](https://github.com/djust-org/djust/issues/3201) (merged on `main` after 1.3.0rc4) such a page mounts fresh, as an anonymous user.
-2. **`socket_timeout` above 5 s on the channel layer with redis-py 8.** redis-py 8 made its socket timeout default to 5 s, which equals channels_redis' receive timeout. A process whose channel receives nothing for 5 s drops a WebSocket: 38 unexpected disconnects in 90 s on 2 pods with 200 per-user clients and no broadcast traffic. Give each channel-layer host a `socket_timeout` greater than 5, for example 10. See [#3199](https://github.com/djust-org/djust/issues/3199) for the configuration and the system check.
+2. **`socket_timeout` above 5 s on the channel layer with redis-py 8.** redis-py 8 made its socket timeout default to 5 s, which equals channels_redis' receive timeout. A process whose channel receives nothing for 5 s drops a WebSocket: 38 unexpected disconnects in 90 s on 2 pods with 200 per-user clients and no broadcast traffic. Give each channel-layer host a `socket_timeout` greater than 5; 20 is recommended, and these measurements ran with 10. Don't use `None`. See [Channel Layer](deployment.md#channel-layer-for-cross-process-push) for why, and [#3199](https://github.com/djust-org/djust/issues/3199) for the system check.
 3. **Opt in to state that survives a reconnect.** `STATE_BACKEND = "redis"` does not bring a view's state back on another process. It caches the compiled view as the diff baseline for the next mount. A default LiveView that reconnects to another process runs `mount()` again, and whatever it held is lost. In the test, a counter went back to 0 on every reconnect of a default view. To keep state across processes, persist it through the Django session:
    - legacy views: set `enable_state_snapshot = True` on the view;
    - [explicit exposure](../state/explicit-exposure.md) views: declare the fields with `state(..., persist="server")`.
@@ -274,7 +274,7 @@ On 1.3.0rc4, explicit-exposure views were the one configuration where failover s
 - a rolling restart produced 80–93 "State unavailable. Please reload the page." errors among 100 explicit-view users, in a burst at each step of the roll, because the surviving pods were busy with the reconnect wave;
 - after a Redis restart that lost their sessions, explicit-view pages could not mount again until the user reloaded.
 
-Both are fixed on `main` after 1.3.0rc4 ([#3200](https://github.com/djust-org/djust/issues/3200), [#3201](https://github.com/djust-org/djust/issues/3201)), and neither fix has been re-measured under failover. Keep sessions in the database, and test a rolling restart under load before relying on explicit exposure in a multi-pod deployment.
+Both changed on `main` after 1.3.0rc4, and neither change has been re-measured under failover. [#3201](https://github.com/djust-org/djust/issues/3201) fixes the second: such a page now mounts fresh. [#3200](https://github.com/djust-org/djust/issues/3200) makes the first much less likely under load, but does not rule it out: a save that keeps missing its deadline still ends in the reload error after three deferrals in a row, or once a save has been running for 10 s. Keep sessions in the database, and test a rolling restart under load before relying on explicit exposure in a multi-pod deployment.
 
 #### Probes
 
@@ -326,7 +326,7 @@ The numbers above came from load generators that behave like browsers. To measur
 - [ ] **"is bound to a different event loop".** An asyncio object is shared between sessions under `--loops`.
 - [ ] **Probes fail during page-load bursts.** Answer `/healthz` on the event loop, not through `PooledHTTP`.
 - [ ] **Several pods: a view's state resets after a reconnect.** Set `enable_state_snapshot` or `persist="server"`, and use a shared session store.
-- [ ] **Several pods: idle clients drop every few seconds.** Set `socket_timeout` above 5 s on the channel layer (redis-py 8, #3199).
+- [ ] **Several pods: idle clients drop every few seconds.** Set `socket_timeout` above 5 s on the channel layer, 20 recommended (redis-py 8, #3199).
 - [ ] **Several pods: one pod is idle after a failover.** Connections don't rebalance; size for N+1.
 - [ ] **A rolling update never finishes.** The surge pod can't be scheduled: free a pod slot or use `maxUnavailable: 1`.
 - [ ] **Load test numbers look too good or too bad.** Check for 4429 refusals (the per-IP limit), the load generator's CPU, the host's load average, and lost result logs.
