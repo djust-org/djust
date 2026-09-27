@@ -643,10 +643,12 @@ def test_save_block_gates_on_enable_state_snapshot_source():
     assert "enable_state_snapshot" in source
     assert "target_view is self.view_instance" in source_collapsed
     # Both gate conditions must co-occur in an AND expression.
+    # #3211: the legacy-policy clause joins them. The flag is the legacy
+    # opt-in; an explicit view commits through ``commit_explicit_turn``.
     assert (
-        'iftarget_viewisself.view_instanceandgetattr(self.view_instance,"enable_state_snapshot",False)'
-        in source_nospaces
-    ), "Both gates must be AND'd in the save-block condition for #1475 fix."
+        "if(target_viewisself.view_instanceandlegacy_target"
+        'andgetattr(self.view_instance,"enable_state_snapshot",False))' in source_nospaces
+    ), "All gates must be AND'd in the save-block condition (#1475, #3211)."
 
 
 class _WSSlowOptInCounter(LiveView):

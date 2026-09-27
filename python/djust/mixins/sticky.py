@@ -85,11 +85,20 @@ def sticky_child_should_persist(child: Any, parent: Any) -> bool:
     parent re-``mount()``s fresh. A child that opts in under a parent that
     does not is a misconfiguration — surfacing it (a ``djust check`` + a
     runtime warning) is iter 18c; 18a silently skips the save.
+
+    Both must also be legacy views (ADR-038): the flag is the legacy opt-in and
+    grants nothing to an explicit view. An explicit child persists through its
+    own adapter, and a legacy save under an explicit parent could never be
+    restored (:func:`restore_sticky_child_state` refuses it) (#3211).
     """
+    from .._exposure import uses_legacy_exposure
+
     return bool(
         getattr(child, "sticky_id", None)
         and getattr(child, "enable_state_snapshot", False)
         and getattr(parent, "enable_state_snapshot", False)
+        and uses_legacy_exposure(child)
+        and uses_legacy_exposure(parent)
     )
 
 

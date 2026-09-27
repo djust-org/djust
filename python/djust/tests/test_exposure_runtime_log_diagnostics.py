@@ -339,16 +339,30 @@ async def test_post_event_state_save_failure_is_value_free_for_explicit_views(
     """``_persist_state_after_event`` logged a failed save with
     ``logger.exception``. Explicit saves project declared ``persist="server"``
     values and "storage exceptions propagate" (``_exposure_sessions``), so a
-    storage error can carry server-only data. The trigger is synthetic — the
-    session store's ``aset`` raises after mount — and it is the one write both
-    the legacy and the explicit save paths share."""
+    storage error can carry server-only data. The trigger is synthetic: the
+    store write raises after mount. A legacy view writes through the session's
+    ``aset``. An explicit view, even with ``enable_state_snapshot`` set, commits
+    through ``commit_explicit_turn`` (#3211), so its failing write is the
+    explicit save, and the turn is not acknowledged."""
     from django.contrib.sessions.backends.base import SessionBase
+
+    from djust import _exposure_sessions
 
     writes = []
 
     async def failing_aset(self, key, value):
         writes.append(key)
         raise ValueError("SESSION_STORE_SENTINEL")
+
+    def failing_explicit_save(view, request):
+        writes.append("explicit")
+        raise ValueError("SESSION_STORE_SENTINEL")
+
+    detail = (
+        "Failed to save LiveView state after runtime event"
+        if policy == "legacy"
+        else "Explicit state save failed; success frame withheld"
+    )
 
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
     monkeypatch.setattr(PersistFailureView, "exposure_policy", policy)
@@ -366,18 +380,20 @@ async def test_post_event_state_save_failure_is_value_free_for_explicit_views(
             )
             await _drain(socket)
             monkeypatch.setattr(SessionBase, "aset", failing_aset)
+            monkeypatch.setattr(_exposure_sessions, "save_server_state", failing_explicit_save)
             caplog.clear()
             with caplog.at_level(logging.DEBUG):
                 await socket.send_json_to({"type": "event", "event": "bump", "params": {}})
-                await _drain(
-                    socket,
-                    caplog,
-                    _marker(policy, debug, "Failed to save LiveView state after runtime event"),
-                )
+                frames = await _drain(socket, caplog, _marker(policy, debug, detail))
             assert writes, "the post-event save never reached the store; vacuous"
+            if policy == "explicit":
+                assert writes == ["explicit"], writes
+                assert [f["type"] for f in frames] == ["error"], frames
+                if not debug:
+                    assert "SESSION_STORE_SENTINEL" not in json.dumps(frames)
             if policy == "legacy" or debug:
                 assert "Traceback" in caplog.text
-                assert "Failed to save LiveView state after runtime event" in caplog.text
+                assert detail in caplog.text
                 assert "SESSION_STORE_SENTINEL" in caplog.text
             else:
                 assert "SESSION_STORE_SENTINEL" not in caplog.text

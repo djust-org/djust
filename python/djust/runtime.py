@@ -4275,19 +4275,26 @@ class ViewRuntime:
         # (test_runtime_state_save_tt_1894) asserts the SAME gate string the WS
         # pin asserts — drift between the two save gates goes red. Default views
         # (no opt-in) MUST NOT persist (#1552). Bounded by 150ms (#1475).
+        #
+        # An explicit view commits regardless of the flag, as mount ignores it
+        # (``opt_in and legacy_exposure`` in ``dispatch_mount``). The flag is
+        # the legacy snapshot opt-in; routing an explicit view to the legacy
+        # best-effort save acked a failed save and bypassed E3 (#3211).
+        from ._exposure import uses_legacy_exposure
+
         target_view = self.view_instance
-        if target_view is self.view_instance and getattr(
-            self.view_instance, "enable_state_snapshot", False
+        legacy_target = uses_legacy_exposure(target_view)
+        if (
+            target_view is self.view_instance
+            and legacy_target
+            and getattr(self.view_instance, "enable_state_snapshot", False)
         ):
             await self._persist_state_after_event(target_view, event_name)
-        else:
-            from ._exposure import uses_legacy_exposure
-
-            if target_view is self.view_instance and not uses_legacy_exposure(target_view):
-                # A failed explicit save withholds the success frame (E3); the
-                # child tree is saved on the render/noop branches below.
-                if not await self.commit_explicit_turn(target_view, source="event", children=False):
-                    return
+        elif target_view is self.view_instance and not legacy_target:
+            # A failed explicit save withholds the success frame (E3); the
+            # child tree is saved on the render/noop branches below.
+            if not await self.commit_explicit_turn(target_view, source="event", children=False):
+                return
 
         snapshot_fields = await self._explicit_event_snapshot(view)
 
@@ -4708,10 +4715,11 @@ class ViewRuntime:
     async def _persist_state_after_event(self, target_view: Any, event_name: Optional[str]) -> None:
         """Persist the top-level view's post-event state to the Django session.
 
-        Caller MUST have already verified top-level view identity and either
-        legacy snapshot opt-in or the staged explicit policy. Explicit saves
-        select only declared server fields, never render context. Bounded by a
-        150ms timeout, mirroring the WS save block (websocket.py:3704-3804)."""
+        Caller MUST have already verified top-level view identity and legacy
+        snapshot opt-in. Legacy views only: an explicit view is refused before
+        any write and commits through :meth:`commit_explicit_turn` instead
+        (#3211). Bounded by a 150ms timeout, mirroring the WS save block
+        (websocket.py:3704-3804)."""
 
         async def _save() -> None:
             # Discover the session the same way the WS save block does
@@ -4719,23 +4727,12 @@ class ViewRuntime:
             # session (carries the save-key namespace + path); fall back to the
             # ASGI scope's session when no mount request was stashed.
             mount_request = getattr(target_view, "_djust_mount_request", None)
-            from ._exposure import ExposureError, uses_legacy_exposure
+            from ._exposure import require_legacy_state_api
 
-            if not uses_legacy_exposure(target_view):
-                from ._exposure_sessions import asave_server_state, request_binding
-
-                event_request = getattr(target_view, "_djust_event_request", None)
-                if event_request is None:
-                    raise ExposureError(
-                        "Explicit persistence requires the authorized event request"
-                    )
-                if (
-                    await sync_to_async(request_binding)(event_request)
-                    != self._explicit_mount_binding
-                ):
-                    raise ExposureError("Explicit event identity changed before persistence")
-                await asave_server_state(target_view, event_request)
-                return
+            # Legacy only. An explicit view commits through
+            # ``commit_explicit_turn`` (E3); this best-effort save would ack a
+            # failed write (#3211). Refused before any read or write.
+            require_legacy_state_api(target_view)
             scope_session = (
                 (self.scope.get("session") if self.scope else None)
                 if mount_request is None
@@ -5265,13 +5262,18 @@ class ViewRuntime:
 
         # New concrete bindings keep their opaque lifetime IDs and state in the
         # native component-session record. They return before the ordinary view
-        # event save below, so use the same bounded, opt-in persistence here.
-        if (
-            isinstance(component, ComponentDeclaration)
-            and view is self.view_instance
-            and getattr(view, "enable_state_snapshot", False)
-        ):
-            await self._persist_state_after_event(view, event_name)
+        # event save below, so use the same persistence here: the bounded,
+        # opt-in save for a legacy view, and the explicit commit (E3) for an
+        # explicit one, whose output handlers can write declared fields. The
+        # snapshot flag means nothing to an explicit view (#3211).
+        if isinstance(component, ComponentDeclaration) and view is self.view_instance:
+            from ._exposure import uses_legacy_exposure
+
+            if not uses_legacy_exposure(view):
+                if not await self.commit_explicit_turn(view, source="event"):
+                    return True
+            elif getattr(view, "enable_state_snapshot", False):
+                await self._persist_state_after_event(view, event_name)
 
         # Propagate the component event to the PARENT view's waiters with the
         # component_id injected (ADR-002 Phase 1b/1c, websocket.py:3456-3479).
