@@ -52,8 +52,10 @@ LIGHT = ThemeTokens(
     warning_foreground=INK,
     info=ColorScale(199, 89, 48),
     info_foreground=INK,
-    link=ColorScale(28, 80, 53),
-    link_hover=ColorScale(28, 80, 45),
+    # Links are text, not a fill: the 53% brand orange read 2.66:1 on the
+    # background (#3165). 35% keeps the hue at 5.3:1 (4.7:1 on muted).
+    link=ColorScale(28, 80, 35),
+    link_hover=ColorScale(28, 80, 29),
     code=ColorScale(215, 14, 93),
     code_foreground=ColorScale(215, 10, 20),
     selection=ColorScale(28, 80, 53),

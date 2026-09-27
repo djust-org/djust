@@ -2730,19 +2730,27 @@ button.rating-star:hover ~ .rating-star { color: hsl(var(--muted-foreground)); }
 .dj-avatar-status-busy, .dj-avatar__status--busy { background: hsl(var(--destructive)); }
 .dj-avatar-status-away, .dj-avatar__status--away { background: hsl(var(--warning)); }
 
-/* --- {% toast_container %} (djust_components/toast.html) ---
+/* --- {% toast_container %} (djust_components/toast.html) and the Python
+   `Toast` class (components/toast.py) ---
    `.dj-toast-container` (the fixed stack) is styled above, with
    `pointer-events: none`; the tag's container carries no position modifier,
-   so it takes the top-right corner, and each toast takes its clicks back. */
+   so it takes the top-right corner, and each toast takes its clicks back.
+   The tag renders `dj-toast--<type>` / `dj-toast__*`; the class renders
+   `dj-toast-<type>` / `dj-toast-message` / `dj-toast-dismiss` and reads the
+   `--dj-toast-*` properties its docstring lists (#3166). */
 .dj-toast-container:where(:not([class*="dj-toast-container--"])) { top: var(--space-4, 1rem); right: var(--space-4, 1rem); }
-.dj-toast { pointer-events: auto; display: flex; align-items: flex-start; gap: var(--space-3, 0.75rem); padding: var(--space-3, 0.75rem) var(--space-4, 1rem); border: 1px solid hsl(var(--dj-toast-tone, var(--border)) / 0.4); border-radius: var(--radius-lg, 0.5rem); background: hsl(var(--card)); color: hsl(var(--card-foreground)); box-shadow: var(--shadow-lg); font-size: var(--text-sm, 0.875rem); animation: dj-slide-in-right 0.2s ease-out; }
+.dj-toast { pointer-events: auto; display: flex; align-items: flex-start; gap: var(--space-3, 0.75rem); padding: var(--dj-toast-padding, var(--space-3, 0.75rem) var(--space-4, 1rem)); border: 1px solid var(--dj-toast-border, hsl(var(--dj-toast-tone, var(--border)) / 0.4)); border-radius: var(--dj-toast-radius, var(--radius-lg, 0.5rem)); background: var(--dj-toast-bg, hsl(var(--card))); color: var(--dj-toast-fg, hsl(var(--card-foreground))); box-shadow: var(--dj-toast-shadow, var(--shadow-lg)); font-size: var(--text-sm, 0.875rem); animation: dj-slide-in-right 0.2s ease-out; }
 .dj-toast--success { --dj-toast-tone: var(--success); }
 .dj-toast--error { --dj-toast-tone: var(--destructive); }
 .dj-toast--warning { --dj-toast-tone: var(--warning); }
 .dj-toast--info { --dj-toast-tone: var(--info); }
+.dj-toast-info { --dj-toast-tone: var(--info); border-color: var(--dj-toast-info-border, var(--dj-toast-border, hsl(var(--info) / 0.4))); background: var(--dj-toast-info-bg, var(--dj-toast-bg, hsl(var(--card)))); color: var(--dj-toast-info-fg, var(--dj-toast-fg, hsl(var(--card-foreground)))); }
+.dj-toast-success { --dj-toast-tone: var(--success); border-color: var(--dj-toast-success-border, var(--dj-toast-border, hsl(var(--success) / 0.4))); background: var(--dj-toast-success-bg, var(--dj-toast-bg, hsl(var(--card)))); color: var(--dj-toast-success-fg, var(--dj-toast-fg, hsl(var(--card-foreground)))); }
+.dj-toast-warning { --dj-toast-tone: var(--warning); border-color: var(--dj-toast-warning-border, var(--dj-toast-border, hsl(var(--warning) / 0.4))); background: var(--dj-toast-warning-bg, var(--dj-toast-bg, hsl(var(--card)))); color: var(--dj-toast-warning-fg, var(--dj-toast-fg, hsl(var(--card-foreground)))); }
+.dj-toast-error { --dj-toast-tone: var(--destructive); border-color: var(--dj-toast-error-border, var(--dj-toast-border, hsl(var(--destructive) / 0.4))); background: var(--dj-toast-error-bg, var(--dj-toast-bg, hsl(var(--card)))); color: var(--dj-toast-error-fg, var(--dj-toast-fg, hsl(var(--card-foreground)))); }
 .dj-toast__icon { flex-shrink: 0; color: hsl(var(--dj-toast-tone, var(--muted-foreground))); font-weight: var(--font-semibold, 600); }
-.dj-toast__message { flex: 1; min-width: 0; font-weight: var(--font-medium, 500); }
-.dj-toast__dismiss { flex-shrink: 0; padding: 0 var(--space-1, 0.25rem); background: transparent; border: none; border-radius: var(--radius-sm, 0.25rem); color: hsl(var(--muted-foreground)); font-size: var(--text-lg, 1.125rem); line-height: 1; cursor: pointer; }
-.dj-toast__dismiss:hover { color: hsl(var(--accent-foreground)); background: hsl(var(--accent)); }
-.dj-toast__dismiss:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
+.dj-toast__message, .dj-toast-message { flex: 1; min-width: 0; font-weight: var(--font-medium, 500); }
+.dj-toast__dismiss, .dj-toast-dismiss { flex-shrink: 0; padding: 0 var(--space-1, 0.25rem); background: transparent; border: none; border-radius: var(--radius-sm, 0.25rem); color: hsl(var(--muted-foreground)); font-size: var(--text-lg, 1.125rem); line-height: 1; cursor: pointer; }
+.dj-toast__dismiss:hover, .dj-toast-dismiss:hover { color: hsl(var(--accent-foreground)); background: hsl(var(--accent)); }
+.dj-toast__dismiss:focus-visible, .dj-toast-dismiss:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { .dj-toast { animation: none; } }
