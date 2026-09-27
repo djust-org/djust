@@ -25,6 +25,7 @@ the three stylesheets a themed page loads.
 
 from __future__ import annotations
 
+import functools
 import re
 from pathlib import Path
 
@@ -122,10 +123,123 @@ _STATIC = Path(djust.__file__).parent
 # (css_block), the theming package's components.css, then djust-components'.
 _THEMING_COMPONENTS_CSS = _STATIC / "theming/static/djust_theming/css/components.css"
 _COMPONENTS_CSS = _STATIC / "components/static/djust_components/components.css"
-# A hovered, enabled ``<button class="btn">``: the selectors that match it.
-# ``:where(.btn)`` matches too, with zero specificity.
-_PLAIN_BTN_HOVER = re.compile(r"^(?:\.btn|:where\(\.btn\))(?::hover|:not\(:disabled\))*$")
-_PLAIN_BTN_REST = re.compile(r"^(?:\.btn|:where\(\.btn\))(?::not\(:disabled\))*$")
+
+# -- A small selector matcher, so element rules compete too (#3238 review) ----
+#
+# The element is ``<TAG class="btn">`` (a ``<button type="button">`` or an
+# ``<a href>``), enabled, inside ``<html><body>``, hovered or not. A selector
+# is a descendant chain of compounds; the last compound must match the
+# element and every earlier one must match an ancestor (``html``/``body``/
+# ``:root``). Anything the matcher does not understand (``:focus``,
+# ``::before``, ``>``) does not match, which only ever hides a rule.
+
+_TOKEN = re.compile(
+    r"\*|[a-zA-Z][\w-]*|\.[\w-]+|\[[^\]]*\]|::?[\w-]+(?:\((?:[^()]|\([^()]*\))*\))?"
+)
+
+
+def _split_list(text: str) -> list:
+    """Split a selector list on top-level commas."""
+    parts, depth, start = [], 0, 0
+    for i, ch in enumerate(text):
+        depth += ch == "("
+        depth -= ch == ")"
+        if ch == "," and depth == 0:
+            parts.append(text[start:i])
+            start = i + 1
+    parts.append(text[start:])
+    return [part.strip() for part in parts if part.strip()]
+
+
+def _compound(text: str, element: dict):
+    """``(matches, (a, b, c) specificity)`` of one compound, or None if unparsable."""
+    tokens = _TOKEN.findall(text)
+    if "".join(tokens) != text:
+        return None
+    spec = [0, 0, 0]
+    ok = True
+    for token in tokens:
+        if token == "*":
+            continue
+        if token.startswith("."):
+            spec[1] += 1
+            ok &= token[1:] in element["classes"]
+        elif token.startswith("["):
+            spec[1] += 1
+            m = re.fullmatch(r"\[\s*([\w-]+)\s*(?:=\s*['\"]?([^'\"\]]*)['\"]?)?\s*\]", token)
+            ok &= bool(m) and (
+                m.group(1) in element["attrs"]
+                and (m.group(2) is None or element["attrs"][m.group(1)] == m.group(2))
+            )
+        elif token.startswith("::"):
+            return None
+        elif token.startswith(":"):
+            name, _, arg = token[1:].partition("(")
+            arg = arg[:-1]
+            if name == "hover":
+                spec[1] += 1
+                ok &= element["hover"]
+            elif name in ("where", "is", "not"):
+                results = [_compound(part, element) for part in _split_list(arg)]
+                if any(r is None for r in results):
+                    return None
+                hit = any(r[0] for r in results)
+                ok &= (not hit) if name == "not" else hit
+                if name != "where":
+                    best = max(r[1] for r in results)
+                    spec = [x + y for x, y in zip(spec, best)]
+            elif name == "disabled":
+                spec[1] += 1
+                ok &= False
+            elif name == "root":
+                spec[1] += 1
+                ok &= element["tag"] == "html"
+            else:
+                return None
+        else:
+            spec[2] += 1
+            ok &= token.lower() == element["tag"]
+    return ok, tuple(spec)
+
+
+def _match(selector: str, element: dict):
+    """Specificity of ``selector`` if it matches ``element``, else None."""
+    compounds, depth, current = [], 0, ""
+    for ch in selector:
+        depth += ch == "("
+        depth -= ch == ")"
+        if ch.isspace() and depth == 0:
+            if current:
+                compounds.append(current)
+            current = ""
+        else:
+            current += ch
+    if current:
+        compounds.append(current)
+    last = _compound(compounds[-1], element)
+    if last is None or not last[0]:
+        return None
+    spec = list(last[1])
+    for ancestor in compounds[:-1]:
+        hit = next(
+            (
+                r
+                for tag in ("html", "body")
+                for r in [_compound(ancestor, {**element, "tag": tag, "classes": set()})]
+                if r is not None and r[0]
+            ),
+            None,
+        )
+        if hit is None:
+            return None
+        spec = [x + y for x, y in zip(spec, hit[1])]
+    return tuple(spec)
+
+
+_PROPERTY_ALIASES = {
+    "background-color": "background",
+    "text-decoration-line": "text-decoration",
+}
 
 
 def _skip_block(css: str, i: int) -> int:
@@ -178,37 +292,58 @@ def _cascade_rules(css: str, layer=None, out=None, order=None):
                 if ":" in decl:
                     prop, value = decl.split(":", 1)
                     decls[prop.strip()] = value.strip()
-            for selector in prelude.split(","):
+            for selector in _split_list(prelude):
                 out.append((layer, " ".join(selector.split()), decls))
         i = end
     return out, order
 
 
-def _cascaded_plain_btn_hover(sheets: list, hovered: bool = True) -> dict:
-    """``color`` and ``background`` of a (hovered) plain ``.btn``, by the cascade."""
-    matches = _PLAIN_BTN_HOVER if hovered else _PLAIN_BTN_REST
-    rules, layers = [], []
-    for css in sheets:
-        _cascade_rules(css, out=rules, order=layers)
-    winners = {}
-    for position, (layer, selector, decls) in enumerate(rules):
-        if not matches.match(selector):
+@functools.lru_cache(maxsize=None)
+def _parsed(css: str) -> tuple:
+    return _cascade_rules(css)
+
+
+def _cascade(sheets: list, tag: str = "button", hovered: bool = True) -> dict:
+    """The winning declaration of each property on ``<tag class="btn">``.
+
+    Values are ``(value, sheet index, layer)``. Precedence as CSS orders it:
+    ``!important`` first (and then earlier layers win, unlayered last);
+    otherwise unlayered beats every layer and later layers beat earlier
+    ones; then specificity; then source order.
+    """
+    element = {
+        "tag": tag,
+        "classes": {"btn"},
+        "hover": hovered,
+        "attrs": {"class": "btn", **({"type": "button"} if tag == "button" else {"href": "#"})},
+    }
+    rules = []  # (sheet index, layer, selector, decls)
+    layers: list = []
+    for index, css in enumerate(sheets):
+        found, order = _parsed(css)
+        layers.extend(name for name in order if name not in layers)
+        rules.extend((index, layer, selector, decls) for layer, selector, decls in found)
+    winners: dict = {}
+    for position, (index, layer, selector, decls) in enumerate(rules):
+        spec = _match(selector, element)
+        if spec is None:
             continue
-        # Unlayered styles beat every layer; later layers beat earlier ones.
         rank = len(layers) if layer is None else layers.index(layer)
-        specificity = (
-            selector.startswith(".btn") + selector.count(":hover") + selector.count(":not(")
-        )
         for prop, value in decls.items():
-            if prop in ("background", "background-color"):
-                prop = "background"
-            elif prop != "color":
-                continue
-            key = (rank, specificity, position)
+            important = value.endswith("!important")
+            value = value[: -len("!important")].strip() if important else value
+            prop = _PROPERTY_ALIASES.get(prop, prop)
+            key = (important, -rank if important else rank, spec, position)
             if prop not in winners or key >= winners[prop][0]:
-                winners[prop] = (key, value)
-    color = winners.get("color", (None, "inherit"))[1]
-    background = winners.get("background", (None, "transparent"))[1]
+                winners[prop] = (key, (value, index, layer))
+    return {prop: won[1] for prop, won in winners.items()}
+
+
+def _cascaded_plain_btn_hover(sheets: list, hovered: bool = True, tag: str = "button") -> dict:
+    """``color`` and ``background`` of a plain ``.btn``, by the cascade."""
+    won = _cascade(sheets, tag=tag, hovered=hovered)
+    color = won.get("color", ("inherit",))[0]
+    background = won.get("background", ("transparent",))[0]
     if background.split()[0].lower() == "currentcolor":
         background = color
     return {"color": color, "background": background}
@@ -236,9 +371,14 @@ def _contrast(a: str, b: str) -> float:
 DESIGN_SYSTEMS = sorted(get_all_design_systems())
 
 
+@functools.lru_cache(maxsize=None)
+def _theme_css(name: str) -> str:
+    return CompleteThemeCSSGenerator(name).generate_css()
+
+
 def _themed_page_sheets(name: str) -> list:
     return [
-        CompleteThemeCSSGenerator(name).generate_css(),
+        _theme_css(name),
         _THEMING_COMPONENTS_CSS.read_text(encoding="utf-8"),
         _COMPONENTS_CSS.read_text(encoding="utf-8"),
     ]
@@ -280,16 +420,15 @@ def test_the_theme_still_styles_a_plain_button(name):
     shows the theme's value: the inverted hover stays inverted, and a theme's
     transparent outlined button stays transparent.
     """
-    theme_rules, _ = _cascade_rules(CompleteThemeCSSGenerator(name)._generate_component_styles())
+    theme_css = CompleteThemeCSSGenerator(name)._generate_component_styles()
     sheets = _themed_page_sheets(name)
     for hovered in (False, True):
-        matches = _PLAIN_BTN_HOVER if hovered else _PLAIN_BTN_REST
-        own = {}
-        for _, selector, decls in sorted(
-            theme_rules, key=lambda rule: ":hover" in rule[1]
-        ):  # the generator emits .btn then .btn:hover; hover is more specific
-            if matches.match(selector):
-                own.update(decls)
+        own = {
+            prop: value
+            for prop, (value, _, _) in _cascade(
+                ["@layer components { %s }" % theme_css], hovered=hovered
+            ).items()
+        }
         cascaded = _cascaded_plain_btn_hover(sheets, hovered=hovered)
         if "color" in own:
             assert cascaded["color"] == own["color"], (name, hovered, cascaded)
@@ -324,3 +463,76 @@ def test_the_cascade_model_ranks_where_below_a_class():
 def test_contrast_ratio_matches_wcag_endpoints():
     assert round(_contrast("0 0% 0%", "0 0% 100%"), 1) == 21.0
     assert _contrast("240 10% 3.9%", "240 10% 3.9%") == 1.0
+
+
+# -- #3238 review: layering the paint must not hand over the box model ---------------
+#
+# The first fix moved the whole ``.btn`` rule into ``@layer components``. In
+# headless Chrome that underlined and link-coloured every hovered
+# ``<a class="btn">`` (the theme's layered ``a:hover``), swapped the radius for
+# the theming package's unlayered ``.btn`` in 63 design systems, and zeroed the
+# padding under Tailwind's unlayered preflight. The cases below model those
+# competitors. Excerpts of the two resets the review rendered:
+_RESETS = {
+    "none": "",
+    "tailwind-preflight": (
+        "a{color:inherit;text-decoration:inherit}"
+        "button,input,optgroup,select,textarea{font-family:inherit;font-size:100%;"
+        "font-weight:inherit;line-height:inherit;color:inherit;margin:0;padding:0}"
+        "button,[type='button'],[type='reset'],[type='submit']{-webkit-appearance:button;"
+        "background-color:transparent;background-image:none}"
+    ),
+    "site-reset": "a{color:rgb(0,0,238);text-decoration:underline} button{border-radius:0;padding:1px 6px}",
+}
+_BOX_MODEL = ("padding", "border-radius", "font-size", "font-weight", "text-decoration", "display")
+
+
+@pytest.mark.parametrize("name", DESIGN_SYSTEMS)
+def test_btn_box_model_stays_with_components_css(name):
+    """padding, radius, font and underline of a ``.btn`` are components.css's,
+    under every reset, for ``<button>`` and ``<a>``, at rest and hovered."""
+    components = _COMPONENTS_CSS.read_text(encoding="utf-8")
+    expected = {
+        prop: _cascade([components], tag="button", hovered=False)[prop][0] for prop in _BOX_MODEL
+    }
+    assert expected["text-decoration"] == "none" and "var(" in expected["padding"]
+    for reset_name, reset in _RESETS.items():
+        sheets = [*_themed_page_sheets(name), reset]
+        for tag in ("button", "a"):
+            for hovered in (False, True):
+                won = _cascade(sheets, tag=tag, hovered=hovered)
+                got = {prop: won[prop][0] for prop in _BOX_MODEL}
+                assert got == expected, (name, reset_name, tag, hovered)
+
+
+@pytest.mark.parametrize("name", DESIGN_SYSTEMS)
+def test_hovered_link_button_is_not_link_coloured(name):
+    """The theme's ``a:hover`` colour must not reach a hovered ``<a class="btn">``;
+    where the theme repaints a hovered ``.btn`` (the inverted designs), the
+    anchor gets that colour like a ``<button>`` does."""
+    sheets = _themed_page_sheets(name)
+    anchor = _cascaded_plain_btn_hover(sheets, tag="a")
+    assert "link" not in anchor["color"], (name, anchor)
+    theme_hover = _cascade(["@layer components { %s }" % _theme_css(name)], tag="a").get("color")
+    if theme_hover and "link" not in theme_hover[0]:
+        # A .btn:hover colour (not the a:hover one) is the theme's intent.
+        assert anchor["color"] == _cascaded_plain_btn_hover(sheets)["color"], (name, anchor)
+
+
+def test_face_is_scoped_to_form_buttons():
+    """``<a class="btn">`` has no UA face, so it keeps a transparent background."""
+    sheets = _themed_page_sheets("default")
+    assert _cascaded_plain_btn_hover(sheets, hovered=False, tag="a")["background"] == "transparent"
+    assert "muted" in _cascaded_plain_btn_hover(sheets, hovered=False)["background"]
+
+
+def test_the_cascade_model_sees_element_rules():
+    """Canary: the #3238 round-1 shape (whole ``.btn`` layered) loses to resets."""
+    theme = "@layer components;\n@layer components { a:hover { text-decoration: underline; } }"
+    layered = "@layer components { .btn { padding: 8px; text-decoration: none; } }"
+    reset = "button { padding: 0 }"
+    assert _cascade([theme, layered, reset])["padding"][0] == "0"
+    assert _cascade([theme, layered], tag="a")["text-decoration"][0] == "underline"
+    unlayered = ".btn { padding: 8px; text-decoration: none; }"
+    assert _cascade([theme, unlayered, reset])["padding"][0] == "8px"
+    assert _cascade([theme, unlayered], tag="a")["text-decoration"][0] == "none"
