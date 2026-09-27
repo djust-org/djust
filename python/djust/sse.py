@@ -270,7 +270,7 @@ async def _linger() -> None:
 async def _shutdown_closed_session(session: "SSESession") -> None:
     """Dispose a closed stream's own session, as a WebSocket disconnect does (#3221).
 
-    Cancels its view's background work and waiters, removes upload temp files
+    Cancels its waiters (and an explicit view's background work), removes upload temp files
     and runs unregister hooks. Runs after the linger and after an event POST
     still being dispatched has finished (waited for up to
     ``_CLOSE_DISPATCH_WAIT_S``), so no turn is torn down mid-way. Explicit and
@@ -425,6 +425,9 @@ class SSESession:
         self.session_id = session_id
         self.view_instance: Optional[Any] = None
         self.queue: asyncio.Queue = asyncio.Queue()
+        # Set once shutdown() queued the close sentinel: the stream reads
+        # nothing after it, so later pushes are dropped (#3232).
+        self._closed_sentinel_queued = False
         # The loop that serves the stream GET. With several event loops
         # (djust serve --loops N, #3128) a later event POST can arrive on
         # another loop; it hops here, because the queue, the locks and the
@@ -582,7 +585,14 @@ class SSESession:
                     await self.runtime._flush_all_pending()
 
     def push(self, msg: Dict[str, Any]) -> None:
-        """Enqueue a message to be sent to the SSE client."""
+        """Enqueue a message to be sent to the SSE client.
+
+        Dropped once ``shutdown()`` has queued the close sentinel: the stream
+        stops at the sentinel, so a later frame (a legacy view's background
+        work finishing after the close, #3232) would only sit in the queue.
+        """
+        if self._closed_sentinel_queued:
+            return
         self._put(msg)
 
     def _put(self, msg: Optional[Dict[str, Any]]) -> None:
@@ -609,11 +619,12 @@ class SSESession:
         """Signal the SSE stream generator to close the connection.
 
         Disposes the session's view, as a WebSocket disconnect does. An
-        explicit view goes through ``dispose_child_subtree``; a legacy view
-        gets the WebSocket disconnect's legacy teardown plus a cancel of its
-        background work (#3232). Either way the session and runtime drop the
-        view, so a late background result is discarded by the runtime's
-        identity guard instead of rendering into a closed queue.
+        explicit view goes through ``dispose_child_subtree`` (which cancels its
+        background work); a legacy view gets the WebSocket disconnect's legacy
+        teardown, and its background work runs to completion as on the
+        WebSocket (#3232). Either way the session and runtime drop the view, so
+        a late background result is discarded by the runtime's identity guard
+        instead of rendering into a closed queue.
         """
         from ._child_lifecycle import dispose_child_subtree
         from ._exposure import uses_legacy_exposure
@@ -628,6 +639,7 @@ class SSESession:
             self.view_instance = None
             self.runtime.view_instance = None
         self._put(None)  # None is the sentinel value
+        self._closed_sentinel_queued = True
 
     # ------------------------------------------------------------------ #
     # Interface for _validate_event_security
@@ -649,21 +661,19 @@ def _release_legacy_view(view: Any) -> None:
     in its order: remove upload temp files, cancel ``wait_for_event`` waiters,
     unregister embedded children (``_unregister_child`` runs each legacy
     child's ``_cleanup_on_unregister`` and disposes an explicit one), and drop
-    the Rust live handles. Before them, the view's ``start_async`` /
-    ``@background`` work is cancelled, as ``dispose_child_subtree`` does for an
-    explicit view: a WebSocket's late result is dropped by the consumer, but an
-    SSE session's would render into a queue nobody reads. The root's own
-    ``_cleanup_on_unregister`` does not run, as on the WebSocket.
+    the Rust live handles. The root's own ``_cleanup_on_unregister`` does not
+    run, as on the WebSocket.
 
-    Each step is best effort; failures are logged without their values.
+    As on the WebSocket, the view's ``start_async`` / ``@background`` work is
+    NOT cancelled: it runs to completion. ``shutdown`` then detaches the view
+    from the session and runtime, so the runtime's identity guard discards the
+    late result (no completion handler, no render into the closed queue).
+
+    Each step is best effort. The framework's own failures are logged without
+    their values; ``_clear_live_handles`` logs its own, as on the WebSocket.
     """
-    from .mixins.async_work import AsyncWorkMixin
     from .websocket import _clear_live_handles
 
-    try:
-        AsyncWorkMixin.cancel_async_all(view)
-    except Exception:  # noqa: BLE001 — teardown must not raise
-        logger.warning("SSE: cancelling a closed legacy view's background work failed")
     if hasattr(view, "_cleanup_uploads"):
         try:
             view._cleanup_uploads()

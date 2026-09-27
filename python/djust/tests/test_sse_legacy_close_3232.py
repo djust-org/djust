@@ -2,11 +2,13 @@
 
 #3221 made a normal SSE close call ``SSESession.shutdown()``, but ``shutdown``
 disposed only explicit views. A legacy view's ``start_async`` work kept
-running (and would render into a queue nobody reads), its waiters stayed
+running and could render into a queue nobody reads, its waiters stayed
 pending, its upload temp files stayed behind and its embedded children never
-ran their unregister hooks. The WebSocket disconnect cleans up a legacy view's
-uploads, waiters and children; the SSE close now does that, and cancels the
-background work.
+ran their unregister hooks. The SSE close now runs the WebSocket disconnect's
+legacy teardown (uploads, waiters, children, Rust live handles) and detaches
+the view. As on the WebSocket, the background work is not cancelled: it runs
+to completion, and its late result is discarded against the detached view
+(#3234 review: owner decision).
 
 Same harness as ``test_exposure_sse_close_3221.py``: the real stream and
 message views, and a stream closed the way Django closes it when the client
@@ -30,9 +32,13 @@ from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
 
-#: Background tasks that are still running, and the ones that were cancelled.
+#: Background tasks that are still running, cancelled, or finished; the
+#: views whose completion handler ran; and the gate that lets a task finish.
 RUNNING: set = set()
 CANCELLED: list = []
+FINISHED: list = []
+RESULTS: list = []
+RELEASE: dict = {}
 
 
 class LegacyChild(LiveView):
@@ -62,15 +68,25 @@ class LegacyWorkPage(LiveView):
     def spawn(self):
         self.start_async(self._work, name="work")
 
+    @event_handler()
+    def noop(self):
+        pass
+
     async def _work(self):
         RUNNING.add(id(self))
         try:
-            await asyncio.Event().wait()  # until cancelled
+            await RELEASE.setdefault(id(self), asyncio.Event()).wait()
         except asyncio.CancelledError:
             CANCELLED.append(id(self))
             raise
         finally:
             RUNNING.discard(id(self))
+        FINISHED.append(id(self))
+        self.count = 99
+        return "late"
+
+    def handle_async_result(self, name, result=None, error=None):
+        RESULTS.append((id(self), name, result))
 
     def _cleanup_uploads(self):
         self._uploads_cleaned = True
@@ -87,6 +103,9 @@ def setup(monkeypatch):
     monkeypatch.setattr(sse, "_SESSION_LINGER_S", 0)
     RUNNING.clear()
     CANCELLED.clear()
+    FINISHED.clear()
+    RESULTS.clear()
+    RELEASE.clear()
     _sse_sessions.clear()
     with override_settings(ROOT_URLCONF=__name__, LIVEVIEW_ALLOWED_MODULES=["djust"], DEBUG=False):
         yield
@@ -151,26 +170,56 @@ async def _until(predicate, what):
     raise AssertionError("timed out waiting for " + what)
 
 
+class _RustViewRecorder:
+    """Stands in for the view's Rust state to record the live-handle release."""
+
+    def __init__(self):
+        self.calls = []
+
+    def clear_live_handles(self):
+        self.calls.append("clear_live_handles")
+
+    def set_raw_py_values(self, values):
+        self.calls.append(("set_raw_py_values", values))
+
+
+async def _finish(view):
+    """Let the view's background task finish, and wait until it has."""
+    RELEASE[id(view)].set()
+    await _until(lambda: id(view) in FINISHED, "the background task to finish")
+    for _ in range(20):  # let the runtime's post-callback step run
+        await asyncio.sleep(0)
+
+
 async def test_a_normal_close_disposes_a_legacy_view():
     key = await sync_to_async(_fresh_key)()
     sid = str(uuid.uuid4())
     session, stream = await _open(sid, key)
     view, waiter = await _spawn(session, key)
     child = view._child
+    rust = view._rust_view = _RustViewRecorder()
     assert view.count == 0 and not view._uploads_cleaned
 
     await stream.aclose()  # the client went away
 
-    await _until(lambda: id(view) in CANCELLED, "the background task to be cancelled")
-    assert id(view) not in RUNNING
+    await _until(lambda: session.view_instance is None, "the session to drop its view")
     await _until(waiter.done, "the waiter to be cancelled")
     assert waiter.cancelled()
     assert view._uploads_cleaned is True
     assert child.unregistered is True and view._child_views == {}
+    assert rust.calls == ["clear_live_handles", ("set_raw_py_values", {})]
     # As on the WebSocket, the legacy root's own unregister hook does not run.
     assert view._root_unregistered is False
-    assert session.active is False
-    assert session.view_instance is None and session.runtime.view_instance is None
+    assert session.active is False and session.runtime.view_instance is None
+
+    # As on the WebSocket, the background work is not cancelled: it finishes,
+    # and its late result is discarded against the detached view.
+    assert id(view) in RUNNING and id(view) not in CANCELLED
+    queued = session.queue.qsize()
+    await _finish(view)
+    assert id(view) not in CANCELLED
+    assert RESULTS == [], "the completion handler must not run for a detached view"
+    assert session.queue.qsize() == queued, "nothing may be pushed into the closed queue"
 
 
 async def test_a_reconnect_within_the_linger_keeps_the_new_legacy_view():
@@ -187,25 +236,30 @@ async def test_a_reconnect_within_the_linger_keeps_the_new_legacy_view():
 
     await old_stream.aclose()
 
-    await _until(lambda: id(old_view) in CANCELLED, "the old view's task to be cancelled")
+    await _until(lambda: old.view_instance is None, "the old session to drop its view")
     await _until(old_waiter.done, "the old view's waiter to be cancelled")
-    assert old.view_instance is None and old_view._uploads_cleaned is True
+    assert old_view._uploads_cleaned is True
     assert _sse_sessions[sid] is new and new.active is True
     assert new.view_instance is new_view and new.runtime.view_instance is new_view
-    assert id(new_view) in RUNNING and id(new_view) not in CANCELLED
     assert not new_waiter.done()
     assert new_view._uploads_cleaned is False and new_view._child.unregistered is False
 
-    # The new session still dispatches events.
+    # The old view's late result is discarded; the new view is unaffected.
+    await _finish(old_view)
+    assert RESULTS == []
+    assert id(new_view) in RUNNING
+
+    # The new session still dispatches events, and its own work still completes.
     request = await sync_to_async(_request)(
         "POST",
         f"/djust/sse/{sid}/message/",
-        {"type": "event", "event": "spawn", "params": {}},
+        {"type": "event", "event": "noop", "params": {}},
         key,
     )
     response = await DjustSSEMessageView().post(request, session_id=sid)
     assert response.status_code == 200
+    await _finish(new_view)
+    await _until(lambda: (id(new_view), "work", "late") in RESULTS, "the new view's result")
 
     await new_stream.aclose()
-    await _until(lambda: id(new_view) in CANCELLED, "the new view's task to be cancelled")
     await _until(new_waiter.done, "the new view's waiter to be cancelled")
