@@ -468,8 +468,9 @@ class StreamingMixin:
         already finalised. Before the terminal op:
 
         - If the flush task is sending, it owns a batch taken before this
-          call, possibly holding this stream's op: wait for it (shielded, so
-          cancelling this caller doesn't cut the batch short), then look
+          call, possibly holding this stream's op: wait for it (``asyncio.wait``:
+          cancelling this caller doesn't cut the batch short, and a send
+          failure stays the flush task's own), then look
           again, since it may have scheduled a successor.
         - Otherwise take this stream's queued ops out of the batch and send
           them here. If no other stream has queued ops, the sleeping flush
@@ -481,7 +482,7 @@ class StreamingMixin:
             if task is None or task.done() or task is asyncio.current_task():
                 break
             if getattr(self, "_stream_flush_sending", False):
-                await asyncio.shield(task)
+                await asyncio.wait({task})
                 continue
             if not any(ops for name, ops in self._stream_batch.items() if name != stream_name):
                 task.cancel()
