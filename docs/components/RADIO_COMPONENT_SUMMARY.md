@@ -10,7 +10,7 @@ Successfully implemented a Radio component for djust following the djust-compone
 ## Files Created
 
 ### 1. Python Component
-**File:** `/Users/tip/Dropbox/online_projects/ai/djust/python/djust/components/ui/radio_simple.py`
+**File:** `repo-root/python/djust/components/ui/radio_simple.py`
 
 **Features:**
 - Group of radio buttons with single selection
@@ -29,7 +29,7 @@ Successfully implemented a Radio component for djust following the djust-compone
 - Follows djust Component base class pattern
 
 ### 2. Test Suite
-**File:** `/Users/tip/Dropbox/online_projects/ai/djust/test_radio_component.py`
+**File:** `repo-root/test_radio_component.py`
 
 **Test Coverage:**
 - ✅ Basic radio button group rendering
@@ -47,7 +47,7 @@ Successfully implemented a Radio component for djust following the djust-compone
 **Result:** All 12 tests pass
 
 ### 3. Demo Script
-**File:** `/Users/tip/Dropbox/online_projects/ai/djust/demo_radio.py`
+**File:** `repo-root/demo_radio.py`
 
 **Examples Included:**
 1. Basic radio button group
@@ -59,7 +59,7 @@ Successfully implemented a Radio component for djust following the djust-compone
 7. Minimal rating selector (no group label)
 
 ### 4. Export Updates
-**File:** `/Users/tip/Dropbox/online_projects/ai/djust/python/djust/components/ui/__init__.py`
+**File:** `repo-root/python/djust/components/ui/__init__.py`
 
 - ✅ Added import: `from .radio_simple import Radio`
 - ✅ Added to `__all__`: `'Radio'`
@@ -229,7 +229,7 @@ However, for typical radio button groups (3-10 options), Python rendering perfor
 ==================================================================== test session starts =====================================================================
 platform darwin -- Python 3.12.11, pytest-8.3.2, pluggy-1.6.0
 cachedir: .pytest_cache
-rootdir: /Users/tip/Dropbox/online_projects/ai/djust
+rootdir: repo-root/
 configfile: pyproject.toml
 plugins: Faker-37.8.0
 collecting ... collected 12 items
@@ -334,9 +334,9 @@ The component includes built-in validation:
 
 If Rust optimization is needed in the future:
 
-1. Create `/Users/tip/Dropbox/online_projects/ai/djust/crates/djust_components/src/simple/radio.rs`
+1. Create `repo-root/crates/djust_components/src/simple/radio.rs`
 2. Implement `RustRadio` struct with PyO3 bindings
-3. Update `/Users/tip/Dropbox/online_projects/ai/djust/crates/djust_components/src/simple/mod.rs`
+3. Update `repo-root/crates/djust_components/src/simple/mod.rs`
 4. Update Python exports in `_rust` module
 5. Link via `_rust_impl_class` in `radio_simple.py`
 

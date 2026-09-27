@@ -9,7 +9,7 @@ Successfully implemented a Tooltip component for djust following the established
 ## Files Created
 
 ### 1. Python Implementation
-**File:** `/Users/tip/Dropbox/online_projects/ai/djust/python/djust/components/ui/tooltip_simple.py`
+**File:** `repo-root/python/djust/components/ui/tooltip_simple.py`
 
 - **Class:** `Tooltip(Component)`
 - **Features:**
@@ -28,7 +28,7 @@ Successfully implemented a Tooltip component for djust following the established
 - Pure Python fallback: ~50-100μs per render
 
 ### 2. Rust Implementation
-**File:** `/Users/tip/Dropbox/online_projects/ai/djust/crates/djust_components/src/simple/tooltip.rs`
+**File:** `repo-root/crates/djust_components/src/simple/tooltip.rs`
 
 - **Struct:** `RustTooltip`
 - **Features:**
@@ -51,26 +51,26 @@ Successfully implemented a Tooltip component for djust following the established
 ## Export Updates Completed
 
 ### 1. Rust Module Exports
-**File:** `/Users/tip/Dropbox/online_projects/ai/djust/crates/djust_components/src/simple/mod.rs`
+**File:** `repo-root/crates/djust_components/src/simple/mod.rs`
 ```rust
 pub mod tooltip;
 pub use tooltip::RustTooltip;
 ```
 
 ### 2. Component Library Exports
-**File:** `/Users/tip/Dropbox/online_projects/ai/djust/crates/djust_components/src/lib.rs`
+**File:** `repo-root/crates/djust_components/src/lib.rs`
 ```rust
 pub use simple::{..., RustTooltip};
 ```
 
 ### 3. Python Bindings
-**File:** `/Users/tip/Dropbox/online_projects/ai/djust/crates/djust_live/src/lib.rs`
+**File:** `repo-root/crates/djust_live/src/lib.rs`
 ```rust
 m.add_class::<djust_components::RustTooltip>()?;
 ```
 
 ### 4. Python Package Exports
-**File:** `/Users/tip/Dropbox/online_projects/ai/djust/python/djust/components/ui/__init__.py`
+**File:** `repo-root/python/djust/components/ui/__init__.py`
 ```python
 from .tooltip_simple import Tooltip
 
@@ -83,7 +83,7 @@ __all__ = [
 ## Test Results
 
 ### Python Test
-**File:** `/Users/tip/Dropbox/online_projects/ai/djust/test_tooltip_rust.py`
+**File:** `repo-root/test_tooltip_rust.py`
 
 All tests passed:
 ```
@@ -99,7 +99,7 @@ All tests passed:
 ```
 
 ### Rust Unit Tests
-**Command:** `PYO3_PYTHON=/Users/tip/Dropbox/online_projects/ai/djust/.venv/bin/python cargo test -p djust_components --lib tooltip`
+**Command:** `PYO3_PYTHON=repo-root/.venv/bin/python cargo test -p djust_components --lib tooltip`
 
 Results:
 ```

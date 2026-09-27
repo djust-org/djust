@@ -10,7 +10,7 @@ Successfully implemented a high-performance Toast notification component for dju
 ## Files Created
 
 ### 1. Python Component
-**File:** `/Users/tip/Dropbox/online_projects/ai/djust/python/djust/components/ui/toast_simple.py`
+**File:** `repo-root/python/djust/components/ui/toast_simple.py`
 
 - Stateless Component class following djust patterns
 - Automatic Rust optimization with fallback support
@@ -22,7 +22,7 @@ Successfully implemented a high-performance Toast notification component for dju
 - XSS protection via HTML escaping
 
 ### 2. Rust Component
-**File:** `/Users/tip/Dropbox/online_projects/ai/djust/crates/djust_components/src/simple/toast.rs`
+**File:** `repo-root/crates/djust_components/src/simple/toast.rs`
 
 - Pure Rust implementation with PyO3 bindings
 - Sub-microsecond rendering (~0.7μs)
@@ -31,7 +31,7 @@ Successfully implemented a high-performance Toast notification component for dju
 - Bootstrap 5 toast structure
 
 ### 3. Demo Template
-**File:** `/Users/tip/Dropbox/online_projects/ai/djust/examples/demo_project/demo_app/templates/demos/toast_demo.html`
+**File:** `repo-root/examples/demo_project/demo_app/templates/demos/toast_demo.html`
 
 - Comprehensive demonstration of all Toast variants
 - Shows success, info, warning, danger variants
@@ -41,7 +41,7 @@ Successfully implemented a high-performance Toast notification component for dju
 - Performance metrics display
 
 ### 4. Demo View
-**File:** `/Users/tip/Dropbox/online_projects/ai/djust/examples/demo_project/demo_app/views/toast_demo.py`
+**File:** `repo-root/examples/demo_project/demo_app/views/toast_demo.py`
 
 - Simple function-based view
 - Creates example toasts with various configurations

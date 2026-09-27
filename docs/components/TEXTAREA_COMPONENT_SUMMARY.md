@@ -9,7 +9,7 @@ Successfully implemented a TextArea component for djust following the component 
 ## Files Created
 
 ### 1. Python Component
-**File:** `/Users/tip/Dropbox/online_projects/ai/djust/python/djust/components/ui/textarea_simple.py`
+**File:** `repo-root/python/djust/components/ui/textarea_simple.py`
 
 - Stateless Component class
 - Automatic Rust optimization when available
@@ -35,7 +35,7 @@ textarea = TextArea(
 ```
 
 ### 2. Rust Implementation
-**File:** `/Users/tip/Dropbox/online_projects/ai/djust/crates/djust_components/src/simple/textarea.rs`
+**File:** `repo-root/crates/djust_components/src/simple/textarea.rs`
 
 - Pure Rust PyO3 class (`RustTextArea`)
 - Sub-microsecond rendering (~1μs)
@@ -52,27 +52,27 @@ textarea = TextArea(
 ## Export Updates
 
 ### 3. Rust Module Export
-**File:** `/Users/tip/Dropbox/online_projects/ai/djust/crates/djust_components/src/simple/mod.rs`
+**File:** `repo-root/crates/djust_components/src/simple/mod.rs`
 - Added `pub mod textarea;`
 - Added `pub use textarea::RustTextArea;`
 
 ### 4. Library Export
-**File:** `/Users/tip/Dropbox/online_projects/ai/djust/crates/djust_components/src/lib.rs`
+**File:** `repo-root/crates/djust_components/src/lib.rs`
 - Added `RustTextArea` to public exports
 
 ### 5. Python Bindings
-**File:** `/Users/tip/Dropbox/online_projects/ai/djust/crates/djust_live/src/lib.rs`
+**File:** `repo-root/crates/djust_live/src/lib.rs`
 - Added `m.add_class::<djust_components::RustTextArea>()?;` to `_rust` module
 
 ### 6. Python Package Export
-**File:** `/Users/tip/Dropbox/online_projects/ai/djust/python/djust/components/ui/__init__.py`
+**File:** `repo-root/python/djust/components/ui/__init__.py`
 - Added `from .textarea_simple import TextArea`
 - Added `'TextArea'` to `__all__`
 
 ## Test Results
 
 ### Python Tests
-**File:** `/Users/tip/Dropbox/online_projects/ai/djust/test_textarea_component.py`
+**File:** `repo-root/test_textarea_component.py`
 
 ✅ **All 10 tests passed:**
 1. ✓ Basic textarea rendering
@@ -103,7 +103,7 @@ textarea = TextArea(
 ## Examples
 
 ### Example File
-**File:** `/Users/tip/Dropbox/online_projects/ai/djust/examples/textarea_example.py`
+**File:** `repo-root/examples/textarea_example.py`
 
 Demonstrates:
 - Basic usage

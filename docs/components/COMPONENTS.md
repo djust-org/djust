@@ -1,28 +1,30 @@
-# djust Components - shadcn/ui Style Architecture
+# djust Components
 
-djust follows a **component-as-code** approach similar to shadcn/ui, where components are:
+djust includes Python components for rendering UI and integrating reusable
+widgets into LiveViews. Component behavior and styling are component-specific:
+some components render framework-specific markup, while others emit the same
+markup regardless of `LIVEVIEW_CONFIG['css_framework']`. Check the component's
+API page or source before assuming a framework switch changes its output.
 
-1. **Style-Independent**: Work with Bootstrap, Tailwind, or plain CSS
-2. **Copy-Paste Ready**: Own the code, customize as needed
-3. **Framework-Agnostic**: Adapt to your CSS framework automatically
-4. **Type-Safe**: Full Python type hints and IDE support
-5. **Server-Side**: No JavaScript framework required
+The component APIs are Python APIs, not a copy-paste component generator.
+Applications can subclass or wrap a component when they need different markup.
+The framework itself does not copy component source into an application.
 
 ## Philosophy
 
-Unlike npm packages that you install and configure, djust components are **code you own**. Similar to shadcn/ui's approach:
-
-> "Copy the component code into your project and customize it to your needs. You own the code."
-
-Components automatically adapt to your configured CSS framework through the **Framework Adapter** pattern.
+Components are Python objects provided by the installed djust package. You can
+subclass or wrap them when an application needs different behavior. The
+framework adapter registry described below applies to Django form rendering;
+it does not automatically adapt every UI component.
 
 ## Two-Tier Component System
 
-djust provides two types of components, optimized for different use cases:
+djust provides two component base classes for different use cases:
 
 ### Component (Stateless, Presentational)
 
-**Simple components** for rendering UI without state or interactivity:
+`Component` is for rendering markup from its current properties. It does not
+have the `LiveComponent` mount lifecycle or its own event dispatch:
 
 ```python
 from djust.components.base import Component
@@ -39,20 +41,21 @@ badge = Badge("<script>alert(1)</script>", "danger")
 assert "&lt;script&gt;" in badge.render()
 ```
 
-**Use for**: Buttons, badges, icons, cards - anything that just displays data.
+**Use for**: Presentational widgets such as buttons, badges, and icons.
 
 **Benefits**:
-- Zero overhead - just a render() method
-- No WebSocket connection or VDOM tree
-- Perfect for simple, reusable UI elements
-- Fast and lightweight
+- Does not create a separate LiveComponent lifecycle
+- Renders through the base class's available rendering path
+- Can be reused wherever a component value can be rendered
 
 ### LiveComponent (Stateful, Interactive)
 
-**Smart components** with their own state, lifecycle, and reactivity:
+`LiveComponent` supports initialization, parent communication, and rerendering
+inside a parent LiveView. The parent LiveView remains responsible for the
+connection and page-level rendering:
 
 ```python
-from djust import LiveComponent
+from djust import LiveComponent, event_handler
 
 class TodoList(LiveComponent):
     template = """
@@ -69,7 +72,8 @@ class TodoList(LiveComponent):
     def mount(self, items=None):
         self.items = items or []
 
-    def toggle(self, id: str = None):
+    @event_handler()
+    def toggle(self, id: str = "", **kwargs):
         item = next(i for i in self.items if i['id'] == int(id))
         item['completed'] = not item['completed']
         self.send_parent("todo_toggled", {"id": int(id)})
@@ -78,10 +82,10 @@ class TodoList(LiveComponent):
 **Use for**: Forms, data tables, filters, tabs - anything with state and user interaction.
 
 **Benefits**:
-- Own VDOM tree with efficient updates
-- Event handlers with automatic routing
-- Props/events communication with parent
-- Lifecycle methods (mount/update/unmount)
+- Component state and lifecycle hooks
+- Event handling when methods are authorized with `@event_handler()` under
+  strict event security
+- Parent communication through `send_parent()`
 
 ### Quick Reference: When to Use Which?
 
@@ -95,67 +99,42 @@ class TodoList(LiveComponent):
 | Multi-step form wizard | `LiveComponent` | Multiple states + navigation |
 | Tabs that preserve state | `LiveComponent` | State persists across tab switches |
 
-**Golden Rule**: Start with the simplest pattern (inline template or `Component`), upgrade to `LiveComponent` only when you need state and interactivity.
+Start with template markup when that is sufficient. Use `Component` for a
+reusable presentational unit and `LiveComponent` when a child needs its own
+stateful lifecycle or parent communication.
 
-### Performance Optimization
+### Rendering Paths
 
-Components feature **automatic performance optimization** - the framework automatically chooses the fastest available implementation:
-
-**Unified Component Design:**
-
-```python
-from djust.components.ui import Badge
-
-# Same simple code, regardless of implementation
-badge = Badge("New", variant="primary")
-html = badge.render()
-
-# Behind the scenes, Component base class chooses:
-# 1. A configured Rust component implementation, if available
-# 2. The component's `template` rendered by the Rust engine with Django fallback
-# 3. The Python `_render_custom()` hook
-```
-
-**Core components in Rust** (automatically optimized):
-- Badge, Button, Icon, Spinner - used frequently, implemented in Rust
-- 50-100x faster than pure Python
-- Transparent to developers - same API
-
-**Custom components use hybrid** (when Rust not available):
-- `template` for the hybrid template rendering path
-- `_render_custom()` for full Python control (maximum flexibility)
-
-**Example with automatic optimization:**
+`Component.render()` tries the component's `_rust_impl_class` when present,
+then renders its `template` when defined, or calls `_render_custom()` as the
+Python fallback. Template rendering tries djust's Rust template engine and
+can fall back to Django templates. These are implementation details, not
+component-wide performance guarantees. The
+compiled extension may not expose every Rust class mentioned in older design
+documents; see [Rust Components](RUST_COMPONENTS.md) for current availability.
 
 ```python
-class StatusBadge(Component):
-    # Links to Rust implementation if available
-    _rust_impl_class = RustBadge  # Automatically used if Rust built
+from djust.components.ui import Button
 
-    # Fallback: hybrid rendering
-    template = '<span class="badge bg-{{ variant }}">{{ text }}</span>'
-
-    def get_context_data(self):
-        return {'text': self.text, 'variant': self.variant}
+button = Button("Save", variant="primary")
+html = button.render()
 ```
 
-See **[COMPONENT_UNIFIED_DESIGN.md](COMPONENT_UNIFIED_DESIGN.md)** for the complete unified design with automatic Rust optimization.
+The supported Python components use these paths differently. Do not infer
+that a component has a native Rust implementation from its base class or from
+an older benchmark; check the component's availability notes first.
+
+The [unified design](COMPONENT_UNIFIED_DESIGN.md) is a historical proposal,
+not the current component contract. Use the API reference and the individual
+component pages for supported behavior.
 
 ### Documentation Guide
 
 For detailed information:
 
-- **[COMPONENT_UNIFIED_DESIGN.md](COMPONENT_UNIFIED_DESIGN.md)** - ⭐ **Start here!**
-  - Unified Component design with automatic Rust optimization
-  - Performance waterfall (Rust → Hybrid → Python)
-  - Core Rust component library (Badge, Button, Icon, etc.)
-  - Single API with transparent optimization
+- **[COMPONENT_UNIFIED_DESIGN.md](COMPONENT_UNIFIED_DESIGN.md)** - Historical architecture proposal; not a current API reference.
 
-- **[LIVECOMPONENT_ARCHITECTURE.md](LIVECOMPONENT_ARCHITECTURE.md)** - Complete architecture guide
-  - How the two-tier system works
-  - VDOM patching with separate trees
-  - Component lifecycle
-  - Performance characteristics
+- **[LIVECOMPONENT_ARCHITECTURE.md](LIVECOMPONENT_ARCHITECTURE.md)** - Historical internal architecture notes; consult the API reference for current behavior.
 
 - **[API_REFERENCE_COMPONENTS.md](API_REFERENCE_COMPONENTS.md)** - API documentation
   - Complete `Component` API
@@ -180,10 +159,7 @@ For detailed information:
   - Real-world patterns
 
 - **[COMPONENT_PERFORMANCE_OPTIMIZATION.md](COMPONENT_PERFORMANCE_OPTIMIZATION.md)** - Performance guide
-  - Three-tier performance spectrum (Python → Hybrid → Rust)
-  - Optional `template` for Rust rendering
-  - Pure Rust components via PyO3
-  - Benchmarks and migration paths
+  - Historical performance and design notes; figures are not current guarantees.
 
 ## Quick Start
 
@@ -193,7 +169,7 @@ In `settings.py`:
 
 ```python
 LIVEVIEW_CONFIG = {
-    'css_framework': 'bootstrap5',  # or 'tailwind', 'plain'
+    'css_framework': 'bootstrap5',  # 'bootstrap4', 'tailwind', or None for plain form markup
 }
 ```
 
@@ -204,11 +180,8 @@ from djust import LiveView
 from djust.components.layout import NavbarComponent, NavItem
 
 class MyView(LiveView):
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-
-        # Create navbar - automatically adapts to your framework
-        context['navbar'] = NavbarComponent(
+    def mount(self, request):
+        self.navbar = NavbarComponent(
             brand_name="My App",
             brand_logo="/static/images/logo.png",
             items=[
@@ -218,59 +191,48 @@ class MyView(LiveView):
             ],
         )
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['navbar'] = self.navbar
         return context
 ```
 
 ### 3. Render in Templates
 
 ```html
-{{ navbar }}
+{{ navbar.render }}
 ```
 
-That's it! The navbar will automatically render with Bootstrap, Tailwind, or plain CSS based on your configuration.
+`NavbarComponent` selects its Bootstrap, Tailwind, or plain renderer using the
+configured CSS framework. For this component, set `css_framework` to the
+explicit string `"plain"` to select the plain renderer: its lookup treats a
+stored `None` as the default Bootstrap value. This behavior is specific to
+this component; it is not a guarantee for every component in the package.
 
 ## Available Components
 
-### UI Components
-- **Button** - Buttons with variants (primary, secondary, danger, etc.)
-- **Card** - Content cards with header, body, footer
-- **Badge** - Labels and tags
-- **Alert** - Dismissible alerts with variants
-- **Modal** - Dialog/modal windows
-- **Dropdown** - Dropdown menus
-- **Progress** - Progress bars
-- **Spinner** - Loading indicators
+The `djust.components.ui` package exports stateless widgets such as `Button`,
+`Badge`, `Radio`, `NavBar`, `Table`, and `Pagination`, along with selected
+stateful `*Component` variants. The exact export list is maintained in
+[`python/djust/components/ui/__init__.py`](../../python/djust/components/ui/__init__.py).
+Layout components such as `NavbarComponent` and `TabsComponent` are exported
+from `djust.components.layout`. See the per-component pages for constructor
+arguments and behavior.
 
-### Layout Components
-- **Navbar** - Navigation bar (NEW!)
-- **Tabs** - Tab navigation
+## Framework Adapters for Django Forms
 
-### Data Components
-- **Table** - Data tables with sorting/filtering
-- **Pagination** - Pagination controls
+`djust.frameworks` supplies adapters used by djust's Django form rendering.
+The built-in choices include Bootstrap 4, Bootstrap 5, Tailwind, and plain
+markup. UI components may use their own framework-specific rendering logic;
+they do not all go through these adapters.
 
-### Form Components
-- Integrated with Django Forms
-- Auto-rendered with your CSS framework
+### Example Navbar Markup
 
-## How It Works: Framework Adapters
+The following snippets illustrate the kinds of classes each
+`NavbarComponent` renderer emits; exact attributes and whitespace can vary with
+component options. These are not outputs from the Django form adapters.
 
-Each component uses the **Framework Adapter** pattern to render framework-specific HTML:
-
-```python
-class NavbarComponent(LiveComponent):
-    def render(self) -> str:
-        framework = config.get('css_framework', 'bootstrap5')
-
-        if framework == 'bootstrap5':
-            return self._render_bootstrap()
-        elif framework == 'tailwind':
-            return self._render_tailwind()
-        else:
-            return self._render_plain()
-```
-
-### Bootstrap 5 Output
+#### Bootstrap 5
 
 ```html
 <nav class="navbar navbar-expand-lg navbar-custom fixed-top">
@@ -288,7 +250,7 @@ class NavbarComponent(LiveComponent):
 </nav>
 ```
 
-### Tailwind Output (Same Component!)
+#### Tailwind
 
 ```html
 <nav class="bg-white border-b border-gray-200 shadow-sm fixed top-0 left-0 right-0 z-50">
@@ -306,7 +268,7 @@ class NavbarComponent(LiveComponent):
 </nav>
 ```
 
-### Plain HTML Output (Same Component!)
+#### Plain
 
 ```html
 <nav class="navbar navbar-fixed">
@@ -333,7 +295,6 @@ For presentational components without state:
 ```python
 from django.utils.html import format_html
 from djust.components.base import Component
-from djust.config import config
 
 class StatusBadge(Component):
     """A simple status badge component"""
@@ -342,38 +303,12 @@ class StatusBadge(Component):
         super().__init__(status=status, label=label or status.title())
 
     def _render_custom(self) -> str:
-        """Render with framework-specific styling"""
-        framework = config.get('css_framework', 'bootstrap5')
-
-        if framework == 'bootstrap5':
-            return self._render_bootstrap()
-        elif framework == 'tailwind':
-            return self._render_tailwind()
-        else:
-            return self._render_plain()
-
-    def _render_bootstrap(self) -> str:
-        variants = {
-            'success': 'success',
-            'error': 'danger',
-            'warning': 'warning',
-            'info': 'info',
-        }
-        variant = variants.get(self.status, 'secondary')
-        return format_html('<span class="badge bg-{}">{}</span>', variant, self.label)
-
-    def _render_tailwind(self) -> str:
-        colors = {
-            'success': 'bg-green-100 text-green-800',
-            'error': 'bg-red-100 text-red-800',
-            'warning': 'bg-yellow-100 text-yellow-800',
-            'info': 'bg-blue-100 text-blue-800',
-        }
-        classes = colors.get(self.status, 'bg-gray-100 text-gray-800')
-        return format_html('<span class="px-2 py-1 rounded text-xs font-semibold {}">{}</span>', classes, self.label)
-
-    def _render_plain(self) -> str:
-        return format_html('<span class="badge badge-{}">{}</span>', self.status, self.label)
+        """Render markup safely; add framework-specific branches if needed."""
+        return format_html(
+            '<span class="status-badge status-{}">{}</span>',
+            self.status,
+            self.label,
+        )
 ```
 
 **Usage**:
@@ -390,8 +325,7 @@ badge = StatusBadge('success', 'Active')
 For interactive components with state:
 
 ```python
-from djust import LiveComponent
-from djust.config import config
+from djust import LiveComponent, event_handler
 
 class FilterWidget(LiveComponent):
     """A filterable list component with state"""
@@ -430,12 +364,14 @@ class FilterWidget(LiveComponent):
         if items is not None:
             self.items = items
 
+    @event_handler()
     def on_search(self, value: str = "", **kwargs):
         """Handle search input"""
         self.search_query = value
         # Notify parent of filter change
         self.send_parent("filter_changed", self._get_filter_state())
 
+    @event_handler()
     def on_category_change(self, value: str = "", **kwargs):
         """Handle category selection"""
         self.selected_category = value
@@ -490,7 +426,8 @@ class ProductListView(LiveView):
 
 ## Example: Navbar Component
 
-The `NavbarComponent` is a perfect example of the shadcn approach. Here's how to use it:
+`NavbarComponent` is a stateful layout component with Bootstrap, Tailwind, and
+plain HTML/CSS renderers. Its navigation items are ordinary links.
 
 ### Basic Usage
 
@@ -504,7 +441,6 @@ navbar = NavbarComponent(
     items=[
         NavItem("Home", "/", active=True),
         NavItem("Demos", "/demos/"),
-        NavItem("Components", "/kitchen-sink/"),
         NavItem("Forms", "/forms/"),
         NavItem("Docs", "/docs/"),
         NavItem("Hosting ↗", "https://djustlive.com", external=True),
@@ -527,14 +463,19 @@ items=[
 ### Dynamic Updates
 
 ```python
+from djust import LiveView, event_handler
+from djust.components.layout import NavbarComponent, NavItem
+
 class MyView(LiveView):
     def mount(self, request):
         self.navbar = NavbarComponent(...)
 
+    @event_handler()
     def add_menu_item(self):
         """Event handler to add menu items"""
         self.navbar.add_item(NavItem("New Page", "/new/"))
 
+    @event_handler()
     def set_active_page(self, href: str):
         """Event handler to change active page"""
         self.navbar.set_active(href)
@@ -545,6 +486,8 @@ class MyView(LiveView):
 ### 1. Start Simple, Upgrade When Needed
 
 ```python
+from djust import LiveView, LiveComponent, event_handler
+from djust.components.base import Component
 from django.utils.html import format_html
 # ✅ Start with inline template
 class SimpleView(LiveView):
@@ -553,6 +496,7 @@ class SimpleView(LiveView):
     def mount(self, request):
         self.count = 0
 
+    @event_handler()
     def increment(self):
         self.count += 1
 
@@ -571,6 +515,7 @@ class CounterWidget(LiveComponent):
     def mount(self, initial_count=0):
         self.count = initial_count
 
+    @event_handler()
     def increment(self):
         self.count += 1
 ```
@@ -653,11 +598,12 @@ class HomeView(BaseView):
 
 ### 5. Customize Components for Your Project
 
-Don't like how a component renders? **Copy the code and modify it!** That's the whole point:
+For application-specific markup, subclass or wrap the public component API.
+Copying package internals creates a fork that you must maintain yourself.
 
-1. Copy `python/djust/components/layout/navbar.py` to your project
-2. Modify the rendering methods
-3. Use your custom version
+1. Subclass the public component or write an application component.
+2. Override or add rendering behavior supported by that component.
+3. Keep user-controlled content escaped; prefer Django's `format_html()`.
 
 ```python
 # my_app/components/navbar.py
@@ -676,15 +622,10 @@ class MyCustomNavbar(BaseNavbar):
 # settings.py
 LIVEVIEW_CONFIG = {
     'css_framework': 'tailwind',
-
-    # Framework-specific class mappings
-    'framework_classes': {
-        'tailwind': {
-            'field_class': 'mt-1 block w-full rounded-md border-gray-300',
-            'error_class': 'mt-2 text-sm text-red-600',
-            # ... more classes
-        }
-    }
+    'tailwind': {
+        'field_class': 'mt-1 block w-full rounded-md border-gray-300',
+        'error_class': 'mt-2 text-sm text-red-600',
+    },
 }
 ```
 
@@ -706,9 +647,9 @@ LIVEVIEW_CONFIG = {
 </nav>
 ```
 
-❌ Tied to one CSS framework
-❌ Hard to switch frameworks
-❌ Logic scattered across templates and views
+This is a valid approach when a template is the simplest fit. The example
+uses Bootstrap classes, so changing CSS frameworks means changing its markup
+or stylesheet.
 
 ### shadcn/ui (React)
 
@@ -725,50 +666,13 @@ export function Navbar({ items }) {
 }
 ```
 
-✅ Framework-agnostic
-✅ Own the code
-❌ Client-side only (React)
-❌ Requires build step
+This React comparison is illustrative only; it is not a djust component API.
 
 ### djust Components (Python)
 
-```python
-from djust.components.base import Component
-from djust.config import config
-
-# Simple Component (stateless, for presentation)
-class StatusBadge(Component):
-    def __init__(self, status):
-        super().__init__(status=status)
-
-    def _render_custom(self):
-        framework = config.get('css_framework')
-        if framework == 'bootstrap5':
-            return self._render_bootstrap()
-        # ... other frameworks
-
-# LiveComponent (stateful, for interactivity)
-class FilterWidget(LiveComponent):
-    template = """
-        <input dj-input="on_search" value="{{ query }}" />
-        <p>{{ results_count }} results</p>
-    """
-
-    def mount(self, items):
-        self.items = items
-        self.query = ""
-
-    def on_search(self, value=""):
-        self.query = value
-        self.send_parent("filter_changed", {"query": value})
-```
-
-✅ Framework-agnostic
-✅ Own the code
-✅ Server-side (no build step)
-✅ Full Python/Django integration
-✅ Reactive with LiveView
-✅ Two-tier system: simple for presentation, powerful for interactivity
+Use `Component` for a presentational unit and `LiveComponent` when a child
+needs its own stateful lifecycle or parent communication. Components render
+on the server; CSS framework support depends on each component's implementation.
 
 ## Switching CSS Frameworks
 
@@ -784,49 +688,32 @@ LIVEVIEW_CONFIG = {
 Components with framework-aware renderers read this setting at render time;
 support differs by component. Check that component's API page before expecting
 the selected framework to change its output. Django form rendering uses the
-configured framework adapter.
+configured framework adapter. Use `None` for plain form markup; the literal
+string `"plain"` is not a documented `css_framework` setting.
 
 ## Advanced: Custom Framework Adapters
 
-You can even create adapters for other CSS frameworks:
+The adapter registry is specifically for Django form fields. A custom adapter
+subclasses `djust.frameworks.FrameworkAdapter`, implements `render_field()`,
+`render_errors()`, and `get_field_class()`, then registers an instance with
+`register_adapter(name, adapter)`. The configured name selects it through
+`get_adapter()`. Its returned HTML is marked safe by form rendering, so the
+adapter must escape every dynamic value. See
+[`python/djust/frameworks.py`](../../python/djust/frameworks.py) and
+[`djust.forms`](../../python/djust/forms.py) for the complete contract.
 
-```python
-from django.utils.html import format_html
-from djust.frameworks import FrameworkAdapter, register_adapter
-
-class BulmaAdapter(FrameworkAdapter):
-    """Bulma CSS framework adapter"""
-
-    def render_field(self, field, field_name, value, errors, **kwargs):
-        # Bulma-specific rendering
-        return format_html('<div class="field">...</div>')
-
-    def render_errors(self, errors, **kwargs):
-        return format_html('<p class="help is-danger">{}</p>', errors[0])
-
-# Register your adapter
-register_adapter('bulma', BulmaAdapter())
-```
-
-Then use it:
-
-```python
-LIVEVIEW_CONFIG = {
-    'css_framework': 'bulma',
-}
-```
+This registry does not select markup for arbitrary UI components. A custom
+component must implement its own rendering behavior.
 
 ## Component Library
 
-All available components:
+The examples below are selected components, not an exhaustive API list:
 
-- [NavbarComponent](python/djust/components/layout/navbar.py) - Navigation bar
-- [ButtonComponent](python/djust/components/ui/button.py) - Buttons
-- [CardComponent](python/djust/components/ui/card.py) - Content cards
-- [AlertComponent](python/djust/components/ui/alert.py) - Alerts
-- [ModalComponent](python/djust/components/ui/modal.py) - Modals
-- [TableComponent](python/djust/components/data/table.py) - Data tables
-- [TabsComponent](python/djust/components/layout/tabs.py) - Tab navigation
+- [NavbarComponent](../../python/djust/components/layout/navbar.py) — navigation bar
+- [ButtonComponent](../../python/djust/components/ui/button.py) — stateful button
+- [Button](../../python/djust/components/ui/button_simple.py) — stateless button
+- [TableComponent](../../python/djust/components/data/table.py) — stateful data table
+- [TabsComponent](../../python/djust/components/layout/tabs.py) — stateful tabs
 
 See `examples/demo_project/demo_app/views/kitchen_sink.py` for live examples.
 
@@ -834,14 +721,14 @@ See `examples/demo_project/demo_app/views/kitchen_sink.py` for live examples.
 
 Want to add a new component? Follow these steps:
 
-1. Create the component file: `python/djust/components/<category>/<name>.py`
-2. Implement `_render_bootstrap()`, `_render_tailwind()`, `_render_plain()`
+1. Add the component under the appropriate package in `python/djust/components/`.
+2. Implement only the rendering paths and framework support the component needs.
 3. Add to `__init__.py` exports
 4. Create example in `examples/demo_project/`
 5. Add documentation
 
 Components should:
-- ✅ Work with all three frameworks (Bootstrap, Tailwind, plain)
+- ✅ Document which CSS frameworks, if any, they support
 - ✅ Be fully typed with type hints
 - ✅ Include comprehensive docstrings
 - ✅ Have examples in the demo project
@@ -850,9 +737,10 @@ Components should:
 ## Learn More
 
 - [CLAUDE.md](../../CLAUDE.md) - Development guide
-- [examples/demo_project/](examples/demo_project/) - Live examples
-- [python/djust/components/](python/djust/components/) - Component source code
+- [`examples/demo_project/`](../../examples/demo_project/) — examples in the demo project
+- [`python/djust/components/`](../../python/djust/components/) — component source code
 
 ---
 
-**The shadcn approach applied to server-side Python/Django**: Own your components, adapt to any CSS framework, no build step required.
+Components are rendered on the server and can be used with djust's LiveView
+integration. Styling and framework support vary by component.

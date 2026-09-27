@@ -183,34 +183,41 @@ When rendered in a Bootstrap 5 styled page, the radio buttons will have:
 
 - **Circular buttons** with proper spacing
 - **Blue accent color** when selected (Bootstrap primary)
-- **Hover effects** for better UX
+- **Focus, checked, and disabled styling** from Bootstrap
 - **Disabled styling** (grayed out) for disabled options
 - **Proper alignment** between radio buttons and labels
 - **Responsive design** that works on mobile and desktop
 
 ## Accessibility Features
 
-Each radio button includes:
+The component currently provides:
 
 - **Unique ID:** `{name}_0`, `{name}_1`, etc.
 - **Associated label:** `<label for="{name}_0">`
 - **Keyboard navigation:** Tab to move between options, Space to select
-- **Screen reader support:** Proper semantic HTML
+- **Native input behavior:** Radio inputs share a `name`, so browsers provide the expected selection and keyboard behavior
 - **Disabled indication:** Via `disabled` attribute
-- **Help text association:** Via proximity and `form-text` class
+
+The group label is a standalone `<label>`, not a `<legend>`, and help text is
+not linked to the inputs with `aria-describedby`. For programmatic group-label
+semantics, wrap the component without its built-in label in a `<fieldset>` with
+a `<legend>`. If assistive technologies must announce help or validation text
+for each control, use a Django form widget or custom markup that supplies
+`aria-describedby`.
 
 ## Integration Example
 
 Here's how the Radio component looks when integrated into a Django form:
 
 ```python
-from djust import LiveView
+from djust import LiveView, event_handler
 from djust.components.ui import Radio
 
 class SettingsView(LiveView):
     template_name = 'settings.html'
 
     def mount(self, request):
+        self.saved_theme = ""
         self.theme_radio = Radio(
             name="theme",
             label="Theme Preference",
@@ -224,10 +231,15 @@ class SettingsView(LiveView):
             help_text="Choose your preferred color theme"
         )
 
-    def get_context_data(self):
-        return {
-            'theme_radio': self.theme_radio,
-        }
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['theme_radio'] = self.theme_radio
+        return context
+
+    @event_handler()
+    def save_settings(self, theme: str = "", **kwargs):
+        self.theme_radio.value = theme
+        self.saved_theme = theme
 ```
 
 **Template (settings.html):**
@@ -238,8 +250,12 @@ class SettingsView(LiveView):
         {{ theme_radio.render|safe }}
         <button type="submit" class="btn btn-primary">Save</button>
     </form>
+    <p aria-live="polite">{% if saved_theme %}Saved: {{ saved_theme }}{% endif %}</p>
 </div>
 ```
+
+`Radio` renders ordinary named radio inputs; it does not add a `dj-change`
+binding. The form submits the selected value through `dj-submit` above.
 
 **Renders as:**
 ```

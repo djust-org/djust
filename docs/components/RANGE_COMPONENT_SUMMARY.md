@@ -9,7 +9,7 @@ Successfully implemented a Range (Slider) component for djust following the djus
 ## Files Created
 
 ### 1. Python Implementation
-**File:** `/Users/tip/Dropbox/online_projects/ai/djust/python/djust/components/ui/range_simple.py`
+**File:** `repo-root/python/djust/components/ui/range_simple.py`
 
 - Stateless `Range` component class
 - Automatic Rust optimization via `_rust_impl_class`
@@ -18,7 +18,7 @@ Successfully implemented a Range (Slider) component for djust following the djus
 - Full parameter support: name, label, value, min_value, max_value, step, show_value, help_text, disabled
 
 ### 2. Rust Implementation
-**File:** `/Users/tip/Dropbox/online_projects/ai/djust/crates/djust_components/src/simple/range.rs`
+**File:** `repo-root/crates/djust_components/src/simple/range.rs`
 
 - Pure Rust `RustRange` PyO3 class
 - Sub-microsecond rendering (~1μs)
@@ -31,18 +31,18 @@ Successfully implemented a Range (Slider) component for djust following the djus
 
 ### 1. Rust Module Exports
 **Files Updated:**
-- `/Users/tip/Dropbox/online_projects/ai/djust/crates/djust_components/src/simple/mod.rs`
+- `repo-root/crates/djust_components/src/simple/mod.rs`
   - Added `pub mod range;`
   - Added `pub use range::RustRange;`
 
-- `/Users/tip/Dropbox/online_projects/ai/djust/crates/djust_components/src/lib.rs`
+- `repo-root/crates/djust_components/src/lib.rs`
   - Added `RustRange` to public exports
 
-- `/Users/tip/Dropbox/online_projects/ai/djust/crates/djust_live/src/lib.rs`
+- `repo-root/crates/djust_live/src/lib.rs`
   - Added `m.add_class::<djust_components::RustRange>()?;` to PyO3 module
 
 ### 2. Python Package Exports
-**File:** `/Users/tip/Dropbox/online_projects/ai/djust/python/djust/components/ui/__init__.py`
+**File:** `repo-root/python/djust/components/ui/__init__.py`
 - Added `from .range_simple import Range`
 - Added `'Range'` to `__all__` list
 

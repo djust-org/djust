@@ -10,7 +10,7 @@ Successfully implemented a high-performance Icon component for djust following t
 ## Files Created
 
 ### 1. Python Wrapper
-**File:** `/Users/tip/Dropbox/online_projects/ai/djust/python/djust/components/ui/icon_simple.py`
+**File:** `repo-root/python/djust/components/ui/icon_simple.py`
 
 - Follows the three-tier rendering pattern: Pure Rust → Hybrid Template → Python Fallback
 - Automatic Rust optimization when available
@@ -27,7 +27,7 @@ Successfully implemented a high-performance Icon component for djust following t
 - XSS protection via HTML escaping
 
 ### 2. Rust Implementation
-**File:** `/Users/tip/Dropbox/online_projects/ai/djust/crates/djust_components/src/simple/icon.rs`
+**File:** `repo-root/crates/djust_components/src/simple/icon.rs`
 
 - Pure Rust PyO3 class
 - Direct HTML generation (no template parsing)
@@ -334,8 +334,8 @@ Potential improvements for future versions:
 ## Documentation
 
 Component documentation available in:
-- Python docstrings: `/Users/tip/Dropbox/online_projects/ai/djust/python/djust/components/ui/icon_simple.py`
-- Rust doc comments: `/Users/tip/Dropbox/online_projects/ai/djust/crates/djust_components/src/simple/icon.rs`
+- Python docstrings: `repo-root/python/djust/components/ui/icon_simple.py`
+- Rust doc comments: `repo-root/crates/djust_components/src/simple/icon.rs`
 - This implementation report: `ICON_COMPONENT_IMPLEMENTATION.md`
 
 ## Summary

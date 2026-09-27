@@ -4,6 +4,14 @@
 
 The NavBar component is already included in djust. No additional installation needed.
 
+The current compiled extension does not export `RustNavBar`, so `NavBar` uses
+its Python renderer. Treat older Rust-performance figures in implementation
+reports as historical, not as a guarantee for this component.
+
+`NavBar` renders ordinary links and menu markup; its items are not djust event
+handlers. Bootstrap's bundle drives Bootstrap collapse/dropdowns, while the
+Tailwind variant uses the component's built-in toggle script and CSS states.
+
 ## Basic Usage
 
 ```python
@@ -108,8 +116,10 @@ class MyView(LiveView):
             ]
         )
 
-    def get_context_data(self):
-        return {'navbar': self.navbar}
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['navbar'] = self.navbar
+        return context
 ```
 
 **Template (my_template.html):**
@@ -179,8 +189,9 @@ class MyView(LiveView):
 ### For Tailwind CSS
 ```html
 <script src="https://cdn.tailwindcss.com"></script>
-<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js"></script>
 ```
+
+This component's Tailwind dropdown and mobile toggle do not require Alpine.js.
 
 ## Demo Page
 
@@ -281,7 +292,7 @@ class AppView(LiveView):
 1. **Active State:** Set `active: True` on the current page's nav item
 2. **Mobile First:** Test on mobile devices - navbar collapses automatically
 3. **Dropdowns:** Require Bootstrap JS for proper functionality
-4. **Sticky Nav:** Use `sticky='top'` for fixed navigation
+4. **Sticky Nav:** Use `sticky='top'` to keep the navbar at the top while scrolling; this is CSS sticky positioning, not fixed positioning.
 5. **Dark Mode:** Use `variant='dark'` for dark backgrounds
 6. **Container:** Use `container='fluid'` for full-width layouts
 
@@ -291,17 +302,24 @@ class AppView(LiveView):
 from djust.config import config
 
 # Use Bootstrap 5 (default)
-config._config = {'css_framework': 'bootstrap5'}
+config.set('css_framework', 'bootstrap5')
 navbar = NavBar(brand={'text': 'App'}, items=[...])
 
 # Use Tailwind CSS
-config._config = {'css_framework': 'tailwind'}
+config.set('css_framework', 'tailwind')
 navbar = NavBar(brand={'text': 'App'}, items=[...])
 
 # Use Plain HTML
-config._config = {'css_framework': 'plain'}
+config.set('css_framework', 'plain')
 navbar = NavBar(brand={'text': 'App'}, items=[...])
 ```
+
+Use the explicit `'plain'` value for this component. The configured `None`
+value means plain form markup to the form adapter, but this navbar's renderer
+uses the default Bootstrap branch when its setting is `None`.
+
+For a site-wide choice, set `LIVEVIEW_CONFIG['css_framework']` in Django
+settings instead of changing the process-wide config at runtime.
 
 ## Troubleshooting
 
@@ -323,6 +341,6 @@ navbar = NavBar(brand={'text': 'App'}, items=[...])
 ## More Information
 
 - **Full Documentation:** See `NAVBAR_COMPONENT_REPORT.md`
-- **Test Suite:** Run `python test_navbar_simple.py`
+- **Relevant tests:** `python/djust/tests/test_ui_simple_components_escaping.py`
 - **Live Demo:** Visit `http://localhost:8002/demos/navbar/`
 - **Component Code:** `python/djust/components/ui/navbar_simple.py`
