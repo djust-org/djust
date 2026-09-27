@@ -550,11 +550,15 @@ class SSESession:
                 self.view_instance = None
                 if old_view is not None:
                     try:
-                        from ._child_lifecycle import release_root_view
+                        from ._child_lifecycle import (
+                            release_root_view,
+                            untrack_view_presence,
+                        )
 
                         # The teardown the WebSocket live_redirect shares
                         # (#3244); SSE keeps no sticky children, so every
                         # child goes with the page.
+                        await sync_to_async(untrack_view_presence)(old_view)
                         await sync_to_async(release_root_view)(
                             old_view, navigation=True, reason="view_navigation"
                         )

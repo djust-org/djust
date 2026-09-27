@@ -1642,26 +1642,19 @@ def _match_sticky_child(
 def _discard_sticky_child(parent: Any, view_id: str, child: Any) -> None:
     """Drop a registered sticky child that may no longer be rendered.
 
-    Runs the child's ``_on_sticky_unmount`` hook (cancels background work)
-    and unregisters it from ``parent`` (which runs ``_cleanup_on_unregister``).
-    Never raises — a failing hook must not mask the refusal that follows.
+    The shared sticky-child teardown (``discard_sticky_child``, #3250 review
+    L2): the child is detached from ``parent``; an explicit child is disposed;
+    a legacy child has its waiters and nested children released, then its
+    ``_on_sticky_unmount`` (cancels background work) and
+    ``_cleanup_on_unregister`` hooks run. Never raises — a failing hook must
+    not mask the refusal that follows.
     """
-    from .._exposure import uses_legacy_exposure
+    from .._child_lifecycle import discard_sticky_child
 
-    # A nonlegacy child is disposed by ``_unregister_child`` below
-    # (``dispose_child_subtree``), never through its application hook.
-    hook = getattr(child, "_on_sticky_unmount", None)
-    if callable(hook) and uses_legacy_exposure(child):
-        try:
-            hook()
-        except Exception:  # noqa: BLE001 — defensive
-            logger.exception("sticky child %r _on_sticky_unmount raised", view_id)
-    unregister = getattr(parent, "_unregister_child", None)
-    if callable(unregister):
-        try:
-            unregister(view_id)
-        except Exception:  # noqa: BLE001 — defensive
-            logger.exception("live_render: unregistering sticky child %r failed", view_id)
+    registry = getattr(parent, "_child_views", None)
+    if type(registry) is dict and registry.get(view_id) is child:
+        registry.pop(view_id)
+    discard_sticky_child(child, navigation=False)
 
 
 #: Attribute on a sticky child holding the ``{% live_render %}`` kwargs it was

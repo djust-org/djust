@@ -125,21 +125,24 @@ def release_legacy_child(child: Any) -> None:
                 logger.warning("Unregistering a legacy child's embedded view failed")
 
 
-def discard_sticky_child(child: Any) -> None:
+def discard_sticky_child(child: Any, *, navigation: bool = True) -> None:
     """Drop a sticky child that a navigation does not keep (#3244).
 
     The one teardown for every place a live_redirect discards a sticky child:
     its auth re-check failed, the destination has no slot for it, the redirect
-    could not be resolved or failed, or the socket closed mid-redirect. It is
-    detached from the page it was registered on, if it still is. An
-    explicit child is disposed (``dispose_child_subtree(navigation=True)``); a
-    legacy child gets :func:`release_legacy_child` (waiters and nested children)
-    and then its ``_on_sticky_unmount`` hook (which cancels its background work).
+    could not be resolved or failed, or the socket closed mid-redirect; and
+    ``{% live_render %}`` refusing a reused sticky child at render
+    (``navigation=False``). It is detached from the page it was registered on,
+    if it still is. An explicit child is disposed (``dispose_child_subtree``);
+    a legacy child gets :func:`release_legacy_child` (waiters and nested
+    children) and then its ``_on_sticky_unmount`` hook (which cancels its
+    background work), and outside a navigation its ``_cleanup_on_unregister``
+    hook too, as unregistering it would.
     """
     from ._exposure import uses_legacy_exposure
 
     if not uses_legacy_exposure(child):
-        dispose_child_subtree(child, navigation=True)
+        dispose_child_subtree(child, navigation=navigation)
         return
     # Still registered on the page being left: detach it, so that page's own
     # teardown does not unregister it a second time.
@@ -148,12 +151,40 @@ def discard_sticky_child(child: Any) -> None:
     if type(owner_registry) is dict and owner_registry.get(slot) is child:
         owner_registry.pop(slot)
     release_legacy_child(child)
-    hook = getattr(child, "_on_sticky_unmount", None)
-    if callable(hook):
-        try:
-            hook()
-        except Exception:  # noqa: BLE001 — legacy child only; cleanup must not raise
-            logger.exception("sticky child _on_sticky_unmount raised")
+    hooks = (
+        ("_on_sticky_unmount",) if navigation else ("_on_sticky_unmount", "_cleanup_on_unregister")
+    )
+    for name in hooks:
+        hook = getattr(child, name, None)
+        if callable(hook):
+            try:
+                hook()
+            except Exception:  # noqa: BLE001 — legacy child only; cleanup must not raise
+                logger.exception("sticky child %s raised", name)
+
+
+def untrack_view_presence(view: Any) -> None:
+    """Stop tracking a discarded view's presence (#3250 review M3).
+
+    Before, only the view mounted when the socket disconnected was untracked,
+    so a view replaced by navigation or by a second mount, and a
+    ``mount_batch`` sibling, stayed in the presence list until
+    ``PRESENCE_TIMEOUT``. ``untrack_presence`` broadcasts to peers through the
+    synchronous channel-layer API, so async callers run this on a thread
+    (``sync_to_async``). Best effort: a failure is logged under the view's
+    diagnostics policy.
+    """
+    untrack = getattr(view, "untrack_presence", None)
+    if not callable(untrack):
+        return
+    try:
+        untrack()
+    except Exception as exc:  # noqa: BLE001 — application hooks run inside
+        from ._exposure_diagnostics import log_failure_for
+
+        log_failure_for(
+            logger, (view,), exc, "Error cleaning up presence: %s", exc, level="warning"
+        )
 
 
 def release_root_view(view: Any, *, navigation: bool, reason: str) -> None:

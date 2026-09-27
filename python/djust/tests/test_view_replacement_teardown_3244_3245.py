@@ -23,7 +23,13 @@ with its own ``mount`` frame, or one ``mount_batch`` (13-lazy-hydration.js).
 Both transports are driven through their real entry points: a
 ``WebsocketCommunicator`` against ``LiveViewConsumer``, and the SSE stream and
 message views. Waiters are awaited by each view's own ``start_async`` work.
-Views are told apart by a tag set at mount, never by ``id()``.
+Views are told apart by a tag set at mount, never by ``id()``. Each step
+waits for the frame it produces (``_ws_until``), never for a quiet window.
+
+A ``mount_batch``'s views are siblings on one socket, but only the last one is
+live: events and pushes are handled by ``view_instance`` alone (#3252). These
+tests pin the teardown (what each view joined is left, and each is torn down),
+not multi-view routing.
 """
 
 import asyncio
@@ -42,6 +48,7 @@ from django.urls import path
 from django.utils.functional import SimpleLazyObject
 
 from djust import LiveView, event_handler, sse
+from djust.presence import PresenceManager, PresenceMixin
 from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
@@ -205,7 +212,30 @@ class Listener(_Waits, LiveView):
         self._listen_channels = {"wsx3245"}
 
 
+class ScopedListener(Listener):
+    """A ``Listener`` that also joins a scoped server-push group."""
+
+    push_scope = "wsx-room"
+
+
+class Present(PresenceMixin, _Waits, LiveView):
+    """A page that tracks the user's presence."""
+
+    exposure_policy = "legacy"
+    presence_key = "wsx3250"
+    template = '<div dj-root dj-view="' + MOD + '.Present"><h1>present</h1></div>'
+
+    def mount(self, request, **kwargs):
+        self._tagged()
+        self.track_presence(meta={})
+
+    def get_presence_user_id(self):
+        return "user-" + self._tag
+
+
 urlpatterns = [
+    path("present/", Present.as_view()),
+    path("scoped/", ScopedListener.as_view()),
     path("listener/", Listener.as_view()),
     path("parent/", Parent.as_view()),
     path("dest/", Dest.as_view()),
@@ -220,6 +250,7 @@ def setup(monkeypatch):
     monkeypatch.setattr(sse, "_SESSION_LINGER_S", 0)
     EVENTS.clear()
     VIEWS.clear()
+    CONSUMERS.clear()
     _sse_sessions.clear()
     with override_settings(
         ROOT_URLCONF=__name__, LIVEVIEW_ALLOWED_MODULES=["djust", __name__], DEBUG=False
@@ -227,6 +258,7 @@ def setup(monkeypatch):
         yield
     _sse_sessions.clear()
     VIEWS.clear()
+    CONSUMERS.clear()
 
 
 async def _until(predicate, what):
@@ -272,11 +304,36 @@ def _view_group(cls):
     return view_group_name(MOD + "." + cls.__name__)
 
 
-async def _ws_drain(communicator):
+#: The frames that answer an event: the view's own reply, an embedded child's,
+#: or a refusal.
+EVENT_REPLIES = ("patch", "html_update", "noop", "embedded_update", "error")
+
+
+async def _ws_until(communicator, *types, timeout=15.0):
+    """Receive frames until one of ``types`` arrives, and return them all.
+
+    Deterministic, unlike stopping at a quiet window: a slow first render only
+    delays the frame (#3250 review L3).
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
     frames = []
-    while not await communicator.receive_nothing(timeout=0.2):
-        frames.append(await communicator.receive_json_from(timeout=2))
-    return frames
+    while True:
+        remaining = deadline - loop.time()
+        assert remaining > 0, "no frame of type %r; got %r" % (types, frames)
+        frame = await communicator.receive_json_from(timeout=remaining)
+        frames.append(frame)
+        if frame.get("type") in types:
+            return frames
+
+
+#: The consumers the tests' sockets run on, newest last.
+CONSUMERS: list = []
+
+
+def communicator_consumer_siblings():
+    """The newest socket's ``mount_batch`` sibling records."""
+    return list(CONSUMERS[-1]._batch_siblings)
 
 
 async def _ws_connect():
@@ -285,7 +342,12 @@ async def _ws_connect():
 
     from djust.websocket import LiveViewConsumer
 
-    communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+    class _Recorded(LiveViewConsumer):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            CONSUMERS.append(self)
+
+    communicator = WebsocketCommunicator(_Recorded.as_asgi(), "/ws/")
     communicator.scope["session"] = SessionStore(await sync_to_async(_fresh_key)())
     communicator.scope["user"] = AnonymousUser()
     connected, _ = await communicator.connect()
@@ -296,14 +358,14 @@ async def _ws_connect():
 
 async def _ws_mount(communicator, cls, url):
     await communicator.send_json_to({"type": "mount", "view": MOD + "." + cls.__name__, "url": url})
-    frames = await _ws_drain(communicator)
-    assert any(f.get("type") == "mount" for f in frames), frames
+    frames = await _ws_until(communicator, "mount", "error")
+    assert frames[-1]["type"] == "mount", frames
 
 
 async def _ws_event(communicator, event, view_id=None):
     params = {"view_id": view_id} if view_id else {}
     await communicator.send_json_to({"type": "event", "event": event, "params": params})
-    await _ws_drain(communicator)
+    await _ws_until(communicator, *EVENT_REPLIES)
 
 
 async def _ws_start_parent_waits(communicator):
@@ -338,7 +400,7 @@ async def test_websocket_live_redirect_tears_down_the_legacy_views_children():
         await communicator.send_json_to(
             {"type": "live_redirect_mount", "view": MOD + ".Dest", "url": "/dest/", "params": {}}
         )
-        await _ws_drain(communicator)
+        await _ws_until(communicator, "mount")
 
         # The non-sticky legacy child: unregistered, its waiter cancelled.
         await _until(lambda: ("cleanup", kid) in EVENTS, "the legacy child's waiter cleanup")
@@ -373,7 +435,7 @@ async def test_websocket_live_redirect_without_a_slot_discards_the_sticky_child(
         await communicator.send_json_to(
             {"type": "live_redirect_mount", "view": MOD + ".Beta", "url": "/beta/", "params": {}}
         )
-        await _ws_drain(communicator)
+        await _ws_until(communicator, "mount")
         assert type(VIEWS[_one(Beta)]) is Beta
         await _until(lambda: ("cleanup", dock) in EVENTS, "the dropped sticky child's cleanup")
         _assert_waiter_cleaned(dock)
@@ -399,7 +461,7 @@ async def test_websocket_live_redirect_discards_a_sticky_child_its_auth_now_deni
         await communicator.send_json_to(
             {"type": "live_redirect_mount", "view": MOD + ".Beta", "url": "/beta/", "params": {}}
         )
-        await _ws_drain(communicator)
+        await _ws_until(communicator, "mount")
         await _until(lambda: ("cleanup", dock) in EVENTS, "the refused sticky child's cleanup")
         _assert_waiter_cleaned(dock)
         assert unmounted == [dock]
@@ -569,7 +631,6 @@ async def test_a_second_mount_tears_down_the_replaced_view(caplog, monkeypatch):
         await _push(Alpha)
         await _push(Beta)
         await _until(lambda: ("pushed", beta) in EVENTS, "the push to Beta")
-        await _ws_drain(communicator)
         assert [e for e in EVENTS if e[0] == "pushed"] == [("pushed", beta)]
 
         # Its waiters and its child's were cancelled, their cleanup ran, and
@@ -589,7 +650,7 @@ async def test_a_second_mount_tears_down_the_replaced_view(caplog, monkeypatch):
     assert _members(_view_group(Beta)) == []
 
 
-async def test_a_mount_batch_tears_down_the_mounted_view_and_keeps_its_siblings(caplog):
+async def test_a_mount_batch_tears_down_the_view_mounted_before_it(caplog):
     caplog.set_level(logging.ERROR, logger="asyncio")
     communicator = await _ws_connect()
     try:
@@ -604,9 +665,8 @@ async def test_a_mount_batch_tears_down_the_mounted_view_and_keeps_its_siblings(
                 ],
             }
         )
-        frames = await _ws_drain(communicator)
-        batch = [f for f in frames if f.get("type") == "mount_batch"]
-        assert batch and [v["target_id"] for v in batch[0]["views"]] == ["b", "g"]
+        frames = await _ws_until(communicator, "mount_batch")
+        assert [v["target_id"] for v in frames[-1]["views"]] == ["b", "g"]
 
         # The previously mounted view is replaced: torn down, groups left.
         assert _members(_view_group(Alpha)) == []
@@ -618,17 +678,17 @@ async def test_a_mount_batch_tears_down_the_mounted_view_and_keeps_its_siblings(
         await _push(Gamma)
         gamma = _one(Gamma)
         await _until(lambda: ("pushed", gamma) in EVENTS, "the push to Gamma")
-        await _ws_drain(communicator)
         assert [e for e in EVENTS if e[0] == "pushed"] == [("pushed", gamma)]
 
-        # The batch's own views are siblings, not replacements: both keep
-        # their group while the socket is open.
-        assert len(_members(_view_group(Beta))) == 1
-        assert len(_members(_view_group(Gamma))) == 1
+        # The batch's first view is not torn down by the second (it is a
+        # sibling, recorded for the teardown). It is not live either: only the
+        # last view gets events and pushes (#3252), so nothing is asserted
+        # about its group membership while the socket is open.
         assert VIEWS[_one(Beta)]._waiters_refused() is False
     finally:
         await _close(communicator)
-    # ...and the disconnect leaves every one of them (Beta's used to leak).
+    # The disconnect leaves every group of every batch view (Beta's view group
+    # used to leak).
     assert _members(_view_group(Beta)) == []
     assert _members(_view_group(Gamma)) == []
     VIEWS.clear()
@@ -648,7 +708,7 @@ async def test_a_mount_after_a_mount_batch_tears_down_every_batch_view():
                 ],
             }
         )
-        await _ws_drain(communicator)
+        await _ws_until(communicator, "mount_batch")
         beta, gamma = _one(Beta), _one(Gamma)
         assert len(_members(_view_group(Beta))) == 1
 
@@ -679,8 +739,173 @@ async def test_replacing_a_view_leaves_its_db_notify_groups(how):
             await communicator.send_json_to(
                 {"type": "live_redirect_mount", "view": MOD + ".Beta", "url": "/beta/"}
             )
-            await _ws_drain(communicator)
+            await _ws_until(communicator, "mount")
         assert type(VIEWS[_one(Beta)]) is Beta
         assert _members(group) == []
     finally:
         await _close(communicator)
+
+
+@pytest.mark.parametrize("end", ["mount", "disconnect"])
+async def test_a_batch_siblings_groups_are_left_when_it_is_torn_down(end):
+    """#3250 review M1: a sibling's db_notify group was reset by the next batch
+    entry without being left (it outlived the disconnect), and its scoped-push
+    group was diffed away by the next entry. Each view's groups are now kept on
+    record for that view and left exactly when it is torn down."""
+    notify = "djust_db_notify_wsx3245"
+    communicator = await _ws_connect()
+    try:
+        await communicator.send_json_to(
+            {
+                "type": "mount_batch",
+                "views": [
+                    {"view": MOD + ".ScopedListener", "url": "/scoped/", "target_id": "s"},
+                    {"view": MOD + ".Gamma", "url": "/gamma/", "target_id": "g"},
+                ],
+            }
+        )
+        await _ws_until(communicator, "mount_batch")
+        from djust.push import push_scope_group_name
+
+        scoped = push_scope_group_name(MOD + ".ScopedListener", "wsx-room")
+        ((sibling, joined),) = communicator_consumer_siblings()
+        assert type(sibling) is ScopedListener
+        assert {notify, scoped, _view_group(ScopedListener)} <= set(joined)
+        if end == "mount":
+            await _ws_mount(communicator, Beta, "/beta/")
+            assert _members(notify) == []
+            assert _members(scoped) == []
+            assert _members(_view_group(Gamma)) == []
+    finally:
+        await _close(communicator)
+    assert _members(notify) == []
+    assert _members(scoped) == []
+    assert _members(_view_group(ScopedListener)) == []
+
+
+@pytest.mark.parametrize("how", ["mount", "live_redirect", "batch-disconnect"])
+async def test_a_torn_down_view_is_untracked_from_presence(how):
+    """#3250 review M3: only the view mounted at disconnect was untracked, so a
+    replaced view, and a mount_batch sibling, stayed in the presence list until
+    PRESENCE_TIMEOUT."""
+    communicator = await _ws_connect()
+    try:
+        if how == "batch-disconnect":
+            await communicator.send_json_to(
+                {
+                    "type": "mount_batch",
+                    "views": [
+                        {"view": MOD + ".Present", "url": "/present/", "target_id": "p"},
+                        {"view": MOD + ".Gamma", "url": "/gamma/", "target_id": "g"},
+                    ],
+                }
+            )
+            await _ws_until(communicator, "mount_batch")
+        else:
+            await _ws_mount(communicator, Present, "/present/")
+        present = _one(Present)
+        assert len(await sync_to_async(PresenceManager.list_presences)("wsx3250")) == 1
+        if how == "mount":
+            await _ws_mount(communicator, Beta, "/beta/")
+        elif how == "live_redirect":
+            await communicator.send_json_to(
+                {"type": "live_redirect_mount", "view": MOD + ".Beta", "url": "/beta/"}
+            )
+            await _ws_until(communicator, "mount")
+        if how != "batch-disconnect":
+            assert await sync_to_async(PresenceManager.list_presences)("wsx3250") == []
+            assert VIEWS[present]._presence_tracked is False
+    finally:
+        await _close(communicator)
+    assert await sync_to_async(PresenceManager.list_presences)("wsx3250") == []
+
+
+# --------------------------------------------------------------------------- #
+# #3250 review L1 / L2 — the remaining teardown paths use the shared helpers
+# --------------------------------------------------------------------------- #
+
+
+class ExplicitRoot(LiveView):
+    exposure_policy = "explicit"
+    template = "<div dj-root><span>root</span></div>"
+
+
+def _explicit_root(monkeypatch):
+    monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
+    view = ExplicitRoot()
+    view.start_async(lambda: None, name="pending")
+    return view
+
+
+def _bare_consumer(view, runtime):
+    from unittest.mock import AsyncMock
+
+    from djust.websocket import LiveViewConsumer
+
+    consumer = LiveViewConsumer()
+    consumer.view_instance = view
+    consumer._runtime = runtime
+    consumer.send_error = AsyncMock()
+    consumer.close = AsyncMock()
+    return consumer
+
+
+@pytest.mark.parametrize("path", ["consumer_turn", "released_event", "runtime_turn"])
+async def test_a_revoked_explicit_root_is_released(monkeypatch, path):
+    """A turn whose authority was revoked dropped the view and closed with
+    4403; the disconnect then saw no view, so the explicit root was never
+    disposed (its background work, waiters and live handles survived)."""
+    from types import SimpleNamespace
+
+    view = _explicit_root(monkeypatch)
+    assert view._async_tasks
+    if path == "runtime_turn":
+        from djust.runtime import ViewRuntime
+        from djust.tests.test_runtime_state_save_tt_1894 import MockTransport
+
+        runtime = ViewRuntime(MockTransport())
+        runtime.view_instance = view
+        await runtime.deny_explicit_turn()
+        assert runtime.view_instance is None
+    else:
+
+        async def revoked(v):
+            raise PermissionError("revoked")
+
+        runtime = SimpleNamespace(
+            view_instance=view, authorize_explicit_turn=revoked, _explicit_mount_binding=None
+        )
+        consumer = _bare_consumer(view, runtime)
+        if path == "consumer_turn":
+            assert await consumer._authorize_explicit_consumer_turn(view) is False
+        else:
+            assert await consumer._authorize_released_explicit_event(view) is False
+        assert consumer.view_instance is None
+        consumer.close.assert_awaited_once_with(code=4403)
+        consumer.send_error.assert_awaited_once()
+    assert view._djust_child_disposed is True
+    assert not view._async_tasks
+
+
+async def test_live_render_discarding_a_legacy_sticky_child_uses_the_shared_teardown():
+    """``{% live_render %}`` refusing a reused sticky child: detached from the
+    parent once, its waiters closed, and both hooks run once (#3250 review L2)."""
+    from djust.templatetags.live_tags import _discard_sticky_child
+
+    hooks = []
+
+    class Kid(LiveView):
+        exposure_policy = "legacy"
+
+        def _on_sticky_unmount(self):
+            hooks.append("unmount")
+
+        def _cleanup_on_unregister(self):
+            hooks.append("unregister")
+
+    parent, kid = LiveView(), Kid()
+    parent._register_child("dock", kid)
+    _discard_sticky_child(parent, "dock", kid)
+    assert parent._get_all_child_views() == {}
+    assert kid._djust_waiters_closed is True
+    assert hooks == ["unmount", "unregister"]

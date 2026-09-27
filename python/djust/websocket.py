@@ -745,11 +745,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # its mount completes.
         self._sticky_preserved: Dict[str, Any] = {}
         # mount_batch siblings (#3245): the views a ``mount_batch`` mounted
-        # before its last one, each with the view group it joined. The socket
-        # holds one ``view_instance``; a batch's earlier views stay mounted
-        # beside it (their groups kept) until the socket's views are replaced
-        # or it disconnects, which tears them all down.
-        self._batch_siblings: List[Tuple[Any, Optional[str]]] = []
+        # before its last one, each with every channel-layer group it joined.
+        # The socket holds one ``view_instance``, and only it receives events
+        # and pushes: a sibling is not independently live (#3252), and a push
+        # to a group a sibling joined is handled by ``view_instance``. The
+        # siblings are torn down, and exactly their groups left, when the
+        # socket's views are replaced or it disconnects.
+        self._batch_siblings: List[Tuple[Any, Tuple[str, ...]]] = []
         self._mount_batch_active = False
         # Sticky auto-detect (ADR-014): IDs that ``{% live_render sticky=True %}``
         # already re-registered onto the new parent during template render.
@@ -1982,6 +1984,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         except Exception:
             # No exception text or traceback: auth providers may include
             # credentials or other internal state in their exceptions.
+            revoked = self.view_instance
             if runtime is not None and runtime.view_instance is target_view:
                 runtime.view_instance = None
             self.view_instance = None
@@ -1989,6 +1992,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 "Event authorization failed. Please reload the page.", code="permission_denied"
             )
             await self.close(code=4403)
+            self._release_revoked_view(revoked)
             return False
         target_view._djust_event_request = authorized
         return True
@@ -2017,13 +2021,27 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         except Exception:  # noqa: BLE001 — auth providers may carry credentials
             if runtime is not None and runtime.view_instance is view:
                 runtime.view_instance = None
+            revoked = None
             if self.view_instance is view:
-                self.view_instance = None
+                revoked, self.view_instance = view, None
             await self.send_error(
                 "Event authorization failed. Please reload the page.", code="permission_denied"
             )
             await self.close(code=4403)
+            self._release_revoked_view(revoked)
             return False
+
+    @staticmethod
+    def _release_revoked_view(view: Any) -> None:
+        """Tear down a root whose authority was revoked, once its socket is
+        closed (#3250 review L1). The view was dropped from the consumer before
+        the close, so the disconnect no longer sees it: without this its
+        background work, waiters and live handles outlived the connection."""
+        if view is None:
+            return
+        from ._child_lifecycle import release_root_view
+
+        release_root_view(view, navigation=False, reason="view_disconnect")
 
     @staticmethod
     def _end_explicit_turn(view: Any) -> None:
@@ -2431,10 +2449,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # Leave per-view channel group
         if self._view_group:
             await self.channel_layer.group_discard(self._view_group, self.channel_name)
-        # ... and the groups of the views a mount_batch mounted beside it (#3245).
-        # The siblings themselves are torn down with the view below.
+        # ... and every group the views a mount_batch mounted beside it joined
+        # (#3245). The siblings themselves are torn down with the view below.
         mounted_views = self._mounted_views()
-        await self._leave_batch_sibling_groups()
+        for group in self._take_batch_sibling_groups():
+            try:
+                await self.channel_layer.group_discard(group, self.channel_name)
+            except Exception as e:  # noqa: BLE001 — leaving is best effort
+                logger.warning("Error leaving channel group %s: %s", group, e)
 
         # Leave every presence group the mounts joined (#3202)
         from .presence import leave_presence_groups
@@ -2457,15 +2479,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 except Exception as e:  # noqa: BLE001
                     logger.warning("Error leaving db_notify group for %s: %s", ch, e)
 
-        # Clean up presence tracking if view supports it
-        if self.view_instance and hasattr(self.view_instance, "untrack_presence"):
-            view = self.view_instance
-            try:
-                await sync_to_async(view.untrack_presence)()
-            except Exception as e:
-                self._log_view_hook_failure(
-                    view, e, "Error cleaning up presence: %s", e, level="warning"
-                )
+        # Clean up presence tracking for every mounted view (#3250 review M3:
+        # the mount_batch siblings too, not only view_instance)
+        await self._untrack_presence_of(mounted_views)
 
         # Cancel tick task and wait for it to finish
         if self._tick_task:
@@ -3831,20 +3847,24 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             views.append(current)
         return views
 
-    async def _leave_batch_sibling_groups(self) -> None:
-        """Leave the view groups the ``mount_batch`` siblings joined, and forget
-        the siblings (#3245). The consumer's other group sets already hold every
-        group the batch joined."""
+    def _take_batch_sibling_groups(self) -> List[str]:
+        """Forget the ``mount_batch`` siblings and return every channel-layer
+        group they joined (view, presence, presence-scope, db_notify, scoped
+        push), for the caller to leave (#3245, #3250 review M1)."""
         siblings = getattr(self, "_batch_siblings", None) or []
         self._batch_siblings = []
-        channel_layer = getattr(self, "channel_layer", None)
-        if channel_layer is None:
-            return
-        for group in {g for _view, g in siblings if isinstance(g, str) and g}:
-            try:
-                await channel_layer.group_discard(group, self.channel_name)
-            except Exception as e:  # noqa: BLE001 — leaving is best effort
-                logger.warning("Error leaving channel group %s: %s", group, e)
+        groups: List[str] = []
+        for _view, joined in siblings:
+            groups.extend(g for g in joined if g not in groups)
+        return groups
+
+    async def _untrack_presence_of(self, views: List[Any]) -> None:
+        """Untrack the presence of every view being torn down (#3250 review M3)."""
+        from ._child_lifecycle import untrack_view_presence
+
+        for view in views:
+            if hasattr(view, "untrack_presence"):
+                await sync_to_async(untrack_view_presence)(view)
 
     async def _release_before_mount(self) -> None:
         """Make room for a mount on this socket (#3245).
@@ -3856,17 +3876,22 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         ``live_redirect`` tears the old page down.
 
         Inside a ``mount_batch`` the entries are siblings: the view the
-        previous entry mounted stays mounted, and is recorded with its view
-        group in ``_batch_siblings`` so that a later replacement, or the
-        disconnect, tears it down and leaves its group.
+        previous entry mounted is not torn down, and is recorded in
+        ``_batch_siblings`` with every group it joined, taken off the
+        consumer's group attributes so the next entry's mount neither resets
+        nor diffs them away (#3250 review M1). A later replacement, or the
+        disconnect, tears it down and leaves exactly those groups. The sibling
+        is not independently live meanwhile: events and pushes are handled by
+        ``view_instance`` alone (#3252).
         """
         if getattr(self, "_mount_batch_active", False):
             current = self.view_instance
             if current is not None:
+                from .runtime import take_consumer_view_groups
+
+                joined = tuple(take_consumer_view_groups(self))
                 siblings = getattr(self, "_batch_siblings", None) or []
-                self._batch_siblings = [*siblings, (current, getattr(self, "_view_group", None))]
-                # The sibling keeps its group; the next entry records its own.
-                self._view_group = None
+                self._batch_siblings = [*siblings, (current, joined)]
             return
         if self._mounted_views():
             await self._release_mounted_views(reason="view_replaced")
@@ -3879,9 +3904,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         The teardown ``live_redirect`` always did, now shared with a second
         ``mount`` / ``mount_batch`` frame (#3245): leave the channel groups the
         views joined (view, presence, presence-scope, db_notify, scoped push),
-        stop the tick task, drop the pushes deferred for them (#3001), and tear
-        each view down (``release_root_view``: waiters, embedded children,
-        uploads, live handles; #3244). ``keep`` holds the sticky children a
+        untrack their presence, stop the tick task, drop the pushes deferred
+        for them (#3001), and tear each view down (``release_root_view``:
+        waiters, embedded children, uploads, live handles; #3244). ``keep`` holds the sticky children a
         ``live_redirect`` preserves: they are removed from the old view's
         registry first, so they survive with their waiters and background work.
         """
@@ -3889,8 +3914,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         from .runtime import leave_consumer_view_groups
 
         views = self._mounted_views()
-        await leave_consumer_view_groups(self)
-        await self._leave_batch_sibling_groups()
+        await leave_consumer_view_groups(self, self._take_batch_sibling_groups())
+        await self._untrack_presence_of(views)
 
         # Cancel old tick task
         if self._tick_task:

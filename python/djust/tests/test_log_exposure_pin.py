@@ -55,9 +55,7 @@ LEGACY_GATED = {
 }
 
 FRAMEWORK_ONLY = {
-    ("_leave_batch_sibling_groups", "Error leaving channel group %s: %s"): (
-        "channel-layer group_discard"
-    ),
+    ("disconnect", "Error leaving channel group %s: %s"): ("channel-layer group_discard"),
     ("_find_sticky_slot_ids", "sticky-slot parse failed; returning empty set"): "slot markup parse",
     ("_clear_live_handles", "%s failed during teardown"): (
         "teardown step names; confirm no application hook runs there"
@@ -165,7 +163,7 @@ MIXIN_TABLES = {
     ),
     "_child_lifecycle.py": (
         {
-            ("discard_sticky_child", "sticky child _on_sticky_unmount raised"): (
+            ("discard_sticky_child", "sticky child %s raised"): (
                 "after `if not uses_legacy_exposure(child)` disposes and returns"
             ),
         },
@@ -295,9 +293,6 @@ MIXIN_TABLES = {
             ("live_render", "live_render: sticky restore for %r failed; mount"): (
                 "inside `if sticky_kwarg and not explicit_child`"
             ),
-            ("_discard_sticky_child", "sticky child %r _on_sticky_unmount raised"): (
-                "inside `if callable(hook) and uses_legacy_exposure(child)`"
-            ),
         },
         {
             ("_resolve_css_class", "config.get_framework_class lookup failed: %s"): (
@@ -308,9 +303,6 @@ MIXIN_TABLES = {
             ),
             ("render", "dj_activity: _register_activity failed for %s"): (
                 "activity registration with a template-supplied name"
-            ),
-            ("_discard_sticky_child", "live_render: unregistering sticky child %r faile"): (
-                "_unregister_child disposes nonlegacy children and catches legacy hooks itself"
             ),
         },
     ),
