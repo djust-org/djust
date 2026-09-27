@@ -68,6 +68,46 @@ async def mount_actor(owner):
     return handle
 
 
+def _apply_deferred_decrefs():
+    """Enter pyo3 once, so it applies the decrefs Rust threads queued (#3222).
+
+    A Rust thread that drops a ``Py<...>`` while not attached to the
+    interpreter cannot decref it; pyo3 queues the decref and applies it at the
+    next pyo3 entry on any thread (``pyo3-0.29.2/src/internal/state.rs``,
+    ``ReferencePool``). The ViewActor that a failed mount shuts down drops its
+    Python view that way, at the end of its task on a tokio worker. Normally
+    that happens before the mount's result reaches Python, and completing the
+    future enters pyo3. On a starved runner the worker can run after it, and
+    then nothing in a ``gc.collect()`` + ``asyncio.sleep`` loop enters pyo3:
+    Rust has let go, but the count is still pending. Any ``djust._rust`` call
+    applies it; this one only reads a counter.
+    """
+    from djust._rust import registry_generation
+
+    registry_generation()
+
+
+async def _released(reference, attempts=100):
+    """Wait for ``reference`` to die: apply queued pyo3 decrefs, collect, repeat."""
+    for _ in range(attempts):
+        _apply_deferred_decrefs()
+        gc.collect()
+        if reference() is None:
+            return True
+        await asyncio.sleep(0.01)
+    return False
+
+
+def _holders(reference):
+    obj = reference()
+    if obj is None:
+        return "released"
+    return "refcount=%d python referrers=%r" % (
+        sys.getrefcount(obj) - 2,
+        [type(r).__name__ for r in gc.get_referrers(obj)],
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["import", "discovery"])
 async def test_failed_actor_mount_does_not_retain_an_unregistered_view(monkeypatch, failure):
@@ -89,15 +129,26 @@ async def test_failed_actor_mount_does_not_retain_an_unregistered_view(monkeypat
             with pytest.raises(RuntimeError, match="Actor render parameter contracts unavailable"):
                 await handle.mount("tests.ActorOwner", {}, owner, template="<div></div>")
         del owner
-        for _ in range(100):
-            gc.collect()
-            if reference() is None:
-                break
-            await asyncio.sleep(0.01)
-        assert reference() is None
+        assert await _released(reference), _holders(reference)
         await handle.ping()
     finally:
         await handle.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_the_release_wait_still_sees_a_view_the_actor_holds():
+    """Gate for the wait above (#3222): applying pyo3's queued decrefs frees
+    only what Rust has let go of. A view a live actor still holds stays alive
+    through it, so a real retention still fails that test."""
+    owner = ActorOwner()
+    reference = weakref.ref(owner)
+    handle = await mount_actor(owner)
+    try:
+        del owner
+        assert not await _released(reference, attempts=5)
+    finally:
+        await handle.shutdown()
+    assert await _released(reference), _holders(reference)
 
 
 @pytest.mark.asyncio
