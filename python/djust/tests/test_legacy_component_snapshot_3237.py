@@ -34,6 +34,8 @@ from djust.components.descriptors.base import LiveComponent as DescriptorCompone
 from djust.components.descriptors.base import TypedState
 from djust.decorators import event_handler
 
+from ._ws_frames import has_type, receive_settled
+
 pytest.importorskip("channels")
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
@@ -140,12 +142,17 @@ async def _connect():
     return communicator, session_key
 
 
-async def _frames(communicator):
-    """Every frame that arrives until the socket goes quiet."""
-    frames = []
-    while not await communicator.receive_nothing(timeout=0.3):
-        frames.append(await communicator.receive_json_from(timeout=2))
-    return frames
+#: The frames that answer an event: its reply, or a refusal.
+EVENT_REPLIES = ("html_update", "patch", "noop", "error")
+
+
+async def _frames(communicator, *expected):
+    """The frames up to the first of type ``expected``, then any that follow.
+
+    Waits for the expected frame instead of stopping at a quiet window, which
+    returned ``[]`` when a loaded runner was slow to send the first one (#3256).
+    """
+    return await receive_settled(communicator, has_type(*expected), what=f"a {expected} frame")
 
 
 def _mount_frame(frames):
@@ -169,7 +176,7 @@ def _held_token(frames, token=None):
 
 async def _mounted(communicator, url):
     await communicator.send_json_to({"type": "mount", "view": VIEW, "url": url})
-    frames = await _frames(communicator)
+    frames = await _frames(communicator, "mount", "error")
     mount = _mount_frame(frames)
     assert isinstance(mount.get(TOKEN), str)
     return frames
@@ -179,7 +186,7 @@ async def _component_event(communicator, component_id, name):
     await communicator.send_json_to(
         {"type": "event", "event": name, "params": {"component_id": component_id}}
     )
-    return await _frames(communicator)
+    return await _frames(communicator, *EVENT_REPLIES)
 
 
 def _component_ids(frames):
@@ -195,7 +202,7 @@ async def _back(communicator, url, token):
     await communicator.send_json_to(
         {"type": "live_redirect_mount", "view": OTHER, "url": "/c3237-other/"}
     )
-    await _frames(communicator)
+    await _frames(communicator, "mount", "error")
     await communicator.send_json_to(
         {
             "type": "live_redirect_mount",
@@ -204,7 +211,7 @@ async def _back(communicator, url, token):
             "state_snapshot": {"view_slug": VIEW, "state_json": token},
         }
     )
-    return _mount_frame(await _frames(communicator))
+    return _mount_frame(await _frames(communicator, "mount", "error"))
 
 
 async def test_back_after_a_component_event_restores_the_events_change():
@@ -239,7 +246,7 @@ async def test_back_after_a_view_event_then_a_component_event_restores_both():
             pinger_id = _component_ids(mounted)[0]
 
             await communicator.send_json_to({"type": "event", "event": "bump", "params": {}})
-            token = _held_token(await _frames(communicator), token)
+            token = _held_token(await _frames(communicator, *EVENT_REPLIES), token)
             frames = await _component_event(communicator, pinger_id, "step")
             assert any("count=11" in f.get("html", "") for f in frames), frames
             token = _held_token(frames, token)
