@@ -736,7 +736,7 @@ class CompleteThemeCSSGenerator:
 }}
 .{p}btn:hover {{
   background: currentColor;
-  color: var(--background);
+  color: hsl(var(--background));
 }}""")
         elif styles["button_style"] == "ghost":
             parts.append(f"""

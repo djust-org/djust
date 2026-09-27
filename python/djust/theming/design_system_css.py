@@ -304,7 +304,7 @@ h6 { font-size: 1rem; }"""
 }
 
 .hover-glow:hover {
-  box-shadow: 0 0 20px rgba(var(--primary) / 0.3);
+  box-shadow: 0 0 20px hsl(var(--primary) / 0.3);
 }
 
 /* Respect reduced motion preferences */

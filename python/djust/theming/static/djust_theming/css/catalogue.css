@@ -216,7 +216,7 @@ body.dc-body {
    catalogue's own CSS lays out, it does not restyle components. */
 .dc-version {
   font-size: 0.75rem;
-  color: var(--muted-foreground, var(--color-text-secondary));
+  color: hsl(var(--muted-foreground));
   font-variant-numeric: tabular-nums;
   padding-inline-end: 0.5rem;
 }
