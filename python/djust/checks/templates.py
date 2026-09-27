@@ -361,7 +361,7 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                     "%s -- template uses dj-* event directives but has no dj-root or dj-view attribute."
                     % relpath,
                     hint=(
-                        'Add dj-root to the root element (e.g. <div dj-root>), '
+                        "Add dj-root to the root element (e.g. <div dj-root>), "
                         "or this template won't be connected to a LiveView. "
                         "If this template is an intentional fragment included from "
                         "a parent LiveView root, add a `{# djust:partial #}` "
