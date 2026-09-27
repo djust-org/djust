@@ -954,7 +954,7 @@ not trigger it.
 
 **Severity**: Info
 
-**What causes it**: A template has a `dj-view` attribute but no element has the `dj-root` attribute. The check skips templates that use `{% extends %}` since the root may be in a parent template.
+**What causes it**: A template has a `dj-view` attribute, and no element of the page has `dj-root`, counting the parents it `{% extends %}`. A child whose parent cannot be loaded is skipped.
 
 **What you see**: Nothing breaks. `dj-root` is inferred from `dj-view` on both the client and the server, so this is informational.
 
@@ -1095,7 +1095,7 @@ class MyView(LiveView):
 
 **What you see**: The page renders as static HTML. djust stamps `dj-view` only onto a `dj-root` element and the client mounts only `[dj-view]`, so no event fires and nothing updates.
 
-The directives covered are every server-event directive the client binds (`dj-click`, `dj-input`, `dj-submit`, `dj-keydown`, `dj-poll`, `dj-mounted`, `dj-viewport-top`, `dj-viewport-bottom`, `dj-window-*`, `dj-document-*` and the rest) plus `dj-model`, `dj-hook`, `dj-upload`, `dj-upload-drop`, `dj-update` and `dj-stream-mode` (#3225). Component templates (`dj-component`, or a root with `data-component-id`) are skipped.
+The directives covered are every server-event directive the client binds (`dj-click`, `dj-input`, `dj-submit`, `dj-keydown`, `dj-poll`, `dj-mounted`, `dj-viewport-top`, `dj-viewport-bottom`, `dj-window-*`, `dj-document-*` and the rest) plus `dj-model`, `dj-upload` and `dj-upload-drop` (#3225). Only real attributes count, not text in `<code>` or a `<script>`. Not flagged: a child whose root is in the base it `{% extends %}`, a partial another template `{% include %}`s, the template of a view a `{% live_render %}` embeds, component templates (a real `dj-component` or `data-component-id` attribute), and `dj-hook`, `dj-update` and `dj-stream-mode`, which work without a connection.
 
 **Fix**: Add `dj-root` to the root element (e.g. `<div dj-root>`), or explicitly add `dj-view="yourapp.views.YourView"`. If the template is an intentional fragment included from a parent LiveView root, add a `{# djust:partial #}` comment, or suppress with `DJUST_CONFIG = {"suppress_checks": ["T012"]}`.
 

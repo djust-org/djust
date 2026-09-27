@@ -122,14 +122,12 @@ _NAV_DATA_ATTRS = re.compile(r"data-(view|tab|page|section)")  # Navigation-styl
 # T012 (#3225) — the attributes that only work inside a connected LiveView.
 # Derived from the client's directive table in ``djust._template_bindings``:
 # every server-event directive (``DIRECTIVES``: dj-click, dj-viewport-bottom,
-# dj-poll, dj-mounted, ...) plus the non-event attributes that bind to the
-# view (a model field, a hook, an upload slot, a patched or streamed
-# container). Every other attribute the client reads is listed in
-# ``_T012_EXEMPT_ATTRIBUTES``; ``python/tests/test_checks_t002_t012_3225.py``
-# scans the client source and fails when an attribute is in neither set.
-_T012_LIVE_NON_EVENT_ATTRIBUTES = frozenset(
-    {"dj-model", "dj-hook", "dj-upload", "dj-upload-drop", "dj-update", "dj-stream-mode"}
-)
+# dj-poll, dj-mounted, ...) plus the non-event attributes that send to the
+# view (a model field, an upload slot). Every other attribute the client
+# reads is listed in ``_T012_EXEMPT_ATTRIBUTES``;
+# ``python/tests/test_checks_t002_t012_3225.py`` scans the client source and
+# fails when an attribute is in neither set, or an exempt entry is stale.
+_T012_LIVE_NON_EVENT_ATTRIBUTES = frozenset({"dj-model", "dj-upload", "dj-upload-drop"})
 _T012_EXEMPT_ATTRIBUTES = frozenset(
     {
         # The root markers themselves, and server-stamped or root-level markers.
@@ -153,7 +151,14 @@ _T012_EXEMPT_ATTRIBUTES = frozenset(
         "dj-track-static",
         "dj-view-transitions",
         "dj-loading",
-        # Client-only behaviour that sends no server event.
+        # Client-only behaviour that sends no server event. A hook mounts
+        # page-wide without a connection (14-init.js calls mountHooks() on the
+        # document); only its pushEvent needs the socket. dj-update and
+        # dj-stream-mode shape patches, and a page without patches is merely
+        # static, not broken.
+        "dj-hook",
+        "dj-update",
+        "dj-stream-mode",
         "dj-audio",
         "dj-copy",
         "dj-copy-class",
@@ -215,10 +220,163 @@ def _dj_event_directives_re() -> "re.Pattern[str]":
 
 
 # Component templates render inside the parent view's root, so T012 skips
-# them: the legacy ``dj-component`` marker, and ``data-component-id`` — the
-# attribute a ``template_name`` LiveComponent puts on its own root, which the
+# them: an element carrying the legacy ``dj-component`` attribute, or
+# ``data-component-id`` — the attribute a component's root carries, which the
 # client reads to route events (08-event-parsing.js, 11-event-handler.js).
-_DJ_COMPONENT_RE = re.compile(r"dj-component|(?<![\w-])data-component-id\s*=")
+# Matched as real attributes of parsed elements (``_page_markup``), not text.
+_T012_COMPONENT_ATTRIBUTES = ("dj-component", "data-component-id")
+_INCLUDE_NAME_RE = re.compile(r"""\{%\s*include\s+["']([^"']+)["']""")
+_LIVE_RENDER_VIEW_RE = re.compile(r"""\{%\s*live_render\s+["']([\w.]+)["']""")
+
+
+def _embedded_view_templates(source: str) -> set:
+    """``template_name`` of each view a ``{% live_render "dotted.View" %}`` embeds.
+
+    Such a view's template renders inside the wrapper the tag emits (which
+    carries ``dj-view``), so it needs no root of its own. A path that does not
+    import is skipped; T013/T018 report bad ``live_render`` paths.
+    """
+    from django.utils.module_loading import import_string
+
+    names = set()
+    for path in _LIVE_RENDER_VIEW_RE.findall(source):
+        try:
+            view = import_string(path)
+        except Exception as exc:  # noqa: BLE001 -- an unimportable path embeds nothing
+            logger.debug("T012: cannot import live_render view %s (%s)", path, type(exc).__name__)
+            continue
+        name = getattr(view, "template_name", None)
+        if isinstance(name, str):
+            names.add(name)
+    return names
+
+
+_EXTENDS_TAG_RE = re.compile(r"\{%\s*extends\s+")
+
+
+class _PageMarkup:
+    """The elements a template renders, for T002 and T012 (#3225).
+
+    ``own`` is the template's own markup with its constant ``{% include %}``s
+    inlined; for a ``{% extends %}`` child, only its blocks. ``page`` is the
+    whole page, parents followed. ``resolved`` is False when the template
+    extends a parent this scan could not follow; both checks then skip it,
+    since its root may be in that parent.
+    """
+
+    def __init__(self, resolved: bool, own: list, page: list) -> None:
+        self.resolved = resolved
+        self.own = own
+        self.page = page
+
+    @staticmethod
+    def has(elements: list, *names: str) -> bool:
+        return any(element.has(name) for element in elements for name in names)
+
+
+def _parse_flat(flat: Any) -> list:
+    from djust._template_bindings import _Markup
+
+    text = "".join(flat.text)
+    parser = _Markup(text)
+    parser.feed(text)
+    parser.close()
+    return parser.elements
+
+
+def _token_flat(source: str) -> Any:
+    """Markup of a template that is not compiled: text kept, tags as boundaries."""
+    from django.template.base import Lexer, TokenType
+
+    from djust._template_bindings import BRANCH, VALUE, _Flat
+
+    flat = _Flat()
+    skip_until: Optional[str] = None
+    for token in Lexer(source).tokenize():
+        contents = token.contents.strip()
+        if skip_until is not None:
+            if token.token_type == TokenType.BLOCK and contents == skip_until:
+                skip_until = None
+            continue
+        if token.token_type == TokenType.TEXT:
+            flat.emit(token.contents)
+        elif token.token_type == TokenType.VAR:
+            flat.emit(VALUE)
+        elif token.token_type == TokenType.BLOCK:
+            tag = contents.split()[0] if contents else ""
+            if tag == "comment":
+                skip_until = "endcomment"
+            else:
+                flat.emit(BRANCH)
+    return flat
+
+
+def _page_markup(content: str, engine: Any) -> _PageMarkup:
+    """Parse a template into real elements, following extends and includes."""
+    from djust._template_bindings import _Flat, _Flattener
+
+    has_extends = bool(_EXTENDS_TAG_RE.search(content))
+    template = None
+    if engine is not None:
+        try:
+            template = engine.from_string(content)
+        except Exception as exc:  # noqa: BLE001 -- an uncompilable template is scanned as tokens
+            logger.debug("T002/T012: template does not compile (%s)", type(exc).__name__)
+    if template is None:
+        own = _parse_flat(_token_flat(content))
+        return _PageMarkup(not has_extends, own, own)
+
+    from django.template.loader_tags import ExtendsNode
+
+    extends = next((n for n in template.nodelist if isinstance(n, ExtendsNode)), None)
+    own_flat = _Flat()
+    flattener = _Flattener(engine, own_flat)
+    if extends is None:
+        flattener.nodes(template.nodelist, "", {}, 0)
+        own = _parse_flat(own_flat)
+        return _PageMarkup(True, own, own)
+    for block in extends.blocks.values():
+        flattener.nodes(block.nodelist, "", {}, 1)
+    page_flat = _Flat()
+    _Flattener(engine, page_flat).template(template, "", {}, 0)
+    resolved = not any(
+        "extends" in gap.reason or gap.reason.startswith("cannot load") for gap in page_flat.gaps
+    )
+    return _PageMarkup(resolved, _parse_flat(own_flat), _parse_flat(page_flat))
+
+
+class _LazyPage:
+    """Parse a template at most once, and only when T002/T012 need it."""
+
+    def __init__(self, content: str, engine: Any) -> None:
+        self._content = content
+        self._engine = engine
+        self._markup: Optional[_PageMarkup] = None
+
+    def __call__(self) -> _PageMarkup:
+        if self._markup is None:
+            self._markup = _page_markup(self._content, self._engine)
+        return self._markup
+
+
+def _is_t012_trigger(attribute: str) -> bool:
+    name = attribute.split(".", 1)[0]
+    return name in _t012_trigger_attributes() or bool(
+        re.fullmatch(r"dj-(?:window|document)-[a-z]+", name)
+    )
+
+
+def _template_names(filepath: str, tpl_dirs: list) -> set:
+    """The names a template file loads as (its path under each template dir)."""
+    names = set()
+    real = os.path.realpath(filepath)
+    for directory in tpl_dirs:
+        base = os.path.realpath(directory)
+        if real.startswith(base + os.sep):
+            names.add(os.path.relpath(real, base).replace(os.sep, "/"))
+    return names
+
+
 # T016 (#1733) — dj-navigate directive. Used to warn when SPA navigation is
 # requested but the URLconf-derived route map is empty (so dj-navigate would
 # silently full-reload instead of navigating over the WebSocket).
@@ -294,6 +452,26 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     # silently full-reloads).
     dj_navigate_hits: list[tuple[str, int]] = []
 
+    # T012 (#3225) — a partial ``{% include %}``d by another template renders
+    # inside the includer's root, and the includer is checked with it inlined.
+    # A view ``{% live_render %}`` embeds renders inside the tag's wrapper.
+    included_names: set = set()
+    for filepath in _iter_template_files(tpl_dirs):
+        try:
+            with open(filepath, "r", encoding="utf-8", errors="replace") as fh:
+                source = fh.read()
+        except OSError:
+            continue
+        included_names.update(_INCLUDE_NAME_RE.findall(source))
+        included_names.update(_embedded_view_templates(source))
+    from djust._template_bindings import django_engine
+
+    try:
+        engine = django_engine()
+    except Exception as exc:  # noqa: BLE001 -- no engine: templates are scanned as tokens
+        logger.debug("T002/T012: no Django template engine (%s)", type(exc).__name__)
+        engine = None
+
     for filepath in _iter_template_files(tpl_dirs):
         try:
             with open(filepath, "r", encoding="utf-8", errors="replace") as fh:
@@ -359,12 +537,19 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
         # page still connects. #3225: that is the ONLY case T002 covers. A
         # template with dj-* directives and neither attribute never connects;
         # T012 warns about it, and T002 must not call it "OK".
+        # T002 and T012 read the same parsed page (``_page_markup``): real
+        # attributes, the parent of an ``{% extends %}`` followed, and a child
+        # whose parent cannot be followed skipped by both.
         has_djust_view = _DJ_VIEW_RE.search(content)
         has_djust_root = _DJ_ROOT_RE.search(content)
-        if has_djust_view and not has_djust_root:
-            # Check if it extends a base template (in which case root is likely in the base)
-            if not re.search(r"\{%\s*extends\s+", content) and not _is_check_suppressed(
-                "djust.T002"
+        page = _LazyPage(content, engine)
+
+        if has_djust_view and not _is_check_suppressed("djust.T002"):
+            markup = page()
+            if (
+                markup.resolved
+                and markup.has(markup.own, "dj-view")
+                and not markup.has(markup.page, "dj-root")
             ):
                 errors.append(
                     DjustInfo(
@@ -447,15 +632,21 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
         # T012 -- template uses dj-* event directives but missing dj-root or dj-view (#3171)
         if (
-            _dj_event_directives_re().search(content)
-            and not has_djust_view
-            and not has_djust_root
-            # Component templates (dj-component / data-component-id) need no root
-            and not _DJ_COMPONENT_RE.search(content)
+            # Cheap text gate; an {% include %} may inline a partial's directives
+            (_dj_event_directives_re().search(content) or _INCLUDE_RE.search(content))
             # #1096: partial-template opt-out marker
             and not _DJ_PARTIAL_MARKER_RE.search(content)
+            # A partial another template includes: checked inlined there
+            and not (_template_names(filepath, tpl_dirs) & included_names)
             # Global suppression via DJUST_CONFIG['suppress_checks']
             and not _is_check_suppressed("djust.T012")
+            and page().resolved
+            # Real attributes of the template's own elements, not text: prose
+            # in <code> or a <script> string is not a directive.
+            and any(_is_t012_trigger(name) for e in page().own for name, _ in e.attrs)
+            and not page().has(page().page, "dj-root", "dj-view")
+            # Component templates render inside the parent view's root
+            and not page().has(page().own, *_T012_COMPONENT_ATTRIBUTES)
         ):
             errors.append(
                 DjustWarning(
