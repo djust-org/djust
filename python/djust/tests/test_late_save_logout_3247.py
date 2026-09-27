@@ -749,7 +749,7 @@ def test_an_expired_or_corrupt_file_session_lookup_writes_no_file(
     import os
 
     # The file backend caches its storage path on the class.
-    monkeypatch.setattr(_store(FILE), "_storage_path", str(tmp_path))
+    monkeypatch.setattr(_store(FILE), "_storage_path", str(tmp_path), raising=False)
     with override_settings(SESSION_FILE_PATH=str(tmp_path), SESSION_ENGINE=FILE):
         save = _store(FILE)()
         save[SESSION_KEY] = "1"
