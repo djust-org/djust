@@ -73,6 +73,7 @@ if TYPE_CHECKING:
     from ._exposure_children import ChildStateSession
 
 from ._class_snapshot import attribute_names
+from ._late_save import LateSaveDropped
 from .rate_limit import ConnectionRateLimiter
 from .security import handle_exception, sanitize_for_log
 from .serialization import fast_json_loads
@@ -151,6 +152,8 @@ def _log_unobserved_save_failure(work: "asyncio.Future[None]") -> None:
     """Report a save failure nobody is waiting for any more (value-free)."""
     if work.cancelled() or work.exception() is None:
         return
+    if isinstance(work.exception(), LateSaveDropped):
+        return  # a logged-out session, already reported at debug (#3247)
     logger.warning("State save failed after its turn stopped waiting")
 
 
@@ -291,10 +294,16 @@ def _spawn_save(run: Callable[[], None]) -> "asyncio.Future[None]":
     this turn. Anywhere else (a WebSocket session, a ``PooledHTTP`` request)
     the thread is unchanged. Saves of one runtime stay ordered either way
     (:func:`_run_explicit_save`).
+
+    A pool save can still be running after its request ended, when another
+    request may have logged the user out. Its session writes re-check the
+    session first (:mod:`djust._late_save`, #3247).
     """
     if not _in_request_scoped_executor():
         return asyncio.ensure_future(sync_to_async(run)())
-    call = sync_to_async(run, thread_sensitive=False, executor=_request_save_executor())
+    from ._late_save import detached
+
+    call = sync_to_async(detached(run), thread_sensitive=False, executor=_request_save_executor())
     return asyncio.ensure_future(call())
 
 
@@ -4928,6 +4937,8 @@ class ViewRuntime:
             )
             if save_session is None:
                 return
+            # Read before anything loads the session (#3247, see _late_save).
+            expected_key = getattr(save_session, "session_key", None)
 
             from .serialization import normalize_django_value as _normalize
 
@@ -4968,6 +4979,9 @@ class ViewRuntime:
             if mount_request is not None and hasattr(target_view, "_save_components_to_session"):
                 target_view._save_components_to_session(mount_request, save_context)
 
+            from ._late_save import check_session
+
+            check_session(save_session, expected_key)
             save_session.save()
 
         try:
@@ -4980,6 +4994,8 @@ class ViewRuntime:
                 sanitize_for_log(event_name or ""),
             )
             return False
+        except LateSaveDropped:
+            return False  # its session was logged out; reported at debug (#3247)
         except Exception as exc:  # noqa: BLE001 — saves must never break event handling
             from ._exposure_diagnostics import log_failure
 
@@ -5022,11 +5038,16 @@ class ViewRuntime:
             )
             if save_session is None:
                 return
+            # Read before anything loads the session (#3247, see _late_save).
+            expected_key = getattr(save_session, "session_key", None)
 
             parent_path = mount_request.path if mount_request is not None else "/"
 
             save_sticky_child_state_sync(target_view, save_session, parent_path)
             write_sticky_index_and_prune_sync(parent, save_session, parent_path)
+            from ._late_save import check_session
+
+            check_session(save_session, expected_key)
             save_session.save()
 
         try:
@@ -5038,6 +5059,8 @@ class ViewRuntime:
                 "land). Subsequent events will retry.",
                 sanitize_for_log(event_name or ""),
             )
+        except LateSaveDropped:
+            pass  # its session was logged out; reported at debug (#3247)
         except Exception as exc:  # noqa: BLE001 — saves must never break event handling
             from ._exposure_diagnostics import log_failure
 
@@ -6425,6 +6448,15 @@ class ViewRuntime:
             )
         except ExplicitSaveDeferred:
             await self._explicit_save_deferred(view, extra, child=False)
+            return False
+        except LateSaveDropped:
+            # Another request logged the session out while this save ran: the
+            # save was dropped before writing (#3247). The page's session is
+            # gone, so this is the reload error, without a failure traceback.
+            view._force_full_html = True
+            await self.transport.send_error(
+                "State unavailable. Please reload the page.", code="state_error", **extra
+            )
             return False
         except Exception as exc:  # noqa: BLE001 — storage errors can carry server-only values
             from ._exposure_diagnostics import log_failure_for

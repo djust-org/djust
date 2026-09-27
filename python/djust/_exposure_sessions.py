@@ -387,6 +387,11 @@ class ServerStateSession:
         # stale session key. Do not bind data to a newly generated replacement.
         self.session.get(self.key)
         self._check_session()
+        # A pool save that outlived its request: is the session still there
+        # and still this user's? (#3247; a no-op off the save pool.)
+        from ._late_save import check_session
+
+        check_session(self.session, self.binding.session)
         self.session[self.key] = envelope
         self.session.save()
 
