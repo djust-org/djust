@@ -40,6 +40,8 @@ from django.utils.functional import SimpleLazyObject
 from djust import LiveView, event_handler, sse
 from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
 
+from ._ws_frames import has_type, receive_settled
+
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
 
 #: Weak references to every mounted tour view, and ``(what, tag)`` records of
@@ -169,9 +171,13 @@ async def _assert_late_wait_refused(view_ref, tag):
 # --------------------------------------------------------------------------- #
 
 
-async def _ws_drain(communicator):
-    while not await communicator.receive_nothing(timeout=0.2):
-        await communicator.receive_json_from(timeout=2)
+async def _ws_mounted(communicator):
+    """Read up to the mount frame, then whatever follows it.
+
+    Waits for the frame instead of stopping at a quiet window, which returned
+    before the mount when a loaded runner was slow to send it (#3256).
+    """
+    await receive_settled(communicator, has_type("mount", "error"), what="the mount")
 
 
 async def _ws_mounted_tour(event):
@@ -185,7 +191,7 @@ async def _ws_mounted_tour(event):
     assert connected
     await communicator.receive_json_from(timeout=2)  # connect ack
     await communicator.send_json_to({"type": "mount", "view": TOUR, "url": "/tour/"})
-    await _ws_drain(communicator)
+    await _ws_mounted(communicator)
     assert len(VIEWS) == 1
     view_ref = VIEWS[0]
     tag = view_ref().tag
@@ -197,7 +203,7 @@ async def _ws_redirect_away(communicator):
     await communicator.send_json_to(
         {"type": "live_redirect_mount", "view": OTHER, "url": "/other/", "params": {}}
     )
-    await _ws_drain(communicator)
+    await _ws_mounted(communicator)
 
 
 async def test_websocket_live_redirect_cancels_the_legacy_views_waiter():

@@ -381,3 +381,17 @@ async def test_child_routed_event_prunes_nested_storage_before_success(rf, monke
     stored = await sync_to_async(SessionStore(request.session.session_key).load)()
     assert child_state_key(request.path, ("root", "root")) not in stored
     assert stored[child_state_key(request.path, ("root",))]["state"]["values"]["count"] == 2
+
+
+def test_a_late_pool_save_of_the_child_tree_after_a_logout_is_dropped(rf):
+    """#3247: the child-tree write re-checks its session on the save pool."""
+    from djust._late_save import LateSaveDropped, detached
+
+    page, request = mounted(rf)
+    key = request.session.session_key
+    SessionStore(key).flush()  # logout in another request
+    page._get_child_view("root").count = 5
+    with pytest.raises(LateSaveDropped):
+        detached(lambda: save_child_states(page, request))()
+    assert not SessionStore().exists(key)
+    assert request.session.session_key == key

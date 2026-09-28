@@ -193,6 +193,23 @@ Implemented (E2-9, D-i, D-j):
   `djust.C020`. It does not change the Django session's own lifetime.
 - The only codec is `json-primitives-v1`. `Decimal`, dates, `UUID`, model
   instances and other objects are rejected at capture, never stringified.
+- A save can outlive its request (#3212): inside a request's executors (the SSE
+  event POST) it runs on the dedicated save pool, and the POST answers when its
+  turn does. Such a save writes through the session object its turn captured,
+  which a logout in another request does not change. So before writing, a pool
+  save looks its session key up once and is dropped, with a debug line and no
+  write, when the key no longer exists or the stored session names a different
+  authenticated user (#3247); a still-waiting explicit turn then answers the
+  reload `state_error`. A lookup that fails (a cache or database error) is not
+  a logout: the save goes ahead and the error is logged as a warning. A key rotation made through the save's own session
+  object (`login()` calling `cycle_key()` in a legacy handler) is not a
+  mismatch: the store holds the pre-login copy under the new key, and the save
+  is what persists the login. The lookup narrows the window; it does not close
+  it. A logout between the lookup and the write still races the write, as for
+  any concurrent Django request: `db`, `cached_db` and `file` refuse to update
+  a deleted session, but `cache` checks and then sets without a lock, so a
+  flush in that gap is overwritten and the session comes back. Saves on a
+  WebSocket session's thread are awaited by their turn and are not re-checked.
 
 Store approved identities, not live ORM instances, across persistence boundaries.
 Resolve object references using current server-side query/permission rules.

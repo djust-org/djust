@@ -100,11 +100,17 @@ def _capture_batch(root: Any, request: Any) -> tuple[SessionBase, dict[str, Any]
 
 def save_child_states(root: Any, request: Any) -> None:
     """Capture authorized descendants and flush their server envelopes once."""
+    from ._late_save import LateSaveDropped, check_session
+
     batch = _capture_batch(root, request)
     if batch:
         try:
             with staged_updates(*batch) as session:
+                # A pool save that outlived its request (#3247).
+                check_session(session, session.session_key)
                 session.save()
+        except LateSaveDropped:
+            raise  # already reported at debug; not a storage failure
         except Exception:  # noqa: BLE001 — HTTP errors must not expose backend details
             raise ExposureError("Child state persistence unavailable") from None
 

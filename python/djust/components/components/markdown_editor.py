@@ -6,6 +6,41 @@ from django.utils.html import conditional_escape
 from djust import Component
 from typing import Any
 
+_ON = frozenset({"true", "1", "yes", "on"})
+_OFF = frozenset({"false", "0", "no", "off"})
+
+
+def menu_flag(value: object, default: bool) -> bool:
+    """Read a ``bubble_menu`` / ``floating_menu`` option from any renderer.
+
+    The value's text, lower-cased, decides: ``true``/``1``/``yes``/``on``
+    is on and ``false``/``0``/``no``/``off`` is off, so ``True``,
+    ``"False"`` and a template literal ``bubble_menu="off"`` all mean what
+    they say. Anything else, including ``None`` and ``""`` (an unset
+    template variable), keeps the default. ``markdown_controls.html``
+    applies the same rule with ``|lower``, so every renderer agrees.
+    """
+    if value is None:
+        return default
+    text = str(value).lower()
+    if text in _ON:
+        return True
+    if text in _OFF:
+        return False
+    return default
+
+
+def menu_attrs(bubble_menu: object = True, floating_menu: object = False) -> str:
+    """The hook's menu switches as host attributes (#3108).
+
+    Both values are fixed literals, never caller text, so nothing here needs
+    escaping; the three renderers (component, Django tag, Rust tag handler)
+    share this so they cannot drift.
+    """
+    bubble = "true" if menu_flag(bubble_menu, True) else "false"
+    floating = "true" if menu_flag(floating_menu, False) else "false"
+    return f' data-bubble-menu="{bubble}" data-floating-menu="{floating}"'
+
 
 class MarkdownEditor(Component):
     """Split-pane markdown editor with live preview.
@@ -53,6 +88,10 @@ class MarkdownEditor(Component):
         event: djust event on change
         custom_class: additional CSS classes
         mode: initial editing mode; visual requires the optional visual bundle
+        bubble_menu: show a formatting menu over a selection in visual mode
+            (default True). It never replaces the browser's context menu.
+        floating_menu: show a block menu on an empty line in visual mode
+            (default False)
     """
 
     TOOLBAR_BUTTONS = [
@@ -75,6 +114,8 @@ class MarkdownEditor(Component):
         event: str = "",
         custom_class: str = "",
         mode: str = "markdown",
+        bubble_menu: bool = True,
+        floating_menu: bool = False,
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -88,6 +129,8 @@ class MarkdownEditor(Component):
             event=event,
             custom_class=custom_class,
             mode=mode,
+            bubble_menu=bubble_menu,
+            floating_menu=floating_menu,
             **kwargs,
         )
         if mode not in {"markdown", "visual"}:
@@ -102,6 +145,8 @@ class MarkdownEditor(Component):
         self.disabled = disabled
         self.event = event
         self.custom_class = custom_class
+        self.bubble_menu = menu_flag(bubble_menu, True)
+        self.floating_menu = menu_flag(floating_menu, False)
 
     def _render_custom(self) -> str:
         classes = ["dj-md-editor"]
@@ -151,4 +196,5 @@ class MarkdownEditor(Component):
 
         panes = f'<div class="dj-md-editor__panes">{textarea_html}{preview_html}</div>'
 
-        return f'<div class="{class_str}" dj-hook="MarkdownEditor" data-mode="{self.mode}">{toolbar_html}{panes}</div>'
+        menus = menu_attrs(self.bubble_menu, self.floating_menu)
+        return f'<div class="{class_str}" dj-hook="MarkdownEditor" data-mode="{self.mode}"{menus}>{toolbar_html}{panes}</div>'

@@ -893,7 +893,9 @@ nested interactive descendants (`<a>`, `<button>`, `<input>`,
 **Option B — `row_click_event` (preferred, LiveView-idiomatic)**: each
 `<tr>` fires a djust event with `data-value=row[row_click_value_key]`.
 Your `@event_handler` receives the row's value via `**kwargs` and can
-`self.redirect(...)` (or do anything else):
+use `self.live_redirect(...)` to navigate over the existing LiveView
+connection (the target must be a LiveView; for any other page, render a
+normal link instead), or do anything else:
 
 ```python
 from djust import LiveView
@@ -912,7 +914,7 @@ class ClaimsListView(LiveView):
 
     @event_handler()
     def open_claim(self, value: str = "", **kwargs):
-        self.redirect(reverse("claims:detail", kwargs={"claim_id": value}))
+        self.live_redirect(reverse("claims:detail", kwargs={"claim_id": value}))
 ```
 
 ```django
@@ -1285,4 +1287,5 @@ yields `assigns["slots"]["col"]` as a 3-element list. The inline tag `{% render_
 ## Markdown editor
 
 See the [Markdown Editor guide](markdown-editor.md) for optional Visual/Markdown editing,
-native form integration, asset loading, theme variables and editing limitations.
+native form integration, asset loading, table actions, the `bubble_menu` and `floating_menu`
+options, theme variables and editing limitations.

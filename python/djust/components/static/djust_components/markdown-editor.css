@@ -13,7 +13,8 @@
   background: var(--dj-md-editor-bg, #fff);
   color: var(--dj-md-editor-text, #111827);
 }
-.dj-markdown-toolbar button {
+.dj-markdown-toolbar button,
+.dj-markdown-menu button {
   min-width: 36px;
   min-height: 36px;
   padding: 4px 9px;
@@ -26,18 +27,66 @@
   cursor: pointer;
 }
 .dj-markdown-toolbar button:hover,
-.dj-markdown-toolbar button:focus-visible {
+.dj-markdown-toolbar button:focus-visible,
+.dj-markdown-menu button:hover,
+.dj-markdown-menu button:focus-visible {
   border-color: var(--dj-md-editor-accent, #2563eb);
   outline: 2px solid transparent;
 }
-.dj-markdown-toolbar button[aria-pressed="true"] {
+.dj-markdown-toolbar button[aria-pressed="true"],
+.dj-markdown-menu button[aria-pressed="true"] {
   color: var(--dj-md-editor-accent, #2563eb);
   background: var(--dj-md-editor-code-bg, #f3f4f6);
   box-shadow: inset 0 -2px var(--dj-md-editor-accent, #2563eb);
 }
-.dj-markdown-toolbar button:disabled {
+.dj-markdown-toolbar button:disabled,
+.dj-markdown-menu button:disabled {
   opacity: 0.45;
   cursor: default;
+}
+/* Table actions (#3107): a labelled group shown while the selection is in a
+   table; the hook toggles [hidden]. */
+.dj-markdown-table-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-left: 6px;
+  border-left: 1px solid var(--dj-md-editor-border, #d1d5db);
+}
+.dj-markdown-table-actions[hidden] {
+  display: none;
+}
+/* Selection (bubble) and empty-line (floating) menus (#3108). Tiptap attaches
+   and positions them; they reuse the toolbar variables so themes apply. */
+.dj-markdown-menu {
+  /* Out of flow and at its final width from the first frame, so the first
+     position calculation measures the size the menu will actually have. */
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: max-content;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  box-sizing: border-box;
+  max-width: min(36rem, calc(100vw - 16px));
+  padding: 4px;
+  border: 1px solid var(--dj-md-editor-border, #d1d5db);
+  border-radius: var(--dj-md-editor-radius, 6px);
+  background: var(--dj-md-editor-bg, #fff);
+  color: var(--dj-md-editor-text, #111827);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.18);
+  z-index: 50;
+}
+.dj-markdown-menu[hidden] {
+  display: none;
+}
+.dj-markdown-menu button {
+  min-width: 32px;
+  min-height: 32px;
+}
+.dj-markdown-menu .dj-markdown-table-actions {
+  padding-left: 4px;
 }
 .dj-markdown-status:empty {
   display: none;
