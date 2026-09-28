@@ -1057,7 +1057,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     traceback=True,
                 )
 
-    async def _send_noop(self, async_pending: bool = False, ref: Optional[int] = None) -> None:
+    async def _send_noop(
+        self,
+        async_pending: bool = False,
+        ref: Optional[int] = None,
+        snapshot_fields: Optional[Dict[str, Any]] = None,
+    ) -> None:
         """
         Send a lightweight noop acknowledgment to the client.
 
@@ -1069,12 +1074,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             async_pending: If True, tells the client to keep loading state active
                 because a start_async() callback is running in the background.
             ref: Event reference number echoed back from the client's request (#560).
+            snapshot_fields: Session-bound snapshot refresh after a committed turn.
         """
         msg: Dict[str, Any] = {"type": "noop"}
         if async_pending:
             msg["async_pending"] = True
         if ref is not None:
             msg["ref"] = ref
+        msg.update(snapshot_fields or {})
         await self.send_json(msg)
 
     async def _send_child_update(
@@ -2176,25 +2183,33 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # The released event was authorized at entry; a nonlegacy root's
         # declared state is committed before its frame (ADR-038 E3).
         snapshot_fields: Dict[str, Any] = {}
+        runtime = getattr(self, "_runtime", None)
         if not uses_legacy_exposure(view):
-            runtime = getattr(self, "_runtime", None)
             try:
-                committed = skip_render or (
-                    runtime is not None and await runtime.commit_explicit_turn(view, source="event")
+                committed = runtime is not None and await runtime.commit_explicit_turn(
+                    view, source="event"
                 )
-                if committed and not skip_render and runtime is not None:
+                if committed and runtime is not None:
                     snapshot_fields = await runtime._explicit_event_snapshot(view)
             finally:
                 self._end_explicit_turn(view)
             if not committed:
                 return
+        elif runtime is not None and getattr(view, "enable_state_snapshot", False):
+            saved = await runtime._persist_state_after_event(view, event_name)
+            if skip_render:
+                snapshot_fields = await runtime._legacy_noop_snapshot(view, saved, pre_assigns)
+            else:
+                snapshot_fields = await runtime._legacy_event_snapshot(view)
 
         if skip_render:
             # (_skip_render was already consumed by _resolve_skip_render —
             # it is the single owner of that reset, #2834/#2847.)
             has_async = has_pending_async_work(view)
             await self._flush_all_pending()
-            await self._send_noop(async_pending=has_async, ref=event_ref)
+            await self._send_noop(
+                async_pending=has_async, ref=event_ref, snapshot_fields=snapshot_fields
+            )
             # Unconditional, like the runtime twin (#1887): ``has_async`` only
             # drives the loading flag; this is what actually starts the work
             # ``start_async`` queued (#2946). No-op when nothing is queued.

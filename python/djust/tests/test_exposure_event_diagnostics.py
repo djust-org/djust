@@ -37,6 +37,7 @@ class EventFailureView(LiveView):
         self._rendered_failure = False
         self._change_policy_in_render = False
         self._final_policy = self.exposure_policy
+        self.set_activity_visible("diagnostics", False)
 
     def get_context_data(self, **kwargs):
         return super().get_context_data(count=self.count, **kwargs)
@@ -54,6 +55,11 @@ class EventFailureView(LiveView):
             raise ValueError("EVENT_DIAGNOSTIC_SENTINEL")
         self._fail_render = True
         self._force_full_html = True
+
+    @event_handler()
+    def reveal(self):
+        self.set_activity_visible("diagnostics", True)
+        self._skip_render = True
 
     def render_with_diff(self, *args, **kwargs):
         if self._fail_render:
@@ -96,7 +102,20 @@ async def test_event_failure_destinations(monkeypatch, caplog, debug, stage, rou
                 {"type": "event", "event": "explode", "params": {"stage": stage}, "ref": 17}
             )
         elif route == "deferred":
-            await runtime._dispatch_single_event(view, "explode", {"stage": stage}, event_ref=17)
+            # Production redispatch borrows the authorized outer event turn.
+            # Exercise that caller boundary so persistence cannot fail merely
+            # because the test skipped authorization setup.
+            await runtime.dispatch_event(
+                {
+                    "type": "event",
+                    "event": "explode",
+                    "params": {"stage": stage, "_activity": "diagnostics"},
+                    "ref": 17,
+                }
+            )
+            assert not view._called
+            transport.sent.clear()
+            await runtime.dispatch_event({"type": "event", "event": "reveal", "params": {}})
         else:
             assert route == "direct_render"
             view._fail_render = True
@@ -108,7 +127,9 @@ async def test_event_failure_destinations(monkeypatch, caplog, debug, stage, rou
     # legacy->explicit switch in the handler fails the explicit state save
     # (fresh authorization) before the render, so that failure never exists.
     raised = stage == "handler" or view._rendered_failure
-    save_first = (stage, route, initial, final) == ("render", "foreground", "legacy", "explicit")
+    save_first = stage == "render" and initial == "legacy" and final == "explicit"
+    if save_first:
+        assert any(frame.get("code") == "state_error" for frame in transport.sent)
     assert raised == (stage != "opaque" and not save_first), "the sentinel site was not reached"
     # Details are allowed for a legacy owner, and for every owner under DEBUG.
     allowed = (legacy or debug) and raised

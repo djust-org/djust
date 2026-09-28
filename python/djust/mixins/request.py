@@ -1048,6 +1048,36 @@ class RequestMixin:
 
                 save_server_state(self, request)
 
+            # Root-view identity and the current Django session bind HTTP
+            # fallback tokens exactly as on the WS/SSE event paths (#3253).
+            from ..security.state_snapshot import legacy_snapshot_fields
+
+            # POST can be the first request, or arrive after cookie expiry.
+            # Allocate its key before signing; SessionMiddleware otherwise
+            # creates a different binding after this response has been built.
+            if (
+                legacy_exposure
+                and getattr(self, "enable_state_snapshot", False)
+                and not request.session.session_key
+            ):
+                request.session.create()
+
+            view_module = getattr(type(self), "__module__", None)
+            view_path = (
+                f"{view_module}.{type(self).__name__}"
+                if isinstance(view_module, str) and view_module
+                else None
+            )
+            snapshot_fields = legacy_snapshot_fields(self, view_path, request.session.session_key)
+
+            # Signed-cookie sessions encode their contents in the identity;
+            # response middleware changes it after this token was captured.
+            # Revoke rather than cache a token that cannot pass session binding.
+            from django.contrib.sessions.backends.signed_cookies import SessionStore
+
+            if isinstance(request.session, SessionStore) and snapshot_fields:
+                snapshot_fields["state_snapshot_signed"] = None
+
             if (
                 observation_before is not None
                 and not _compute_changed_keys(observation_before, _snapshot_assigns(self))
@@ -1055,7 +1085,7 @@ class RequestMixin:
                 and not getattr(self, "_async_tasks", None)
                 and not getattr(self, "_async_pending", None)
             ):
-                noop_response = {"type": "noop", "event_name": event_name}
+                noop_response = {"type": "noop", "event_name": event_name, **snapshot_fields}
                 _inject_side_channels(noop_response)
                 return JsonResponse(noop_response)
 
@@ -1074,7 +1104,7 @@ class RequestMixin:
             from ..websocket import _resolve_skip_render
 
             if _resolve_skip_render(self):
-                skip_response: Dict[str, Any] = {"patches": []}
+                skip_response: Dict[str, Any] = {"patches": [], **snapshot_fields}
                 contract_fields = _http_parameter_contract_fields(self, request)
                 if contract_fields is None:
                     return _contract_error_response()
@@ -1190,7 +1220,12 @@ class RequestMixin:
                 # server's version at 1, so the client's next version check
                 # failed and it reloaded the page, losing its state.
                 if 0 <= patch_count <= PATCH_THRESHOLD:
-                    response_data = {"patches": patches, "version": version, **contract_fields}
+                    response_data = {
+                        "patches": patches,
+                        "version": version,
+                        **contract_fields,
+                        **snapshot_fields,
+                    }
                     if cache_request_id:
                         response_data["cache_request_id"] = cache_request_id
                     _inject_side_channels(response_data)
@@ -1198,14 +1233,24 @@ class RequestMixin:
                     return JsonResponse(response_data)
                 else:
                     self._rust_view.reset()
-                    response_data = {"html": html, "version": version, **contract_fields}
+                    response_data = {
+                        "html": html,
+                        "version": version,
+                        **contract_fields,
+                        **snapshot_fields,
+                    }
                     if cache_request_id:
                         response_data["cache_request_id"] = cache_request_id
                     _inject_side_channels(response_data)
                     _inject_debug(response_data)
                     return JsonResponse(response_data)
             else:
-                response_data = {"html": html, "version": version, **contract_fields}
+                response_data = {
+                    "html": html,
+                    "version": version,
+                    **contract_fields,
+                    **snapshot_fields,
+                }
                 if cache_request_id:
                     response_data["cache_request_id"] = cache_request_id
                 _inject_side_channels(response_data)
