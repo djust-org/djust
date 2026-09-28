@@ -411,12 +411,30 @@ async def test_a_free_lock_with_a_queued_waiter_goes_through_wait_for(monkeypatc
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-async def test_tick_snapshots_run_with_handle_tick_with_the_pool(pool, spies):
+@pytest.mark.parametrize("mount_frame_delay", [0, 0.6], ids=["immediate", "delayed-mount"])
+async def test_tick_snapshots_run_with_handle_tick_with_the_pool(
+    pool, spies, monkeypatch, mount_frame_delay
+):
+    from channels.testing import WebsocketCommunicator
+
+    receive_json = WebsocketCommunicator.receive_json_from
+
+    async def receive_with_delay(self, *args, **kwargs):
+        frame = await receive_json(self, *args, **kwargs)
+        if frame.get("type") == "mount" and mount_frame_delay:
+            # Let the server emit its first tick before _connect returns.
+            await asyncio.sleep(mount_frame_delay)
+            assert _SEEN.get("tick"), "the delayed mount did not exercise an early tick"
+        return frame
+
+    monkeypatch.setattr(WebsocketCommunicator, "receive_json_from", receive_with_delay)
     loop_thread = threading.get_ident()
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[MOD]):
+        # A tick can precede delivery of the mount frame. Preserve its records
+        # along with its queued patch by clearing before the connection starts.
+        _SEEN.clear()
         comm = await _connect("_TickView", "mode=bump")
         try:
-            _SEEN.clear()
             frame = await _receive_until(comm, "patch")
         finally:
             await comm.disconnect()
