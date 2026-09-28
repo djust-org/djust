@@ -164,7 +164,7 @@
       "hashes": [
         {
           "alg": "SHA-384",
-          "content": "e54c587f4d23420618e20612474591775c53a4157d8ded241e06eef07ddf784faa60754510aed5c210aa7e655de7d893"
+          "content": "57105dffc8fd1464c089cb348584089b7b7ec34fcb88ef0109021560f8245b0cb68f93eb01c399ecdb417b4e23c9a0a1"
         }
       ],
       "name": "markdown-visual",
@@ -2473,7 +2473,7 @@
     "properties": [
       {
         "name": "djust:manifest-digest",
-        "value": "f649e7a0c109db51c10a6d397a018f89ea5bb25f159ea8882351a26d65516a46"
+        "value": "d19ba50cab44a99bb9a0ac60a87dd7d2e19aa404ae7d2ceb86ec52e55911b08d"
       }
     ],
     "tools": {

@@ -16,7 +16,12 @@ import pytest
 from django.template import Context, Template, Variable
 
 from djust import _rust
-from djust.components.components.markdown_editor import MarkdownEditor, menu_attrs, menu_flag
+from djust.components.components.markdown_editor import (
+    MarkdownEditor,
+    comment_attrs,
+    menu_attrs,
+    menu_flag,
+)
 from djust.components.rust_handlers import MarkdownEditorHandler
 from djust.components.templatetags._dev_tools import MarkdownEditorNode
 
@@ -174,3 +179,26 @@ def test_caller_text_never_reaches_the_menu_attributes(render, value):
 def test_menu_attrs_is_a_fixed_literal():
     assert menu_attrs() == ' data-bubble-menu="true" data-floating-menu="false"'
     assert menu_attrs(False, True) == ' data-bubble-menu="false" data-floating-menu="true"'
+
+
+@pytest.mark.parametrize("render", RENDERERS.values(), ids=RENDERERS.keys())
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (None, "false"),
+        (True, "true"),
+        ("yes", "true"),
+        (False, "false"),
+        ('" onmouseover="bad()', "false"),
+    ],
+)
+def test_preserve_comments_is_opt_in_for_every_renderer(render, value, expected):
+    kw = {} if value is None else {"preserve_comments": value}
+    output = render(**kw)
+    assert re.findall(r'data-preserve-comments="([^"]*)"', output) == [expected]
+    assert "onmouseover" not in output
+
+
+def test_comment_attrs_is_a_fixed_literal():
+    assert comment_attrs() == ' data-preserve-comments="false"'
+    assert comment_attrs(True) == ' data-preserve-comments="true"'

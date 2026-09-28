@@ -141,6 +141,21 @@ textarea[data-markdown-editor]:focus,
   outline: none;
   box-shadow: none;
 }
+.dj-markdown-visual .dj-md-comment {
+  display: inline-block;
+  max-width: 100%;
+  padding: 0.05em 0.4em;
+  border: 1px dashed var(--dj-md-editor-border, #d1d5db);
+  border-radius: 4px;
+  color: var(--dj-md-editor-muted, #6b7280);
+  font: 0.8em var(--dj-font-mono, monospace);
+  vertical-align: baseline;
+  user-select: none;
+}
+.dj-markdown-visual div.dj-md-comment {
+  display: table;
+  margin: 0.5em 0;
+}
 .dj-markdown-visual p {
   margin: 0 0 0.8em;
 }

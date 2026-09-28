@@ -35,9 +35,9 @@ const hookSource = readFileSync(
   "utf8",
 );
 window.eval(hookSource);
-function setup(value = "") {
+function setup(value = "", { preserveComments = false } = {}) {
   document.querySelector("main").innerHTML =
-    '<form><label for="body">Body</label><textarea id="body" name="body" dj-input="validate_field"></textarea><div dj-hook="MarkdownEditor" dj-update="ignore" data-field="body" data-mode="visual"></div></form>';
+    `<form><label for="body">Body</label><textarea id="body" name="body" dj-input="validate_field"></textarea><div dj-hook="MarkdownEditor" dj-update="ignore" data-field="body" data-mode="visual" data-preserve-comments="${preserveComments}"></div></form>`;
   const field = document.querySelector("textarea");
   field.value = value;
   const hook = {
@@ -101,6 +101,7 @@ test("headings, nested lists, tables, tasks, images and fenced code survive seri
 test("unsupported Markdown stays editable in source without silent loss", () => {
   for (const source of [
     "<details>keep me</details>",
+    "Before <!-- default stays in Markdown --> after.",
     "Hello[^1]\n\n[^1]: footnote",
     ":::custom\nkeep\n:::",
     "[bad](javascript:alert(1))",
@@ -112,6 +113,70 @@ test("unsupported Markdown stays editable in source without silent loss", () => 
     assert.equal(hook.surface.hidden, true);
     hook.destroyed();
   }
+});
+test("block HTML comments survive visual edits in their original order", () => {
+  const source =
+    "# Draft\n\nBefore.\n\n<!-- internal:start -->\n\nPrivate.\n\n<!-- internal:end -->\n\nAfter.";
+  const { field, hook } = setup(source, { preserveComments: true });
+  assert.equal(hook.mode, "visual", hook.status.textContent);
+  assert.equal(field.value, source);
+  assert.equal(hook.surface.querySelectorAll(".dj-md-comment").length, 2);
+  hook.visual.editor.commands.setTextSelection(3);
+  hook.visual.editor.commands.insertContent("Revised ");
+  const saved = field.value;
+  assert.equal((saved.match(/<!-- internal:start -->/g) || []).length, 1);
+  assert.equal((saved.match(/<!-- internal:end -->/g) || []).length, 1);
+  assert.ok(
+    saved.indexOf("<!-- internal:start -->") < saved.indexOf("Private."),
+  );
+  assert.ok(saved.indexOf("Private.") < saved.indexOf("<!-- internal:end -->"));
+  assert.equal(hook.visual.load(saved), "");
+  hook.destroyed();
+});
+test("inline HTML comments retain exact bytes between edited words", () => {
+  const source = "Before <!-- reviewer: keep  two spaces --> after.";
+  const { field, hook } = setup(source, { preserveComments: true });
+  assert.equal(hook.mode, "visual", hook.status.textContent);
+  assert.equal(field.value, source);
+  hook.visual.editor.commands.setTextSelection(2);
+  hook.visual.editor.commands.insertContent("X");
+  assert.equal(
+    field.value,
+    "BXefore <!-- reviewer: keep  two spaces --> after.",
+  );
+  assert.equal(hook.visual.load(field.value), "");
+  hook.destroyed();
+});
+test("inline then block comments remain separate visual tokens", () => {
+  const source = "Before <!-- inline --> after.\n\n<!-- block -->\n\nEnd.";
+  const { field, hook } = setup(source, { preserveComments: true });
+  assert.equal(hook.mode, "visual", hook.status.textContent);
+  assert.equal(hook.surface.querySelectorAll("span.dj-md-comment").length, 1);
+  assert.equal(hook.surface.querySelectorAll("div.dj-md-comment").length, 1);
+  hook.visual.editor.commands.setTextSelection(2);
+  hook.visual.editor.commands.insertContent("X");
+  assert.ok(field.value.includes("<!-- inline -->"));
+  assert.ok(field.value.includes("<!-- block -->"));
+  hook.destroyed();
+});
+test("opt-in comments do not allow other HTML or incomplete comments", () => {
+  for (const source of [
+    "<!-- unfinished",
+    "<!-- safe --><script>alert(1)</script>",
+    "<details>still unsupported</details>",
+  ]) {
+    const { field, hook } = setup(source, { preserveComments: true });
+    assert.equal(hook.mode, "markdown", source);
+    assert.equal(field.value, source);
+    hook.destroyed();
+  }
+});
+test("HTML comments in fenced code stay literal code", () => {
+  const source = "```html\n<!-- literal -->\n```";
+  const { hook } = setup(source, { preserveComments: true });
+  assert.equal(hook.mode, "visual");
+  assert.equal(hook.surface.querySelectorAll(".dj-md-comment").length, 0);
+  hook.destroyed();
 });
 test("focused visual draft survives an older server value without replacing editor or history", () => {
   const { field, hook } = setup("Hello");
