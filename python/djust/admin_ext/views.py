@@ -10,13 +10,14 @@ from functools import wraps
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlencode
 
-from django.contrib.auth import authenticate, logout
+from django.contrib.admin.forms import AdminAuthenticationForm
+from django.contrib.auth import logout
+from django.contrib.auth.views import LoginView as DjangoLoginView
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.db.models import ForeignKey, OneToOneField, Q
 from django.http import HttpRequest, HttpResponse, HttpResponseRedirect
 from django.urls import Resolver404, resolve, reverse
-from django.utils.http import url_has_allowed_host_and_scheme
 from djust import LiveView
 from djust.decorators import StateProperty, debounce, event_handler, state
 
@@ -514,9 +515,7 @@ class ModelListView(AdminBaseMixin, LiveView):
         decorated actions do), the redirect is intercepted and a
         ``redirect`` push_event is dispatched to the client. This is
         required because LiveView event handlers are invoked over the
-        WebSocket — raw HTTP responses have nowhere to go. Mirrors the
-        ``push_event("redirect", ...)`` pattern used by
-        ``LoginView.do_login``.
+        WebSocket — raw HTTP responses have nowhere to go.
         """
         if not self.selected_ids:
             return None
@@ -797,75 +796,33 @@ class ModelDeleteView(AdminBaseMixin, LiveView):
         self.is_deleting = False
 
 
-class LoginView(_AdminRegistryMixin, LiveView):
-    """Admin login view."""
+class LoginView(_AdminRegistryMixin, DjangoLoginView):
+    """Complete admin authentication over HTTP, including cookie rotation.
+
+    Django's login view supplies CSRF protection, sensitive-parameter handling,
+    safe ``next`` validation, and ``login()``. A WebSocket cannot deliver the
+    rotated session cookie, so this page deliberately is not a LiveView.
+    """
 
     template_name = "djust_admin/login.html"
+    authentication_form = AdminAuthenticationForm
 
-    username = state(default="")
-    password = state(default="")
-    error = state(default="")
-
-    def mount(self, request: HttpRequest, **kwargs: Any) -> None:
-        self.request = request
-        self.next_url = request.GET.get("next", "")
+    def get_default_redirect_url(self) -> str:
+        admin_name = self._admin_site.name if self._admin_site else "djust_admin"
+        return str(reverse(f"{admin_name}:index"))
 
     def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
-        return {
-            "site_header": self._admin_site.site_header
+        context: Dict[str, Any] = super().get_context_data(**kwargs)
+        form = context["form"]
+        context.update(
+            site_header=self._admin_site.site_header
             if self._admin_site
             else "djust administration",
-            "site_title": self._admin_site.site_title if self._admin_site else "djust admin",
-            "username": self.username,
-            "error": self.error,
-        }
-
-    @event_handler
-    def update_username(self, value: str, field: Optional[str] = None) -> None:
-        self.username = value
-        self.error = ""
-
-    @event_handler
-    def update_password(self, value: str, field: Optional[str] = None) -> None:
-        self.password = value
-        self.error = ""
-
-    @event_handler
-    def do_login(self, **kwargs: Any) -> None:
-        """Attempt to log in the user."""
-        from django.contrib.auth import BACKEND_SESSION_KEY, HASH_SESSION_KEY, SESSION_KEY
-
-        if not self.username or not self.password:
-            self.error = "Please enter both username and password."
-            return
-
-        user = authenticate(self.request, username=self.username, password=self.password)
-
-        if user is not None:
-            if user.is_active and user.is_staff:
-                # Manual session login for WebSocket context
-                session = self.request.session
-                session[SESSION_KEY] = str(user.pk)
-                session[BACKEND_SESSION_KEY] = user.backend
-                session[HASH_SESSION_KEY] = user.get_session_auth_hash()
-                session.save()
-
-                if self.next_url and url_has_allowed_host_and_scheme(
-                    url=self.next_url,
-                    allowed_hosts={self.request.get_host()},
-                    require_https=self.request.is_secure(),
-                ):
-                    redirect_url = self.next_url
-                else:
-                    admin_name = self._admin_site.name if self._admin_site else "djust_admin"
-                    redirect_url = reverse(f"{admin_name}:index")
-                self.push_event("redirect", {"url": redirect_url})
-            else:
-                self.error = "Your account is not authorized to access the admin."
-        else:
-            self.error = "Invalid username or password."
-
-        self.password = ""
+            site_title=self._admin_site.site_title if self._admin_site else "djust admin",
+            username=form["username"].value() or "",
+            error=" ".join(str(error) for errors in form.errors.values() for error in errors),
+        )
+        return context
 
 
 class LogoutView(_AdminRegistryMixin, LiveView):
