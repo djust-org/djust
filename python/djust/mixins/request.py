@@ -1062,9 +1062,13 @@ class RequestMixin:
             ):
                 request.session.create()
 
-            snapshot_fields = legacy_snapshot_fields(
-                self, f"{type(self).__module__}.{type(self).__name__}", request.session.session_key
+            view_module = getattr(type(self), "__module__", None)
+            view_path = (
+                f"{view_module}.{type(self).__name__}"
+                if isinstance(view_module, str) and view_module
+                else None
             )
+            snapshot_fields = legacy_snapshot_fields(self, view_path, request.session.session_key)
 
             # Signed-cookie sessions encode their contents in the identity;
             # response middleware changes it after this token was captured.

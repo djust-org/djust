@@ -322,3 +322,29 @@ def test_http_token_binds_cookie_issued_by_session_middleware(cookie, backend, m
         assert state_json is not None, "HTTP token must match the response session cookie"
         assert json.loads(state_json)["count"] == 1
         assert unsign_snapshot(body[TOKEN], f"{MOD}.DeferredLegacy", "other-session") is None
+
+
+@pytest.mark.django_db
+def test_http_missing_module_identity_withholds_token(monkeypatch):
+    class MissingModuleMeta(type(LiveView)):
+        def __getattribute__(cls, name):
+            if name == "__module__" and type.__getattribute__(cls, "_hide_module"):
+                raise AttributeError("__module__")
+            return super().__getattribute__(name)
+
+    class MissingModuleView(DeferredLegacy, metaclass=MissingModuleMeta):
+        _hide_module = False
+
+    endpoint = MissingModuleView.as_view()
+    request = make_request()
+    assert endpoint(request).status_code == 200
+    post = RequestFactory().post(
+        request.path,
+        json.dumps({"event": "change", "params": {}}),
+        content_type="application/json",
+    )
+    post.session, post.user = request.session, request.user
+    monkeypatch.setattr(MissingModuleView, "_hide_module", True)
+    response = endpoint(post)
+    assert response.status_code == 200, response.content
+    assert TOKEN not in json.loads(response.content)
