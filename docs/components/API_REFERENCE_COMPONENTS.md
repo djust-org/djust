@@ -1,5 +1,9 @@
 # Component API Reference
 
+> This page is maintained against the current source API. For user-facing
+> application patterns, see [Components](COMPONENTS.md) and
+> [Component Best Practices](COMPONENT_BEST_PRACTICES.md).
+
 ## Table of Contents
 
 1. [Component (Simple/Stateless)](#component-simplestateless)
@@ -18,17 +22,9 @@
 
 ### Class Definition
 
-```python
-from djust.components import Component
-
-class Component(ABC):
-    """
-    Base class for stateless components.
-
-    Simple components are pure functions that convert props to HTML.
-    They are lightweight, have no lifecycle, and are recreated on each render.
-    """
-```
+Subclass `djust.components.base.Component`. Implement either `template` (with
+`get_context_data()`) or `_render_custom()`. The base class owns `render()`;
+overriding it bypasses its Rust/template/custom rendering waterfall.
 
 ### Constructor
 
@@ -45,42 +41,19 @@ def __init__(self, **kwargs):
     """
 ```
 
-### Methods
+### Rendering
 
-#### `render() -> str`
-
-**Required.** Renders the component to HTML.
-
-```python
-@abstractmethod
-def render(self) -> str:
-    """
-    Render component to HTML string.
-
-    Returns:
-        HTML string (should be marked as safe for Django templates)
-
-    Example:
-        def render(self) -> str:
-            from django.utils.safestring import mark_safe
-            return mark_safe(f'<span class="badge">{self.text}</span>')
-    """
-```
-
-**Returns:**
-- `str`: HTML markup (marked as safe via `mark_safe()`)
-
-**Notes:**
-- Should use `mark_safe()` to prevent double-escaping
-- Should implement framework-specific rendering (see Framework Adapters)
-- Should handle None/empty values gracefully
+`render()` is implemented by the base class. Override `_render_custom()` for
+Python-generated markup, or set `template` and return its context from
+`get_context_data()`. The base class marks rendered markup safe, so custom
+renderers must escape every dynamic value. Prefer Django's `format_html()`;
+never interpolate user-controlled data into an HTML f-string or wrap it in
+`mark_safe()`.
 
 ### Complete Example
 
 ```python
-from djust.components import Component
-from django.utils.safestring import mark_safe
-from djust.config import config
+from djust.components.base import Component
 
 class BadgeComponent(Component):
     """
@@ -92,60 +65,22 @@ class BadgeComponent(Component):
         size: Badge size (sm, md, lg)
     """
 
-    def __init__(
-        self,
-        text: str,
-        variant: str = "primary",
-        size: str = "md"
-    ):
-        self.text = text
-        self.variant = variant
-        self.size = size
+    def __init__(self, text: str, variant: str = "primary"):
+        super().__init__(text=text, variant=variant)
 
-    def render(self) -> str:
-        """Render badge with framework-specific styling"""
-        framework = config.get('css_framework', 'bootstrap5')
+    def _render_custom(self) -> str:
+        from django.utils.html import format_html
 
-        if framework == 'bootstrap5':
-            return mark_safe(self._render_bootstrap())
-        elif framework == 'tailwind':
-            return mark_safe(self._render_tailwind())
-        else:
-            return mark_safe(self._render_plain())
-
-    def _render_bootstrap(self) -> str:
-        """Bootstrap 5 implementation"""
-        size_class = 'fs-6' if self.size == 'lg' else ''
-        return f'<span class="badge bg-{self.variant} {size_class}">{self.text}</span>'
-
-    def _render_tailwind(self) -> str:
-        """Tailwind CSS implementation"""
-        colors = {
-            'primary': 'bg-blue-500 text-white',
-            'secondary': 'bg-gray-500 text-white',
-            'success': 'bg-green-500 text-white',
-            'danger': 'bg-red-500 text-white',
-        }
-        size_classes = {
-            'sm': 'text-xs px-2 py-0.5',
-            'md': 'text-sm px-2.5 py-1',
-            'lg': 'text-base px-3 py-1.5',
-        }
-        color = colors.get(self.variant, colors['primary'])
-        size = size_classes.get(self.size, size_classes['md'])
-
-        return f'<span class="inline-block rounded {color} {size}">{self.text}</span>'
-
-    def _render_plain(self) -> str:
-        """Plain HTML implementation"""
-        return f'<span class="badge badge-{self.variant} badge-{self.size}">{self.text}</span>'
+        return format_html(
+            '<span class="badge bg-{}">{}</span>', self.variant, self.text
+        )
 ```
 
 ### Usage in LiveView
 
 ```python
 class MyView(LiveView):
-    template_string = """
+    template = """
         <h1>Counter: {{ counter }}</h1>
         {{ badge }}
     """
@@ -195,7 +130,7 @@ class LiveComponent(ABC):
 class MyComponent(LiveComponent):
     # Template source (choose one)
     template_name: Optional[str] = None  # Path to template file
-    template_string: Optional[str] = None  # Inline template string
+    template: Optional[str] = None  # Inline template string
 
     # Component ID (auto-assigned by framework)
     component_id: str  # e.g., "tabs_abc123"
@@ -221,10 +156,11 @@ def __init__(self, component_id: Optional[str] = None, **kwargs):
 
 #### `mount(**kwargs)`
 
-**Required.** Initialize component state.
+Optional initialization hook for the legacy `LiveComponent` pattern. The
+base implementation is a no-op; descriptor-style components can instead
+declare a `State` class and initialize it through constructor values.
 
 ```python
-@abstractmethod
 def mount(self, **kwargs):
     """
     Initialize component state.
@@ -251,7 +187,7 @@ def mount(self, **kwargs):
 - Loading data
 - Initializing timers/connections (future)
 
-#### `update(**props)` (Future)
+#### `update(**props)`
 
 ```python
 def update(self, **props):
@@ -272,13 +208,13 @@ def update(self, **props):
 ```
 
 **When called:**
-- When parent changes props passed to component
+- By `update_component(component_id, **props)` when the parent updates a child
 
 **Use for:**
 - Reacting to prop changes
 - Re-calculating derived state
 
-#### `unmount()` (Future)
+#### `unmount()`
 
 ```python
 def unmount(self):
@@ -312,10 +248,10 @@ def unmount(self):
 
 #### `get_context_data() -> Dict[str, Any]`
 
-**Required.** Return template context.
+Optional. Return template context when using the legacy `template` rendering
+pattern. The base implementation does not require an override.
 
 ```python
-@abstractmethod
 def get_context_data(self) -> Dict[str, Any]:
     """
     Get context data for template rendering.
@@ -351,7 +287,7 @@ def render(self) -> str:
     Render component to HTML.
 
     Returns:
-        HTML string with component boundary marker
+        Safe HTML string. Inline templates receive a data-component-id wrapper.
 
     Note:
         Called automatically by framework. Usually don't need to override.
@@ -363,37 +299,15 @@ def render(self) -> str:
 
 **HTML Structure:**
 ```html
-<div data-livecomponent-id="tabs_abc123" data-component="TabsComponent">
+<div data-component-id="tabs_abc123">
     <!-- Your template content here -->
     <ul class="nav">...</ul>
 </div>
 ```
 
-#### `render_with_diff() -> Tuple[str, Optional[str], int]`
-
-Generate VDOM patches (called by framework).
-
-```python
-def render_with_diff(self) -> Tuple[str, Optional[str], int]:
-    """
-    Render and generate VDOM patches.
-
-    Returns:
-        Tuple of (html, patches_json, version)
-        - html: Full HTML string
-        - patches_json: JSON string of patches (or None)
-        - version: VDOM version number
-
-    Note:
-        Called automatically by framework after event handlers.
-    """
-```
-
-**Returns:**
-- `Tuple[str, Optional[str], int]`:
-  - `html`: Full rendered HTML
-  - `patches_json`: JSON array of patches (or `None` on first render)
-  - `version`: Incrementing version number
+LiveComponent instances do not own a separate `render_with_diff()` API. The
+parent LiveView runtime renders the page and calculates the DOM update after an
+event.
 
 ### Event Handling
 
@@ -414,7 +328,7 @@ class TabsComponent(LiveComponent):
         """
         if tab:
             self.active_tab = tab
-            # State changed - framework will call render_with_diff()
+            # State changed - the parent LiveView runtime renders the update.
 ```
 
 **Event Handler Signature:**
@@ -485,7 +399,7 @@ class TabsComponent(LiveComponent):
         variant: Visual style ("tabs" or "pills")
     """
 
-    template_string = """
+    template = """
         <div class="tabs-container">
             <!-- Tab buttons -->
             <ul class="nav nav-{{ variant }}">
@@ -564,7 +478,7 @@ class TabsComponent(LiveComponent):
 
 ```python
 class DashboardView(LiveView):
-    template_string = """
+    template = """
         <h1>Dashboard</h1>
 
         <!-- Render LiveComponent -->
@@ -671,21 +585,27 @@ self.pagination.go_to_page(5)
 
 ### Overview
 
-Both Component and LiveComponent can implement framework-specific rendering:
+For framework-specific output, use the custom rendering hook and escape dynamic
+values with Django's `format_html()`:
 
 ```python
+from django.utils.html import format_html
+from djust.components.base import Component
 from djust.config import config
 
-class MyComponent:
-    def render(self) -> str:
+class MyComponent(Component):
+    def __init__(self, label: str):
+        super().__init__(label=label)
+
+    def _render_custom(self) -> str:
         framework = config.get('css_framework', 'bootstrap5')
 
         if framework == 'bootstrap5':
-            return self._render_bootstrap()
+            return format_html('<span class="badge bg-primary">{}</span>', self.label)
         elif framework == 'tailwind':
-            return self._render_tailwind()
+            return format_html('<span class="rounded">{}</span>', self.label)
         else:
-            return self._render_plain()
+            return format_html('<span>{}</span>', self.label)
 ```
 
 ### Framework Detection
@@ -699,17 +619,20 @@ framework = config.get('css_framework', 'bootstrap5')
 # Check framework
 if framework == 'bootstrap5':
     # Bootstrap implementation
+    pass
 elif framework == 'tailwind':
     # Tailwind implementation
+    pass
 else:
     # Plain HTML fallback
+    pass
 ```
 
 ### Configuration
 
 ```python
 # settings.py
-DJUST = {
+LIVEVIEW_CONFIG = {
     'css_framework': 'bootstrap5',  # or 'tailwind', 'plain'
 }
 ```
@@ -742,23 +665,25 @@ Props = Dict[str, Any]
 ### Component Signatures
 
 ```python
-# Simple Component
-class Component(ABC):
+# Stateless Component
+class Component:
     def __init__(self, **kwargs): ...
-    @abstractmethod
-    def render(self) -> str: ...
+    def render(self) -> str: ...  # Implemented by the base class.
+    def _render_custom(self) -> str: ...  # Optional Python rendering hook.
+    def get_context_data(self) -> dict[str, Any]: ...  # For template rendering.
 
-# LiveComponent
-class LiveComponent(ABC):
+# Stateful LiveComponent
+class LiveComponent:
     def __init__(self, component_id: Optional[str] = None, **kwargs): ...
-    @abstractmethod
-    def mount(self, **kwargs): ...
-    @abstractmethod
-    def get_context_data(self) -> ContextDict: ...
+    def mount(self, **kwargs): ...  # Optional initialization hook.
+    def get_context_data(self) -> ContextDict: ...  # Optional; defaults to {}.
     def render(self) -> str: ...
-    def render_with_diff(self) -> RenderResult: ...
+    def update(self, **props) -> "LiveComponent": ...
     def send_parent(self, event: str, data: EventData): ...
 ```
+
+The signatures above summarize the public Python methods. Rendering and
+diffing are handled by the parent LiveView runtime.
 
 ---
 

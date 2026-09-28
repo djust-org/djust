@@ -1,5 +1,8 @@
 # ListGroup Component Implementation Summary
 
+> **Status:** Historical implementation summary. Verify current availability and performance claims against the current package before use.
+
+
 ## Task Completion Report
 
 **Date**: 2025-11-11
@@ -15,34 +18,34 @@ Successfully implemented the `ListGroup` component for djust following the estab
 ## Files Created
 
 ### 1. Component Implementation
-**File**: `/Users/tip/Dropbox/online_projects/ai/djust/python/djust/components/ui/list_group_simple.py`
+**File**: `repo-root/python/djust/components/ui/list_group_simple.py`
 - **Lines**: 419
 - **Type**: Stateless Component
 - **Rendering**: Python `_render_custom()` method with loops
 - **Frameworks**: Bootstrap 5, Tailwind CSS, Plain HTML
 
 ### 2. Export Configuration
-**File**: `/Users/tip/Dropbox/online_projects/ai/djust/python/djust/components/ui/__init__.py`
+**File**: `repo-root/python/djust/components/ui/__init__.py`
 - **Changes**:
   - Added import: `from .list_group_simple import ListGroup`
   - Added to `__all__`: `'ListGroup'`
 
 ### 3. Test Suite
-**File**: `/Users/tip/Dropbox/online_projects/ai/djust/test_list_group.py`
+**File**: `repo-root/test_list_group.py`
 - **Tests**: 12 comprehensive tests
 - **Coverage**: All features and frameworks
 - **Result**: ✅ All tests passed
 
 ### 4. Visual Test
-**File**: `/Users/tip/Dropbox/online_projects/ai/djust/test_list_group_visual.py`
+**File**: `repo-root/test_list_group_visual.py`
 - **Generates**: `list_group_visual_test.html`
 - **Purpose**: Browser-based visual verification
 - **Examples**: 7 different ListGroup variations
 
 ### 5. Documentation
 **Files**:
-- `/Users/tip/Dropbox/online_projects/ai/djust/LIST_GROUP_COMPONENT.md` (detailed docs)
-- `/Users/tip/Dropbox/online_projects/ai/djust/LISTGROUP_IMPLEMENTATION_SUMMARY.md` (this file)
+- `repo-root/LIST_GROUP_COMPONENT.md` (detailed docs)
+- `repo-root/LISTGROUP_IMPLEMENTATION_SUMMARY.md` (this file)
 
 ---
 
@@ -184,7 +187,7 @@ Following the djust component architecture:
 4. **Type Safe**: Uses type hints for better IDE support
 
 ### Why Python Loops?
-The component uses Python's `_render_custom()` method instead of `template_string` because:
+The component uses Python's `_render_custom()` method instead of `template` because:
 - Lists with loops are more reliable in Python
 - Rust template engine has issues with `forloop.counter0` and `forloop.last`
 - Complex item attributes (badges, variants) easier to handle in Python

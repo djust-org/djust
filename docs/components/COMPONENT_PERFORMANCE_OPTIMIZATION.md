@@ -1,5 +1,13 @@
 # Component Performance Optimization Guide
 
+> **Status:** Historical performance/design notes; figures and proposed implementation details below are not current guarantees. Verify runnable API examples against the current guides before use.
+
+> Snippets describing unshipped Rust wrappers or old `render()` overrides are
+> design sketches, not copyable Python. Current Python components implement
+> `template` or `_render_custom()`; component-specific timings have not been
+> measured by the current benchmark suite.
+
+
 This document explains performance optimization strategies for djust components, from pure Python flexibility to pure Rust performance.
 
 ## Table of Contents
@@ -33,18 +41,17 @@ djust components exist on a spectrum from maximum flexibility (Python) to maximu
 **Pure Python implementation** with complete control over rendering logic.
 
 ```python
+from django.utils.html import format_html
 from djust.components import Component
-from django.utils.safestring import mark_safe
 from djust.config import config
 
 class StatusBadge(Component):
     """Pure Python component - maximum flexibility"""
 
     def __init__(self, status: str, label: str = None):
-        self.status = status
-        self.label = label or status.title()
+        super().__init__(status=status, label=label or status.title())
 
-    def render(self) -> str:
+    def _render_custom(self) -> str:
         # Can use ANY Python logic
         framework = config.get('css_framework', 'bootstrap5')
 
@@ -54,16 +61,16 @@ class StatusBadge(Component):
 
         # Can use complex conditionals
         if framework == 'bootstrap5':
-            return mark_safe(self._render_bootstrap())
+            return self._render_bootstrap()
         elif framework == 'tailwind':
-            return mark_safe(self._render_tailwind())
+            return self._render_tailwind()
         else:
-            return mark_safe(self._render_plain())
+            return self._render_plain()
 
     def _render_bootstrap(self) -> str:
         variants = {'success': 'success', 'error': 'danger'}
         variant = variants.get(self.status, 'secondary')
-        return f'<span class="badge bg-{variant}">{self.label}</span>'
+        return format_html('<span class="badge bg-{}">{}</span>', variant, self.label)
 ```
 
 **Performance**: ~50-100μs per component
@@ -81,13 +88,12 @@ class StatusBadge(Component):
     """Hybrid component - Rust rendering, Python logic"""
 
     # Rust renders this template
-    template_string = """
+    template = """
         <span class="badge bg-{{ variant }}">{{ label }}</span>
     """
 
     def __init__(self, status: str, label: str = None):
-        self.status = status
-        self.label = label or status.title()
+        super().__init__(status=status, label=label or status.title())
 
     def get_context_data(self) -> dict:
         """Python logic for context preparation"""
@@ -105,15 +111,15 @@ class StatusBadge(Component):
 
 **How it works:**
 
-```python
+```text
 class Component(ABC):
-    template_string: Optional[str] = None
+    template: Optional[str] = None
 
     def render(self) -> str:
-        if self.template_string:
+        if self.template:
             # Fast path: Rust template rendering
             context = self.get_context_data()
-            return _rust.render_template(self.template_string, context)
+            return _rust.render_template(self.template, context)
         else:
             # Flexible path: Python rendering
             return self._render_custom()
@@ -205,7 +211,7 @@ impl BadgeComponent {
 
 **Python side** (usage):
 
-```python
+```text
 # Import from Rust
 from djust._rust import BadgeComponent
 
@@ -306,7 +312,7 @@ pub fn render_badges_batch_parallel(badges: Vec<Py<BadgeComponent>>) -> Vec<Stri
 
 **Python usage:**
 
-```python
+```text
 from djust._rust import BadgeComponent, render_badges_batch_parallel
 
 badges = [BadgeComponent(f"Item {i}", "primary") for i in range(1000)]
@@ -319,17 +325,18 @@ rendered = render_badges_batch_parallel(badges)  # Parallel rendering in Rust!
 
 **Phase 1**: Implement in Python for flexibility
 
-```python
+```text
+from django.utils.html import format_html
 class Badge(Component):
     def render(self):
-        return f'<span class="badge">{self.text}</span>'
+        return format_html('<span class="badge">{}</span>', self.text)
 ```
 
 **Phase 2**: Add template for Rust acceleration
 
 ```python
 class Badge(Component):
-    template_string = '<span class="badge">{{ text }}</span>'
+    template = '<span class="badge">{{ text }}</span>'
 
     def get_context_data(self):
         return {'text': self.text}
@@ -363,7 +370,7 @@ These are used frequently and benefit from Rust performance.
 
 Provide both implementations, let developers choose:
 
-```python
+```text
 # Import Python version (flexible)
 from djust.components.ui import BadgeComponent
 
@@ -423,22 +430,23 @@ else:
 
 ### Path 1: Python → Hybrid (Easy)
 
-```python
+```text
+from django.utils.html import format_html
 # Before: Pure Python
 class Badge(Component):
     def render(self):
-        return f'<span class="badge">{self.text}</span>'
+        return format_html('<span class="badge">{}</span>', self.text)
 
 # After: Add template (no other changes needed)
 class Badge(Component):
-    template_string = '<span class="badge">{{ text }}</span>'
+    template = '<span class="badge">{{ text }}</span>'
 
     def get_context_data(self):
         return {'text': self.text}
 
     # Old render() method still works as fallback
     def render(self):
-        return f'<span class="badge">{self.text}</span>'
+        return format_html('<span class="badge">{}</span>', self.text)
 ```
 
 ### Path 2: Python → Rust (Advanced)
@@ -462,7 +470,7 @@ pub struct BadgeComponent { ... }
 
 **Step 3**: Replace imports
 
-```python
+```text
 # Before
 from djust.components.ui import BadgeComponent
 
@@ -474,7 +482,7 @@ from djust._rust import BadgeComponent
 
 ### Path 3: Rust → Python (Rare, for Adding Flexibility)
 
-```python
+```text
 # Wrap Rust component with Python for custom logic
 from djust._rust import BadgeComponent as RustBadge
 
@@ -506,19 +514,19 @@ class SmartBadge(Component):
 
 ### Default Approach: Hybrid Components
 
-Use **Hybrid Components** (Python + template_string) as the default:
+Use **Hybrid Components** (Python + template) as the default:
 
-```python
+```text
 class Component(ABC):
     """Base class supporting both Python and Rust rendering"""
 
-    template_string: Optional[str] = None
+    template: Optional[str] = None
 
     def render(self) -> str:
-        if self.template_string:
+        if self.template:
             # Fast path: Rust rendering
             return _rust.render_template(
-                self.template_string,
+                self.template,
                 self.get_context_data()
             )
         else:
@@ -532,7 +540,7 @@ class Component(ABC):
     @abstractmethod
     def _render_custom(self) -> str:
         """Override for custom Python rendering"""
-        raise NotImplementedError("Either provide template_string or implement _render_custom()")
+        raise NotImplementedError("Either provide template or implement _render_custom()")
 ```
 
 ### When to Use Each Tier
@@ -585,7 +593,7 @@ Keep these in Python or Hybrid for flexibility:
 - ✅ Implement LiveComponent with Rust VDOM
 
 ### Phase 2: Hybrid Support
-- Add `template_string` support to Component base class
+- Add `template` support to Component base class
 - Implement Rust template rendering for Components
 - Add template caching
 - Benchmark and optimize
@@ -608,30 +616,29 @@ Keep these in Python or Hybrid for flexibility:
 ### Python Version (Maximum Flexibility)
 
 ```python
+from django.utils.html import format_html
 # python/djust/components/ui/badge.py
 from djust.components import Component
-from django.utils.safestring import mark_safe
 from djust.config import config
 
 class BadgeComponent(Component):
     """Pure Python badge - maximum flexibility"""
 
     def __init__(self, text: str, variant: str = "primary"):
-        self.text = text
-        self.variant = variant
+        super().__init__(text=text, variant=variant)
 
-    def render(self) -> str:
+    def _render_custom(self) -> str:
         framework = config.get('css_framework', 'bootstrap5')
 
         if framework == 'bootstrap5':
-            return mark_safe(self._render_bootstrap())
+            return self._render_bootstrap()
         elif framework == 'tailwind':
-            return mark_safe(self._render_tailwind())
+            return self._render_tailwind()
         else:
-            return mark_safe(self._render_plain())
+            return self._render_plain()
 
     def _render_bootstrap(self) -> str:
-        return f'<span class="badge bg-{self.variant}">{self.text}</span>'
+        return format_html('<span class="badge bg-{}">{}</span>', self.variant, self.text)
 
     def _render_tailwind(self) -> str:
         colors = {
@@ -639,15 +646,15 @@ class BadgeComponent(Component):
             'success': 'bg-green-100 text-green-800',
         }
         color = colors.get(self.variant, 'bg-gray-100 text-gray-800')
-        return f'<span class="rounded px-2 py-1 {color}">{self.text}</span>'
+        return format_html('<span class="rounded px-2 py-1 {}">{}</span>', color, self.text)
 
     def _render_plain(self) -> str:
-        return f'<span class="badge badge-{self.variant}">{self.text}</span>'
+        return format_html('<span class="badge badge-{}">{}</span>', self.variant, self.text)
 ```
 
 ### Hybrid Version (Balanced)
 
-```python
+```text
 # python/djust/components/ui/badge_hybrid.py
 from djust.components import Component
 
@@ -655,7 +662,7 @@ class BadgeComponentHybrid(Component):
     """Hybrid badge - Rust rendering, Python context"""
 
     # Bootstrap template (Rust renders this)
-    template_string = """
+    template = """
         <span class="badge bg-{{ variant }}">{{ text }}</span>
     """
 
@@ -707,7 +714,7 @@ impl BadgeComponentRust {
 
 ### Usage Comparison
 
-```python
+```text
 # All three work the same from Python's perspective
 
 # Python version (flexible)
@@ -788,7 +795,7 @@ Lazy hydration works well with other optimization strategies:
 class DashboardView(LiveView):
     """Dashboard with optimized component loading"""
 
-    template_string = """
+    template = """
         <!-- Critical: Loads immediately -->
         <div dj-view="summary">{{ summary }}</div>
 

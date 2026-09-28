@@ -1,5 +1,10 @@
 # Component Rendering Performance Analysis
 
+> **Historical benchmark record:** these measurements are from an old local
+> run and are not a current performance guarantee. The README benchmark covers
+> template rendering, not component rendering. Raw HTML f-string examples have
+> been replaced with escaped formatting; those replacements were not measured.
+
 ## Executive Summary
 
 **Template caching is working perfectly.** The "slowness" we observed in Hybrid rendering is NOT due to parsing overhead (that's cached!), but due to the runtime cost of template evaluation flexibility.
@@ -66,9 +71,9 @@ Total overhead:               13.6 μs
 
 **Python f-strings:**
 ```python
-f'<span class="badge bg-{variant}">{text}</span>'
+format_html('<span class="badge bg-{}">{}</span>', variant, text)
 # Compiled to bytecode at parse time
-# Runtime: Direct variable substitution
+# Runtime: Django escapes variable values before returning safe HTML
 ```
 
 **Rust Template (cached):**
@@ -87,81 +92,71 @@ The difference:
 ### Use Case 1: Simple Badge Component
 
 ```python
+from django.utils.html import format_html
+
 # Pure Rust PyO3
-RustBadge("Hello", "primary").render()     # 0.3 μs
+# Rust component availability depends on the built extension; historical timing only.
 
-# Python f-string
-f'<span class="badge bg-primary">Hello</span>'  # 0.9 μs
+# Python safe HTML formatting
+format_html('<span class="badge bg-primary">{}</span>', 'Hello')  # historical measurement only
 
-# Hybrid (cached template_string)
-render_template(
-    '<span class="badge bg-{{ variant }}">{{ text }}</span>',
-    {'variant': 'primary', 'text': 'Hello'}
-)  # 1.6 μs
+# Hybrid template rendering is covered by the current Component API guide.
 ```
 
-**Winner**: Pure Rust (3x faster than Python, 5x faster than Hybrid)
+The previous winner ratios describe only the historical benchmark setup.
 
 ### Use Case 2: Complex List with Loop
 
 ```python
+from django.utils.html import format_html, format_html_join
+
 items = [{'name': f'Item {i}'} for i in range(10)]
 
-# Python f-string with loop
-html = ['<div>']
-for item in items:
-    html.append(f'<div>{item["name"]}</div>')
-html.append('</div>')
-result = '\n'.join(html)  # 0.9 μs
-
-# Hybrid (cached template with loop)
-render_template('''
-<div>
-{% for item in items %}
-    <div>{{ item.name }}</div>
-{% endfor %}
-</div>
-''', {'items': items})  # 14.5 μs
+result = format_html(
+    '<div>{}</div>',
+    format_html_join('', '<div>{}</div>', ((item['name'],) for item in items)),
+)
 ```
 
-**Winner**: Python f-string (16x faster!)
+The former comparison used raw f-string interpolation and is not a safe or
+current performance comparison. Use `format_html()` or a Django template.
 
-**Why?** Python list comprehension + join is highly optimized bytecode. Template loop evaluation requires AST walking.
+Do not infer comparative throughput from this historical example.
 
 ### Use Case 3: Large Dataset (100 items)
 
 ```python
+from django.utils.html import format_html, format_html_join
+
 items = list(range(100))
 
-# Python f-string
-result = '<ul>\n' + '\n'.join([f'<li>{i}</li>' for i in items]) + '\n</ul>'  # 11.6 μs
+# Escaped HTML construction
+result = format_html('<ul>{}</ul>', format_html_join('\n', '<li>{}</li>', ((i,) for i in items)))  # historical measurement only
 
-# Hybrid (cached template)
-render_template('''
-<ul>
-{% for item in items %}
-    <li>{{ item }}</li>
-{% endfor %}
-</ul>
-''', {'items': items})  # 190.8 μs
 ```
 
-**Winner**: Python f-string (16x faster!)
+The old hybrid-template timing belongs to the historical benchmark; use a
+configured Django template engine for a direct comparison.
 
 ### Use Case 4: Template with Filters
 
 ```python
-# Only Hybrid supports filters
-render_template(
+from datetime import datetime
+from django.utils.html import format_html
+
+from django.template import Context, Engine
+
+# A Django template supports filters.
+Engine().from_string(
     '<div>{{ date|date:"Y-m-d" }}</div>',
-    {'date': datetime.now()}
-)  # ~15-20 μs
+).render(Context({'date': datetime.now()}))
 
 # Python equivalent
-f'<div>{datetime.now().strftime("%Y-%m-%d")}</div>'  # ~1 μs
+format_html('<div>{}</div>', datetime.now().strftime("%Y-%m-%d"))  # historical measurement only
 ```
 
-**Winner**: Python (when you can write the logic directly)
+**Historical result:** the original benchmark compared these approaches on
+one machine and is not a current guarantee.
 
 **But**: Templates provide filter reusability and designer-friendly syntax.
 
@@ -175,9 +170,10 @@ f'<div>{datetime.now().strftime("%Y-%m-%d")}</div>'  # ~1 μs
 | Hybrid (complex, cached) | 14.5 μs | **68,000** |
 | Hybrid (complex, uncached) | 193 μs | **5,000** |
 
-**All methods are imperceptibly fast for web applications.**
+These historical measurements are not current performance guarantees.
 
-A typical web request budget is **100-500ms**. Even the "slowest" cached method (14.5μs) uses only **0.0145%** of a 100ms budget.
+A typical web request budget is often **100-500ms**; benchmark your own
+application and runtime before drawing a budget conclusion.
 
 ## When to Use Each Approach
 
@@ -195,16 +191,16 @@ A typical web request budget is **100-500ms**. Even the "slowest" cached method 
 ✅ Need **maximum flexibility**
 ✅ Developers > Designers
 
-**Example**: `f'<div class="badge">{text}</div>'` → 0.9μs
+**Example**: `format_html('<div class="badge">{}</div>', text)` escapes dynamic text.
 
-### Use Hybrid (template_string) When:
+### Use Hybrid (template) When:
 ✅ Need **template reusability**
 ✅ Want **designer-friendly** syntax
 ✅ Need **filters** (|date, |upper, etc.)
 ✅ Complex **nested logic** (loops in loops)
 ✅ Template **inheritance** (`{% extends %}`)
 
-**Example**: Components with `template_string = '...'` → 1.6-14.5μs
+**Example**: Use `template` when you need Django template syntax and autoescaping.
 
 ## Optimization Strategies
 
@@ -301,7 +297,7 @@ fn render_compiled(items: &[Value]) -> String {
 | Component Type | Recommended Approach | Reasoning |
 |----------------|---------------------|-----------|
 | **Library components** (Badge, Button, Icon) | Pure Rust PyO3 | Fixed structure, maximum performance (0.3μs) |
-| **Layout components** (Card, Container) | Hybrid template_string | Flexible slots, designer-friendly (5-10μs) |
+| **Layout components** (Card, Container) | Hybrid template | Flexible slots, designer-friendly (5-10μs) |
 | **Complex interactive** (DataTable, Autocomplete) | Python with helpers | Business logic complexity, 10-50μs acceptable |
 
 ### For Application Developers
@@ -345,12 +341,13 @@ Choose based on your needs, not micro-benchmarks. All approaches are blazing fas
 **Use the Component base class with automatic performance waterfall:**
 
 ```python
+from django.utils.html import format_html
 class Badge(Component):
     _rust_impl_class = RustBadge  # If available: 0.3μs
-    template_string = '...'        # Fallback: 1.6μs (cached)
+    template = '...'        # Fallback: 1.6μs (cached)
 
     def _render_custom(self):      # Last resort: 0.9μs
-        return f'<span>...</span>'
+        return format_html('<span>...</span>')
 ```
 
 This gives you:

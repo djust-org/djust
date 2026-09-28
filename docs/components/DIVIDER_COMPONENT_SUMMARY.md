@@ -1,5 +1,8 @@
 # Divider Component Implementation Summary
 
+> **Status:** Historical implementation summary. Verify current availability and performance claims against the current package before use.
+
+
 ## Overview
 Successfully built a Divider (Horizontal Rule) component for djust following the djust-components skill patterns. The component implements a stateless, high-performance divider with optional text labels.
 

@@ -1,5 +1,8 @@
 # Icon Component Implementation Report
 
+> **Status:** Historical implementation notes. Verify current availability and performance claims against the current package before use.
+
+
 ## Overview
 
 Successfully implemented a high-performance Icon component for djust following the Pure Rust simple component pattern. The component renders icons in ~1μs with support for multiple icon libraries and accessibility features.
@@ -7,7 +10,7 @@ Successfully implemented a high-performance Icon component for djust following t
 ## Files Created
 
 ### 1. Python Wrapper
-**File:** `/Users/tip/Dropbox/online_projects/ai/djust/python/djust/components/ui/icon_simple.py`
+**File:** `repo-root/python/djust/components/ui/icon_simple.py`
 
 - Follows the three-tier rendering pattern: Pure Rust → Hybrid Template → Python Fallback
 - Automatic Rust optimization when available
@@ -24,7 +27,7 @@ Successfully implemented a high-performance Icon component for djust following t
 - XSS protection via HTML escaping
 
 ### 2. Rust Implementation
-**File:** `/Users/tip/Dropbox/online_projects/ai/djust/crates/djust_components/src/simple/icon.rs`
+**File:** `repo-root/crates/djust_components/src/simple/icon.rs`
 
 - Pure Rust PyO3 class
 - Direct HTML generation (no template parsing)
@@ -259,7 +262,7 @@ from djust import LiveView
 from djust.components.ui import Icon
 
 class DashboardView(LiveView):
-    template_string = """
+    template = """
         <div class="dashboard">
             <h1>{{ title_icon.render|safe }} {{ title }}</h1>
             <div class="status">
@@ -331,8 +334,8 @@ Potential improvements for future versions:
 ## Documentation
 
 Component documentation available in:
-- Python docstrings: `/Users/tip/Dropbox/online_projects/ai/djust/python/djust/components/ui/icon_simple.py`
-- Rust doc comments: `/Users/tip/Dropbox/online_projects/ai/djust/crates/djust_components/src/simple/icon.rs`
+- Python docstrings: `repo-root/python/djust/components/ui/icon_simple.py`
+- Rust doc comments: `repo-root/crates/djust_components/src/simple/icon.rs`
 - This implementation report: `ICON_COMPONENT_IMPLEMENTATION.md`
 
 ## Summary

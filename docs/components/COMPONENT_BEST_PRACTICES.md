@@ -20,7 +20,7 @@
 ```python
 # ✅ Good: Start with the simplest pattern
 class MyView(LiveView):
-    template_string = """
+    template = """
         <h1>{{ title }}</h1>
         <button dj-click="increment">{{ count }}</button>
     """
@@ -81,8 +81,9 @@ Ask these questions in order:
 **Use case:** Badges, buttons, icons, labels
 
 ```python
+from django.utils.html import format_html
 # ✅ Best: Just use template syntax
-template_string = """
+template = """
     <span class="badge bg-primary">{{ count }}</span>
     <button class="btn btn-success" dj-click="save">Save</button>
 """
@@ -90,11 +91,10 @@ template_string = """
 # ⚠️ OK: Simple component if reused everywhere
 class BadgeComponent(Component):
     def __init__(self, text, variant="primary"):
-        self.text = text
-        self.variant = variant
+        super().__init__(text=text, variant=variant)
 
-    def render(self):
-        return f'<span class="badge bg-{self.variant}">{self.text}</span>'
+    def _render_custom(self):
+        return format_html('<span class="badge bg-{}">{}</span>', self.variant, self.text)
 
 # ❌ Overkill: LiveComponent for static UI
 class BadgeComponent(LiveComponent):  # Don't do this!
@@ -108,7 +108,7 @@ class BadgeComponent(LiveComponent):  # Don't do this!
 
 ```python
 # ✅ Best: Template conditionals
-template_string = """
+template = """
     {% if show_alert %}
     <div class="alert alert-success">
         {{ message }}
@@ -132,7 +132,7 @@ def save(self):
 
 ```python
 # ✅ Best: Template loops
-template_string = """
+template = """
     <ul>
         {% for item in items %}
         <li class="{% if item.done %}completed{% endif %}">
@@ -157,7 +157,7 @@ def toggle_item(self, id):
 class TabsComponent(LiveComponent):
     """Self-contained tabs with internal state"""
 
-    template_string = """
+    template = """
         <ul class="nav nav-tabs">
             {% for tab in tabs %}
             <li class="nav-item">
@@ -194,41 +194,37 @@ Use a simple `Component` when:
 ### Examples
 
 ```python
+from django.utils.html import format_html
 # Badge - perfect for simple component
 class BadgeComponent(Component):
     def __init__(self, text, variant="primary"):
-        self.text = text
-        self.variant = variant
+        super().__init__(text=text, variant=variant)
 
-    def render(self):
-        return f'<span class="badge bg-{self.variant}">{self.text}</span>'
+    def _render_custom(self):
+        return format_html('<span class="badge bg-{}">{}</span>', self.variant, self.text)
 
 # Icon - perfect for simple component
 class IconComponent(Component):
     def __init__(self, name, size=16):
-        self.name = name
-        self.size = size
+        super().__init__(name=name, size=size)
 
-    def render(self):
-        return f'<svg width="{self.size}" height="{self.size}">...</svg>'
+    def _render_custom(self):
+        return format_html('<svg width="{}" height="{}">...</svg>', self.size, self.size)
 
 # Progress bar - borderline (consider template syntax)
 class ProgressComponent(Component):
     def __init__(self, value, max=100, variant="primary"):
-        self.value = value
-        self.max = max
-        self.variant = variant
-        self.percentage = (value / max) * 100
+        percentage = (value / max) * 100
+        super().__init__(value=value, max=max, variant=variant, percentage=percentage)
 
-    def render(self):
-        return f'''
-            <div class="progress">
-                <div class="progress-bar bg-{self.variant}"
-                     style="width: {self.percentage}%">
-                    {self.percentage:.0f}%
-                </div>
-            </div>
-        '''
+    def _render_custom(self):
+        return format_html(
+            '<div class="progress"><div class="progress-bar bg-{}" '
+            'style="width: {}%">{}%</div></div>',
+            self.variant,
+            self.percentage,
+            format(self.percentage, ".0f"),
+        )
 ```
 
 ### When NOT to Use
@@ -302,7 +298,7 @@ This is **the recommended pattern** for component coordination.
 class DashboardView(LiveView):
     """Parent coordinates children via props and events"""
 
-    template_string = """
+    template = """
         <FilterComponent id="filter" :active="current_filter" />
         <DataListComponent id="list" :items="filtered_items" />
     """
@@ -398,17 +394,18 @@ class DashboardView(LiveView):
 ### Use Simple Components for High-Volume Rendering
 
 ```python
+from django.utils.html import format_html
 # ✅ Good: Simple component for list items
 class TodoItemComponent(Component):
     """Lightweight - no VDOM overhead"""
     def __init__(self, item):
-        self.item = item
+        super().__init__(item=item)
 
-    def render(self):
-        return f'<li>{self.item.text}</li>'
+    def _render_custom(self):
+        return format_html('<li>{}</li>', self.item.text)
 
 # Usage in template
-template_string = """
+template = """
     <ul>
         {% for item in items %}
         {{ item_component(item) }}
@@ -426,7 +423,7 @@ template_string = """
 # ✅ Good: One component manages many items
 class TodoListComponent(LiveComponent):
     """Single component, efficient updates"""
-    template_string = """
+    template = """
         <ul>
             {% for item in items %}
             <li>{{ item.text }}</li>
@@ -442,7 +439,7 @@ class TodoListComponent(LiveComponent):
 
 ```python
 # ✅ Good: Template variable for frequently changing data
-template_string = """
+template = """
     <div class="counter">{{ count }}</div>
 """
 
@@ -460,17 +457,18 @@ class CounterComponent(LiveComponent):  # Overkill!
 ### ❌ Anti-Pattern 1: Over-Componentization
 
 ```python
+from django.utils.html import format_html
 # ❌ Bad: Components for everything
 class TitleComponent(Component):
-    def render(self):
-        return f'<h1>{self.text}</h1>'
+    def _render_custom(self):
+        return format_html('<h1>{}</h1>', self.text)
 
 class ParagraphComponent(Component):
-    def render(self):
-        return f'<p>{self.text}</p>'
+    def _render_custom(self):
+        return format_html('<p>{}</p>', self.text)
 
 # ✅ Good: Just use HTML!
-template_string = """
+template = """
     <h1>{{ title }}</h1>
     <p>{{ description }}</p>
 """
@@ -482,7 +480,7 @@ template_string = """
 # ❌ Bad: Trying to add state to simple component
 class BadgeComponent(Component):
     def __init__(self, initial_count):
-        self.count = initial_count  # Won't persist!
+        super().__init__(count=initial_count)  # Recreated instances do not preserve state.
 
     def increment(self):  # Won't work!
         self.count += 1
@@ -502,7 +500,8 @@ class BadgeComponent(LiveComponent):
 # ❌ Bad: Components referencing each other
 class ComponentA(LiveComponent):
     def do_something(self):
-        self.parent.component_b.update_data()  # Tight coupling!
+        # Anti-pattern: reaching through a parent to mutate a sibling.
+        pass
 
 # ✅ Good: Via parent
 class ComponentA(LiveComponent):
@@ -512,7 +511,7 @@ class ComponentA(LiveComponent):
 class ParentView(LiveView):
     def handle_component_event(self, component_id, event, data):
         if event == "something_happened":
-            self.component_b.update_data()  # Parent coordinates
+            self.update_component("component_b", value="updated")
 ```
 
 ### ❌ Anti-Pattern 4: Bloated Parent
@@ -530,9 +529,11 @@ class DashboardView(LiveView):
 
     def filter_users(self, criteria):
         # ... 100 lines of filtering logic
+        pass
 
     def sort_users(self, field):
         # ... 100 lines of sorting logic
+        pass
 
 # ✅ Good: Extract to components
 class UserTableComponent(LiveComponent):
@@ -630,7 +631,7 @@ def test_dashboard_coordinates_components(client):
 class DashboardView(LiveView):
     """Real-world dashboard - mix of approaches"""
 
-    template_string = """
+    template = """
         <!-- Simple template syntax for stats -->
         <div class="stats">
             <div class="stat-card">
@@ -678,7 +679,7 @@ class DashboardView(LiveView):
 class UserManagementView(LiveView):
     """Coordinating multiple components"""
 
-    template_string = """
+    template = """
         <div class="row">
             <div class="col-md-4">
                 <FilterPanelComponent id="filter" :options="filter_options" />

@@ -1,5 +1,12 @@
 # LiveComponent Architecture
 
+> **Historical architecture notes:** the diagrams and low-level routing
+> examples describe an earlier internal design. In the current API, the parent
+> LiveView owns rendering and diffing; `LiveComponent` does not expose a
+> `render_with_diff()` method. For supported methods and runnable patterns, see
+> [Component API Reference](API_REFERENCE_COMPONENTS.md) and
+> [Components](COMPONENTS.md).
+
 ## Table of Contents
 
 1. [Overview](#overview)
@@ -42,17 +49,17 @@ djust implements a **two-tier component system** inspired by Phoenix LiveView, c
 **Purpose:** Render HTML based on input parameters, no state, no lifecycle.
 
 ```python
+from django.utils.html import format_html
 from djust.components import Component
 
 class BadgeComponent(Component):
     """Simple component - just returns HTML"""
 
     def __init__(self, text: str, variant: str = "primary"):
-        self.text = text
-        self.variant = variant
+        super().__init__(text=text, variant=variant)
 
-    def render(self) -> str:
-        return f'<span class="badge bg-{self.variant}">{self.text}</span>'
+    def _render_custom(self) -> str:
+        return format_html('<span class="badge bg-{}">{}</span>', self.variant, self.text)
 ```
 
 **Characteristics:**
@@ -74,7 +81,7 @@ from djust import LiveComponent
 class TabsComponent(LiveComponent):
     """Stateful component - manages own state"""
 
-    template_string = """
+    template = """
         <ul class="nav">
             {% for tab in tabs %}
             <li class="{% if tab.id == active_tab %}active{% endif %}"
@@ -209,7 +216,7 @@ Simple components are rendered inline into the parent's HTML:
 
 ```python
 # Parent template
-template_string = """
+template = """
     <h1>Counter: {{ counter }}</h1>
     {{ badge }}  <!-- Inline: <span class="badge">5</span> -->
 """
@@ -234,7 +241,7 @@ LiveComponents maintain their own VDOM tree:
 
 ```python
 # Parent template
-template_string = """
+template = """
     <h1>Counter: {{ counter }}</h1>
     <LiveComponent id="tabs" />  <!-- Component boundary -->
 """
@@ -408,7 +415,7 @@ This is the **Phoenix LiveView pattern**:
 
 ```python
 class DashboardView(LiveView):
-    template_string = """
+    template = """
         <h1>User: {{ username }}</h1>
 
         <!-- Pass props to component -->
@@ -541,7 +548,7 @@ Each LiveComponent gets its own session storage:
 
 ### WebSocket Routing
 
-```python
+```text
 # Client sends event
 {
     "type": "event",

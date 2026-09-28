@@ -1,5 +1,8 @@
 # Unified Component Design: Automatic Performance Optimization
 
+> **Status:** Historical architecture proposal. Several sections describe designs that were not shipped; use the current component API reference for supported behavior.
+
+
 This document describes the **unified component design** where a single `Component` class automatically selects the fastest available implementation: Pure Rust → Hybrid → Python.
 
 ## Table of Contents
@@ -37,7 +40,7 @@ The `Component` base class automatically tries implementations in order of speed
 ```
 1. Pure Rust implementation?     ✅ Use it (fastest: 0.5-2μs)
    ↓ No
-2. template_string defined?      ✅ Use Rust rendering (fast: 5-10μs)
+2. template defined?      ✅ Use Rust rendering (fast: 5-10μs)
    ↓ No
 3. render() method overridden?   ✅ Use Python (flexible: 50-100μs)
    ↓ No
@@ -194,7 +197,7 @@ class Component(ABC):
 
     Performance waterfall:
     1. If Rust implementation exists → use it (fastest)
-    2. Elif template_string defined → use Rust rendering (fast)
+    2. Elif template defined → use Rust rendering (fast)
     3. Elif render() overridden → use Python (flexible)
     4. Else → error
 
@@ -202,9 +205,9 @@ class Component(ABC):
         # Pure Rust (automatic if available)
         badge = Badge("New", variant="primary")
 
-        # Hybrid (template_string)
+        # Hybrid (template)
         class CustomCard(Component):
-            template_string = '<div class="card">{{ content }}</div>'
+            template = '<div class="card">{{ content }}</div>'
             def get_context_data(self):
                 return {'content': self.content}
 
@@ -218,7 +221,7 @@ class Component(ABC):
     _rust_impl_class: Optional[type] = None
 
     # Class attribute: optional template string for hybrid rendering
-    template_string: Optional[str] = None
+    template: Optional[str] = None
 
     def __init__(self, **kwargs):
         """
@@ -254,21 +257,21 @@ class Component(ABC):
 
         Performance waterfall:
         1. Rust implementation (fastest)
-        2. template_string with Rust rendering (fast)
+        2. template with Rust rendering (fast)
         3. _render_custom() override (flexible)
         """
         # 1. Try pure Rust implementation (fastest)
         if self._rust_instance is not None:
             return mark_safe(self._rust_instance.render())
 
-        # 2. Try hybrid: template_string with Rust rendering (fast)
-        if self.template_string is not None:
+        # 2. Try hybrid: template with Rust rendering (fast)
+        if self.template is not None:
             from djust._rust import render_template
             context = self.get_context_data()
-            return mark_safe(render_template(self.template_string, context))
+            return mark_safe(render_template(self.template, context))
 
         # 3. Fall back to custom Python rendering (flexible)
-        return mark_safe(self._render_custom())
+        return self._render_custom()
 
     def get_context_data(self) -> Dict[str, Any]:
         """
@@ -283,7 +286,7 @@ class Component(ABC):
         """
         Override for custom Python rendering.
 
-        Only called if no Rust implementation and no template_string.
+        Only called if no Rust implementation and no template.
 
         Returns:
             HTML string
@@ -291,7 +294,7 @@ class Component(ABC):
         raise NotImplementedError(
             f"{self.__class__.__name__} must define either:\n"
             f"  - _rust_impl_class (for pure Rust)\n"
-            f"  - template_string (for hybrid rendering)\n"
+            f"  - template (for hybrid rendering)\n"
             f"  - _render_custom() method (for custom Python)"
         )
 
@@ -310,7 +313,8 @@ class Component(ABC):
 
 **Python side** (`python/djust/component.py`):
 
-```python
+```text
+from django.utils.html import format_html
 import uuid
 from typing import Dict, Any, Optional, Callable
 from djust._rust import RustLiveView
@@ -338,7 +342,7 @@ class LiveComponent(Component):
 
     Example:
         class TodoListComponent(LiveComponent):
-            template_string = '''
+            template = '''
                 <div class="todo-list">
                     <input type="text" dj-input="on_filter" value="{{ filter }}" />
                     {% for item in filtered_items %}
@@ -379,7 +383,7 @@ class LiveComponent(Component):
                 }
     """
 
-    template_string: str = ""
+    template: str = ""
 
     def __init__(self, **props):
         """
@@ -491,18 +495,18 @@ class LiveComponent(Component):
             )
 
         if self._rust_view is None:
-            if not self.template_string:
+            if not self.template:
                 raise ValueError(
-                    f"Component {self.__class__.__name__} must define template_string"
+                    f"Component {self.__class__.__name__} must define template"
                 )
-            self._rust_view = RustLiveView(self.template_string)
+            self._rust_view = RustLiveView(self.template)
 
         context = self.get_context_data()
         self._rust_view.update_state(context)
         html = self._rust_view.render()
 
         # Wrap in div with component ID for event routing
-        return f'<div data-component-id="{self.component_id}">{html}</div>'
+        return format_html('<div data-component-id="{}">{}</div>', self.component_id, html)
 
 
 # Component vs LiveComponent Decision Tree
@@ -689,8 +693,8 @@ class Badge(Component):
     # Link to Rust implementation if available
     _rust_impl_class = RustBadge if _RUST_AVAILABLE else None
 
-    # Fallback: Hybrid rendering with template_string
-    template_string = """
+    # Fallback: Hybrid rendering with template
+    template = """
         <span class="badge bg-{{ variant }}{% if size == 'sm' %} badge-sm{% elif size == 'lg' %} badge-lg{% endif %}">
             {{ text }}
         </span>
@@ -738,7 +742,7 @@ html = badge.render()
 
 Behind the scenes:
 1. **If Rust built**: Uses `RustBadge` (~1μs per render) ⚡
-2. **If Rust not built**: Uses `template_string` with Rust template engine (~5μs) ✅
+2. **If Rust not built**: Uses `template` with Rust template engine (~5μs) ✅
 3. **If Rust disabled**: Falls back to Python (custom implementation needed) ⚠️
 
 **Developer experience**: Write once, automatic optimization, graceful degradation.
@@ -904,7 +908,7 @@ badge = Badge("New", variant="success", size="sm")
 
 # Behind the scenes:
 # - If Rust built: RustBadge renders in ~1μs
-# - If not: template_string renders in ~5μs
+# - If not: template renders in ~5μs
 # Developer doesn't need to know or care!
 
 html = badge.render()
@@ -965,10 +969,10 @@ class UserAvatar(Component):
     """
     Custom component using hybrid rendering.
 
-    No Rust implementation needed - uses template_string for speed.
+    No Rust implementation needed - uses template for speed.
     """
 
-    template_string = """
+    template = """
         <div class="avatar avatar-{{ size }}">
             {% if image_url %}
                 <img src="{{ image_url }}" alt="{{ name }}">
@@ -1001,6 +1005,7 @@ class UserAvatar(Component):
 ### Example 4: Fully Custom Python Component
 
 ```python
+from django.utils.html import format_html
 from djust.components.base import Component
 
 class DynamicChart(Component):
@@ -1034,9 +1039,9 @@ class DynamicChart(Component):
 
         for value in self.data:
             height = (value / max_value) * 100
-            bars.append(f'<div class="bar" style="height: {height}%"></div>')
+            bars.append(format_html('<div class="bar" style="height: {}%"></div>', height))
 
-        return f'<div class="chart chart-bar">{"".join(bars)}</div>'
+        return format_html('<div class="chart chart-bar">{}</div>', "".join(bars))
 
     # ... more complex rendering methods
 ```
@@ -1046,16 +1051,16 @@ class DynamicChart(Component):
 ### Phase 1: Start with Current Design
 
 Implement `Component` base class with:
-- `template_string` support (hybrid)
+- `template` support (hybrid)
 - `_render_custom()` fallback (Python)
 
 ```python
 class Component(ABC):
-    template_string: Optional[str] = None
+    template: Optional[str] = None
 
     def render(self):
-        if self.template_string:
-            return render_template(self.template_string, self.get_context_data())
+        if self.template:
+            return render_template(self.template, self.get_context_data())
         return self._render_custom()
 ```
 
@@ -1066,15 +1071,15 @@ Update `Component` to check for Rust implementation:
 ```python
 class Component(ABC):
     _rust_impl_class: Optional[type] = None
-    template_string: Optional[str] = None
+    template: Optional[str] = None
 
     def render(self):
         # Try Rust first
         if self._rust_instance:
             return self._rust_instance.render()
         # Fall back to hybrid
-        if self.template_string:
-            return render_template(self.template_string, self.get_context_data())
+        if self.template:
+            return render_template(self.template, self.get_context_data())
         # Fall back to Python
         return self._render_custom()
 ```
@@ -1094,7 +1099,7 @@ from djust._rust import RustBadge
 
 class Badge(Component):
     _rust_impl_class = RustBadge
-    template_string = "..."  # Fallback
+    template = "..."  # Fallback
 ```
 
 ### Phase 4: Optimize Hot Paths
@@ -1148,7 +1153,7 @@ button = Button("Click me", size="lg")
 
 # Custom display component
 class UserAvatar(Component):
-    template_string = '''
+    template = '''
         <div class="avatar">
             <img src="{{ image_url }}" alt="{{ name }}">
         </div>
@@ -1170,7 +1175,7 @@ class UserAvatar(Component):
 ```python
 # Todo list component
 class TodoListComponent(LiveComponent):
-    template_string = '''...'''
+    template = '''...'''
 
     def mount(self, items=None):
         self.items = items or []
