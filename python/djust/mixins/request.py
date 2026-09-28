@@ -1052,6 +1052,16 @@ class RequestMixin:
             # fallback tokens exactly as on the WS/SSE event paths (#3253).
             from ..security.state_snapshot import legacy_snapshot_fields
 
+            # POST can be the first request, or arrive after cookie expiry.
+            # Allocate its key before signing; SessionMiddleware otherwise
+            # creates a different binding after this response has been built.
+            if (
+                legacy_exposure
+                and getattr(self, "enable_state_snapshot", False)
+                and not request.session.session_key
+            ):
+                request.session.create()
+
             snapshot_fields = legacy_snapshot_fields(
                 self, f"{type(self).__module__}.{type(self).__name__}", request.session.session_key
             )

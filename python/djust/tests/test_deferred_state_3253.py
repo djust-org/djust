@@ -278,3 +278,36 @@ def test_http_snapshot_respects_opt_in_and_revokes_stale_token(monkeypatch, cont
         assert TOKEN in body and body[TOKEN] is None
     else:
         assert TOKEN not in body
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("cookie", [None, "expired-session-key"])
+def test_http_token_binds_cookie_issued_by_session_middleware(cookie):
+    from django.conf import settings
+    from django.test import Client
+    from django.urls import path
+
+    with override_settings(
+        ROOT_URLCONF=type(
+            "URLs", (), {"urlpatterns": [path("fallback/", DeferredLegacy.as_view())]}
+        ),
+        MIDDLEWARE=[
+            "django.contrib.sessions.middleware.SessionMiddleware",
+            "django.contrib.auth.middleware.AuthenticationMiddleware",
+        ],
+    ):
+        client = Client()
+        if cookie:
+            client.cookies[settings.SESSION_COOKIE_NAME] = cookie
+        response = client.post(
+            "/fallback/",
+            json.dumps({"event": "change", "params": {}}),
+            content_type="application/json",
+        )
+        assert response.status_code == 200, response.content
+        body = response.json()
+        key = client.cookies[settings.SESSION_COOKIE_NAME].value
+        state_json = unsign_snapshot(body[TOKEN], f"{MOD}.DeferredLegacy", key)
+        assert state_json is not None, "HTTP token must match the response session cookie"
+        assert json.loads(state_json)["count"] == 1
+        assert unsign_snapshot(body[TOKEN], f"{MOD}.DeferredLegacy", "other-session") is None
