@@ -30,6 +30,9 @@ window.eval(
     "utf8",
   ),
 );
+window.ClipboardEvent ??= class extends window.Event {};
+window.Range.prototype.getClientRects ??= () => [];
+window.Range.prototype.getBoundingClientRect ??= () => new window.DOMRect();
 const hookSource = readFileSync(
   "../../python/djust/components/static/djust_components/markdown-editor.js",
   "utf8",
@@ -355,4 +358,200 @@ test("cells hold one paragraph: block commands cannot split a table", () => {
     assert.equal(hook.visual.load(hook.visual.value()), "", String(run));
     hook.destroyed();
   }
+});
+
+const imagePos = (editor) => {
+  let at = null;
+  editor.state.doc.descendants((node, pos) => {
+    if (at === null && /^(image|cellImage)$/.test(node.type.name)) at = pos;
+  });
+  assert.notEqual(at, null, "the image must be present before typing");
+  return at;
+};
+const assertImageRoundTrip = (hook, expected) => {
+  assert.equal(hook.visual.value(), expected);
+  const before = hook.visual.editor.getJSON();
+  assert.doesNotThrow(() => hook.visual.editor.state.doc.check());
+  assert.equal(hook.visual.load(expected), "");
+  assert.deepEqual(hook.visual.editor.getJSON(), before);
+  assert.equal(hook.visual.value(), expected);
+};
+
+test("#3261 typing on either side preserves paragraph and nested inline images", () => {
+  for (const wrap of [
+    (s) => s,
+    (s) => `## ${s}`,
+    (s) => `> ${s}`,
+    (s) => `- ${s}`,
+  ]) {
+    const image = '![a](/x.png "image title")';
+    const { hook, field } = setup(wrap(`text ${image} text`) + "\n\nEnd");
+    const editor = hook.visual.editor;
+    const at = imagePos(editor);
+    editor.view.dispatch(editor.state.tr.insertText("L", at));
+    editor.view.dispatch(editor.state.tr.insertText("R", at + 2));
+    const expected = wrap(`text L${image}R text`) + "\n\nEnd";
+    assert.equal(field.value, expected);
+    assertImageRoundTrip(hook, expected);
+    hook.destroyed();
+  }
+});
+
+test("#3261 image links and emphasis survive edits and serialization", () => {
+  for (const image of [
+    '[![a](/x.png "image title")](/y "link title")',
+    "**![a](/x.png)**",
+    "*![a](/x.png)*",
+    "~~![a](/x.png)~~",
+    "[**![a](/x.png)**](/y)",
+  ]) {
+    const { hook } = setup(`before ${image} after`);
+    const editor = hook.visual.editor;
+    editor.view.dispatch(
+      editor.state.tr.insertText("!", editor.state.doc.content.size - 1),
+    );
+    assertImageRoundTrip(hook, `before ${image} after!`);
+    hook.destroyed();
+  }
+});
+
+test("#3261 marks spanning text and images survive save and reload", () => {
+  for (const source of [
+    "**left ![a](/x.png) right**",
+    "[left ![a](/x.png) right](/y)",
+    "**left [![a](/x.png)](/y) right**",
+  ]) {
+    const { hook } = setup(source);
+    const before = hook.visual.editor.getJSON();
+    assert.equal(hook.visual.load(hook.visual.value()), "");
+    assert.deepEqual(hook.visual.editor.getJSON(), before);
+    const image = [];
+    hook.visual.editor.state.doc.descendants((n) => {
+      if (n.type.name === "image") image.push(n);
+    });
+    assert.equal(image.length, 1);
+    assert.ok(image[0].marks.length, "image retains the surrounding mark");
+    hook.destroyed();
+  }
+});
+
+test("#3261 copying marked text and an image out of a table retains content after typing", () => {
+  const content = 'left [**![a](/x.png "title")**](/y) right';
+  const { hook } = setup(`| H |\n| --- |\n| ${content} |\n\nTarget `);
+  const editor = hook.visual.editor;
+  const at = imagePos(editor);
+  const { dom } = editor.view.serializeForClipboard(
+    editor.state.doc.slice(at - 5, at + 7),
+  );
+  editor.commands.setTextSelection(editor.state.doc.content.size - 1);
+  editor.view.pasteHTML(dom.innerHTML);
+  editor.view.dispatch(editor.state.tr.insertText("!"));
+  const expected = hook.visual.value();
+  assert.ok(expected.endsWith(`Target ${content}!`), expected);
+  assert.equal((expected.match(/!\[a\]/g) || []).length, 2);
+  assertImageRoundTrip(hook, expected);
+  hook.destroyed();
+});
+
+test("#3261 HTML image paste and toolbar marks retain attributes and reject data URLs", () => {
+  const { hook } = setup("before ");
+  const editor = hook.visual.editor;
+  editor.commands.setTextSelection(8);
+  editor.view.pasteHTML(
+    '<img src="/x.png" alt="a" title="title"><img src="data:image/png;base64,AAAA">',
+  );
+  const at = imagePos(editor);
+  editor.commands.setTextSelection({ from: at, to: at + 1 });
+  editor.commands.toggleBold();
+  editor.commands.setLink({ href: "/y" });
+  editor.commands.setTextSelection(at + 1);
+  editor.view.dispatch(editor.state.tr.insertText("!"));
+  const expected = hook.visual.value();
+  assert.equal(expected, 'before [**![a](/x.png "title")!**](/y)');
+  assert.equal(hook.surface.querySelectorAll("img").length, 1);
+  assertImageRoundTrip(hook, expected);
+  hook.destroyed();
+});
+
+test("#3261 dropping an HTML image into paragraph or table keeps it on the next keystroke", () => {
+  for (const source of ["before after", "| H |\n| --- |\n| before after |"]) {
+    const { hook } = setup(source);
+    const editor = hook.visual.editor;
+    let at;
+    editor.state.doc.descendants((node, pos) => {
+      if (node.isText && node.text === "before after") at = pos + 7;
+    });
+    editor.view.posAtCoords = () => ({ pos: at, inside: -1 });
+    const event = new window.MouseEvent("drop", {
+      bubbles: true,
+      cancelable: true,
+      clientX: 10,
+      clientY: 10,
+    });
+    Object.defineProperty(event, "dataTransfer", {
+      value: {
+        getData: (type) =>
+          type === "text/html" ? '<img src="/x.png" alt="a">' : "",
+        files: [],
+      },
+    });
+    editor.view.dom.dispatchEvent(event);
+    assert.ok(event.defaultPrevented);
+    editor.view.dispatch(editor.state.tr.insertText("!"));
+    const expected = hook.visual.value();
+    assert.ok(expected.includes("before ![a](/x.png)!after"), expected);
+    assertImageRoundTrip(hook, expected);
+    hook.destroyed();
+  }
+});
+
+test("#3261 serialization placeholders cannot replace user text or image titles", () => {
+  const source = '\uE0000\uE000 **![a](/x.png "$& title")** \uE000';
+  const { hook } = setup(source);
+  assertImageRoundTrip(hook, source);
+  hook.destroyed();
+});
+
+test("#3261 image commands and Markdown input rules insert valid inline images", () => {
+  for (const source of ["text", "| H |\n| --- |\n| text |"]) {
+    const { hook } = setup(source);
+    const editor = hook.visual.editor;
+    let at;
+    editor.state.doc.descendants((node, pos) => {
+      if (node.isText && node.text === "text") at = pos + 4;
+    });
+    editor.commands.setTextSelection(at);
+    assert.equal(editor.commands.setImage({ src: "/x.png", alt: "a" }), true);
+    editor.view.dispatch(editor.state.tr.insertText("!"));
+    const expected = hook.visual.value();
+    assert.ok(expected.includes("text![a](/x.png)!"), expected);
+    assertImageRoundTrip(hook, expected);
+    hook.destroyed();
+  }
+  const { hook } = setup("![a](/x.png");
+  const editor = hook.visual.editor;
+  const end = editor.state.doc.content.size - 1;
+  editor.commands.setTextSelection(end);
+  assert.ok(
+    editor.view.someProp("handleTextInput", (handler) =>
+      handler(editor.view, end, end, ")", () =>
+        editor.state.tr.insertText(")"),
+      ),
+    ),
+  );
+  assertImageRoundTrip(hook, "![a](/x.png)");
+  hook.destroyed();
+});
+
+test("#3261 inline code formatting cannot turn an image into literal Markdown", () => {
+  const { hook } = setup("text ![a](/x.png) text");
+  const editor = hook.visual.editor;
+  const at = imagePos(editor);
+  editor.commands.setTextSelection({ from: at, to: at + 1 });
+  editor.commands.toggleCode();
+  assertImageRoundTrip(hook, "text ![a](/x.png) text");
+  editor.commands.setTextSelection(editor.state.doc.content.size - 1);
+  editor.view.pasteHTML('<code><img src="/pasted.png" alt="pasted"></code>');
+  assertImageRoundTrip(hook, "text ![a](/x.png) text![pasted](/pasted.png)");
+  hook.destroyed();
 });
