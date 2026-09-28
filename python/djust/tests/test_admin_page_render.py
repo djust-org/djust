@@ -1,4 +1,4 @@
-"""Every djust admin page renders, carries a LiveView root, and mounts.
+"""Admin pages render and mount; login uses a CSRF-protected HTTP form (#3154).
 
 #3139 — ``base.html``, ``model_list.html`` and ``model_detail.html`` used the
 ``concat`` filter without loading ``djust_admin_tags``, so every page except
@@ -20,6 +20,7 @@ the second copy's fixed sidebar and heading drawn inside the widget card.
 from __future__ import annotations
 
 import re
+from html import unescape
 import sys
 from pathlib import Path
 
@@ -170,9 +171,11 @@ def test_admin_page_root_names_its_view(admin_client, group, page):
     assert _ROOT.findall(html) == [_PAGE_VIEWS[page]]
 
 
-def test_login_page_root_names_the_login_view(db):
+def test_login_page_is_an_http_form_without_a_liveview_root(db):
     html = Client().get(PREFIX + "login/").content.decode()
-    assert _ROOT.findall(html) == ["djust.admin_ext.views.LoginView"]
+    assert _ROOT.findall(html) == []
+    assert '<form method="post"' in html
+    assert 'name="csrfmiddlewaretoken"' in html
 
 
 def test_no_admin_template_uses_the_legacy_root_attribute():
@@ -225,7 +228,7 @@ def test_page_widget_renders_once(admin_client, group, page):
 
 
 # --------------------------------------------------------------------------- #
-# #3140: the pages mount over a real WebSocket, and the login submit works
+# #3140: LiveView pages mount over a real WebSocket; login now uses HTTP (#3154)
 # --------------------------------------------------------------------------- #
 
 
@@ -277,36 +280,37 @@ def _session_cookie(client: Client) -> str:
     )
 
 
-async def _socket_login(django_user_model, params=None):
-    """Load the login page, then sign in over the socket the page opens.
-
-    Returns the pushed ``redirect`` URL and the browser holding the session."""
+async def _http_login(django_user_model, params=None):
+    """Submit the form rendered by the registered site's HTTP login page."""
     await sync_to_async(django_user_model.objects.create_user)(
         "staff", password="s3cret-pw", is_staff=True
     )
-    browser = Client()
-    page = await sync_to_async(browser.get)(PREFIX + "login/")
+    browser = Client(enforce_csrf_checks=True)
+    page = await sync_to_async(browser.get)(PREFIX + "login/", params or {})
     assert page.status_code == 200
-
-    async with _Socket(_session_cookie(browser)) as ws:
-        # The client sends the page's query string as the mount params.
-        mounted = await ws.mount("djust.admin_ext.views.LoginView", PREFIX + "login/", params)
-        assert "Render-pages administration" in mounted["html"]
-        for name, value in (("update_username", "staff"), ("update_password", "s3cret-pw")):
-            await ws.send({"type": "event", "event": name, "params": {"value": value}})
-            await ws.until("patch", "html_update", "noop")
-        await ws.send({"type": "event", "event": "do_login", "params": {}})
-        pushed = await ws.until("push_event")
-    assert pushed["event"] == "redirect"
-    return pushed["payload"]["url"], browser
+    html = page.content.decode()
+    assert "Render-pages administration" in html
+    csrf = re.search(r'name="csrfmiddlewaretoken" value="([^\"]+)"', html)
+    next_field = re.search(r'name="next" value="([^\"]*)"', html)
+    assert csrf and next_field
+    response = await sync_to_async(browser.post)(
+        PREFIX + "login/",
+        {
+            "username": "staff",
+            "password": "s3cret-pw",
+            "csrfmiddlewaretoken": csrf[1],
+            "next": unescape(next_field[1]),
+        },
+    )
+    assert response.status_code == 302
+    return response["Location"], browser
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_login_view_mounts_and_its_submit_logs_in(django_user_model):
-    url, browser = await _socket_login(django_user_model)
+async def test_login_form_submit_logs_in_to_its_registered_site(django_user_model):
+    url, browser = await _http_login(django_user_model)
 
-    # The redirect names THIS site's index: the view found its registration
-    # from the page URL, although a socket mount passes no as_view() kwargs.
+    # The redirect names THIS site's index, not the other registered site.
     assert url == PREFIX
     # The session the browser holds is now logged in.
     response = await sync_to_async(browser.get)(PREFIX)
@@ -329,9 +333,8 @@ async def test_login_view_mounts_and_its_submit_logs_in(django_user_model):
     ],
 )
 async def test_login_redirect_honors_only_a_same_host_next(django_user_model, next_url, expected):
-    """``?next=`` reaches the socket mount, so the sign-in that now works must
-    not redirect to another host."""
-    url, _ = await _socket_login(django_user_model, {"next": next_url})
+    """``?next=`` passes through the form without allowing an off-site redirect."""
+    url, _ = await _http_login(django_user_model, {"next": next_url})
     assert url == expected
 
 
