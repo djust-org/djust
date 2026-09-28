@@ -16,6 +16,41 @@ import TaskItem from "@tiptap/extension-task-item";
 import BubbleMenu from "@tiptap/extension-bubble-menu";
 import FloatingMenu from "@tiptap/extension-floating-menu";
 
+// An image inside a table cell. The cell holds one paragraph of inline
+// content, and the ordinary Image is a block node: placed in that paragraph
+// it makes the cell's content invalid, so the next edit in the cell drops
+// it (and inserting next to it throws). Cells use this inline twin instead,
+// with the same attributes and the same `![alt](src)` Markdown. It has no
+// HTML rule, input rule or command of its own: an `<img>` always parses as
+// the block Image (so its source rule, no data: URIs with
+// `allowBase64: false`, applies unchanged), and the cell paths below
+// (HTML cells, paste and drop into a cell, Markdown tables) convert it.
+// `setImage` and a typed `![]()` stay the block Image's.
+const CellImage = Image.extend({
+  name: "cellImage",
+  inline: true,
+  group: "inline",
+  parseHTML: () => [],
+  addCommands: () => ({}),
+  addInputRules: () => [],
+});
+// An image node as the inline cell image (other nodes unchanged).
+const asCellImage = (node, schema) =>
+  node.type.name === "image"
+    ? schema.nodes.cellImage.create(node.attrs, null, node.marks)
+    : node;
+// The same for parsed-Markdown JSON: every image inside a table cell.
+const cellImagesInJSON = (json, inCell = false) => {
+  if (!json || typeof json !== "object") return json;
+  if (Array.isArray(json)) return json.map((n) => cellImagesInJSON(n, inCell));
+  const here = inCell || json.type === "tableCell" || json.type === "tableHeader";
+  const out = { ...json };
+  if (here && json.type === "image") out.type = "cellImage";
+  if (Array.isArray(json.content))
+    out.content = json.content.map((n) => cellImagesInJSON(n, here));
+  return out;
+};
+
 // The editor or its menu holds focus. A menu that holds keyboard focus
 // stays open, so Tab/arrow navigation into it does not dismiss it.
 const focused = (view, element) =>
@@ -59,12 +94,12 @@ function inlineContent(fragment, schema) {
       joinNext = true;
       return false;
     }
-    // Images too: the Markdown loader keeps `![alt](src)` in a cell as an
-    // image inside the cell's paragraph, and this matches it.
+    // Images too, as the inline cell image (what `![alt](src)` in a
+    // Markdown cell loads to).
     if (node.isInline || node.type.name === "image") {
       if (joinNext) out.push(schema.nodes.hardBreak.create());
       joinNext = false;
-      out.push(node);
+      out.push(asCellImage(node, schema));
       return false;
     }
     return true;
@@ -138,35 +173,6 @@ function flatSlice(slice, schema) {
     1,
     1,
   );
-}
-// A flattened paragraph holding an image (a block node, placed the way the
-// Markdown loader places `![alt](src)` in a cell) cannot be merged into the
-// cell's paragraph by an ordinary replace, which re-checks that paragraph's
-// content. Replace the whole paragraph instead, as loading Markdown does.
-function insertIntoCell(view, slice, $from, $to) {
-  const para = slice.content.firstChild;
-  if (
-    slice.content.childCount !== 1 ||
-    para.type.name !== "paragraph" ||
-    !inCell($from) ||
-    $from.parent !== $to.parent ||
-    para.content.content.every((node) => node.isInline)
-  )
-    return false;
-  const target = $from.parent;
-  const content = target.content
-    .cut(0, $from.parentOffset)
-    .append(para.content)
-    .append(target.content.cut($to.parentOffset));
-  const tr = view.state.tr.replaceWith(
-    $from.before(),
-    $from.after(),
-    target.type.create(target.attrs, content, target.marks),
-  );
-  const caret = $from.before() + 1 + $from.parentOffset + para.content.size;
-  tr.setSelection(TextSelection.near(tr.doc.resolve(caret)));
-  view.dispatch(tr.scrollIntoView());
-  return true;
 }
 // Mirrors what prosemirror-tables' pastedCells() accepts: after unwrapping
 // single open wrappers (or a lone table), only rows or only cells.
@@ -243,6 +249,21 @@ const CellsStayInline = Extension.create({
           view = editorView;
           return {};
         },
+        // A drop selects what it dropped, so the next keystroke would replace
+        // it (a dropped cell image vanished on typing). In a cell, leave the
+        // caret after the dropped content, as a paste does.
+        appendTransaction(trs, oldState, state) {
+          const { selection } = state;
+          if (
+            selection.empty ||
+            !trs.some((tr) => tr.getMeta("uiEvent") === "drop") ||
+            !inCell(selection.$to)
+          )
+            return null;
+          return state.tr.setSelection(
+            TextSelection.create(state.doc, selection.to),
+          );
+        },
         filterTransaction(tr, state) {
           if (!tr.docChanged || !splitsTable(tr)) return true;
           // An input rule whose block cannot go in a cell (`---`, an image)
@@ -276,20 +297,6 @@ const CellsStayInline = Extension.create({
           transformPastedHTML(html) {
             pastedTableHTML = /<(table|tr|td|th)[\s>]/i.test(html);
             return html;
-          },
-          handlePaste(view, event, slice) {
-            const { $from, $to } = view.state.selection;
-            return insertIntoCell(view, slice, $from, $to);
-          },
-          handleDrop(view, event, slice, moved) {
-            if (moved) return false;
-            const pos = view.posAtCoords({
-              left: event.clientX,
-              top: event.clientY,
-            })?.pos;
-            if (pos == null) return false;
-            const $pos = view.state.doc.resolve(pos);
-            return insertIntoCell(view, slice, $pos, $pos);
           },
           // A drop lands where the pointer is, not at the selection.
           handleDOMEvents: {
@@ -341,6 +348,9 @@ const CellsStayInline = Extension.create({
 export const escapeCellPipes = (text) =>
   text.replace(/(^|[^\\])((?:\\\\)*)\|/g, "$1$2\\|");
 const GfmTable = Table.extend({
+  // `![alt](src)` in a cell loads as the inline cell image.
+  parseMarkdown: (token, h) =>
+    cellImagesInJSON(Table.config.parseMarkdown(token, h)),
   renderMarkdown(node, h, context) {
     const cellHelpers = {
       ...h,
@@ -370,6 +380,7 @@ const extensions = (menus = {}) => [
   TableHeader.extend({ ...CELL, parseHTML: cellParse("th") }),
   CellsStayInline,
   Image.configure({ allowBase64: false }),
+  CellImage.configure({ allowBase64: false }),
   TaskList,
   TaskItem.configure({ nested: true }),
   ...(menus.bubble

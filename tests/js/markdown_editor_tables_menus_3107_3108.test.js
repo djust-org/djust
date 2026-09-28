@@ -333,6 +333,30 @@ describe("#3107 table actions", () => {
     expect(hook.visual.value()).toContain("![im](https://e.com/p.png)");
   });
 
+  it("a cell image is inline: edits beside it keep it (re-review 3)", () => {
+    const { hook } = setup("");
+    const editor = hook.getEditor();
+    const img = "![pic](https://e.com/p.png)";
+    expect(
+      hook.visual.load(`| A | B |\n| --- | --- |\n| x${img}yz | e |`),
+    ).toBe("");
+    let at = null;
+    editor.state.doc.descendants((node, pos) => {
+      if (at === null && node.type.name === "cellImage") at = pos;
+    });
+    expect(at).not.toBeNull();
+    editor.chain().setTextSelection(at).insertContent("L").run();
+    editor
+      .chain()
+      .setTextSelection(at + 2)
+      .insertContent("R")
+      .run();
+    const md = hook.visual.value();
+    expect(md).toContain(`| xL${img}Ryz |`);
+    expect(hook.visual.load(md)).toBe("");
+    expect(hook.visual.value()).toBe(md);
+  });
+
   it("keeps a table inside a list item loose (re-review L12)", () => {
     const { hook } = setup("");
     const src = "- item\n\n  | A | B |\n  | --- | --- |\n  | x | y |\n\n- next";
