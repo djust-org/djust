@@ -1232,12 +1232,16 @@ class LiveViewWebSocket {
             this.stats.connectedAt = Date.now();
         };
 
-        this.ws.onclose = (_event) => {
+        this.ws.onclose = (event) => {
             // A navigation disconnect clears this.ws before the close event.
             // Its callback must not touch a subsequent mount's global state.
             if (this.ws !== socket) return;
             if (globalThis.djustDebug) console.log('[LiveView] WebSocket disconnected');
             this.viewMounted = false;
+            const authRefused = event.code === 4401 || event.code === 4403;
+            // Disable before notifying hooks: a refused session must not retry
+            // the socket, host-root path, or SSE transport (#3265).
+            if (authRefused) this.enabled = false;
 
             // Connection state CSS classes
             document.body.classList.add('dj-disconnected');
@@ -1259,7 +1263,7 @@ class LiveViewWebSocket {
             // exactly as it was before this PR. If the POST wins, the edit
             // survives. Neither ordering corrupts client state, so the
             // recovery is worth the extra request.
-            if (this._intentionalDisconnect) cancelPendingRateLimits();
+            if (this._intentionalDisconnect || authRefused) cancelPendingRateLimits();
             else flushPendingRateLimits();
 
             // Phase 3: Optimistic updates
@@ -1276,6 +1280,21 @@ class LiveViewWebSocket {
             // Skip reconnection logic if this was an intentional disconnect (TurboNav)
             if (this._intentionalDisconnect) {
                 this._intentionalDisconnect = false;
+                return;
+            }
+
+            if (authRefused) {
+                // No automatic HTTP replay of pending edits after auth refusal.
+                // Discard detached views that belong to the refused session.
+                if (window.djust && window.djust.stickyPreserve && window.djust.stickyPreserve.clearStash) {
+                    window.djust.stickyPreserve.clearStash();
+                }
+                document.body.removeAttribute('data-dj-reconnect-attempt');
+                document.body.style.removeProperty('--dj-reconnect-attempt');
+                this._removeReconnectBanner();
+                window.dispatchEvent(new CustomEvent('djust:auth-refused', {
+                    detail: { code: event.code, reason: event.reason || '' }
+                }));
                 return;
             }
 
@@ -1355,6 +1374,7 @@ class LiveViewWebSocket {
         };
 
         this.ws.onmessage = (event) => {
+            if (this.ws !== socket) return;
             try {
                 // Track received message (Phase 2.1: WebSocket Inspector)
                 const messageBytes = event.data.length;
@@ -1382,10 +1402,10 @@ class LiveViewWebSocket {
                     // ``.catch`` that already logs and swallows. The
                     // returned promise never rejects, so we just ignore it.
                     setTimeout(() => {
-                        this.handleMessage(data);
+                        this.handleMessage(data, socket);
                     }, actual);
                 } else {
-                    this.handleMessage(data);
+                    this.handleMessage(data, socket);
                 }
             } catch (error) {
                 console.error('[LiveView] Failed to parse message:', error);
@@ -1407,7 +1427,9 @@ class LiveViewWebSocket {
      * callers may ignore it. Errors propagate through `.catch()` to
      * preserve unhandled-rejection visibility.
      */
-    handleMessage(data) {
+    handleMessage(data, socket = this.ws) {
+        // A debug-latency callback may arrive after this connection is replaced.
+        if (this.ws !== socket) return Promise.resolve();
         // Strip inbound copies of client-owned frame flags (#2829). One shared
         // helper, called at each transport's inbound entry — SSE and the HTTP
         // fallback call it too, so this is not the only choke point and must
@@ -1416,7 +1438,13 @@ class LiveViewWebSocket {
         _recordParameterContractFrame(this, data);
         const prev = this._inflight || Promise.resolve();
         const next = prev
-            .then(() => this._handleMessageImpl(data))
+            .then(() => {
+                // Recheck after the queue wait as navigation/reconnect can replace
+                // the socket meanwhile. A CLOSED but still-current auth socket
+                // must retain its queued login redirect (#3265).
+                if (this.ws !== socket) return;
+                return this._handleMessageImpl(data);
+            })
             .catch((err) => {
                 console.error('[LiveView] handleMessage threw:', err);
             });
@@ -2044,6 +2072,17 @@ class LiveViewWebSocket {
                     this.lastTriggerElement = null;
                 }
                 break;
+
+            case 'navigate': {
+                // Auth redirects use the same URL policy as the SSE transport.
+                const navTarget = window.djust.safeNavigationTarget(data.to);
+                if (navTarget) {
+                    window.location.href = navTarget; // codeql[js/xss] -- validated via safeNavigationTarget
+                } else if (globalThis.djustDebug) {
+                    console.warn('[LiveView] navigate target rejected: %s', String(data.to));
+                }
+                break;
+            }
 
             case 'navigation':
                 // Server-side live_patch or live_redirect

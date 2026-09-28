@@ -948,3 +948,24 @@ it('#2705 a timer armed on view A cannot fire in the window between live_redirec
     expect(sent).toHaveLength(0);   // pre-fix / reply-only reset: 1, routed to view B
     expect(http).toHaveLength(0);
 });
+
+it.each([4401, 4403])('#3265 auth close %i cancels pending edits without HTTP replay', async code => {
+    const { dom, window, sent, clock, http } = createHarness({search: {debounce: {wait: 5}}});
+    try {
+        window.document.cookie = 'csrftoken=token3265';
+        await window.djust.handleEvent('search', {query: 'private-edit'});
+        const client = window.djust.liveViewInstance;
+        const refused = [];
+        window.addEventListener('djust:auth-refused', event => refused.push(event.detail.code));
+        client.ws.readyState = 3;
+        client.ws.onclose({code});
+        clock.advance(10_000);
+        expect(http).toHaveLength(0);
+        expect(sent).toHaveLength(0);
+        expect(client.enabled).toBe(false);
+        expect(client.reconnectAttempts).toBe(0);
+        expect(refused).toEqual([code]);
+    } finally {
+        dom.window.close();
+    }
+});
