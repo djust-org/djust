@@ -960,13 +960,11 @@ class Transport(Protocol):
     def uses_actors(self, view: Any) -> bool:
         """Return whether this event turn must be handled by the actor system.
 
-        ADR-022 Iter 2 Phase 2.3a (#1901). The WS bespoke event handler routes a
-        top-level event through the per-session Rust actor whenever the consumer
-        mounted in actor mode (``use_actors=True`` + a created ``actor_handle``).
-        ``dispatch_event`` historically had NO actor branch — so once Phase 2.3b
-        flips WS events onto the runtime, a ``use_actors`` view's events would
-        silently run the handler IN-PROCESS via the normal render path, desyncing
-        the actor's server-side diff baseline. This hook closes that gap.
+        ADR-022 Iter 2 Phase 2.3a (#1901). WS routes a top-level event through
+        the per-session Rust actor whenever the consumer mounted in actor mode
+        (``use_actors=True`` + a created ``actor_handle``). This hook lets
+        ``dispatch_event`` select that actor path and preserve the actor's
+        server-side diff baseline.
 
         - WS: ``consumer.use_actors and consumer.actor_handle is not None`` — the
           exact precondition of the bespoke actor block (websocket.py:3282).
@@ -974,8 +972,8 @@ class Transport(Protocol):
           ``use_actors`` mounts outright (``dispatch_mount`` guard,
           runtime.py:602), so the actor branch is never reachable on SSE.
 
-        DORMANT until Phase 2.3b: WS events still run on the bespoke handler and
-        SSE refuses actors, so no live event turn reaches this hook yet.
+        Live for WS events since Phase 2.3b (#1907): ``dispatch_event`` checks
+        this hook before selecting the actor path. SSE still refuses actors.
         """
         return False
 
@@ -1049,16 +1047,13 @@ class Transport(Protocol):
         return True
 
     # ------------------------------------------------------------------ #
-    # Mount hooks (ADR-022 Iter 3 Phase 3.2 — DORMANT scaffolding, #1915)
+    # Mount hooks (ADR-022 Iter 3 Phase 3.2, #1915)
     #
-    # The 5 hooks below define the transport seam the Phase 3.3b WS-mount
-    # flip needs, mirroring how Phase 2.3a defined the event hooks
-    # (``event_context`` / ``on_event_recorded`` / ``dispatch_actor_event``)
-    # DORMANT before the event flip wired + routed them. They are NOT called
-    # by ``dispatch_mount`` yet — Phase 3.3a wires them in. Until then
-    # ``handle_mount`` keeps doing all of this inline (untouched), and the
-    # runtime/SSE mount path is unaffected because every Protocol default
-    # below is a behaviour-preserving no-op (or the existing refusal).
+    # Phase 3.3a (#1917) wired these hooks into ``dispatch_mount``; Phase 3.3b
+    # (#1919) routed WS mounts through it. ``LiveViewConsumer.RUNTIME_OWNED_VERBS``
+    # includes "mount", and ``handle_mount`` delegates direct callers to the
+    # same runtime path. WS implements consumer-specific behavior; SSE keeps
+    # its no-op / raw-version / actor-refusal behavior.
     # ------------------------------------------------------------------ #
 
     def on_view_instantiated(self, view: Any) -> None:
@@ -1080,20 +1075,17 @@ class Transport(Protocol):
         - SSE: a no-op — SSE has no consumer to back-reference; its identity
           stamp already lands in :meth:`on_view_mounted`.
 
-        DORMANT until Phase 3.3a: ``dispatch_mount`` does not call this yet, and
-        the WS bespoke ``handle_mount`` keeps stamping these attrs inline.
+        Live in ``dispatch_mount`` since Phase 3.3a (#1917), including WS
+        mounts since Phase 3.3b (#1919).
         """
 
     def uses_actors_for_mount(self, view: Any) -> bool:
         """Return whether this MOUNT must be driven through the actor system.
 
-        ADR-022 Iter 3 Phase 3.2 (#1915, Finding D — actor mount is actively
-        REFUSED by the runtime today (``dispatch_mount`` raises a structured
-        ``use_actors is not supported over SSE`` error, runtime.py:1175). Once
-        Phase 3.3b flips WS mounts onto the runtime, a ``use_actors`` WS view
-        must instead be mounted through the actor system, NOT refused. This hook
-        + :meth:`dispatch_actor_mount` close that gap; the runtime keeps
-        refusing on SSE.
+        ADR-022 Iter 3 Phase 3.2 (#1915, Finding D). ``dispatch_mount`` uses
+        this hook to admit WS actor mounts and :meth:`dispatch_actor_mount`
+        to mount them through the actor system. SSE still returns ``False``,
+        so the runtime refuses ``use_actors`` mounts over SSE.
 
         - WS: ``getattr(view, "use_actors", False) and create_session_actor is
           not None`` — the exact precondition of the bespoke actor block
@@ -1101,8 +1093,8 @@ class Transport(Protocol):
         - SSE: ``False`` — SSE has no bidirectional actor channel; the mount-time
           refusal stays.
 
-        DORMANT until Phase 3.3a: WS mounts still run on the bespoke handler and
-        the runtime/SSE path still hits the refusal at runtime.py:1175.
+        Wired in Phase 3.3a (#1917); live WS mounts use this gate since the
+        Phase 3.3b mount flip (#1919).
         """
         return False
 
@@ -1140,11 +1132,11 @@ class Transport(Protocol):
         ``rust_version`` is the raw ``render_with_diff()`` version (SSE's source);
         it mirrors :meth:`next_client_version`'s second arg so the runtime can hand
         every transport the same inputs. WS ignores it (returns the consumer
-        counter); SSE returns it unchanged. The default keeps the Phase-3.2
-        single-arg callers (the dormant tests) working.
+        counter); SSE returns it unchanged. The default preserves compatibility
+        with single-argument callers.
 
         - WS: returns ``consumer._next_version()`` — the no-arm counter the
-          bespoke ``handle_mount`` uses (websocket.py:2746). It does NOT call
+          mount path uses. It does NOT call
           ``_next_version_armed`` / ``_arm_recovery``, so ``_recovery_html`` stays
           ``None`` after a mount.
         - SSE: returns ``rust_version`` (the raw Rust ``render_with_diff()``
@@ -1177,7 +1169,8 @@ class Transport(Protocol):
           not the mount HTML).
         - SSE: returns ``html`` unchanged (no sticky / live_redirect surface).
 
-        DORMANT until Phase 3.3a: ``handle_mount`` keeps the sticky block inline.
+        Live in ``dispatch_mount`` since Phase 3.3a (#1917); WS sticky
+        preservation runs here since the Phase 3.3b mount flip (#1919).
         """
         return html
 
@@ -1188,9 +1181,9 @@ class Transport(Protocol):
         The runtime's ``_check_auth`` / ``run_on_mount_hooks`` paths already SEND
         the verdict frame in the runtime's shape (``{type:error, error:...}`` for
         a permission denial, ``{type:navigate, to:...}`` for a login/hook
-        redirect) and clear ``view_instance``. What the runtime path is MISSING
-        vs the WS bespoke ``handle_mount`` is the transport-level socket
-        ``close(4403)`` (websocket.py:2337-2401). This hook adds it.
+        redirect) and clear ``view_instance``. The runtime's
+        ``_finalize_mount_auth`` invokes this hook to apply the WS-specific
+        socket ``close(4403)`` after sending the verdict frame.
 
         ``verdict`` is a marker describing the kind of block. The two redirect
         verdicts (login-redirect at websocket.py:2347-2370 and the
@@ -1208,8 +1201,8 @@ class Transport(Protocol):
           verdict frame (error / navigate) the runtime already sent is the
           SSE-side finalization. A no-op here.
 
-        DORMANT until Phase 3.3a: ``handle_mount`` keeps doing the
-        verdict→frame→close inline; ``dispatch_mount`` does not call this yet.
+        Wired through ``_finalize_mount_auth`` in Phase 3.3a (#1917); live WS
+        mounts use it since the Phase 3.3b mount flip (#1919).
         """
 
     @property
@@ -2014,10 +2007,13 @@ class WSConsumerTransport:
         and return ``False``. On success or any error (fail-safe): return ``True``.
 
         Gated on ``reauth_on_event`` + ``login_required``/``permission_required``
-        so default views never pay the session read. DORMANT until Phase 2.3b for
-        live WS events (WS events still run on the bespoke handler today); the WS
-        bespoke handler keeps its own inline copy until the flip — this is the
-        runtime port for when WS events route through ``dispatch_event``.
+        so default views never pay the session read. Live since Phase 2.3b
+        (#1907): ``LiveViewConsumer.RUNTIME_OWNED_VERBS`` routes ``event`` frames
+        through ``dispatch_message`` → ``dispatch_event``; direct ``handle_event``
+        calls also delegate to ``dispatch_event``. Its event body invokes this
+        hook for legacy-exposure views before actor routing or normal handler
+        dispatch. ``check_view_auth_lightweight`` delegates to ``check_view_auth``,
+        including an overridden ``check_permissions(request)`` hook.
         """
         from .config import config as djust_config
 
@@ -2066,10 +2062,10 @@ class WSConsumerTransport:
         return await sync_to_async(fresh_socket_request)(view)
 
     # ------------------------------------------------------------------ #
-    # Mount hooks (ADR-022 Iter 3 Phase 3.2 — DORMANT, #1915)
-    # WS implementations. Each encapsulates the verbatim bespoke
-    # ``handle_mount`` logic for the cited site so Phase 3.3a can wire them
-    # into ``dispatch_mount`` with no behaviour change. NOT called yet.
+    # Mount hooks (ADR-022 Iter 3 Phase 3.2, #1915)
+    # WS implementations extracted from the former bespoke ``handle_mount``.
+    # Wired into ``dispatch_mount`` in Phase 3.3a (#1917), and live for WS
+    # mounts since Phase 3.3b (#1919).
     # ------------------------------------------------------------------ #
 
     def on_view_instantiated(self, view: Any) -> None:
@@ -2586,7 +2582,7 @@ class SSESessionTransport:
         return request
 
     # ------------------------------------------------------------------ #
-    # Mount hooks (ADR-022 Iter 3 Phase 3.2 — DORMANT, #1915)
+    # Mount hooks (ADR-022 Iter 3 Phase 3.2, #1915; wired in Phase 3.3a, #1917)
     # SSE implementations: no-op / raw / refuse. SSE has no consumer to
     # back-reference, no actor channel, no sticky/live_redirect surface, and
     # no persistent socket to close — so these preserve SSE behaviour exactly.
@@ -4062,9 +4058,9 @@ class ViewRuntime:
         event on a ``use_actors`` view goes through the actor, not component
         routing; only a ``view_id`` resolving to a different child excludes it.
 
-        DORMANT until Phase 2.3b: ``uses_actors`` is ``False`` for both live
-        transports today (WS events still run on the bespoke handler; SSE refuses
-        actor mounts), so this branch changes NO live behavior.
+        Live for WS actor events since Phase 2.3b (#1907). WS reports the
+        consumer's actor mode through ``uses_actors``; SSE returns ``False``
+        and continues to refuse actor mounts.
         """
         if not self.view_instance:
             await self.transport.send_error("View not mounted. Please reload the page.")
@@ -4120,7 +4116,7 @@ class ViewRuntime:
             await self.transport.dispatch_actor_event(
                 self.view_instance,
                 # frame-dynamic: forwarded verbatim like the WS bespoke actor block;
-                # the actor handler validates the name downstream (dormant path today)
+                # the actor handler validates the name downstream
                 event_name,  # type: ignore[arg-type]
                 params,
                 event_ref=event_ref,
@@ -7372,7 +7368,7 @@ class ViewRuntime:
     # push through ``self.transport.send`` so they are wire-blind.
     #
     # Reached via ``dispatch_event`` for BOTH transports now: SSE since Iter 1,
-    # and WS since #1907 THE FLIP (RUNTIME_OWNED_VERBS = {"url_change", "event"}).
+    # and WS since #1907 THE FLIP ("event" joined ``RUNTIME_OWNED_VERBS``).
     # A WS event's ``start_async`` / ``@background`` work therefore dispatches
     # through THIS runtime helper (which pushes via ``self.transport.send`` →
     # ``consumer.send_json``, wire-blind) rather than the consumer's own
