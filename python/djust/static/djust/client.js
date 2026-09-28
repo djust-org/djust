@@ -1374,6 +1374,7 @@ class LiveViewWebSocket {
         };
 
         this.ws.onmessage = (event) => {
+            if (this.ws !== socket) return;
             try {
                 // Track received message (Phase 2.1: WebSocket Inspector)
                 const messageBytes = event.data.length;
@@ -1401,10 +1402,10 @@ class LiveViewWebSocket {
                     // ``.catch`` that already logs and swallows. The
                     // returned promise never rejects, so we just ignore it.
                     setTimeout(() => {
-                        this.handleMessage(data);
+                        this.handleMessage(data, socket);
                     }, actual);
                 } else {
-                    this.handleMessage(data);
+                    this.handleMessage(data, socket);
                 }
             } catch (error) {
                 console.error('[LiveView] Failed to parse message:', error);
@@ -1426,7 +1427,9 @@ class LiveViewWebSocket {
      * callers may ignore it. Errors propagate through `.catch()` to
      * preserve unhandled-rejection visibility.
      */
-    handleMessage(data) {
+    handleMessage(data, socket = this.ws) {
+        // A debug-latency callback may arrive after this connection is replaced.
+        if (this.ws !== socket) return Promise.resolve();
         // Strip inbound copies of client-owned frame flags (#2829). One shared
         // helper, called at each transport's inbound entry — SSE and the HTTP
         // fallback call it too, so this is not the only choke point and must
@@ -1435,7 +1438,13 @@ class LiveViewWebSocket {
         _recordParameterContractFrame(this, data);
         const prev = this._inflight || Promise.resolve();
         const next = prev
-            .then(() => this._handleMessageImpl(data))
+            .then(() => {
+                // Recheck after the queue wait as navigation/reconnect can replace
+                // the socket meanwhile. A CLOSED but still-current auth socket
+                // must retain its queued login redirect (#3265).
+                if (this.ws !== socket) return;
+                return this._handleMessageImpl(data);
+            })
             .catch((err) => {
                 console.error('[LiveView] handleMessage threw:', err);
             });

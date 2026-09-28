@@ -119,6 +119,50 @@ describe('#3265 authentication refusal', () => {
         expect(h.window.location.href).toBe(target);
     });
 
+    it.each(['reconnect', 'navigation'])('drops a queued old-socket redirect after %s', async mode => {
+        const h = harness();
+        h.client.connect();
+        let release;
+        h.client._inflight = new Promise(resolve => { release = resolve; });
+        h.client.ws.onmessage({ data: JSON.stringify({ type: 'navigate', to: '/old-login/' }) });
+        if (mode === 'navigation') h.client.disconnect();
+        else h.client.ws.readyState = 3;
+        h.client.connect();
+        release();
+        await h.client._inflight;
+        expect(h.window.location.href).toBe('');
+        await h.receive({ type: 'navigate', to: '/current-login/' });
+        expect(h.window.location.href).toBe('/current-login/');
+    });
+
+    it('ignores an old socket callback before parsing or recording the frame', async () => {
+        const h = harness();
+        h.client.connect();
+        const old = h.client.ws;
+        old.readyState = 3;
+        h.client.connect();
+        old.onmessage({ data: JSON.stringify({ type: 'navigate', to: '/old-login/' }) });
+        await h.client._inflight;
+        expect(h.client.stats.received).toBe(0);
+        expect(h.window.location.href).toBe('');
+        expect(h.console.error).not.toHaveBeenCalled();
+    });
+
+    it('drops an old socket frame held by debug latency before enqueue', async () => {
+        const h = harness();
+        h.window.DEBUG_MODE = true;
+        h.window.djust._simulatedLatency = 100;
+        h.client.connect();
+        h.client.ws.onmessage({ data: JSON.stringify({ type: 'navigate', to: '/old-login/' }) });
+        expect(h.timers).toHaveLength(1);
+        h.client.ws.readyState = 3;
+        h.client.connect();
+        h.timers.shift()();
+        await h.client._inflight;
+        expect(h.window.location.href).toBe('');
+        expect(h.console.error).not.toHaveBeenCalled();
+    });
+
     it('still applies a queued auth redirect when close arrives before its drain', async () => {
         const h = harness();
         h.client.connect();
