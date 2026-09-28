@@ -4761,6 +4761,20 @@ class ViewRuntime:
         view = self.view_instance
         if view is None:  # pragma: no cover — caller guarantees a mounted view
             return
+        # Deferred events have the same commit-before-ack contract as live
+        # events, including handlers that explicitly request no render (#3253).
+        from ._exposure import uses_legacy_exposure
+
+        legacy = uses_legacy_exposure(view)
+        legacy_saved = False
+        snapshot_fields: Dict[str, Any] = {}
+        if not legacy:
+            if not await self.commit_explicit_turn(view, source="event", children=False):
+                return
+            snapshot_fields = await self._explicit_event_snapshot(view)
+        elif getattr(view, "enable_state_snapshot", False):
+            legacy_saved = await self._persist_state_after_event(view, event_name)
+
         # _resolve_skip_render owns the skip decision (#2834/#2847) — the same
         # resolution as dispatch_event / server_push / db_notify / tick. This
         # twin previously read the two flags inline and resolved the collision
@@ -4784,6 +4798,10 @@ class ViewRuntime:
         has_async = bool(async_batch.token)
 
         if skip_render:
+            if not await self._persist_explicit_children_after_event(view):
+                return
+            if not snapshot_fields:
+                snapshot_fields = await self._legacy_noop_snapshot(view, legacy_saved, pre_assigns)
             # (_skip_render was already consumed by _resolve_skip_render —
             # it is the single owner of that reset, #2834/#2847.)
             self._flush_push_events()
@@ -4797,10 +4815,13 @@ class ViewRuntime:
             if has_async:
                 noop_msg["async_pending"] = True
             noop_msg.update(async_batch.fields())
+            noop_msg.update(snapshot_fields)
             await self.transport.send(noop_msg)
             self._dispatch_async_work(event_name, async_batch)
             return
 
+        if not snapshot_fields and legacy:
+            snapshot_fields = await self._legacy_event_snapshot(view)
         await self._render_and_send(
             event_name=event_name,
             has_async=has_async,
@@ -4808,6 +4829,7 @@ class ViewRuntime:
             force_html=force_html,
             event_ref=event_ref,
             scoped_component=_scoped_component_for(view, getattr(view, "_changed_keys", None)),
+            snapshot_fields=snapshot_fields,
         )
         self._dispatch_async_work(event_name, async_batch)
 
@@ -6287,32 +6309,13 @@ class ViewRuntime:
         capture failure revokes the client's token (``None``) rather than
         leaving an older state to be restored; it never breaks the event.
         """
-        from django.conf import settings
+        from .security.state_snapshot import legacy_snapshot_fields
 
-        if not getattr(settings, "DJUST_STATE_SNAPSHOT_ENABLED", True):
-            return {}
-        if not getattr(view, "enable_state_snapshot", False):
-            return {}
-        view_path = getattr(view, "_djust_mount_view_path", None)
-        snapshot_fn = getattr(view, "_capture_snapshot_state", None)
-        if not isinstance(view_path, str) or not view_path or not callable(snapshot_fn):
-            return {}
-        fields: Dict[str, Any] = {"view": view_path, "state_snapshot_signed": None}
-        try:
-            public_state = await sync_to_async(snapshot_fn)(strict=True)
-            if isinstance(public_state, dict) and public_state:
-                from .security import sign_snapshot
-
-                state_json = json.dumps(public_state, sort_keys=True, separators=(",", ":"))
-                fields["state_snapshot_signed"] = sign_snapshot(
-                    state_json, view_path, getattr(view, "_django_session_key", None)
-                )
-        except Exception:  # noqa: BLE001 — snapshot refresh must never break the event
-            logger.warning(
-                "Legacy event snapshot unavailable for %s; cached snapshot invalidated",
-                sanitize_for_log(view_path),
-            )
-        return fields
+        return await sync_to_async(legacy_snapshot_fields)(
+            view,
+            getattr(view, "_djust_mount_view_path", None),
+            getattr(view, "_django_session_key", None),
+        )
 
     async def _explicit_event_snapshot(self, view: Any) -> Dict[str, Any]:
         """Refresh only declared client persistence after an authorized turn.

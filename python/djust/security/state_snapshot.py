@@ -50,7 +50,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Optional, cast
+from typing import Any, Dict, Optional, cast
 
 from django.conf import settings
 from django.core import signing
@@ -245,3 +245,32 @@ def unsign_snapshot(
         return None
 
     return state_json
+
+
+def legacy_snapshot_fields(
+    view: Any, view_path: Optional[str], session_key: Optional[str]
+) -> Dict[str, Any]:
+    """Capture a legacy opt-in token, or explicitly revoke an uncapturable one."""
+    from .._exposure import uses_legacy_exposure
+
+    if not uses_legacy_exposure(view) or not getattr(
+        settings, "DJUST_STATE_SNAPSHOT_ENABLED", True
+    ):
+        return {}
+    if not getattr(view, "enable_state_snapshot", False):
+        return {}
+    snapshot_fn = getattr(view, "_capture_snapshot_state", None)
+    if not isinstance(view_path, str) or not view_path or not callable(snapshot_fn):
+        return {}
+    fields: Dict[str, Any] = {"view": view_path, "state_snapshot_signed": None}
+    try:
+        public_state = snapshot_fn(strict=True)
+        if isinstance(public_state, dict) and public_state:
+            state_json = json.dumps(public_state, sort_keys=True, separators=(",", ":"))
+            fields["state_snapshot_signed"] = sign_snapshot(state_json, view_path, session_key)
+    except Exception:  # noqa: BLE001 — invalidate a stale token without breaking the event
+        logger.warning(
+            "Legacy event snapshot unavailable for %s; cached snapshot invalidated",
+            sanitize_for_log(view_path),
+        )
+    return fields
