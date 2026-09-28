@@ -90,7 +90,7 @@ async def _start(
 
 
 @pytest.fixture
-def blocked_store(monkeypatch):
+async def blocked_store(monkeypatch):
     """Once armed, the next session save blocks until released; a timer
     releases it. Armed after the mount, so only the event's save blocks."""
     release = threading.Event()
@@ -108,9 +108,27 @@ def blocked_store(monkeypatch):
         monkeypatch.setattr(SessionStore, "save", save)
         valve.start()
 
-    yield arm, release, entered
-    release.set()
-    valve.cancel()
+    try:
+        yield arm, release, entered
+    finally:
+        release.set()
+        valve.cancel()
+        # A timed-out save deliberately outlives the POST. Releasing it is
+        # not enough: pytest must not flush the database while that thread
+        # (or its catch-up turn's second save) still writes to the session.
+        # Keep the test loop alive until both finish, including on assertion
+        # failure; cancelling the asyncio wrapper cannot stop a running save.
+        pending = {
+            task
+            for session in _sse_sessions.values()
+            for task in (
+                session.runtime._explicit_save_pending,
+                session.runtime._explicit_catch_up,
+            )
+            if task is not None
+        }
+        if pending:
+            await asyncio.wait_for(asyncio.gather(*pending), VALVE_S * 2)
 
 
 def _body(session):
