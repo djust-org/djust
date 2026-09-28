@@ -342,7 +342,7 @@ describe("#3107 table actions", () => {
     ).toBe("");
     let at = null;
     editor.state.doc.descendants((node, pos) => {
-      if (at === null && node.type.name === "cellImage") at = pos;
+      if (at === null && node.type.name === "image") at = pos;
     });
     expect(at).not.toBeNull();
     editor.chain().setTextSelection(at).insertContent("L").run();
