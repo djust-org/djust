@@ -37,3 +37,28 @@ test("scoped purls are percent-encoded", () => {
   const purls = manifest("components").assets["markdown-visual"].packages.map((p) => p.purl);
   assert.ok(purls.some((p) => p.startsWith("pkg:npm/%40tiptap/core@")), purls.join("\n"));
 });
+
+test("markdown-visual bundles the selection and empty-line menus (#3108)", () => {
+  const text = read("components/static/djust_components/markdown-visual.LICENSE.txt").toString();
+  for (const name of ["@tiptap/extension-bubble-menu", "@tiptap/extension-floating-menu", "@floating-ui/dom"])
+    assert.ok(text.split("\n").includes(name), name);
+  const purls = manifest("components").assets["markdown-visual"].packages.map((p) => p.purl);
+  const version = (name) =>
+    purls.find((p) => p.startsWith(`pkg:npm/${name.replace(/^@/, "%40")}@`))?.split("@").pop();
+  // The menus ship at exactly the @tiptap/core version they were built with.
+  assert.ok(version("@tiptap/core"));
+  assert.equal(version("@tiptap/extension-bubble-menu"), version("@tiptap/core"));
+  assert.equal(version("@tiptap/extension-floating-menu"), version("@tiptap/core"));
+  assert.ok(version("@floating-ui/dom"), purls.join("\n"));
+});
+
+test("every direct vendor dependency is pinned to one exact version", () => {
+  const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url)));
+  for (const [name, spec] of Object.entries({ ...pkg.dependencies, ...pkg.devDependencies }))
+    assert.match(spec, /^\d+\.\d+\.\d+$/, `${name}@${spec}`);
+  const tiptap = Object.entries(pkg.dependencies).filter(([name]) => name.startsWith("@tiptap/"));
+  assert.deepEqual([...new Set(tiptap.map(([, v]) => v))], [pkg.dependencies["@tiptap/core"]]);
+  const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url)));
+  for (const [name, spec] of Object.entries(pkg.dependencies))
+    assert.equal(lock.packages[`node_modules/${name}`].version, spec, name);
+});

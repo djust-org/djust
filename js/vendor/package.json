@@ -8,6 +8,8 @@
   },
   "dependencies": {
     "@tiptap/core": "3.31.3",
+    "@tiptap/extension-bubble-menu": "3.31.3",
+    "@tiptap/extension-floating-menu": "3.31.3",
     "@tiptap/extension-image": "3.31.3",
     "@tiptap/extension-table": "3.31.3",
     "@tiptap/extension-task-item": "3.31.3",

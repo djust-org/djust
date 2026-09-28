@@ -228,9 +228,12 @@ class MarkdownEditorNode(template.Node):
             )
 
         panes = f'<div class="dj-md-editor__panes">{textarea_html}{preview_html}</div>'
+        from djust.components.components.markdown_editor import menu_attrs
+
+        menus = menu_attrs(kw.get("bubble_menu"), kw.get("floating_menu"))
 
         return _safe(
-            f'<div class="{class_str}" dj-hook="MarkdownEditor" data-mode="{mode}">{toolbar_html}{panes}</div>'
+            f'<div class="{class_str}" dj-hook="MarkdownEditor" data-mode="{mode}"{menus}>{toolbar_html}{panes}</div>'
         )
 
 

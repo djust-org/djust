@@ -380,7 +380,22 @@ function destroyAllHooks() {
     _activeHooks.clear();
 }
 
+/**
+ * Public accessor (#3107): the hook instance mounted on `el`, or null.
+ * `el` is an Element or a CSS selector (first match). Returns null for an
+ * element with no mounted hook, including one whose hook was destroyed.
+ * The instance is the same `this` the hook's callbacks receive.
+ */
+function getHook(el) {
+    _ensureHooksInit();
+    if (typeof el === 'string') el = document.querySelector(el);
+    if (!el || !el._djustHookId) return null;
+    const entry = _activeHooks.get(el._djustHookId);
+    return entry && entry.el === el ? entry.instance : null;
+}
+
 // Export to namespace
+window.djust.getHook = getHook;
 window.djust.mountHooks = mountHooks;
 window.djust.beforeUpdateHooks = beforeUpdateHooks;
 window.djust.updateHooks = updateHooks;
