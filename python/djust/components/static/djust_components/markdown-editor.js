@@ -335,6 +335,7 @@
             label + " (visual editor)",
             () => this.updateButtons(),
             { bubble: this.bubble, floating: this.floating },
+            { preserveComments: this.el.dataset.preserveComments === "true" },
           );
           for (const element of [this.bubble, this.floating])
             if (element) element.tabIndex = -1;

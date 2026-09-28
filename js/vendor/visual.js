@@ -1,4 +1,4 @@
-import { Editor, Extension } from "@tiptap/core";
+import { Editor, Extension, Node } from "@tiptap/core";
 import { Plugin, TextSelection } from "@tiptap/pm/state";
 import { DOMParser as PMDOMParser, Fragment, Slice } from "@tiptap/pm/model";
 import StarterKit from "@tiptap/starter-kit";
@@ -15,6 +15,60 @@ import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
 import BubbleMenu from "@tiptap/extension-bubble-menu";
 import FloatingMenu from "@tiptap/extension-floating-menu";
+
+// Comments carry authoring metadata (including application-private markers).
+// Keep their exact source in an atom rather than parsing them as HTML, where
+// ProseMirror would discard them. Only a complete comment is recognized; raw
+// tags and an unfinished <!-- still take the Markdown-only path below.
+const commentTokenizer = (name, level) => ({
+  name,
+  level,
+  start: (source) => {
+    const at = source.indexOf("<!--");
+    if (at < 0 || level === "inline") return at;
+    const lineStart = source.lastIndexOf("\n", at - 1) + 1;
+    return /^[ \t]*$/.test(source.slice(lineStart, at)) ? at : -1;
+  },
+  tokenize(source) {
+    const match = /^<!--[\s\S]*?-->/.exec(source);
+    if (!match) return undefined;
+    return { type: name, raw: match[0], text: match[0] };
+  },
+});
+const commentNode = (name, level) =>
+  Node.create({
+    name,
+    group: level,
+    inline: level === "inline",
+    atom: true,
+    selectable: false,
+    addAttributes: () => ({ source: { default: "" } }),
+    parseHTML: () => [
+      {
+        tag: `[data-dj-md-comment="${level}"]`,
+        getAttrs: (element) => {
+          const source = element.getAttribute("data-source") || "";
+          return /^<!--[\s\S]*?-->$/.test(source) ? { source } : false;
+        },
+      },
+    ],
+    renderHTML: ({ node }) => [
+      level === "inline" ? "span" : "div",
+      {
+        class: "dj-md-comment",
+        "data-dj-md-comment": level,
+        "data-source": node.attrs.source,
+        contenteditable: "false",
+        title: "HTML comment (edit in Markdown mode)",
+      },
+      "HTML comment",
+    ],
+    markdownTokenizer: commentTokenizer(name, level),
+    parseMarkdown: (token) => ({ type: name, attrs: { source: token.raw } }),
+    renderMarkdown: (node) => node.attrs.source,
+  });
+const BlockComment = commentNode("htmlCommentBlock", "block");
+const InlineComment = commentNode("htmlCommentInline", "inline");
 
 // An image inside a table cell. The cell holds one paragraph of inline
 // content, and the ordinary Image is a block node: placed in that paragraph
@@ -43,7 +97,8 @@ const asCellImage = (node, schema) =>
 const cellImagesInJSON = (json, inCell = false) => {
   if (!json || typeof json !== "object") return json;
   if (Array.isArray(json)) return json.map((n) => cellImagesInJSON(n, inCell));
-  const here = inCell || json.type === "tableCell" || json.type === "tableHeader";
+  const here =
+    inCell || json.type === "tableCell" || json.type === "tableHeader";
   const out = { ...json };
   if (here && json.type === "image") out.type = "cellImage";
   if (Array.isArray(json.content))
@@ -371,9 +426,10 @@ const GfmTable = Table.extend({
 // surface (and cover the toolbar), and a menu hides when its anchor scrolls
 // out of the surface.
 const SHIFT = { padding: 8 };
-const extensions = (menus = {}) => [
+const extensions = (menus = {}, preserveComments = false) => [
   StarterKit.configure({ underline: false, link: { openOnClick: false } }),
   Markdown,
+  ...(preserveComments ? [BlockComment, InlineComment] : []),
   TableKit.configure({ table: false, tableCell: false, tableHeader: false }),
   GfmTable,
   TableCell.extend({ ...CELL, parseHTML: cellParse("td") }),
@@ -436,7 +492,7 @@ const supported = new Set([
   "taskList",
   "taskItem",
 ]);
-export function unsupported(editor, source) {
+export function unsupported(editor, source, preserveComments = false) {
   let reason = "";
   const visit = (tokens, inCell = false) => {
     for (const token of tokens || []) {
@@ -444,7 +500,14 @@ export function unsupported(editor, source) {
       // line-break spelling a table row has) and parses back to a hard break.
       const cellBreak =
         inCell && token.type === "html" && /^<br\s*\/?>$/i.test(token.raw);
-      if (!supported.has(token.type) && !cellBreak)
+      if (
+        !supported.has(token.type) &&
+        !(
+          preserveComments &&
+          ["htmlCommentBlock", "htmlCommentInline"].includes(token.type)
+        ) &&
+        !cellBreak
+      )
         reason =
           "This document contains HTML or Markdown extensions that need Markdown mode.";
       if (
@@ -555,11 +618,13 @@ export function createVisual(
   label,
   onSelection = () => {},
   menus = {},
+  options = {},
 ) {
+  const preserveComments = options.preserveComments === true;
   const editor = new Editor({
     element,
     injectCSS: false,
-    extensions: extensions({ boundary: element, ...menus }),
+    extensions: extensions({ boundary: element, ...menus }, preserveComments),
     content: "",
     editorProps: {
       attributes: {
@@ -593,7 +658,7 @@ export function createVisual(
   return {
     editor,
     load(value) {
-      const reason = unsupported(editor, value);
+      const reason = unsupported(editor, value, preserveComments);
       if (reason) return reason;
       editor.commands.setContent(value, {
         contentType: "markdown",

@@ -42,6 +42,12 @@ def menu_attrs(bubble_menu: object = True, floating_menu: object = False) -> str
     return f' data-bubble-menu="{bubble}" data-floating-menu="{floating}"'
 
 
+def comment_attrs(preserve_comments: object = False) -> str:
+    """Enable visual HTML-comment tokens only when explicitly requested."""
+    enabled = "true" if menu_flag(preserve_comments, False) else "false"
+    return f' data-preserve-comments="{enabled}"'
+
+
 class MarkdownEditor(Component):
     """Split-pane markdown editor with live preview.
 
@@ -92,6 +98,8 @@ class MarkdownEditor(Component):
             (default True). It never replaces the browser's context menu.
         floating_menu: show a block menu on an empty line in visual mode
             (default False)
+        preserve_comments: render complete HTML comments as non-editable visual
+            tokens and preserve their source on visual edits (default False)
     """
 
     TOOLBAR_BUTTONS = [
@@ -116,6 +124,7 @@ class MarkdownEditor(Component):
         mode: str = "markdown",
         bubble_menu: bool = True,
         floating_menu: bool = False,
+        preserve_comments: bool = False,
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -131,6 +140,7 @@ class MarkdownEditor(Component):
             mode=mode,
             bubble_menu=bubble_menu,
             floating_menu=floating_menu,
+            preserve_comments=preserve_comments,
             **kwargs,
         )
         if mode not in {"markdown", "visual"}:
@@ -147,6 +157,7 @@ class MarkdownEditor(Component):
         self.custom_class = custom_class
         self.bubble_menu = menu_flag(bubble_menu, True)
         self.floating_menu = menu_flag(floating_menu, False)
+        self.preserve_comments = menu_flag(preserve_comments, False)
 
     def _render_custom(self) -> str:
         classes = ["dj-md-editor"]
@@ -197,4 +208,5 @@ class MarkdownEditor(Component):
         panes = f'<div class="dj-md-editor__panes">{textarea_html}{preview_html}</div>'
 
         menus = menu_attrs(self.bubble_menu, self.floating_menu)
-        return f'<div class="{class_str}" dj-hook="MarkdownEditor" data-mode="{self.mode}"{menus}>{toolbar_html}{panes}</div>'
+        comments = comment_attrs(self.preserve_comments)
+        return f'<div class="{class_str}" dj-hook="MarkdownEditor" data-mode="{self.mode}"{menus}{comments}>{toolbar_html}{panes}</div>'

@@ -45,6 +45,7 @@ rendered fields:
 
 The include also takes `bubble_menu=False` and `floating_menu=True`; see
 [Selection and empty-line menus](#selection-and-empty-line-menus).
+Set `preserve_comments=True` to allow complete HTML comments in Visual mode.
 
 The host must be inside the same semantic form as the field. Keep the usual
 CSRF token and `dj-submit="submit_form"`. Put body last when rendering an entire
@@ -98,6 +99,7 @@ MarkdownEditor(
 | `toolbar=False` | Keep the plain textarea. |
 | `bubble_menu=False` | Turn off the formatting menu over a selection (Visual mode; on by default). |
 | `floating_menu=True` | Add the block menu on an empty line (Visual mode; off by default). |
+| `preserve_comments=True` | Show complete HTML comments as non-editable tokens in Visual mode (off by default). Their exact source is serialized on edits; edit their contents in Markdown mode. |
 
 The template tag takes the same names, e.g.
 `{% markdown_editor name="body" mode="visual" floating_menu=True %}`.
@@ -119,6 +121,11 @@ djust.markdown.render_markdown(..., provisional=False)
   including inserting and editing tables; images already in Markdown can be edited in place.
 - **Unsupported content.** Unsupported HTML, footnotes, directives and
   unsafe/unrecognized URLs stay in Markdown mode with an explanation.
+  With `preserve_comments=True`, complete HTML comments are accepted as
+  non-editable tokens. Other raw HTML and incomplete comments still stay in
+  Markdown mode. The option does not preserve unrelated Markdown spelling
+  after a Visual edit; use Markdown mode when byte-for-byte source fidelity
+  across a whole document is required.
   Raw source is never silently replaced just
   to enter Visual mode. This is a conservative guard, not a claim of universal
   Markdown compatibility; Tiptap's Markdown extension is still beta.
@@ -282,7 +289,7 @@ rendering code.
 | `--dj-md-editor-toolbar-bg` | Toolbar background (`components.css`) |
 | `--dj-font-mono` | Monospace font |
 
-The optional visual bundle is approximately 165 KiB gzip and does not enter the
+The optional visual bundle is approximately 171 KiB gzip and does not enter the
 core djust client. Its pinned MIT dependencies and license notices live with the
 vendored-asset build in `js/vendor/` and the generated static assets.
 
