@@ -179,12 +179,15 @@ that itself rather than relying on which buttons it shows:
   block, rule or nested table in one: not the toolbar, not a keyboard shortcut
   or a Markdown input rule such as `# ` or `---` (these stay literal text),
   not `getEditor()` commands, and not a selection that spans a table (only the
-  blocks around the table change). Pasted blocks land in the cell as text,
-  joined by line breaks. Formatting inside a cell (bold, italic, code, link)
-  works as usual.
-- **Line breaks.** Shift+Enter in a cell is saved as `<br>`, the only line
-  break a table row can hold, and reopens in Visual mode. Raw HTML anywhere
-  else still keeps a document in Markdown mode.
+  blocks around the table change). Formatting inside a cell (bold, italic,
+  code, link) works as usual.
+- **Paste.** Copied cells, or a table copied from a spreadsheet or web page,
+  paste cell by cell into the cells at the caret. Other pasted blocks land in
+  the one cell as text joined by line breaks, and an HTML table whose cells
+  hold several paragraphs keeps one cell per `<td>`.
+- **Line breaks.** Enter or Shift+Enter in a cell inserts a line break, saved
+  as `<br>`, the only line break a table row can hold; it reopens in Visual
+  mode. Raw HTML anywhere else still keeps a document in Markdown mode.
 - **`|` in a cell** is saved as `\|`, so the cell reloads whole.
 - **The header row.** A GFM table always has one. `header-row` is an action,
   not a toggle: it is available only when the first row is not a header, which
@@ -240,6 +243,16 @@ if (editor?.can().addRowAfter()) editor.chain().focus().addRowAfter().run();
 Edits made this way update the native field and fire its input event like any
 other Visual edit. Prefer the built-in actions where they exist, and keep to
 commands whose result is valid Markdown.
+
+**Inside a table cell, block content is refused.** With the caret in a cell,
+a command that would insert a block — `insertContent("<p>a</p><p>b</p>")`, a
+heading, a list, a rule, a table — changes nothing, even though the chain can
+still report `true`. Insert inline content instead, and use `setHardBreak()`
+(saved as `<br>`) for a new line:
+
+```javascript
+editor.chain().focus().insertContent("first").setHardBreak().insertContent("second").run();
+```
 
 ## Theme and contribution development
 
