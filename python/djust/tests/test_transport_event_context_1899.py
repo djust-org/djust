@@ -286,3 +286,116 @@ def test_event_context_is_on_transport_protocol_and_both_adapters():
     # runtime_checkable Protocol membership still holds for both adapters.
     assert isinstance(WSConsumerTransport(_FakeConsumer()), Transport)
     assert isinstance(SSESessionTransport(_FakeSession()), Transport)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("debug, expose", [(True, False), (False, True), (False, False)])
+async def test_concurrent_ws_event_frames_keep_their_own_performance_summary(debug, expose):
+    """Separate consumer locks do not serialize tasks on the same event loop."""
+    from django.test import override_settings
+
+    a_started = asyncio.Event()
+    b_started = asyncio.Event()
+    a_finished = asyncio.Event()
+    frames = {}
+
+    async def first():
+        transport = WSConsumerTransport(_FakeConsumer())
+        try:
+            async with transport.event_context(_FakeView()):
+                PerformanceTracker.get_current().start("session-a")
+                a_started.set()
+                await b_started.wait()
+                frames["a"] = {}
+                transport.on_event_frame(_FakeView(), frames["a"], event_name="a")
+        finally:
+            a_finished.set()
+
+    async def second():
+        await a_started.wait()
+        transport = WSConsumerTransport(_FakeConsumer())
+        async with transport.event_context(_FakeView()):
+            PerformanceTracker.get_current().start("session-b")
+            b_started.set()
+            await a_finished.wait()
+            frames["b"] = {}
+            transport.on_event_frame(_FakeView(), frames["b"], event_name="b")
+
+    with override_settings(DEBUG=debug, DJUST_EXPOSE_TIMING=expose):
+        await asyncio.wait_for(asyncio.gather(first(), second()), timeout=3)
+    if debug or expose:
+        assert frames["a"]["performance"]["timing"]["name"] == "session-a"
+        assert frames["b"]["performance"]["timing"]["name"] == "session-b"
+    else:
+        assert frames == {"a": {}, "b": {}}
+    assert PerformanceTracker.get_current() is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raises", [False, True])
+async def test_nested_ws_context_restores_outer_tracker(raises):
+    outer = WSConsumerTransport(_FakeConsumer())
+    inner = WSConsumerTransport(_FakeConsumer())
+    async with outer.event_context(_FakeView()):
+        prior = PerformanceTracker.get_current()
+        try:
+            async with inner.event_context(_FakeView()):
+                assert PerformanceTracker.get_current() is not prior
+                if raises:
+                    raise ValueError("handler failed")
+        except ValueError:
+            assert raises
+        assert PerformanceTracker.get_current() is prior
+    assert PerformanceTracker.get_current() is None
+
+
+@pytest.mark.asyncio
+async def test_cancelled_ws_context_restores_tracker_and_releases_lock():
+    entered = asyncio.Event()
+    consumer = _FakeConsumer()
+    prior = PerformanceTracker()
+    restored = []
+
+    async def event_turn():
+        PerformanceTracker.set_current(prior)
+        try:
+            async with WSConsumerTransport(consumer).event_context(_FakeView()):
+                entered.set()
+                await asyncio.Event().wait()
+        finally:
+            restored.append(PerformanceTracker.get_current())
+            PerformanceTracker.set_current(None)
+
+    task = asyncio.create_task(event_turn())
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=3)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+    assert restored == [prior]
+    assert not consumer._render_lock.locked()
+    assert not consumer._processing_user_event
+    assert PerformanceTracker.get_current() is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("thread_sensitive", [False, True])
+async def test_tracker_follows_awaited_sync_handler(thread_sensitive):
+    from asgiref.sync import sync_to_async
+
+    from djust.performance import track_performance
+
+    @track_performance("sync-handler")
+    def handler():
+        return PerformanceTracker.get_current()
+
+    async with WSConsumerTransport(_FakeConsumer()).event_context(_FakeView()):
+        tracker = PerformanceTracker.get_current()
+        tracker.start("event")
+        assert await sync_to_async(handler, thread_sensitive=thread_sensitive)() is tracker
+        assert [node.name for node in tracker.root_node.children] == ["sync-handler"]
+    assert PerformanceTracker.get_current() is None

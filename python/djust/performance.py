@@ -7,12 +7,12 @@ timing breakdowns.
 """
 
 import time
-import threading
 import functools
 import importlib.util
 from typing import Any, Callable, Dict, Iterator, List, Optional
 from dataclasses import dataclass, field
 from contextlib import contextmanager
+from contextvars import ContextVar, Token
 
 
 @dataclass
@@ -227,17 +227,26 @@ class MemoryTracker:
 class PerformanceTracker:
     """Main performance tracking coordinator."""
 
-    _thread_local = threading.local()
+    _current: ContextVar[Optional["PerformanceTracker"]] = ContextVar(
+        "djust_performance_tracker", default=None
+    )
 
     @classmethod
     def get_current(cls) -> Optional["PerformanceTracker"]:
-        """Get the current performance tracker for this thread."""
-        return getattr(cls._thread_local, "tracker", None)
+        """Get this context's tracker, including inside awaited sync_to_async calls."""
+        return cls._current.get()
 
     @classmethod
-    def set_current(cls, tracker: Optional["PerformanceTracker"]) -> None:
-        """Set the current performance tracker for this thread."""
-        cls._thread_local.tracker = tracker
+    def set_current(
+        cls, tracker: Optional["PerformanceTracker"]
+    ) -> Token[Optional["PerformanceTracker"]]:
+        """Set this context's tracker and return a token for scoped restoration."""
+        return cls._current.set(tracker)
+
+    @classmethod
+    def reset_current(cls, token: Token[Optional["PerformanceTracker"]]) -> None:
+        """Restore the tracker preceding a matching set_current call."""
+        cls._current.reset(token)
 
     def __init__(self) -> None:
         self.root_node: Optional[TimingNode] = None

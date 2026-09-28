@@ -1710,9 +1710,9 @@ class WSConsumerTransport:
 
         EXIT (``finally``) mirrors websocket.py:4311-4313: reset the origin token,
         clear ``_processing_user_event``, RELEASE the borrowed lock, then close the
-        SQL-capture scope + clear the tracker (the tracker is thread-local and the
-        WS path overwrites it on the next event, so clearing here avoids leaking it
-        across turns on the same worker thread).
+        SQL-capture scope + restore the task-local tracker. Separate consumer
+        tasks cannot overwrite each other's tracker; nested scopes restore the
+        enclosing tracker even on exception or cancellation (#3089).
         """
         consumer = self._consumer
 
@@ -1737,7 +1737,7 @@ class WSConsumerTransport:
         from djust.performance import PerformanceTracker
 
         tracker = PerformanceTracker()
-        PerformanceTracker.set_current(tracker)
+        _tracker_token = PerformanceTracker.set_current(tracker)
 
         _sid = getattr(consumer, "session_id", None)
         # ``capture_for_event`` reads ``handler_name`` at enter, but the runtime
@@ -1764,7 +1764,7 @@ class WSConsumerTransport:
                 await self._sync_push_scopes(view)
         finally:
             sql_scope.__exit__(None, None, None)
-            PerformanceTracker.set_current(None)
+            PerformanceTracker.reset_current(_tracker_token)
             _djust_push.origin_channel.reset(_origin_token)
             consumer._processing_user_event = False
             consumer._render_lock.release()
