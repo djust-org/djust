@@ -158,3 +158,15 @@ def test_attribute_error_recovery_still_exposes_real_names(opening):
     assert RustLiveView(html).render_with_diff()[0].startswith("<main ")
     assert TemplateMixin()._extract_liveview_content(html) == "real"
     assert 'dj-root dj-view="views.Page"' in TemplateMixin._stamp_dj_view(html, "views.Page")
+
+
+def test_unicode_casefold_does_not_make_text_into_an_html_tag():
+    from djust._rust import RustLiveView
+
+    prefix = "<ſection dj-root>fake</ſection>"
+    html = prefix + "<main dj-root>real</main>"
+    assert RustLiveView(html).render_with_diff()[0].startswith("<main ")
+    match = _search_dj_root_open(html, _DJ_ROOT_RE, _DJ_VIEW_RE)
+    assert match.start() == len(prefix)
+    assert TemplateMixin()._extract_liveview_content(html) == "real"
+    assert TemplateMixin._stamp_dj_view(html, "views.Page").startswith(prefix)

@@ -75,7 +75,7 @@ def _root_open_re(tag_name: str, attr: str) -> "re.Pattern[str]":
         + _TAG_BODY_UNIT
         + r"*>"
     )
-    return re.compile(tag_name + closes + body, re.IGNORECASE)
+    return re.compile(tag_name + closes + body, re.IGNORECASE | re.ASCII)
 
 
 _DJ_ROOT_RE = _root_open_re(_ROOT_TAG_NAME, "dj-root")
