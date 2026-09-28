@@ -58,8 +58,7 @@ class DeferredExplicit(DeferredLegacy):
 
 
 @pytest.fixture(autouse=True)
-def settings_for_test(monkeypatch):
-    monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
+def settings_for_test():
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[MOD], DEBUG=False, DJUST_TENANTS=None):
         yield
 
