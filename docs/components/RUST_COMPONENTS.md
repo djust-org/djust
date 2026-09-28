@@ -66,8 +66,9 @@ html = btn.render()
 ```
 
 The supported `djust.components.ui.Button` API does not expose
-`render_with_framework()`. Its Python fallback follows djust's configured CSS
-framework; the current native Rust button renderer emits Bootstrap classes.
+`render_with_framework()`. Both its native Rust renderer and its inline-template
+fallback emit Bootstrap classes. Changing `css_framework` does not change
+those rendering paths.
 
 ## Components
 
