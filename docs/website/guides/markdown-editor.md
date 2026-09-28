@@ -188,9 +188,12 @@ that itself rather than relying on which buttons it shows:
   as text joined by line breaks; a drop goes to the cell under the pointer,
   not the caret. An HTML table whose cells hold several paragraphs keeps one
   cell per `<td>`.
-- **Images in cells** are kept. An `<img>` in a pasted, dropped or loaded HTML
-  cell becomes the same node that `![alt](src)` in a Markdown cell loads to,
-  and is saved as `![alt](src)`.
+- **Images in cells** are inline, like the text around them. `![alt](src)` in
+  a Markdown cell, and an `<img>` in a pasted, dropped or loaded HTML cell,
+  load as an inline image that you can type before and after, and that
+  `getEditor()` can insert text next to. It is saved as `![alt](src)`, and an
+  image dropped into a cell leaves the caret after it. An `<img>` follows the
+  same source rule as any other image (no `data:` URIs).
 - **Line breaks.** Enter or Shift+Enter in a cell inserts a line break, saved
   as `<br>`, the only line break a table row can hold; it reopens in Visual
   mode. Raw HTML anywhere else still keeps a document in Markdown mode.
