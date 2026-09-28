@@ -28,6 +28,7 @@ class Handler:
     def __call__(self, *args):
         return "ok"
     def __del__(self):
+        assert rust.registry_generation() > before_generation
         reenter()
         finished.append(True)
 
@@ -56,6 +57,7 @@ else:
     reenter = lambda: register_fn(lambda *args: None, lambda *args: None)
 
 register(Handler())
+before_generation = rust.registry_generation()
 if action == "replace":
     class Replacement:
         def render(self, *args): return "ok"
@@ -147,3 +149,46 @@ print("churn completed", flush=True)
         pytest.fail(f"registry churn stalled with concurrent GC:\n{exc.stderr}")
     assert result.returncode == 0, result.stdout + result.stderr
     assert "churn completed" in result.stdout
+
+
+@pytest.mark.parametrize("action", ["replace", "remove", "clear"])
+def test_finalizer_compilation_sees_updated_registry(action):
+    """A reentrant compile must not accept a stale cached parse/validator."""
+    script = r"""
+import sys
+import sysconfig
+from djust import _rust as rust
+if sysconfig.get_config_var("Py_GIL_DISABLED"):
+    assert not sys._is_gil_enabled(), "free-threaded native validation requires GIL off"
+source = "{% finalizer_generation_3088 %}"
+seen = []
+class Old:
+    def render(self, *args): return "old"
+    def __del__(self):
+        try:
+            rust.compile_template(source)
+        except Exception:
+            seen.append("rejected")
+        else:
+            seen.append("accepted stale parse")
+class New:
+    def render(self, *args): return "new"
+    def validate_at_parse(self, *args): raise ValueError("new handler refusal")
+rust.register_tag_handler("finalizer_generation_3088", Old())
+rust.compile_template(source)
+if sys.argv[1] == "replace":
+    rust.register_tag_handler("finalizer_generation_3088", New())
+elif sys.argv[1] == "remove":
+    rust.unregister_tag_handler("finalizer_generation_3088")
+else:
+    rust.clear_tag_handlers()
+assert seen == ["rejected"], seen
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script, action],
+        env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])},
+        text=True,
+        capture_output=True,
+        timeout=12,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

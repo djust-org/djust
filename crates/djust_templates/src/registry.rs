@@ -52,7 +52,10 @@ pub(crate) fn bump_registry_generation() {
 /// completed, on every return path including errors. Bumping BEFORE the write
 /// let a concurrent `compile_template` read the new generation, parse against
 /// the still-old registry, and store that stale parse as current
-/// (#2668 review). An extra bump on an error path only costs a re-parse.
+/// (#2668 review). Mutation paths that removed Python objects explicitly
+/// drop this guard after unlocking but BEFORE those objects: finalizers may
+/// re-enter compilation and must observe the new generation (#3088).
+/// An extra bump on an error path only costs a re-parse.
 pub(crate) struct BumpOnReturn;
 
 impl Drop for BumpOnReturn {
@@ -675,6 +678,7 @@ pub fn register_tag_handler(py: Python<'_>, name: String, handler: Py<PyAny>) ->
         },
     );
     drop(registry);
+    drop(_bump); // Publish the mutation before Python finalizers can re-enter.
     drop(removed);
     Ok(())
 }
@@ -691,6 +695,7 @@ pub fn unregister_tag_handler(name: &str) -> PyResult<bool> {
 
     let removed = registry.remove(name);
     drop(registry);
+    drop(_bump);
     Ok(removed.is_some())
 }
 
@@ -724,6 +729,7 @@ pub fn clear_tag_handlers() -> PyResult<()> {
 
     let removed = registry.clear();
     drop(registry);
+    drop(_bump); // Publish the mutation before Python finalizers can re-enter.
     drop(removed);
     Ok(())
 }
@@ -843,6 +849,7 @@ pub fn register_block_tag_handler(
         },
     );
     drop(registry);
+    drop(_bump); // Publish the mutation before Python finalizers can re-enter.
     drop(removed);
     Ok(())
 }
@@ -857,6 +864,7 @@ pub fn unregister_block_tag_handler(name: &str) -> PyResult<bool> {
 
     let removed = registry.remove(name);
     drop(registry);
+    drop(_bump);
     Ok(removed.is_some())
 }
 
@@ -880,6 +888,7 @@ pub fn clear_block_tag_handlers() -> PyResult<()> {
 
     let removed = registry.clear();
     drop(registry);
+    drop(_bump); // Publish the mutation before Python finalizers can re-enter.
     drop(removed);
     Ok(())
 }
@@ -1159,6 +1168,7 @@ pub fn register_assign_tag_handler(
         },
     );
     drop(registry);
+    drop(_bump); // Publish the mutation before Python finalizers can re-enter.
     drop(removed);
     Ok(())
 }
@@ -1172,6 +1182,7 @@ pub fn unregister_assign_tag_handler(name: &str) -> PyResult<bool> {
     })?;
     let removed = registry.remove(name);
     drop(registry);
+    drop(_bump);
     Ok(removed.is_some())
 }
 
@@ -1193,6 +1204,7 @@ pub fn clear_assign_tag_handlers() -> PyResult<()> {
     })?;
     let removed = registry.clear();
     drop(registry);
+    drop(_bump); // Publish the mutation before Python finalizers can re-enter.
     drop(removed);
     Ok(())
 }
@@ -1767,6 +1779,7 @@ pub fn register_library_loader(callable: Py<PyAny>) -> PyResult<()> {
     })?;
     let removed = slot.replace(callable);
     drop(slot);
+    drop(_bump); // Publish the mutation before Python finalizers can re-enter.
     drop(removed);
     Ok(())
 }
@@ -1780,6 +1793,7 @@ pub fn clear_library_loader() -> PyResult<()> {
     })?;
     let removed = slot.take();
     drop(slot);
+    drop(_bump); // Publish the mutation before Python finalizers can re-enter.
     drop(removed);
     Ok(())
 }
@@ -2028,6 +2042,7 @@ pub fn register_raw_block_tag_handler(
         },
     );
     drop(registry);
+    drop(_bump); // Publish the mutation before Python finalizers can re-enter.
     drop(removed);
     Ok(())
 }
@@ -2041,6 +2056,7 @@ pub fn unregister_raw_block_tag_handler(name: &str) -> PyResult<bool> {
     })?;
     let removed = registry.remove(name);
     drop(registry);
+    drop(_bump);
     Ok(removed.is_some())
 }
 
@@ -2062,6 +2078,7 @@ pub fn clear_raw_block_tag_handlers() -> PyResult<()> {
     })?;
     let removed = registry.clear();
     drop(registry);
+    drop(_bump); // Publish the mutation before Python finalizers can re-enter.
     drop(removed);
     Ok(())
 }
@@ -2180,6 +2197,7 @@ pub fn register_translator(
         default_timezone_resolver,
     });
     drop(slot);
+    drop(_bump); // Publish the mutation before Python finalizers can re-enter.
     drop(removed);
     Ok(())
 }
@@ -2193,6 +2211,7 @@ pub fn clear_translator() -> PyResult<()> {
     })?;
     let removed = slot.take();
     drop(slot);
+    drop(_bump); // Publish the mutation before Python finalizers can re-enter.
     drop(removed);
     Ok(())
 }
@@ -2346,6 +2365,7 @@ pub fn register_language_scope_hooks(enter: Py<PyAny>, exit: Py<PyAny>) -> PyRes
     })?;
     let removed = slot.replace((enter, exit));
     drop(slot);
+    drop(_bump); // Publish the mutation before Python finalizers can re-enter.
     drop(removed);
     Ok(())
 }
@@ -2419,6 +2439,7 @@ pub fn register_timezone_scope_hooks(enter: Py<PyAny>, exit: Py<PyAny>) -> PyRes
     })?;
     let removed = slot.replace((enter, exit));
     drop(slot);
+    drop(_bump); // Publish the mutation before Python finalizers can re-enter.
     drop(removed);
     Ok(())
 }

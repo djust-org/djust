@@ -151,6 +151,7 @@ pub fn register_custom_filter(
         },
     );
     drop(registry);
+    drop(_bump); // Publish the mutation before Python finalizers can re-enter.
     drop(removed);
     // Flip the hot-path guard so renderer's ``is_custom_filter_safe`` stops
     // short-circuiting and starts consulting the registry. ``Release``
@@ -172,6 +173,7 @@ pub fn unregister_custom_filter(name: &str) -> PyResult<bool> {
     })?;
     let removed = registry.remove(name);
     drop(registry);
+    drop(_bump);
     Ok(removed.is_some())
 }
 
@@ -195,6 +197,7 @@ pub fn clear_custom_filters() -> PyResult<()> {
     })?;
     let removed = registry.clear();
     drop(registry);
+    drop(_bump); // Publish the mutation before Python finalizers can re-enter.
     drop(removed);
     Ok(())
 }
