@@ -217,4 +217,23 @@ This is a conscious trade-off shared by all LiveView-style frameworks (Phoenix, 
 - Use handler-level `@permission_required` for sensitive operations (checked per event)
 - WebSocket heartbeats will eventually detect stale sessions
 - Set `LIVEVIEW_CONFIG = {"reauth_on_event": True}` to re-run view-level auth (`login_required` / `permission_required`) on every event, at the cost of one session read per event. On failure the client is sent to the login URL and the socket closes with 4403.
+
+WebSocket close codes **4401** and **4403** stop automatic reconnects and transport
+fallback. Pending debounced/throttled edits are cancelled instead of replayed over
+HTTP. A server `navigate` frame redirects through the shared URL validator, which
+accepts same-origin paths and absolute HTTP(S) URLs (including an external login
+provider), and rejects script schemes and unsafe protocol-relative paths.
+
+Applications can listen on `window` for `djust:auth-refused`; its `detail` contains
+`code` and `reason` from the close event. This also covers refusals with no redirect:
+
+```javascript
+window.addEventListener('djust:auth-refused', ({ detail }) => {
+    document.querySelector('#session-status').textContent =
+        detail.code === 4401 ? 'Please sign in again.' : 'Access was refused.';
+});
+```
+
+Reload the page after restoring authentication to establish a new connection.
+
 - For object-level access, use `get_object()` + `has_object_permission()`, which are re-checked on every event (see [Authorization](authorization.md))

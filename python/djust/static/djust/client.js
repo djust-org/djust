@@ -1232,12 +1232,16 @@ class LiveViewWebSocket {
             this.stats.connectedAt = Date.now();
         };
 
-        this.ws.onclose = (_event) => {
+        this.ws.onclose = (event) => {
             // A navigation disconnect clears this.ws before the close event.
             // Its callback must not touch a subsequent mount's global state.
             if (this.ws !== socket) return;
             if (globalThis.djustDebug) console.log('[LiveView] WebSocket disconnected');
             this.viewMounted = false;
+            const authRefused = event.code === 4401 || event.code === 4403;
+            // Disable before notifying hooks: a refused session must not retry
+            // the socket, host-root path, or SSE transport (#3265).
+            if (authRefused) this.enabled = false;
 
             // Connection state CSS classes
             document.body.classList.add('dj-disconnected');
@@ -1259,7 +1263,7 @@ class LiveViewWebSocket {
             // exactly as it was before this PR. If the POST wins, the edit
             // survives. Neither ordering corrupts client state, so the
             // recovery is worth the extra request.
-            if (this._intentionalDisconnect) cancelPendingRateLimits();
+            if (this._intentionalDisconnect || authRefused) cancelPendingRateLimits();
             else flushPendingRateLimits();
 
             // Phase 3: Optimistic updates
@@ -1276,6 +1280,21 @@ class LiveViewWebSocket {
             // Skip reconnection logic if this was an intentional disconnect (TurboNav)
             if (this._intentionalDisconnect) {
                 this._intentionalDisconnect = false;
+                return;
+            }
+
+            if (authRefused) {
+                // No automatic HTTP replay of pending edits after auth refusal.
+                // Discard detached views that belong to the refused session.
+                if (window.djust && window.djust.stickyPreserve && window.djust.stickyPreserve.clearStash) {
+                    window.djust.stickyPreserve.clearStash();
+                }
+                document.body.removeAttribute('data-dj-reconnect-attempt');
+                document.body.style.removeProperty('--dj-reconnect-attempt');
+                this._removeReconnectBanner();
+                window.dispatchEvent(new CustomEvent('djust:auth-refused', {
+                    detail: { code: event.code, reason: event.reason || '' }
+                }));
                 return;
             }
 
@@ -2044,6 +2063,17 @@ class LiveViewWebSocket {
                     this.lastTriggerElement = null;
                 }
                 break;
+
+            case 'navigate': {
+                // Auth redirects use the same URL policy as the SSE transport.
+                const navTarget = window.djust.safeNavigationTarget(data.to);
+                if (navTarget) {
+                    window.location.href = navTarget; // codeql[js/xss] -- validated via safeNavigationTarget
+                } else if (globalThis.djustDebug) {
+                    console.warn('[LiveView] navigate target rejected: %s', String(data.to));
+                }
+                break;
+            }
 
             case 'navigation':
                 // Server-side live_patch or live_redirect
