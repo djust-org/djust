@@ -12,6 +12,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import textwrap
 import threading
 import time
@@ -322,30 +323,110 @@ def test_one_loop_reaching_limit_max_requests_stops_the_process(tmp_path):
     assert out.count("shutdown on djust-loop-") == 2, out
 
 
-def test_a_unix_socket_is_removed_on_exit_so_a_restart_can_bind(tmp_path):
-    import tempfile
+def _uds_restart_cycle(cmd, env, uds, attempt, startup_timeout=20, stop_timeout=20):
+    # A file cannot fill up and block the child while we wait for its socket.
+    with tempfile.TemporaryFile(mode="w+") as log:
+        proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, text=True, env=env)
+        phase = "startup"
+        try:
+            deadline = time.monotonic() + startup_timeout
+            while not os.path.exists(uds):
+                assert proc.poll() is None, "server exited before creating the UNIX socket"
+                assert time.monotonic() < deadline, "server did not create the UNIX socket"
+                time.sleep(0.1)
+            phase = "shutdown"
+            proc.send_signal(signal.SIGTERM)
+            code = proc.wait(timeout=stop_timeout)
+            assert code == 0, f"server exited with status {code}"
+            phase = "socket cleanup"
+            assert not os.path.exists(uds), "the UNIX socket file was left behind"
+        except BaseException as exc:
+            # Reap on failures and interrupts before reading the complete output.
+            if proc.poll() is None:
+                proc.kill()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                phase += " (child still alive after SIGKILL)"
+            if not isinstance(exc, Exception):
+                raise
+            log.seek(0)
+            raise AssertionError(
+                f"UDS restart attempt {attempt}, {phase}: {exc}\n"
+                f"command: {cmd!r}\nreturncode: {proc.returncode}\n"
+                f"subprocess output:\n{log.read()}"
+            ) from exc
 
+
+def test_a_unix_socket_is_removed_on_exit_so_a_restart_can_bind(tmp_path):
     (tmp_path / "mlapp.py").write_text(_APP)
     # AF_UNIX paths are short on macOS: keep the socket out of tmp_path.
-    uds = os.path.join(tempfile.mkdtemp(prefix="ml"), "s.sock")
-    env = {**os.environ, "PYTHONPATH": REPO_PYTHON}
-    env.pop("DJANGO_SETTINGS_MODULE", None)
-    cmd = [
-        sys.executable, "-m", "djust", "serve", "mlapp:app", "--loops", "2",
-        "--uds", uds, "--app-dir", str(tmp_path), "--lifespan", "off", "--allow-gil",
-    ]  # fmt: skip
-    for _ in range(2):  # the second start must bind the same path
-        proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env
+    with tempfile.TemporaryDirectory(prefix="ml") as socket_dir:
+        uds = os.path.join(socket_dir, "s.sock")
+        env = {**os.environ, "PYTHONPATH": REPO_PYTHON}
+        env.pop("DJANGO_SETTINGS_MODULE", None)
+        cmd = [
+            sys.executable, "-m", "djust", "serve", "mlapp:app", "--loops", "2",
+            "--uds", uds, "--app-dir", str(tmp_path), "--lifespan", "off", "--allow-gil",
+        ]  # fmt: skip
+        for attempt in (1, 2):  # the second start must bind the same path
+            _uds_restart_cycle(cmd, env, uds, attempt)
+
+
+@pytest.mark.parametrize(
+    ("child", "expected", "startup_timeout", "stop_timeout"),
+    [
+        ("raise SystemExit(7)", "startup: server exited before", 5, 5),
+        ("time.sleep(60)", "startup: server did not create", 5, 5),
+        (
+            "signal.signal(signal.SIGTERM, lambda *_: sys.exit(9)); path.touch(); time.sleep(60)",
+            "shutdown: server exited with status 9",
+            5,
+            5,
+        ),
+        (
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN); path.touch(); time.sleep(60)",
+            "shutdown:",
+            5,
+            0.3,
+        ),
+        (
+            "signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)); path.touch(); time.sleep(60)",
+            "socket cleanup: the UNIX socket file was left behind",
+            5,
+            5,
+        ),
+    ],
+)
+def test_uds_restart_failure_reports_child_output(
+    tmp_path, child, expected, startup_timeout, stop_timeout
+):
+    uds = tmp_path / "child.sock"
+    pid_file = tmp_path / "child.pid"
+    script = (
+        "import os, signal, sys, time; from pathlib import Path; "
+        f"Path({str(pid_file)!r}).write_text(str(os.getpid())); "
+        "print('intentional child diagnostic', flush=True); "
+        "print('intentional stderr diagnostic', file=sys.stderr, flush=True); "
+        f"path = Path({str(uds)!r}); " + child
+    )
+    with pytest.raises(AssertionError) as failure:
+        _uds_restart_cycle(
+            [sys.executable, "-c", script],
+            os.environ.copy(),
+            str(uds),
+            2,
+            startup_timeout=startup_timeout,
+            stop_timeout=stop_timeout,
         )
-        deadline = time.monotonic() + 20
-        while not os.path.exists(uds) and time.monotonic() < deadline:
-            if proc.poll() is not None:
-                raise AssertionError(proc.stdout.read())
-            time.sleep(0.1)
-        code, out = _stop(proc)
-        assert code == 0, out
-        assert not os.path.exists(uds), "the UNIX socket file was left behind"
+    message = str(failure.value)
+    assert f"UDS restart attempt 2, {expected}" in message
+    assert "subprocess output:\nintentional child diagnostic" in message
+    assert "intentional stderr diagnostic" in message
+    assert "returncode:" in message
+    # Verify the failing child was reaped, including both deadline cases.
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(pid_file.read_text()), 0)
 
 
 def test_the_test_app_fails_exactly_one_startup_under_concurrent_loops(monkeypatch):
