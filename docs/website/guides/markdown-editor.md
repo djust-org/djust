@@ -181,10 +181,16 @@ that itself rather than relying on which buttons it shows:
   not `getEditor()` commands, and not a selection that spans a table (only the
   blocks around the table change). Formatting inside a cell (bold, italic,
   code, link) works as usual.
-- **Paste.** Copied cells, or a table copied from a spreadsheet or web page,
-  paste cell by cell into the cells at the caret. Other pasted blocks land in
-  the one cell as text joined by line breaks, and an HTML table whose cells
-  hold several paragraphs keeps one cell per `<td>`.
+- **Paste and drop.** Copied cells, or a table copied on its own from a
+  spreadsheet or web page, paste cell by cell into the cells at the caret.
+  Anything else pasted or dropped into a cell (several paragraphs, a list, or
+  a Docs/Word selection that mixes text with a table) lands in that one cell
+  as text joined by line breaks; a drop goes to the cell under the pointer,
+  not the caret. An HTML table whose cells hold several paragraphs keeps one
+  cell per `<td>`.
+- **Images in cells** are kept. An `<img>` in a pasted, dropped or loaded HTML
+  cell becomes the same node that `![alt](src)` in a Markdown cell loads to,
+  and is saved as `![alt](src)`.
 - **Line breaks.** Enter or Shift+Enter in a cell inserts a line break, saved
   as `<br>`, the only line break a table row can hold; it reopens in Visual
   mode. Raw HTML anywhere else still keeps a document in Markdown mode.
