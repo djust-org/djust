@@ -302,6 +302,37 @@ describe("#3107 table actions", () => {
     expect(hook.visual.load(md)).toBe("");
   });
 
+  it("pastes Docs/Word paragraphs mixed with a table into the cell (re-review N1)", async () => {
+    const T = "| A | B |\n| --- | --- |\n| x | y |";
+    const { hook, window } = setup(T);
+    const editor = hook.getEditor();
+    editor.commands.setTextSelection(posOf(editor, "x") + 1);
+    editor.view.pasteHTML(
+      "<p>intro</p><table><tr><td>c1</td><td>c2</td></tr></table><p>outro</p>",
+    );
+    await wait(window, 0);
+    const md = hook.visual.value();
+    expect(
+      editor.getJSON().content.filter((n) => n.type === "table").length,
+    ).toBe(1);
+    expect(md).toMatch(/\| xintro<br>c1.*c2.*<br>outro \| y +\|/);
+    expect(hook.visual.load(md)).toBe("");
+  });
+
+  it("keeps an image in an HTML table cell as the Markdown loader does (re-review N3)", () => {
+    const { hook } = setup("");
+    const editor = hook.getEditor();
+    const md = "| A | B |\n| --- | --- |\n| ![im](https://e.com/p.png) | e |";
+    expect(hook.visual.load(md)).toBe("");
+    const fromMarkdown = JSON.stringify(editor.getJSON());
+    editor.commands.setContent(
+      "<table><tr><th>A</th><th>B</th></tr><tr><td><img src='https://e.com/p.png' alt='im'></td><td>e</td></tr></table>",
+      { contentType: "html" },
+    );
+    expect(JSON.stringify(editor.getJSON())).toBe(fromMarkdown);
+    expect(hook.visual.value()).toContain("![im](https://e.com/p.png)");
+  });
+
   it("keeps a table inside a list item loose (re-review L12)", () => {
     const { hook } = setup("");
     const src = "- item\n\n  | A | B |\n  | --- | --- |\n  | x | y |\n\n- next";

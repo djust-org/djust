@@ -85,7 +85,7 @@
       "files": [
         {
           "path": "djust_components/markdown-visual.js",
-          "integrity": "sha384-qsciFVHZ+aFKA4l+wj/c+RfQfHBRSopxpaZ0LoS8kgkkIva1j7/vBPzX0E9ejcsj"
+          "integrity": "sha384-4+1ROVxS2RSYt22p3qFCeVpAQjsAD/2ODnCscFEDUkSaI9Q6S0yjOfTHPNK+WBFH"
         }
       ],
       "license_file": "djust_components/markdown-visual.LICENSE.txt",

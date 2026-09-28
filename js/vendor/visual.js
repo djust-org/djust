@@ -1,5 +1,5 @@
 import { Editor, Extension } from "@tiptap/core";
-import { Plugin } from "@tiptap/pm/state";
+import { Plugin, TextSelection } from "@tiptap/pm/state";
 import { DOMParser as PMDOMParser, Fragment, Slice } from "@tiptap/pm/model";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "@tiptap/markdown";
@@ -59,7 +59,9 @@ function inlineContent(fragment, schema) {
       joinNext = true;
       return false;
     }
-    if (node.isInline) {
+    // Images too: the Markdown loader keeps `![alt](src)` in a cell as an
+    // image inside the cell's paragraph, and this matches it.
+    if (node.isInline || node.type.name === "image") {
       if (joinNext) out.push(schema.nodes.hardBreak.create());
       joinNext = false;
       out.push(node);
@@ -127,6 +129,66 @@ const hasTableNodes = (fragment) => {
   });
   return found;
 };
+// The slice as one paragraph of inline content (or unchanged if it has none).
+function flatSlice(slice, schema) {
+  const inline = inlineContent(slice.content, schema);
+  if (!inline.length) return slice;
+  return new Slice(
+    Fragment.from(schema.nodes.paragraph.create(null, inline)),
+    1,
+    1,
+  );
+}
+// A flattened paragraph holding an image (a block node, placed the way the
+// Markdown loader places `![alt](src)` in a cell) cannot be merged into the
+// cell's paragraph by an ordinary replace, which re-checks that paragraph's
+// content. Replace the whole paragraph instead, as loading Markdown does.
+function insertIntoCell(view, slice, $from, $to) {
+  const para = slice.content.firstChild;
+  if (
+    slice.content.childCount !== 1 ||
+    para.type.name !== "paragraph" ||
+    !inCell($from) ||
+    $from.parent !== $to.parent ||
+    para.content.content.every((node) => node.isInline)
+  )
+    return false;
+  const target = $from.parent;
+  const content = target.content
+    .cut(0, $from.parentOffset)
+    .append(para.content)
+    .append(target.content.cut($to.parentOffset));
+  const tr = view.state.tr.replaceWith(
+    $from.before(),
+    $from.after(),
+    target.type.create(target.attrs, content, target.marks),
+  );
+  const caret = $from.before() + 1 + $from.parentOffset + para.content.size;
+  tr.setSelection(TextSelection.near(tr.doc.resolve(caret)));
+  view.dispatch(tr.scrollIntoView());
+  return true;
+}
+// Mirrors what prosemirror-tables' pastedCells() accepts: after unwrapping
+// single open wrappers (or a lone table), only rows or only cells.
+function isCellSlice(slice) {
+  let { content, openStart, openEnd } = slice;
+  while (
+    content.childCount === 1 &&
+    ((openStart > 0 && openEnd > 0) ||
+      content.child(0).type.spec.tableRole === "table")
+  ) {
+    openStart--;
+    openEnd--;
+    content = content.child(0).content;
+  }
+  if (!content.childCount) return false;
+  const roles = new Set();
+  content.forEach((node) => roles.add(node.type.spec.tableRole || ""));
+  return (
+    roles.size > 0 &&
+    [...roles].every((r) => r === "row" || r === "cell" || r === "header_cell")
+  );
+}
 // Pasted cells take the cell type of the rows they land in: GFM has header
 // cells only in a table's first row, so a copied header row pasted into the
 // body becomes body cells (and body cells pasted into the header row become
@@ -174,6 +236,7 @@ const CellsStayInline = Extension.create({
   addProseMirrorPlugins() {
     let view = null;
     let pastedTableHTML = false;
+    let dropPos;
     return [
       new Plugin({
         view(editorView) {
@@ -214,12 +277,48 @@ const CellsStayInline = Extension.create({
             pastedTableHTML = /<(table|tr|td|th)[\s>]/i.test(html);
             return html;
           },
+          handlePaste(view, event, slice) {
+            const { $from, $to } = view.state.selection;
+            return insertIntoCell(view, slice, $from, $to);
+          },
+          handleDrop(view, event, slice, moved) {
+            if (moved) return false;
+            const pos = view.posAtCoords({
+              left: event.clientX,
+              top: event.clientY,
+            })?.pos;
+            if (pos == null) return false;
+            const $pos = view.state.doc.resolve(pos);
+            return insertIntoCell(view, slice, $pos, $pos);
+          },
+          // A drop lands where the pointer is, not at the selection.
+          handleDOMEvents: {
+            drop(view, event) {
+              dropPos = view.posAtCoords({
+                left: event.clientX,
+                top: event.clientY,
+              })?.pos;
+              return false;
+            },
+          },
           transformPasted(slice, view) {
             const fromTable = pastedTableHTML;
+            const at = dropPos;
             pastedTableHTML = false;
-            if (!inCell(view.state.selection.$from)) return slice;
-            const { $from } = view.state.selection;
-            if (fromTable && hasTableNodes(slice.content))
+            dropPos = undefined;
+            // Cells without table markup were invented by the parser for
+            // text that did not fit a one-paragraph cell: always flatten.
+            if (!fromTable && hasTableNodes(slice.content))
+              return flatSlice(slice, view.state.schema);
+            const $from =
+              at == null
+                ? view.state.selection.$from
+                : view.state.doc.resolve(at);
+            if (!inCell($from)) return slice;
+            // Only a pure cells/table slice is a cell paste the table
+            // extension accepts; Docs/Word mixes of text and a table are
+            // flattened into the cell like any other blocks.
+            if (isCellSlice(slice))
               return new Slice(
                 cellTypesFor(
                   slice.content,
@@ -229,13 +328,7 @@ const CellsStayInline = Extension.create({
                 slice.openStart,
                 slice.openEnd,
               );
-            const inline = inlineContent(slice.content, view.state.schema);
-            if (!inline.length) return slice;
-            const paragraph = view.state.schema.nodes.paragraph.create(
-              null,
-              inline,
-            );
-            return new Slice(Fragment.from(paragraph), 1, 1);
+            return flatSlice(slice, view.state.schema);
           },
         },
       }),
