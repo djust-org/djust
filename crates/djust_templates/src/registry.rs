@@ -24,10 +24,10 @@
 //! - Built-in tags: Zero overhead (native Rust match)
 //! - Custom tags: ~15-50µs per call (GIL acquisition + Python callback)
 
+use crate::registry_scope::RegistryLock;
 use once_cell::sync::Lazy;
 use pyo3::prelude::*;
 use std::collections::{HashMap, HashSet};
-use std::sync::RwLock;
 
 use djust_core::DjangoRustError;
 
@@ -52,7 +52,10 @@ pub(crate) fn bump_registry_generation() {
 /// completed, on every return path including errors. Bumping BEFORE the write
 /// let a concurrent `compile_template` read the new generation, parse against
 /// the still-old registry, and store that stale parse as current
-/// (#2668 review). An extra bump on an error path only costs a re-parse.
+/// (#2668 review). Mutation paths that removed Python objects explicitly
+/// drop this guard after unlocking but BEFORE those objects: finalizers may
+/// re-enter compilation and must observe the new generation (#3088).
+/// An extra bump on an error path only costs a re-parse.
 pub(crate) struct BumpOnReturn;
 
 impl Drop for BumpOnReturn {
@@ -269,7 +272,7 @@ fn as_var_name_str<'py>(py: Python<'py>, text: &str) -> PyResult<Bound<'py, PyAn
 
 /// Global registry mapping tag names to Python handler objects.
 ///
-/// Thread-safe via `RwLock`. Registration is one-time bootstrap; lookup is
+/// Thread-safe via `RegistryLock`. Registration is one-time bootstrap; lookup is
 /// read-only and happens on every render, so concurrent renders share the
 /// read lock. Handlers must implement a `render(args, context)` method
 /// that returns a string.
@@ -278,14 +281,12 @@ fn as_var_name_str<'py>(py: Python<'py>, text: &str) -> PyResult<Bound<'py, PyAn
 ///
 /// `RustLiveView.render_with_diff` renders with its thread DETACHED from the
 /// interpreter, and re-attaches (`Python::attach`) only to call into Python.
-/// So a registry lookup made during a render must take its read lock while
-/// already attached — `Python::attach(|py| { lock.read(); clone_ref(py) })` —
-/// never the other way round. Holding a read guard while waiting to attach
-/// deadlocks on a GIL build: a `register_*` call holds the GIL while it
-/// waits for the write lock, and the detached reader waits for the GIL while
-/// it holds the read lock. Every `Python::attach` that needs a registry entry
-/// in this module and in `filter_registry.rs` follows that order; reads that
-/// never attach (`*_exists`, `is_*`) may run detached.
+/// RegistryLock coordinates contended acquisitions with Python (#3088),
+/// detaching while waiting so GIL builds and free-threaded stop-the-world
+/// pauses can make progress. Lookups that clone Python references attach
+/// around the lookup and clone, then release the guard before calling Python.
+/// Replaced/removed entries are always dropped after releasing the guard:
+/// their finalizers may call back into the same registry.
 static TAG_HANDLERS: Lazy<crate::registry_scope::ScopedMap<TagHandlerEntry>> =
     Lazy::new(crate::registry_scope::ScopedMap::new);
 
@@ -664,7 +665,7 @@ pub fn register_tag_handler(py: Python<'_>, name: String, handler: Py<PyAny>) ->
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
 
-    registry.insert(
+    let removed = registry.insert(
         name,
         TagHandlerEntry {
             handler,
@@ -676,6 +677,9 @@ pub fn register_tag_handler(py: Python<'_>, name: String, handler: Py<PyAny>) ->
             parse_refusal,
         },
     );
+    drop(registry);
+    drop(_bump); // Publish the mutation before Python finalizers can re-enter.
+    drop(removed);
     Ok(())
 }
 
@@ -689,7 +693,10 @@ pub fn unregister_tag_handler(name: &str) -> PyResult<bool> {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
 
-    Ok(registry.remove(name).is_some())
+    let removed = registry.remove(name);
+    drop(registry);
+    drop(_bump);
+    Ok(removed.is_some())
 }
 
 /// Check if a handler is registered for a tag name.
@@ -720,7 +727,10 @@ pub fn clear_tag_handlers() -> PyResult<()> {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
 
-    registry.clear();
+    let removed = registry.clear();
+    drop(registry);
+    drop(_bump); // Publish the mutation before Python finalizers can re-enter.
+    drop(removed);
     Ok(())
 }
 
@@ -825,7 +835,7 @@ pub fn register_block_tag_handler(
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
 
-    registry.insert(
+    let removed = registry.insert(
         name,
         BlockHandlerEntry {
             end_tag,
@@ -838,6 +848,9 @@ pub fn register_block_tag_handler(
             lazy_body,
         },
     );
+    drop(registry);
+    drop(_bump); // Publish the mutation before Python finalizers can re-enter.
+    drop(removed);
     Ok(())
 }
 
@@ -849,7 +862,10 @@ pub fn unregister_block_tag_handler(name: &str) -> PyResult<bool> {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
 
-    Ok(registry.remove(name).is_some())
+    let removed = registry.remove(name);
+    drop(registry);
+    drop(_bump);
+    Ok(removed.is_some())
 }
 
 /// Check if a block tag handler is registered.
@@ -870,7 +886,10 @@ pub fn clear_block_tag_handlers() -> PyResult<()> {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
 
-    registry.clear();
+    let removed = registry.clear();
+    drop(registry);
+    drop(_bump); // Publish the mutation before Python finalizers can re-enter.
+    drop(removed);
     Ok(())
 }
 
@@ -1141,13 +1160,16 @@ pub fn register_assign_tag_handler(
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
 
-    registry.insert(
+    let removed = registry.insert(
         name,
         AssignHandlerEntry {
             handler,
             resolve_positions,
         },
     );
+    drop(registry);
+    drop(_bump); // Publish the mutation before Python finalizers can re-enter.
+    drop(removed);
     Ok(())
 }
 
@@ -1158,7 +1180,10 @@ pub fn unregister_assign_tag_handler(name: &str) -> PyResult<bool> {
     let mut registry = ASSIGN_TAG_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
-    Ok(registry.remove(name).is_some())
+    let removed = registry.remove(name);
+    drop(registry);
+    drop(_bump);
+    Ok(removed.is_some())
 }
 
 /// Check if an assign tag handler is registered.
@@ -1177,7 +1202,10 @@ pub fn clear_assign_tag_handlers() -> PyResult<()> {
     let mut registry = ASSIGN_TAG_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
-    registry.clear();
+    let removed = registry.clear();
+    drop(registry);
+    drop(_bump); // Publish the mutation before Python finalizers can re-enter.
+    drop(removed);
     Ok(())
 }
 
@@ -1734,7 +1762,8 @@ pub fn call_block_handler_with_bindings(
 /// every `{% load %}` in every parse, primary or `{% include %}`d or inside a
 /// `{% block %}` — and the loader imports the Django library and registers
 /// its tags and filters before the parser reaches them.
-static LIBRARY_LOADER: Lazy<RwLock<Option<Py<PyAny>>>> = Lazy::new(|| RwLock::new(None));
+static LIBRARY_LOADER: Lazy<RegistryLock<Option<Py<PyAny>>>> =
+    Lazy::new(|| RegistryLock::new(None));
 
 /// Install the `{% load %}` library loader (#2547).
 ///
@@ -1748,7 +1777,10 @@ pub fn register_library_loader(callable: Py<PyAny>) -> PyResult<()> {
     let mut slot = LIBRARY_LOADER.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
-    *slot = Some(callable);
+    let removed = slot.replace(callable);
+    drop(slot);
+    drop(_bump); // Publish the mutation before Python finalizers can re-enter.
+    drop(removed);
     Ok(())
 }
 
@@ -1759,7 +1791,10 @@ pub fn clear_library_loader() -> PyResult<()> {
     let mut slot = LIBRARY_LOADER.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
-    *slot = None;
+    let removed = slot.take();
+    drop(slot);
+    drop(_bump); // Publish the mutation before Python finalizers can re-enter.
+    drop(removed);
     Ok(())
 }
 
@@ -1997,7 +2032,7 @@ pub fn register_raw_block_tag_handler(
     let mut registry = RAW_BLOCK_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
-    registry.insert(
+    let removed = registry.insert(
         name,
         RawBlockHandlerEntry {
             end_tag,
@@ -2006,6 +2041,9 @@ pub fn register_raw_block_tag_handler(
             wants_autoescape,
         },
     );
+    drop(registry);
+    drop(_bump); // Publish the mutation before Python finalizers can re-enter.
+    drop(removed);
     Ok(())
 }
 
@@ -2016,7 +2054,10 @@ pub fn unregister_raw_block_tag_handler(name: &str) -> PyResult<bool> {
     let mut registry = RAW_BLOCK_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
-    Ok(registry.remove(name).is_some())
+    let removed = registry.remove(name);
+    drop(registry);
+    drop(_bump);
+    Ok(removed.is_some())
 }
 
 /// Check if a raw-block tag handler is registered (#2558).
@@ -2035,7 +2076,10 @@ pub fn clear_raw_block_tag_handlers() -> PyResult<()> {
     let mut registry = RAW_BLOCK_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
-    registry.clear();
+    let removed = registry.clear();
+    drop(registry);
+    drop(_bump); // Publish the mutation before Python finalizers can re-enter.
+    drop(removed);
     Ok(())
 }
 
@@ -2131,7 +2175,7 @@ struct LocaleHooks {
     format_resolver: Option<Py<PyAny>>,
     default_timezone_resolver: Option<Py<PyAny>>,
 }
-static TRANSLATOR: Lazy<RwLock<Option<LocaleHooks>>> = Lazy::new(|| RwLock::new(None));
+static TRANSLATOR: Lazy<RegistryLock<Option<LocaleHooks>>> = Lazy::new(|| RegistryLock::new(None));
 
 /// Install the `_("…")` translator: `callable(%-doubled_msgid) -> str`.
 /// The optional resolver returns format strings for `(name)` and translated
@@ -2147,11 +2191,14 @@ pub fn register_translator(
     let mut slot = TRANSLATOR.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
-    *slot = Some(LocaleHooks {
+    let removed = slot.replace(LocaleHooks {
         translator: callable,
         format_resolver,
         default_timezone_resolver,
     });
+    drop(slot);
+    drop(_bump); // Publish the mutation before Python finalizers can re-enter.
+    drop(removed);
     Ok(())
 }
 
@@ -2162,7 +2209,10 @@ pub fn clear_translator() -> PyResult<()> {
     let mut slot = TRANSLATOR.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
-    *slot = None;
+    let removed = slot.take();
+    drop(slot);
+    drop(_bump); // Publish the mutation before Python finalizers can re-enter.
+    drop(removed);
     Ok(())
 }
 
@@ -2251,8 +2301,8 @@ pub fn resolve_date_part(part: &str, index: u32) -> Option<String> {
 /// names when it bridges the owning library, so an UNLOADED `{% language %}`
 /// still falls through to the `UnsupportedTag` arm exactly as before this
 /// row, and a loaded one parses natively.
-static ARMED_SCOPE_TAGS: Lazy<RwLock<std::collections::HashSet<String>>> =
-    Lazy::new(|| RwLock::new(std::collections::HashSet::new()));
+static ARMED_SCOPE_TAGS: Lazy<RegistryLock<std::collections::HashSet<String>>> =
+    Lazy::new(|| RegistryLock::new(std::collections::HashSet::new()));
 
 /// Arm the native scope tags named here (#2558). Called by the library
 /// loader when it bridges `i18n` / `l10n` / `tz`.
@@ -2303,7 +2353,7 @@ type ScopeHooks = Option<(Py<PyAny>, Py<PyAny>)>;
 /// would be the #1646 parallel path. The exit half runs on the error path
 /// too (the renderer calls it before propagating a child's exception): a
 /// raising child must not leak `de` into the thread's next render.
-static LANGUAGE_SCOPE_HOOKS: Lazy<RwLock<ScopeHooks>> = Lazy::new(|| RwLock::new(None));
+static LANGUAGE_SCOPE_HOOKS: Lazy<RegistryLock<ScopeHooks>> = Lazy::new(|| RegistryLock::new(None));
 
 /// Install the `{% language %}` hooks (#2558): `enter(lang) -> token`,
 /// `exit(token)`.
@@ -2313,7 +2363,10 @@ pub fn register_language_scope_hooks(enter: Py<PyAny>, exit: Py<PyAny>) -> PyRes
     let mut slot = LANGUAGE_SCOPE_HOOKS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
-    *slot = Some((enter, exit));
+    let removed = slot.replace((enter, exit));
+    drop(slot);
+    drop(_bump); // Publish the mutation before Python finalizers can re-enter.
+    drop(removed);
     Ok(())
 }
 
@@ -2374,7 +2427,7 @@ pub fn language_scope_exit(token: Option<&Py<PyAny>>) -> Result<(), DjangoRustEr
 /// The `{% timezone %}` enter/exit hook pair (#2558) — the same shape as the
 /// language hooks: the override lives in Python's `timezone._active`, and
 /// the exit re-pushes the render env so the Rust zone follows.
-static TIMEZONE_SCOPE_HOOKS: Lazy<RwLock<ScopeHooks>> = Lazy::new(|| RwLock::new(None));
+static TIMEZONE_SCOPE_HOOKS: Lazy<RegistryLock<ScopeHooks>> = Lazy::new(|| RegistryLock::new(None));
 
 /// Install the `{% timezone %}` hooks (#2558): `enter(zone_name) -> token`,
 /// `exit(token)`.
@@ -2384,7 +2437,10 @@ pub fn register_timezone_scope_hooks(enter: Py<PyAny>, exit: Py<PyAny>) -> PyRes
     let mut slot = TIMEZONE_SCOPE_HOOKS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
-    *slot = Some((enter, exit));
+    let removed = slot.replace((enter, exit));
+    drop(slot);
+    drop(_bump); // Publish the mutation before Python finalizers can re-enter.
+    drop(removed);
     Ok(())
 }
 

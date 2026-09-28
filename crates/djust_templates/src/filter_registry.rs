@@ -140,7 +140,7 @@ pub fn register_custom_filter(
     let mut registry = FILTER_REGISTRY.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Filter registry lock: {e}"))
     })?;
-    registry.insert(
+    let removed = registry.insert(
         name,
         FilterEntry {
             callable,
@@ -150,6 +150,9 @@ pub fn register_custom_filter(
             },
         },
     );
+    drop(registry);
+    drop(_bump); // Publish the mutation before Python finalizers can re-enter.
+    drop(removed);
     // Flip the hot-path guard so renderer's ``is_custom_filter_safe`` stops
     // short-circuiting and starts consulting the registry. ``Release``
     // pairs with the renderer's ``Acquire`` load to ensure registry
@@ -168,7 +171,10 @@ pub fn unregister_custom_filter(name: &str) -> PyResult<bool> {
     let mut registry = FILTER_REGISTRY.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Filter registry lock: {e}"))
     })?;
-    Ok(registry.remove(name).is_some())
+    let removed = registry.remove(name);
+    drop(registry);
+    drop(_bump);
+    Ok(removed.is_some())
 }
 
 /// Check if a custom filter is registered (intended for tests + diagnostics).
@@ -189,7 +195,10 @@ pub fn clear_custom_filters() -> PyResult<()> {
     let mut registry = FILTER_REGISTRY.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Filter registry lock: {e}"))
     })?;
-    registry.clear();
+    let removed = registry.clear();
+    drop(registry);
+    drop(_bump); // Publish the mutation before Python finalizers can re-enter.
+    drop(removed);
     Ok(())
 }
 

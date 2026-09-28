@@ -1,9 +1,10 @@
 //! Engine-local registry storage. Namespace zero retains the low-level API.
 use pyo3::prelude::*;
+use pyo3::sync::RwLockExt;
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{LockResult, RwLock, RwLockReadGuard, RwLockWriteGuard, TryLockError};
 
 thread_local! { static CURRENT: Cell<u64> = const { Cell::new(0) }; }
 static NEXT: AtomicU64 = AtomicU64::new(1);
@@ -21,11 +22,41 @@ pub fn current() -> u64 {
     CURRENT.with(Cell::get)
 }
 
+/// Registry locks cooperate with Python while waiting for contention. The
+/// PyO3 helpers detach only on a blocking acquisition, allowing both the GIL
+/// and free-threaded stop-the-world pauses to make progress. Pure-Rust users
+/// without an initialized interpreter retain ordinary lock behavior. The
+/// uncontended fast path never attaches, keeping detached render lookups cheap.
+///
+/// Guards must never surround Python calls or the last drop of a Python object.
+pub(crate) struct RegistryLock<T>(RwLock<T>);
+impl<T> RegistryLock<T> {
+    pub fn new(value: T) -> Self {
+        Self(RwLock::new(value))
+    }
+    pub fn read(&self) -> LockResult<RwLockReadGuard<'_, T>> {
+        match self.0.try_read() {
+            Ok(guard) => Ok(guard),
+            Err(TryLockError::Poisoned(error)) => Err(error),
+            Err(TryLockError::WouldBlock) => Python::try_attach(|py| self.0.read_py_attached(py))
+                .unwrap_or_else(|| self.0.read()),
+        }
+    }
+    pub fn write(&self) -> LockResult<RwLockWriteGuard<'_, T>> {
+        match self.0.try_write() {
+            Ok(guard) => Ok(guard),
+            Err(TryLockError::Poisoned(error)) => Err(error),
+            Err(TryLockError::WouldBlock) => Python::try_attach(|py| self.0.write_py_attached(py))
+                .unwrap_or_else(|| self.0.write()),
+        }
+    }
+}
+
 type Maps<V> = HashMap<u64, HashMap<String, V>>;
-pub(crate) struct ScopedMap<V>(RwLock<Maps<V>>);
+pub(crate) struct ScopedMap<V>(RegistryLock<Maps<V>>);
 impl<V> ScopedMap<V> {
     pub fn new() -> Self {
-        Self(RwLock::new(HashMap::new()))
+        Self(RegistryLock::new(HashMap::new()))
     }
     pub fn release(&self, namespace: u64) -> Result<(), String> {
         let removed = self
@@ -101,8 +132,8 @@ impl<V> Write<'_, V> {
             .get_mut(&self.namespace)
             .and_then(|m| m.remove(name))
     }
-    pub fn clear(&mut self) {
-        self.maps.remove(&self.namespace);
+    pub fn clear(&mut self) -> Option<HashMap<String, V>> {
+        self.maps.remove(&self.namespace)
     }
 }
 
@@ -116,5 +147,58 @@ impl NamespaceGuard {
 impl Drop for NamespaceGuard {
     fn drop(&mut self) {
         set_registry_namespace(self.0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{mpsc, Arc};
+    use std::time::Duration;
+
+    fn contended_acquisition_allows_python_progress(write: bool) {
+        Python::initialize();
+        let lock = Arc::new(RegistryLock::new(()));
+        let (held_tx, held_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let owner_lock = Arc::clone(&lock);
+        let owner = std::thread::spawn(move || {
+            // Hold the raw lock in a detached worker. Its release requires a
+            // second worker to attach, modelling GIL/STW cooperation.
+            let _guard = owner_lock.0.write().unwrap();
+            held_tx.send(()).unwrap();
+            // Bound the negative case: a blocking attached reader would hold
+            // the GIL until this timeout releases the lock, failing below.
+            release_rx.recv_timeout(Duration::from_secs(3)).is_ok()
+        });
+        held_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        let releaser = Python::attach(|_| {
+            let releaser = std::thread::spawn(move || {
+                Python::attach(|_| {
+                    let _ = release_tx.send(());
+                });
+            });
+            if write {
+                drop(lock.write().unwrap());
+            } else {
+                drop(lock.read().unwrap());
+            }
+            releaser
+        });
+        releaser.join().unwrap();
+        assert!(
+            owner.join().unwrap(),
+            "registry wait blocked Python progress"
+        );
+    }
+
+    #[test]
+    fn contended_read_allows_python_progress() {
+        contended_acquisition_allows_python_progress(false);
+    }
+
+    #[test]
+    fn contended_write_allows_python_progress() {
+        contended_acquisition_allows_python_progress(true);
     }
 }
