@@ -4655,37 +4655,66 @@ fn find_ci(hay: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
 /// `bytes[i]` starts an ordinary tag. An unterminated region runs to EOF.
 fn skip_raw_text_region(bytes: &[u8], i: usize) -> Option<usize> {
     if bytes[i..].starts_with(b"<!--") {
+        if bytes[i + 4..].starts_with(b">") {
+            return Some(i + 5);
+        }
+        if bytes[i + 4..].starts_with(b"->") {
+            return Some(i + 6);
+        }
+        let mut cursor = i + 4;
+        while cursor < bytes.len() {
+            if bytes[cursor..].starts_with(b"-->") {
+                return Some(cursor + 3);
+            }
+            if bytes[cursor..].starts_with(b"--!>") {
+                return Some(cursor + 4);
+            }
+            cursor += 1;
+        }
+        return Some(bytes.len());
+    }
+    if matches!(bytes.get(i + 1), Some(b'!' | b'?'))
+        || (bytes.get(i + 1) == Some(&b'/')
+            && bytes
+                .get(i + 2)
+                .is_some_and(|c| !c.is_ascii_alphabetic() && *c != b'>'))
+    {
         return Some(
-            find_ci(bytes, i + 4, b"-->")
-                .map(|p| p + 3)
-                .unwrap_or(bytes.len()),
+            bytes[i..]
+                .iter()
+                .position(|&c| c == b'>')
+                .map_or(bytes.len(), |end| i + end + 1),
         );
     }
     for name in [&b"script"[..], &b"style"[..]] {
         let after = i + 1 + name.len();
         if after < bytes.len()
             && starts_with_ci(&bytes[i + 1..], name)
-            && matches!(bytes[after], b' ' | b'\t' | b'\n' | b'\r' | b'/' | b'>')
+            && (html_space(bytes[after]) || matches!(bytes[after], b'/' | b'>'))
         {
-            let Some(open_end) = bytes[i..]
-                .iter()
-                .position(|&c| c == b'>')
-                .map(|p| i + p + 1)
-            else {
+            let Ok(open_end) = find_open_tag_end(bytes, i) else {
                 return Some(bytes.len());
             };
+            let open_end = open_end + 1;
             let mut close = b"</".to_vec();
             close.extend_from_slice(name);
-            let Some(close_start) = find_ci(bytes, open_end, &close) else {
+            let mut search = open_end;
+            let close_start = loop {
+                let Some(candidate) = find_ci(bytes, search, &close) else {
+                    return Some(bytes.len());
+                };
+                if bytes
+                    .get(candidate + close.len())
+                    .is_some_and(|&c| html_space(c) || matches!(c, b'/' | b'>'))
+                {
+                    break candidate;
+                }
+                search = candidate + close.len();
+            };
+            let Ok(close_end) = find_open_tag_end(bytes, close_start) else {
                 return Some(bytes.len());
             };
-            return Some(
-                bytes[close_start..]
-                    .iter()
-                    .position(|&c| c == b'>')
-                    .map(|p| close_start + p + 1)
-                    .unwrap_or(bytes.len()),
-            );
+            return Some(close_end + 1);
         }
     }
     None
@@ -4700,57 +4729,72 @@ fn skip_raw_text_region(bytes: &[u8], i: usize) -> Option<usize> {
 /// twin of the Python `mixins/template.py::_DJ_ROOT_RE` / `_DJ_VIEW_RE`
 /// (#2892, #2981, #1646).
 fn tag_has_root_marker(tag_body: &[u8]) -> bool {
-    const MARKERS: [&[u8]; 2] = [b"dj-root", b"dj-view"];
-    const N: usize = 7; // both markers are 7 bytes
-    let mut p = 0;
-    while p < tag_body.len() {
-        let c = tag_body[p];
-        if c == b'"' || c == b'\'' {
-            // Skip the whole quoted value (to EOF if unterminated).
-            p = tag_body[p + 1..]
-                .iter()
-                .position(|&q| q == c)
-                .map_or(tag_body.len(), |q| p + 1 + q + 1);
-            continue;
-        }
-        if p > 0
-            && tag_body[p - 1].is_ascii_whitespace()
-            && p + N <= tag_body.len()
-            && MARKERS
-                .iter()
-                .any(|m| tag_body[p..p + N].eq_ignore_ascii_case(m))
-            && tag_body
-                .get(p + N)
-                .is_none_or(|&c| c.is_ascii_whitespace() || c == b'=' || c == b'/')
-        {
-            return true;
-        }
-        p += 1;
-    }
-    false
+    scan_tag_body(tag_body, 0).is_some_and(|(_, attrs)| {
+        attrs.iter().any(|&(start, end)| {
+            tag_body[start..end].eq_ignore_ascii_case(b"dj-root")
+                || tag_body[start..end].eq_ignore_ascii_case(b"dj-view")
+        })
+    })
 }
 
-/// The index of the `>` that ends the open tag starting at `bytes[i]` (a
-/// `<`), skipping quoted attribute values so a `>` inside one does not end
-/// the tag. `Err(k)` when an unquoted `<` at `k` comes first (not a tag —
-/// resume there, as the Python pattern's unquoted units exclude `<`);
-/// `Err(len)` at EOF.
-fn find_open_tag_end(bytes: &[u8], i: usize) -> Result<usize, usize> {
-    let mut j = i + 1;
-    while j < bytes.len() {
-        match bytes[j] {
-            b'>' => return Ok(j),
-            b'<' => return Err(j),
-            q @ (b'"' | b'\'') => {
-                j = bytes[j + 1..]
-                    .iter()
-                    .position(|&c| c == q)
-                    .map_or(bytes.len(), |k| j + 1 + k + 1);
+/// HTML attribute states shared by the opening and balancing walks (#3054).
+/// A quote is special only at the start of a value after '='. In unquoted
+/// values and names both quotes and '<' are literal parse errors.
+/// Returns the '>' offset (or EOF) and attribute-name spans.
+fn scan_tag_body(bytes: &[u8], start: usize) -> Option<(usize, Vec<(usize, usize)>)> {
+    let mut i = start;
+    if bytes.get(i) == Some(&b'/') {
+        i += 1;
+    }
+    while i < bytes.len() && !html_space(bytes[i]) && !matches!(bytes[i], b'/' | b'>') {
+        i += 1;
+    }
+    let mut attrs = Vec::new();
+    while i < bytes.len() {
+        while i < bytes.len() && (html_space(bytes[i]) || bytes[i] == b'/') {
+            i += 1;
+        }
+        if i == bytes.len() || bytes[i] == b'>' {
+            break;
+        }
+        let begin = i;
+        i += 1; // an initial '=' is part of an invalid attribute NAME
+        while i < bytes.len() && !html_space(bytes[i]) && !matches!(bytes[i], b'/' | b'>' | b'=') {
+            i += 1;
+        }
+        attrs.push((begin, i));
+        while i < bytes.len() && html_space(bytes[i]) {
+            i += 1;
+        }
+        if bytes.get(i) == Some(&b'=') {
+            i += 1;
+            while i < bytes.len() && html_space(bytes[i]) {
+                i += 1;
             }
-            _ => j += 1,
+            if let Some(&q @ (b'"' | b'\'')) = bytes.get(i) {
+                i += 1;
+                i += bytes[i..].iter().position(|&c| c == q)?;
+                i += 1;
+            } else {
+                while i < bytes.len() && !html_space(bytes[i]) && bytes[i] != b'>' {
+                    i += 1;
+                }
+            }
         }
     }
-    Err(bytes.len())
+    Some((i, attrs))
+}
+
+fn html_space(c: u8) -> bool {
+    matches!(c, b' ' | b'\t' | b'\n' | b'\r' | b'\x0c')
+}
+
+/// Index of the terminating '>', or EOF for an unfinished token.
+fn find_open_tag_end(bytes: &[u8], i: usize) -> Result<usize, usize> {
+    match scan_tag_body(bytes, i + 1) {
+        Some((end, _)) if end < bytes.len() => Ok(end),
+        _ => Err(bytes.len()),
+    }
 }
 
 /// Locate the byte offset in `html` immediately after the opening tag
@@ -4821,7 +4865,7 @@ fn find_root_open(bytes: &[u8]) -> Option<(usize, Vec<u8>)> {
         }
         let name_end = tag_body
             .iter()
-            .position(|&c| c.is_ascii_whitespace() || c == b'/' || c == b'>')
+            .position(|&c| html_space(c) || c == b'/' || c == b'>')
             .unwrap_or(tag_body.len());
         let name = tag_body[..name_end].to_ascii_lowercase();
         // A root on <html>/<head>/<body> is not a root the VDOM's
@@ -4861,13 +4905,7 @@ fn find_root_close(bytes: &[u8], open_end: usize, tag_name: &[u8]) -> Option<usi
             k += 1;
             continue;
         }
-        let mut m = k + 1;
-        while m < bytes.len() && bytes[m] != b'>' {
-            m += 1;
-        }
-        if m >= bytes.len() {
-            return None;
-        }
+        let m = find_open_tag_end(bytes, k).ok()?;
         let tag_body = &bytes[k + 1..m];
         if tag_body.is_empty() || tag_body[0] == b'!' {
             k = m + 1;
@@ -4877,7 +4915,7 @@ fn find_root_close(bytes: &[u8], open_end: usize, tag_name: &[u8]) -> Option<usi
         let name_start = if is_close { 1 } else { 0 };
         let name_end = tag_body[name_start..]
             .iter()
-            .position(|&c| c.is_ascii_whitespace() || c == b'/' || c == b'>')
+            .position(|&c| html_space(c) || c == b'/' || c == b'>')
             .map(|n| name_start + n)
             .unwrap_or(tag_body.len());
         let this_name = tag_body[name_start..name_end].to_ascii_lowercase();
@@ -5591,6 +5629,93 @@ mod dj_root_content_range_2663 {
 
     fn inner(html: &str) -> Option<&str> {
         find_dj_root_content_range(html).map(|(s, e)| &html[s..e])
+    }
+
+    #[test]
+    fn end_tag_attributes_and_self_closing_flag_3054() {
+        for closing in ["</main ignored='>'>", "</main/>"] {
+            let html = format!("<main dj-root>real{closing}<footer>tail</footer>");
+            let root = super::parse_html(&html).unwrap();
+            assert_eq!(root.tag, "main");
+            assert_eq!(root.children.len(), 1);
+            assert_eq!(inner(&html), Some("real"));
+        }
+    }
+
+    #[test]
+    fn html_whitespace_and_comment_error_recovery_3054() {
+        for prefix in [
+            "<script\x0c>\"<div dj-root>fake</div>\"</script>",
+            "<style\x0c>\"<div dj-root>fake</div>\"</style>",
+            "<div\x0bdj-root>fake</div>",
+            "<div\u{00a0}dj-root>fake</div>",
+            "<div a\x0bdj-root>fake</div>",
+            "<div a\u{00a0}dj-root>fake</div>",
+            "<!-->",
+            "<!--->",
+            "<!--x--!>",
+        ] {
+            let html = format!("{prefix}<main dj-root>real</main>");
+            let root = super::parse_html(&html).unwrap();
+            assert_eq!(root.tag, "main", "{html:?}");
+            assert!(root.attrs.contains_key("dj-root"));
+            assert_eq!(inner(&html), Some("real"), "{html:?}");
+        }
+    }
+
+    #[test]
+    fn malformed_attribute_and_comment_recovery_3054() {
+        // parse_html uses the production html5ever tokenizer, independently
+        // checking which tag actually owns the marker after error recovery.
+        for (html, tag, expected) in [
+            (
+                "<div a=b\"<section dj-root>\">inside</div><main dj-root>later</main>",
+                "div",
+                "\">inside",
+            ),
+            (
+                "<?x \"<div dj-root>\" ?><main dj-root>real</main>",
+                "main",
+                "real",
+            ),
+            (
+                "<!bogus \"<div dj-root>\"><main dj-root>real</main>",
+                "main",
+                "real",
+            ),
+        ] {
+            let root = super::parse_html(html).unwrap();
+            assert_eq!(root.tag, tag);
+            assert!(root.attrs.contains_key("dj-root"));
+            assert_eq!(inner(html), Some(expected));
+        }
+    }
+
+    #[test]
+    fn unfinished_tokens_do_not_emit_roots_3054() {
+        for html in [
+            "<p title=\"never><main dj-root>phantom</main>",
+            "<p a=never<main dj-root",
+        ] {
+            assert_eq!(inner(html), None);
+            assert!(!super::parse_html(html)
+                .unwrap()
+                .attrs
+                .contains_key("dj-root"));
+        }
+    }
+
+    #[test]
+    fn close_walk_obeys_attribute_and_bogus_comment_states_3054() {
+        for body in [
+            "<p title=\"> </main> phantom\">real</p>",
+            "<?bogus </main> tail?>real",
+            "<!bogus </main> tail>real",
+        ] {
+            let html = format!("<main dj-root>{body}</main><footer>end</footer>");
+            assert_eq!(inner(&html), Some(body));
+            assert_eq!(super::parse_html(&html).unwrap().tag, "main");
+        }
     }
 
     #[test]

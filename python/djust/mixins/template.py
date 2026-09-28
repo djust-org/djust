@@ -56,7 +56,7 @@ logger = logging.getLogger(__name__)
 # ``crates/djust_live/src/lib.rs::find_dj_root_content_range`` (#1646).
 _QUOTED = r""""[^"]*"|'[^']*'"""
 _TAG_BODY_UNIT = r"""(?:%s|[^'"<>])""" % _QUOTED
-_ROOT_TAG_NAME = r"<(?!(?:html|head|body)(?=[\s/>]))([A-Za-z][A-Za-z0-9-]*)(?=[\s/>])"
+_ROOT_TAG_NAME = r"<(?!(?:html|head|body)(?=[ \t\n\r\f/>]))([A-Za-z][A-Za-z0-9-]*)(?=[ \t\n\r\f/>])"
 
 
 def _root_open_re(tag_name: str, attr: str) -> "re.Pattern[str]":
@@ -67,7 +67,14 @@ def _root_open_re(tag_name: str, attr: str) -> "re.Pattern[str]":
     # tag fails in one linear pass, and in a closed tag the first matching
     # name always succeeds.
     closes = r"(?=" + _TAG_BODY_UNIT + r"*>)"
-    body = _TAG_BODY_UNIT + r"*?(?<=\s)" + attr + r"(?=[\s=>/])" + _TAG_BODY_UNIT + r"*>"
+    body = (
+        _TAG_BODY_UNIT
+        + r"*?(?<=[ \t\n\r\f])"
+        + attr
+        + r"(?=[ \t\n\r\f=>/])"
+        + _TAG_BODY_UNIT
+        + r"*>"
+    )
     return re.compile(tag_name + closes + body, re.IGNORECASE)
 
 
@@ -90,16 +97,7 @@ _DJ_VIEW_RE = _root_open_re(_ROOT_TAG_NAME, "dj-view")
 # Any tag carrying a dj-root / dj-view attribute, INCLUDING the elements the
 # two patterns above exclude. Only used to decide whether a page that yielded
 # no usable root was trying to declare one (``_warn_unmatched_root``).
-_ANY_ROOT_ATTR_RE = _root_open_re(r"<[A-Za-z][A-Za-z0-9-]*(?=[\s/>])", "dj-(?:root|view)")
-
-# Within an open tag already matched above: quoted strings (skipped) or a
-# ``dj-root`` / ``dj-view`` attribute name with its value, if any. Tokenising
-# this way means a ``dj-root``/``dj-view`` inside an attribute value is never
-# mistaken for the attribute (#2981 stamp placement).
-_ROOT_ATTR_TOKEN_RE = re.compile(
-    _QUOTED + r"""|(?<=\s)dj-(root|view)(?=[\s=>/])(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'>]+))?""",
-    re.IGNORECASE,
-)
+_ANY_ROOT_ATTR_RE = _root_open_re(r"<[A-Za-z][A-Za-z0-9-]*(?=[ \t\n\r\f/>])", "dj-(?:root|view)")
 
 # View classes already warned about an unusable root (one warning per class
 # per process — the render path runs on every GET).
@@ -136,86 +134,129 @@ def _mask_raw_text(html: str) -> str:
     return _RAW_TEXT_RE.sub(lambda m: "\x00" * len(m.group(0)), html)
 
 
-#: #3030: after a ``<``, the rest of a tag up to the ``>`` that ends it, a
-#: ``<`` that aborts it, or an unterminated quote — quoted values are skipped
-#: whole, so a ``>`` or ``<`` inside one belongs to the value. Linear: every
-#: unit consumes input and no unit can start another's text.
-_TAG_REST_RE = re.compile(r"""[^<>"']*(?:(?:"[^"]*"|'[^']*')[^<>"']*)*""")
-#: The raw-text openers the Rust walker (``skip_raw_text_region``) knows.
-_RAW_OPEN_RE = re.compile(r"(script|style)[ \t\n\r/>]", re.IGNORECASE)
-_RAW_CLOSE_RES = {name: re.compile(r"</" + name, re.IGNORECASE) for name in ("script", "style")}
+# HTML whitespace (not Python's broader Unicode whitespace class).
+_HTML_SPACE = " \t\n\r\f"
+_COMMENT_CLOSE_RE = re.compile(r"--!?>")
+_RAW_CLOSE_RES = {
+    name: re.compile(r"</" + name + r"(?=[ \t\n\r\f/>])", re.IGNORECASE)
+    for name in ("script", "style")
+}
+
+
+def _scan_html_tag(html: str, start: int) -> "tuple[int, list[tuple[int, int, int, int]]]":
+    """End offset and attribute name/value spans for one tag (#3054).
+
+    Quotes only open values immediately after '=' and optional whitespace.
+    In an unquoted value or attribute name they are literal parse errors.
+    '<' is likewise literal inside a tag; EOF discards an unfinished token.
+    Spans are (name start, name end, value start, attribute end).
+    An end offset of -1 means EOF discarded the unfinished tag.
+    """
+    n = len(html)
+    i = start + 1
+    if i < n and html[i] == "/":
+        i += 1
+    while i < n and html[i] not in _HTML_SPACE + "/>":
+        i += 1
+    attrs: list[tuple[int, int, int, int]] = []
+    while i < n:
+        while i < n and html[i] in _HTML_SPACE + "/":
+            i += 1
+        if i >= n:
+            break
+        if html[i] == ">":
+            return i + 1, attrs
+        begin = i
+        # '=' at the start of a name is an unexpected-equals parse error,
+        # but belongs to that name rather than starting an empty value.
+        i += 1
+        while i < n and html[i] not in _HTML_SPACE + "/>=":
+            i += 1
+        name_end = i
+        while i < n and html[i] in _HTML_SPACE:
+            i += 1
+        value_start = i
+        end = name_end
+        if i < n and html[i] == "=":
+            i += 1
+            while i < n and html[i] in _HTML_SPACE:
+                i += 1
+            value_start = i
+            if i < n and html[i] in "\"'":
+                quote = html[i]
+                close = html.find(quote, i + 1)
+                if close < 0:
+                    return -1, []
+                i = close + 1
+            else:
+                while i < n and html[i] not in _HTML_SPACE + ">":
+                    i += 1
+            end = i
+        attrs.append((begin, name_end, value_start, end))
+    return -1, []
 
 
 def _mask_for_root_search(html: str) -> str:
-    """``html`` masked for the dj-root / dj-view search, walking it tag by tag
-    exactly as the Rust twin does (``crates/djust_live/src/lib.rs::
-    find_dj_root_content_range``, #1646).
+    """Length-preserving HTML token walk for root selection and balancing.
 
-    * A comment, ``<script>`` or ``<style>`` region is masked whole
-      (``skip_raw_text_region``: an unterminated one runs to the end).
-    * In every other tag, each ``<`` inside a quoted attribute value is masked
-      (#3030). ``re.search`` can start at any ``<``; without this, the
-      ``<section dj-root>`` inside ``<div data-h="<section dj-root>">`` was
-      picked as the root, the dj-view stamp's ``"`` closed ``data-h`` early,
-      and the Rust side (which skips quoted values) picked the next real tag.
-    * A tag starts at ``<`` followed by a letter, ``/`` or ``!``, as in the
-      HTML tokenizer; any other ``<`` is text. The Rust walker applies the
-      same rule.
-
-    Length-preserving, so positions index the original string. When a tag
-    never ends (an unterminated quote, or EOF), the Rust walker stops looking;
-    here the rest of the string keeps the plain #2663 raw-text mask, as it
-    had before #3030.
+    Attribute values, bogus comments and unfinished tags cannot expose tag
+    candidates. The original offsets remain suitable for template splicing.
+    Root precedence and embedded ownership are decided by the caller.
     """
-    out: "list[str]" = []
-    last = 0
-    i = html.find("<")
+    out = list(html)
     n = len(html)
+    i = html.find("<")
     while 0 <= i < n - 1:
         nxt = html[i + 1]
         if html.startswith("<!--", i):
-            end = html.find("-->", i + 4)
-            end = n if end < 0 else end + 3
-            out.append(html[last:i])
-            out.append("\x00" * (end - i))
-            last = i = end
-            i = html.find("<", i)
-            continue
-        raw = _RAW_OPEN_RE.match(html, i + 1)
-        if raw:
-            gt = html.find(">", i)
-            end = n
-            if gt >= 0:
-                close = _RAW_CLOSE_RES[raw.group(1).lower()].search(html, gt + 1)
-                if close:
-                    cgt = html.find(">", close.start())
-                    end = n if cgt < 0 else cgt + 1
-            out.append(html[last:i])
-            out.append("\x00" * (end - i))
-            last = i = end
-            i = html.find("<", i)
-            continue
-        if not (nxt.isascii() and (nxt.isalpha() or nxt in "/!")):
+            if html.startswith(">", i + 4):
+                end = i + 5
+            elif html.startswith("->", i + 4):
+                end = i + 6
+            else:
+                comment_close = _COMMENT_CLOSE_RE.search(html, i + 4)
+                end = n if comment_close is None else comment_close.end()
+            out[i:end] = "\x00" * (end - i)
+        elif nxt in "!?" or (
+            nxt == "/"
+            and i + 2 < n
+            and (not (html[i + 2].isascii() and html[i + 2].isalpha()) and html[i + 2] != ">")
+        ):
+            close = html.find(">", i + 2)
+            end = n if close < 0 else close + 1
+            out[i:end] = "\x00" * (end - i)
+        elif nxt.isascii() and (nxt.isalpha() or nxt == "/"):
+            end, attrs = _scan_html_tag(html, i)
+            if end < 0:
+                out[i:] = "\x00" * (n - i)
+                break
+            # Mask nested '<' and literal quote parse errors throughout tags.
+            for k in range(i + 1, end):
+                if html[k] in "<\"'":
+                    out[k] = "\x00"
+            for begin, _name_end, value_start, attr_end in attrs:
+                # A stray '/' before an attribute is a tokenizer parse
+                # error, but still separates it from the preceding name.
+                if html[begin - 1] == "/":
+                    out[begin - 1] = " "
+                if attr_end > value_start:
+                    out[value_start:attr_end] = "\x00" * (attr_end - value_start)
+                    if html[value_start] in "\"'":
+                        out[attr_end - 1] = " "
+            name = re.match(r"</?([^ \t\n\r\f/>]+)", html[i:end])
+            if name and name.group(1).lower() in _RAW_CLOSE_RES and nxt != "/":
+                raw_close = _RAW_CLOSE_RES[name.group(1).lower()].search(html, end)
+                if raw_close:
+                    end, _ = _scan_html_tag(html, raw_close.start())
+                    if end < 0:
+                        end = n
+                else:
+                    end = n
+                out[i:end] = "\x00" * (end - i)
+        else:
             i = html.find("<", i + 1)
             continue
-        rest = _TAG_REST_RE.match(html, i + 1)
-        j = rest.end() if rest else i + 1
-        if j >= n or html[j] in "\"'":
-            # Never ends: the Rust walker gives up here. Keep the #2663
-            # raw-text mask over the rest, as before #3030.
-            out.append(html[last:i])
-            out.append(_mask_raw_text(html[i:]))
-            return "".join(out)
-        if html[j] == "<":
-            i = j  # not a tag; resume at the `<` that aborted it
-            continue
-        body = html[i:j]
-        if "<" in body[1:]:
-            out.append(html[last:i])
-            out.append(body[0] + body[1:].replace("<", "\x00"))
-            last = j
-        i = html.find("<", j + 1)
-    out.append(html[last:])
+        i = html.find("<", end)
     return "".join(out)
 
 
@@ -256,7 +297,7 @@ def _search_dj_root_open(html: str, *patterns: "re.Pattern[str]") -> "Optional[r
 # wrapper spliced the whole page into the child's slot (two documents, the
 # generic form of #3142).
 _EMBEDDED_ATTR_TOKEN_RE = re.compile(
-    _QUOTED + r"""|(?<=\s)(data-djust-embedded)(?=[\s=>/])""", re.IGNORECASE
+    _QUOTED + r"""|(?<=[ \t\n\r\f])(data-djust-embedded)(?=[ \t\n\r\f=>/])""", re.IGNORECASE
 )
 
 
@@ -273,7 +314,7 @@ def _embedded_child_spans(html: str, masked: str) -> "list[tuple[int, int]]":
     for m in _DJ_VIEW_RE.finditer(masked):
         if m.start() < covered:
             continue  # inside an embedded child already recorded
-        tag = html[m.start() : m.end()]
+        tag = masked[m.start() : m.end()]
         if not any(tok.group(1) for tok in _EMBEDDED_ATTR_TOKEN_RE.finditer(tag)):
             continue
         close_end = _close_in_masked(masked, m.end(), _root_tag_name(html, m))
@@ -323,8 +364,11 @@ def _open_close_res(tag: str) -> "tuple[re.Pattern[str], re.Pattern[str]]":
     the scanner runs on every GET and almost always for the same few tags)."""
     name = re.escape(tag)
     return (
-        re.compile(r"<%s(?=[\s/>{])" % name, re.IGNORECASE),
-        re.compile(r"</%s\s*>" % name, re.IGNORECASE),
+        re.compile(r"<%s(?=[ \t\n\r\f/>{])" % name, re.IGNORECASE),
+        # This runs only over token-masked input: quoted '>' and nested
+        # '<' are already hidden, and unfinished tags were discarded.
+        # HTML ignores attributes and self-closing flags on end tags.
+        re.compile(r"</%s(?=[ \t\n\r\f/>])[^>]*>" % name, re.IGNORECASE),
     )
 
 
@@ -1256,11 +1300,11 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         it was at the matching {% if %}, so mutually-exclusive branches that
         each open a <div> are counted only once.
         """
-        # #2663: scan a raw-text-masked copy. ``<script>``/``<style>`` bodies
+        # #2663/#3054: scan a token-masked copy. ``<script>``/``<style>`` bodies
         # and HTML comments are text, so a ``<div`` or ``</div>`` inside them
         # must not move the depth counter. The mask is length-preserving, so
         # every offset computed below indexes the caller's ``template``.
-        template = _mask_raw_text(template)
+        template = _mask_for_root_search(template)
 
         # Pre-scan for if/elif/else/endif tags in the region being searched.
         flow_tags = [
@@ -1568,7 +1612,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         and are left alone (#2663).
         """
         attr = ' dj-view="%s"' % _html_escape(view_path, quote=True)
-        masked = _mask_raw_text(html)
+        masked = _mask_for_root_search(html)
         # #3155: a dj-root inside an embedded {% live_render %} child is the
         # child's, not this view's — stamping this view's path there would
         # tell the client to mount the page a second time inside the child.
@@ -1582,20 +1626,18 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         for m in _DJ_ROOT_RE.finditer(masked):
             if embedded and _span_containing(embedded, m.start()) is not None:
                 continue
-            tag = html[m.start() : m.end()]
             root_attr_end: Optional[int] = None
             has_view = False
-            for tok in _ROOT_ATTR_TOKEN_RE.finditer(tag):
-                kind = tok.group(1)
-                if kind is None:
-                    continue  # a quoted attribute value — text, skip it
-                if kind.lower() == "view":
+            _, attrs = _scan_html_tag(html, m.start())
+            for begin, name_end, _value_start, end in attrs:
+                kind = html[begin:name_end].lower()
+                if kind == "dj-view":
                     has_view = True
-                elif root_attr_end is None:
-                    root_attr_end = tok.end()
+                elif kind == "dj-root" and root_attr_end is None:
+                    root_attr_end = end
             if has_view or root_attr_end is None:
                 continue
-            insert_at = m.start() + root_attr_end
+            insert_at = root_attr_end
             parts.append(html[last:insert_at])
             parts.append(attr)
             last = insert_at

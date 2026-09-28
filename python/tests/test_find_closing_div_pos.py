@@ -258,12 +258,13 @@ class TestEveryRootLocatorUsesTheMaskedSearch:
         # render_full_template step 3, and the four extraction helpers.
         assert calls == 8, calls
 
-    def test_the_depth_walk_scans_the_masked_copy(self):
-        src = self._source()
-        # #2892: the walk is tag-generic; the div finder delegates to it.
-        walker_start = src.index("def _find_closing_tag_pos(")
-        walker_end = src.index("\n    def ", walker_start + 10)
-        assert "template = _mask_raw_text(template)" in src[walker_start:walker_end]
-        div_start = src.index("def _find_closing_div_pos(")
-        div_end = src.index("\n    def ", div_start + 10)
-        assert '_find_closing_tag_pos(template, inner_start, "div")' in src[div_start:div_end]
+    def test_the_depth_walk_ignores_markup_owned_by_values_and_comments(self):
+        for tag in ("div", "main"):
+            body = '<p title="</%s>">text</p><!-- </%s> -->' % (tag, tag)
+            html = "<%s dj-root>%s</%s>" % (tag, body, tag)
+            start = len("<%s dj-root>" % tag)
+            close, end = TemplateMixin._find_closing_tag_pos(html, start, tag)
+            assert html[start:close] == body
+            assert end == len(html)
+            if tag == "div":
+                assert TemplateMixin._find_closing_div_pos(html, start) == (close, end)
