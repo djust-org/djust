@@ -282,12 +282,18 @@ def test_http_snapshot_respects_opt_in_and_revokes_stale_token(monkeypatch, cont
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("cookie", [None, "expired-session-key"])
-def test_http_token_binds_cookie_issued_by_session_middleware(cookie):
+@pytest.mark.parametrize("backend", ["db", "signed_cookies"])
+@pytest.mark.parametrize("mode", ["enabled", "disabled", "not_opted_in"])
+def test_http_token_binds_cookie_issued_by_session_middleware(cookie, backend, mode, monkeypatch):
     from django.conf import settings
     from django.test import Client
     from django.urls import path
 
+    if mode == "not_opted_in":
+        monkeypatch.setattr(DeferredLegacy, "enable_state_snapshot", False)
     with override_settings(
+        DJUST_STATE_SNAPSHOT_ENABLED=mode != "disabled",
+        SESSION_ENGINE=f"django.contrib.sessions.backends.{backend}",
         ROOT_URLCONF=type(
             "URLs", (), {"urlpatterns": [path("fallback/", DeferredLegacy.as_view())]}
         ),
@@ -306,7 +312,13 @@ def test_http_token_binds_cookie_issued_by_session_middleware(cookie):
         )
         assert response.status_code == 200, response.content
         body = response.json()
+        if mode != "enabled":
+            assert TOKEN not in body
+            return
         key = client.cookies[settings.SESSION_COOKIE_NAME].value
+        if backend == "signed_cookies":
+            assert TOKEN in body and body[TOKEN] is None
+            return
         state_json = unsign_snapshot(body[TOKEN], f"{MOD}.DeferredLegacy", key)
         assert state_json is not None, "HTTP token must match the response session cookie"
         assert json.loads(state_json)["count"] == 1

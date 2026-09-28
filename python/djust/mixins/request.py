@@ -1066,6 +1066,14 @@ class RequestMixin:
                 self, f"{type(self).__module__}.{type(self).__name__}", request.session.session_key
             )
 
+            # Signed-cookie sessions encode their contents in the identity;
+            # response middleware changes it after this token was captured.
+            # Revoke rather than cache a token that cannot pass session binding.
+            from django.contrib.sessions.backends.signed_cookies import SessionStore
+
+            if isinstance(request.session, SessionStore) and snapshot_fields:
+                snapshot_fields["state_snapshot_signed"] = None
+
             if (
                 observation_before is not None
                 and not _compute_changed_keys(observation_before, _snapshot_assigns(self))
