@@ -1,6 +1,6 @@
 import { Editor, Extension } from "@tiptap/core";
 import { Plugin } from "@tiptap/pm/state";
-import { Fragment, Slice } from "@tiptap/pm/model";
+import { DOMParser as PMDOMParser, Fragment, Slice } from "@tiptap/pm/model";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "@tiptap/markdown";
 import {
@@ -47,6 +47,46 @@ const floatingShouldShow =
       $anchor.parent.childCount === 0
     );
   };
+// Inline content of `fragment`: text blocks joined by hard breaks (written as
+// <br> in a cell), inline nodes kept with their marks.
+function inlineContent(fragment, schema) {
+  const out = [];
+  let joinNext = false;
+  fragment.descendants((node) => {
+    if (node.isTextblock) {
+      if (out.length) out.push(schema.nodes.hardBreak.create());
+      node.forEach((child) => out.push(child));
+      joinNext = true;
+      return false;
+    }
+    if (node.isInline) {
+      if (joinNext) out.push(schema.nodes.hardBreak.create());
+      joinNext = false;
+      out.push(node);
+      return false;
+    }
+    return true;
+  });
+  return out;
+}
+// HTML (paste, drop, setContent) can put several blocks in a <td>; parse each
+// cell as one paragraph instead of letting the parser push the extra blocks
+// into new cells (which adds columns and shifts values).
+const cellParse = (tag) => () => [
+  {
+    tag,
+    getContent: (dom, schema) =>
+      Fragment.from(
+        schema.nodes.paragraph.create(
+          null,
+          inlineContent(
+            PMDOMParser.fromSchema(schema).parseSlice(dom).content,
+            schema,
+          ),
+        ),
+      ),
+  },
+];
 // A GFM table cell holds one line of inline content. Restricting the cell
 // schema to a single paragraph makes every path that could put a block in a
 // cell (toolbar, shortcuts, input rules, paste, a selection spanning a table)
@@ -79,27 +119,122 @@ const splitsTable = (tr) =>
     const after = i + 1 < tr.docs.length ? tr.docs[i + 1] : tr.doc;
     return countTables(after) > countTables(before);
   });
+const hasTableNodes = (fragment) => {
+  let found = false;
+  fragment.descendants((node) => {
+    if (node.type.spec.tableRole) found = true;
+    return !found;
+  });
+  return found;
+};
+// Pasted cells take the cell type of the rows they land in: GFM has header
+// cells only in a table's first row, so a copied header row pasted into the
+// body becomes body cells (and body cells pasted into the header row become
+// header cells), which keeps the Markdown reloading to the same table.
+function cellTypesFor(fragment, schema, firstRowIsHeader) {
+  let row = 0;
+  const walk = (frag) => {
+    const nodes = [];
+    frag.forEach((node) => {
+      if (/cell/.test(node.type.spec.tableRole || "")) {
+        const type =
+          firstRowIsHeader && row === 0
+            ? schema.nodes.tableHeader
+            : schema.nodes.tableCell;
+        nodes.push(type.create(node.attrs, node.content, node.marks));
+      } else if (node.type.spec.tableRole === "row") {
+        nodes.push(node.copy(walk(node.content)));
+        row++;
+      } else if (node.childCount && !node.isTextblock) {
+        nodes.push(node.copy(walk(node.content)));
+      } else nodes.push(node);
+    });
+    return Fragment.from(nodes);
+  };
+  return walk(fragment);
+}
+const inHeaderRow = ($pos) => {
+  for (let depth = $pos.depth; depth > 0; depth--)
+    if ($pos.node(depth).type.spec.tableRole === "row")
+      return $pos.index(depth - 1) === 0;
+  return false;
+};
 const CellsStayInline = Extension.create({
   name: "djustCellsStayInline",
+  // Ahead of StarterKit's Enter handling.
+  priority: 1000,
+  addKeyboardShortcuts() {
+    return {
+      // A cell holds one paragraph: Enter adds a line break (saved as <br>).
+      Enter: () =>
+        inCell(this.editor.state.selection.$from) &&
+        this.editor.commands.setHardBreak(),
+    };
+  },
   addProseMirrorPlugins() {
+    let view = null;
+    let pastedTableHTML = false;
     return [
       new Plugin({
-        filterTransaction: (tr) => !tr.docChanged || !splitsTable(tr),
+        view(editorView) {
+          view = editorView;
+          return {};
+        },
+        filterTransaction(tr, state) {
+          if (!tr.docChanged || !splitsTable(tr)) return true;
+          // An input rule whose block cannot go in a cell (`---`, an image)
+          // consumed the typed character; type it as plain text instead.
+          // (The editor can hold more than one input-rules plugin.)
+          const typed = state.plugins
+            .filter((p) => p.spec.isInputRules)
+            .map((p) => tr.getMeta(p))
+            .find(Boolean);
+          if (
+            view &&
+            typed &&
+            typeof typed.text === "string" &&
+            typed.text !== "\n"
+          )
+            queueMicrotask(() => {
+              if (view.state === state)
+                view.dispatch(
+                  state.tr.insertText(typed.text, typed.from, typed.to),
+                );
+            });
+          return false;
+        },
         props: {
           // Paste into a cell: keep the text and inline marks, join the
           // pasted blocks with line breaks (written as <br> in the cell).
+          // Pasted cells or tables go to the table extension's cell paste.
+          // Whether the clipboard HTML really held table markup. Pasting
+          // several paragraphs into a one-paragraph cell makes the clipboard
+          // parser invent cells for them; those are text, not copied cells.
+          transformPastedHTML(html) {
+            pastedTableHTML = /<(table|tr|td|th)[\s>]/i.test(html);
+            return html;
+          },
           transformPasted(slice, view) {
+            const fromTable = pastedTableHTML;
+            pastedTableHTML = false;
             if (!inCell(view.state.selection.$from)) return slice;
-            const { schema } = view.state;
-            const inline = [];
-            slice.content.descendants((node) => {
-              if (!node.isTextblock) return true;
-              if (inline.length) inline.push(schema.nodes.hardBreak.create());
-              node.forEach((child) => inline.push(child));
-              return false;
-            });
+            const { $from } = view.state.selection;
+            if (fromTable && hasTableNodes(slice.content))
+              return new Slice(
+                cellTypesFor(
+                  slice.content,
+                  view.state.schema,
+                  inHeaderRow($from),
+                ),
+                slice.openStart,
+                slice.openEnd,
+              );
+            const inline = inlineContent(slice.content, view.state.schema);
             if (!inline.length) return slice;
-            const paragraph = schema.nodes.paragraph.create(null, inline);
+            const paragraph = view.state.schema.nodes.paragraph.create(
+              null,
+              inline,
+            );
             return new Slice(Fragment.from(paragraph), 1, 1);
           },
         },
@@ -113,14 +248,18 @@ const CellsStayInline = Extension.create({
 export const escapeCellPipes = (text) =>
   text.replace(/(^|[^\\])((?:\\\\)*)\|/g, "$1$2\\|");
 const GfmTable = Table.extend({
-  renderMarkdown(node, h) {
+  renderMarkdown(node, h, context) {
     const cellHelpers = {
       ...h,
       renderChildren: (...args) => escapeCellPipes(h.renderChildren(...args)),
     };
-    // Upstream pads a table with extra blank lines; the block joiner already
-    // separates blocks with one.
-    return renderTableToMarkdown(node, cellHelpers).replace(/^\n+|\n+$/g, "");
+    const markdown = renderTableToMarkdown(node, cellHelpers);
+    // Upstream pads a table with extra blank lines; at the top level the
+    // block joiner already separates blocks with one. Inside a list item
+    // or quote keep the padding, so the item stays loose (<p>) in previews.
+    return context?.parentType && context.parentType !== "doc"
+      ? markdown
+      : markdown.replace(/^\n+|\n+$/g, "");
   },
 });
 // Menus use fixed positioning so the editor frame's overflow (components.css
@@ -134,8 +273,8 @@ const extensions = (menus = {}) => [
   Markdown,
   TableKit.configure({ table: false, tableCell: false, tableHeader: false }),
   GfmTable,
-  TableCell.extend(CELL),
-  TableHeader.extend(CELL),
+  TableCell.extend({ ...CELL, parseHTML: cellParse("td") }),
+  TableHeader.extend({ ...CELL, parseHTML: cellParse("th") }),
   CellsStayInline,
   Image.configure({ allowBase64: false }),
   TaskList,

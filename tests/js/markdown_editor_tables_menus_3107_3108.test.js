@@ -273,6 +273,42 @@ describe("#3107 table actions", () => {
     expect(hook.visual.load(hook.visual.value())).toBe("");
   });
 
+  it("pastes table cells into cells, not flattened into one (re-review R1)", async () => {
+    const T = "| A | B |\n| --- | --- |\n| x | y |\n| p | q |";
+    const { hook, window } = setup(T);
+    const editor = hook.getEditor();
+    editor.commands.setTextSelection(posOf(editor, "p"));
+    editor.view.pasteHTML(
+      "<table><tr><td>q1</td><td>r1</td></tr><tr><td>w1</td><td>e1</td></tr></table>",
+    );
+    await wait(window, 0);
+    const md = hook.visual.value();
+    expect(md).toContain("| q1  | r1  |");
+    expect(md).toContain("| w1  | e1  |");
+    expect(md).not.toContain("<br>");
+    expect(hook.visual.load(md)).toBe("");
+  });
+
+  it("parses an HTML cell with several paragraphs as one cell (re-review R2)", () => {
+    const { hook } = setup("");
+    const editor = hook.getEditor();
+    editor.commands.setContent(
+      "<table><tr><th>q</th><th>r</th></tr><tr><td><p>w1</p><p>w2</p></td><td>e</td></tr></table>",
+      { contentType: "html" },
+    );
+    const md = hook.visual.value();
+    expect(md).toContain("| q        | r   |");
+    expect(md).toContain("| w1<br>w2 | e   |");
+    expect(hook.visual.load(md)).toBe("");
+  });
+
+  it("keeps a table inside a list item loose (re-review L12)", () => {
+    const { hook } = setup("");
+    const src = "- item\n\n  | A | B |\n  | --- | --- |\n  | x | y |\n\n- next";
+    expect(hook.visual.load(src)).toBe("");
+    expect(hook.visual.value()).toMatch(/^- item\n[ ]*\n {2}\| A/);
+  });
+
   it("inserts a table in Visual mode and a Markdown skeleton in source mode", () => {
     const { hook, field } = setup("Hello");
     hook.getEditor().commands.setTextSelection(6);
