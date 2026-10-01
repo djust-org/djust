@@ -123,7 +123,15 @@ self.allow_upload('documents', accept='.pdf,.docx',
 | `dj-upload="name"` | Bind a file input to an upload slot. `accept` and `multiple` are set automatically. |
 | `dj-upload-drop="name"` | Create a drag-and-drop zone. Adds `upload-dragover` CSS class during drag. |
 | `dj-upload-preview="name"` | Container for image previews (auto-populated for image files). |
-| `dj-upload-progress="name"` | Container for progress bars with `.upload-progress-bar[role=progressbar]`. |
+| `dj-upload-progress="name"` | Progress for the slot's running upload. Leave it empty and the client renders a `<progress>` (file name, bar, percent) per file; or put a bar inside it — a `.upload-progress-bar`, any `[role=progressbar]` track whose first child is the fill, or a `{% theme_progress %}` — and the client drives that bar instead. The container gets `data-upload-ref` / `data-upload-status` while an upload runs. |
+
+With `djust.theming`, `theme_progress` passes extra keyword arguments through to its wrapper (underscores become hyphens), so a themed bar can be wired to a slot:
+
+```html
+{% theme_progress value=0 label="Uploading" dj_upload_progress="avatar" %}
+```
+
+Only one bar exists per container, so files uploaded one after another reuse it; an empty container renders one item per file.
 
 ## Client-Side Events
 

@@ -783,11 +783,15 @@ def theme_progress(
         value: Current value (None for indeterminate)
         max: Maximum value
         label: Accessible label text
-        **attrs: Additional HTML attributes
+        **attrs: Additional HTML attributes. ``class`` and ``id`` land on the
+            wrapper; everything else (``dj_upload_progress``, ``dj_hook``,
+            ``data_*`` ...) is emitted on the wrapper too, underscores becoming
+            hyphens.
 
     Usage:
         {% theme_progress value=75 max=100 label="Upload progress" %}
         {% theme_progress label="Loading..." %}
+        {% theme_progress value=0 dj_upload_progress="avatar" %}
     """
     slots, remaining_attrs = _extract_slots(attrs)
     request = context.get("request")
@@ -805,6 +809,9 @@ def theme_progress(
         "is_indeterminate": is_indeterminate,
         "percentage": percentage,
         "attrs": remaining_attrs,
+        # `dj_upload_progress="slot"` makes the client drive this bar from
+        # that upload slot's progress (#3289).
+        "extra_attrs": _passthrough_attrs(remaining_attrs, skip=("class", "id")),
         "css_prefix": _css_prefix(),
         **slots,
     }
