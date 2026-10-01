@@ -230,7 +230,9 @@ def plan_asgi(project: Project) -> Tuple[Optional[FileChange], Step, Optional[st
 
 
 _REQUIREMENT_NAME_RE = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
+_REQUIREMENT_EXTRAS_RE = re.compile(r"^\s*[A-Za-z0-9][A-Za-z0-9._-]*\s*\[([^\]]*)\]")
 _INCLUDE_RE = re.compile(r"^\s*(?:-r|--requirement)[\s=]+(\S+)")
+_ALREADY_DECLARED = "djust, channels and uvicorn already declared in pyproject.toml"
 FIRST_LIVEVIEW_URL = "https://docs.djust.org/getting-started/first-liveview/"
 
 
@@ -264,11 +266,69 @@ class PackageAction:
     runnable: bool
 
 
+def _extras(requirement: str) -> set:
+    """The extras a PEP 508 requirement string asks for, canonicalised."""
+    found = _REQUIREMENT_EXTRAS_RE.match(requirement)
+    if not found:
+        return set()
+    return {_canonical_name(extra) for extra in found.group(1).split(",") if extra.strip()}
+
+
+def _declared_dependencies(pyproject: Path) -> Optional[dict]:
+    """``[project].dependencies`` as {canonical name: extras}, or None when unreadable.
+
+    Names and extras are read, the specifier is deliberately left alone. Every
+    PEP 508 form counts (markers, a ``name @ url`` reference).
+    """
+    try:
+        try:
+            import tomllib
+        except ImportError:  # Python 3.10
+            import tomli as tomllib
+        data = tomllib.loads(_read(pyproject))
+    except (ImportError, OSError, ValueError):
+        return None
+    declared: dict = {}
+    for entry in data.get("project", {}).get("dependencies", []):
+        match = _REQUIREMENT_NAME_RE.match(entry) if isinstance(entry, str) else None
+        if match:
+            declared.setdefault(_canonical_name(match.group(1)), set()).update(_extras(entry))
+    return declared
+
+
+def _undeclared_requirements(pyproject: Path) -> List[str]:
+    """The requirements ``uv add`` must be given.
+
+    ``uv add`` rewrites the specifier of a package it is given, so one the
+    project already declares is left out (#3296), as ``plan_requirements`` does
+    for requirements.txt. A declared package that lacks an extra the scaffold
+    needs (``uvicorn`` without ``[standard]``, which carries the WebSocket
+    library) is passed as ``name[extras]`` with NO specifier: uv keeps the
+    existing specifier and adds the extra, so the user's bounds survive.
+    """
+    declared = _declared_dependencies(pyproject) if pyproject.exists() else None
+    if declared is None:
+        return requirements()
+    needed = []
+    for req in requirements():
+        name = _REQUIREMENT_NAME_RE.match(req).group(1)
+        have = declared.get(_canonical_name(name))
+        if have is None:
+            needed.append(req)
+        elif _extras(req) - have:
+            needed.append("%s[%s]" % (name, ",".join(sorted(_extras(req) | have))))
+    return needed
+
+
 def choose_package_action(root: Path, python: Optional[Path], uv_available: bool) -> PackageAction:
     reqs = requirements()
     pyproject = root / "pyproject.toml"
     if (root / "uv.lock").exists() or (pyproject.exists() and "[tool.uv]" in pyproject.read_text()):
-        return PackageAction("uv", ["uv", "add", *reqs], runnable=uv_available)
+        missing = _undeclared_requirements(pyproject)
+        # An empty command means every dependency is already declared.
+        return PackageAction(
+            "uv", ["uv", "add", *missing] if missing else [], runnable=uv_available
+        )
     if (root / "poetry.lock").exists():
         return PackageAction("poetry", ["poetry", "add", *reqs], runnable=False)
     if (root / "requirements.txt").exists():
@@ -318,20 +378,64 @@ def _mentions(line: str, name: str) -> bool:
     return False
 
 
+def _add_extras_to_line(line: str, name: str, extras: set) -> Optional[str]:
+    """``line`` with ``extras`` added after the package name, or None when the
+    line is not a plain ``name[extras] spec`` requirement for ``name``."""
+    found = _REQUIREMENT_NAME_RE.match(line)
+    if not found or _canonical_name(found.group(1)) != _canonical_name(name):
+        return None
+    if line[found.end() :].lstrip().startswith("@"):
+        return None  # a direct URL reference: leave it alone
+    have = _extras(line)
+    if extras <= have:
+        return line
+    rest = line[found.end() :]
+    existing = _REQUIREMENT_EXTRAS_RE.match(line)
+    if existing:
+        rest = line[existing.end() :]
+    return "%s[%s]%s" % (line[: found.end()], ",".join(sorted(extras | have)), rest)
+
+
 def plan_requirements(root: Path) -> Optional[FileChange]:
     path = root / "requirements.txt"
     old = _read(path)
     lines = _requirement_lines(path)
-    missing = [
-        req
-        for req in requirements()
-        if not any(_mentions(line, _REQUIREMENT_NAME_RE.match(req).group(1)) for line in lines)
-    ]
-    if not missing:
+    missing = []
+    rewrites = {}  # name -> extras still needed on an existing line
+    for req in requirements():
+        name = _REQUIREMENT_NAME_RE.match(req).group(1)
+        mentioning = [line for line in lines if _mentions(line, name)]
+        if not mentioning:
+            missing.append(req)
+        elif _extras(req) and not any(
+            _extras(req) <= _extras(line) or _add_extras_to_line(line, name, set()) is None
+            for line in mentioning
+        ):
+            # Only plain ``name spec`` lines mention it, and none has the extra
+            # the scaffold needs (``uvicorn>=0.30`` lacks ``[standard]``).
+            rewrites[name] = _extras(req)
+    if not missing and not rewrites:
         return None
     newline = "\r\n" if "\r\n" in old else "\n"
-    prefix = old if not old or old.endswith("\n") else old + newline
-    return FileChange(path, old, prefix + "".join(req + newline for req in missing))
+    out = []
+    for raw in old.splitlines(keepends=True):
+        body = raw.rstrip("\r\n")
+        tail = raw[len(body) :]
+        for name, extras in rewrites.items():
+            changed = _add_extras_to_line(body, name, extras)
+            if changed is not None and changed != body:
+                body = changed
+                rewrites = {k: v for k, v in rewrites.items() if k != name}
+                break
+        out.append(body + tail)
+    new = "".join(out)
+    if missing:
+        new = (new if not new or new.endswith("\n") else new + newline) + "".join(
+            req + newline for req in missing
+        )
+    if new == old:
+        return None
+    return FileChange(path, old, new)
 
 
 def dirty_files(root: Path, paths: List[Path]) -> List[str]:
@@ -432,14 +536,18 @@ def init_project(
         result.run_command = "%s -m uvicorn %s:application --reload" % (runner, project.asgi_module)
 
     command = shlex.join(action.command)
+    nothing_to_add = action.kind == "uv" and not action.command
     if dry_run:
         result.steps = [
             Step(step.name, PLANNED, step.planned or step.detail) if step.status == DONE else step
             for step in result.steps
         ]
-        result.steps.append(
-            Step("packages", SKIPPED, "would run: %s" % command if install else "--no-install")
-        )
+        if not install:
+            result.steps.append(Step("packages", SKIPPED, "--no-install"))
+        elif nothing_to_add:
+            result.steps.append(Step("packages", UNCHANGED, _ALREADY_DECLARED))
+        else:
+            result.steps.append(Step("packages", SKIPPED, "would run: %s" % command))
         return result
 
     if result.changes and not force:
@@ -456,17 +564,23 @@ def init_project(
         result.steps.append(Step("check", SKIPPED, "install packages, then run manage.py check"))
         return result
     if not action.runnable:
-        result.steps.append(Step("packages", SKIPPED, "run: %s" % command))
+        if nothing_to_add:
+            result.steps.append(Step("packages", UNCHANGED, _ALREADY_DECLARED))
+        else:
+            result.steps.append(Step("packages", SKIPPED, "run: %s" % command))
         result.steps.append(Step("check", SKIPPED, "run manage.py check after installing"))
         return result
 
-    installed = _run(action.command, root)
-    if installed.returncode != 0:
-        result.steps.append(Step("packages", ATTENTION, "failed: %s" % command))
-        result.notes.append("%s\n%s" % (command, (installed.stdout + installed.stderr).strip()))
-        result.steps.append(Step("check", SKIPPED, "packages did not install"))
-        return result
-    result.steps.append(Step("packages", DONE, command))
+    if nothing_to_add:
+        result.steps.append(Step("packages", UNCHANGED, _ALREADY_DECLARED))
+    else:
+        installed = _run(action.command, root)
+        if installed.returncode != 0:
+            result.steps.append(Step("packages", ATTENTION, "failed: %s" % command))
+            result.notes.append("%s\n%s" % (command, (installed.stdout + installed.stderr).strip()))
+            result.steps.append(Step("check", SKIPPED, "packages did not install"))
+            return result
+        result.steps.append(Step("packages", DONE, command))
 
     if action.kind == "uv":
         check_cmd = ["uv", "run", "python", "manage.py", "check"]
