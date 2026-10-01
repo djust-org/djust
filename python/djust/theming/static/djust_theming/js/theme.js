@@ -366,6 +366,30 @@
         }
 
         /**
+         * Build the <style id="djust-theme-css"> for a live preset switch.
+         *
+         * Under a CSP without 'unsafe-inline' an un-nonced <style> is blocked, so
+         * the nonce is copied on: from the global the server-rendered anti-FOUC
+         * script set (window.__djust_theme_nonce, present when theme_head had a
+         * nonce), else from the element being replaced, else from any nonced
+         * theme <style> already in the page. `el.nonce` is read first because
+         * browsers hide the nonce attribute once parsed.
+         */
+        _createThemeStyle(css, replaced) {
+            const style = document.createElement('style');
+            style.id = 'djust-theme-css';
+            style.setAttribute('data-djust-theme', '');
+            style.textContent = css;
+            const nonceOf = (el) => (el && (el.nonce || el.getAttribute('nonce'))) || '';
+            const nonce = window.__djust_theme_nonce || nonceOf(replaced) ||
+                nonceOf(document.querySelector('style[data-djust-theme], style[data-djust-theme-critical], style[data-djust-components]'));
+            if (nonce) {
+                style.setAttribute('nonce', nonce);
+            }
+            return style;
+        }
+
+        /**
          * Update preset and CSS without reloading the page (for LiveView reactive updates)
          */
         setPresetWithoutReload(preset, css) {
@@ -387,21 +411,14 @@
                 if (styleElement && css) {
                     if (styleElement.tagName === 'LINK') {
                         // Replace <link> with <style> so we can set textContent
-                        const newStyle = document.createElement('style');
-                        newStyle.id = 'djust-theme-css';
-                        newStyle.setAttribute('data-djust-theme', '');
-                        newStyle.textContent = css;
+                        const newStyle = this._createThemeStyle(css, styleElement);
                         styleElement.replaceWith(newStyle);
                     } else {
                         styleElement.textContent = css;
                     }
                 } else if (css) {
                     // Create style element if it doesn't exist
-                    const newStyle = document.createElement('style');
-                    newStyle.id = 'djust-theme-css';
-                    newStyle.setAttribute('data-djust-theme', '');
-                    newStyle.textContent = css;
-                    document.head.appendChild(newStyle);
+                    document.head.appendChild(this._createThemeStyle(css, null));
                 }
 
                 // Dispatch event

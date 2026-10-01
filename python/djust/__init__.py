@@ -404,13 +404,12 @@ def enable_hot_reload():
         )
         # Never stdout: ready() runs this for every management command, and
         # ``manage.py <cmd> > file`` would otherwise start with the banner
-        # (#3298). Use logging when something is listening for it, else write
-        # to stderr so the dev-server banner stays visible; not both, which
-        # printed it twice when INFO records also reach the terminal.
-        if logger.isEnabledFor(logging.INFO) and logger.hasHandlers():
-            logger.info("%s", banner)
-        else:
-            sys.stderr.write(banner + "\n")
+        # (#3298). Always straight to stderr, never through ``logger``: whether a
+        # log record reaches a terminal depends on handlers and levels this code
+        # cannot see (``apps.py`` always installs one, so a ``hasHandlers()``
+        # guard is vacuous), and routing here printed it nowhere under a
+        # non-console handler or a WARNING-level console handler (#3312).
+        sys.stderr.write(banner + "\n")
     except Exception as e:
         # logger.error reaches stderr through logging's last-resort handler.
         logger.error("[HotReload] Failed to start hot reload server: %s", e)

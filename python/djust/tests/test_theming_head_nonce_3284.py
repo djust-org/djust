@@ -67,7 +67,12 @@ class TestThemeHeadNonce:
     def test_the_script_is_otherwise_identical(self):
         plain = _head(_request())
         with_nonce = _head(_request(), nonce="n1")
-        assert with_nonce.replace(' nonce="n1"', "") == plain
+        # The only additions are the ``nonce`` attributes and the one
+        # ``window.__djust_theme_nonce`` assignment theme.js reads (#3310).
+        stripped = re.sub(
+            r"\n *(?:/\*[^*]*\*/\n *)?window\.__djust_theme_nonce = \"n1\";", "", with_nonce
+        )
+        assert stripped.replace(' nonce="n1"', "") == plain
 
     def test_it_works_in_a_template_with_the_request_in_context(self):
         template = engines["django"].from_string(

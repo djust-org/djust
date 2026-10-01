@@ -545,6 +545,8 @@ class TestThemeMixinThemeHead:
             "asset_version",
             # ` nonce="..."` for the inline <script>/<style> blocks, or "" (#3284).
             "nonce_attr",
+            # The same nonce as a JS string literal, published to theme.js (#3310).
+            "nonce_js",
         }
         assert set(ctx.keys()) == expected, (
             "build_theme_head_context() key set drifted from the variables "

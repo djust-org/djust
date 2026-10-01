@@ -22,7 +22,10 @@ def _ensure_registry_populated():
     ThemeRegistry._reset()
     get_registry().discover()
     yield
+    # Leave a populated registry for whatever test shares this worker next (a bare
+    # reset leaves it empty and undiscovered).
     ThemeRegistry._reset()
+    get_registry().discover()
 
 
 def _call_validate(*args, **kwargs):

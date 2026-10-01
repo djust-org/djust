@@ -51,6 +51,15 @@ if TYPE_CHECKING:
 register = template.Library()
 
 
+def _resolve_nonce(request: Any, nonce: str | None = None) -> str:
+    """The CSP nonce to use: ``nonce`` when given (``""`` means none), else ``request.csp_nonce``."""
+    if nonce is None:
+        nonce = get_csp_nonce(request)
+    # ``{% theme_head nonce=request.csp_nonce %}`` passes django-csp's
+    # SimpleLazyObject straight through: ``json.dumps`` rejects it, so make it a str.
+    return str(nonce) if nonce else ""
+
+
 def _nonce_attr(request: Any, nonce: str | None = None) -> str:
     """`` nonce="..."`` for an inline ``<script>`` / ``<style>``, or ``""``.
 
@@ -58,9 +67,23 @@ def _nonce_attr(request: Any, nonce: str | None = None) -> str:
     (django-csp) is used. Built with ``format_html`` so the value is escaped here,
     once, and safe to place in markup rendered with autoescape off.
     """
-    if nonce is None:
-        nonce = get_csp_nonce(request)
-    return format_html(' nonce="{}"', nonce) if nonce else ""
+    resolved = _resolve_nonce(request, nonce)
+    return format_html(' nonce="{}"', resolved) if resolved else ""
+
+
+def _nonce_js(request: Any, nonce: str | None = None) -> str:
+    """The nonce as a JS string literal for the anti-FOUC script, or ``""`` when there is none.
+
+    ``theme.js`` creates ``<style>`` elements on a live preset switch; under a
+    CSP without ``'unsafe-inline'`` each needs this nonce (#3310). ``json.dumps``
+    plus the ``<``/``>``/``&`` escapes make it safe inside a ``<script>`` block.
+    """
+    resolved = _resolve_nonce(request, nonce)
+    if not resolved:
+        return ""
+    return (
+        json.dumps(resolved).replace("<", "\\u003C").replace(">", "\\u003E").replace("&", "\\u0026")
+    )
 
 
 def build_theme_head_context(
@@ -103,7 +126,7 @@ def build_theme_head_context(
         ``deferred_css_block``, ``component_css_block``,
         ``include_component_link``, ``include_components_app_link``,
         ``include_js``, ``direction``,
-        ``cookie_prefix_js``, ``resolved_mode_js``, ``nonce_attr`` — exactly the variables
+        ``cookie_prefix_js``, ``resolved_mode_js``, ``nonce_attr``, ``nonce_js`` — exactly the variables
         ``theme_head.html``
         consumes.
     """
@@ -142,7 +165,7 @@ def build_theme_head_context(
         except NoReverseMatch:
             # Cannot resolve deferred URL — fall back to inlining everything
             css = generate_css_for_state(state, css_prefix=css_prefix)
-            css_block = f"<style data-djust-theme{nonce_attr}>{css}</style>"
+            css_block = f'<style id="djust-theme-css" data-djust-theme{nonce_attr}>{css}</style>'
             deferred_css_block = ""
     elif link_css:
         try:
@@ -153,7 +176,8 @@ def build_theme_head_context(
                 query_params["pk"] = state.pack
 
             css_block = (
-                f'<link rel="stylesheet" href="{url}?{urlencode(query_params)}" data-djust-theme>'
+                f'<link rel="stylesheet" href="{url}?{urlencode(query_params)}" '
+                'id="djust-theme-css" data-djust-theme>'
             )
         except NoReverseMatch:
             # Fallback to inline if URL not configured
@@ -162,7 +186,7 @@ def build_theme_head_context(
     if not css_block:
         # Generate CSS inline (legacy behavior or fallback)
         css = generate_css_for_state(state, css_prefix=css_prefix)
-        css_block = f"<style data-djust-theme{nonce_attr}>{css}</style>"
+        css_block = f'<style id="djust-theme-css" data-djust-theme{nonce_attr}>{css}</style>'
 
     # Component CSS: inline when prefix is set, static link otherwise
     component_css_block = ""
@@ -206,6 +230,7 @@ def build_theme_head_context(
         "include_components_app_link": include_components_app_link,
         "include_js": include_js,
         "nonce_attr": nonce_attr,
+        "nonce_js": _nonce_js(request, nonce),
         "direction": direction,
         "cookie_prefix_js": cookie_prefix_js,
         # The mode the *server* resolved — config default, session, or cookie.
