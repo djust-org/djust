@@ -544,24 +544,75 @@ _DJ_TABLE_SECTION_ROOT_RE = re.compile(
 # HTTP render of such a page is complete, but the WebSocket mount looks for the
 # root INSIDE `<body>` and otherwise falls back to its first element child, so
 # a page with several body children mounts with only the first. Same
-# same-tag scoping as T017 above, but the attribute span walks quoted values as
-# units, so a `>` inside `data-x="a>b"` does not end the tag early and text
-# inside a value (`title="dj-root"`) is never read as an attribute. The
-# trailing `(?![\w-])` rejects `<header>`-style longer tag names (`<head` is a
-# prefix of `<header`).
-_DJ_DOCUMENT_ROOT_RE = re.compile(
-    r"""<(html|head|body)(?![\w-])(?:[^>"']|"[^"]*"|'[^']*')*?(?<=\s)(dj-view|dj-root)(?=[\s=>/])""",
-    re.IGNORECASE,
-)
+# same-tag scoping as T017 above, found by a scanner rather than one regexp:
+# quoted values and Django `{% %}` / `{{ }}` units are walked whole, so a `>`
+# inside `data-x="a>b"` or `{% if a > b %}` does not end the tag early and text
+# inside a value (`title="dj-root"`) is never read as an attribute, and every
+# step moves forward, so unterminated input costs one pass (a regexp with
+# nested lazy quantifiers took tens of seconds on 20k unterminated tags). The
+# `(?![\w-])` after the tag name rejects `<header>` (`<head` is its prefix).
+_DOCUMENT_TAG_RE = re.compile(r"<(html|head|body)(?![\w-])", re.IGNORECASE)
+# Preceded by whitespace or the `}` ending a template tag
+# (`<body {% if x %}dj-root{% endif %}>`), followed by a value, whitespace, the
+# tag end or the `{` opening one.
+_DOCUMENT_ROOT_ATTR_RE = re.compile(r"(?<=[\s}])(dj-view|dj-root)(?=[\s=>/{])", re.IGNORECASE)
 
-# What T025 must not read: an HTML comment (to its `-->`, or to the end of the
-# file when unterminated, as browsers do) and the body of a `<script>`, which
-# can hold a `"<body dj-root>"` string literal. Only the body is blanked, so
-# the tags themselves stay.
-_HTML_COMMENT_OR_SCRIPT_RE = re.compile(
-    r"<!--.*?(?:-->|\Z)|<script\b[^>]*>(?P<body>.*?)</script\s*>",
-    re.DOTALL | re.IGNORECASE,
-)
+# What T025 must not read: an HTML comment (to its `-->` or `--!>`, or to the
+# end of the file when unterminated, as browsers do) and the body of a
+# `<script>`, which can hold a `"<body dj-root>"` string literal. Only the
+# body is blanked, so the tags themselves stay.
+_HTML_OPENER_RE = re.compile(r"<!--|<script(?![\w-])", re.IGNORECASE)
+_COMMENT_CLOSE_RE = re.compile(r"--!?>")
+# A browser ends a script at ``</script`` followed by whitespace, ``/`` or ``>``
+# (so ``</script\t\n bar>`` ends it and ``</scriptx>`` does not).
+_SCRIPT_CLOSE_RE = re.compile(r"</script(?=[\s/>])", re.IGNORECASE)
+
+
+def _blank(text: str) -> str:
+    return "".join(ch if ch in "\n\r" else " " for ch in text)
+
+
+def _blank_html_comments_and_scripts(text: str) -> str:
+    """Blank HTML comments and ``<script>`` bodies, keeping line breaks.
+
+    One forward pass: a search that fails once cannot succeed later, so an
+    unterminated ``<script>`` is remembered instead of re-searched.
+    """
+    pieces: list[str] = []
+    done = 0
+    position = 0
+    no_script_close = False
+    while True:
+        opener = _HTML_OPENER_RE.search(text, position)
+        if opener is None:
+            break
+        if opener.group(0) == "<!--":
+            closer = _COMMENT_CLOSE_RE.search(text, opener.end())
+            end = closer.end() if closer else len(text)
+            pieces.append(text[done : opener.start()])
+            pieces.append(_blank(text[opener.start() : end]))
+            done = position = end
+            continue
+        if no_script_close:
+            position = opener.end()
+            continue
+        tag_end = text.find(">", opener.end())
+        if tag_end == -1:
+            break  # no `>` anywhere after: no further tag can complete
+        body_start = tag_end + 1
+        closer = _SCRIPT_CLOSE_RE.search(text, body_start)
+        if closer is None:
+            no_script_close = True
+            position = body_start
+            continue
+        pieces.append(text[done:body_start])
+        pieces.append(_blank(text[body_start : closer.start()]))
+        done = closer.start()
+        position = closer.end()
+    if not pieces:
+        return text
+    pieces.append(text[done:])
+    return "".join(pieces)
 
 
 def _document_root_scan_text(content: str) -> str:
@@ -572,15 +623,49 @@ def _document_root_scan_text(content: str) -> str:
     text = _strip_verbatim_blocks(content)
     if "<!--" not in text and "<script" not in text.lower():
         return text
+    return _blank_html_comments_and_scripts(text)
 
-    def _blank(match: "re.Match[str]") -> str:
-        start = match.start("body") if match.group("body") is not None else match.start()
-        blanked = "".join(
-            ch if ch in "\n\r" else " " for ch in match.group(0)[start - match.start() :]
-        )
-        return match.group(0)[: start - match.start()] + blanked
 
-    return _HTML_COMMENT_OR_SCRIPT_RE.sub(_blank, text)
+def _find_document_roots(text: str) -> list[tuple[int, str, str]]:
+    """``(offset of the tag, tag name, attribute)`` for each ``dj-view`` /
+    ``dj-root`` on an ``<html>``, ``<head>`` or ``<body>`` tag of ``text``."""
+    found: list[tuple[int, str, str]] = []
+    position = 0
+    while True:
+        tag = _DOCUMENT_TAG_RE.search(text, position)
+        if tag is None:
+            return found
+        outside: list[str] = []
+        i = tag.end()
+        end = None
+        while i < len(text):
+            ch = text[i]
+            if ch == ">":
+                end = i
+                break
+            if ch in "\"'":
+                close = text.find(ch, i + 1)
+                if close == -1:
+                    return found  # an unterminated quote swallows the rest
+                outside.append(_blank(text[i : close + 1]))
+                i = close + 1
+                continue
+            if ch == "{" and text.startswith(("{%", "{{"), i):
+                closer = "%}" if text[i + 1] == "%" else "}}"
+                line_end = text.find("\n", i)
+                close = text.find(closer, i + 2, len(text) if line_end == -1 else line_end)
+                if close != -1:
+                    outside.append(_blank(text[i : close + 1]) + "}")
+                    i = close + 2
+                    continue
+            outside.append(ch)
+            i += 1
+        if end is None:
+            return found
+        attr = _DOCUMENT_ROOT_ATTR_RE.search("".join(outside) + ">")
+        if attr is not None:
+            found.append((tag.start(), tag.group(1).lower(), attr.group(1).lower()))
+        position = end + 1
 
 
 @register("djust")
@@ -704,7 +789,7 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
         if (
             has_djust_view
             and not _is_check_suppressed("djust.T002")
-            and not _DJ_DOCUMENT_ROOT_RE.search(_document_root_scan_text(content))
+            and not _find_document_roots(_document_root_scan_text(content))
         ):
             markup = page()
             if (
@@ -1636,13 +1721,11 @@ def _check_document_element_root(
     from .bindings import noqa_state
 
     scan = _document_root_scan_text(content)
-    for match in _DJ_DOCUMENT_ROOT_RE.finditer(scan):
-        lineno = scan[: match.start()].count("\n") + 1
+    for offset, tag_name, attr in _find_document_roots(scan):
+        lineno = scan[:offset].count("\n") + 1
         state = noqa_state(filepath, lineno, "T025")
         if state == "suppressed":
             continue
-        tag_name = match.group(1).lower()
-        attr = match.group(2).lower()
         hint = (
             "Put %s on one element inside <body> that wraps the whole "
             "page content, such as <div dj-root> or <main dj-root>. "

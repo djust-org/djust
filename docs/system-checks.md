@@ -793,7 +793,8 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
   is required, as for T024)
 - **False positives**: The match is scoped to the same tag and reads quoted
   attribute values as units, so `<header>`, `<htmlx>`, `<body-wrapper>`,
-  `<body title="dj-root">` and a `>` inside a value are handled. Text a browser
+  `<body title="dj-root">` and a `>` inside a value or a `{% if a > b %}` are
+  handled, and `<body {% if x %}dj-root{% endif %}>` is detected. Text a browser
   never reads as markup is skipped: HTML comments and `<script>` bodies. A
   `<style>` body or a `<textarea>` is not skipped; use the `noqa` comment there.
 - **Scope**: Static check only; it does not change how the mount finds the root.

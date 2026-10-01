@@ -11,17 +11,23 @@ import os
 
 import pytest
 
-from djust.checks import _DJ_DOCUMENT_ROOT_RE
+import time
+
+from djust.checks import _document_root_scan_text, _find_document_roots
+
+
+def _hits(markup):
+    return [(tag, attr) for _, tag, attr in _find_document_roots(markup)]
 
 
 @pytest.mark.parametrize("tag", ["html", "head", "body"])
 @pytest.mark.parametrize("attr", ["dj-view", "dj-root"])
 def test_regex_matches_document_elements(tag, attr):
-    assert _DJ_DOCUMENT_ROOT_RE.search('<%s lang="en" %s="x.V">' % (tag, attr)) is not None
+    assert _hits('<%s lang="en" %s="x.V">' % (tag, attr)) == [(tag, attr)]
 
 
 def test_regex_is_case_insensitive_and_tolerates_bare_attribute():
-    assert _DJ_DOCUMENT_ROOT_RE.search("<BODY DJ-ROOT>") is not None
+    assert _hits("<BODY DJ-ROOT>") == [("body", "dj-root")]
 
 
 @pytest.mark.parametrize(
@@ -39,12 +45,28 @@ def test_regex_is_case_insensitive_and_tolerates_bare_attribute():
     ],
 )
 def test_regex_ignores_everything_else(markup):
-    assert _DJ_DOCUMENT_ROOT_RE.search(markup) is None
+    assert _hits(markup) == []
 
 
 def test_regex_walks_quoted_values_so_a_gt_does_not_end_the_tag():
-    assert _DJ_DOCUMENT_ROOT_RE.search('<body data-x="a>b" dj-root>') is not None
-    assert _DJ_DOCUMENT_ROOT_RE.search("<body data-x='a>b' dj-view='x.V'>") is not None
+    assert _hits('<body data-x="a>b" dj-root>') == [("body", "dj-root")]
+    assert _hits("<body data-x='a>b' dj-view='x.V'>") == [("body", "dj-view")]
+
+
+@pytest.mark.parametrize(
+    "markup",
+    [
+        "<body {% if x %}dj-root{% endif %}>",
+        "<body {% if a > b %}dj-root{% endif %} class='c'>",
+        '<body class="{% if x %}a{% endif %}" {{ extra }}dj-root>',
+    ],
+)
+def test_a_template_tag_in_the_tag_is_walked_whole(markup):
+    assert _hits(markup) == [("body", "dj-root")]
+
+
+def test_a_template_tag_does_not_hide_the_real_end_of_the_tag():
+    assert _hits("<body {% if a > b %}class='x'{% endif %}><div dj-root>") == []
 
 
 def _scan(tmp_path, settings, body, ids=("djust.T025",)):
@@ -145,6 +167,11 @@ def test_t002_for_a_root_inside_body_limits_its_reassurance(tmp_path, settings):
         "<!--\n<html dj-view='a.V'>\n--><div>x</div>",
         '<div></div><script>var s = "<body dj-root>";</script>',
         "<script type='text/x'>\n<html dj-view='a.V'>\n</script><div>x</div>",
+        # A browser ends a script at `</script` plus whitespace and junk...
+        "<script>\n<body dj-root>\n</script\t\n bar><div>x</div>",
+        "<script>\n<body dj-root>\n</SCRIPT/><div>x</div>",
+        # ...and a comment at `--!>` as well as `-->`.
+        "<!-- <body dj-root> --!><div>x</div>",
     ],
 )
 def test_comments_and_script_bodies_are_not_markup(tmp_path, settings, body):
@@ -204,3 +231,36 @@ def test_noqa_without_a_reason_does_not_suppress(tmp_path, settings):
 def test_noqa_for_another_check_does_not_suppress(tmp_path, settings):
     found = _scan(tmp_path, settings, "{# noqa: T024 -- other #}\n<body dj-root><p>x</p></body>")
     assert len(found) == 1
+
+
+def test_script_closing_needs_a_tag_name_boundary(tmp_path, settings):
+    # `</scriptx>` does not end the script, so the string literal stays hidden.
+    body = '<script>"<body dj-root>"</scriptx></script><div>x</div>'
+    assert _scan(tmp_path, settings, body) == []
+
+
+def test_markup_after_a_terminated_comment_and_script_is_still_read(tmp_path, settings):
+    body = "<!-- c --!><script>var a;</script\t><body dj-root><p>x</p></body>"
+    assert len(_scan(tmp_path, settings, body)) == 1
+
+
+# -- linear on unterminated input (a nested-quantifier regexp took 14-43 s) ---
+
+
+@pytest.mark.parametrize(
+    "markup",
+    [
+        "<script>\n" * 20000,
+        "<script \n" * 20000,
+        "<!-- \n" * 20000,
+        "<body x='\n" * 20000,
+        '<body x="\n' * 20000,
+        "<body {% if \n" * 20000,
+        "<body {{ \n" * 20000,
+        "</script \n" * 20000,
+    ],
+)
+def test_unterminated_input_is_scanned_in_one_pass(markup):
+    started = time.perf_counter()
+    _find_document_roots(_document_root_scan_text(markup))
+    assert time.perf_counter() - started < 3.0
