@@ -130,6 +130,7 @@ def _generate_content(framework: dict, project: dict, fmt: str) -> str:
     sections.append(_section_lifecycle(framework))
     sections.append(_section_decorators(framework))
     sections.append(_section_conventions(framework))
+    sections.append(_section_security())
 
     # Project-specific
     if project.get("views") or project.get("components"):
@@ -249,6 +250,29 @@ def _section_conventions(framework: dict) -> str:
             lines.append("")
 
     return "\n".join(lines)
+
+
+# Kept as one constant, apart from the schema-driven sections above, so the
+# guidance can be pinned by a test and reviewed as a unit (#3292). Every name in
+# it is documented in docs/website/guides/BEST_PRACTICES.md and
+# docs/website/guides/djust-audit.md; add nothing here that those do not say.
+_SECURITY_SECTION = """\
+## Security
+
+These practices catch common mistakes. They do not make generated code secure on their own: review it.
+
+- **Never mark user-supplied content safe.** Do not use `{{ value|safe }}`, `{% autoescape off %}` or `mark_safe()` on anything a user can influence; `{{ value }}` is auto-escaped. If rich text is required, sanitise it with an allow-list sanitiser first. Build server-side HTML with `format_html()`, and pass values into JavaScript with `json.dumps()`.
+- **Gate who can open a view.** Set `login_required = True` or `permission_required = "app.codename"` on the view (or use `LoginRequiredMixin` / `PermissionRequiredMixin`). A view with neither is public.
+- **Re-check permissions in event handlers that change data.** Auth runs when the view mounts, not on every event. Stack `@permission_required("app.codename")` under `@event_handler`, check object ownership and raise `PermissionDenied` when it fails, and validate every handler argument: it comes from the browser.
+- **Include `{% csrf_token %}`** in every form.
+- **Before finishing, run `python manage.py check` and `python manage.py djust_audit --ast`** and fix what they report. `djust_audit --ast` is a heuristic scan, not a proof: it flags patterns such as `|safe` on a template variable (X006), `{% autoescape off %}` (X007), `mark_safe()` around an interpolated string (X005), event handlers that write to the database with no permission check (X002), object lookups by URL parameter that are not scoped to the user (X001), SQL built by string formatting (X003) and open redirects (X004).
+- In production, set `LIVEVIEW_ALLOWED_MODULES` to the modules that hold your views (it limits which views a client may mount over the WebSocket), and keep `ALLOWED_HOSTS` specific: the WebSocket handshake's `Origin` header is checked against it.
+"""
+
+
+def _section_security() -> str:
+    """Generate the security guidance section."""
+    return _SECURITY_SECTION
 
 
 def _section_project_views(project: dict) -> str:

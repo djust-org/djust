@@ -1,8 +1,13 @@
-"""``djust_ai_context``: never replace a file silently (#3297).
+"""``djust_ai_context``: never replace a file silently (#3297) and carry security guidance (#3292).
 
 #3297: the command opened its target with ``open(path, "w")`` and no check, so a
 hand-written ``CLAUDE.md`` or ``.cursorrules`` was replaced by the generated one
 with exit status 0. It now refuses unless ``--force`` is given.
+
+#3292: the generated text said nothing about XSS (``|safe`` / ``mark_safe``),
+``manage.py check`` or ``djust_audit --ast``, although the tooling that catches
+the commonest mistake exists. The lines are pinned per format so they cannot
+drop out unnoticed.
 """
 
 import os
@@ -78,5 +83,46 @@ def test_missing_file_is_written_without_force(in_tmp, fmt):
 
 def test_print_ignores_an_existing_file(in_tmp):
     (in_tmp / "CLAUDE.md").write_text(HAND_WRITTEN)
-    assert "# CLAUDE.md" in _run("--print")
+    assert "## Security" in _run("--print")
     assert (in_tmp / "CLAUDE.md").read_text() == HAND_WRITTEN
+
+
+# --- the security section ---------------------------------------------------
+
+REQUIRED_LINES = [
+    "## Security",
+    "python manage.py check",
+    "python manage.py djust_audit --ast",
+    "|safe",
+    "mark_safe()",
+    "X006",
+    "login_required",
+    "permission_required",
+    "{% csrf_token %}",
+]
+
+
+@pytest.mark.parametrize("fmt", FORMATS)
+def test_every_format_carries_the_security_section(fmt):
+    content = _run("--format", fmt, "--print")
+    for needle in REQUIRED_LINES:
+        assert needle in content, "%s output lost %r" % (fmt, needle)
+
+
+def test_security_section_makes_no_comparative_claim():
+    content = _run("--print").lower()
+    assert "more secure" not in content
+    assert "secure by default" not in content
+    assert "do not make generated code secure on their own" in content
+
+
+def test_audit_codes_named_in_the_context_exist():
+    # Every X-code the generated text cites must be one djust_audit --ast emits.
+    import re
+
+    from djust.audit_ast import AST_FINDING_CODES
+
+    cited = set(re.findall(r"\bX\d{3}\b", _run("--print")))
+    assert cited, "the security section should cite audit codes"
+    for code in cited:
+        assert code in AST_FINDING_CODES

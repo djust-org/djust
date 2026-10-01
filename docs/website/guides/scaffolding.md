@@ -263,7 +263,8 @@ automatically read a dependency's docs.
 
 `python manage.py djust_ai_context` generates a context file for an AI coding
 assistant from the installed djust version and your project: the template
-directives, lifecycle methods, decorators and conventions, and (when the project defines them) your views, handlers, components and
+directives, lifecycle methods, decorators and conventions, a short security
+section, and (when the project defines them) your views, handlers, components and
 URL routes. It is generated output: rerun it after upgrading djust or adding
 views, and keep your own rules in a separate file.
 
