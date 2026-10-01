@@ -20,8 +20,8 @@
 //! true. The HTML5-spec rewrite landed in **3.12.10**, so 3.12.9 *is* a CPython
 //! 3.12 and djust differs from it on a quarter of the corpus — a reader on
 //! 3.12.9 taking a looser header at its word would expect a match and not get
-//! one. `requires-python` is `>=3.11`, so 3.11 is supported too and
-//! carries the same pre-rewrite parser.
+//! one. `requires-python` is `>=3.10`, so 3.10 and 3.11 are supported too and
+//! carry the same pre-rewrite parser.
 //!
 //! Measured over the 4000 values in the fixture named below, rendering
 //! `{{ p|striptags }}` and comparing against each interpreter's recorded answer
