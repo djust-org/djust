@@ -491,6 +491,8 @@ class TemplateMixin:
         _rust_render_timing: Any
         _sync_done_this_cycle: bool
 
+        def _csrf_token_for_render(self, request: Optional[Any] = None) -> Optional[str]: ...
+
         def _observe_loop_render_cache(self) -> None: ...
 
         def get_context_data(self, **kwargs: Any) -> Dict[str, Any]: ...
@@ -1535,6 +1537,15 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 json_compatible_context = normalize_django_value(rendered_context)
                 for key, value in json_compatible_context.items():
                     safe_keys.extend(_collect_safe_keys(value, key))
+
+            # #3294: the shell needs the same ``csrf_token`` the dj-root gets in
+            # ``_sync_state_to_rust`` (#696); no ``RequestContext`` supplies it
+            # to the Rust engine, so a logout form outside the root rendered
+            # without a token.
+            if "csrf_token" not in json_compatible_context:
+                csrf_token = self._csrf_token_for_render(request)
+                if csrf_token is not None:
+                    json_compatible_context["csrf_token"] = csrf_token
 
             temp_rust.update_state(json_compatible_context)
             if safe_keys:

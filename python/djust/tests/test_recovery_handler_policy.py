@@ -368,6 +368,33 @@ def test_a_djust_block_tags_body_is_scanned(templates):
     assert _recovery_scan(ActivityRecovery) == (frozenset({"restore_state"}), True)
 
 
+def test_the_scan_is_complete_on_a_djust_only_templates_list(templates, tmp_path):
+    """#3299: with only ``DjustTemplateBackend`` configured there is no Django
+    engine of the project's own; a compile-only one is built from its config, so
+    the scan sees the template instead of reporting "incomplete" for every view
+    (it follows ``{% include %}`` and ``{% load %}`` of installed libraries)."""
+    from django.test import override_settings
+    from djust.utils import clear_template_dirs_cache
+    from djust.validation import _RECOVERY_HANDLERS, _recovery_scan
+
+    djust_only = [
+        {
+            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "DIRS": [str(tmp_path / "templates")],
+            "APP_DIRS": False,
+            "OPTIONS": {},
+        }
+    ]
+    with override_settings(TEMPLATES=djust_only):
+        _RECOVERY_HANDLERS.clear()
+        clear_template_dirs_cache()
+        assert _recovery_scan(ActivityRecovery) == (frozenset({"restore_state"}), True)
+        # A computed target is still not a complete answer.
+        _RECOVERY_HANDLERS.clear()
+        assert _recovery_scan(DynamicRecovery)[1] is False
+    _RECOVERY_HANDLERS.clear()
+
+
 @pytest.mark.django_db
 def test_a_djust_tag_does_not_reopen_the_downgrade(templates):
     """PR #3159 review: ``{% dj_flash %}`` made the scan a gap, so the page went

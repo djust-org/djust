@@ -26,6 +26,7 @@ from djust.checks.utils import (
     _parse_python_file,
     _walk_subclasses,
     _get_template_dirs,
+    _blank_template_comments,
     _strip_verbatim_blocks,
     _LIVE_RENDER_TAG_RE,
     _LIVE_RENDER_STICKY_TRUTHY_RE,
@@ -62,10 +63,6 @@ _SERVICE_INSTANCE_KEYWORDS = re.compile(r"(Service|Client|Session|API|Connection
 # ``<div dj-view dj-sticky-view="audio-player" ...>``); that example tag is
 # inside a comment, not the real root, so it must NOT trigger V012. Covers
 # Django block comments, Django inline comments, and HTML comments.
-_DJANGO_COMMENT_BLOCK_RE = re.compile(
-    r"\{%\s*comment\b[^%]*%\}.*?\{%\s*endcomment\s*%\}", re.DOTALL
-)
-_DJANGO_INLINE_COMMENT_RE = re.compile(r"\{#.*?#\}", re.DOTALL)
 _HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 
 
@@ -79,8 +76,7 @@ def _strip_template_comments(content: str) -> str:
     """
     if "{%" not in content and "{#" not in content and "<!--" not in content:
         return content
-    content = _DJANGO_COMMENT_BLOCK_RE.sub("", content)
-    content = _DJANGO_INLINE_COMMENT_RE.sub("", content)
+    content = _blank_template_comments(content)
     content = _HTML_COMMENT_RE.sub("", content)
     return content
 
@@ -767,7 +763,7 @@ def check_sticky_child_optin(app_configs: Any, **kwargs: Any) -> list[CheckMessa
         if relname is None:
             continue
 
-        scan_source = _strip_verbatim_blocks(content)
+        scan_source = _blank_template_comments(_strip_verbatim_blocks(content))
         for match in _LIVE_RENDER_TAG_RE.finditer(scan_source):
             args = match.group(1)
 
