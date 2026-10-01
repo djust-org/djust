@@ -540,6 +540,18 @@ _DJ_TABLE_SECTION_ROOT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# T025 (#3302) -- `dj-view` / `dj-root` on `<html>`, `<head>` or `<body>`. The
+# HTTP render of such a page is complete, but the WebSocket mount looks for the
+# root INSIDE `<body>` and otherwise falls back to its first element child, so
+# a page with several body children mounts with only the first. Same
+# same-tag scoping as T017 above: `[^>]*?` stops at the tag's own `>`, and the
+# trailing `(?![\w-])` rejects `<header>`-style longer tag names (`<head` is a
+# prefix of `<header`).
+_DJ_DOCUMENT_ROOT_RE = re.compile(
+    r"<(html|head|body)(?![\w-])[^>]*?(?<=\s)(dj-view|dj-root)(?=[\s=>/])",
+    re.IGNORECASE,
+)
+
 
 @register("djust")
 def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
@@ -657,7 +669,13 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
         has_djust_root = _DJ_ROOT_RE.search(content)
         page = _LazyPage(content, scan)
 
-        if has_djust_view and not _is_check_suppressed("djust.T002"):
+        # #3302: a root on <html>/<head>/<body> is T025's warning, never
+        # T002's "the page still connects": the WebSocket mount drops content.
+        if (
+            has_djust_view
+            and not _is_check_suppressed("djust.T002")
+            and not _DJ_DOCUMENT_ROOT_RE.search(_strip_verbatim_blocks(content))
+        ):
             markup = page()
             if (
                 markup.resolved
@@ -666,8 +684,8 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
             ):
                 errors.append(
                     DjustInfo(
-                        "%s -- template declares dj-view but no dj-root. The page still "
-                        "connects: djust infers dj-root from dj-view." % relpath,
+                        "%s -- template declares dj-view but no dj-root. A root inside "
+                        "<body> still connects: djust infers dj-root from dj-view." % relpath,
                         hint=(
                             "Write dj-root on the root element instead: <div dj-root>. "
                             "djust stamps dj-view onto it when it renders the page. "
@@ -830,6 +848,9 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
         # T017 -- dj-view / dj-root on a table-section element (#1837)
         _check_table_section_root(content, relpath, filepath, errors)
+
+        # T025 -- dj-view / dj-root on <html>, <head> or <body> (#3302)
+        _check_document_element_root(content, relpath, filepath, errors)
 
         # A070 / A071 -- {% dj_activity %} name validation (v0.7.0).
         # A070 (Warning): tag with no name arg — renders a no-op wrapper
@@ -1556,6 +1577,50 @@ def _check_table_section_root(
                     "`<table>` or a surrounding `<div>`); a table-section "
                     "element is foster-parented at render time and cannot be "
                     "a parse root. (line %d in `%s`)" % (lineno, relpath)
+                ),
+                file_path=filepath,
+                line_number=lineno,
+            )
+        )
+
+
+def _check_document_element_root(
+    content: str, relpath: str, filepath: str, errors: list[CheckMessage]
+) -> None:
+    """T025 (#3302): Detect dj-view / dj-root on ``<html>``, ``<head>`` or ``<body>``.
+
+    The root must be an element inside ``<body>``. With the attribute on the
+    document element the HTTP render is complete, but the WebSocket mount
+    looks for the root inside ``<body>``, else falls back to its first element
+    child: a page with a ``<header>`` and a ``<main>`` under ``<body>`` mounts
+    with the header only, and nothing says so.
+
+    ``{% verbatim %}`` regions are skipped so documentation pages can show the
+    mistake. SCOPE: static check only; the mount-time root detection itself is
+    unchanged.
+    """
+    if _is_check_suppressed("djust.T025"):
+        return
+    scan = _strip_verbatim_blocks(content)
+    for match in _DJ_DOCUMENT_ROOT_RE.finditer(scan):
+        lineno = scan[: match.start()].count("\n") + 1
+        tag_name = match.group(1).lower()
+        attr = match.group(2).lower()
+        errors.append(
+            DjustWarning(
+                "%s:%d -- '%s' is on <%s>. The HTTP render is complete, but the "
+                "WebSocket mount keeps only the first element inside <body>, so "
+                "the live page silently loses the rest." % (relpath, lineno, attr, tag_name),
+                hint=(
+                    "Put %s on one element inside <body> that wraps the whole "
+                    "page content, such as <div dj-root> or <main dj-root>. "
+                    "Suppress this check with "
+                    "DJUST_CONFIG = {'suppress_checks': ['T025']}." % attr
+                ),
+                id="djust.T025",
+                fix_hint=(
+                    "Move `%s` from `<%s>` to a wrapping element inside `<body>` "
+                    "(line %d in `%s`)." % (attr, tag_name, lineno, relpath)
                 ),
                 file_path=filepath,
                 line_number=lineno,
