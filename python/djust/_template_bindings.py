@@ -1058,8 +1058,8 @@ def _installed_libraries() -> dict[str, str]:
         for entry in walk_packages(package.__path__, package.__name__ + "."):
             try:
                 module = import_module(entry[1])
-            except Exception as exc:  # noqa: BLE001 -- one broken library must not stop the scan
-                logger.debug("Skipping template library %s: %s", entry[1], type(exc).__name__)
+            except Exception:  # noqa: BLE001 -- one broken library must not stop the scan
+                logger.debug("Skipping template library %s: it did not import", entry[1])
                 continue
             if hasattr(module, "register"):
                 libraries[entry[1].rsplit(".", 1)[1]] = entry[1]
@@ -1093,8 +1093,8 @@ def _engine_for_djust_backend(backend: Any) -> Any:
             },
             builtins=list(getattr(backend, "template_builtins", [])),
         )
-    except Exception as exc:  # noqa: BLE001 -- the checks must not abort over the scan engine
-        logger.debug("Cannot build the template scan engine: %s", type(exc).__name__)
+    except Exception:  # noqa: BLE001 -- the checks must not abort over the scan engine
+        logger.debug("Cannot build the template scan engine; the binding scan is skipped")
         backend._binding_scan_engine = False
         return None
     backend._binding_scan_engine = engine
