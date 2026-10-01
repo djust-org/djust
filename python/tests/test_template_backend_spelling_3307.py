@@ -79,3 +79,32 @@ def test_app_dirs_gate_recognises_every_spelling(backend):
 @pytest.mark.parametrize("backend", ["no.such.Backend", "os.path.join", 42, None])
 def test_app_dirs_gate_rejects_others(backend):
     assert not is_app_dirs_template_backend(backend)
+
+
+@pytest.mark.parametrize(
+    "backend", [".relative.Backend", "no.such.module.Backend", "djust.template.backend.NoSuchName"]
+)
+def test_unresolvable_backends_are_not_recognised_and_do_not_raise(backend):
+    assert not is_app_dirs_template_backend(backend)
+
+
+def test_a_failed_import_is_not_pinned(tmp_path, monkeypatch):
+    import sys
+
+    from djust.utils import _backend_class_cache
+
+    name = "late_backend_3307"
+    module = tmp_path / ("%s.py" % name)
+    module.write_text("raise RuntimeError('import-time boom')\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    path = "%s.Backend" % name
+    assert not is_app_dirs_template_backend(path)  # import-time error: not a backend, no raise
+    module.write_text(
+        "from djust.template.backend import DjustTemplateBackend\nclass Backend(DjustTemplateBackend): pass\n"
+    )
+    sys.modules.pop(name, None)
+    try:
+        assert is_app_dirs_template_backend(path)  # looked up again, not cached as a failure
+    finally:
+        _backend_class_cache.pop(path, None)
+        sys.modules.pop(name, None)

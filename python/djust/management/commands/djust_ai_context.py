@@ -19,7 +19,10 @@ Usage:
 An existing target file is never overwritten unless ``--force`` is passed.
 """
 
+import contextlib
 import os
+import shutil
+import tempfile
 from typing import Any
 
 from django.core.management.base import BaseCommand, CommandError, CommandParser
@@ -85,15 +88,7 @@ class Command(BaseCommand):
         # ASCII default encoding failed AFTER the file was created), and a
         # failed write must not leave a half-written file behind (#3312).
         if options.get("force", False):
-            # Write beside the target and rename over it, so a failure keeps
-            # the file that is already there.
-            scratch = "%s.%d.tmp" % (output_path, os.getpid())
-            _write_new(scratch, content)
-            try:
-                os.replace(scratch, output_path)
-            except OSError:
-                _discard(scratch)
-                raise
+            _replace_existing(output_path, content)
         else:
             try:
                 _write_new(output_path, content)
@@ -112,6 +107,36 @@ def _discard(path: str) -> None:
         os.unlink(path)
     except FileNotFoundError:
         pass
+
+
+def _replace_existing(path: str, content: str) -> None:
+    """Replace ``path`` with ``content`` so that a failure keeps what was there.
+
+    The text is written to a uniquely named file beside the REAL target (a
+    symlinked ``AGENTS.md -> CLAUDE.md`` is written through, as ``open(path, "w")``
+    did, instead of being replaced by a regular file) and renamed over it. The
+    original's permission bits and, where allowed, owner are carried over, so a
+    0600 file stays 0600.
+    """
+    real = os.path.realpath(path)
+    if not os.path.exists(real):
+        _write_new(real, content)
+        return
+    original = os.stat(real)
+    fd, scratch = tempfile.mkstemp(
+        dir=os.path.dirname(real) or ".", prefix=".%s." % os.path.basename(real), suffix=".tmp"
+    )
+    os.close(fd)
+    try:
+        with open(scratch, "w", encoding="utf-8") as f:
+            f.write(content)
+        shutil.copymode(real, scratch)
+        with contextlib.suppress(OSError):  # chown needs privilege; the mode is what matters
+            os.chown(scratch, original.st_uid, original.st_gid)
+        os.replace(scratch, real)
+    except BaseException:
+        _discard(scratch)
+        raise
 
 
 def _write_new(path: str, content: str) -> None:

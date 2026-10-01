@@ -114,3 +114,55 @@ def test_refusal_still_works(in_tmp):
     with pytest.raises(CommandError, match="--force"):
         _run()
     assert (in_tmp / "CLAUDE.md").read_text() == "mine\n"
+
+
+# --- --force replaces in place: symlinks, modes, stale temp files (#3315 review) ---
+
+
+def test_force_writes_through_a_symlink(in_tmp):
+    (in_tmp / "CLAUDE.md").write_text("old\n")
+    (in_tmp / "AGENTS.md").symlink_to("CLAUDE.md")
+    _run("--output", "AGENTS.md", "--force")
+    assert (in_tmp / "AGENTS.md").is_symlink()
+    assert (in_tmp / "CLAUDE.md").read_text().startswith("# CLAUDE.md")
+    assert (in_tmp / "AGENTS.md").read_text() == (in_tmp / "CLAUDE.md").read_text()
+
+
+def test_force_keeps_the_permission_bits(in_tmp):
+    import stat
+
+    target = in_tmp / "CLAUDE.md"
+    target.write_text("old\n")
+    target.chmod(0o600)
+    _run("--force")
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert target.read_text().startswith("# CLAUDE.md")
+
+
+def test_a_stale_scratch_file_does_not_break_force(in_tmp):
+    import os
+
+    (in_tmp / "CLAUDE.md").write_text("old\n")
+    (in_tmp / ("CLAUDE.md.%d.tmp" % os.getpid())).write_text("stale\n")
+    _run("--force")
+    assert (in_tmp / "CLAUDE.md").read_text().startswith("# CLAUDE.md")
+
+
+def test_force_leaves_no_scratch_file_behind(in_tmp):
+    (in_tmp / "CLAUDE.md").write_text("old\n")
+    _run("--force")
+    assert sorted(p.name for p in in_tmp.iterdir()) == ["CLAUDE.md"]
+
+
+def test_a_failed_force_write_leaves_no_scratch_file(in_tmp, monkeypatch):
+    (in_tmp / "CLAUDE.md").write_text("hand written\n")
+
+    def failing_open(path, mode="r", *args, **kwargs):
+        return _FailingWrite(builtins.open(path, mode, *args, **kwargs))
+
+    monkeypatch.setattr(
+        "djust.management.commands.djust_ai_context.open", failing_open, raising=False
+    )
+    with pytest.raises(OSError):
+        _run("--force")
+    assert sorted(p.name for p in in_tmp.iterdir()) == ["CLAUDE.md"]

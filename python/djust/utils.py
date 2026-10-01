@@ -33,20 +33,36 @@ _APP_DIRS_TEMPLATE_BACKENDS = frozenset(
 )
 
 
-@lru_cache(maxsize=64)
+# Only SUCCESSFUL resolutions are remembered: a backend whose import failed
+# (a typo fixed mid-session by the dev server's reload, a transient import-time
+# error) must be looked up again, not pinned as "not a backend".
+_backend_class_cache: dict[str, type] = {}
+
+
 def _resolve_backend_class(path: str) -> Optional[type]:
     """Import ``path`` and return the class, or ``None`` if it can't be resolved.
 
-    An unimportable ``BACKEND`` is Django's ``templates.E001`` to report, not
-    ours, so it is simply "not recognised" here.
+    A ``BACKEND`` that does not import is Django's ``templates.E001`` to report,
+    not ours, so it is simply "not recognised" here. Anything an import can
+    raise counts (``ImportError``, a ``ValueError`` from a relative ``.foo``,
+    an exception at the module's import time).
     """
+    cached = _backend_class_cache.get(path)
+    if cached is not None:
+        return cached
     from django.utils.module_loading import import_string
 
     try:
         cls = import_string(path)
-    except ImportError:
+    except Exception as exc:  # noqa: BLE001 — see docstring: any import failure means "not ours"
+        from ._exposure_diagnostics import log_failure
+
+        log_failure(logger, exc, "TEMPLATES BACKEND %r did not import", path, level="debug")
         return None
-    return cls if isinstance(cls, type) else None
+    if not isinstance(cls, type):
+        return None
+    _backend_class_cache[path] = cls
+    return cls
 
 
 def is_app_dirs_template_backend(backend: Any) -> bool:

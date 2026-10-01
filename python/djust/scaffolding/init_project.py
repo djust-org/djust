@@ -396,7 +396,7 @@ def _add_extras_to_line(line: str, name: str, extras: set) -> Optional[str]:
     return "%s[%s]%s" % (line[: found.end()], ",".join(sorted(extras | have)), rest)
 
 
-_HASH_OPTION_RE = re.compile(r"(?:^|\s)--hash[=\s]")
+_HASH_OPTION_RE = re.compile(r"(?:^|\s)--(?:hash[=\s]|require-hashes(?:\s|$))")
 
 
 def _uses_hashes(path: Path, seen: Optional[set] = None) -> bool:

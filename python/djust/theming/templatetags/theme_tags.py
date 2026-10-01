@@ -55,7 +55,9 @@ def _resolve_nonce(request: Any, nonce: str | None = None) -> str:
     """The CSP nonce to use: ``nonce`` when given (``""`` means none), else ``request.csp_nonce``."""
     if nonce is None:
         nonce = get_csp_nonce(request)
-    return nonce or ""
+    # ``{% theme_head nonce=request.csp_nonce %}`` passes django-csp's
+    # SimpleLazyObject straight through: ``json.dumps`` rejects it, so make it a str.
+    return str(nonce) if nonce else ""
 
 
 def _nonce_attr(request: Any, nonce: str | None = None) -> str:

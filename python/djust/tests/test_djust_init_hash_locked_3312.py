@@ -93,3 +93,9 @@ def test_dry_run_reports_it_too(tmp_path):
     _write(tmp_path, HASHED)
     result = init.init_project(tmp_path, dry_run=True)
     assert any(s.name == "requirements.txt" and s.status == init.ATTENTION for s in result.steps)
+
+
+def test_a_bare_require_hashes_option_locks_the_file(tmp_path):
+    _write(tmp_path, "--require-hashes\ndjango==5.2.17\n")
+    assert init.plan_requirements(tmp_path) is None
+    assert init.hash_locked_requirements(tmp_path) == init.requirements()

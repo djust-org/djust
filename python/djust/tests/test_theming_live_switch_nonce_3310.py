@@ -80,3 +80,64 @@ class TestThemeElementHasTheId:
 from django.urls import include, path  # noqa: E402
 
 urlpatterns = [path("djust-theming/", include("djust.theming.urls"))]
+
+
+class TestLazyNonceObject:
+    """``{% theme_head nonce=request.csp_nonce %}`` hands django-csp's
+    ``SimpleLazyObject`` straight in; ``json.dumps`` rejects one."""
+
+    @staticmethod
+    def _lazy(value="lazy-n"):
+        from django.utils.functional import SimpleLazyObject
+
+        return SimpleLazyObject(lambda: value)
+
+    def test_theme_head_accepts_a_lazy_explicit_nonce(self):
+        head = _head(_request(), nonce=self._lazy())
+        assert 'window.__djust_theme_nonce = "lazy-n";' in head
+        assert '<script nonce="lazy-n">' in head
+
+    def test_documented_template_form_works_with_a_lazy_request_nonce(self):
+        from django.template import engines
+
+        template = engines["django"].from_string(
+            "{% load theme_tags %}{% theme_head nonce=request.csp_nonce %}"
+        )
+        html = template.render({"request": _request(nonce=self._lazy("tpl-lazy"))})
+        assert 'window.__djust_theme_nonce = "tpl-lazy";' in html
+
+    def test_theme_css_accepts_a_lazy_nonce(self):
+        from djust.theming.templatetags.theme_tags import theme_css
+
+        out = str(theme_css({"request": _request()}, nonce=self._lazy()))
+        assert '<style data-djust-theme nonce="lazy-n">' in out
+
+    def test_framework_overrides_accepts_a_lazy_nonce(self):
+        from unittest import mock
+
+        from djust.theming.templatetags import theme_tags
+
+        class State:
+            pack = "anything"
+
+        class Manager:
+            def get_state(self):
+                return State()
+
+        class Gen:
+            def __init__(self, pack_name):
+                pass
+
+            def _generate_framework_css(self):
+                return ".a{color:red}"
+
+        with (
+            mock.patch.object(theme_tags, "get_theme_manager", return_value=Manager()),
+            mock.patch("djust.theming.pack_css_generator.ThemePackCSSGenerator", Gen),
+        ):
+            html = theme_tags.theme_framework_overrides({"request": _request()}, nonce=self._lazy())
+        assert '<style data-djust-framework-overrides nonce="lazy-n">' in html
+
+    def test_an_empty_lazy_nonce_means_none(self):
+        head = _head(_request(), nonce=self._lazy(""))
+        assert "nonce" not in head
