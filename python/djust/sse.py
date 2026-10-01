@@ -428,6 +428,9 @@ class SSESession:
         # Set once shutdown() queued the close sentinel: the stream reads
         # nothing after it, so later pushes are dropped (#3232).
         self._closed_sentinel_queued = False
+        # Presence untracks scheduled by shutdown() (#3254): held so a task is
+        # not garbage-collected before it finishes, dropped when it does.
+        self._presence_untrack_tasks: set[asyncio.Task] = set()
         # The loop that serves the stream GET. With several event loops
         # (djust serve --loops N, #3128) a later event POST can arrive on
         # another loop; it hops here, because the queue, the locks and the
@@ -637,12 +640,35 @@ class SSESession:
         self.active = False
         view = self.view_instance
         if view is not None:
+            self._untrack_presence(view)
             # The WebSocket disconnect's teardown (#3232, #3239, #3244).
             release_root_view(view, navigation=False, reason="view_disconnect")
             self.view_instance = None
             self.runtime.view_instance = None
         self._put(None)  # None is the sentinel value
         self._closed_sentinel_queued = True
+
+    def _untrack_presence(self, view: Any) -> None:
+        """Untrack a closing view's presence without blocking the loop (#3254).
+
+        ``untrack_presence`` broadcasts through the synchronous channel-layer
+        API, which cannot run on a loop thread, so ``shutdown()`` (synchronous
+        itself) schedules it onto a worker thread, as navigation awaits it
+        (``_replace_view``). With no running loop there is nothing to schedule
+        onto: it runs inline. A view that never tracked presence costs nothing.
+        """
+        if not getattr(view, "_presence_tracked", False):
+            return
+        from ._child_lifecycle import untrack_view_presence
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            untrack_view_presence(view)
+            return
+        task = loop.create_task(sync_to_async(untrack_view_presence)(view))
+        self._presence_untrack_tasks.add(task)
+        task.add_done_callback(self._presence_untrack_tasks.discard)
 
     # ------------------------------------------------------------------ #
     # Interface for _validate_event_security
