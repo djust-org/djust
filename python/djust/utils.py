@@ -21,7 +21,9 @@ logger = logging.getLogger(__name__)
 # fragment-only on the initial GET (#1801).
 #
 # ``djust.template_backend.DjustTemplateBackend`` is a back-compat shim that
-# re-exports the same class, so both dotted paths are recognized.
+# re-exports the same class, so both dotted paths are recognized. The literal
+# set is only the fast path: ``is_app_dirs_template_backend`` resolves any
+# other spelling (or a project subclass) through the class itself (#3307).
 _APP_DIRS_TEMPLATE_BACKENDS = frozenset(
     {
         "django.template.backends.django.DjangoTemplates",
@@ -29,6 +31,45 @@ _APP_DIRS_TEMPLATE_BACKENDS = frozenset(
         "djust.template_backend.DjustTemplateBackend",
     }
 )
+
+
+@lru_cache(maxsize=64)
+def _resolve_backend_class(path: str) -> Optional[type]:
+    """Import ``path`` and return the class, or ``None`` if it can't be resolved.
+
+    An unimportable ``BACKEND`` is Django's ``templates.E001`` to report, not
+    ours, so it is simply "not recognised" here.
+    """
+    from django.utils.module_loading import import_string
+
+    try:
+        cls = import_string(path)
+    except ImportError:
+        return None
+    return cls if isinstance(cls, type) else None
+
+
+def is_app_dirs_template_backend(backend: Any) -> bool:
+    """True when ``TEMPLATES[...]["BACKEND"]`` names the Django or the djust backend.
+
+    Matches by class, not by spelling (#3307): ``djust.template.backend`` and the
+    ``djust.template_backend`` shim name one class, and a project subclass of
+    either is the same kind of backend. djust's backend is identified by its
+    ``_is_djust_template_backend`` marker so this module never imports the
+    backend (which would drag in the Rust extension).
+    """
+    if not isinstance(backend, str):
+        return False
+    if backend in _APP_DIRS_TEMPLATE_BACKENDS:
+        return True
+    cls = _resolve_backend_class(backend)
+    if cls is None:
+        return False
+    from django.template.backends.django import DjangoTemplates
+
+    return issubclass(cls, DjangoTemplates) or bool(
+        getattr(cls, "_is_djust_template_backend", False)
+    )
 
 
 def is_model_list(value: Any) -> bool:
@@ -306,7 +347,7 @@ def _get_template_dirs_cached() -> tuple[str, ...]:
     # ``_APP_DIRS_TEMPLATE_BACKENDS``). Gating on the stock backend name alone
     # dropped every app's templates under djust's own backend (#1801).
     for template_config in settings.TEMPLATES:
-        if template_config["BACKEND"] in _APP_DIRS_TEMPLATE_BACKENDS:
+        if is_app_dirs_template_backend(template_config.get("BACKEND")):
             if template_config.get("APP_DIRS", False):
                 from django.apps import apps
 
