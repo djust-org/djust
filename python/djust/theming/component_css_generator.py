@@ -24,6 +24,14 @@ _DO_NOT_PREFIX = frozenset(
         "uploading",
         "vertical",
         "horizontal",
+        # Emitted without ``{{ css_prefix }}`` by their templates
+        # (``theme_mode_button.html``, ``preset_selector_{grid,list}.html``), and
+        # ``djust.auth`` styles ``.theme-mode-toggle`` by that name (#3277).
+        "theme-mode-toggle",
+        "theme-preset-grid",
+        "theme-preset-btn",
+        "theme-preset-list",
+        "theme-preset-item",
     }
 )
 
