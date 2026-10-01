@@ -1169,7 +1169,9 @@ automatically when django-csp sets it, or pass it yourself with
 `{% theme_head nonce=request.csp_nonce %}`; `nonce=""` turns it off. The
 `{{ theme_head }}` variable (context processor) and `ThemeMixin.theme_head` take
 it from the request too. Without a
-nonce the output is unchanged. The deferred-stylesheet `<link>` still swaps
+nonce the output is unchanged. The same nonce is handed to `theme.js`, which puts
+it on the `<style>` it creates when a preset is switched without a reload, so
+live switching also works under a policy without `'unsafe-inline'`. The deferred-stylesheet `<link>` still swaps
 itself in with an inline `onload` handler, which a nonce does not authorise, so
 under a strict policy use `{% theme_head link_css=True %}` or set
 `critical_css` to `False`.

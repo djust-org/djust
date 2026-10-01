@@ -3,11 +3,15 @@
 {# are framework-generated in theme_tags.py, not user input. #}
 {# cookie_prefix_js and resolved_mode_js are JSON-encoded strings, framework-generated. #}
 {# nonce_attr is built with format_html in build_theme_head_context, so it is already escaped. #}
+{# nonce_js is json.dumps with <, > and & escaped, so it is a safe JS string literal. #}
 {% load static %}
 {% autoescape off %}
 <script{{ nonce_attr }}>
 (function() {
     window.__djust_theme_cookie_prefix = {{ cookie_prefix_js }};
+    {% if nonce_js %}/* CSP nonce, read by theme.js for the style element it creates on a live preset switch. */
+    window.__djust_theme_nonce = {{ nonce_js }};
+    {% endif %}
     /* Single source of truth for the default mode, read by BOTH this script and
        theme.js (via getMode()). theme.js loads `defer`, so it runs after this
        one and re-applies the mode — when it resolved its own fallback the two
