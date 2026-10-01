@@ -688,7 +688,7 @@ body::before {{
             focus_css = """
 *:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 3px hsla(var(--ring), 0.3);
+  box-shadow: 0 0 0 3px hsl(var(--ring) / 0.3);
 }
 """
         elif interact.focus_style == "underline":

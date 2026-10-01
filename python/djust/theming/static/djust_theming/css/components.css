@@ -141,9 +141,9 @@
 }
 
 .btn:focus-visible {
-    outline: none;
-    ring: 2px solid hsl(var(--ring));
-    ring-offset: 2px;
+    /* `ring:` is a Tailwind utility, not a CSS property (#3276). */
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
 }
 
 .btn:disabled {
@@ -290,10 +290,9 @@
     color: hsl(var(--muted-foreground));
 }
 
-.input:focus {
-    outline: none;
-    ring: 2px solid hsl(var(--ring));
-    ring-offset: 2px;
+.input:focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
 }
 
 .input:disabled {
