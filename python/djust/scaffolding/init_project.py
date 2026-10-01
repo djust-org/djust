@@ -396,9 +396,34 @@ def _add_extras_to_line(line: str, name: str, extras: set) -> Optional[str]:
     return "%s[%s]%s" % (line[: found.end()], ",".join(sorted(extras | have)), rest)
 
 
-def plan_requirements(root: Path) -> Optional[FileChange]:
-    path = root / "requirements.txt"
-    old = _read(path)
+_HASH_OPTION_RE = re.compile(r"(?:^|\s)--hash[=\s]")
+
+
+def _uses_hashes(path: Path, seen: Optional[set] = None) -> bool:
+    """Whether ``path`` or a file it includes carries a ``--hash=`` option.
+
+    pip and uv switch to ``--require-hashes`` as soon as ONE requirement has a
+    hash, so every requirement in the tree then needs one.
+    """
+    seen = set() if seen is None else seen
+    if path in seen or not path.is_file():
+        return False
+    seen.add(path)
+    for line in _read(path).splitlines():
+        line = line.split(" #", 1)[0].strip()
+        if not line or line.startswith("#"):
+            continue
+        if _HASH_OPTION_RE.search(line):
+            return True
+        include = _INCLUDE_RE.match(line)
+        if include and _uses_hashes(path.parent / include.group(1), seen):
+            return True
+    return False
+
+
+def _requirement_edits(path: Path) -> Tuple[List[str], dict]:
+    """``(missing, rewrites)``: requirements to append, and extras still needed
+    on a line that already names the package."""
     lines = _requirement_lines(path)
     missing = []
     rewrites = {}  # name -> extras still needed on an existing line
@@ -414,6 +439,36 @@ def plan_requirements(root: Path) -> Optional[FileChange]:
             # Only plain ``name spec`` lines mention it, and none has the extra
             # the scaffold needs (``uvicorn>=0.30`` lacks ``[standard]``).
             rewrites[name] = _extras(req)
+    return missing, rewrites
+
+
+def hash_locked_requirements(root: Path) -> Optional[List[str]]:
+    """What a hash-locked ``requirements.txt`` needs, or None.
+
+    A hash-locked file is never edited (a changed line no longer matches its
+    ``--hash``, an appended one has none, and ``--require-hashes`` refuses the
+    install either way), so ``djust init`` reports these instead. None when the
+    file is not hash-locked or already has everything.
+    """
+    path = root / "requirements.txt"
+    if not _uses_hashes(path):
+        return None
+    missing, rewrites = _requirement_edits(path)
+    if not missing and not rewrites:
+        return None
+    return [req for req in requirements() if req in missing or _requirement_name(req) in rewrites]
+
+
+def _requirement_name(req: str) -> str:
+    return _REQUIREMENT_NAME_RE.match(req).group(1)
+
+
+def plan_requirements(root: Path) -> Optional[FileChange]:
+    path = root / "requirements.txt"
+    if _uses_hashes(path):
+        return None  # see hash_locked_requirements: reported, never edited
+    old = _read(path)
+    missing, rewrites = _requirement_edits(path)
     if not missing and not rewrites:
         return None
     newline = "\r\n" if "\r\n" in old else "\n"
@@ -524,9 +579,26 @@ def init_project(
     result.steps.append(step)
     if snippet:
         result.notes.append("%s is customized. Merge in:\n\n%s" % (step.name, snippet))
-    requirements_change = (
-        plan_requirements(root) if install and action.kind == "requirements" else None
-    )
+    requirements_change = None
+    if install and action.kind == "requirements":
+        needed = hash_locked_requirements(root)
+        if needed:
+            result.steps.append(
+                Step(
+                    "requirements.txt",
+                    ATTENTION,
+                    "hash-locked (--hash): not edited, add %d requirement(s) yourself"
+                    % len(needed),
+                )
+            )
+            result.notes.append(
+                "requirements.txt pins hashes, so djust init left it alone (a changed or "
+                "appended line breaks --require-hashes). Add these to your source "
+                "requirements and recompile with hashes (e.g. pip-compile --generate-hashes "
+                "or uv pip compile --generate-hashes):\n\n%s" % "\n".join(needed)
+            )
+        else:
+            requirements_change = plan_requirements(root)
     result.changes = [c for c in (settings_change, asgi_change, requirements_change) if c]
 
     if action.kind == "uv":

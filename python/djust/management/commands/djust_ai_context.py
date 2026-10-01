@@ -81,17 +81,54 @@ class Command(BaseCommand):
         # The target is often a hand-written file (a CLAUDE.md with project
         # rules), and the generated one replaces it whole: refuse (#3297).
         # Mode "x" makes the existence check and the create one atomic step.
-        try:
-            with open(output_path, "w" if options.get("force", False) else "x") as f:
-                f.write(content)
-        except FileExistsError:
-            raise CommandError(
-                "%s already exists and was not written; the generated file would replace it "
-                "entirely. Rerun with --force to overwrite it, --output to write elsewhere, "
-                "or --print to see the generated text." % output_path
-            ) from None
+        # The text is UTF-8 whatever the locale (it carries an em dash, and an
+        # ASCII default encoding failed AFTER the file was created), and a
+        # failed write must not leave a half-written file behind (#3312).
+        if options.get("force", False):
+            # Write beside the target and rename over it, so a failure keeps
+            # the file that is already there.
+            scratch = "%s.%d.tmp" % (output_path, os.getpid())
+            _write_new(scratch, content)
+            try:
+                os.replace(scratch, output_path)
+            except OSError:
+                _discard(scratch)
+                raise
+        else:
+            try:
+                _write_new(output_path, content)
+            except FileExistsError:
+                raise CommandError(
+                    "%s already exists and was not written; the generated file would replace it "
+                    "entirely. Rerun with --force to overwrite it, --output to write elsewhere, "
+                    "or --print to see the generated text." % output_path
+                ) from None
 
         self.stdout.write(self.style.SUCCESS("Wrote %s" % output_path))
+
+
+def _discard(path: str) -> None:
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+
+
+def _write_new(path: str, content: str) -> None:
+    """Create ``path`` (it must not exist) holding ``content``, as UTF-8.
+
+    Raises ``FileExistsError`` if it exists. Anything that goes wrong after the
+    file was created removes it again, so the rerun is not refused as "already
+    exists" by a 0-byte or truncated leftover.
+    """
+    try:
+        with open(path, "x", encoding="utf-8") as f:
+            f.write(content)
+    except FileExistsError:
+        raise  # not ours: someone else's file, left alone
+    except BaseException:
+        _discard(path)
+        raise
 
 
 def _default_path(fmt: str) -> str:

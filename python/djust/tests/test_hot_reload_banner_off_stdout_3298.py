@@ -92,26 +92,66 @@ def _enable(monkeypatch, tmp_path):
     return djust, override_settings(DEBUG=True, BASE_DIR=tmp_path)
 
 
-def test_banner_is_not_written_twice_when_logging_carries_it(monkeypatch, tmp_path, caplog, capsys):
+def _banner_count(captured):
+    return captured.err.count("[HotReload] Hot reload enabled for directories")
+
+
+@pytest.mark.parametrize(
+    "setup",
+    [
+        "nothing_listens",
+        "djust_info_to_non_console_handler",
+        "root_console_handler_at_warning",
+        "root_console_handler_at_info",
+    ],
+)
+def test_banner_is_on_stderr_exactly_once_whatever_the_logging_config(
+    monkeypatch, tmp_path, capsys, caplog, setup
+):
+    """#3312(5): the banner must not depend on the logging configuration.
+
+    The old ``isEnabledFor(INFO) and hasHandlers()`` guard routed it through
+    ``logger.info`` whenever ANY handler existed (``apps.py`` always installs the
+    observability one), so a ``djust`` logger at INFO with no console handler, or a
+    root console handler at WARNING, printed nothing at all. It is written to
+    stderr directly, once, and never also through logging.
+    """
     import logging
-
-    djust, ctx = _enable(monkeypatch, tmp_path)
-    with ctx, caplog.at_level(logging.INFO, logger="djust"):
-        djust.enable_hot_reload()
-    assert "Hot reload enabled for directories" in caplog.text
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert "[HotReload]" not in captured.err
-
-
-def test_banner_falls_back_to_stderr_when_nothing_listens(monkeypatch, tmp_path, capsys):
-    import logging
+    import sys
 
     djust, ctx = _enable(monkeypatch, tmp_path)
     root = logging.getLogger()
+    djust_logger = logging.getLogger("djust")
+    monkeypatch_level = djust_logger.level
+    monkeypatch_root_level = root.level
     monkeypatch.setattr(root, "handlers", [])
-    with ctx:
-        djust.enable_hot_reload()
+    monkeypatch.setattr(djust_logger, "handlers", [])
+    if setup == "djust_info_to_non_console_handler":
+        monkeypatch.setattr(djust_logger, "level", djust_logger.level)  # restored on teardown
+        djust_logger.setLevel(logging.INFO)
+        djust_logger.addHandler(logging.NullHandler())
+    elif setup == "root_console_handler_at_warning":
+        monkeypatch.setattr(root, "level", root.level)  # restored on teardown
+        root.setLevel(logging.INFO)  # logger passes INFO; the console HANDLER drops it
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setLevel(logging.WARNING)
+        root.addHandler(handler)
+    elif setup == "root_console_handler_at_info":
+        monkeypatch.setattr(djust_logger, "level", djust_logger.level)  # restored on teardown
+        djust_logger.setLevel(logging.INFO)
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setLevel(logging.INFO)
+        root.addHandler(handler)
+    try:
+        with ctx:
+            djust.enable_hot_reload()
+    finally:
+        djust_logger.setLevel(monkeypatch_level)
+        root.setLevel(monkeypatch_root_level)
+        for h in list(root.handlers) + list(djust_logger.handlers):
+            if not isinstance(h, logging.NullHandler):
+                root.removeHandler(h)
+                djust_logger.removeHandler(h)
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert captured.err.count("[HotReload] Hot reload enabled for directories") == 1
+    assert _banner_count(captured) == 1
