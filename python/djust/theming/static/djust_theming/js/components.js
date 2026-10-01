@@ -253,10 +253,43 @@
     }
 
     // =========================================================================
+    // Nav active state (#3318)
+    // =========================================================================
+
+    // ``{% theme_nav_item %}`` decides ``active`` from ``request.path`` when it
+    // renders. A nav outside the swapped ``dj-root`` is never re-rendered by
+    // ``dj-navigate``, so the highlight stayed on the page you left. The tag
+    // stamps ``data-dj-nav="<url>"`` on a link whose state it auto-detected, and
+    // this recomputes that state from ``location.pathname`` with the SAME rule
+    // the tag uses: exact for ``/``, a path prefix for anything else. A link the
+    // app pinned with ``active=`` carries no marker and is left alone.
+    //
+    // It toggles the ``active`` class and ``aria-current`` the template renders,
+    // so server-rendered markup stays correct for first paint and without JS.
+    function updateNavActive(root) {
+        var path = window.location.pathname;
+        (root || document).querySelectorAll('[data-dj-nav]').forEach(function(link) {
+            var url = link.getAttribute('data-dj-nav');
+            var active = url === '/' ? path === '/' : path.indexOf(url) === 0;
+            link.classList.toggle('active', active);
+            if (active) {
+                link.setAttribute('aria-current', 'page');
+            } else if (link.getAttribute('aria-current') === 'page') {
+                link.removeAttribute('aria-current');
+            }
+        });
+    }
+
+    // =========================================================================
     // Initialization
     // =========================================================================
 
     function initAll(root) {
+        // Not subject to the stand-down below: the nav is server-rendered on
+        // every page and only ever moves on the client, which is exactly the
+        // LiveView case.
+        updateNavActive(root);
+
         // Stand down on any page djust is driving.
         //
         // The theming components are server-driven when a LiveView hosts them:
@@ -296,12 +329,27 @@
         initAll(document);
     });
 
+    // The nav sits outside the swapped dj-root, so follow the URL itself:
+    // `djust:navigate-end` is dispatched on `document` when a dj-navigate /
+    // live_redirect lands, and back/forward fires `popstate`.
+    document.addEventListener('djust:navigate-end', function() {
+        updateNavActive(document);
+    });
+    window.addEventListener('popstate', function() {
+        updateNavActive(document);
+    });
+    // A page restored from the back/forward cache keeps the DOM it was left in.
+    window.addEventListener('pageshow', function(e) {
+        if (e.persisted) updateNavActive(document);
+    });
+
     // Expose for manual init
     window.djustComponents = {
         initAll: initAll,
         initModals: initModals,
         initDropdowns: initDropdowns,
         initTabs: initTabs,
+        updateNavActive: updateNavActive,
     };
 
 })();

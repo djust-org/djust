@@ -1067,6 +1067,10 @@ def theme_icon(name: str, size: int = 20) -> SafeString:
     return mark_safe(icons.get(name, ""))
 
 
+# A query string or fragment: such a url is not a plain path match.
+_URL_TAIL_RE = re.compile(r"[?#]")
+
+
 @register.simple_tag(takes_context=True)
 def theme_nav_item(
     context: Context,
@@ -1112,6 +1116,15 @@ def theme_nav_item(
         "url": url,
         "icon": icon,
         "is_active": bool(is_active),
+        # Marker for the client (#3318). Only a link whose state was
+        # auto-detected from the path above carries it: components.js re-runs
+        # that same rule on navigation, for a nav that sits outside dj-root and
+        # is never re-rendered. An explicit ``active=`` is the app's call, and a
+        # url with a query or fragment is not a plain path match.
+        "track_active": active is None
+        and url.startswith("/")
+        and not url.startswith("//")
+        and not _URL_TAIL_RE.search(url),
         "badge": badge,
         "attrs": remaining_attrs,
         "css_prefix": _css_prefix(),

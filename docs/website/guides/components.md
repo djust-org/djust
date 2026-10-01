@@ -1187,6 +1187,38 @@ render exactly what they did before while those blocks are not overridden:
 | `client_config` | `<head>`, before `{% theme_head %}` | `{% load live_tags %}{% djust_client_config %}` |
 | `sidebar_topbar_main`, `sidebar_main`, `topbar_main`, `centered_main` | the layout's whole `<main>` element | supply your own `<main dj-root>` so there is only one |
 
+### Nav items outside `dj-root`
+
+`{% theme_nav_item "Inbox" "/inbox/" %}` works out whether it is active from
+`request.path` when it renders: an exact match for `/`, a path prefix for
+anything else. That is right for the first paint and without JavaScript, but a
+nav that sits outside the swapped `dj-root` (the `sidebar_topbar` layout, or an
+app that supplies its own `<main dj-root>` through the layout's `*_main` blocks)
+is never re-rendered by `dj-navigate`, so on its own the highlight would stay on
+the page you left.
+
+The tag therefore stamps `data-dj-nav="/inbox/"` on every link whose state it
+detected, and `components.js` (loaded by `{% theme_head %}`) recomputes it on
+`djust:navigate-end` and on back/forward, with the same rule, by toggling the
+`active` class and `aria-current="page"` the template already renders. It runs
+on LiveView pages too. Nothing to configure and no server round trip.
+
+- A link rendered with an explicit `active=True` or `active=False` is the app's
+  decision: it carries no marker and the client never touches it.
+- A `url` that is not a plain path (`https://...`, `//...`, or one with a `?` or
+  `#`) carries no marker either.
+- The match is per link, as on the server: with `/admin/` and `/admin/users/`
+  both in the nav, both are active on `/admin/users/`. Pass `active=` yourself
+  if you want only the longest match highlighted.
+- `dj-navigate`'s own `aria-current` sync (exact path match) skips a link that
+  carries `data-dj-nav`, so the two never disagree about a prefix-active link.
+- The client step needs `djust:navigate-end`, which the page-loading bar
+  dispatches; a page that sets `window.djust.pageLoading.enabled = false` still
+  gets the update on back/forward but not on a forward `dj-navigate`.
+
+`{% theme_nav_group %}`, `{% theme_nav %}` and `{% theme_sidebar_nav %}` take
+`active` per item from your data, so they are yours to keep current.
+
 ### Reactive Theme Switching with LiveView
 
 ```python

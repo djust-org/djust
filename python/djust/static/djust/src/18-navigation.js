@@ -646,6 +646,12 @@
     function updateAriaCurrent() {
         const here = window.location.pathname;
         document.querySelectorAll('[dj-navigate]').forEach(function (el) {
+            // A link that carries ``data-dj-nav`` has its own active rule
+            // (theme_nav_item: path PREFIX, not equality, and an ``active``
+            // class) managed by the theme's components.js. Applying this exact
+            // match too would strip the prefix-active link's aria-current on
+            // every patch. (#3318)
+            if (el.hasAttribute('data-dj-nav')) return;
             let dest;
             try {
                 dest = new URL(el.getAttribute('dj-navigate'), window.location.origin);
