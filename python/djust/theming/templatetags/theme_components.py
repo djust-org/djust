@@ -15,6 +15,7 @@ import re
 import uuid
 
 from typing import Any, Optional
+from urllib.parse import unquote
 
 from django import template
 from django.template import Context
@@ -1071,6 +1072,30 @@ def theme_icon(name: str, size: int = 20) -> SafeString:
 _URL_TAIL_RE = re.compile(r"[?#]")
 
 
+def _nav_url_is_plain_path(url: str) -> bool:
+    return url.startswith("/") and not url.startswith("//") and not _URL_TAIL_RE.search(url)
+
+
+def _nav_url_matches(url: str, path: str) -> bool:
+    """Whether a nav link to ``url`` is active on ``path``.
+
+    ``/`` matches only itself. Any other url matches its own path and what is
+    under it, on a SEGMENT boundary (``/docs`` is active on ``/docs/x/`` and
+    ``/docs``, not on ``/docs-old/``), with or without a trailing slash. Both
+    sides are percent-decoded, because ``request.path`` is decoded while a
+    reversed url is not. ``components.js`` (``updateNavActive``) is the same
+    rule: change one, change the other, and the ``PARITY_CASES`` tables in both
+    tests (#3318).
+    """
+    if not _nav_url_is_plain_path(url):
+        return False
+    url, path = unquote(url), unquote(path)
+    if url == "/":
+        return path == "/"
+    base = url.rstrip("/")
+    return path == base or path.startswith(base + "/")
+
+
 @register.simple_tag(takes_context=True)
 def theme_nav_item(
     context: Context,
@@ -1100,16 +1125,14 @@ def theme_nav_item(
     slots, remaining_attrs = _extract_slots(attrs)
     request = context.get("request")
     tmpl = resolve_component_template(request, "nav_item")
+    url = "" if url is None else str(url)
 
     # Auto-detect active state from request.path
     is_active = active
     if is_active is None and request is not None:
         request_path = getattr(request, "path", None)
         if request_path is not None:
-            if url == "/":
-                is_active = request_path == "/"
-            else:
-                is_active = request_path.startswith(url)
+            is_active = _nav_url_matches(url, request_path)
 
     ctx = {
         "label": label,
@@ -1120,11 +1143,9 @@ def theme_nav_item(
         # auto-detected from the path above carries it: components.js re-runs
         # that same rule on navigation, for a nav that sits outside dj-root and
         # is never re-rendered. An explicit ``active=`` is the app's call, and a
-        # url with a query or fragment is not a plain path match.
-        "track_active": active is None
-        and url.startswith("/")
-        and not url.startswith("//")
-        and not _URL_TAIL_RE.search(url),
+        # url that is not a plain path (``?``, ``#``, ``//``, a scheme) is not
+        # a path match.
+        "track_active": active is None and _nav_url_is_plain_path(url),
         "badge": badge,
         "attrs": remaining_attrs,
         "css_prefix": _css_prefix(),

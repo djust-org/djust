@@ -462,6 +462,7 @@ An NProgress-style loading bar appears automatically during TurboNav and `live_r
 
 - `djust:navigate-start` — fires when navigation begins
 - `djust:navigate-end` — fires when the new page renders
+- `djust:path-changed` — fires on `document` whenever the rendered pathname moves (`live_redirect`, `live_patch` to a new path, an auto-navigate click, back/forward), right after history is updated, whether or not the loading bar is enabled; `detail` is `{pathname, search}`. Use it, not `navigate-end`, to keep chrome outside `[dj-root]` in sync with the URL
 
 The `.djust-navigating` CSS class is added to `[dj-root]` during navigation, enabling CSS-only page transitions:
 

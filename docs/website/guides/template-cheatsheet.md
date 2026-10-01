@@ -898,6 +898,7 @@ Page loading bar:
   .djust-navigating             (on [dj-root] during navigation)
   djust:navigate-start          (CustomEvent on document)
   djust:navigate-end            (CustomEvent on document)
+  djust:path-changed            (CustomEvent on document; detail {pathname, search})
 
 Document metadata (Python-side, no template directive):
   self.page_title = "..."              (update document.title)

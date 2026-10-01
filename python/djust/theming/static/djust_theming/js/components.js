@@ -261,16 +261,34 @@
     // ``dj-navigate``, so the highlight stayed on the page you left. The tag
     // stamps ``data-dj-nav="<url>"`` on a link whose state it auto-detected, and
     // this recomputes that state from ``location.pathname`` with the SAME rule
-    // the tag uses: exact for ``/``, a path prefix for anything else. A link the
-    // app pinned with ``active=`` carries no marker and is left alone.
+    // as ``_nav_url_matches`` in ``theme_components.py``: ``/`` matches only
+    // itself; any other url matches its own path and what is under it, on a
+    // segment boundary, with or without a trailing slash; both sides are
+    // percent-decoded. A link the app pinned with ``active=`` carries no marker
+    // and is left alone.
     //
     // It toggles the ``active`` class and ``aria-current`` the template renders,
     // so server-rendered markup stays correct for first paint and without JS.
+    function navDecode(value) {
+        try {
+            return decodeURIComponent(value);
+        } catch (e) {
+            return value;
+        }
+    }
+
+    function navUrlMatches(url, path) {
+        url = navDecode(url);
+        path = navDecode(path);
+        if (url === '/') return path === '/';
+        var base = url.replace(/\/+$/, '');
+        return path === base || path.indexOf(base + '/') === 0;
+    }
+
     function updateNavActive(root) {
         var path = window.location.pathname;
         (root || document).querySelectorAll('[data-dj-nav]').forEach(function(link) {
-            var url = link.getAttribute('data-dj-nav');
-            var active = url === '/' ? path === '/' : path.indexOf(url) === 0;
+            var active = navUrlMatches(link.getAttribute('data-dj-nav'), path);
             link.classList.toggle('active', active);
             if (active) {
                 link.setAttribute('aria-current', 'page');
@@ -329,10 +347,12 @@
         initAll(document);
     });
 
-    // The nav sits outside the swapped dj-root, so follow the URL itself:
-    // `djust:navigate-end` is dispatched on `document` when a dj-navigate /
-    // live_redirect lands, and back/forward fires `popstate`.
-    document.addEventListener('djust:navigate-end', function() {
+    // The nav sits outside the swapped dj-root, so follow the URL itself.
+    // `djust:path-changed` is dispatched on `document` by the client every time
+    // the rendered pathname moves (live_redirect, live_patch with a new path,
+    // an auto-navigate click, back/forward), right after history is updated;
+    // `popstate` is kept as well for a page whose client.js has not mounted.
+    document.addEventListener('djust:path-changed', function() {
         updateNavActive(document);
     });
     window.addEventListener('popstate', function() {

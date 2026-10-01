@@ -648,10 +648,13 @@
         document.querySelectorAll('[dj-navigate]').forEach(function (el) {
             // A link that carries ``data-dj-nav`` has its own active rule
             // (theme_nav_item: path PREFIX, not equality, and an ``active``
-            // class) managed by the theme's components.js. Applying this exact
+            // class) managed by the theme's components.js, when that script is
+            // loaded (it registers window.djustComponents). Applying this exact
             // match too would strip the prefix-active link's aria-current on
-            // every patch. (#3318)
-            if (el.hasAttribute('data-dj-nav')) return;
+            // every patch; without the script (include_js=False) this exact
+            // match stays the only sync. (#3318)
+            if (el.hasAttribute('data-dj-nav') && window.djustComponents &&
+                window.djustComponents.updateNavActive) return;
             let dest;
             try {
                 dest = new URL(el.getAttribute('dj-navigate'), window.location.origin);
@@ -786,8 +789,20 @@
             : '';
 
     function _setRenderedPathname(pathname, search) {
+        const moved = pathname !== _renderedPathname;
         _renderedPathname = pathname;
         _renderedCacheKey = pathname + (typeof search === 'string' ? search : '');
+        // Every path that changes what the address bar shows calls this right
+        // after history is updated, so it is the one place to announce it. A
+        // persistent nav outside [dj-root] (theme_nav_item) re-derives its
+        // active state from this; djust:navigate-end is not enough, since the
+        // page-loading bar only dispatches it for a cross-view live_redirect
+        // with the bar enabled (#3318).
+        if (moved && typeof document !== 'undefined') {
+            document.dispatchEvent(
+                new CustomEvent('djust:path-changed', { detail: { pathname: pathname, search: search } })
+            );
+        }
     }
 
     let _autoNavigateInstalled = false;

@@ -14,15 +14,30 @@ import re
 
 from djust.tests.theming_component_test_base import ComponentTestCase
 
-# (nav item url, current path, active?) -- exact for "/", a path prefix otherwise.
+# (nav item url, request.path, location.pathname, active?). Django reports
+# request.path percent-DECODED and the browser reports location.pathname
+# percent-ENCODED, so the two differ for non-ASCII paths. A url matches its own
+# path and what is under it on a SEGMENT boundary, with or without a trailing
+# slash; "/" matches only itself.
 PARITY_CASES = [
-    ("/", "/", True),
-    ("/", "/inbox/", False),
-    ("/inbox/", "/inbox/", True),
-    ("/inbox/", "/inbox/archive/", True),
-    ("/inbox/", "/other/", False),
-    ("/inbox/", "/", False),
-    ("/inbox/archive/", "/inbox/", False),
+    ("/", "/", "/", True),
+    ("/", "/inbox/", "/inbox/", False),
+    ("/inbox/", "/inbox/", "/inbox/", True),
+    ("/inbox/", "/inbox/archive/", "/inbox/archive/", True),
+    ("/inbox/", "/other/", "/other/", False),
+    ("/inbox/", "/", "/", False),
+    ("/inbox/archive/", "/inbox/", "/inbox/", False),
+    ("/docs", "/docs", "/docs", True),
+    ("/docs", "/docs/", "/docs/", True),
+    ("/docs", "/docs/intro/", "/docs/intro/", True),
+    ("/docs", "/docs-old/", "/docs-old/", False),
+    ("/docs/", "/docs-old/", "/docs-old/", False),
+    ("/docs/", "/docs", "/docs", True),
+    ("/doc", "/docs/", "/docs/", False),
+    ("/caf%C3%A9/", "/caf\u00e9/", "/caf%C3%A9/", True),
+    ("/caf\u00e9/", "/caf\u00e9/", "/caf%C3%A9/", True),
+    ("/caf%C3%A9/", "/caf\u00e9/menu/", "/caf%C3%A9/menu/", True),
+    ("/caf%C3%A9/", "/cafe/", "/cafe/", False),
 ]
 
 _MARKER = re.compile(r'data-dj-nav="([^"]*)"')
@@ -59,10 +74,20 @@ class TestNavItemMarker(ComponentTestCase):
         assert 'data-dj-nav="/a&quot;b/"' in html
 
     def test_server_rendering_follows_the_parity_table(self):
-        for url, path, expected in PARITY_CASES:
+        for url, path, _location, expected in PARITY_CASES:
             html = self.render_component("nav_item", label="X", url=url, request_path=path)
             assert ("active" in self._classes(html)) is expected, (url, path)
             assert ('aria-current="page"' in html) is expected, (url, path)
+
+    def test_no_url_does_not_raise_and_is_never_active(self):
+        for kwargs in ({}, {"request_path": "/"}):
+            html = self.render_component("nav_item", label="X", url=None, **kwargs)
+            assert "data-dj-nav" not in html
+            assert 'aria-current="page"' not in html
+
+    def test_empty_url_is_not_active_on_every_path(self):
+        html = self.render_component("nav_item", label="X", url="", request_path="/anything/")
+        assert 'aria-current="page"' not in html
 
     @staticmethod
     def _classes(html):
