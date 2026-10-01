@@ -706,7 +706,7 @@ class SSESession:
         self._presence_untrack_tasks.add(task)
         task.add_done_callback(self._presence_untrack_done)
 
-    def _presence_untrack_done(self, task: "asyncio.Task[Any]") -> None:
+    def _presence_untrack_done(self, task: "asyncio.Task[Any]") -> None:  # noqa: dead-method-allowed
         """Drop a finished untrack task and log how it failed, if it did."""
         self._presence_untrack_tasks.discard(task)
         if task.cancelled():
