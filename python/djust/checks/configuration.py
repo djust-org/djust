@@ -16,6 +16,7 @@ from djust.checks.utils import (
     DjustError,
     DjustInfo,
     DjustWarning,
+    _blank_template_comments,
     _is_check_suppressed,
     _is_production,
     _walk_subclasses,
@@ -95,7 +96,8 @@ def _check_tailwind_cdn_in_production(errors: list[CheckMessage]) -> None:
                         filepath = os.path.join(root, filename)
                         try:
                             with open(filepath, "r", encoding="utf-8") as f:
-                                content = f.read()
+                                # A mention inside a comment loads nothing.
+                                content = _blank_template_comments(f.read())
                                 # Scan template content for CDN reference (not URL validation)
                                 # nosemgrep: python.lang.security.audit.dangerous-system-call.dangerous-system-call
                                 cdn_domain = "cdn.tailwindcss.com"
@@ -309,7 +311,7 @@ def _check_manual_client_js(errors: list[CheckMessage]) -> None:
                         filepath = os.path.join(root, filename)
                         try:
                             with open(filepath, "r", encoding="utf-8") as f:
-                                lines = f.readlines()
+                                lines = _blank_template_comments(f.read()).split("\n")
                                 for line_num, line in enumerate(lines, 1):
                                     # Look for manual client.js or client.min.js loading
                                     has_manual_ref = (

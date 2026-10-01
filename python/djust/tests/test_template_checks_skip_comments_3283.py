@@ -8,7 +8,11 @@ its line number.
 
 import pytest
 
+import time
+
 from djust.checks import check_accessibility, check_inline_script_csp, check_templates
+from djust.checks.assets import check_undeclared_origins
+from djust.checks.configuration import _check_manual_client_js, _check_tailwind_cdn_in_production
 from djust.checks.utils import _blank_template_comments
 
 
@@ -124,3 +128,76 @@ def test_blanking_preserves_length_and_newlines():
     assert "x" not in blanked and "q" not in blanked
     # Django renders a multi-line {# #} as literal text, so it is not a comment.
     assert "multi" in blanked
+
+
+def test_a_comment_tag_note_may_contain_a_percent_sign():
+    """Django's lexer closes the tag at the first ``%}``; a quoted ``%`` is no exception."""
+    blanked = _blank_template_comments('a {% comment "100% sure" %}<input>{% endcomment %} b')
+    assert "input" not in blanked and blanked.startswith("a ") and blanked.endswith(" b")
+
+
+def test_blanking_keeps_every_line_break_the_scans_split_on():
+    source = "x {# a\r b #} {% comment %}\x0b\r\n{% endcomment %} y"
+    assert len(_blank_template_comments(source).splitlines()) == len(source.splitlines())
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "{# x " * 50_000,
+        "{% comment %}" * 20_000,
+        "{# x {% comment %}" * 20_000,
+        "{% comment " * 30_000,
+        "{# x\n" * 50_000 + "#}",
+    ],
+    ids=["hash", "comment-open", "mixed", "comment-no-close", "hash-lines"],
+)
+def test_blanking_is_linear_on_unterminated_openers(source):
+    start = time.perf_counter()
+    _blank_template_comments(source)
+    assert time.perf_counter() - start < 2
+
+
+# -- the sibling scanners that read template source (C010, C012, B010) ----------
+
+_COMMENTED_ASSETS = (
+    "{# <script src=\"{% static 'djust/client.js' %}\"></script> #}\n"
+    '{# <script src="https://cdn.tailwindcss.com"></script> #}\n'
+    "{% comment %}\n"
+    "<script src=\"{% static 'djust/client.js' %}\"></script>\n"
+    '<script src="https://cdn.tailwindcss.com"></script>\n'
+    "{% endcomment %}\n"
+)
+_LIVE_ASSETS = (
+    "<script src=\"{% static 'djust/client.js' %}\"></script>\n"
+    '<script src="https://cdn.tailwindcss.com"></script>\n'
+)
+
+
+def test_c010_and_c012_ignore_comments_and_still_fire_outside_them(tmp_path, settings):
+    _write(settings, tmp_path, _COMMENTED_ASSETS, name="base.html")
+    found = []
+    _check_tailwind_cdn_in_production(found)
+    _check_manual_client_js(found)
+    assert found == []
+
+    _write(settings, tmp_path, _COMMENTED_ASSETS + _LIVE_ASSETS, name="base.html")
+    _check_tailwind_cdn_in_production(found)
+    _check_manual_client_js(found)
+    assert sorted(m.id for m in found) == ["djust.C010", "djust.C012"]
+    (c012,) = [m for m in found if m.id == "djust.C012"]
+    assert c012.line_number == 7  # lines after the comments keep their numbers
+
+
+def test_b010_ignores_comments_but_reads_its_noqa_from_them(tmp_path, settings):
+    _write(
+        settings,
+        tmp_path,
+        '{# <script src="https://cdn.other.example/x.js"></script> #}\n'
+        '<script src="https://cdn.other.example/y.js"></script> {# noqa: B010 #}\n'
+        '{% comment %}<link rel="stylesheet" href="https://cdn.other.example/z.css">{% endcomment %}\n'
+        '<script src="https://cdn.other.example/live.js"></script>\n',
+    )
+    found = check_undeclared_origins(None)
+    assert [m.id for m in found] == ["djust.B010"]
+    assert "page.html:4" in found[0].msg

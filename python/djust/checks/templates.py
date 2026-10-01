@@ -253,9 +253,6 @@ def _embedded_view_templates(source: str) -> set:
 
 
 _EXTENDS_TAG_RE = re.compile(r"\{%\s*extends\s+")
-_TEMPLATE_COMMENT_RE = re.compile(
-    r"\{#.*?#\}|\{%\s*comment\b.*?%\}.*?\{%\s*endcomment\s*%\}", re.DOTALL
-)
 
 
 def _included_elsewhere(real: str, real_dirs: list, included_by: dict) -> bool:
@@ -577,7 +574,7 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                 sources[filepath] = fh.read()
         except OSError:
             continue
-        source = _TEMPLATE_COMMENT_RE.sub("", sources[filepath])
+        source = _blank_template_comments(sources[filepath])
         if "include" in source or "live_render" in source:
             for name in set(_INCLUDE_NAME_RE.findall(source)) | _embedded_view_templates(source):
                 included_by.setdefault(name, set()).add(os.path.realpath(filepath))

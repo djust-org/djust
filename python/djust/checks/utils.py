@@ -375,29 +375,70 @@ _VERBATIM_BLOCK_RE = re.compile(
 )
 
 
-# Django's two comment forms. ``{# ... #}`` is single-line only (Django renders a
-# multi-line one as literal text); ``{% comment %}`` may carry a note and spans
-# lines, and the first ``{% endcomment %}`` closes it.
-_TEMPLATE_COMMENT_RE = re.compile(
-    r"\{#[^\n]*?#\}|\{%\s*comment\b[^%]*%\}.*?\{%\s*endcomment\s*%\}",
-    re.DOTALL,
-)
+# Django's two comment forms, found the way its lexer finds them: a tag is
+# ``{% ... %}`` / ``{# ... #}`` on ONE line (a multi-line ``{# #}`` renders as
+# literal text, and a ``{% comment "100% sure" %}`` note may contain ``%``);
+# ``{% comment %}`` then runs to the first ``{% endcomment %}``.
+_COMMENT_OPENER = re.compile(r"\{#|\{%\s*comment\b")
+_ENDCOMMENT = re.compile(r"\{%\s*endcomment\s*%\}")
+# Every character ``str.splitlines`` breaks on survives blanking, so a scan that
+# splits the blanked text sees the same lines as one that splits the original.
+_LINE_BREAKS = frozenset("\n\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029")
 
 
 def _blank_template_comments(content: str) -> str:
     """Replace every ``{# #}`` and ``{% comment %}...{% endcomment %}`` region
-    with whitespace, keeping newlines so line numbers stay aligned (#3283).
+    with whitespace, keeping line breaks so line numbers stay aligned (#3283).
 
     A comment renders nothing, so markup it mentions (an ``<input>``, ``dj-root``,
     ``<script src>``) is not part of the page. Scan with this, but read pragmas
     that live in comments (``{# noqa: T011 #}``, ``{# djust:partial #}``) from
     the original source.
+
+    Linear in the template: a search that fails once cannot succeed later, so an
+    unterminated opener is remembered rather than re-searched for each repeat.
     """
-    if "{#" not in content and "comment" not in content:
+    if "{#" not in content and "{%" not in content:
         return content
-    return _TEMPLATE_COMMENT_RE.sub(
-        lambda match: "".join("\n" if ch == "\n" else " " for ch in match.group(0)), content
-    )
+    pieces: list[str] = []
+    done = 0
+    position = 0
+    no_endcomment = False
+    # Per opener kind: no closer exists on the current line before this offset.
+    dead_until = {True: -1, False: -1}
+    while True:
+        opener = _COMMENT_OPENER.search(content, position)
+        if opener is None:
+            break
+        position = opener.end()
+        inline = opener.group(0) == "{#"
+        if position <= dead_until[inline]:
+            continue
+        line_end = content.find("\n", position)
+        if line_end == -1:
+            line_end = len(content)
+        closer = content.find("#}" if inline else "%}", position, line_end)
+        if closer == -1:
+            dead_until[inline] = line_end
+            continue
+        end = closer + 2
+        if not inline:
+            if no_endcomment:
+                continue
+            endcomment = _ENDCOMMENT.search(content, end)
+            if endcomment is None:
+                no_endcomment = True
+                continue
+            end = endcomment.end()
+        pieces.append(content[done : opener.start()])
+        pieces.append(
+            "".join(ch if ch in _LINE_BREAKS else " " for ch in content[opener.start() : end])
+        )
+        done = position = end
+    if not pieces:
+        return content
+    pieces.append(content[done:])
+    return "".join(pieces)
 
 
 def _strip_verbatim_blocks(content: str) -> str:

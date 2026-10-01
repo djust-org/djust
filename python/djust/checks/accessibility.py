@@ -73,7 +73,6 @@ _SELF_CLOSING_TAG_RE = re.compile(r"<[a-zA-Z][^>]*/\s*>")
 _ICON_WRAPPER_RE = re.compile(
     r"<(?P<w>i|span|em)\b[^>]*>(?P<wi>.*?)</(?P=w)>", re.IGNORECASE | re.DOTALL
 )
-_TEMPLATE_COMMENT_RE = re.compile(r"\{#.*?#\}", re.DOTALL)
 
 # Y002 — <img> tag missing an `alt` attribute. `alt=""` is the WCAG-
 # correct way to mark a decorative image, so the regex only flags an
@@ -147,7 +146,7 @@ def _content_is_icon_only(inner: str) -> bool:
     """
     stripped = inner
     # Template comments carry no rendered content.
-    stripped = _TEMPLATE_COMMENT_RE.sub(" ", stripped)
+    stripped = _blank_template_comments(stripped)
     # A {{ ... }} or {% ... %} could render visible text — bail out
     # (treat as "has a name", no flag).
     if "{{" in stripped or "{%" in stripped:

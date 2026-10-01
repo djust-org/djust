@@ -63,10 +63,6 @@ _SERVICE_INSTANCE_KEYWORDS = re.compile(r"(Service|Client|Session|API|Connection
 # ``<div dj-view dj-sticky-view="audio-player" ...>``); that example tag is
 # inside a comment, not the real root, so it must NOT trigger V012. Covers
 # Django block comments, Django inline comments, and HTML comments.
-_DJANGO_COMMENT_BLOCK_RE = re.compile(
-    r"\{%\s*comment\b[^%]*%\}.*?\{%\s*endcomment\s*%\}", re.DOTALL
-)
-_DJANGO_INLINE_COMMENT_RE = re.compile(r"\{#.*?#\}", re.DOTALL)
 _HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 
 
@@ -80,8 +76,7 @@ def _strip_template_comments(content: str) -> str:
     """
     if "{%" not in content and "{#" not in content and "<!--" not in content:
         return content
-    content = _DJANGO_COMMENT_BLOCK_RE.sub("", content)
-    content = _DJANGO_INLINE_COMMENT_RE.sub("", content)
+    content = _blank_template_comments(content)
     content = _HTML_COMMENT_RE.sub("", content)
     return content
 
