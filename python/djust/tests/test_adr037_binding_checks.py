@@ -712,3 +712,34 @@ def test_the_ai_schema_event_directives_agree_with_the_directive_table():
         "dj-viewport-bottom",
         "dj-viewport-top",
     }
+
+
+# -- #3299: a TEMPLATES list with only DjustTemplateBackend ---------------------
+
+
+def test_bindings_are_checked_when_templates_lists_only_the_djust_backend(fixture):
+    """``djust new`` writes only ``DjustTemplateBackend``; T019-T022 must still run."""
+    module, templates = fixture
+    djust_only = [
+        {
+            "BACKEND": "djust.template.backend.DjustTemplateBackend",
+            "DIRS": [str(templates)],
+            "APP_DIRS": True,
+            "OPTIONS": {},
+        }
+    ]
+    with override_settings(TEMPLATES=djust_only):
+        from django.template import engines
+
+        assert not any(hasattr(b, "engine") for b in engines.all())
+        assert _ids("Names"), "T019-T022 never ran on a Djust-only TEMPLATES"
+        assert "djust.T019" in _ids("Names")
+        assert not [m for m in check_event_bindings(None) if m.id == "djust.T023"]
+
+
+def test_a_skipped_binding_scan_says_so():
+    """No template engine at all: the checks cannot run, and the output names why."""
+    with override_settings(TEMPLATES=[]):
+        messages = check_event_bindings(None)
+    assert [m.id for m in messages] == ["djust.T023"]
+    assert "skipped" in messages[0].msg

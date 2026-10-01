@@ -1009,14 +1009,46 @@ def _scan_flat(flat: _Flat, label: str, file: str) -> TemplateScan:
 
 
 def django_engine() -> Any:
-    """The project's first Django template engine, or None."""
+    """A Django template engine over the project's template configuration, or None.
+
+    A ``DjangoTemplates`` backend supplies its own. A project whose ``TEMPLATES``
+    lists only ``DjustTemplateBackend`` (what ``djust new`` writes) has no such
+    backend, so one is built from the Djust backend's directories, libraries and
+    builtins: the scans only compile templates, never render them (#3299).
+    """
     from django.template import engines
 
+    djust_backend = None
     for backend in engines.all():
         engine = getattr(backend, "engine", None)
         if engine is not None and hasattr(engine, "get_template"):
             return engine
-    return None
+        if djust_backend is None and getattr(backend, "_is_djust_template_backend", False):
+            djust_backend = backend
+    if djust_backend is None:
+        return None
+    return _engine_for_djust_backend(djust_backend)
+
+
+def _engine_for_djust_backend(backend: Any) -> Any:
+    """A compile-only ``django.template.Engine`` mirroring a ``DjustTemplateBackend``.
+
+    Cached on the backend, which Django rebuilds whenever ``TEMPLATES`` changes.
+    """
+    cached = getattr(backend, "_binding_scan_engine", None)
+    if cached is not None:
+        return cached
+    from django.template import Engine
+
+    engine = Engine(
+        dirs=[str(d) for d in getattr(backend, "template_dirs", [])],
+        app_dirs=False,
+        debug=bool(getattr(backend, "debug", False)),
+        libraries=dict(getattr(backend, "template_libraries", {})),
+        builtins=list(getattr(backend, "template_builtins", [])),
+    )
+    backend._binding_scan_engine = engine
+    return engine
 
 
 def _inline_location(cls: type) -> tuple[str, int]:

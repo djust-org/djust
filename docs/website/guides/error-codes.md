@@ -1221,6 +1221,21 @@ itself.
 
 ---
 
+### T023: Event binding checks skipped
+
+**Severity**: Info
+
+**What causes it**: `T019`-`T022` compile each template with a Django template
+engine. A `TEMPLATES` list with a `DjangoTemplates` entry supplies one, and a
+list with only `DjustTemplateBackend` (what `djust new` writes) has one built
+from the same directories, libraries and builtins. This message appears only
+when `TEMPLATES` configures neither, so there is nothing to scan with and the
+binding checks did not run.
+
+**Fix**: Add a `DjustTemplateBackend` or `DjangoTemplates` entry to `TEMPLATES`.
+
+---
+
 ## Code Quality (Q0xx)
 
 ### Q001: print() statement

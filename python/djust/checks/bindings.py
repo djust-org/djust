@@ -29,7 +29,7 @@ import types
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from django.core.checks import CheckMessage, register
+from django.core.checks import CheckMessage, Info, register
 
 from djust.checks.utils import DjustWarning, _is_check_suppressed
 
@@ -879,4 +879,12 @@ def check_event_bindings(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
         from djust.live_view import LiveView  # noqa: F401
     except ImportError:
         return []
+    if _django_engine() is None:
+        return [
+            Info(
+                "T019-T022 were skipped: no template engine is configured to scan templates with.",
+                hint="Add a DjustTemplateBackend or DjangoTemplates entry to TEMPLATES.",
+                id="djust.T023",
+            )
+        ]
     return _messages(binding_reports())
