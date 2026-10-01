@@ -68,6 +68,9 @@ BUTTON_CONTRACT = ComponentContract(
     optional_context=(
         ContextVar(name="variant", type="str", default="primary"),
         ContextVar(name="size", type="str", default="md"),
+        ContextVar(name="tag", type="str", default="button"),
+        ContextVar(name="href", type="Optional[str]", default=None),
+        ContextVar(name="extra_attrs", type="str", default=""),
         ContextVar(name="css_prefix", type="str", default=""),
         ContextVar(name="attrs", type="dict", default=None),
         ContextVar(name="slot_icon", type="str", default=None),
