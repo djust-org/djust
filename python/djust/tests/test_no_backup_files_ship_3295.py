@@ -17,8 +17,15 @@ REPO = Path(__file__).resolve().parents[3]
 def test_no_tracked_backup_files():
     if not (REPO / ".git").exists():
         pytest.skip("not a git checkout")
+    from tests.git_env import isolated_git_env
+
     out = subprocess.run(
-        ["git", "ls-files", "*.backup"], cwd=REPO, capture_output=True, text=True, check=True
+        ["git", "ls-files", "*.backup"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=True,
+        env=isolated_git_env(),
     ).stdout.split()
     assert out == [], f"tracked *.backup files would ship in the package: {out}"
 
