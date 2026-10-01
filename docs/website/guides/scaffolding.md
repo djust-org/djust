@@ -258,3 +258,27 @@ references. Add project-specific rules there. Note that `djust new` does not
 rewrite an existing project directory; for an existing application, add the
 pointer to whatever agent entry file it already has. Agents do not
 automatically read a dependency's docs.
+
+### `djust_ai_context`
+
+`python manage.py djust_ai_context` generates a context file for an AI coding
+assistant from the installed djust version and your project: the template
+directives, lifecycle methods, decorators and conventions, and (when the project defines them) your views, handlers, components and
+URL routes. It is generated output: rerun it after upgrading djust or adding
+views, and keep your own rules in a separate file.
+
+| Option | Effect |
+|---|---|
+| `--format claude` (default) | Write `CLAUDE.md` |
+| `--format cursor` | Write `.cursorrules` |
+| `--format copilot` | Write `.github/copilot-instructions.md` |
+| `--output PATH` | Write to `PATH` instead of the format's default location |
+| `--print` | Print the text to stdout and write nothing |
+| `--force` | Replace the target file if it already exists |
+
+The default paths are relative to the directory you run the command from. If
+the target file already exists the command refuses, prints the path, and exits
+with status 1 without touching it: the generated file replaces the whole file,
+so a hand-written `CLAUDE.md` would otherwise be lost. Pass `--force` to
+overwrite it, `--output` to write somewhere else, or `--print` to look at the
+generated text first.

@@ -14,12 +14,15 @@ Usage:
     python manage.py djust_ai_context --format cursor    # -> .cursorrules
     python manage.py djust_ai_context --format copilot   # -> .github/copilot-instructions.md
     python manage.py djust_ai_context --format claude --output /path/to/file
+    python manage.py djust_ai_context --format claude --force   # replace an existing file
+
+An existing target file is never overwritten unless ``--force`` is passed.
 """
 
 import os
 from typing import Any
 
-from django.core.management.base import CommandParser, BaseCommand
+from django.core.management.base import BaseCommand, CommandError, CommandParser
 
 
 class Command(BaseCommand):
@@ -45,6 +48,11 @@ class Command(BaseCommand):
             dest="print_stdout",
             help="Print to stdout instead of writing to file",
         )
+        parser.add_argument(
+            "--force",
+            action="store_true",
+            help="Replace the target file if it already exists (it is refused otherwise)",
+        )
 
     def handle(self, *args: Any, **options: Any) -> None:
         from djust.schema import get_framework_schema, get_project_schema
@@ -64,6 +72,15 @@ class Command(BaseCommand):
 
         if output_path is None:
             output_path = _default_path(fmt)
+
+        # The target is often a hand-written file (a CLAUDE.md with project
+        # rules), and the generated one replaces it whole: refuse (#3297).
+        if os.path.exists(output_path) and not options.get("force", False):
+            raise CommandError(
+                "%s already exists and was not written; the generated file would replace it "
+                "entirely. Rerun with --force to overwrite it, --output to write elsewhere, "
+                "or --print to see the generated text." % output_path
+            )
 
         # Ensure parent directory exists
         parent = os.path.dirname(output_path)
