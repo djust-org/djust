@@ -206,7 +206,7 @@ The HTTP page-POST fallback (see [HTTP-Only Mode](http-only-mode.md)) happens to
 Sign in through an ordinary HTTP request instead:
 
 - Use a plain Django login view, or the account pages djust ships ([Accounts](accounts.md)), and link to them with `{% url 'djust_auth:login' %}`.
-- To keep a LiveView form for the UX, validate on the server and then hand the credentials to the real login view with a native form submit: put `dj-trigger-action` on a form whose `action` is the login URL, and call `self.trigger_submit(selector)` from the handler once validation passes. See [`dj-trigger-action`](declarative-ux-attrs.md#dj-trigger-action--selftrigger_submitselector--bridge-to-native-post).
+- To keep a LiveView form for the UX, validate on the server and then hand the credentials to the real login view with a native form submit. Put `dj-submit` and `dj-trigger-action` on the form, with the login URL as its `action`. `dj-submit` sends the form's fields to the handler (a `dj-click` button outside the form would send none of them). When validation passes, the handler calls `self.trigger_submit(selector)` and the browser submits the form natively, which bypasses the djust submit handler for that final step. See [`dj-trigger-action`](declarative-ux-attrs.md#dj-trigger-action--selftrigger_submitselector--bridge-to-native-post).
 
 ```python
 from djust import LiveView
@@ -224,20 +224,24 @@ class SignInView(LiveView):
         if not username:
             self.error = "Enter a username."
             return
+        self.error = ""
         self.trigger_submit("#login-form")  # the browser POSTs the form natively
 ```
 
 ```django
 <div dj-root>
   <p>{{ error }}</p>
-  <button dj-click="check">Sign in</button>
-  <form id="login-form" action="{% url 'login' %}" method="POST" dj-trigger-action>
+  <form id="login-form" action="{% url 'login' %}" method="POST"
+        dj-submit="check" dj-trigger-action>
     {% csrf_token %}
     <input name="username">
     <input name="password" type="password">
+    <button type="submit">Sign in</button>
   </form>
 </div>
 ```
+
+The handler receives every field of the form, the password included, so don't store or log them; only the native POST to the login view should act on the credentials.
 
 Logging out is different: `logout()` flushes the session on the server, so the old key stops working at once and nothing has to reach the browser.
 

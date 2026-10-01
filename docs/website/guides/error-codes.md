@@ -1275,7 +1275,9 @@ silently loses the rest."
 **Fix**: Put the attribute on one element inside `<body>` that wraps the whole
 page content, such as `<div dj-root>`. See
 [Template requirements](template-requirements.md). Suppress with
-`DJUST_CONFIG = {"suppress_checks": ["T025"]}`.
+`DJUST_CONFIG = {"suppress_checks": ["T025"]}`, or one match with
+`{# noqa: T025 -- <reason> #}` on its line or the line above. HTML comments,
+`<script>` bodies and `{% verbatim %}` regions are not scanned.
 
 ---
 

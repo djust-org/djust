@@ -780,7 +780,7 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 
 ### T025 — dj-view / dj-root on `<html>`, `<head>` or `<body>`
 - **Severity**: Warning
-- **Method**: Regex (template scan, `{% verbatim %}` regions skipped)
+- **Method**: Regex (template scan; `{% verbatim %}` regions, HTML comments and `<script>` bodies are skipped)
 - **What it detects**: A `dj-view` or `dj-root` attribute on the `<html>`, `<head>`
   or `<body>` tag itself. The HTTP render of such a page is complete, but the
   WebSocket mount looks for the root inside `<body>` and otherwise falls back
@@ -788,9 +788,14 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
   `<body>` mounts with the header only and nothing says so (#3302).
 - **Fix**: Put `dj-root` (or `dj-view`) on one element inside `<body>` that
   wraps the whole page content, such as `<div dj-root>` or `<main dj-root>`.
-- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["T025"]}`
-- **False positives**: None expected; the match is scoped to the same tag, and
-  `<header>`, `<htmlx>` and `<body-wrapper>` are not matched.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["T025"]}`, or one match
+  with `{# noqa: T025 -- <reason> #}` on its line or the line above (the reason
+  is required, as for T024)
+- **False positives**: The match is scoped to the same tag and reads quoted
+  attribute values as units, so `<header>`, `<htmlx>`, `<body-wrapper>`,
+  `<body title="dj-root">` and a `>` inside a value are handled. Text a browser
+  never reads as markup is skipped: HTML comments and `<script>` bodies. A
+  `<style>` body or a `<textarea>` is not skipped; use the `noqa` comment there.
 - **Scope**: Static check only; it does not change how the mount finds the root.
 
 ### T019–T022 — Template event bindings (ADR-037)

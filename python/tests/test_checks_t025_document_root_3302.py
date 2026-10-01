@@ -34,10 +34,17 @@ def test_regex_is_case_insensitive_and_tolerates_bare_attribute():
         "<htmlx dj-root>",
         "<body-wrapper dj-root>",
         '<body class="a">',
+        '<body title="dj-root">',  # attribute VALUE text is not an attribute
+        "<body data-x='dj-view'>",
     ],
 )
 def test_regex_ignores_everything_else(markup):
     assert _DJ_DOCUMENT_ROOT_RE.search(markup) is None
+
+
+def test_regex_walks_quoted_values_so_a_gt_does_not_end_the_tag():
+    assert _DJ_DOCUMENT_ROOT_RE.search('<body data-x="a>b" dj-root>') is not None
+    assert _DJ_DOCUMENT_ROOT_RE.search("<body data-x='a>b' dj-view='x.V'>") is not None
 
 
 def _scan(tmp_path, settings, body, ids=("djust.T025",)):
@@ -126,3 +133,74 @@ def test_t002_for_a_root_inside_body_limits_its_reassurance(tmp_path, settings):
     assert [e.id for e in found] == ["djust.T002"]
     assert "inside <body>" in found[0].msg
     assert os.path.basename(found[0].msg.split(" -- ")[0]) == "t.html"
+
+
+# -- text a browser never reads as markup, and the noqa pragma ---------------
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "<!-- <body dj-root> -->\n<div><p>x</p></div>",
+        "<!--\n<html dj-view='a.V'>\n--><div>x</div>",
+        '<div></div><script>var s = "<body dj-root>";</script>',
+        "<script type='text/x'>\n<html dj-view='a.V'>\n</script><div>x</div>",
+    ],
+)
+def test_comments_and_script_bodies_are_not_markup(tmp_path, settings, body):
+    assert _scan(tmp_path, settings, body) == []
+
+
+def test_a_script_tag_itself_is_still_read(tmp_path, settings):
+    found = _scan(tmp_path, settings, "<body dj-root><script>var a = 1;</script></body>")
+    assert len(found) == 1
+
+
+def test_an_unterminated_comment_runs_to_the_end(tmp_path, settings):
+    assert _scan(tmp_path, settings, "<div>x</div><!-- <body dj-root>") == []
+
+
+def test_line_numbers_survive_blanking(tmp_path, settings):
+    found = _scan(
+        tmp_path,
+        settings,
+        "<!--\nline two\n-->\n<script>\nvar a;\n</script>\n<body dj-root>\n<p>x</p></body>",
+    )
+    assert len(found) == 1 and ":7" in found[0].msg
+
+
+def test_t002_still_fires_when_a_comment_mentions_a_document_root(tmp_path, settings):
+    found = _scan(
+        tmp_path,
+        settings,
+        '<!-- <body dj-view="x.V"> --><section dj-view="app.V"><p>a</p></section>',
+        ids=("djust.T002", "djust.T025"),
+    )
+    assert [e.id for e in found] == ["djust.T002"]
+
+
+def test_noqa_with_a_reason_suppresses_one_match(tmp_path, settings):
+    found = _scan(
+        tmp_path,
+        settings,
+        "{# noqa: T025 -- single-child page, mounts whole #}\n<html dj-root><body><p>x</p></body></html>",
+    )
+    assert found == []
+
+
+def test_noqa_on_the_same_line_suppresses(tmp_path, settings):
+    assert (
+        _scan(tmp_path, settings, "<body dj-root>{# noqa: T025 -- legacy shell #}<p>x</p></body>")
+        == []
+    )
+
+
+def test_noqa_without_a_reason_does_not_suppress(tmp_path, settings):
+    found = _scan(tmp_path, settings, "{# noqa: T025 #}\n<body dj-root><p>x</p></body>")
+    assert len(found) == 1
+    assert "without a reason" in found[0].hint
+
+
+def test_noqa_for_another_check_does_not_suppress(tmp_path, settings):
+    found = _scan(tmp_path, settings, "{# noqa: T024 -- other #}\n<body dj-root><p>x</p></body>")
+    assert len(found) == 1

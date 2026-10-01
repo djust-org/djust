@@ -544,13 +544,43 @@ _DJ_TABLE_SECTION_ROOT_RE = re.compile(
 # HTTP render of such a page is complete, but the WebSocket mount looks for the
 # root INSIDE `<body>` and otherwise falls back to its first element child, so
 # a page with several body children mounts with only the first. Same
-# same-tag scoping as T017 above: `[^>]*?` stops at the tag's own `>`, and the
+# same-tag scoping as T017 above, but the attribute span walks quoted values as
+# units, so a `>` inside `data-x="a>b"` does not end the tag early and text
+# inside a value (`title="dj-root"`) is never read as an attribute. The
 # trailing `(?![\w-])` rejects `<header>`-style longer tag names (`<head` is a
 # prefix of `<header`).
 _DJ_DOCUMENT_ROOT_RE = re.compile(
-    r"<(html|head|body)(?![\w-])[^>]*?(?<=\s)(dj-view|dj-root)(?=[\s=>/])",
+    r"""<(html|head|body)(?![\w-])(?:[^>"']|"[^"]*"|'[^']*')*?(?<=\s)(dj-view|dj-root)(?=[\s=>/])""",
     re.IGNORECASE,
 )
+
+# What T025 must not read: an HTML comment (to its `-->`, or to the end of the
+# file when unterminated, as browsers do) and the body of a `<script>`, which
+# can hold a `"<body dj-root>"` string literal. Only the body is blanked, so
+# the tags themselves stay.
+_HTML_COMMENT_OR_SCRIPT_RE = re.compile(
+    r"<!--.*?(?:-->|\Z)|<script\b[^>]*>(?P<body>.*?)</script\s*>",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _document_root_scan_text(content: str) -> str:
+    """``content`` with verbatim regions, HTML comments and script bodies blanked.
+
+    Line breaks survive, so a match's line number is the template's.
+    """
+    text = _strip_verbatim_blocks(content)
+    if "<!--" not in text and "<script" not in text.lower():
+        return text
+
+    def _blank(match: "re.Match[str]") -> str:
+        start = match.start("body") if match.group("body") is not None else match.start()
+        blanked = "".join(
+            ch if ch in "\n\r" else " " for ch in match.group(0)[start - match.start() :]
+        )
+        return match.group(0)[: start - match.start()] + blanked
+
+    return _HTML_COMMENT_OR_SCRIPT_RE.sub(_blank, text)
 
 
 @register("djust")
@@ -674,7 +704,7 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
         if (
             has_djust_view
             and not _is_check_suppressed("djust.T002")
-            and not _DJ_DOCUMENT_ROOT_RE.search(_strip_verbatim_blocks(content))
+            and not _DJ_DOCUMENT_ROOT_RE.search(_document_root_scan_text(content))
         ):
             markup = page()
             if (
@@ -1595,28 +1625,39 @@ def _check_document_element_root(
     child: a page with a ``<header>`` and a ``<main>`` under ``<body>`` mounts
     with the header only, and nothing says so.
 
-    ``{% verbatim %}`` regions are skipped so documentation pages can show the
-    mistake. SCOPE: static check only; the mount-time root detection itself is
-    unchanged.
+    ``{% verbatim %}`` regions, HTML comments and ``<script>`` bodies are
+    skipped, so a documentation page or a script string can show the mistake.
+    ``{# noqa: T025 -- <reason> #}`` on the line, or the line above, silences one
+    match (the reason is required, as for T024). SCOPE: static check only; the
+    mount-time root detection itself is unchanged.
     """
     if _is_check_suppressed("djust.T025"):
         return
-    scan = _strip_verbatim_blocks(content)
+    from .bindings import noqa_state
+
+    scan = _document_root_scan_text(content)
     for match in _DJ_DOCUMENT_ROOT_RE.finditer(scan):
         lineno = scan[: match.start()].count("\n") + 1
+        state = noqa_state(filepath, lineno, "T025")
+        if state == "suppressed":
+            continue
         tag_name = match.group(1).lower()
         attr = match.group(2).lower()
+        hint = (
+            "Put %s on one element inside <body> that wraps the whole "
+            "page content, such as <div dj-root> or <main dj-root>. "
+            "Suppress this check with "
+            "DJUST_CONFIG = {'suppress_checks': ['T025']}, or one match with "
+            "{# noqa: T025 -- <reason> #}." % attr
+        )
+        if state == "no-reason":
+            hint += " (A noqa comment without a reason does not suppress T025.)"
         errors.append(
             DjustWarning(
                 "%s:%d -- '%s' is on <%s>. The HTTP render is complete, but the "
                 "WebSocket mount keeps only the first element inside <body>, so "
                 "the live page silently loses the rest." % (relpath, lineno, attr, tag_name),
-                hint=(
-                    "Put %s on one element inside <body> that wraps the whole "
-                    "page content, such as <div dj-root> or <main dj-root>. "
-                    "Suppress this check with "
-                    "DJUST_CONFIG = {'suppress_checks': ['T025']}." % attr
-                ),
+                hint=hint,
                 id="djust.T025",
                 fix_hint=(
                     "Move `%s` from `<%s>` to a wrapping element inside `<body>` "
