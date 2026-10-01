@@ -51,6 +51,18 @@ if TYPE_CHECKING:
 register = template.Library()
 
 
+def _nonce_attr(request: Any, nonce: str | None = None) -> str:
+    """`` nonce="..."`` for an inline ``<script>`` / ``<style>``, or ``""``.
+
+    ``nonce`` wins when given (``""`` means none); otherwise ``request.csp_nonce``
+    (django-csp) is used. Built with ``format_html`` so the value is escaped here,
+    once, and safe to place in markup rendered with autoescape off.
+    """
+    if nonce is None:
+        nonce = get_csp_nonce(request)
+    return format_html(' nonce="{}"', nonce) if nonce else ""
+
+
 def build_theme_head_context(
     request: HttpRequest | None,
     include_js: bool = True,
@@ -95,11 +107,7 @@ def build_theme_head_context(
         ``theme_head.html``
         consumes.
     """
-    # A nonce is interpolated into markup rendered with autoescape off, so it
-    # is escaped here, once, into a ready-made attribute (or nothing).
-    if nonce is None:
-        nonce = get_csp_nonce(request)
-    nonce_attr = format_html(' nonce="{}"', nonce) if nonce else ""
+    nonce_attr = _nonce_attr(request, nonce)
 
     # Get current theme state
     if manager is None:
@@ -306,11 +314,13 @@ def theme_head(
 
 
 @register.simple_tag(takes_context=True)
-def theme_css(context: Context) -> SafeString:
+def theme_css(context: Context, nonce: str | None = None) -> SafeString:
     """
     Render only the theme CSS (no scripts).
 
-    Useful when you want more control over script placement.
+    Useful when you want more control over script placement. The ``<style>``
+    carries ``nonce="..."`` like ``{% theme_head %}`` does: ``request.csp_nonce``
+    unless ``nonce=`` is given.
 
     Usage:
         {% theme_css %}
@@ -321,7 +331,9 @@ def theme_css(context: Context) -> SafeString:
 
     css = generate_css_for_state(state, css_prefix=get_css_prefix())
 
-    return format_html("<style data-djust-theme>{}</style>", mark_safe(css))
+    return format_html(
+        "<style data-djust-theme{}>{}</style>", _nonce_attr(request, nonce), mark_safe(css)
+    )
 
 
 @register.simple_tag(takes_context=True)
@@ -378,7 +390,7 @@ def theme_css_link(context: Context) -> SafeString:
 
 
 @register.simple_tag(takes_context=True)
-def theme_framework_overrides(context: Context) -> str:
+def theme_framework_overrides(context: Context, nonce: str | None = None) -> str:
     """
     Render theme-aware CSS overrides for the active CSS framework.
 
@@ -390,6 +402,8 @@ def theme_framework_overrides(context: Context) -> str:
         <link rel="stylesheet" href="bootstrap4.css">
         {% theme_framework_overrides %}
         <link rel="stylesheet" href="base.css">
+
+    The ``<style>`` carries ``nonce="..."`` like ``{% theme_head %}`` does.
     """
     request = context.get("request")
     manager = get_theme_manager(request)
@@ -407,7 +421,9 @@ def theme_framework_overrides(context: Context) -> str:
             # format_html returns a SafeString; the local annotation narrows the
             # untyped-boundary Any (django.utils.html is unstubbed here) to str.
             overrides: str = format_html(
-                "<style data-djust-framework-overrides>{}</style>", mark_safe(fw_css)
+                "<style data-djust-framework-overrides{}>{}</style>",
+                _nonce_attr(request, nonce),
+                mark_safe(fw_css),
             )
             return overrides
     except (ValueError, ImportError):

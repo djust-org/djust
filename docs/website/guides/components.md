@@ -1127,11 +1127,16 @@ binding instead (`theme_button` keeps its documented `onclick=`).
 ```
 
 - `theme_button`: `href=` renders an `<a>`; `element="a"` or `"button"` chooses
-  explicitly (`href=` with `element="button"` raises). `javascript:`,
+  explicitly (`href=` with `element="button"` raises). On an `<a>`, `type=`
+  raises and `disabled=True` renders `aria-disabled="true" tabindex="-1"` with no
+  `href`. A project-level `components/button.html` must render `{{ extra_attrs }}`,
+  `{{ href }}` and branch on `tag` to honour these; `djust_theme check-compat`
+  warns about one that does not. `javascript:`,
   `vbscript:` and `data:` URLs are refused for `href`, `src`, `action` and
   `formaction`.
 - `theme_select`: `value=` marks the option whose `value` equals it (compared
-  as strings, so `3` matches `"3"`) as `selected`; an option dict's own
+  as strings, so `3` matches `"3"`; a list `value=` on a `multiple` select
+  selects every match) as `selected`; an option dict's own
   `"selected"` still works, and the placeholder is selected only when nothing
   else is. `dj_change`, `aria_*` and the other extra keywords land on the
   `<select>`.
@@ -1149,16 +1154,21 @@ block-tag forms are not part of this.
 `{% theme_preset_selector presets="legal,medical,default" %}` lists only those
 presets, in that order (a list works too). To limit every picker on the site,
 set `LIVEVIEW_CONFIG["theme"]["selectable_presets"]` to the same names; the tag
-argument wins over the setting. A name that is not a registered preset raises
-(`ValueError` for the tag argument, `ImproperlyConfigured` for the setting)
-rather than silently dropping a preset from the picker.
+argument wins over the setting, and `presets=""` means no limit. A name that is
+not a registered preset in the tag argument raises `ValueError`. The setting is
+read on every request, so a bad value never raises there: unknown names are
+dropped with one logged warning (all presets are listed when none is usable) and
+`manage.py check` reports it as `djust_theming.W003`.
 
 ### Content-Security-Policy
 
 `{% theme_head %}` carries `nonce="..."` on its inline anti-flash `<script>` and
-on its inline `<style>` blocks when it has one. The nonce is `request.csp_nonce`
+on its inline `<style>` blocks when it has one, and so do `{% theme_css %}` and
+`{% theme_framework_overrides %}`. The nonce is `request.csp_nonce`
 automatically when django-csp sets it, or pass it yourself with
-`{% theme_head nonce=request.csp_nonce %}`; `nonce=""` turns it off. Without a
+`{% theme_head nonce=request.csp_nonce %}`; `nonce=""` turns it off. The
+`{{ theme_head }}` variable (context processor) and `ThemeMixin.theme_head` take
+it from the request too. Without a
 nonce the output is unchanged. The deferred-stylesheet `<link>` still swaps
 itself in with an inline `onload` handler, which a nonce does not authorise, so
 under a strict policy use `{% theme_head link_css=True %}` or set

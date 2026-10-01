@@ -8,6 +8,8 @@ hand-built context.
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
+
 from django.template import engines
 from django.template.loader import render_to_string
 from django.utils.safestring import mark_safe
@@ -280,3 +282,75 @@ class TestSelectPassthrough:
     def test_a_plain_select_has_no_stray_attributes(self):
         html = render('{% theme_select "f" options=opts %}', opts=OPTS)
         assert "dj-" not in html
+
+
+class TestReviewFollowUps:
+    def test_a_trailing_newline_is_not_a_valid_attribute_name(self):
+        with pytest.raises(ValueError, match="valid HTML attribute name"):
+            _passthrough_attrs({"x\n": "v"}, skip=())
+
+    def test_a_disabled_link_button_is_inert_and_says_so(self):
+        html = render('{% theme_button "Go" href="/x/" disabled=True %}')
+        assert html.lstrip().startswith("<a ")
+        assert 'aria-disabled="true"' in html and 'tabindex="-1"' in html
+        assert "href" not in html and "disabled>" not in html
+
+    def test_type_on_a_link_button_is_refused_not_dropped(self):
+        with pytest.raises(ValueError, match="type="):
+            render('{% theme_button "Go" href="/x/" type="submit" %}')
+
+    def test_multiple_select_marks_every_match_of_a_list_value(self):
+        html = render(
+            '{% theme_select "f" options=opts value=chosen multiple=True %}',
+            opts=OPTS,
+            chosen=["a", 2],
+        )
+        assert selected_values(html) == ["a", "2"]
+        assert " multiple" in html.split("<select")[1].split(">")[0]
+
+    def test_tuple_options_render_value_and_label_not_none(self):
+        html = render(
+            '{% theme_select "f" options=opts value="b" %}', opts=[("a", "Alpha"), ("b", "Beta")]
+        )
+        assert "None" not in html
+        assert '<option value="b" selected>Beta</option>' in html.replace("  ", " ").replace(
+            " >", ">"
+        )
+        assert 'value="a"' in html
+
+    def test_an_option_without_a_label_prints_nothing_not_none(self):
+        html = render('{% theme_select "f" options=opts %}', opts=[{"value": "a"}])
+        assert "None" not in html
+
+    @pytest.mark.parametrize("name", ["input", "select", "textarea"])
+    def test_the_field_contracts_name_the_new_context_vars(self, name):
+        from djust.theming.contracts import get_contract
+
+        names = {v.name for v in get_contract(name).optional_context}
+        assert "field_id" in names
+        if name == "select":
+            assert {"extra_attrs", "has_selected_option"} <= names
+        if name == "input":
+            assert "extra_attrs" in names
+
+
+class TestOverridesThatIgnoreThePassthrough:
+    def test_check_compat_warns_about_a_button_override_without_extra_attrs(self, tmp_path):
+        from djust.theming.compat import check_theme_compat
+
+        (tmp_path / "components").mkdir()
+        (tmp_path / "components" / "button.html").write_text("<button>{{ text }}</button>\n")
+        warnings = [i for i in check_theme_compat(tmp_path) if i.severity == "warning"]
+        missing = {w.message.split("'")[1] for w in warnings}
+        assert missing == {"extra_attrs", "href", "tag"}
+
+    def test_the_shipped_button_template_passes_that_check(self, tmp_path):
+        from djust.theming.compat import check_theme_compat
+
+        shipped = (
+            Path(__file__).resolve().parents[1]
+            / "theming/templates/djust_theming/components/button.html"
+        )
+        (tmp_path / "components").mkdir()
+        (tmp_path / "components" / "button.html").write_text(shipped.read_text())
+        assert [i for i in check_theme_compat(tmp_path) if i.severity == "warning"] == []

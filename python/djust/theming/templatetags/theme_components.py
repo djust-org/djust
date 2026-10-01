@@ -74,7 +74,13 @@ def theme_button(
             everything else (``dj_click``, ``dj_value_id``, ``name``,
             ``value``, ``disabled``, ``data_*``, ``aria_*`` ...) is emitted on
             the element, escaped per attribute, underscores becoming hyphens.
-            Other ``on*`` handler attributes are refused.
+            Other ``on*`` handler attributes are refused. On an ``<a>``,
+            ``type=`` raises, and ``disabled=True`` becomes
+            ``aria-disabled="true" tabindex="-1"`` with no ``href``.
+
+            A project-level ``components/button.html`` that predates this must
+            render ``{{ extra_attrs }}``, ``{{ href }}`` and branch on ``tag``
+            to honour them; ``djust_theme check-compat`` flags one that does not.
 
     Usage:
         {% theme_button "Click me" variant="primary" size="md" %}
@@ -92,6 +98,16 @@ def theme_button(
         )
     if href:
         _check_url("href", href)
+    if element == "a":
+        if attrs.get("type") is not None:
+            raise ValueError("theme_button: type= applies to a <button>, not an <a>")
+        if attrs.get("disabled"):
+            # `disabled` does nothing on an anchor: the link stays clickable. Say
+            # it is disabled to assistive tech, take it out of the tab order and
+            # drop the destination.
+            attrs = {k: v for k, v in attrs.items() if k != "disabled"}
+            attrs.update(aria_disabled="true", tabindex="-1")
+            href = None
     request = context.get("request")
     tmpl = resolve_component_template(request, "button")
     # `slot_*` keywords are context, not attributes — the template
@@ -304,7 +320,7 @@ def theme_input(
 # first, then letters, digits and hyphens. Template kwargs are already
 # ``\w+``, but these helpers are plain functions too, so the name is checked
 # rather than trusted — it is written into the tag unescaped.
-_ATTR_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9-]*$")
+_ATTR_NAME_RE = re.compile(r"[A-Za-z][A-Za-z0-9-]*")
 
 # Attributes whose value is a URL the browser will navigate to or load.
 _URL_ATTRS = frozenset({"href", "src", "action", "formaction"})
@@ -341,7 +357,7 @@ def _passthrough_attrs(attrs: dict[str, Any], skip: tuple[str, ...]) -> SafeStri
         if key in skip or value is None or value is False:
             continue
         name = key.replace("_", "-")
-        if not _ATTR_NAME_RE.match(name):
+        if not _ATTR_NAME_RE.fullmatch(name):
             raise ValueError(f"{key!r} is not a valid HTML attribute name")
         if name.lower().startswith("on"):
             raise ValueError(
@@ -609,22 +625,42 @@ def theme_pagination(
     return mark_safe(tmpl.render(ctx))
 
 
+def _option_parts(opt: Any) -> tuple[Any, Any, bool]:
+    """``(value, label, selected)`` of one option: a dict, a ``(value, label)``
+    pair, or an object with ``value`` / ``label`` attributes. Missing parts are
+    ``""`` (what the template printed before) rather than ``"None"``."""
+    if isinstance(opt, dict):
+        value, label, selected = opt.get("value"), opt.get("label"), opt.get("selected")
+    elif isinstance(opt, (tuple, list)):
+        value = opt[0] if len(opt) > 0 else None
+        label = opt[1] if len(opt) > 1 else value
+        selected = None
+    else:
+        value, label, selected = (getattr(opt, key, None) for key in ("value", "label", "selected"))
+    return ("" if value is None else value, "" if label is None else label, bool(selected))
+
+
 def _mark_selected(options: Any, value: Any) -> list[dict[str, Any]]:
-    """Copy ``options`` as ``{value, label, selected}`` dicts, selecting the one
-    whose value equals ``value`` as a string (no copy is mutated in place — the
-    caller's option dicts are shared view state)."""
+    """Copy ``options`` as ``{value, label, selected}`` dicts, selecting those
+    whose value equals ``value`` as a string. A list, tuple or set ``value``
+    (a ``multiple`` select) selects every match. The caller's option dicts are
+    shared view state, so none is mutated."""
+    if value is None:
+        wanted: set[str] = set()
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        wanted = {str(v) for v in value}
+    else:
+        wanted = {str(value)}
     resolved = []
     for opt in options:
-        get = (
-            opt.get
-            if isinstance(opt, dict)
-            else lambda key, default=None: getattr(opt, key, default)
+        opt_value, label, selected = _option_parts(opt)
+        resolved.append(
+            {
+                "value": opt_value,
+                "label": label,
+                "selected": selected or str(opt_value) in wanted,
+            }
         )
-        opt_value = get("value")
-        selected = bool(get("selected", False)) or (
-            value is not None and opt_value is not None and str(opt_value) == str(value)
-        )
-        resolved.append({"value": opt_value, "label": get("label"), "selected": selected})
     return resolved
 
 

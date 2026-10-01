@@ -75,3 +75,65 @@ class TestThemeHeadNonce:
         )
         html = template.render({"request": _request(nonce="tpl-nonce")})
         assert '<script nonce="tpl-nonce">' in html
+
+
+class TestTheOtherPaths:
+    """#3284 was first closed for the tag only; every path that emits the head or
+    an inline ``<style>`` carries the nonce."""
+
+    def test_the_theme_mixin_head_carries_it(self):
+        from djust.theming.mixins import ThemeMixin
+
+        view = ThemeMixin()
+        view.mount(_request(nonce="mixin-nonce"))
+        assert '<script nonce="mixin-nonce">' in str(view.theme_head)
+
+    def test_the_theme_mixin_head_has_none_without_one(self):
+        from djust.theming.mixins import ThemeMixin
+
+        view = ThemeMixin()
+        view.mount(_request())
+        assert "nonce" not in str(view.theme_head)
+
+    def test_the_context_processor_head_carries_it(self):
+        from djust.theming.context_processors import theme_context
+
+        ctx = theme_context(_request(nonce="cp-nonce"))
+        assert '<script nonce="cp-nonce">' in str(ctx["theme_head"])
+
+    def test_theme_css_carries_it(self):
+        from djust.theming.templatetags.theme_tags import theme_css
+
+        assert '<style data-djust-theme nonce="css-nonce">' in str(
+            theme_css({"request": _request(nonce="css-nonce")})
+        )
+        assert '<style data-djust-theme nonce="explicit">' in str(
+            theme_css({"request": _request()}, nonce="explicit")
+        )
+        assert "nonce" not in str(theme_css({"request": _request()}))
+
+    def test_framework_overrides_carry_it(self, settings):
+        from djust.theming.templatetags import theme_tags
+
+        class State:
+            pack = "anything"
+
+        class Manager:
+            def get_state(self):
+                return State()
+
+        class Gen:
+            def __init__(self, pack_name):
+                pass
+
+            def _generate_framework_css(self):
+                return ".a{color:red}"
+
+        from unittest import mock
+
+        with (
+            mock.patch.object(theme_tags, "get_theme_manager", return_value=Manager()),
+            mock.patch("djust.theming.pack_css_generator.ThemePackCSSGenerator", Gen),
+        ):
+            html = theme_tags.theme_framework_overrides({"request": _request(nonce="fw")})
+        assert '<style data-djust-framework-overrides nonce="fw">' in html
