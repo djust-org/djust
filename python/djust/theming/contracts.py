@@ -109,6 +109,7 @@ ALERT_CONTRACT = ComponentContract(
         ContextVar(name="title", type="Optional[str]", default=None),
         ContextVar(name="variant", type="str", default="default"),
         ContextVar(name="dismissible", type="bool", default=False),
+        ContextVar(name="role", type="str", default="alert"),
         ContextVar(name="css_prefix", type="str", default=""),
         ContextVar(name="attrs", type="dict", default=None),
         ContextVar(name="slot_icon", type="str", default=None),
@@ -116,6 +117,9 @@ ALERT_CONTRACT = ComponentContract(
         ContextVar(name="slot_actions", type="str", default=None),
         ContextVar(name="slot_dismiss", type="str", default=None),
     ),
+    # The template source must carry ``role="alert"`` (the compat check reads
+    # source); ``theme_alert`` renders ``role="status"`` instead for the
+    # non-urgent variants (#3280), so rendered-HTML checks use an urgent variant.
     required_elements=(RequiredElement(tag="div", attrs={"role": "alert"}),),
     accessibility=(
         AccessibilityRequirement(

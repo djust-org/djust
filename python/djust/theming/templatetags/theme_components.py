@@ -189,6 +189,10 @@ def theme_badge(context: Context, text: str, variant: str = "default", **attrs: 
     return mark_safe(tmpl.render(ctx))
 
 
+_ASSERTIVE_ALERT_VARIANTS = frozenset({"destructive", "warning"})
+_ALERT_ROLES = frozenset({"alert", "status", "log"})
+
+
 @register.simple_tag(takes_context=True)
 def theme_alert(
     context: Context,
@@ -196,6 +200,7 @@ def theme_alert(
     title: Optional[str] = None,
     variant: str = "default",
     dismissible: bool = False,
+    role: Optional[str] = None,
     **attrs: Any,
 ) -> SafeString:
     """
@@ -204,14 +209,24 @@ def theme_alert(
     Args:
         message: Alert message
         title: Optional alert title
-        variant: 'default', 'success', 'warning', 'destructive'
+        variant: 'default', 'info', 'success', 'warning', 'destructive'
         dismissible: Whether alert can be dismissed
+        role: ARIA live-region role: 'alert' (assertive), 'status' (polite)
+            or 'log'. Defaults to 'alert' for the 'destructive' and 'warning'
+            variants and 'status' for the rest, so a persistent banner does
+            not interrupt a screen reader the way an error should.
         **attrs: Additional HTML attributes
 
     Usage:
         {% theme_alert "Operation successful!" variant="success" dismissible=True %}
         {% theme_alert "Error occurred" title="Error" variant="destructive" %}
+        {% theme_alert "Viewing the record as of 2026-01-01" variant="info" %}
+        {% theme_alert "Saved" variant="success" role="alert" %}
     """
+    if role is None:
+        role = "alert" if variant in _ASSERTIVE_ALERT_VARIANTS else "status"
+    elif role not in _ALERT_ROLES:
+        raise ValueError(f"theme_alert: role must be one of {sorted(_ALERT_ROLES)}, got {role!r}")
     request = context.get("request")
     tmpl = resolve_component_template(request, "alert")
     # `slot_*` keywords are context, not attributes — the template
@@ -223,6 +238,7 @@ def theme_alert(
         "message": message,
         "title": title,
         "variant": variant,
+        "role": role,
         "dismissible": dismissible,
         "attrs": remaining_attrs,
         "css_prefix": _css_prefix(),
