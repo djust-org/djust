@@ -748,9 +748,11 @@ def _check_dead_config_keys(errors: list) -> None:
 def _check_presence_backend(errors: list) -> None:
     """C019 -- unknown ``DJUST_CONFIG['PRESENCE_BACKEND']`` value (#2973).
 
-    The presence registry falls back to the per-process memory backend for any
-    value it does not know, so a typo (or the pre-#2973 ``tenant_redis``,
-    which the registry did not accept) silently loses cross-process presence.
+    The presence registry raises ``ImproperlyConfigured`` for a value it does
+    not know, on first use. Before #2973 it silently built the per-process
+    memory backend (a typo, or ``tenant_redis``, which it did not accept), so
+    cross-process presence quietly stopped working. The check reports the same
+    value at startup, before the first presence call.
     """
     from ..backends.registry import KNOWN_PRESENCE_BACKENDS
     from ..config import get_djust_config
@@ -761,9 +763,9 @@ def _check_presence_backend(errors: list) -> None:
     if value is None or value in KNOWN_PRESENCE_BACKENDS:
         return
     errors.append(
-        DjustWarning(
+        DjustError(
             "DJUST_CONFIG['PRESENCE_BACKEND'] is %r, which djust does not know; "
-            "presence falls back to the in-memory backend (one process only)." % (value,),
+            "the first presence call raises ImproperlyConfigured." % (value,),
             hint=(
                 "Use one of: %s. Suppress with DJUST_CONFIG = "
                 "{'suppress_checks': ['C019']}." % ", ".join(KNOWN_PRESENCE_BACKENDS)

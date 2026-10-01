@@ -276,9 +276,9 @@ In development, pages render without Tailwind utilities until you compile the CS
 
 ### C019: Unknown PRESENCE_BACKEND
 
-**Severity**: Warning
+**Severity**: Error
 
-**What causes it**: `DJUST_CONFIG['PRESENCE_BACKEND']` is set to a value djust doesn't know ("DJUST_CONFIG['PRESENCE_BACKEND'] is '...', which djust does not know; presence falls back to the in-memory backend (one process only)."). A dotted class path counts as unknown: the setting takes a short name.
+**What causes it**: `DJUST_CONFIG['PRESENCE_BACKEND']` is set to a value djust doesn't know ("DJUST_CONFIG['PRESENCE_BACKEND'] is '...', which djust does not know; the first presence call raises ImproperlyConfigured."). A dotted class path counts as unknown: the setting takes a short name. Before 1.3 djust fell back to in-process memory here, so a typo quietly turned cross-process presence into per-process presence.
 
 **Fix**: Use `'redis'` or `'tenant_redis'` for presence shared between processes, or `'memory'` / `'tenant_memory'` for a single process. Suppress with `DJUST_CONFIG = {"suppress_checks": ["C019"]}`.
 

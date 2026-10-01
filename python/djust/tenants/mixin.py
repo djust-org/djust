@@ -65,7 +65,7 @@ class TenantMixin:
     - Makes tenant available as self.tenant in all methods
     - Adds tenant to template context automatically
     - Provides tenant-scoped presence keys
-    - Integrates with tenant-aware state backends
+    - Keys saved view state by tenant (``get_state_key_prefix()``)
 
     Usage::
 
@@ -289,9 +289,14 @@ class TenantMixin:
 
     def get_state_key_prefix(self) -> str:
         """
-        Get prefix for state storage keys.
+        Get the tenant prefix for this view's saved-state key.
 
-        Used by tenant-aware state backends to isolate state per tenant.
+        ``_initialize_rust_view`` prepends ``<prefix>:`` to the state-backend
+        key, so one session that reaches two tenants on the same URL keeps two
+        entries (#2973). Returns ``"tenant:<id>"``, or ``""`` when no tenant is
+        resolved; the empty string means *no saved state* for this view, never
+        the shared unprefixed key. Override it to change the scope, keeping
+        that rule.
         """
         if self._tenant:
             return f"tenant:{self._tenant.id}"

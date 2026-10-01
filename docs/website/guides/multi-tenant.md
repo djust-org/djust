@@ -306,21 +306,47 @@ class OnboardingView(TenantMixin, LiveView):
 
 ## View state and tenants
 
-There is no tenant-aware *state* backend. `DJUST_STATE_BACKEND` (or
-`DJUST_CONFIG['STATE_BACKEND']`) accepts only `'redis'` (or a `redis://` URL)
-and `'memory'`; **any other value, including a dotted path to a class, silently
-falls back to the in-process memory backend**. Don't point it at the classes in
-`djust.tenants.backends`: those are *presence* backends, not state backends.
+Saved view state is keyed by tenant. A view that uses `TenantMixin` stores its
+state in the state backend under `tenant:<id>:<session>_<page>...`, using
+`TenantMixin.get_state_key_prefix()`, which returns `tenant:<id>`. A session
+that reaches two tenants on the same URL (a header or session resolver, or
+`set_tenant()`) therefore holds two separate entries, and tenant A's request
+can never read the state tenant B saved, whatever the session or room ids.
+This applies to every state backend (`memory` and `redis`).
 
-View state is keyed by the user's session and the page path, not by tenant, so
-two users never share view state, whichever tenant they belong to. The keys
-don't include the tenant id, though. If one session can reach several tenants
-on the **same URL** (a header or session resolver, or `set_tenant()`), don't
-rely on the state cache to separate them: include the tenant in the URL, or
-re-derive tenant data in the event handler. `TenantMixin.get_state_key_prefix()`
-returns `tenant:<id>`, but no built-in state backend calls it at this release;
-it is a hook for your own storage (see
-[#2973](https://github.com/djust-org/djust/issues/2973)).
+- **A view without `TenantMixin`** is keyed exactly as before
+  (`<session>_<page>...`). A project that does not use tenants keeps every
+  saved state across the upgrade.
+- **Fail closed:** a tenant view whose tenant is unresolved (for example
+  `tenant_required = False` on a page with no tenant yet) saves and loads no
+  state at all. It never falls back to the shared, unprefixed key. On a
+  reconnect it mounts fresh.
+- **Your own tenant-aware views:** a view that defines its own
+  `get_state_key_prefix()` is keyed by what it returns, and returning an empty
+  string means "no saved state", not "shared state".
+- **Server-persisted fields (`persist="server"`, ADR-038)** live in the Django
+  session, not the state backend. Their stored envelope is bound to the
+  resolved tenant, and an envelope saved under one tenant is refused under
+  another, so the view remounts fresh instead of leaking. They are not
+  re-keyed by tenant: there is one entry per session and view, so switching
+  tenants inside one session remounts, and the other tenant's values are
+  never loaded.
+
+**Upgrading to 1.3:** the state key for tenant views changed, so the saved
+view state those views held under the old key is no longer found. That state is
+the Rust view the state backend stores per session and page (its context and
+the VDOM the next diff is computed against). After you deploy, the first
+reconnect or page load of each tenant view builds a new one and sends a full
+render instead of a patch: a **one-time reset** of the saved view state of
+tenant views. Nothing needs migrating, and the orphaned entries expire with
+`SESSION_TTL`. Views that do not use
+`TenantMixin` are not affected.
+
+`DJUST_STATE_BACKEND` (or `DJUST_CONFIG['STATE_BACKEND']`) accepts only
+`'redis'` (or a `redis://` URL) and `'memory'`; **any other value, including a
+dotted path to a class, falls back to the in-process memory backend**. There is
+no tenant-specific state backend to configure, and the classes in
+`djust.tenants.backends` are *presence* backends, not state backends.
 
 ## Tenant-Aware Presence
 
@@ -389,9 +415,11 @@ turned `'tenant_redis'` into in-process memory
 ([#2973](https://github.com/djust-org/djust/issues/2973)).
 
 Any other value, including a dotted path such as
-`'djust.tenants.backends.TenantAwareRedisBackend'`, falls back to in-process
-memory, which isn't shared between workers. The registry logs a warning and
-the `djust.C019` system check flags it at startup.
+`'djust.tenants.backends.TenantAwareRedisBackend'`, raises
+`ImproperlyConfigured` the first time presence is used, and the `djust.C019`
+system check reports it as an error at startup. Before 1.3 it fell back to
+in-process memory, which isn't shared between workers, with only a log
+warning.
 
 ## Template Context
 

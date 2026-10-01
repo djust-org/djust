@@ -5,9 +5,12 @@
   to become the per-process memory backend, silently).
 - The tenant prefix on the presence key no longer depends on base order:
   ``PresenceMixin`` listed before ``TenantMixin`` used to drop it.
-- ``djust.C019`` warns on an unknown ``PRESENCE_BACKEND`` value.
+- An unknown ``PRESENCE_BACKEND`` value raises ``ImproperlyConfigured`` (it
+  used to build the memory backend, with a log line) and ``djust.C019`` is an
+  error at startup.
 
-The state-key prefix (part 2) is 1.3 work and is not covered here.
+The tenant-keyed state backend key (part 2) is covered by
+``python/djust/tests/test_tenant_state_keys_2973.py``.
 """
 
 from __future__ import annotations
@@ -43,11 +46,60 @@ def test_memory_values_select_the_memory_backend_quietly(value, caplog):
     assert "Unknown PRESENCE_BACKEND" not in caplog.text
 
 
-def test_unknown_value_falls_back_to_memory_and_says_so(caplog):
-    with caplog.at_level("WARNING", logger="djust.backends.registry"):
-        backend = _create_presence_backend("tenant_redsi", {})
-    assert isinstance(backend, InMemoryPresenceBackend)
-    assert "Unknown PRESENCE_BACKEND 'tenant_redsi'" in caplog.text
+@pytest.mark.parametrize("value", ["tenant_redsi", "rediss", "djust.tenants.backends.Foo", ""])
+def test_unknown_value_raises_instead_of_using_memory(value):
+    from django.core.exceptions import ImproperlyConfigured
+
+    with pytest.raises(ImproperlyConfigured, match="Unknown DJUST_CONFIG\\['PRESENCE_BACKEND'\\]"):
+        _create_presence_backend(value, {})
+
+
+def test_tenant_redis_through_the_global_registry_is_redis_not_memory():
+    """The issue's repro: ``PRESENCE_BACKEND = 'tenant_redis'`` read through the
+    registry ``PresenceMixin`` uses. It used to be ``InMemoryPresenceBackend``."""
+    from django.test import override_settings
+
+    from djust.backends.registry import get_presence_backend, reset_presence_backend
+
+    reset_presence_backend()
+    try:
+        with override_settings(DJUST_CONFIG={"PRESENCE_BACKEND": "tenant_redis"}):
+            with patch("djust.backends.redis.RedisPresenceBackend") as redis_cls:
+                backend = get_presence_backend()
+        assert backend is redis_cls.return_value
+    finally:
+        reset_presence_backend()
+
+
+def test_unknown_value_raises_through_the_global_registry():
+    from django.core.exceptions import ImproperlyConfigured
+    from django.test import override_settings
+
+    from djust.backends.registry import get_presence_backend, reset_presence_backend
+
+    reset_presence_backend()
+    try:
+        with override_settings(DJUST_CONFIG={"PRESENCE_BACKEND": "tenant_redsi"}):
+            with pytest.raises(ImproperlyConfigured):
+                get_presence_backend()
+    finally:
+        reset_presence_backend()
+
+
+def test_tenant_presence_manager_rejects_an_unknown_value_too():
+    """The per-tenant factory had its own silent memory fallback."""
+    from django.core.exceptions import ImproperlyConfigured
+    from django.test import override_settings
+
+    from djust.tenants.backends import TenantPresenceManager
+
+    TenantPresenceManager.clear_cache()
+    try:
+        with override_settings(DJUST_CONFIG={"PRESENCE_BACKEND": "tenant_redsi"}):
+            with pytest.raises(ImproperlyConfigured):
+                TenantPresenceManager.for_tenant("acme")
+    finally:
+        TenantPresenceManager.clear_cache()
 
 
 # --- presence key, both base orders ---------------------------------------------
@@ -163,9 +215,12 @@ def test_c019_silent_for_known_values(value):
     assert _c019(cfg) == []
 
 
-def test_c019_warns_for_unknown_value():
+def test_c019_is_an_error_for_unknown_value():
+    from django.core.checks import ERROR
+
     found = _c019({"PRESENCE_BACKEND": "rediss"})
     assert len(found) == 1
+    assert found[0].level == ERROR
     assert "'rediss'" in found[0].msg
     assert "tenant_redis" in found[0].hint
 
