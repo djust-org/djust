@@ -22,7 +22,6 @@ import pytest
 from djust.observability.log_handler import (
     ObservabilityLogHandler,
     _clear_logs,
-    install_handler,
 )
 
 _SCRIPT = textwrap.dedent(
@@ -121,8 +120,14 @@ def probe_logger(monkeypatch):
     capture handlers (installed per test phase) cannot count as "configured".
     """
     _clear_logs()
-    install_handler()  # idempotent; AppConfig.ready() normally did this already
     parent = logging.getLogger("djust")
+    # Production has exactly one handler on ``djust`` (install_handler() is
+    # idempotent). Other tests may have rebuilt logging config, so make sure
+    # one is there without ever adding a second.
+    added = None
+    if not any(isinstance(h, ObservabilityLogHandler) for h in parent.handlers):
+        added = ObservabilityLogHandler(level=logging.DEBUG)
+        parent.addHandler(added)
     child = logging.getLogger("djust.unit_probe_3301")
     seen: list[str] = []
 
@@ -138,6 +143,8 @@ def probe_logger(monkeypatch):
         yield child, seen, fake_root
     finally:
         parent.parent = saved_parent
+        if added is not None:
+            parent.removeHandler(added)
         _clear_logs()
 
 
@@ -179,6 +186,11 @@ def test_unit_non_djust_logger_is_left_alone(probe_logger):
     # The handler is also attached to ``django``; Django owns its own output.
     _, seen, _ = probe_logger
     dj = logging.getLogger("django.unit_probe_3301")
-    assert any(isinstance(h, ObservabilityLogHandler) for h in logging.getLogger("django").handlers)
-    dj.warning("w")
+    parent = logging.getLogger("django")
+    handler = ObservabilityLogHandler(level=logging.DEBUG)
+    parent.addHandler(handler)
+    try:
+        dj.warning("w")
+    finally:
+        parent.removeHandler(handler)
     assert seen == []
