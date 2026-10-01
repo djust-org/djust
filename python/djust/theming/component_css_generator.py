@@ -25,9 +25,11 @@ _DO_NOT_PREFIX = frozenset(
         "vertical",
         "horizontal",
         # Emitted without ``{{ css_prefix }}`` by their templates
-        # (``theme_mode_button.html``, ``preset_selector_{grid,list}.html``), and
-        # ``djust.auth`` styles ``.theme-mode-toggle`` by that name (#3277).
+        # (``theme_mode_button.html``, ``nav.html``, ``nav_item.html``,
+        # ``preset_selector_{grid,list}.html``), and ``djust.auth`` styles
+        # ``.theme-mode-toggle`` by that name (#3277).
         "theme-mode-toggle",
+        "theme-nav-link",
         "theme-preset-grid",
         "theme-preset-btn",
         "theme-preset-list",

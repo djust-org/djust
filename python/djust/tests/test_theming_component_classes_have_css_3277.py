@@ -32,7 +32,8 @@ _TAG = re.compile(r"\{%.*?%\}", re.S)
 _VAR = re.compile(r"\{\{\s*([^}|\s]+)[^}]*\}\}")
 _DYNAMIC = re.compile(r"\x00([^\x00]+)\x00")
 _PREFIX = re.compile(r"\{\{\s*css_prefix\s*\}\}")
-_CSS_CLASS = re.compile(r"(?<![\w-])\.([a-zA-Z_][\w-]*)")
+# No lookbehind: in a selector the second class of ``.a.b`` is a class too.
+_CSS_CLASS = re.compile(r"\.([a-zA-Z_][\w-]*)")
 _COMMENT = re.compile(r"/\*.*?\*/", re.S)
 _QUOTED = re.compile(r"'([\w-]+)'")
 
@@ -201,3 +202,18 @@ def test_classes_templates_emit_unprefixed_stay_unprefixed_under_a_css_prefix():
         assert f".{name}" in css and f".dj-{name}" not in css, name
     # A class the templates DO prefix is still prefixed.
     assert ".dj-select" in css and ".dj-nav-link" in css
+
+
+def test_new_rules_do_not_restyle_djust_components_markup():
+    """djust.components emits ``.alert-icon`` and a Bootstrap-style ``.nav-link`` in its
+    own markup and links its own stylesheet beside this one (#3305 review)."""
+    selectors = [s for _line, s, _d in _flat_rules()]
+    assert ".nav-link" not in selectors and ".nav-link:hover" not in selectors
+    assert ".nav-link.active" not in selectors
+    assert any(".nav-link.theme-nav-link" in s for s in selectors)
+    for _line, selector, decls in _flat_rules():
+        if selector in {".alert-icon", ".alert-actions"}:
+            assert not [k for k in decls if k.startswith("margin")], selector
+    templates = {p.stem: p.read_text("utf-8") for p in COMPONENT_TEMPLATES.glob("nav*.html")}
+    for name in ("nav", "nav_item"):
+        assert "theme-nav-link" in templates[name], name

@@ -113,6 +113,23 @@ class ColorScale:
         return ColorScale(self.h, new_saturation, self.lightness)
 
 
+def _luminance(rgb: Tuple[int, int, int]) -> float:
+    """WCAG relative luminance. Same formula as ``AccessibilityValidator``, which this
+    module may not import (see the note at the top); a test pins that they agree."""
+
+    def lin(channel: int) -> float:
+        c = channel / 255.0
+        return c / 12.92 if c <= 0.03928 else float(((c + 0.055) / 1.055) ** 2.4)
+
+    r, g, b = rgb
+    return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+
+
+def _contrast(a: "ColorScale", b: "ColorScale") -> float:
+    hi, lo = sorted((_luminance(a.to_rgb()), _luminance(b.to_rgb())), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
 @dataclass
 class ThemeTokens:
     """
@@ -201,15 +218,22 @@ class ThemeTokens:
     # Derived surfaces. Not tokens: no preset sets them and no CSS variable is
     # emitted. They exist so the contrast matrix can name the background that
     # ``.alert-*`` and ``.toast-*`` actually paint, which is the status colour
-    # at 10% alpha over the page (``hsl(var(--success) / 0.1)``), and so check
-    # the status colour used as text on it (#3281).
+    # at 10% alpha over whatever it sits on (``hsl(var(--success) / 0.1)``), and
+    # so check the status colour used as text on it (#3281).
     def _tint(self, colour: ColorScale, alpha: float = 0.1) -> ColorScale:
-        """``colour`` at ``alpha`` composited over ``background`` (what the browser paints)."""
+        """``colour`` at ``alpha`` composited over the page or a card, whichever
+        gives the status text LESS contrast. An alert is placed on either, and
+        the check must hold for both."""
         fg = colour.to_rgb()
-        bg = self.background.to_rgb()
-        return ColorScale.from_rgb(
-            *(round(alpha * f + (1 - alpha) * b) for f, b in zip(fg, bg, strict=True))
-        )
+        candidates = []
+        for surface in (self.background, self.card):
+            base = surface.to_rgb()
+            candidates.append(
+                ColorScale.from_rgb(
+                    *(round(alpha * f + (1 - alpha) * b) for f, b in zip(fg, base, strict=True))
+                )
+            )
+        return min(candidates, key=lambda tint: _contrast(colour, tint))
 
     @property
     def success_tint(self) -> ColorScale:

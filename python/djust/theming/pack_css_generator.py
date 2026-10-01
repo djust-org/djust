@@ -687,7 +687,8 @@ body::before {{
         elif interact.focus_style == "glow":
             focus_css = """
 *:focus-visible {
-  outline: none;
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
   box-shadow: 0 0 0 3px hsl(var(--ring) / 0.3);
 }
 """

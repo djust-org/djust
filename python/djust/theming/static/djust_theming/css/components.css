@@ -27,6 +27,10 @@
     display: flex;
     align-items: start;
     justify-content: space-between;
+    /* One `gap` spaces icon, content and actions. A margin on `.alert-icon` or
+       `.alert-actions` would stack with djust.components' own `.alert` gap on
+       the same markup. */
+    gap: 0.75rem;
     padding: 1rem;
     border-radius: var(--radius);
     border: 1px solid;
@@ -424,7 +428,8 @@
 }
 
 .theme-preset-select:focus {
-    outline: none;
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
     border-color: hsl(var(--ring));
     box-shadow: 0 0 0 2px hsl(var(--ring) / 0.2);
 }
@@ -1242,7 +1247,8 @@
 .theme-form-inline input:focus,
 .theme-form-inline select:focus,
 .theme-form-inline textarea:focus {
-    outline: none;
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
     border-color: hsl(var(--ring));
     box-shadow: 0 0 0 2px hsl(var(--ring) / 0.2);
 }
@@ -1657,9 +1663,15 @@ label .text-danger, .form-label .text-danger { color: hsl(var(--destructive)); }
     color: hsl(var(--foreground));
     border: 1px solid hsl(var(--input));
     border-radius: var(--radius);
-    /* Native popup and arrow follow the theme mode, not the OS. */
-    color-scheme: light;
+    /* Native popup and arrow follow the theme mode. With no `data-theme` yet
+       (no JS, or before the head script runs) they follow the OS, as the
+       generated `prefers-color-scheme` tokens do. */
+    color-scheme: light dark;
     transition: all 0.15s ease;
+}
+
+[data-theme="light"] .select {
+    color-scheme: light;
 }
 
 [data-theme="dark"] .select {
@@ -1754,10 +1766,7 @@ label .text-danger, .form-label .text-danger { color: hsl(var(--destructive)); }
 /* Alert: an optional icon on the left, content in the middle, and an actions
    area (buttons, links) before the dismiss button. */
 .alert-icon {
-    display: flex;
     flex-shrink: 0;
-    align-items: center;
-    margin-inline-end: 0.75rem;
 }
 
 .alert-actions {
@@ -1766,11 +1775,14 @@ label .text-danger, .form-label .text-danger { color: hsl(var(--destructive)); }
     flex-wrap: wrap;
     align-items: center;
     gap: 0.5rem;
-    margin-inline-start: 1rem;
 }
 
-/* Navigation link (`{% theme_nav_item %}`, `{% theme_nav %}`) */
-.nav-link {
+/* Navigation link (`{% theme_nav_item %}`, `{% theme_nav %}`).
+   Scoped to the links these tags emit (`.theme-nav-link`), because `nav-link` is
+   also the class of Bootstrap-style markup in djust.components' navbar and tabs.
+   `:where()` keeps specificity at zero, so the opt-in scaffold.css `.nav-link`
+   rules, which style the same links as part of a navbar or sidebar, win. */
+:where(.nav-link.theme-nav-link) {
     display: inline-flex;
     align-items: center;
     gap: 0.5rem;
@@ -1783,17 +1795,17 @@ label .text-danger, .form-label .text-danger { color: hsl(var(--destructive)); }
     transition: color 0.15s ease, background-color 0.15s ease;
 }
 
-.nav-link:hover {
+:where(.nav-link.theme-nav-link):hover {
     color: hsl(var(--accent-foreground));
     background-color: hsl(var(--accent));
 }
 
-.nav-link.active {
+:where(.nav-link.theme-nav-link.active) {
     color: hsl(var(--accent-foreground));
     background-color: hsl(var(--accent));
 }
 
-.nav-link:focus-visible {
+:where(.nav-link.theme-nav-link):focus-visible {
     outline: 2px solid hsl(var(--ring));
     outline-offset: 2px;
 }

@@ -39,9 +39,9 @@ def test_no_label_exemption_is_left_for_the_djust_preset():
     ]
 
 
-def test_djust_primary_is_the_one_documented_text_exemption():
+def test_djust_light_primary_text_is_documented_not_recoloured():
     """#3165: ``primary`` as TEXT on the page is 2.65:1 in light mode and stays that
-    way. It is the brand orange and it carries the dark ink labels of #2996, so
+    way. The full set of djust rows is pinned in ``test_theming_contrast_coverage_3281``. It is the brand orange and it carries the dark ink labels of #2996, so
     darkening it to 4.5:1 would change the identity. ``link``, the colour that is
     actually used as body text, passes on every surface (#3165's first half)."""
     for surface in ("background", "card"):

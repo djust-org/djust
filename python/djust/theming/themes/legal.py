@@ -77,9 +77,13 @@ DARK = ThemeTokens(
     muted_foreground=ColorScale(40, 8, 65),  # Muted text (4.5:1 on muted, #3281)
     accent=ColorScale(220, 20, 18),  # Dark hover
     accent_foreground=ColorScale(40, 10, 90),
-    destructive=ColorScale(0, 55, 64),  # Red brightened: AA as text on its alert tint (#3281)
+    destructive=ColorScale(
+        0, 55, 68
+    ),  # Red brightened: AA as text on its tint over page and card (#3281)
     destructive_foreground=ColorScale(220, 30, 10),  # Dark ink: white fails on this fill
-    success=ColorScale(145, 40, 45),  # Green brightened
+    success=ColorScale(
+        145, 40, 48
+    ),  # Green brightened: AA as text on its tint over page and card (#3281)
     success_foreground=ColorScale(220, 30, 10),  # Dark ink: white is 3.2:1 on this fill (#3281)
     warning=ColorScale(40, 60, 55),  # Amber brightened
     warning_foreground=ColorScale(220, 30, 12),

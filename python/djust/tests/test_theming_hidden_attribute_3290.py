@@ -35,13 +35,6 @@ def _rules() -> list[tuple[str, str]]:
     return [(" ".join(m.group(1).split()), m.group(2)) for m in _RULE.finditer(css)]
 
 
-def _displays_something(body: str) -> bool:
-    return any(
-        value.strip().lower() not in {"none", "contents"}
-        for value in re.findall(r"(?<![\w-])display\s*:\s*([^;!]+)", body)
-    )
-
-
 def test_a_class_that_sets_display_exists():
     # The reproduction in the issue: this is what an attribute alone cannot beat.
     flex_classes = [s for s, b in _rules() if s == ".progress-wrapper" and "flex" in b]
@@ -58,14 +51,14 @@ def test_hidden_attribute_guard_beats_every_display_rule():
     assert re.search(r"display\s*:\s*none\s*!important", guards[0])
 
 
-def test_every_display_setting_class_is_covered_by_the_one_guard():
-    # Document the blast radius: these all lose to `hidden` without the guard.
-    affected = sorted(
-        {
-            selector
-            for selector, body in _rules()
-            if _displays_something(body) and not selector.startswith(("@", "[hidden]"))
-        }
-    )
-    assert ".progress-wrapper" in affected
-    assert len(affected) > 20
+def test_no_later_rule_can_undo_the_guard():
+    """``!important`` only wins over normal declarations. An ``!important`` ``display`` on
+    some class would tie it, and the later rule would win."""
+    offenders = [
+        selector
+        for selector, body in _rules()
+        if not selector.startswith("[hidden]")
+        and re.search(r"display\s*:[^;]*!important", body)
+        and "none" not in body
+    ]
+    assert not offenders, offenders

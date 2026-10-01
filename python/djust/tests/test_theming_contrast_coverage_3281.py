@@ -13,6 +13,7 @@ import pytest
 from django.core.checks import Warning
 
 from djust.theming.a11y_exemptions import (
+    _PAIR_DEBT_2885,
     A11Y_EXEMPTIONS,
     CONTRAST_PAIRS,
     NEW_PAIR_KEYS,
@@ -67,6 +68,36 @@ class TestAlertTint:
         light = THEME_PRESETS["legal"].light
         assert light.destructive_tint.lightness > 85
         assert THEME_PRESETS["legal"].dark.destructive_tint.lightness < 25
+
+    @pytest.mark.parametrize("name", ["legal", "default", "dracula"])
+    @pytest.mark.parametrize("mode", MODES)
+    def test_it_is_the_worse_of_the_page_and_a_card(self, name, mode):
+        """An alert sits on either; the matrix must hold for both placements."""
+        from djust.theming.presets import ColorScale as C
+
+        tokens = getattr(THEME_PRESETS[name], mode)
+        for status in ("success", "warning", "destructive"):
+            colour = getattr(tokens, status)
+            fg = colour.to_rgb()
+            ratios = []
+            for surface in (tokens.background, tokens.card):
+                base = surface.to_rgb()
+                tint = C.from_rgb(*(round(0.1 * f + 0.9 * b) for f, b in zip(fg, base)))
+                ratios.append(_validator.calculate_contrast_ratio(colour, tint))
+            assert _ratio(name, mode, status, f"{status}_tint") == pytest.approx(min(ratios))
+
+    def test_the_local_luminance_matches_the_validator(self):
+        """``_types`` may not import ``accessibility`` (cyclic-import rule), so it
+        carries its own copy of the WCAG formula. They must agree."""
+        from djust.theming import _types
+
+        for name, preset in THEME_PRESETS.items():
+            for mode in MODES:
+                tokens = getattr(preset, mode)
+                for a, b in ((tokens.foreground, tokens.background), (tokens.primary, tokens.card)):
+                    assert _types._contrast(a, b) == pytest.approx(
+                        _validator.calculate_contrast_ratio(a, b), abs=1e-6
+                    ), name
 
 
 class TestLegalPreset:
@@ -140,3 +171,68 @@ class TestLegacyDebtIsDocumented:
         """#3165: ``primary`` is the brand orange carrying dark ink labels."""
         assert _ratio("djust", "light", "primary", "background") < 4.5
         assert ("djust", "light", "primary", "background") in A11Y_EXEMPTIONS
+
+
+# The framework's own presets are the ones people copy. Their debt is pinned
+# exactly, so a new row or a worse ratio there is a conscious edit.
+FLAGSHIP_DEBT = {
+    "djust": {
+        ("light", "primary", "background"),
+        ("light", "primary", "card"),
+        ("light", "success", "success_tint"),
+        ("light", "warning", "warning_tint"),
+        ("light", "destructive", "destructive_tint"),
+        ("light", "input", "background"),
+        ("dark", "destructive", "destructive_tint"),
+        ("dark", "input", "background"),
+    },
+    "default": {
+        ("light", "success", "success_tint"),
+        ("light", "warning", "warning_tint"),
+        ("light", "destructive", "destructive_tint"),
+        ("light", "input", "background"),
+        ("dark", "success", "success_tint"),
+        ("dark", "destructive", "destructive_tint"),
+        ("dark", "input", "background"),
+    },
+}
+FLAGSHIP_DEBT["shadcn"] = FLAGSHIP_DEBT["blue"] = FLAGSHIP_DEBT["default"]
+FLAGSHIP_DEBT["slate"] = {
+    ("light", "success", "success_tint"),
+    ("light", "warning", "warning_tint"),
+    ("light", "destructive", "destructive_tint"),
+    ("light", "input", "background"),
+    ("dark", "input", "background"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(FLAGSHIP_DEBT))
+def test_flagship_presets_carry_exactly_the_known_new_pair_debt(name):
+    rows = {
+        (mode, fg, bg)
+        for (preset, mode, fg, bg) in A11Y_EXEMPTIONS
+        if preset == name and (fg, bg) in NEW_PAIR_KEYS
+    }
+    assert rows == FLAGSHIP_DEBT[name], (
+        f"{name}: the set of exempted new pairs changed. If a palette edit fixed a pair "
+        f"remove its row and this pin; if it broke one, fix the palette."
+    )
+
+
+@pytest.mark.parametrize(
+    "key",
+    sorted(_PAIR_DEBT_2885),
+    ids=lambda k: f"{k[0]}-{k[1]}-{k[2]}_on_{k[3]}",
+)
+def test_a_recorded_ratio_is_the_measured_ratio(key):
+    """ "Do not hand-edit ratios" made true: a palette that got worse fails here, and
+    one that got better asks for the row to be regenerated."""
+    recorded = _PAIR_DEBT_2885[key]
+    measured = _ratio(*key)
+    assert measured >= recorded - 0.006, (
+        f"{key} got WORSE: recorded {recorded:.2f}, measured {measured:.2f}"
+    )
+    assert measured <= recorded + 0.006, (
+        f"{key} improved: recorded {recorded:.2f}, measured {measured:.2f}; regenerate with "
+        f"scripts/report_theme_contrast.py --debt-table (and delete the row if it now passes)"
+    )
