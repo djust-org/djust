@@ -872,8 +872,9 @@ def _emit(
 
 @register("djust")
 def check_event_bindings(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
-    """``djust.T019``-``T022``: template event bindings against their owners."""
-    if all(_is_check_suppressed("djust.%s" % check_id) for check_id in BINDING_IDS):
+    """``djust.T019``-``T022``: template event bindings against their owners;
+    ``djust.T024``: floor-excluded user fields in those templates."""
+    if all(_is_check_suppressed("djust.%s" % check_id) for check_id in (*BINDING_IDS, "T024")):
         return []
     try:
         from djust.live_view import LiveView  # noqa: F401
@@ -887,4 +888,64 @@ def check_event_bindings(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                 id="djust.T023",
             )
         ]
-    return _messages(binding_reports())
+    reports = binding_reports()
+    return _messages(reports) + _floor_messages(reports)
+
+
+# ---------------------------------------------------------------------------
+# T024: fields the serialization floor withholds
+# ---------------------------------------------------------------------------
+
+#: A ``user`` path (``request.user``, ``current_user``) naming a field the
+#: serialization floor excludes (``serialization._ALWAYS_EXCLUDED_FIELDS``).
+_FLOOR_FIELD = re.compile(r"\b((?:\w+\.)*(?:user|\w+_user))\.(is_staff|is_superuser|password)\b")
+_TEMPLATE_TAG = re.compile(r"\{\{.*?\}\}|\{%.*?%\}", re.DOTALL)
+
+
+def _floor_messages(reports: list[OwnerReport]) -> list[CheckMessage]:
+    """``djust.T024``: a template an owner renders reads a floor-excluded field.
+
+    ``{% if request.user.is_staff %}`` is false on every LiveView page and in
+    its shell, with no error, because the serializer never ships ``is_staff``,
+    ``is_superuser`` or ``password`` (#3282). Only paths through a ``user``
+    variable are reported, so a form field named ``password`` is left alone.
+    """
+    if _is_check_suppressed("djust.T024"):
+        return []
+    from djust.checks.utils import _blank_template_comments, _strip_verbatim_blocks
+
+    messages: list[CheckMessage] = []
+    seen: set[str] = set()
+    for report in reports:
+        for file in report.files:
+            if file in seen or not file.endswith((".html", ".htm", ".txt")):
+                continue
+            seen.add(file)
+            try:
+                with open(file, encoding="utf-8", errors="replace") as handle:
+                    source = handle.read()
+            except OSError:
+                continue
+            scan = _blank_template_comments(_strip_verbatim_blocks(source))
+            for tag in _TEMPLATE_TAG.finditer(scan):
+                for match in _FLOOR_FIELD.finditer(tag.group(0)):
+                    line = scan.count("\n", 0, tag.start() + match.start()) + 1
+                    if noqa_state(file, line, "T024") == "suppressed":
+                        continue
+                    path = match.group(0)
+                    messages.append(
+                        DjustWarning(
+                            "%s:%d: `%s` is always empty in a LiveView template: djust never "
+                            "serializes `%s`." % (file, line, path, match.group(2)),
+                            hint=(
+                                "`is_staff`, `is_superuser` and `password` are withheld from the "
+                                "template context. Expose a derived boolean instead, for example "
+                                "`self.can_manage = request.user.is_staff` in mount(), or a "
+                                "context processor, and test that in the template."
+                            ),
+                            id="djust.T024",
+                            file_path=file,
+                            line_number=line,
+                        )
+                    )
+    return messages

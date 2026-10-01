@@ -722,7 +722,7 @@ def test_bindings_are_checked_when_templates_lists_only_the_djust_backend(fixtur
     module, templates = fixture
     djust_only = [
         {
-            "BACKEND": "djust.template.backend.DjustTemplateBackend",
+            "BACKEND": "djust.template_backend.DjustTemplateBackend",
             "DIRS": [str(templates)],
             "APP_DIRS": True,
             "OPTIONS": {},
