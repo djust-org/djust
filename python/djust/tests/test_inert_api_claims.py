@@ -406,8 +406,8 @@ def test_wired_decorators_are_not_marked_inert() -> None:
 #
 # `DIRECTIVES["dj-submit"]["description"]` said the client "Calls
 # e.preventDefault() and e.target.reset()". It does not reset anything: the
-# only `e.target.reset()` in the tree is in the stale `client.js.backup`. The
-# live client clears a form only when the server's response frame carries
+# client never calls `e.target.reset()` in the submit handler (an unreferenced
+# `client.js.backup` that did was deleted in #3308). The live client clears a form only when the server's response frame carries
 # `reset_form` (02-response-handler.js), which `FormMixin.reset_form()` — or a
 # handler setting `_should_reset_form` — arranges. An AI assistant that trusts
 # the old sentence will wait for a reset that never comes.
@@ -467,4 +467,32 @@ def test_the_client_does_not_reset_a_form_on_submit_itself() -> None:
     response = (CLIENT_SRC / "02-response-handler.js").read_text(encoding="utf-8")
     assert "if (data.reset_form)" in response and "form.reset()" in response, (
         "the server-requested reset path moved; re-check dj-submit's schema.py description"
+    )
+
+
+def test_dj_target_is_documented_as_inert_where_agents_read_it() -> None:
+    """`dj-target` is read, then dropped before the event is sent.
+
+    `_djTargetSelector` is stripped in 11-event-handler.js, so nothing scopes
+    the server re-render to the named element. Both the generated schema and the
+    template cheat sheet have to say so.
+    """
+    from djust.schema import DIRECTIVES
+
+    (entry,) = [d for d in DIRECTIVES if d.get("name") == "dj-target"]
+    assert str(entry["description"]).startswith("INERT"), (
+        "dj-target is dropped by the client; its schema.py description must say it is inert"
+    )
+
+    handler = (CLIENT_SRC / "11-event-handler.js").read_text(encoding="utf-8")
+    assert "key === '_djTargetSelector'" in handler, (
+        "the client may now send dj-target's selector; re-check dj-target's description"
+    )
+
+    cheatsheet = (ROOT / "docs" / "website" / "guides" / "template-cheatsheet.md").read_text(
+        encoding="utf-8"
+    )
+    line = next(ln for ln in cheatsheet.splitlines() if 'dj-target="#selector"' in ln)
+    assert "scoped DOM updates" not in line and "INERT" in line, (
+        "template-cheatsheet.md must not present dj-target as scoping updates"
     )
