@@ -409,8 +409,8 @@ def test_wired_decorators_are_not_marked_inert() -> None:
 # only `e.target.reset()` in the tree is in the stale `client.js.backup`. The
 # live client clears a form only when the server's response frame carries
 # `reset_form` (02-response-handler.js), which `FormMixin.reset_form()` — or a
-# handler setting `_should_reset_form` — arranges. Three AI-built apps trusted
-# the old sentence and bolted on their own JS to clear the form.
+# handler setting `_should_reset_form` — arranges. An AI assistant that trusts
+# the old sentence will wait for a reset that never comes.
 
 CLIENT_SRC = ROOT / "python" / "djust" / "static" / "djust" / "src"
 
