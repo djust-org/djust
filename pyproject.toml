@@ -149,6 +149,8 @@ include = [
     { path = "LICENSE", format = "sdist" },
     { path = "README.md", format = "sdist" },
 ]
+# A stray editor/dev backup must never ship in the sdist or wheel (#3295).
+exclude = ["**/*.backup"]
 
 [tool.maturin.sbom]
 rust = true

@@ -267,6 +267,92 @@ def test_package_action_matches_project_tooling(tmp_path, files, kind, runnable)
     assert (action.kind, action.runnable) == (kind, runnable)
 
 
+# --- uv projects keep the specifiers they already declare (#3296) -------------
+
+PINNED_PYPROJECT = """\
+[project]
+name = "site"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "django>=5.2,<6",
+    "djust==1.2.2",
+    "channels>=4.2,<5",
+    "uvicorn[standard]==0.35.0",
+]
+"""
+
+
+def uv_project(root: Path, dependencies: str) -> None:
+    (root / "pyproject.toml").write_text(
+        '[project]\nname = "site"\nversion = "0.1.0"\ndependencies = [%s]\n' % dependencies
+    )
+    (root / "uv.lock").write_text("")
+
+
+def test_uv_add_skips_dependencies_that_are_already_pinned(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(PINNED_PYPROJECT)
+    (tmp_path / "uv.lock").write_text("")
+    action = init.choose_package_action(tmp_path, None, uv_available=True)
+    assert action.kind == "uv"
+    assert action.command == []
+
+
+def test_uv_add_names_only_the_missing_dependencies(tmp_path):
+    # Names match by canonical form, ignoring extras, markers and specifiers.
+    uv_project(tmp_path, '"Django>=5.2", "DJust==1.2.2", "Uvicorn[standard]==0.35.0"')
+    action = init.choose_package_action(tmp_path, None, uv_available=True)
+    assert action.command == ["uv", "add", "channels>=4.0"]
+    uv_project(tmp_path, '"django>=5.2"')
+    action = init.choose_package_action(tmp_path, None, uv_available=True)
+    assert action.command == ["uv", "add", *init.requirements()]
+
+
+def test_uv_add_ignores_similarly_named_packages(tmp_path):
+    uv_project(tmp_path, '"djust-components", "django-channels", "uvicorn-worker"')
+    action = init.choose_package_action(tmp_path, None, uv_available=True)
+    assert action.command == ["uv", "add", *init.requirements()]
+
+
+def test_uv_add_adds_everything_when_pyproject_is_unreadable(tmp_path):
+    (tmp_path / "pyproject.toml").write_text("[project\n")
+    (tmp_path / "uv.lock").write_text("")
+    action = init.choose_package_action(tmp_path, None, uv_available=True)
+    assert action.command == ["uv", "add", *init.requirements()]
+
+
+def test_init_leaves_pinned_uv_dependencies_alone(tmp_path):
+    make_project(tmp_path)
+    (tmp_path / "pyproject.toml").write_text(PINNED_PYPROJECT)
+    (tmp_path / "uv.lock").write_text("")
+    dry = init.format_result(init.init_project(tmp_path, dry_run=True), tmp_path)
+    assert "uv add" not in dry
+    assert "already declared in pyproject.toml" in dry
+    calls = []
+
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    with (
+        patch.object(init.shutil, "which", return_value="/usr/bin/uv"),
+        patch.object(init.subprocess, "run", side_effect=run),
+    ):
+        result = init.init_project(tmp_path, force=True)
+    assert [cmd for cmd in calls if cmd[0] != "git"] == [
+        ["uv", "run", "python", "manage.py", "check"]
+    ]
+    assert (tmp_path / "pyproject.toml").read_text() == PINNED_PYPROJECT
+    assert any(s.name == "packages" and s.status == init.UNCHANGED for s in result.steps)
+
+
+def test_init_adds_only_missing_uv_dependencies_and_prints_that_command(tmp_path):
+    make_project(tmp_path)
+    uv_project(tmp_path, '"djust==1.2.2", "channels>=4.2,<5"')
+    dry = init.format_result(init.init_project(tmp_path, dry_run=True), tmp_path)
+    assert "would run: uv add 'uvicorn[standard]>=0.30'" in dry
+
+
 def test_requirements_install_targets_project_python(tmp_path):
     (tmp_path / "requirements.txt").write_text("django\n")
     python = tmp_path / ".venv/bin/python"
@@ -309,7 +395,7 @@ def test_requirements_appended_only_when_missing(tmp_path):
     ],
 )
 def test_requirements_recognize_djust_in_any_form(tmp_path, line):
-    (tmp_path / "requirements.txt").write_text("channels\nuvicorn\n%s\n" % line)
+    (tmp_path / "requirements.txt").write_text("channels\nuvicorn[standard]\n%s\n" % line)
     assert init.plan_requirements(tmp_path) is None
 
 
@@ -320,10 +406,62 @@ def test_requirements_follow_included_files(tmp_path):
 
 
 def test_similarly_named_packages_do_not_count(tmp_path):
-    (tmp_path / "requirements.txt").write_text("djust-components\ndjango-channels\nuvicorn\n")
+    (tmp_path / "requirements.txt").write_text(
+        "djust-components\ndjango-channels\nuvicorn[standard]\n"
+    )
     change = init.plan_requirements(tmp_path)
     added = change.new[len(change.old) :].splitlines()
     assert [line.split(">=")[0] for line in added] == ["djust", "channels"]
+
+
+# --- an existing requirement must carry the extras the scaffold needs ---------
+#
+# ``uvicorn>=0.30`` names the package but has no WebSocket library; only
+# ``uvicorn[standard]`` does. Name-only matching treated the two as the same.
+
+
+def test_uv_add_adds_a_missing_extra_without_a_specifier(tmp_path):
+    # uv keeps the declared specifier when it is given extras only (checked with
+    # uv 0.9.11: "uvicorn>=0.30,<0.40" + `uv add "uvicorn[standard]"` gives
+    # "uvicorn[standard]>=0.30,<0.40"), so the user's bounds survive.
+    uv_project(tmp_path, '"djust==1.2.2", "channels>=4.2,<5", "uvicorn>=0.30,<0.40"')
+    action = init.choose_package_action(tmp_path, None, uv_available=True)
+    assert action.command == ["uv", "add", "uvicorn[standard]"]
+
+
+def test_uv_add_keeps_other_declared_extras_when_adding_one(tmp_path):
+    uv_project(tmp_path, '"djust==1.2.2", "channels>=4.2", "uvicorn[foo]==0.35.0"')
+    action = init.choose_package_action(tmp_path, None, uv_available=True)
+    assert action.command == ["uv", "add", "uvicorn[foo,standard]"]
+
+
+def test_requirements_line_gains_the_missing_extra_in_place(tmp_path):
+    (tmp_path / "requirements.txt").write_text(
+        "django>=5.2\r\ndjust==1.2.2\r\nchannels>=4.2,<5\r\nuvicorn>=0.30,<0.40  # asgi\r\n"
+    )
+    change = init.plan_requirements(tmp_path)
+    assert change.new == (
+        "django>=5.2\r\ndjust==1.2.2\r\nchannels>=4.2,<5\r\n"
+        "uvicorn[standard]>=0.30,<0.40  # asgi\r\n"
+    )
+    (tmp_path / "requirements.txt").write_text(change.new)
+    assert init.plan_requirements(tmp_path) is None
+
+
+def test_requirements_extra_added_and_missing_package_appended_together(tmp_path):
+    (tmp_path / "requirements.txt").write_text("uvicorn==0.35.0")
+    change = init.plan_requirements(tmp_path)
+    lines = change.new.splitlines()
+    assert lines[0] == "uvicorn[standard]==0.35.0"
+    assert [line.split(">=")[0] for line in lines[1:]] == ["djust", "channels"]
+
+
+def test_requirements_extra_in_an_included_file_is_left_alone(tmp_path):
+    # An included file is the user's, and a URL reference has no specifier to
+    # keep: neither is rewritten.
+    (tmp_path / "base.txt").write_text("djust\nchannels\nuvicorn\n")
+    (tmp_path / "requirements.txt").write_text("-r base.txt\n")
+    assert init.plan_requirements(tmp_path) is None
 
 
 def test_printed_commands_are_shell_quoted(tmp_path):

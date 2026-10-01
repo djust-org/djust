@@ -2,9 +2,10 @@
 {# Safety: autoescape off is safe here — all variables (css_block, direction, etc.) #}
 {# are framework-generated in theme_tags.py, not user input. #}
 {# cookie_prefix_js and resolved_mode_js are JSON-encoded strings, framework-generated. #}
+{# nonce_attr is built with format_html in build_theme_head_context, so it is already escaped. #}
 {% load static %}
 {% autoescape off %}
-<script>
+<script{{ nonce_attr }}>
 (function() {
     window.__djust_theme_cookie_prefix = {{ cookie_prefix_js }};
     /* Single source of truth for the default mode, read by BOTH this script and

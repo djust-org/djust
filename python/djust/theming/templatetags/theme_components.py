@@ -11,6 +11,7 @@ Falling back to:
     djust_theming/components/{component}.html
 """
 
+import re
 import uuid
 
 from typing import Any, Optional
@@ -48,7 +49,13 @@ def _extract_slots(attrs: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any
 
 @register.simple_tag(takes_context=True)
 def theme_button(
-    context: Context, text: str, variant: str = "primary", size: str = "md", **attrs: Any
+    context: Context,
+    text: str,
+    variant: str = "primary",
+    size: str = "md",
+    href: Optional[str] = None,
+    element: Optional[str] = None,
+    **attrs: Any,
 ) -> SafeString:
     """
     Render a themed button.
@@ -57,12 +64,50 @@ def theme_button(
         text: Button text
         variant: 'primary', 'secondary', 'destructive', 'ghost', 'link'
         size: 'sm', 'md', 'lg'
-        **attrs: Additional HTML attributes (class, id, onclick, etc.)
+        href: Render an ``<a class="btn ...">`` pointing here instead of a
+            ``<button>``. ``javascript:``, ``vbscript:`` and ``data:`` URLs
+            are refused.
+        element: 'button' or 'a'. Defaults to 'a' when ``href`` is given and
+            'button' otherwise.
+        **attrs: Additional HTML attributes. ``class``, ``id``, ``onclick``
+            and ``type`` (``<button>`` only) are handled by the template;
+            everything else (``dj_click``, ``dj_value_id``, ``name``,
+            ``value``, ``disabled``, ``data_*``, ``aria_*`` ...) is emitted on
+            the element, escaped per attribute, underscores becoming hyphens.
+            Other ``on*`` handler attributes are refused. On an ``<a>``,
+            ``type=`` raises, and ``disabled=True`` becomes
+            ``aria-disabled="true" tabindex="-1"`` with no ``href``.
+
+            A project-level ``components/button.html`` that predates this must
+            render ``{{ extra_attrs }}``, ``{{ href }}`` and branch on ``tag``
+            to honour them; ``djust_theme check-compat`` flags one that does not.
 
     Usage:
         {% theme_button "Click me" variant="primary" size="md" %}
         {% theme_button "Delete" variant="destructive" onclick="confirmDelete()" %}
+        {% theme_button "Advance" dj_click="advance" dj_value_id=item.id %}
+        {% theme_button "Open record" href=record.url variant="secondary" %}
     """
+    if element is None:
+        element = "a" if href else "button"
+    if element not in ("button", "a"):
+        raise ValueError(f"theme_button: element must be 'button' or 'a', got {element!r}")
+    if href and element != "a":
+        raise ValueError(
+            "theme_button: href= renders an <a>; it cannot be used with element='button'"
+        )
+    if href:
+        _check_url("href", href)
+    if element == "a":
+        if attrs.get("type") is not None:
+            raise ValueError("theme_button: type= applies to a <button>, not an <a>")
+        if attrs.get("disabled"):
+            # `disabled` does nothing on an anchor: the link stays clickable. Say
+            # it is disabled to assistive tech, take it out of the tab order and
+            # drop the destination.
+            attrs = {k: v for k, v in attrs.items() if k != "disabled"}
+            attrs.update(aria_disabled="true", tabindex="-1")
+            href = None
     request = context.get("request")
     tmpl = resolve_component_template(request, "button")
     # `slot_*` keywords are context, not attributes — the template
@@ -74,7 +119,12 @@ def theme_button(
         "text": text,
         "variant": variant,
         "size": size,
+        "tag": element,
+        "href": href,
         "attrs": remaining_attrs,
+        "extra_attrs": _passthrough_attrs(
+            remaining_attrs, skip=("class", "id", "onclick", "type", "href")
+        ),
         "css_prefix": _css_prefix(),
         **slots,
     }
@@ -155,6 +205,10 @@ def theme_badge(context: Context, text: str, variant: str = "default", **attrs: 
     return mark_safe(tmpl.render(ctx))
 
 
+_ASSERTIVE_ALERT_VARIANTS = frozenset({"destructive", "warning"})
+_ALERT_ROLES = frozenset({"alert", "status", "log"})
+
+
 @register.simple_tag(takes_context=True)
 def theme_alert(
     context: Context,
@@ -162,6 +216,7 @@ def theme_alert(
     title: Optional[str] = None,
     variant: str = "default",
     dismissible: bool = False,
+    role: Optional[str] = None,
     **attrs: Any,
 ) -> SafeString:
     """
@@ -170,14 +225,24 @@ def theme_alert(
     Args:
         message: Alert message
         title: Optional alert title
-        variant: 'default', 'success', 'warning', 'destructive'
+        variant: 'default', 'info', 'success', 'warning', 'destructive'
         dismissible: Whether alert can be dismissed
+        role: ARIA live-region role: 'alert' (assertive), 'status' (polite)
+            or 'log'. Defaults to 'alert' for the 'destructive' and 'warning'
+            variants and 'status' for the rest, so a persistent banner does
+            not interrupt a screen reader the way an error should.
         **attrs: Additional HTML attributes
 
     Usage:
         {% theme_alert "Operation successful!" variant="success" dismissible=True %}
         {% theme_alert "Error occurred" title="Error" variant="destructive" %}
+        {% theme_alert "Viewing the record as of 2026-01-01" variant="info" %}
+        {% theme_alert "Saved" variant="success" role="alert" %}
     """
+    if role is None:
+        role = "alert" if variant in _ASSERTIVE_ALERT_VARIANTS else "status"
+    elif role not in _ALERT_ROLES:
+        raise ValueError(f"theme_alert: role must be one of {sorted(_ALERT_ROLES)}, got {role!r}")
     request = context.get("request")
     tmpl = resolve_component_template(request, "alert")
     # `slot_*` keywords are context, not attributes — the template
@@ -189,6 +254,7 @@ def theme_alert(
         "message": message,
         "title": title,
         "variant": variant,
+        "role": role,
         "dismissible": dismissible,
         "attrs": remaining_attrs,
         "css_prefix": _css_prefix(),
@@ -204,6 +270,7 @@ def theme_input(
     label: Optional[str] = None,
     placeholder: str = "",
     type: str = "text",
+    id: Optional[str] = None,
     **attrs: Any,
 ) -> SafeString:
     """
@@ -214,6 +281,9 @@ def theme_input(
         label: Optional label text
         placeholder: Placeholder text
         type: Input type (text, email, password, etc.)
+        id: The ``<input>``'s id, which the label's ``for`` points at. Defaults
+            to ``name``; pass one when the same field repeats on a page (one
+            note field per row) so ids stay unique.
         **attrs: Additional HTML attributes
 
     Usage:
@@ -228,6 +298,7 @@ def theme_input(
     slots, remaining_attrs = _extract_slots(attrs)
     ctx = {
         "name": name,
+        "field_id": id or name,
         "label": label,
         "placeholder": placeholder,
         "type": type,
@@ -245,10 +316,40 @@ def theme_input(
     return mark_safe(tmpl.render(ctx))
 
 
+# What an attribute name may look like once ``_`` has become ``-``: a letter
+# first, then letters, digits and hyphens. Template kwargs are already
+# ``\w+``, but these helpers are plain functions too, so the name is checked
+# rather than trusted — it is written into the tag unescaped.
+_ATTR_NAME_RE = re.compile(r"[A-Za-z][A-Za-z0-9-]*")
+
+# Attributes whose value is a URL the browser will navigate to or load.
+_URL_ATTRS = frozenset({"href", "src", "action", "formaction"})
+
+_UNSAFE_URL_SCHEMES = ("javascript:", "vbscript:", "data:")
+
+
+def _check_url(name: str, value: Any) -> None:
+    """Refuse a script-bearing URL scheme in ``name``.
+
+    Browsers drop tabs, newlines and other control characters inside a URL
+    scheme and ignore leading whitespace, so ``"java\tscript:..."`` is still
+    ``javascript:``. Strip those before looking at the scheme.
+    """
+    compact = "".join(ch for ch in str(value) if ord(ch) > 32 and ord(ch) != 127).lower()
+    if compact.startswith(_UNSAFE_URL_SCHEMES):
+        raise ValueError(f"{name}= refuses javascript:, vbscript: and data: URLs")
+
+
 def _passthrough_attrs(attrs: dict[str, Any], skip: tuple[str, ...]) -> SafeString:
     """``key="value"`` pairs for the attrs a component template does not
     handle itself. ``dj_input`` → ``dj-input``; values are escaped; ``True``
-    emits a bare attribute, ``False``/``None`` nothing."""
+    emits a bare attribute, ``False``/``None`` nothing.
+
+    Names are validated, because they are written into the tag as given: a
+    name that is not a plain attribute identifier raises ``ValueError``, as
+    does an ``on*`` event-handler attribute (inline script — use a ``dj-*``
+    binding) and a script-bearing ``href`` / ``src`` / ``action`` URL.
+    """
     from django.utils.html import escape
 
     parts = []
@@ -256,6 +357,15 @@ def _passthrough_attrs(attrs: dict[str, Any], skip: tuple[str, ...]) -> SafeStri
         if key in skip or value is None or value is False:
             continue
         name = key.replace("_", "-")
+        if not _ATTR_NAME_RE.fullmatch(name):
+            raise ValueError(f"{key!r} is not a valid HTML attribute name")
+        if name.lower().startswith("on"):
+            raise ValueError(
+                f"{key!r}: inline event-handler attributes are not passed through; "
+                "use a dj-* binding (dj_click, dj_change ...)"
+            )
+        if name.lower() in _URL_ATTRS and value is not True:
+            _check_url(key, value)
         parts.append(name if value is True else f'{name}="{escape(value)}"')
     return mark_safe(" ".join(parts))
 
@@ -515,6 +625,45 @@ def theme_pagination(
     return mark_safe(tmpl.render(ctx))
 
 
+def _option_parts(opt: Any) -> tuple[Any, Any, bool]:
+    """``(value, label, selected)`` of one option: a dict, a ``(value, label)``
+    pair, or an object with ``value`` / ``label`` attributes. Missing parts are
+    ``""`` (what the template printed before) rather than ``"None"``."""
+    if isinstance(opt, dict):
+        value, label, selected = opt.get("value"), opt.get("label"), opt.get("selected")
+    elif isinstance(opt, (tuple, list)):
+        value = opt[0] if len(opt) > 0 else None
+        label = opt[1] if len(opt) > 1 else value
+        selected = None
+    else:
+        value, label, selected = (getattr(opt, key, None) for key in ("value", "label", "selected"))
+    return ("" if value is None else value, "" if label is None else label, bool(selected))
+
+
+def _mark_selected(options: Any, value: Any) -> list[dict[str, Any]]:
+    """Copy ``options`` as ``{value, label, selected}`` dicts, selecting those
+    whose value equals ``value`` as a string. A list, tuple or set ``value``
+    (a ``multiple`` select) selects every match. The caller's option dicts are
+    shared view state, so none is mutated."""
+    if value is None:
+        wanted: set[str] = set()
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        wanted = {str(v) for v in value}
+    else:
+        wanted = {str(value)}
+    resolved = []
+    for opt in options:
+        opt_value, label, selected = _option_parts(opt)
+        resolved.append(
+            {
+                "value": opt_value,
+                "label": label,
+                "selected": selected or str(opt_value) in wanted,
+            }
+        )
+    return resolved
+
+
 @register.simple_tag(takes_context=True)
 def theme_select(
     context: Context,
@@ -522,6 +671,8 @@ def theme_select(
     label: Optional[str] = None,
     options: Any = None,
     placeholder: str = "",
+    value: Any = None,
+    id: Optional[str] = None,
     **attrs: Any,
 ) -> SafeString:
     """
@@ -530,22 +681,37 @@ def theme_select(
     Args:
         name: Select name attribute
         label: Optional label text
-        options: List of dicts with 'value' and 'label' keys
+        options: List of dicts with 'value' and 'label' keys. An option dict
+            carrying a truthy 'selected' is selected, as before.
         placeholder: Placeholder option text
-        **attrs: Additional HTML attributes (required, disabled, etc.)
+        value: The current value. The option whose 'value' equals it
+            (compared as strings, so ``3`` matches ``"3"``) is rendered
+            ``selected``, which is what an edit form needs to open on the
+            stored choice. The placeholder is selected only when nothing else is.
+        id: The ``<select>``'s id, which the label's ``for`` points at.
+            Defaults to ``name``.
+        **attrs: Additional HTML attributes. ``required`` and ``disabled`` are
+            handled by the template; everything else (``dj_change``,
+            ``data_*``, ``aria_*`` ...) is emitted on the ``<select>``, escaped
+            per attribute, underscores becoming hyphens.
 
     Usage:
         {% theme_select "country" label="Country" options=countries placeholder="Choose..." %}
+        {% theme_select "category" options=opts value=doc.category dj_change="set_category" %}
     """
     slots, remaining_attrs = _extract_slots(attrs)
     request = context.get("request")
     tmpl = resolve_component_template(request, "select")
+    resolved_options = _mark_selected(options or [], value)
     ctx = {
         "name": name,
+        "field_id": id or name,
         "label": label,
-        "options": options or [],
+        "options": resolved_options,
         "placeholder": placeholder,
+        "has_selected_option": any(opt["selected"] for opt in resolved_options),
         "attrs": remaining_attrs,
+        "extra_attrs": _passthrough_attrs(remaining_attrs, skip=("class", "required", "disabled")),
         "css_prefix": _css_prefix(),
         **slots,
     }
@@ -559,6 +725,7 @@ def theme_textarea(
     label: Optional[str] = None,
     placeholder: str = "",
     rows: int = 4,
+    id: Optional[str] = None,
     **attrs: Any,
 ) -> SafeString:
     """
@@ -569,6 +736,8 @@ def theme_textarea(
         label: Optional label text
         placeholder: Placeholder text
         rows: Number of visible text rows
+        id: The ``<textarea>``'s id, which the label's ``for`` points at.
+            Defaults to ``name``.
         **attrs: Additional HTML attributes (required, disabled, readonly, etc.)
 
     Usage:
@@ -579,6 +748,7 @@ def theme_textarea(
     tmpl = resolve_component_template(request, "textarea")
     ctx = {
         "name": name,
+        "field_id": id or name,
         "label": label,
         "placeholder": placeholder,
         "rows": rows,
@@ -783,11 +953,15 @@ def theme_progress(
         value: Current value (None for indeterminate)
         max: Maximum value
         label: Accessible label text
-        **attrs: Additional HTML attributes
+        **attrs: Additional HTML attributes. ``class`` and ``id`` land on the
+            wrapper; everything else (``dj_upload_progress``, ``dj_hook``,
+            ``data_*`` ...) is emitted on the wrapper too, underscores becoming
+            hyphens.
 
     Usage:
         {% theme_progress value=75 max=100 label="Upload progress" %}
         {% theme_progress label="Loading..." %}
+        {% theme_progress value=0 dj_upload_progress="avatar" %}
     """
     slots, remaining_attrs = _extract_slots(attrs)
     request = context.get("request")
@@ -805,6 +979,9 @@ def theme_progress(
         "is_indeterminate": is_indeterminate,
         "percentage": percentage,
         "attrs": remaining_attrs,
+        # `dj_upload_progress="slot"` makes the client drive this bar from
+        # that upload slot's progress (#3289).
+        "extra_attrs": _passthrough_attrs(remaining_attrs, skip=("class", "id")),
         "css_prefix": _css_prefix(),
         **slots,
     }

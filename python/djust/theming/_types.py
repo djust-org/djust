@@ -236,6 +236,10 @@ class ThemeTokens:
         return min(candidates, key=lambda tint: _contrast(colour, tint))
 
     @property
+    def info_tint(self) -> ColorScale:
+        return self._tint(self.info)
+
+    @property
     def success_tint(self) -> ColorScale:
         return self._tint(self.success)
 

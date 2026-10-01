@@ -5,7 +5,7 @@ from typing import Any, Iterator
 from django.conf import settings
 from django.core.checks import CheckMessage, Error, Warning, register, Tags
 
-from ._config import get_theme_config
+from ._config import get_theme_config, parse_preset_names
 from .accessibility import AccessibilityValidator
 from ._registry_accessor import get_registry
 from .a11y_exemptions import A11Y_EXEMPTIONS, CONTRAST_PAIRS
@@ -235,3 +235,37 @@ def check_design_system_valid(app_configs: Any, **kwargs: Any) -> list[CheckMess
         )
 
     return errors
+
+
+@register(Tags.compatibility)
+def check_selectable_presets(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    """Validate ``LIVEVIEW_CONFIG["theme"]["selectable_presets"]``.
+
+    At render time a bad value is logged and ignored (the setting is read on
+    every request, and a preset can be renamed or removed in a later release, so
+    it must not 500 the site). This is where the mistake is reported.
+    """
+    raw = get_theme_config().get("selectable_presets")
+    hint = "Use a list of preset names, e.g. ['default', 'legal']; run `python manage.py djust_theme list-presets` for the registered names."
+    try:
+        names = parse_preset_names(raw)
+    except ValueError as exc:
+        return [
+            Warning(
+                f'LIVEVIEW_CONFIG["theme"]["selectable_presets"] is invalid: {exc}',
+                hint=hint,
+                id="djust_theming.W003",
+            )
+        ]
+    registered = get_registry().list_presets()
+    unknown = [name for name in names or () if name not in registered]
+    if not unknown:
+        return []
+    return [
+        Warning(
+            f'LIVEVIEW_CONFIG["theme"]["selectable_presets"] names unknown preset(s) '
+            f"{', '.join(map(repr, unknown))}, which are ignored.",
+            hint=hint,
+            id="djust_theming.W003",
+        )
+    ]
