@@ -684,6 +684,13 @@ intact across live updates:
 </div>
 ```
 
+`{% csrf_token %}` also renders in the page shell outside `dj-root`, such as a
+logout form in a shared `base.html` nav, and carries the same token as a form
+inside the root. The shell is rendered once, on the initial HTTP request, and
+the socket only updates what is inside the root. A nav that has to change after
+a live event (a username chip that follows a state change, say) belongs inside
+the root.
+
 ---
 
 ## Common UI Patterns
