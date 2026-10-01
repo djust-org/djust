@@ -759,9 +759,12 @@ def _check_presence_backend(errors: list) -> None:
 
     if _is_check_suppressed("djust.C019"):
         return
-    value = get_djust_config().get("PRESENCE_BACKEND")
-    if value is None or value in KNOWN_PRESENCE_BACKENDS:
-        return
+    config = get_djust_config()
+    if "PRESENCE_BACKEND" not in config:
+        return  # unset: the registry's default (memory)
+    value = config["PRESENCE_BACKEND"]
+    if value in KNOWN_PRESENCE_BACKENDS:
+        return  # ``None`` is not known: the registry raises for it too
     errors.append(
         DjustError(
             "DJUST_CONFIG['PRESENCE_BACKEND'] is %r, which djust does not know; "

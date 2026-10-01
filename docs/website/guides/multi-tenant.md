@@ -306,41 +306,62 @@ class OnboardingView(TenantMixin, LiveView):
 
 ## View state and tenants
 
-Saved view state is keyed by tenant. A view that uses `TenantMixin` stores its
-state in the state backend under `tenant:<id>:<session>_<page>...`, using
-`TenantMixin.get_state_key_prefix()`, which returns `tenant:<id>`. A session
-that reaches two tenants on the same URL (a header or session resolver, or
-`set_tenant()`) therefore holds two separate entries, and tenant A's request
-can never read the state tenant B saved, whatever the session or room ids.
-This applies to every state backend (`memory` and `redis`).
+Saved view state is keyed by tenant. A view that uses `TenantMixin` keeps its
+state in two places, and both are scoped by `TenantMixin.get_state_key_prefix()`
+(`tenant:<id>`, the id percent-encoded):
 
-- **A view without `TenantMixin`** is keyed exactly as before
-  (`<session>_<page>...`). A project that does not use tenants keeps every
-  saved state across the upgrade.
+- **The state backend** (`memory` or `redis`), under
+  `tenant:<id>:<session>_<page>...`: the Rust view the framework stores per
+  session and page.
+- **The Django session**, under `liveview_tenant:<id>:<path>` (plus the
+  `__private`, `_components` and `__sticky__` siblings): the saved public and
+  private state that the HTTP fallback POST restores, and that a WebSocket or
+  SSE reconnect restores when the view sets `enable_state_snapshot = True`.
+
+A session that reaches two tenants on the same URL (a cookie shared across
+`*.example.com`, a header or session resolver, or `set_tenant()`) therefore
+holds separate entries per tenant, and tenant A's request never reads state
+tenant B saved.
+
+- **A view without `TenantMixin`** is keyed exactly as before. A project that
+  does not use tenants keeps every saved state across the upgrade. This holds
+  even on a project that runs `TenantMiddleware`: the middleware alone does not
+  scope saved state, because it resolves the tenant for HTTP requests only, so
+  the same view would get a different key over HTTP and over the WebSocket.
+  Use `TenantMixin` on any view that must not share state across tenants.
 - **Fail closed:** a tenant view whose tenant is unresolved (for example
   `tenant_required = False` on a page with no tenant yet) saves and loads no
-  state at all. It never falls back to the shared, unprefixed key. On a
-  reconnect it mounts fresh.
+  state in either place. It never falls back to the shared, unprefixed key. On
+  a reconnect it mounts fresh, and an HTTP fallback POST re-runs `mount()`.
 - **Your own tenant-aware views:** a view that defines its own
   `get_state_key_prefix()` is keyed by what it returns, and returning an empty
   string means "no saved state", not "shared state".
 - **Server-persisted fields (`persist="server"`, ADR-038)** live in the Django
-  session, not the state backend. Their stored envelope is bound to the
-  resolved tenant, and an envelope saved under one tenant is refused under
-  another, so the view remounts fresh instead of leaking. They are not
-  re-keyed by tenant: there is one entry per session and view, so switching
-  tenants inside one session remounts, and the other tenant's values are
-  never loaded.
+  session too, in an envelope bound to the tenant that the request resolved
+  when the view mounted. An envelope saved under one tenant is refused under
+  another, so the view remounts fresh instead of leaking. They are not re-keyed
+  by tenant: there is one entry per session and view, so switching tenants
+  inside one session remounts. The binding takes the tenant from the request,
+  not from `self.tenant`, so a tenant you change in-process with
+  `set_tenant()` is not part of it; resolve the tenant from the request
+  (subdomain, path, header) for views that persist server fields.
+- **The signed `state_snapshot` token** the client holds is bound to the view
+  and the session, not the tenant.
 
-**Upgrading to 1.3:** the state key for tenant views changed, so the saved
-view state those views held under the old key is no longer found. That state is
-the Rust view the state backend stores per session and page (its context and
-the VDOM the next diff is computed against). After you deploy, the first
-reconnect or page load of each tenant view builds a new one and sends a full
-render instead of a patch: a **one-time reset** of the saved view state of
-tenant views. Nothing needs migrating, and the orphaned entries expire with
-`SESSION_TTL`. Views that do not use
-`TenantMixin` are not affected.
+**Upgrading to 1.3:** the keys for tenant views changed, so the saved view
+state those views held under the old keys is no longer found: a **one-time
+reset** of the saved view state of tenant views.
+
+- State backend: the first reconnect or page load of each tenant view builds a
+  new Rust view and sends a full render instead of a patch. The orphaned
+  entries expire with `SESSION_TTL`.
+- Django session: the first HTTP fallback POST after the deploy, or the first
+  reconnect of a view with `enable_state_snapshot = True`, finds no saved state
+  and re-runs `mount()`, so in-page state (a counter, a half-filled form) is
+  lost once. The orphaned `liveview_<path>` entries stay in the session until
+  it expires or is cleared.
+
+Nothing needs migrating. Views that do not use `TenantMixin` are not affected.
 
 `DJUST_STATE_BACKEND` (or `DJUST_CONFIG['STATE_BACKEND']`) accepts only
 `'redis'` (or a `redis://` URL) and `'memory'`; **any other value, including a

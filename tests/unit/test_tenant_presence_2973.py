@@ -230,3 +230,9 @@ def test_c019_can_be_suppressed():
 
     with override_settings(DJUST_CONFIG={"suppress_checks": ["C019"]}):
         assert _c019({"PRESENCE_BACKEND": "rediss"}) == []
+
+
+def test_c019_flags_an_explicit_none_like_the_registry_does():
+    """The registry raises for ``PRESENCE_BACKEND = None``; the check agrees."""
+    assert len(_c019({"PRESENCE_BACKEND": None})) == 1
+    assert _c019({}) == []

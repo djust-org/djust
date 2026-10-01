@@ -576,17 +576,15 @@ class RustBridgeMixin:
         backend. Falling back to the unprefixed key would put that request in
         the namespace every non-tenant view shares.
         """
-        hook = getattr(self, "get_state_key_prefix", None)
-        tenant_scope = ""
-        if callable(hook):
-            prefix = hook()
-            if not prefix:
-                logger.debug(
-                    "[LiveView] %s has no tenant; saved view state is not used",
-                    type(self).__name__,
-                )
-                return None
-            tenant_scope = f"{prefix}:"
+        from .._tenant_state import state_scope
+
+        tenant_scope = state_scope(self)
+        if tenant_scope is None:
+            logger.debug(
+                "[LiveView] %s has no tenant; saved view state is not used",
+                type(self).__name__,
+            )
+            return None
         return f"{tenant_scope}{session_key}_{view_key}{template_hash_slot}"
 
     def _get_cached_template_hash_slot(self) -> str:
