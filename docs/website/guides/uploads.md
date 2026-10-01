@@ -14,7 +14,7 @@ djust provides chunked binary file uploads over WebSocket, with client-side prev
 ## What You Get
 
 - **UploadMixin** -- Server-side configuration with `allow_upload()` and `consume_uploaded_entries()`
-- **Chunked transfer** -- Files are split into 64KB chunks as binary WebSocket frames
+- **Chunked transfer** -- Files are split into 63KB chunks as binary WebSocket frames
 - **Template directives** -- `dj-upload`, `dj-upload-drop`, `dj-upload-preview`, `dj-upload-progress`
 - **Validation** -- File size limits, extension filtering, MIME type checking, magic byte verification
 - **Progress tracking** -- Real-time updates via `djust:upload:progress` DOM events
@@ -89,7 +89,7 @@ class ProfileView(UploadMixin, LiveView):
 | `accept` | `str` | `""` | Comma-separated extensions or MIME types (e.g., `".jpg,.png"` or `"image/*"`) |
 | `max_entries` | `int` | `1` | Maximum files for this slot. Sets `multiple` automatically if > 1. |
 | `max_file_size` | `int` | `10_000_000` | Maximum file size in bytes (default 10MB) |
-| `chunk_size` | `int` | `65536` | Chunk size for transfer (default 64KB) |
+| `chunk_size` | `int` | `64512` | Chunk size for transfer (default 63KB; clamped so a chunk frame, header included, fits `max_message_size`) |
 | `auto_upload` | `bool` | `True` | Start upload immediately when files are selected |
 
 ```python
@@ -123,7 +123,15 @@ self.allow_upload('documents', accept='.pdf,.docx',
 | `dj-upload="name"` | Bind a file input to an upload slot. `accept` and `multiple` are set automatically. |
 | `dj-upload-drop="name"` | Create a drag-and-drop zone. Adds `upload-dragover` CSS class during drag. |
 | `dj-upload-preview="name"` | Container for image previews (auto-populated for image files). |
-| `dj-upload-progress="name"` | Container for progress bars with `.upload-progress-bar[role=progressbar]`. |
+| `dj-upload-progress="name"` | Progress for the slot's running upload. Leave it empty and the client renders a `<progress>` (file name, bar, percent) per file; or put a bar inside it — a `.upload-progress-bar`, any `[role=progressbar]` track whose first child is the fill, or a `{% theme_progress %}` — and the client drives that bar instead. The container gets `data-upload-ref` / `data-upload-status` while an upload runs. |
+
+With `djust.theming`, `theme_progress` passes extra keyword arguments through to its wrapper (underscores become hyphens), so a themed bar can be wired to a slot:
+
+```html
+{% theme_progress value=0 label="Uploading" dj_upload_progress="avatar" %}
+```
+
+Only one bar exists per container, so files uploaded one after another reuse it; an empty container renders one item per file.
 
 ## Client-Side Events
 

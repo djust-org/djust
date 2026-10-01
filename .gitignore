@@ -47,6 +47,7 @@ Thumbs.db
 
 # Development
 *.orig
+*.backup
 .env
 
 # Temporary/Debug files
