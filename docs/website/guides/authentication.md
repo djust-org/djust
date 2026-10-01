@@ -284,4 +284,45 @@ window.addEventListener('djust:auth-refused', ({ detail }) => {
 
 Reload the page after restoring authentication to establish a new connection.
 
+### Refusal codes
+
+Don't match the text of a refusal; its wording can change. Every refusal error frame
+and HTTP 403 body carries the fixed code `permission_denied`, next to the
+human-readable `error` text, on every transport:
+
+| Refusal | WebSocket / SSE frame | HTTP fallback |
+|---|---|---|
+| Authority revoked or session ended before an event or server push (`exposure_policy="explicit"`) | `{"type": "error", "error": "Event authorization failed. Please reload the page.", "code": "permission_denied"}`, then close 4403 (WebSocket) or end of stream (SSE) | Not applicable: the HTTP fallback re-checks each POST, see the next row |
+| `reauth_on_event` re-check failed | SSE: the same error frame (`"error": "Session is no longer authorized. Please reload the page."`), then end of stream. WebSocket: a `navigate` frame to the login URL, then close 4403, with no error frame, so `detail.error_code` is `null` | Not applicable |
+| `@permission_required` handler or view-level `permission_required` refused | `{"type": "error", "error": "Permission denied", "code": "permission_denied"}` | `403` with `{"error": "Permission denied", "code": "permission_denied"}` |
+| Object-level refusal (`has_object_permission`) | `{"type": "error", "error": "Access denied for this object.", "code": "permission_denied"}` | `403` with `{"error": "Access denied for this object.", "code": "permission_denied"}` |
+
+The code is a constant. It is never built from the user's input or from an
+exception message. A login redirect is not a refusal frame: the HTTP fallback
+answers `403` with `{"redirect": "<login url>"}`, and the WebSocket sends a
+`navigate` frame.
+
+The code reaches the page in two places:
+
+- `djust:error`: `detail.code` is the code of the error frame or HTTP body that
+  produced it, or `null` when it carried none. Use it for a refusal that leaves the
+  connection open, such as a denied handler.
+- `djust:auth-refused`: `detail.error_code` is the code of the refusal frame that
+  immediately preceded the 4401/4403 close, or `null` when the close had none.
+  `detail.code` stays the numeric close code.
+
+```javascript
+window.addEventListener('djust:auth-refused', ({ detail }) => {
+    if (detail.error_code === 'permission_denied') {
+        document.body.hidden = true;        // authority ended: hide the page
+        window.location.assign('/accounts/login/');
+    }
+});
+window.addEventListener('djust:error', ({ detail }) => {
+    if (detail.code === 'permission_denied') {
+        showToast('You are not allowed to do that.');
+    }
+});
+```
+
 - For object-level access, use `get_object()` + `has_object_permission()`, which are re-checked on every event (see [Authorization](authorization.md))
