@@ -793,7 +793,9 @@ class RequestMixin:
                     "Auth denied for %s: missing view permission (HTTP POST)",
                     type(self).__name__,
                 )
-                return JsonResponse({"error": "Permission denied"}, status=403)
+                return JsonResponse(
+                    {"error": "Permission denied", "code": "permission_denied"}, status=403
+                )
             if redirect_url:
                 logger.info(
                     "Auth denied for %s: login required (HTTP POST)",
@@ -904,7 +906,10 @@ class RequestMixin:
                     "Auth denied for %s: object permission (HTTP POST)",
                     type(self).__name__,
                 )
-                return JsonResponse({"error": "Access denied for this object."}, status=403)
+                return JsonResponse(
+                    {"error": "Access denied for this object.", "code": "permission_denied"},
+                    status=403,
+                )
 
             # Call the event handler — only @event_handler-decorated methods
             # can be invoked via POST (matches WS security)
@@ -981,7 +986,9 @@ class RequestMixin:
                         event_name,
                         type(self).__name__,
                     )
-                    return JsonResponse({"error": "Permission denied"}, status=403)
+                    return JsonResponse(
+                        {"error": "Permission denied", "code": "permission_denied"}, status=403
+                    )
                 coerce = True
                 if hasattr(handler, "_djust_decorators"):
                     event_meta = handler._djust_decorators.get("event_handler", {})

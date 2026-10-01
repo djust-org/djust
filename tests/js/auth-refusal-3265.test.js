@@ -73,7 +73,7 @@ describe('#3265 authentication refusal', () => {
         expect(h.cancelEventRequests).toHaveBeenCalledOnce();
         expect(h.clearOptimisticPending).toHaveBeenCalledOnce();
         expect(h.window.djust.stickyPreserve.clearStash).toHaveBeenCalledOnce();
-        expect(h.refused).toEqual([{ code, reason: 'denied' }]);
+        expect(h.refused).toEqual([{ code, reason: 'denied', error_code: null }]);
         expect(h.client.onTransportFailed).not.toHaveBeenCalled();
         h.client.connect();
         expect(h.sockets).toHaveLength(1);

@@ -2566,7 +2566,7 @@ class SSESessionTransport:
             if not authorized:
                 await session.send_error(
                     "Session is no longer authorized. Please reload the page.",
-                    code=4403,
+                    code="permission_denied",
                 )
                 await session.close(code=4403)
                 return False
@@ -6055,7 +6055,9 @@ class ViewRuntime:
         try:
             redirect_url = await sync_to_async(run_pre_mount_auth)(self.view_instance, request)
         except PermissionDenied:
-            await self.transport.send({"type": "error", "error": "Permission denied"})
+            await self.transport.send(
+                {"type": "error", "error": "Permission denied", "code": "permission_denied"}
+            )
             # ADR-022 Iter 3 Phase 3.3a (#1917, Finding E): the runtime already
             # sent the verdict frame; finalize_mount_auth adds ONLY the
             # transport-level close (WS close(4403) — unconditional for a
