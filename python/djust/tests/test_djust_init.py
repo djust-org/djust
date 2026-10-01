@@ -267,6 +267,92 @@ def test_package_action_matches_project_tooling(tmp_path, files, kind, runnable)
     assert (action.kind, action.runnable) == (kind, runnable)
 
 
+# --- uv projects keep the specifiers they already declare (#3296) -------------
+
+PINNED_PYPROJECT = """\
+[project]
+name = "site"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "django>=5.2,<6",
+    "djust==1.2.2",
+    "channels>=4.2,<5",
+    "uvicorn[standard]==0.35.0",
+]
+"""
+
+
+def uv_project(root: Path, dependencies: str) -> None:
+    (root / "pyproject.toml").write_text(
+        '[project]\nname = "site"\nversion = "0.1.0"\ndependencies = [%s]\n' % dependencies
+    )
+    (root / "uv.lock").write_text("")
+
+
+def test_uv_add_skips_dependencies_that_are_already_pinned(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(PINNED_PYPROJECT)
+    (tmp_path / "uv.lock").write_text("")
+    action = init.choose_package_action(tmp_path, None, uv_available=True)
+    assert action.kind == "uv"
+    assert action.command == []
+
+
+def test_uv_add_names_only_the_missing_dependencies(tmp_path):
+    # Names match by canonical form, ignoring extras, markers and specifiers.
+    uv_project(tmp_path, '"Django>=5.2", "DJust==1.2.2", "Uvicorn[standard]==0.35.0"')
+    action = init.choose_package_action(tmp_path, None, uv_available=True)
+    assert action.command == ["uv", "add", "channels>=4.0"]
+    uv_project(tmp_path, '"django>=5.2"')
+    action = init.choose_package_action(tmp_path, None, uv_available=True)
+    assert action.command == ["uv", "add", *init.requirements()]
+
+
+def test_uv_add_ignores_similarly_named_packages(tmp_path):
+    uv_project(tmp_path, '"djust-components", "django-channels", "uvicorn-worker"')
+    action = init.choose_package_action(tmp_path, None, uv_available=True)
+    assert action.command == ["uv", "add", *init.requirements()]
+
+
+def test_uv_add_adds_everything_when_pyproject_is_unreadable(tmp_path):
+    (tmp_path / "pyproject.toml").write_text("[project\n")
+    (tmp_path / "uv.lock").write_text("")
+    action = init.choose_package_action(tmp_path, None, uv_available=True)
+    assert action.command == ["uv", "add", *init.requirements()]
+
+
+def test_init_leaves_pinned_uv_dependencies_alone(tmp_path):
+    make_project(tmp_path)
+    (tmp_path / "pyproject.toml").write_text(PINNED_PYPROJECT)
+    (tmp_path / "uv.lock").write_text("")
+    dry = init.format_result(init.init_project(tmp_path, dry_run=True), tmp_path)
+    assert "uv add" not in dry
+    assert "already declared in pyproject.toml" in dry
+    calls = []
+
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    with (
+        patch.object(init.shutil, "which", return_value="/usr/bin/uv"),
+        patch.object(init.subprocess, "run", side_effect=run),
+    ):
+        result = init.init_project(tmp_path, force=True)
+    assert [cmd for cmd in calls if cmd[0] != "git"] == [
+        ["uv", "run", "python", "manage.py", "check"]
+    ]
+    assert (tmp_path / "pyproject.toml").read_text() == PINNED_PYPROJECT
+    assert any(s.name == "packages" and s.status == init.UNCHANGED for s in result.steps)
+
+
+def test_init_adds_only_missing_uv_dependencies_and_prints_that_command(tmp_path):
+    make_project(tmp_path)
+    uv_project(tmp_path, '"djust==1.2.2", "channels>=4.2,<5"')
+    dry = init.format_result(init.init_project(tmp_path, dry_run=True), tmp_path)
+    assert "would run: uv add 'uvicorn[standard]>=0.30'" in dry
+
+
 def test_requirements_install_targets_project_python(tmp_path):
     (tmp_path / "requirements.txt").write_text("django\n")
     python = tmp_path / ".venv/bin/python"

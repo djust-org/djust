@@ -231,6 +231,7 @@ def plan_asgi(project: Project) -> Tuple[Optional[FileChange], Step, Optional[st
 
 _REQUIREMENT_NAME_RE = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
 _INCLUDE_RE = re.compile(r"^\s*(?:-r|--requirement)[\s=]+(\S+)")
+_ALREADY_DECLARED = "djust, channels and uvicorn already declared in pyproject.toml"
 FIRST_LIVEVIEW_URL = "https://docs.djust.org/getting-started/first-liveview/"
 
 
@@ -264,11 +265,51 @@ class PackageAction:
     runnable: bool
 
 
+def _declared_dependencies(pyproject: Path) -> Optional[set]:
+    """Canonical names in ``[project].dependencies``, or None when unreadable.
+
+    Only the name is read, so every PEP 508 form counts (extras, markers, a
+    ``name @ url`` reference); the specifier is deliberately left alone.
+    """
+    try:
+        try:
+            import tomllib
+        except ImportError:  # Python 3.10
+            import tomli as tomllib
+        data = tomllib.loads(_read(pyproject))
+    except (ImportError, OSError, ValueError):
+        return None
+    names = set()
+    for entry in data.get("project", {}).get("dependencies", []):
+        match = _REQUIREMENT_NAME_RE.match(entry) if isinstance(entry, str) else None
+        if match:
+            names.add(_canonical_name(match.group(1)))
+    return names
+
+
+def _undeclared_requirements(pyproject: Path) -> List[str]:
+    """The requirements ``uv add`` must add: ``uv add`` rewrites the specifier
+    of a package it is given, so one the project already declares is left out
+    (#3296), as ``plan_requirements`` does for requirements.txt."""
+    declared = _declared_dependencies(pyproject) if pyproject.exists() else None
+    if declared is None:
+        return requirements()
+    return [
+        req
+        for req in requirements()
+        if _canonical_name(_REQUIREMENT_NAME_RE.match(req).group(1)) not in declared
+    ]
+
+
 def choose_package_action(root: Path, python: Optional[Path], uv_available: bool) -> PackageAction:
     reqs = requirements()
     pyproject = root / "pyproject.toml"
     if (root / "uv.lock").exists() or (pyproject.exists() and "[tool.uv]" in pyproject.read_text()):
-        return PackageAction("uv", ["uv", "add", *reqs], runnable=uv_available)
+        missing = _undeclared_requirements(pyproject)
+        # An empty command means every dependency is already declared.
+        return PackageAction(
+            "uv", ["uv", "add", *missing] if missing else [], runnable=uv_available
+        )
     if (root / "poetry.lock").exists():
         return PackageAction("poetry", ["poetry", "add", *reqs], runnable=False)
     if (root / "requirements.txt").exists():
@@ -432,14 +473,18 @@ def init_project(
         result.run_command = "%s -m uvicorn %s:application --reload" % (runner, project.asgi_module)
 
     command = shlex.join(action.command)
+    nothing_to_add = action.kind == "uv" and not action.command
     if dry_run:
         result.steps = [
             Step(step.name, PLANNED, step.planned or step.detail) if step.status == DONE else step
             for step in result.steps
         ]
-        result.steps.append(
-            Step("packages", SKIPPED, "would run: %s" % command if install else "--no-install")
-        )
+        if not install:
+            result.steps.append(Step("packages", SKIPPED, "--no-install"))
+        elif nothing_to_add:
+            result.steps.append(Step("packages", UNCHANGED, _ALREADY_DECLARED))
+        else:
+            result.steps.append(Step("packages", SKIPPED, "would run: %s" % command))
         return result
 
     if result.changes and not force:
@@ -456,17 +501,23 @@ def init_project(
         result.steps.append(Step("check", SKIPPED, "install packages, then run manage.py check"))
         return result
     if not action.runnable:
-        result.steps.append(Step("packages", SKIPPED, "run: %s" % command))
+        if nothing_to_add:
+            result.steps.append(Step("packages", UNCHANGED, _ALREADY_DECLARED))
+        else:
+            result.steps.append(Step("packages", SKIPPED, "run: %s" % command))
         result.steps.append(Step("check", SKIPPED, "run manage.py check after installing"))
         return result
 
-    installed = _run(action.command, root)
-    if installed.returncode != 0:
-        result.steps.append(Step("packages", ATTENTION, "failed: %s" % command))
-        result.notes.append("%s\n%s" % (command, (installed.stdout + installed.stderr).strip()))
-        result.steps.append(Step("check", SKIPPED, "packages did not install"))
-        return result
-    result.steps.append(Step("packages", DONE, command))
+    if nothing_to_add:
+        result.steps.append(Step("packages", UNCHANGED, _ALREADY_DECLARED))
+    else:
+        installed = _run(action.command, root)
+        if installed.returncode != 0:
+            result.steps.append(Step("packages", ATTENTION, "failed: %s" % command))
+            result.notes.append("%s\n%s" % (command, (installed.stdout + installed.stderr).strip()))
+            result.steps.append(Step("check", SKIPPED, "packages did not install"))
+            return result
+        result.steps.append(Step("packages", DONE, command))
 
     if action.kind == "uv":
         check_cmd = ["uv", "run", "python", "manage.py", "check"]
