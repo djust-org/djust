@@ -726,38 +726,38 @@
       "properties": [
         {
           "name": "djust:integrity:djust_components/vendor/xterm/xterm.mjs",
-          "value": "sha384-s0JwKMRXSBBDUlPbf3oli3dDVk65q2lo7eKxkRdQ5lDWCmm7q6Nnygi5WjTHiOg4"
+          "value": "sha384-Ga3vVPXUe0IfsWMOdTRPOo07yJaXkYMDqMtfDfl1CEj0rr90ekPrDNPt3uZ6tslg"
         },
         {
           "name": "djust:integrity:djust_components/vendor/xterm/xterm.css",
-          "value": "sha384-8Xk9wy/gzEDUKrXtrmCFa2bBuK3BpjpDuL/p0SeKQX19Khl/M+lHOgD/CyYf7efP"
+          "value": "sha384-n2n7twoohnW+d3myBKaUgl7DSiwidw6MkQy9oesGzkPpMjejKRR3XlnD+5yCdtBD"
         }
       ],
       "type": "file"
     },
     {
-      "bom-ref": "asset:xterm:pkg:npm/%40xterm/addon-fit@0.10.0",
+      "bom-ref": "asset:xterm:pkg:npm/%40xterm/addon-fit@0.11.0",
       "licenses": [
         {
           "expression": "MIT"
         }
       ],
       "name": "@xterm/addon-fit",
-      "purl": "pkg:npm/%40xterm/addon-fit@0.10.0",
+      "purl": "pkg:npm/%40xterm/addon-fit@0.11.0",
       "type": "library",
-      "version": "0.10.0"
+      "version": "0.11.0"
     },
     {
-      "bom-ref": "asset:xterm:pkg:npm/%40xterm/xterm@5.5.0",
+      "bom-ref": "asset:xterm:pkg:npm/%40xterm/xterm@6.0.0",
       "licenses": [
         {
           "expression": "MIT"
         }
       ],
       "name": "@xterm/xterm",
-      "purl": "pkg:npm/%40xterm/xterm@5.5.0",
+      "purl": "pkg:npm/%40xterm/xterm@6.0.0",
       "type": "library",
-      "version": "5.5.0"
+      "version": "6.0.0"
     },
     {
       "bom-ref": "rust:pkg:cargo/ahash@0.8.12",
@@ -2457,8 +2457,8 @@
     },
     {
       "dependsOn": [
-        "asset:xterm:pkg:npm/%40xterm/addon-fit@0.10.0",
-        "asset:xterm:pkg:npm/%40xterm/xterm@5.5.0"
+        "asset:xterm:pkg:npm/%40xterm/addon-fit@0.11.0",
+        "asset:xterm:pkg:npm/%40xterm/xterm@6.0.0"
       ],
       "ref": "asset:xterm"
     }
@@ -2473,7 +2473,7 @@
     "properties": [
       {
         "name": "djust:manifest-digest",
-        "value": "41f7f4386a3cba2f54f3ee9b9751052d6a9a31f7c732b5e5910a97bbfe5f275d"
+        "value": "26486dfa8a78bf0d035eeeb1439220243d4a083026c0f266c58345aa2ae348b6"
       }
     ],
     "tools": {
