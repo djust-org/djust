@@ -52,6 +52,35 @@ class ObservabilityLogHandler(logging.Handler):
         with _lock:
             _buffer.append(entry)
 
+        self._fall_back_to_last_resort(record)
+
+    def _fall_back_to_last_resort(self, record: logging.LogRecord) -> None:
+        """Print WARNING+ djust records the project never configured output for.
+
+        A logger that has any handler stops falling back to
+        ``logging.lastResort``, so attaching this handler to ``djust`` silenced
+        every djust warning in a project with no ``LOGGING`` (#3301). Hand the
+        record to ``lastResort`` ourselves, but only when no other handler on
+        the logger's propagation chain would receive it: a configured project
+        keeps its own output, exactly once.
+        """
+        if record.levelno < logging.WARNING:
+            return
+        if record.name != "djust" and not record.name.startswith("djust."):
+            return
+        last_resort = logging.lastResort
+        if last_resort is None or record.levelno < last_resort.level:
+            return
+        logger: "logging.Logger | None" = logging.getLogger(record.name)
+        while logger is not None:
+            for other in logger.handlers:
+                if not isinstance(other, ObservabilityLogHandler) and record.levelno >= other.level:
+                    return
+            if not logger.propagate:
+                break
+            logger = logger.parent
+        last_resort.handle(record)
+
 
 # Level name → int for server-side filtering. Standard logging levels.
 _LEVEL_NAMES = {

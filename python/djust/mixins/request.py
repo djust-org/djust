@@ -753,7 +753,15 @@ class RequestMixin:
             # _sync_state_to_rust csrf_token injection (#705).
             self.request = request
 
+            # Navigation the handler queued (``live_redirect`` / ``live_patch``),
+            # as ``navigation`` frames in the WebSocket shape. Filled right after
+            # the handler runs; the client's ``handleNavigation`` consumes each
+            # entry of the answer's ``_navigation`` list (#3303).
+            navigation_frames: List[Dict[str, Any]] = []
+
             def _inject_side_channels(resp_data: Dict[str, Any]) -> None:
+                if navigation_frames:
+                    resp_data["_navigation"] = navigation_frames
                 if hasattr(self, "_drain_flash"):
                     flash_commands = self._drain_flash()
                     if flash_commands:
@@ -785,7 +793,9 @@ class RequestMixin:
                     "Auth denied for %s: missing view permission (HTTP POST)",
                     type(self).__name__,
                 )
-                return JsonResponse({"error": "Permission denied"}, status=403)
+                return JsonResponse(
+                    {"error": "Permission denied", "code": "permission_denied"}, status=403
+                )
             if redirect_url:
                 logger.info(
                     "Auth denied for %s: login required (HTTP POST)",
@@ -896,7 +906,10 @@ class RequestMixin:
                     "Auth denied for %s: object permission (HTTP POST)",
                     type(self).__name__,
                 )
-                return JsonResponse({"error": "Access denied for this object."}, status=403)
+                return JsonResponse(
+                    {"error": "Access denied for this object.", "code": "permission_denied"},
+                    status=403,
+                )
 
             # Call the event handler — only @event_handler-decorated methods
             # can be invoked via POST (matches WS security)
@@ -973,7 +986,9 @@ class RequestMixin:
                         event_name,
                         type(self).__name__,
                     )
-                    return JsonResponse({"error": "Permission denied"}, status=403)
+                    return JsonResponse(
+                        {"error": "Permission denied", "code": "permission_denied"}, status=403
+                    )
                 coerce = True
                 if hasattr(handler, "_djust_decorators"):
                     event_meta = handler._djust_decorators.get("event_handler", {})
@@ -1016,6 +1031,27 @@ class RequestMixin:
                 else:
                     handler(*call_args, **call_kwargs)
                 t_handler_ms = (time.perf_counter() - t0_handler) * 1000
+
+            # A queued ``live_redirect`` / ``live_patch`` goes out with this
+            # answer, as the WebSocket flushes it at turn end. The HTTP
+            # fallback drained only flash and page metadata, so the navigation
+            # was dropped (#3303). A ``live_redirect`` leaves this view, so
+            # nothing is rendered or saved for it: after ``logout()`` the
+            # request is anonymous and ``get_context_data()`` may not run. A
+            # ``live_patch`` stays on the view, so its render still goes out.
+            if hasattr(self, "_drain_navigation"):
+                for command in self._drain_navigation():
+                    navigation_frames.append(
+                        {
+                            "type": "navigation",
+                            "action": command.get("type"),
+                            **{k: v for k, v in command.items() if k != "type"},
+                        }
+                    )
+            if any(frame["action"] == "live_redirect" for frame in navigation_frames):
+                redirect_response: Dict[str, Any] = {}
+                _inject_side_channels(redirect_response)
+                return JsonResponse(redirect_response)
 
             # Persist user-defined _private attributes BEFORE get_context_data()
             # because get_context_data() sets render-cycle internals that we
@@ -1109,14 +1145,7 @@ class RequestMixin:
                 if contract_fields is None:
                     return _contract_error_response()
                 skip_response.update(contract_fields)
-                if hasattr(self, "_drain_flash"):
-                    flash_commands = self._drain_flash()
-                    if flash_commands:
-                        skip_response["_flash"] = flash_commands
-                if hasattr(self, "_drain_page_metadata"):
-                    meta_commands = self._drain_page_metadata()
-                    if meta_commands:
-                        skip_response["_page_metadata"] = meta_commands
+                _inject_side_channels(skip_response)
                 return JsonResponse(skip_response)
 
             # Apply context processors so the render includes auth context

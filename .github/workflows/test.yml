@@ -131,7 +131,7 @@ jobs:
   #
   # Matrix-on-PR is the project's #1 minute sink (3 cells × ~10 min each).
   # On PR we run only the canonical interpreter (3.12); on push to main
-  # we run the full matrix (3.12/3.13/3.14). 3.13 / 3.14 regressions are
+  # we run the full matrix (3.12/3.13/3.14, plus 3.15 allowed to fail). 3.13 / 3.14 regressions are
   # caught on the merge commit instead of at PR time — one merge later,
   # not "never". Historical evidence the matrix has value: PRs #450 / #452
   # shipped real 3.14-support fixes. Tradeoff accepted because the absolute
@@ -162,10 +162,17 @@ jobs:
   # they are per-checkout, not per-shard, and would be 4x duplicated work.
   python-tests:
     runs-on: ubuntu-latest
+    # 3.15 is a release candidate (#3255), so a red 3.15 cell is a signal to
+    # read, not a merge blocker: with this job-level `continue-on-error` a
+    # failed 3.15 shard shows red in the run but `needs.python-tests.result`
+    # (what the test-summary gate reads) stays "success". Delete the
+    # `== '3.15'` once 3.15.0 is final and the cell is green, so it gates like
+    # 3.12-3.14. Push-to-main only, like 3.13/3.14.
+    continue-on-error: ${{ matrix.python-version == '3.15' }}
     strategy:
       fail-fast: false
       matrix:
-        python-version: ${{ github.event_name == 'push' && fromJSON('["3.12","3.13","3.14"]') || fromJSON('["3.12"]') }}
+        python-version: ${{ github.event_name == 'push' && fromJSON('["3.12","3.13","3.14","3.15"]') || fromJSON('["3.12"]') }}
         group: [1, 2, 3, 4]
     name: python-tests (py${{ matrix.python-version }}, shard ${{ matrix.group }}/4)
     # NOT given rust-tests' CARGO_PROFILE_* override — measured, and it is a

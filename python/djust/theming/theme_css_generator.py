@@ -787,7 +787,8 @@ class CompleteThemeCSSGenerator:
 }}
 .{p}form-input:focus {{
   border-color: hsl(var(--ring));
-  outline: none;
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
 }}""")
         elif styles["input_style"] == "filled":
             parts.append(f"""
@@ -801,7 +802,8 @@ class CompleteThemeCSSGenerator:
 .{p}form-input:focus {{
   border-bottom-color: hsl(var(--ring));
   background: hsl(var(--muted) / 0.7);
-  outline: none;
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
 }}""")
         elif styles["input_style"] == "underlined":
             parts.append(f"""
@@ -815,7 +817,8 @@ class CompleteThemeCSSGenerator:
 .{p}form-input:focus {{
   border-bottom-width: 2px;
   border-bottom-color: hsl(var(--ring));
-  outline: none;
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
 }}""")
 
         return "\n".join(parts)

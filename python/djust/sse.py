@@ -131,6 +131,10 @@ def _max_sessions_total() -> int:
 # checks includes the mounts still in flight. The lock also makes the
 # registry's check-and-set / check-and-pop steps atomic across loops.
 _sse_registry_lock = threading.Lock()
+#: Stream GETs still mounting, per session id (#3254). A reconnect's mount
+#: joins presence BEFORE the new session is registered, so the old session's
+#: close must treat an id with a mount in flight as already replaced.
+_sse_mounting: Dict[str, int] = {}
 #: In-flight reservations per cap key (see ``_client_cap_key``).
 _sse_reserved: Dict[str, int] = {}
 #: Sum of ``_sse_reserved``.
@@ -221,6 +225,29 @@ def _release_sse_slot(cap_key: str) -> None:
     """Give back a reservation whose mount did not register a session."""
     with _sse_registry_lock:
         _release_reservation_locked(cap_key)
+
+
+def _begin_sse_mount(session_id: str) -> None:
+    with _sse_registry_lock:
+        _sse_mounting[session_id] = _sse_mounting.get(session_id, 0) + 1
+
+
+def _end_sse_mount(session_id: str) -> None:
+    with _sse_registry_lock:
+        left = _sse_mounting.get(session_id, 0) - 1
+        if left > 0:
+            _sse_mounting[session_id] = left
+        else:
+            _sse_mounting.pop(session_id, None)
+
+
+def _sse_session_superseded(session: "SSESession") -> bool:
+    """Whether a reconnect has replaced ``session`` under its id, or is mounting to (#3254)."""
+    with _sse_registry_lock:
+        current = _sse_sessions.get(session.session_id)
+        if current is not None and current is not session:
+            return True
+        return _sse_mounting.get(session.session_id, 0) > 0
 
 
 def _register_sse_session(cap_key: str, session_id: str, session: "SSESession") -> bool:
@@ -428,6 +455,9 @@ class SSESession:
         # Set once shutdown() queued the close sentinel: the stream reads
         # nothing after it, so later pushes are dropped (#3232).
         self._closed_sentinel_queued = False
+        # Presence untracks scheduled by shutdown() (#3254): held so a task is
+        # not garbage-collected before it finishes, dropped when it does.
+        self._presence_untrack_tasks: set[asyncio.Task] = set()
         # The loop that serves the stream GET. With several event loops
         # (djust serve --loops N, #3128) a later event POST can arrive on
         # another loop; it hops here, because the queue, the locks and the
@@ -637,12 +667,57 @@ class SSESession:
         self.active = False
         view = self.view_instance
         if view is not None:
+            self._untrack_presence(view)
             # The WebSocket disconnect's teardown (#3232, #3239, #3244).
             release_root_view(view, navigation=False, reason="view_disconnect")
             self.view_instance = None
             self.runtime.view_instance = None
         self._put(None)  # None is the sentinel value
         self._closed_sentinel_queued = True
+
+    def _untrack_presence(self, view: Any) -> None:
+        """Untrack a closing view's presence without blocking the loop (#3254).
+
+        ``untrack_presence`` broadcasts through the synchronous channel-layer
+        API, which cannot run on a loop thread, so ``shutdown()`` (synchronous
+        itself) schedules it onto a worker thread. ``_replace_view`` awaits it
+        before releasing the view; here the release runs at once on the loop
+        thread and the untrack runs beside it, so a ``handle_presence_leave``
+        hook must not rely on the view's uploads, waiters or children still
+        being in place. With no running loop there is nothing to schedule
+        onto: it runs inline. A view that never tracked presence costs nothing.
+
+        A session that a same-owner reconnect (EventSource auto-reconnect) has
+        replaced under its id, or that a reconnect is still mounting to, is
+        not untracked: the presence record is keyed by (room, user), so
+        leaving it would delete the record the reconnect's view just created,
+        and SSE has no heartbeat to put it back.
+        """
+        if not getattr(view, "_presence_tracked", False) or _sse_session_superseded(self):
+            return
+        from ._child_lifecycle import untrack_view_presence
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            untrack_view_presence(view)
+            return
+        task = loop.create_task(sync_to_async(untrack_view_presence)(view))
+        self._presence_untrack_tasks.add(task)
+        task.add_done_callback(self._presence_untrack_done)
+
+    def _presence_untrack_done(self, task: "asyncio.Task[Any]") -> None:  # noqa: dead-method-allowed
+        """Drop a finished untrack task and log how it failed, if it did."""
+        self._presence_untrack_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.warning(
+                "SSE: presence untrack for closed session %s failed: %s",
+                sanitize_for_log(self.session_id),
+                type(exc).__name__,
+            )
 
     # ------------------------------------------------------------------ #
     # Interface for _validate_event_security
@@ -990,6 +1065,7 @@ class DjustSSEStreamView(View):
                 status=429,
             )
         reserved = True
+        _begin_sse_mount(session_id)
         try:
             # Create the session and bind it to its owner. NOTE: not yet registered
             # in _sse_sessions — registration happens only after a successful mount
@@ -1091,6 +1167,7 @@ class DjustSSEStreamView(View):
                 # closes promptly.
                 session.shutdown()
         finally:
+            _end_sse_mount(session_id)
             if reserved:
                 _release_sse_slot(cap_key)
 
@@ -1205,7 +1282,7 @@ class DjustSSEEventView(View):
                 "SSE: rejected event POST for session %s — requester is not the owner",
                 sanitize_for_log(session_id),
             )
-            return JsonResponse({"error": "forbidden"}, status=403)
+            return JsonResponse({"error": "forbidden", "code": "permission_denied"}, status=403)
 
         if not session.view_instance:
             return JsonResponse({"error": "View not mounted yet"}, status=503)
@@ -1310,7 +1387,7 @@ class DjustSSEMessageView(View):
                 "SSE: rejected message POST for session %s — requester is not the owner",
                 sanitize_for_log(session_id),
             )
-            return JsonResponse({"error": "forbidden"}, status=403)
+            return JsonResponse({"error": "forbidden", "code": "permission_denied"}, status=403)
 
         try:
             body = json.loads(request.body)

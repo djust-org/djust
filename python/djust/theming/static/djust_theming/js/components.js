@@ -253,10 +253,61 @@
     }
 
     // =========================================================================
+    // Nav active state (#3318)
+    // =========================================================================
+
+    // ``{% theme_nav_item %}`` decides ``active`` from ``request.path`` when it
+    // renders. A nav outside the swapped ``dj-root`` is never re-rendered by
+    // ``dj-navigate``, so the highlight stayed on the page you left. The tag
+    // stamps ``data-dj-nav="<url>"`` on a link whose state it auto-detected, and
+    // this recomputes that state from ``location.pathname`` with the SAME rule
+    // as ``_nav_url_matches`` in ``theme_components.py``: ``/`` matches only
+    // itself; any other url matches its own path and what is under it, on a
+    // segment boundary, with or without a trailing slash; both sides are
+    // percent-decoded. A link the app pinned with ``active=`` carries no marker
+    // and is left alone.
+    //
+    // It toggles the ``active`` class and ``aria-current`` the template renders,
+    // so server-rendered markup stays correct for first paint and without JS.
+    function navDecode(value) {
+        try {
+            return decodeURIComponent(value);
+        } catch (e) {
+            return value;
+        }
+    }
+
+    function navUrlMatches(url, path) {
+        url = navDecode(url);
+        path = navDecode(path);
+        if (url === '/') return path === '/';
+        var base = url.replace(/\/+$/, '');
+        return path === base || path.indexOf(base + '/') === 0;
+    }
+
+    function updateNavActive(root) {
+        var path = window.location.pathname;
+        (root || document).querySelectorAll('[data-dj-nav]').forEach(function(link) {
+            var active = navUrlMatches(link.getAttribute('data-dj-nav'), path);
+            link.classList.toggle('active', active);
+            if (active) {
+                link.setAttribute('aria-current', 'page');
+            } else if (link.getAttribute('aria-current') === 'page') {
+                link.removeAttribute('aria-current');
+            }
+        });
+    }
+
+    // =========================================================================
     // Initialization
     // =========================================================================
 
     function initAll(root) {
+        // Not subject to the stand-down below: the nav is server-rendered on
+        // every page and only ever moves on the client, which is exactly the
+        // LiveView case.
+        updateNavActive(root);
+
         // Stand down on any page djust is driving.
         //
         // The theming components are server-driven when a LiveView hosts them:
@@ -296,12 +347,29 @@
         initAll(document);
     });
 
+    // The nav sits outside the swapped dj-root, so follow the URL itself.
+    // `djust:path-changed` is dispatched on `document` by the client every time
+    // the rendered pathname moves (live_redirect, live_patch with a new path,
+    // an auto-navigate click, back/forward), right after history is updated;
+    // `popstate` is kept as well for a page whose client.js has not mounted.
+    document.addEventListener('djust:path-changed', function() {
+        updateNavActive(document);
+    });
+    window.addEventListener('popstate', function() {
+        updateNavActive(document);
+    });
+    // A page restored from the back/forward cache keeps the DOM it was left in.
+    window.addEventListener('pageshow', function(e) {
+        if (e.persisted) updateNavActive(document);
+    });
+
     // Expose for manual init
     window.djustComponents = {
         initAll: initAll,
         initModals: initModals,
         initDropdowns: initDropdowns,
         initTabs: initTabs,
+        updateNavActive: updateNavActive,
     };
 
 })();

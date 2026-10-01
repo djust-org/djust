@@ -21,6 +21,8 @@ Switching the backend never touches a template, and overriding a template never 
 
 This guide covers the account *pages*. For requiring login on LiveViews and checking permissions, see [Authentication & Authorization](authentication.md).
 
+Sign-in is a normal HTTP request on purpose. It can't happen inside a LiveView event handler over the WebSocket, because `login()` rotates the session key and a WebSocket can't send the `Set-Cookie` that delivers the new one ([why](authentication.md#signing-in-from-an-event-handler)).
+
 ## Quick start
 
 With django-allauth (recommended):

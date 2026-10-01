@@ -326,7 +326,11 @@ class LiveViewSSE {
             case 'error':
                 console.error('[SSE] Server error:', data.error);
                 window.dispatchEvent(new CustomEvent('djust:error', {
-                    detail: { error: data.error, traceback: data.traceback || null }
+                    detail: {
+                        error: data.error,
+                        code: typeof data.code === 'string' ? data.code : null,
+                        traceback: data.traceback || null
+                    }
                 }));
                 if (data.source !== 'async') {
                     cancelEventRequests(this, data.ref ?? null);

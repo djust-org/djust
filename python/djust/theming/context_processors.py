@@ -216,10 +216,9 @@ def theme_context(request: HttpRequest) -> dict:
     # skipped on later syncs).
     #
     # Scope is request-level (not a cross-request module cache) by design:
-    # none of the four outputs currently embed per-request data (no CSP
-    # nonce; `cookie_prefix_js` derives from the `cookie_namespace` config,
-    # not the request), but a request-scoped cache cannot leak a future
-    # per-request value across requests. On the WS path `request` is a
+    # `theme_head` embeds a per-request CSP nonce (`request.csp_nonce`, #3284),
+    # and a request-scoped cache cannot leak that value across requests. (A
+    # cross-request cache would have to key on the nonce, or drop it.) On the WS path `request` is a
     # long-lived instance attr set once in `handle_connect`, so the cache
     # naturally spans all events of a connection and is invalidated by the
     # state key changing on a theme switch.
@@ -378,7 +377,8 @@ def _render_theme_switcher(state: ThemeState, presets: list[dict]) -> str:
     border-color: hsl(var(--ring));
 }}
 .theme-preset-select:focus {{
-    outline: none;
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
     border-color: hsl(var(--ring));
     box-shadow: 0 0 0 2px hsl(var(--ring) / 0.2);
 }}

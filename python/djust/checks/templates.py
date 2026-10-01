@@ -21,6 +21,7 @@ from djust.checks.utils import (
     _is_check_suppressed,
     _iter_template_files,
     _get_template_dirs,
+    _blank_template_comments,
     _strip_verbatim_blocks,
     _walk_subclasses,
     _LIVE_RENDER_TAG_RE,
@@ -252,9 +253,6 @@ def _embedded_view_templates(source: str) -> set:
 
 
 _EXTENDS_TAG_RE = re.compile(r"\{%\s*extends\s+")
-_TEMPLATE_COMMENT_RE = re.compile(
-    r"\{#.*?#\}|\{%\s*comment\b.*?%\}.*?\{%\s*endcomment\s*%\}", re.DOTALL
-)
 
 
 def _included_elsewhere(real: str, real_dirs: list, included_by: dict) -> bool:
@@ -542,6 +540,133 @@ _DJ_TABLE_SECTION_ROOT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# T025 (#3302) -- `dj-view` / `dj-root` on `<html>`, `<head>` or `<body>`. The
+# HTTP render of such a page is complete, but the WebSocket mount looks for the
+# root INSIDE `<body>` and otherwise falls back to its first element child, so
+# a page with several body children mounts with only the first. Same
+# same-tag scoping as T017 above, found by a scanner rather than one regexp:
+# quoted values and Django `{% %}` / `{{ }}` units are walked whole, so a `>`
+# inside `data-x="a>b"` or `{% if a > b %}` does not end the tag early and text
+# inside a value (`title="dj-root"`) is never read as an attribute, and every
+# step moves forward, so unterminated input costs one pass (a regexp with
+# nested lazy quantifiers took tens of seconds on 20k unterminated tags). The
+# `(?![\w-])` after the tag name rejects `<header>` (`<head` is its prefix).
+_DOCUMENT_TAG_RE = re.compile(r"<(html|head|body)(?![\w-])", re.IGNORECASE)
+# Preceded by whitespace or the `}` ending a template tag
+# (`<body {% if x %}dj-root{% endif %}>`), followed by a value, whitespace, the
+# tag end or the `{` opening one.
+_DOCUMENT_ROOT_ATTR_RE = re.compile(r"(?<=[\s}])(dj-view|dj-root)(?=[\s=>/{])", re.IGNORECASE)
+
+# What T025 must not read: an HTML comment (to its `-->` or `--!>`, or to the
+# end of the file when unterminated, as browsers do) and the body of a
+# `<script>`, which can hold a `"<body dj-root>"` string literal. Only the
+# body is blanked, so the tags themselves stay.
+_HTML_OPENER_RE = re.compile(r"<!--|<script(?![\w-])", re.IGNORECASE)
+_COMMENT_CLOSE_RE = re.compile(r"--!?>")
+# A browser ends a script at ``</script`` followed by whitespace, ``/`` or ``>``
+# (so ``</script\t\n bar>`` ends it and ``</scriptx>`` does not).
+_SCRIPT_CLOSE_RE = re.compile(r"</script(?=[\s/>])", re.IGNORECASE)
+
+
+def _blank(text: str) -> str:
+    return "".join(ch if ch in "\n\r" else " " for ch in text)
+
+
+def _blank_html_comments_and_scripts(text: str) -> str:
+    """Blank HTML comments and ``<script>`` bodies, keeping line breaks.
+
+    One forward pass: a search that fails once cannot succeed later, so an
+    unterminated ``<script>`` is remembered instead of re-searched.
+    """
+    pieces: list[str] = []
+    done = 0
+    position = 0
+    no_script_close = False
+    while True:
+        opener = _HTML_OPENER_RE.search(text, position)
+        if opener is None:
+            break
+        if opener.group(0) == "<!--":
+            closer = _COMMENT_CLOSE_RE.search(text, opener.end())
+            end = closer.end() if closer else len(text)
+            pieces.append(text[done : opener.start()])
+            pieces.append(_blank(text[opener.start() : end]))
+            done = position = end
+            continue
+        if no_script_close:
+            position = opener.end()
+            continue
+        tag_end = text.find(">", opener.end())
+        if tag_end == -1:
+            break  # no `>` anywhere after: no further tag can complete
+        body_start = tag_end + 1
+        closer = _SCRIPT_CLOSE_RE.search(text, body_start)
+        if closer is None:
+            no_script_close = True
+            position = body_start
+            continue
+        pieces.append(text[done:body_start])
+        pieces.append(_blank(text[body_start : closer.start()]))
+        done = closer.start()
+        position = closer.end()
+    if not pieces:
+        return text
+    pieces.append(text[done:])
+    return "".join(pieces)
+
+
+def _document_root_scan_text(content: str) -> str:
+    """``content`` with verbatim regions, HTML comments and script bodies blanked.
+
+    Line breaks survive, so a match's line number is the template's.
+    """
+    text = _strip_verbatim_blocks(content)
+    if "<!--" not in text and "<script" not in text.lower():
+        return text
+    return _blank_html_comments_and_scripts(text)
+
+
+def _find_document_roots(text: str) -> list[tuple[int, str, str]]:
+    """``(offset of the tag, tag name, attribute)`` for each ``dj-view`` /
+    ``dj-root`` on an ``<html>``, ``<head>`` or ``<body>`` tag of ``text``."""
+    found: list[tuple[int, str, str]] = []
+    position = 0
+    while True:
+        tag = _DOCUMENT_TAG_RE.search(text, position)
+        if tag is None:
+            return found
+        outside: list[str] = []
+        i = tag.end()
+        end = None
+        while i < len(text):
+            ch = text[i]
+            if ch == ">":
+                end = i
+                break
+            if ch in "\"'":
+                close = text.find(ch, i + 1)
+                if close == -1:
+                    return found  # an unterminated quote swallows the rest
+                outside.append(_blank(text[i : close + 1]))
+                i = close + 1
+                continue
+            if ch == "{" and text.startswith(("{%", "{{"), i):
+                closer = "%}" if text[i + 1] == "%" else "}}"
+                line_end = text.find("\n", i)
+                close = text.find(closer, i + 2, len(text) if line_end == -1 else line_end)
+                if close != -1:
+                    outside.append(_blank(text[i : close + 1]) + "}")
+                    i = close + 2
+                    continue
+            outside.append(ch)
+            i += 1
+        if end is None:
+            return found
+        attr = _DOCUMENT_ROOT_ATTR_RE.search("".join(outside) + ">")
+        if attr is not None:
+            found.append((tag.start(), tag.group(1).lower(), attr.group(1).lower()))
+        position = end + 1
+
 
 @register("djust")
 def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
@@ -576,7 +701,7 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                 sources[filepath] = fh.read()
         except OSError:
             continue
-        source = _TEMPLATE_COMMENT_RE.sub("", sources[filepath])
+        source = _blank_template_comments(sources[filepath])
         if "include" in source or "live_render" in source:
             for name in set(_INCLUDE_NAME_RE.findall(source)) | _embedded_view_templates(source):
                 included_by.setdefault(name, set()).add(os.path.realpath(filepath))
@@ -590,7 +715,10 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     scan = _T012Scan(engine)
     real_dirs = [os.path.realpath(d) for d in tpl_dirs]
 
-    for filepath, content in sources.items():
+    for filepath, raw_content in sources.items():
+        # Comments render nothing: scan the page without them (#3283), but read
+        # pragmas that live in comments from ``raw_content``.
+        content = _blank_template_comments(raw_content)
         relpath = os.path.relpath(filepath)
 
         # T001 -- deprecated @click/@input syntax
@@ -656,7 +784,13 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
         has_djust_root = _DJ_ROOT_RE.search(content)
         page = _LazyPage(content, scan)
 
-        if has_djust_view and not _is_check_suppressed("djust.T002"):
+        # #3302: a root on <html>/<head>/<body> is T025's warning, never
+        # T002's "the page still connects": the WebSocket mount drops content.
+        if (
+            has_djust_view
+            and not _is_check_suppressed("djust.T002")
+            and not _find_document_roots(_document_root_scan_text(content))
+        ):
             markup = page()
             if (
                 markup.resolved
@@ -665,8 +799,8 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
             ):
                 errors.append(
                     DjustInfo(
-                        "%s -- template declares dj-view but no dj-root. The page still "
-                        "connects: djust infers dj-root from dj-view." % relpath,
+                        "%s -- template declares dj-view but no dj-root. A root inside "
+                        "<body> still connects: djust infers dj-root from dj-view." % relpath,
                         hint=(
                             "Write dj-root on the root element instead: <div dj-root>. "
                             "djust stamps dj-view onto it when it renders the page. "
@@ -687,7 +821,7 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                 has_liveview_include = any(
                     re.search(r"liveview|live_view", path, re.IGNORECASE) for path in include_paths
                 )
-                has_noqa = "{# noqa: T003 #}" in content or "{# noqa #}" in content
+                has_noqa = "{# noqa: T003 #}" in raw_content or "{# noqa #}" in raw_content
                 if has_liveview_include and not has_noqa:
                     errors.append(
                         DjustInfo(
@@ -740,14 +874,14 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
         _check_click_for_navigation(content, relpath, filepath, errors)
 
         # T011 -- unsupported Django template tags (not implemented in Rust renderer)
-        _check_unsupported_tags(content, relpath, filepath, errors)
+        _check_unsupported_tags(content, relpath, filepath, errors, raw_content)
 
         # T012 -- template uses dj-* event directives but missing dj-root or dj-view (#3171)
         if (
             # Cheap text gate; an {% include %} may inline a partial's directives
             (_dj_event_directives_re().search(content) or _INCLUDE_RE.search(content))
             # #1096: partial-template opt-out marker
-            and not _DJ_PARTIAL_MARKER_RE.search(content)
+            and not _DJ_PARTIAL_MARKER_RE.search(raw_content)
             # A partial another template includes: checked inlined there
             and not _included_elsewhere(os.path.realpath(filepath), real_dirs, included_by)
             # Global suppression via DJUST_CONFIG['suppress_checks']
@@ -829,6 +963,9 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
         # T017 -- dj-view / dj-root on a table-section element (#1837)
         _check_table_section_root(content, relpath, filepath, errors)
+
+        # T025 -- dj-view / dj-root on <html>, <head> or <body> (#3302)
+        _check_document_element_root(content, relpath, filepath, errors)
 
         # A070 / A071 -- {% dj_activity %} name validation (v0.7.0).
         # A070 (Warning): tag with no name arg — renders a no-op wrapper
@@ -1357,14 +1494,19 @@ _UNSUPPORTED_TAGS_RE = _unsupported_tags_re(_UNSUPPORTED_TAGS)
 
 
 def _check_unsupported_tags(
-    content: str, relpath: str, filepath: str, errors: list[CheckMessage]
+    content: str,
+    relpath: str,
+    filepath: str,
+    errors: list[CheckMessage],
+    raw_content: Optional[str] = None,
 ) -> None:
     """T011: Detect unsupported Django template tags in LiveView templates.
 
     The Rust renderer silently ignores these tags, rendering an HTML comment
     instead. This check warns developers at startup so they can use workarounds.
     """
-    has_noqa = "{# noqa: T011 #}" in content or "{# noqa #}" in content
+    pragmas = content if raw_content is None else raw_content
+    has_noqa = "{# noqa: T011 #}" in pragmas or "{# noqa #}" in pragmas
     if has_noqa:
         return
 
@@ -1550,6 +1692,59 @@ def _check_table_section_root(
                     "`<table>` or a surrounding `<div>`); a table-section "
                     "element is foster-parented at render time and cannot be "
                     "a parse root. (line %d in `%s`)" % (lineno, relpath)
+                ),
+                file_path=filepath,
+                line_number=lineno,
+            )
+        )
+
+
+def _check_document_element_root(
+    content: str, relpath: str, filepath: str, errors: list[CheckMessage]
+) -> None:
+    """T025 (#3302): Detect dj-view / dj-root on ``<html>``, ``<head>`` or ``<body>``.
+
+    The root must be an element inside ``<body>``. With the attribute on the
+    document element the HTTP render is complete, but the WebSocket mount
+    looks for the root inside ``<body>``, else falls back to its first element
+    child: a page with a ``<header>`` and a ``<main>`` under ``<body>`` mounts
+    with the header only, and nothing says so.
+
+    ``{% verbatim %}`` regions, HTML comments and ``<script>`` bodies are
+    skipped, so a documentation page or a script string can show the mistake.
+    ``{# noqa: T025 -- <reason> #}`` on the line, or the line above, silences one
+    match (the reason is required, as for T024). SCOPE: static check only; the
+    mount-time root detection itself is unchanged.
+    """
+    if _is_check_suppressed("djust.T025"):
+        return
+    from .bindings import noqa_state
+
+    scan = _document_root_scan_text(content)
+    for offset, tag_name, attr in _find_document_roots(scan):
+        lineno = scan[:offset].count("\n") + 1
+        state = noqa_state(filepath, lineno, "T025")
+        if state == "suppressed":
+            continue
+        hint = (
+            "Put %s on one element inside <body> that wraps the whole "
+            "page content, such as <div dj-root> or <main dj-root>. "
+            "Suppress this check with "
+            "DJUST_CONFIG = {'suppress_checks': ['T025']}, or one match with "
+            "{# noqa: T025 -- <reason> #}." % attr
+        )
+        if state == "no-reason":
+            hint += " (A noqa comment without a reason does not suppress T025.)"
+        errors.append(
+            DjustWarning(
+                "%s:%d -- '%s' is on <%s>. The HTTP render is complete, but the "
+                "WebSocket mount keeps only the first element inside <body>, so "
+                "the live page silently loses the rest." % (relpath, lineno, attr, tag_name),
+                hint=hint,
+                id="djust.T025",
+                fix_hint=(
+                    "Move `%s` from `<%s>` to a wrapping element inside `<body>` "
+                    "(line %d in `%s`)." % (attr, tag_name, lineno, relpath)
                 ),
                 file_path=filepath,
                 line_number=lineno,

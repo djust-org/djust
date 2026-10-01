@@ -74,3 +74,25 @@ def get_theme_config() -> dict:
     # Validate cookie_namespace at config-load (#1169(b)).
     _validate_cookie_namespace(merged.get("cookie_namespace"))
     return merged
+
+
+def parse_preset_names(value: object) -> list[str] | None:
+    """Normalise a preset allow-list: ``"legal, medical"`` or ``["legal", "medical"]``
+    become ``["legal", "medical"]``. ``None`` stays ``None`` (not given); an empty
+    string or list gives ``[]`` (given, and meaning "no limit").
+
+    Raises:
+        ValueError: ``value`` is neither a string nor an iterable of names.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        items: list[object] = list(value.split(","))
+    else:
+        try:
+            items = list(value)  # type: ignore[call-overload]
+        except TypeError:
+            raise ValueError(
+                f"preset names must be a comma-separated string or a list of names, got {value!r}"
+            ) from None
+    return [str(item).strip() for item in items if str(item).strip()]

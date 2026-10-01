@@ -622,6 +622,11 @@ auth. Practices to follow:
 - **Non-LiveView endpoints** — a plain `django.views.View` (e.g. an OAuth
   callback) is NOT covered by `login_required` / `check_view_auth`; gate it with
   Django's own `LoginRequiredMixin`.
+- **Don't call `login()` in an event handler.** It rotates the session key, a
+  WebSocket can't set the cookie that carries the new one, and the browser stays
+  anonymous. Sign in through an HTTP login view or the
+  [accounts pages](accounts.md); see
+  [Signing in from an event handler](authentication.md#signing-in-from-an-event-handler).
 - Don't let the **login page extend a base** whose `dj-view` root mounts a
   `login_required` view, or it redirect-loops — give the login view a standalone
   template.
@@ -683,6 +688,43 @@ intact across live updates:
   {% endif %}
 </div>
 ```
+
+`{% csrf_token %}` also renders in the page shell outside `dj-root`, such as a
+logout form in a shared `base.html` nav, and carries the same token as a form
+inside the root. The shell is rendered once, on the initial HTTP request, and
+the socket only updates what is inside the root. A nav that has to change after
+a live event (a username chip that follows a state change, say) belongs inside
+the root.
+
+#### Staff and superuser checks
+
+`{% if request.user.is_staff %}` is always false in a LiveView template, and so
+are `user.is_superuser` and `user.password`. The serializer never ships those
+three fields, so the template reads nothing and renders nothing, with no error
+(the same line on a plain Django page works). `manage.py check` reports it as
+[`T024`](error-codes.md#t024-template-reads-a-field-djust-never-serializes).
+
+Expose a derived boolean instead and test that. Set it in `mount()`:
+
+```python
+def mount(self, request, **kwargs):
+    self.can_manage = request.user.is_staff
+```
+
+or supply it from a context processor, which applies to the page shell as well
+as the root (add it to `TEMPLATES[...]["OPTIONS"]["context_processors"]`):
+
+```python
+def can_manage(request):
+    return {"can_manage": bool(getattr(request.user, "is_staff", False))}
+```
+
+```html
+{% if can_manage %}<a href="{% url 'admin:index' %}">Admin</a>{% endif %}
+```
+
+A `mount()` attribute is set once, when the view mounts, so it does not follow
+a permission change made while the socket is open.
 
 ---
 

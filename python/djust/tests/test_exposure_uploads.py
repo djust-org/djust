@@ -30,7 +30,7 @@ from djust.decorators import state
 from djust.runtime import ViewRuntime
 from djust.tests.test_exposure_runtime import make_request
 from djust.tests.test_runtime_state_save_tt_1894 import MockTransport
-from djust.uploads import UploadMixin
+from djust.uploads import DEFAULT_CHUNK_SIZE, UploadMixin
 from djust.uploads.storage import InMemoryUploadState, get_default_store, set_default_store
 
 from .conftest import observability_request_factory
@@ -216,7 +216,7 @@ async def test_mount_frame_upload_configs_are_configuration_only(staged, monkeyp
             "accept": ".png",
             "max_entries": 3,
             "max_file_size": 1000,
-            "chunk_size": 64 * 1024,
+            "chunk_size": DEFAULT_CHUNK_SIZE,
             "auto_upload": True,
             "resumable": False,
         }

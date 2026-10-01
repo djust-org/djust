@@ -2,7 +2,7 @@
     {% if slot_label %}
     {{ slot_label|safe }}
     {% elif label %}
-    <label for="{{ name }}" class="{{ css_prefix }}input-label">{{ label }}</label>
+    <label for="{{ field_id|default:name }}" class="{{ css_prefix }}input-label">{{ label }}</label>
     {% endif %}
     {% if slot_input %}
     {{ slot_input|safe }}
@@ -10,7 +10,7 @@
     <input
         type="{{ type }}"
         name="{{ name }}"
-        id="{{ name }}"
+        id="{{ field_id|default:name }}"
         placeholder="{{ placeholder }}"
         class="{{ css_prefix }}input"
         {% if attrs.value %}value="{{ attrs.value }}"{% endif %}

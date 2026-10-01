@@ -88,7 +88,10 @@ def reset_registry():
     """Reset the singleton registry before each test."""
     ThemeRegistry._reset()
     yield
+    # Leave a populated registry for whatever test shares this worker next (a bare
+    # reset leaves it empty and undiscovered).
     ThemeRegistry._reset()
+    get_registry().discover()
 
 
 # ---------------------------------------------------------------------------

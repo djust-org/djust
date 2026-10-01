@@ -143,5 +143,10 @@ class TestExemptionsStillNeeded:
         checks 14 pairs while the original #2060 gate covered 6, so the
         8 previously-ungated pairs' legacy failures were grandfathered in
         one documented bulk import (134 of them catastrophic <3.0 — the
-        branded-palette remediation follow-up owns fixing them)."""
-        assert 0 < len(A11Y_EXEMPTIONS) <= 600
+        branded-palette remediation follow-up owns fixing them.
+
+        Raised 508 -> 1200 by #3281 / #3165: eight pairs (link and primary as
+        text, status text on its alert tint, the input border) joined the
+        matrix and 594 preset-mode pairs now carry a documented, ratio-bearing row
+        in ``_PAIR_DEBT_2885``, which #2885 owns."""
+        assert 0 < len(A11Y_EXEMPTIONS) <= 1200

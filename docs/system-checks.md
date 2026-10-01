@@ -74,6 +74,9 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | T020 | Templates | Warning | An event binding's arguments are missing, unexpected or supplied twice (ADR-037) |
 | T021 | Templates | Warning | An event binding's literal value or wire-type hint does not fit the handler (ADR-037) |
 | T022 | Templates | Warning | Markup supplies routing context (`view_id` / `component_id`) as an argument (ADR-037) |
+| T023 | Templates | Info | T019-T022 were skipped: no usable template engine (none configured, or it could not be built) |
+| T024 | Templates | Warning | A template an owner renders reads `is_staff`, `is_superuser` or `password` through a `user` variable; djust never serializes them |
+| T025 | Templates | Warning | `dj-view` / `dj-root` on `<html>`, `<head>` or `<body>`: the HTTP render is complete but the WebSocket mount keeps only the first body child |
 | Q001 | Quality | Info | print() statement found |
 | Q002 | Quality | Warning | f-string in logger call |
 | Q003 | Quality | Info | console.log without djustDebug guard |
@@ -594,7 +597,7 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 ### T002 — dj-view without dj-root
 - **Severity**: Info
 - **Method**: Template parse, shared with T012 (real attributes; `{% extends %}` parents followed)
-- **What it detects**: A template's own markup declares `dj-view`, and no element of the rendered page, parents included, has `dj-root`. The page still connects: djust infers `dj-root` from `dj-view` on the client and the server. The hint suggests writing `<div dj-root>` instead, since djust stamps `dj-view` itself. A child whose `{% extends %}` parent cannot be loaded is skipped, as T012 skips it
+- **What it detects**: A template's own markup declares `dj-view`, and no element of the rendered page, parents included, has `dj-root`. A root inside `<body>` still connects: djust infers `dj-root` from `dj-view` on the client and the server. A `dj-view` on `<html>`, `<head>` or `<body>` is not reassured: it is T025's warning (#3302), and T002 stays silent for it. The hint suggests writing `<div dj-root>` instead, since djust stamps `dj-view` itself. A child whose `{% extends %}` parent cannot be loaded is skipped, as T012 skips it
 - **Not covered (#3225)**: A template with `dj-*` directives and neither `dj-root` nor `dj-view`. Before #3225, T002 fired on that template too and called it "OK", but nothing is inferred there and the page never connects. That case is T012's warning
 - **Suppression**: `SILENCED_SYSTEM_CHECKS = ["djust.T002"]` or `DJUST_CONFIG = {"suppress_checks": ["T002"]}`
 - **False positives**: None known
@@ -760,6 +763,42 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Scope**: Static check only; abstract base LiveViews (`abstract = True`)
   are skipped, matching the other V/T checks' convention.
 
+### T024 — Floor-excluded user field in a template
+- **Severity**: Warning
+- **Detects**: `{{ request.user.is_staff }}`, `user.is_superuser`,
+  `current_user.password` and the like, in any template a LiveView or
+  LiveComponent renders (parents and includes too, and an inline `template`
+  string). The serializer never ships `is_staff`, `is_superuser` or
+  `password`, so these always render empty or false.
+- **Sees**: paths through a variable named `user` or ending `_user`, and a
+  `{% with u=request.user %}` / `{% with request.user as u %}` alias of one.
+- **Does not see**: a loop variable (`{% for u in users %}`), a user held under
+  any other name, or a form field named `password`.
+- **Fix**: expose a derived boolean from `mount()` or a context processor; see
+  [Staff and superuser checks](website/guides/BEST_PRACTICES.md#staff-and-superuser-checks).
+  Suppress one line with `{# noqa: T024 -- <reason> #}`.
+
+### T025 — dj-view / dj-root on `<html>`, `<head>` or `<body>`
+- **Severity**: Warning
+- **Method**: Regex (template scan; `{% verbatim %}` regions, HTML comments and `<script>` bodies are skipped)
+- **What it detects**: A `dj-view` or `dj-root` attribute on the `<html>`, `<head>`
+  or `<body>` tag itself. The HTTP render of such a page is complete, but the
+  WebSocket mount looks for the root inside `<body>` and otherwise falls back
+  to its first element child, so a page with a `<header>` and a `<main>` under
+  `<body>` mounts with the header only and nothing says so (#3302).
+- **Fix**: Put `dj-root` (or `dj-view`) on one element inside `<body>` that
+  wraps the whole page content, such as `<div dj-root>` or `<main dj-root>`.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["T025"]}`, or one match
+  with `{# noqa: T025 -- <reason> #}` on its line or the line above (the reason
+  is required, as for T024)
+- **False positives**: The match is scoped to the same tag and reads quoted
+  attribute values as units, so `<header>`, `<htmlx>`, `<body-wrapper>`,
+  `<body title="dj-root">` and a `>` inside a value or a `{% if a > b %}` are
+  handled, and `<body {% if x %}dj-root{% endif %}>` is detected. Text a browser
+  never reads as markup is skipped: HTML comments and `<script>` bodies. A
+  `<style>` body or a `<textarea>` is not skipped; use the `noqa` comment there.
+- **Scope**: Static check only; it does not change how the mount finds the root.
+
 ### T019–T022 — Template event bindings (ADR-037)
 - **Severity**: Warning (all four, in 1.3)
 - **Method**: Each LiveView's and LiveComponent's template is compiled with
@@ -799,6 +838,12 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
     checked;
   - an attribute set that is itself conditional (missing arguments are then
     unknown).
+- **Engine**: a project that lists `DjangoTemplates` is scanned with its
+  engine. A project that lists only `DjustTemplateBackend` (the `djust new`
+  default) is scanned with a compile-only Django engine built from the same
+  directories, installed-app tag libraries, `OPTIONS["libraries"]` and
+  builtins. If `TEMPLATES` configures neither, or the engine cannot be built, `T023` (Info) says the checks
+  were skipped; silence it with `DJUST_CONFIG = {"suppress_checks": ["T023"]}`.
 - **Not seen**: markup rendered by a third-party template tag or a dynamic
   `{% include %}`. Each is recorded as a gap, and the owner's event graph is
   reported as incomplete.

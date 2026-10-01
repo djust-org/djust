@@ -746,13 +746,12 @@ class ContextMixin:
         if cache_key in _context_processors_cache:
             return _context_processors_cache[cache_key]
 
-        # Prefer DjustTemplateBackend, fall back to DjangoTemplates
-        _BACKENDS = (
-            "djust.template_backend.DjustTemplateBackend",
-            "django.template.backends.django.DjangoTemplates",
-        )
+        # Any DjustTemplateBackend / DjangoTemplates entry, matched by class so
+        # every dotted spelling of the backend counts (#3307).
+        from ..utils import is_app_dirs_template_backend
+
         for template_config in getattr(settings, "TEMPLATES", []):
-            if template_config.get("BACKEND") in _BACKENDS:
+            if is_app_dirs_template_backend(template_config.get("BACKEND")):
                 processors: List[Any] = template_config.get("OPTIONS", {}).get(
                     "context_processors", []
                 )

@@ -723,6 +723,33 @@ class RustBridgeMixin:
         if rust_view is not None and hasattr(rust_view, "capture_render_env"):
             rust_view.capture_render_env()
 
+    def _csrf_token_for_render(self, request: Optional[Any] = None) -> Optional[str]:
+        """The CSRF token ``{% csrf_token %}`` renders, or None without a request.
+
+        Shared by the dj-root render (``_sync_state_to_rust``, #696) and the
+        page-shell render (``render_full_template``, #3294): both feed the Rust
+        engine, which has no ``RequestContext`` to supply Django's built-in
+        ``csrf`` processor. Cached so the change tracker sees one stable string.
+        """
+        cached: Optional[str] = getattr(self, "_cached_csrf_token", None)
+        if cached is not None:
+            return cached
+        request = request if request is not None else getattr(self, "request", None)
+        if request is None:
+            return None
+        try:
+            from django.middleware.csrf import get_token
+
+            token: str = get_token(request)
+        except Exception:
+            logging.getLogger("djust.rust_bridge").warning(
+                "Failed to inject csrf_token into Rust context",
+                exc_info=True,
+            )
+            return None
+        self._cached_csrf_token = token
+        return token
+
     def _sync_state_to_rust(self, preloaded_context: Optional[Dict[str, Any]] = None) -> None:
         """Sync Python state to Rust backend.
 
@@ -838,23 +865,9 @@ class RustBridgeMixin:
             # Cache it to avoid creating a new string object each call,
             # which would cause the change tracker to see it as "changed".
             if "csrf_token" not in full_context:
-                cached_csrf = getattr(self, "_cached_csrf_token", None)
-                if cached_csrf is not None:
-                    full_context["csrf_token"] = cached_csrf
-                else:
-                    request = getattr(self, "request", None)
-                    if request is not None:
-                        try:
-                            from django.middleware.csrf import get_token
-
-                            token = get_token(request)
-                            self._cached_csrf_token = token
-                            full_context["csrf_token"] = token
-                        except Exception:
-                            logging.getLogger("djust.rust_bridge").warning(
-                                "Failed to inject csrf_token into Rust context",
-                                exc_info=True,
-                            )
+                token = self._csrf_token_for_render()
+                if token is not None:
+                    full_context["csrf_token"] = token
 
             # Inject DATE_FORMAT / TIME_FORMAT from Django settings so the
             # Rust |date and |time filters honour the project's configured

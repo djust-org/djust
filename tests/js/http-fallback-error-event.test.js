@@ -30,7 +30,7 @@ it('dispatches djust:error with the server error body', async () => {
         ok: false, status: 500,
         json: async () => ({error: 'Error in View.save(): RuntimeError: boom', traceback: 'tb'}),
     });
-    expect(errors).toEqual([{error: 'Error in View.save(): RuntimeError: boom', traceback: 'tb'}]);
+    expect(errors).toEqual([{error: 'Error in View.save(): RuntimeError: boom', code: null, traceback: 'tb'}]);
 });
 
 it('falls back to the status when the body is not JSON', async () => {

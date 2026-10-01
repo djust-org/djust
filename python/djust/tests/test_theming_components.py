@@ -311,16 +311,18 @@ class TestAlertComponent(ComponentTestCase):
     """Alert rendering, contract, and slot tests."""
 
     def test_basic_render(self):
+        # The default variant is a status message, not an interruption (#3280).
         html = self.render_component("alert", message="Something happened")
-        self.assert_has_element(html, "div", {"role": "alert"})
+        self.assert_has_element(html, "div", {"role": "status"})
         self.assert_contains(html, "Something happened")
 
     def test_contract(self):
-        html = self.render_component("alert", message="Error!")
+        html = self.render_component("alert", message="Error!", variant="destructive")
+        self.assert_has_element(html, "div", {"role": "alert"})
         self.assert_contract(html, "alert")
 
     def test_accessible(self):
-        html = self.render_component("alert", message="Warning!")
+        html = self.render_component("alert", message="Warning!", variant="warning")
         self.assert_accessible(html, "alert")
 
     def test_variant_classes(self):

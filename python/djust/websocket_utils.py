@@ -258,7 +258,7 @@ async def _validate_event_security(
         logger.warning(
             "Permission check skipped (no request) for handler with @permission_required"
         )
-        await ws.send_error("Permission denied")
+        await ws.send_error("Permission denied", code="permission_denied")
         return None
     # Wrap in sync_to_async (#1648, sibling of #1638): for a @permission_required
     # handler, check_handler_permission calls user.has_perms(), which under the
@@ -274,7 +274,7 @@ async def _validate_event_security(
         else:
             permitted = await sync_to_async(check_handler_permission)(handler, owner_request)
         if not permitted:
-            await ws.send_error("Permission denied")
+            await ws.send_error("Permission denied", code="permission_denied")
             return None
 
     # Object-level permission check (ADR-017 § Decision 7, v0.9.5-1b).

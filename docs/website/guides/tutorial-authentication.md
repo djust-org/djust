@@ -301,9 +301,9 @@ the handler sets `error`, and the re-render shows the message and drops
 the button. Losing the site-wide `manage_team_members` permission is
 different. The handler never runs, so there is no server-side hook to
 catch it in: the framework rejects the event before dispatch and sends a
-`{"type": "error", "error": "Permission denied"}` frame back. The
-client turns every error frame into a `djust:error` window event,
-so listen for that and show a banner:
+`{"type": "error", "error": "Permission denied", "code": "permission_denied"}`
+frame back. The client turns every error frame into a `djust:error`
+window event, so listen for that and show a banner:
 
 ```html
 <!-- in your base template, after the dj-root element -->
@@ -313,7 +313,7 @@ so listen for that and show a banner:
 </div>
 <script>
   window.addEventListener("djust:error", (e) => {
-    if (e.detail && e.detail.error === "Permission denied") {
+    if (e.detail && e.detail.code === "permission_denied") {
       document.getElementById("perm-revoked").hidden = false;
     }
   });

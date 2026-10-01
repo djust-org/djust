@@ -9,6 +9,15 @@
  * djust-components defaults so theming overrides take effect.
  */
 
+/* The `hidden` attribute must hide a component (#3290). Many component classes
+   set `display: flex|grid|inline-flex`, and an author `display` beats the UA's
+   `[hidden] { display: none }`, so `<div class="progress-wrapper" hidden>` stayed
+   visible. `!important` makes the attribute win over every one of them, as
+   Tailwind's preflight does; `until-found` keeps find-in-page reveal working. */
+[hidden]:not([hidden="until-found"]) {
+    display: none !important;
+}
+
 /* ==========================================================================
    Alert
    ========================================================================== */
@@ -18,6 +27,10 @@
     display: flex;
     align-items: start;
     justify-content: space-between;
+    /* One `gap` spaces icon, content and actions. A margin on `.alert-icon` or
+       `.alert-actions` would stack with djust.components' own `.alert` gap on
+       the same markup. */
+    gap: 0.75rem;
     padding: 1rem;
     border-radius: var(--radius);
     border: 1px solid;
@@ -57,6 +70,12 @@
     background-color: hsl(var(--background));
     color: hsl(var(--foreground));
     border-color: hsl(var(--border));
+}
+
+.alert-info {
+    background-color: hsl(var(--info) / 0.1);
+    color: hsl(var(--info));
+    border-color: hsl(var(--info) / 0.2);
 }
 
 .alert-success {
@@ -129,6 +148,7 @@
    ========================================================================== */
 
 .btn {
+    box-sizing: border-box;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -141,9 +161,9 @@
 }
 
 .btn:focus-visible {
-    outline: none;
-    ring: 2px solid hsl(var(--ring));
-    ring-offset: 2px;
+    /* `ring:` is a Tailwind utility, not a CSS property (#3276). */
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
 }
 
 .btn:disabled {
@@ -273,6 +293,7 @@
 }
 
 .input {
+    box-sizing: border-box;
     display: flex;
     height: 2.5rem;
     width: 100%;
@@ -290,10 +311,9 @@
     color: hsl(var(--muted-foreground));
 }
 
-.input:focus {
-    outline: none;
-    ring: 2px solid hsl(var(--ring));
-    ring-offset: 2px;
+.input:focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
 }
 
 .input:disabled {
@@ -414,7 +434,8 @@
 }
 
 .theme-preset-select:focus {
-    outline: none;
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
     border-color: hsl(var(--ring));
     box-shadow: 0 0 0 2px hsl(var(--ring) / 0.2);
 }
@@ -445,6 +466,7 @@
 }
 
 .modal {
+    box-sizing: border-box;
     position: relative;
     background-color: hsl(var(--card));
     color: hsl(var(--card-foreground));
@@ -568,6 +590,7 @@
 }
 
 .dropdown-item {
+    box-sizing: border-box;
     display: flex;
     align-items: center;
     gap: 0.5rem;
@@ -644,6 +667,7 @@
    ========================================================================== */
 
 .table-container {
+    box-sizing: border-box;
     width: 100%;
     overflow-x: auto;
     border: 1px solid hsl(var(--border));
@@ -711,6 +735,7 @@
 .pagination-link,
 .pagination-prev,
 .pagination-next {
+    box-sizing: border-box;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -1206,6 +1231,7 @@
 .theme-form-inline input[type="number"],
 .theme-form-inline select,
 .theme-form-inline textarea {
+    box-sizing: border-box;
     display: flex;
     width: 100%;
     padding: 0.5rem 0.75rem;
@@ -1227,7 +1253,8 @@
 .theme-form-inline input:focus,
 .theme-form-inline select:focus,
 .theme-form-inline textarea:focus {
-    outline: none;
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
     border-color: hsl(var(--ring));
     box-shadow: 0 0 0 2px hsl(var(--ring) / 0.2);
 }
@@ -1302,6 +1329,7 @@
 }
 
 .theme-panel-menu {
+    box-sizing: border-box;
     display: none; position: absolute; top: calc(100% + 0.5rem); right: 0;
     background: hsl(var(--card)); border: 1px solid hsl(var(--border));
     border-radius: 0.75rem; box-shadow: 0 8px 30px hsl(var(--foreground) / 0.12), 0 2px 8px hsl(var(--foreground) / 0.06);
@@ -1356,6 +1384,7 @@
 /* Custom themed select */
 .tp-select { position: relative; }
 .tp-select-btn {
+    box-sizing: border-box;
     width: 100%; display: flex; align-items: center; justify-content: space-between;
     padding: 0.4375rem 0.625rem; border: 1px solid hsl(var(--border));
     border-radius: 0.375rem; background: hsl(var(--muted) / 0.3);
@@ -1374,6 +1403,7 @@
 }
 .tp-select.open .tp-select-list { display: block; }
 .tp-select-option {
+    box-sizing: border-box;
     display: block; width: 100%; text-align: start; padding: 0.375rem 0.5rem;
     border: none; border-radius: 0.25rem; background: none;
     color: hsl(var(--foreground)); font-size: 0.8125rem; cursor: pointer;
@@ -1383,6 +1413,7 @@
 .tp-select-option.active { color: hsl(var(--primary)); font-weight: 600; }
 
 .theme-panel-customize-toggle {
+    box-sizing: border-box;
     display: flex; align-items: center; gap: 0.375rem; width: 100%;
     padding: 0.375rem 0 0.125rem; border: none; background: none; cursor: pointer;
     color: hsl(var(--muted-foreground)); font-size: 0.75rem; font-weight: 500;
@@ -1529,7 +1560,7 @@ label .text-danger, .form-label .text-danger { color: hsl(var(--destructive)); }
    ========================================================================== */
 
 .validation-modal-backdrop { position: fixed; inset: 0; background: hsl(var(--foreground) / 0.5); z-index: 1040; }
-.validation-modal.modal-dialog { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 1050; width: 100%; max-width: 500px; padding: 0 1rem; }
+.validation-modal.modal-dialog { box-sizing: border-box; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 1050; width: 100%; max-width: 500px; padding: 0 1rem; }
 .validation-modal .modal-content { background: hsl(var(--surface-1, var(--card, 0 0% 100%))); border: 1px solid hsl(var(--border)); border-radius: var(--radius, 0.5rem); box-shadow: 0 10px 25px hsl(var(--foreground) / 0.2); overflow: hidden; }
 .validation-modal .modal-header.warning { display: flex; align-items: center; justify-content: space-between; padding: 1rem 1.25rem; background-color: hsl(var(--warning) / 0.12); border-bottom: 2px solid hsl(var(--warning)); }
 .validation-modal .modal-title { margin: 0; font-size: 1.125rem; font-weight: 700; color: hsl(var(--warning)); }
@@ -1580,3 +1611,357 @@ label .text-danger, .form-label .text-danger { color: hsl(var(--destructive)); }
    inside clicks from closing it, which swallowed every dj-click in the panel. */
 .dj-scrim { position: absolute; inset: 0; z-index: -1; }
 :has(> .dj-scrim) { isolation: isolate; }
+
+
+/* ==========================================================================
+   Classes the component tags emit that had no rule (#3277)
+
+   `{% theme_select %}`, `{% theme_textarea %}`, `{% theme_radio %}`,
+   `{% theme_nav_item %}`, `{% theme_mode_button %}`, the nav group, the
+   preset selectors and the alert's actions area all render these classes.
+   Without a rule here they showed as unstyled browser controls (a white
+   <select> in dark mode), because `components.css` is the only stylesheet
+   `{% theme_head %}` always links.
+   ========================================================================== */
+
+/* Form field helper and error text, shared by input / select / textarea. */
+.input-help,
+.select-help,
+.textarea-help {
+    font-size: 0.8125rem;
+    line-height: 1.25rem;
+    color: hsl(var(--muted-foreground));
+}
+
+.input-error,
+.select-error,
+.textarea-error {
+    font-size: 0.8125rem;
+    line-height: 1.25rem;
+    color: hsl(var(--destructive));
+}
+
+/* Select */
+.select-group,
+.textarea-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.select-label,
+.textarea-label {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: hsl(var(--foreground));
+}
+
+.select {
+    box-sizing: border-box;
+    display: flex;
+    height: 2.5rem;
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    font-family: inherit;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    border: 1px solid hsl(var(--input));
+    border-radius: var(--radius);
+    /* Native popup and arrow follow the theme mode. With no `data-theme` yet
+       (no JS, or before the head script runs) they follow the OS, as the
+       generated `prefers-color-scheme` tokens do. */
+    color-scheme: light dark;
+    transition: all 0.15s ease;
+}
+
+[data-theme="light"] .select {
+    color-scheme: light;
+}
+
+[data-theme="dark"] .select {
+    color-scheme: dark;
+}
+
+.select:focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+}
+
+.select:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+/* Textarea. It does not reuse .input: that class pins a fixed height, which
+   squashes a textarea and ignores its `rows` attribute. */
+.textarea {
+    box-sizing: border-box;
+    display: block;
+    width: 100%;
+    min-height: 5rem;
+    padding: 0.5rem 0.75rem;
+    font-family: inherit;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    border: 1px solid hsl(var(--input));
+    border-radius: var(--radius);
+    resize: vertical;
+    transition: all 0.15s ease;
+}
+
+.textarea::placeholder {
+    color: hsl(var(--muted-foreground));
+}
+
+.textarea:focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+}
+
+.textarea:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+/* Radio group */
+.radio-legend {
+    padding: 0;
+    margin-bottom: 0.5rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: hsl(var(--foreground));
+}
+
+.radio-option {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    margin-bottom: 0.5rem;
+}
+
+.radio {
+    width: 1rem;
+    height: 1rem;
+    margin: 0;
+    accent-color: hsl(var(--primary));
+    cursor: pointer;
+}
+
+.radio:focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+}
+
+.radio-label {
+    color: hsl(var(--foreground));
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    cursor: pointer;
+}
+
+.radio:disabled,
+.radio:disabled + .radio-label {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+/* Alert: an optional icon on the left, content in the middle, and an actions
+   area (buttons, links) before the dismiss button. */
+.alert-icon {
+    flex-shrink: 0;
+}
+
+.alert-actions {
+    display: flex;
+    flex-shrink: 0;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+/* Navigation link (`{% theme_nav_item %}`, `{% theme_nav %}`).
+   Scoped to the links these tags emit (`.theme-nav-link`), because `nav-link` is
+   also the class of Bootstrap-style markup in djust.components' navbar and tabs.
+   `:where()` keeps specificity at zero, so the opt-in scaffold.css `.nav-link`
+   rules, which style the same links as part of a navbar or sidebar, win. */
+:where(.nav-link.theme-nav-link) {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    border-radius: var(--radius);
+    font-size: 0.875rem;
+    font-weight: 500;
+    text-decoration: none;
+    color: hsl(var(--muted-foreground));
+    transition: color 0.15s ease, background-color 0.15s ease;
+}
+
+:where(.nav-link.theme-nav-link):hover {
+    color: hsl(var(--accent-foreground));
+    background-color: hsl(var(--accent));
+}
+
+:where(.nav-link.theme-nav-link.active) {
+    color: hsl(var(--accent-foreground));
+    background-color: hsl(var(--accent));
+}
+
+:where(.nav-link.theme-nav-link):focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+}
+
+.nav-link-icon,
+.nav-group-icon,
+.nav-item-icon {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+}
+
+.nav-link-label {
+    min-width: 0;
+}
+
+.nav-link-badge,
+.nav-group-badge {
+    margin-inline-start: auto;
+    padding: 0 0.5rem;
+    border-radius: 9999px;
+    font-size: 0.75rem;
+    line-height: 1.25rem;
+    background-color: hsl(var(--muted));
+    color: hsl(var(--muted-foreground));
+}
+
+/* Collapsible nav group (`{% theme_nav_group %}`) */
+.nav-group > summary {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+}
+
+/* Theme mode toggle (`{% theme_mode_button %}`) */
+.theme-mode-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.375rem;
+    padding: 0.5rem;
+    border: 1px solid hsl(var(--border));
+    border-radius: var(--radius);
+    background: transparent;
+    color: hsl(var(--muted-foreground));
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: color 0.15s ease, background-color 0.15s ease;
+}
+
+.theme-mode-toggle:hover {
+    color: hsl(var(--foreground));
+    background-color: hsl(var(--muted));
+}
+
+.theme-mode-toggle:focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+}
+
+/* Preset selectors (`{% theme_preset_selector layout="grid" | "list" %}`) */
+.theme-preset-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr));
+    gap: 0.5rem;
+}
+
+.theme-preset-btn {
+    padding: 0.5rem 0.75rem;
+    border: 1px solid hsl(var(--border));
+    border-radius: var(--radius);
+    background: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-size: 0.875rem;
+    cursor: pointer;
+}
+
+.theme-preset-btn:hover {
+    border-color: hsl(var(--ring));
+}
+
+.theme-preset-btn.active {
+    border-color: hsl(var(--primary));
+    background: hsl(var(--primary));
+    color: hsl(var(--primary-foreground));
+}
+
+.theme-preset-btn:focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+}
+
+.theme-preset-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.theme-preset-item {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    font-size: 0.875rem;
+    color: hsl(var(--foreground));
+    cursor: pointer;
+}
+
+.theme-preset-item:hover {
+    background: hsl(var(--muted));
+}
+
+.theme-preset-item.active {
+    border-color: hsl(var(--primary));
+}
+
+.theme-preset-item small {
+    flex-basis: 100%;
+    color: hsl(var(--muted-foreground));
+}
+
+/* Tooltip wrapper: the bubble itself is the `[data-tooltip]::after` rule. */
+.tooltip {
+    display: inline-block;
+}
+
+/* The theme panel's current-value label inside `.tp-select-btn`. */
+.tp-select-value {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Sidebar pieces that neither this file nor scaffold.css styled. The sidebar
+   shell, menu and item rules stay in the opt-in scaffold.css. */
+.sidebar-header {
+    padding: 0.75rem 1rem;
+}
+
+.sidebar-section + .sidebar-section {
+    margin-top: 0.5rem;
+}
+
+.sidebar-item-icon {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+}
