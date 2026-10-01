@@ -378,7 +378,8 @@ def _render_theme_switcher(state: ThemeState, presets: list[dict]) -> str:
     border-color: hsl(var(--ring));
 }}
 .theme-preset-select:focus {{
-    outline: none;
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
     border-color: hsl(var(--ring));
     box-shadow: 0 0 0 2px hsl(var(--ring) / 0.2);
 }}

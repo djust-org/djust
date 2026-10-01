@@ -14,7 +14,7 @@
                 {{ slot_items|safe }}
             {% else %}
                 {% for item in items %}
-                <a href="{{ item.url }}" class="{{ css_prefix }}nav-link{% if item.active %} active{% endif %}"
+                <a href="{{ item.url }}" class="{{ css_prefix }}nav-link theme-nav-link{% if item.active %} active{% endif %}"
                    {% if item.active %}aria-current="page"{% endif %}>
                     {% if item.icon %}<span class="{{ css_prefix }}nav-link-icon">{{ item.icon }}</span>{% endif %}
                     {{ item.label }}

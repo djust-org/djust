@@ -64,6 +64,18 @@ def _presets_to_check() -> Iterator[tuple[str, Any]]:
     yield active_name, registry.list_presets()[active_name]
 
 
+def _contrast_hint(fg_attr: str, bg_attr: str, minimum: float) -> str:
+    if bg_attr.endswith("_tint"):
+        # ``*_tint`` is derived (the colour at 10% over the page or a card), so
+        # a preset author has no such token to set: they change the colour itself.
+        return (
+            f"Adjust {fg_attr}: the alert background is {fg_attr} at 10% over the page or a "
+            f"card, so a darker or lighter {fg_attr} is the only way to reach at least "
+            f"{minimum}:1 contrast."
+        )
+    return f"Adjust {fg_attr} or {bg_attr} to achieve at least {minimum}:1 contrast."
+
+
 @register(Tags.compatibility)
 def check_preset_contrast(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     """Validate the active theme preset meets WCAG AA contrast ratios.
@@ -96,8 +108,7 @@ def check_preset_contrast(app_configs: Any, **kwargs: Any) -> list[CheckMessage]
                         Warning(
                             f'Preset "{preset_name}" {mode_name} mode: {label} '
                             f"contrast ratio {ratio:.2f}:1 < {minimum}:1 (WCAG AA)",
-                            hint=f"Adjust {fg_attr} or {bg_attr} to achieve at least "
-                            f"{minimum}:1 contrast.",
+                            hint=_contrast_hint(fg_attr, bg_attr, minimum),
                             id="djust_theming.W001",
                         )
                     )
