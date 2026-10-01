@@ -43,6 +43,7 @@ from ..manager import (
     get_theme_manager,
 )
 from ..template_resolver import resolve_theme_template
+from ...utils import get_csp_nonce
 
 if TYPE_CHECKING:
     from ..manager import ThemeManager
@@ -56,6 +57,7 @@ def build_theme_head_context(
     link_css: bool = False,
     loading_class: bool = True,
     manager: "ThemeManager | None" = None,
+    nonce: str | None = None,
 ) -> dict[str, Any]:
     """Build the full context dict consumed by ``djust_theming/theme_head.html``.
 
@@ -80,16 +82,25 @@ def build_theme_head_context(
             recur.
         manager: An already-resolved ``ThemeManager``. When ``None`` (the tag
             path), the manager is resolved via ``get_theme_manager(request)``.
+        nonce: CSP nonce for the inline ``<script>`` and ``<style>`` blocks.
+            ``None`` takes ``request.csp_nonce`` (django-csp) when there is
+            one; an explicit value, including ``""`` for none, wins over it.
 
     Returns:
         A dict with keys: ``loading_class``, ``css_block``,
         ``deferred_css_block``, ``component_css_block``,
         ``include_component_link``, ``include_components_app_link``,
         ``include_js``, ``direction``,
-        ``cookie_prefix_js``, ``resolved_mode_js`` — exactly the variables
+        ``cookie_prefix_js``, ``resolved_mode_js``, ``nonce_attr`` — exactly the variables
         ``theme_head.html``
         consumes.
     """
+    # A nonce is interpolated into markup rendered with autoescape off, so it
+    # is escaped here, once, into a ready-made attribute (or nothing).
+    if nonce is None:
+        nonce = get_csp_nonce(request)
+    nonce_attr = format_html(' nonce="{}"', nonce) if nonce else ""
+
     # Get current theme state
     if manager is None:
         manager = get_theme_manager(request)
@@ -106,7 +117,7 @@ def build_theme_head_context(
     if critical_css_enabled and not link_css:
         # Critical CSS split: inline critical, async-load deferred
         critical_css = generate_critical_css_for_state(state, css_prefix=css_prefix)
-        css_block = f"<style data-djust-theme-critical>{critical_css}</style>"
+        css_block = f"<style data-djust-theme-critical{nonce_attr}>{critical_css}</style>"
 
         # Build deferred CSS URL
         try:
@@ -123,7 +134,7 @@ def build_theme_head_context(
         except NoReverseMatch:
             # Cannot resolve deferred URL — fall back to inlining everything
             css = generate_css_for_state(state, css_prefix=css_prefix)
-            css_block = f"<style data-djust-theme>{css}</style>"
+            css_block = f"<style data-djust-theme{nonce_attr}>{css}</style>"
             deferred_css_block = ""
     elif link_css:
         try:
@@ -143,7 +154,7 @@ def build_theme_head_context(
     if not css_block:
         # Generate CSS inline (legacy behavior or fallback)
         css = generate_css_for_state(state, css_prefix=css_prefix)
-        css_block = f"<style data-djust-theme>{css}</style>"
+        css_block = f"<style data-djust-theme{nonce_attr}>{css}</style>"
 
     # Component CSS: inline when prefix is set, static link otherwise
     component_css_block = ""
@@ -152,7 +163,7 @@ def build_theme_head_context(
     if css_prefix:
         # Generate prefixed component CSS inline
         component_css = generate_component_css(css_prefix)
-        component_css_block = f"<style data-djust-components>{component_css}</style>"
+        component_css_block = f"<style data-djust-components{nonce_attr}>{component_css}</style>"
         include_component_link = False
 
     # #1624: auto-include djust-components's components.css when the app is
@@ -186,6 +197,7 @@ def build_theme_head_context(
         "include_component_link": include_component_link,
         "include_components_app_link": include_components_app_link,
         "include_js": include_js,
+        "nonce_attr": nonce_attr,
         "direction": direction,
         "cookie_prefix_js": cookie_prefix_js,
         # The mode the *server* resolved — config default, session, or cookie.
@@ -245,7 +257,12 @@ def _theme_asset_version() -> str:
 
 
 @register.simple_tag(takes_context=True)
-def theme_head(context: Context, include_js: bool = True, link_css: bool = False) -> SafeString:
+def theme_head(
+    context: Context,
+    include_js: bool = True,
+    link_css: bool = False,
+    nonce: str | None = None,
+) -> SafeString:
     """
     Render theme CSS and anti-FOUC script in the <head>.
 
@@ -253,6 +270,17 @@ def theme_head(context: Context, include_js: bool = True, link_css: bool = False
         {% theme_head %}
         {% theme_head include_js=False %}
         {% theme_head link_css=True %}
+        {% theme_head nonce=request.csp_nonce %}
+
+    Content-Security-Policy: the anti-flash ``<script>`` and the inline
+    ``<style>`` blocks carry ``nonce="..."`` when a nonce is available, so a
+    policy without ``'unsafe-inline'`` can allow them. The nonce is
+    ``request.csp_nonce`` automatically when django-csp sets one; pass
+    ``nonce=`` to supply it yourself (``nonce=""`` turns it off). Without a
+    nonce the output is unchanged. The deferred-stylesheet ``<link>`` still
+    swaps itself in with an inline ``onload`` handler, which a nonce does not
+    authorize; set ``critical_css: False`` or use ``link_css=True`` under a
+    strict policy.
 
     Renders via the shared ``djust_theming/theme_head.html`` template:
 
@@ -270,7 +298,9 @@ def theme_head(context: Context, include_js: bool = True, link_css: bool = False
     the two paths cannot drift (#1531).
     """
     request = context.get("request")
-    head_ctx = build_theme_head_context(request, include_js=include_js, link_css=link_css)
+    head_ctx = build_theme_head_context(
+        request, include_js=include_js, link_css=link_css, nonce=nonce
+    )
     html = render_to_string("djust_theming/theme_head.html", head_ctx)
     return mark_safe(html)
 
