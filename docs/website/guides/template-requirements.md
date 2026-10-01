@@ -50,7 +50,7 @@ Don't put `dj-root` on a separate inner element to keep a wrapper out of VDOM di
 
 ### Which element?
 
-The root can be any element inside `<body>`: a `<div>`, or the semantically better `<main>`, `<section>` or `<article>`. It can't be `<html>`, `<head>` or `<body>` itself, or a table-section element such as `<tbody>` (`djust.T017`). djust logs a warning when a page declares its root on `<html>`, `<head>` or `<body>`, because the first render can't be matched to the live updates that follow.
+The root can be any element inside `<body>`: a `<div>`, or the semantically better `<main>`, `<section>` or `<article>`. It can't be `<html>`, `<head>` or `<body>` itself (`djust.T025`), or a table-section element such as `<tbody>` (`djust.T017`). With the root on `<html>` the HTTP render is complete, but the WebSocket mount keeps only the first element inside `<body>`, so the live page loses the rest. `manage.py check` warns about it, and djust logs a warning when a page declares its root there, because the first render can't be matched to the live updates that follow.
 
 ---
 

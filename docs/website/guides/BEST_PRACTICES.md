@@ -622,6 +622,11 @@ auth. Practices to follow:
 - **Non-LiveView endpoints** — a plain `django.views.View` (e.g. an OAuth
   callback) is NOT covered by `login_required` / `check_view_auth`; gate it with
   Django's own `LoginRequiredMixin`.
+- **Don't call `login()` in an event handler.** It rotates the session key, a
+  WebSocket can't set the cookie that carries the new one, and the browser stays
+  anonymous. Sign in through an HTTP login view or the
+  [accounts pages](accounts.md); see
+  [Signing in from an event handler](authentication.md#signing-in-from-an-event-handler).
 - Don't let the **login page extend a base** whose `dj-view` root mounts a
   `login_required` view, or it redirect-loops — give the login view a standalone
   template.

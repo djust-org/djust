@@ -1260,6 +1260,27 @@ line above, or all of them with `DJUST_CONFIG = {"suppress_checks": ["T024"]}`.
 
 ---
 
+### T025: dj-view or dj-root on `<html>`, `<head>` or `<body>`
+
+**Severity**: Warning
+
+**What causes it**: `dj-view` or `dj-root` is on the `<html>`, `<head>` or `<body>`
+tag. The HTTP render of the page is complete, but the WebSocket mount looks for
+the root inside `<body>` and otherwise keeps only the first element child, so a
+page with a `<header>` and a `<main>` under `<body>` mounts with the header only.
+Message: "<file>:<line> -- '<attr>' is on <tag>. The HTTP render is complete, but
+the WebSocket mount keeps only the first element inside <body>, so the live page
+silently loses the rest."
+
+**Fix**: Put the attribute on one element inside `<body>` that wraps the whole
+page content, such as `<div dj-root>`. See
+[Template requirements](template-requirements.md). Suppress with
+`DJUST_CONFIG = {"suppress_checks": ["T025"]}`, or one match with
+`{# noqa: T025 -- <reason> #}` on its line or the line above. HTML comments,
+`<script>` bodies and `{% verbatim %}` regions are not scanned.
+
+---
+
 ## Code Quality (Q0xx)
 
 ### Q001: print() statement

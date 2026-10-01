@@ -13,6 +13,7 @@ Registers checks with Django's check framework that also run via
 - Event parameters (V016-V018) -- ADR-036 strict handler contracts
 - Event bindings (T019-T022, T023) -- ADR-037 template bindings against their owners
 - Serialization floor (T024) -- user fields a template reads that djust never serializes
+- Document-root placement (T025) -- dj-view / dj-root on <html>, <head> or <body>
 - Assets (B0xx) -- vendored third-party files and SBOMs
 """
 
