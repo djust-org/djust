@@ -200,6 +200,7 @@ def _generate_content(framework: dict, project: dict, fmt: str) -> str:
     sections.append(_section_decorators(framework))
     sections.append(_section_conventions(framework))
     sections.append(_section_security())
+    sections.append(_section_state())
 
     # Project-specific
     if project.get("views") or project.get("components"):
@@ -334,6 +335,7 @@ These practices catch common mistakes. They do not make generated code secure on
 - **Gate who can open a view.** Set `login_required = True` or `permission_required = "app.codename"` on the view (or use `LoginRequiredMixin` / `PermissionRequiredMixin`, imported with `from djust import LoginRequiredMixin, PermissionRequiredMixin`). A view with neither is public.
 - **Re-check permissions in event handlers that change data.** Auth runs when the view mounts, not on every event. Stack `@permission_required("app.codename")` under `@event_handler`, check object ownership and raise `PermissionDenied` when it fails, and validate every handler argument: it comes from the browser.
 - **Include `{% csrf_token %}`** in every form.
+- **Do not call `login()` in an event handler.** It rotates the session key, and a WebSocket cannot set the cookie that carries the new one, so the browser stays anonymous. Sign in through an HTTP login view, the accounts pages djust ships (`{% url 'djust_auth:login' %}`), or a LiveView form whose `action` is the real login URL, with `dj-submit` and `dj-trigger-action`, where the handler validates and then calls `self.trigger_submit("#form-id")` so the browser posts the form natively.
 - **Before finishing, run `python manage.py check` and `python manage.py djust_audit --ast`** and fix what they report. `djust_audit --ast` is a heuristic scan, not a proof: it flags patterns such as `|safe` on a template variable (X006), `{% autoescape off %}` (X007), `mark_safe()` around an interpolated string (X005), event handlers that write to the database with no permission check (X002), object lookups by URL parameter that are not scoped to the user (X001), detail views with no object-permission override (X008), SQL built by string formatting (X003) and open redirects (X004).
 - In production, set `LIVEVIEW_ALLOWED_MODULES` to the modules that hold your views **and `"djust"`**, for example `["myapp.views", "djust"]`. It limits which views a client may mount over the WebSocket; an explicit list replaces the default, and without `"djust"` in it djust's own LiveViews (component and theme galleries, admin extensions) stop mounting. Keep `ALLOWED_HOSTS` specific: the WebSocket handshake's `Origin` header is checked against it.
 """
@@ -342,6 +344,20 @@ These practices catch common mistakes. They do not make generated code secure on
 def _section_security() -> str:
     """Generate the security guidance section."""
     return _SECURITY_SECTION
+
+
+# Documented in docs/website/api-reference/liveview.md (get_context_data) and
+# docs/website/guides/http-only-mode.md (what the page-POST fallback keeps).
+_STATE_SECTION = """\
+## State and `get_context_data()`
+
+- **Set state in `mount()`, and always call `super().get_context_data(**kwargs)`** in an override, adding to its result instead of replacing it. On the HTTP page-POST fallback a view on the default state policy is rebuilt from the dict `get_context_data()` returned on the previous request, so an attribute your override leaves out is unset when the next event handler runs. The same events can work over the WebSocket and fail on the fallback.
+"""
+
+
+def _section_state() -> str:
+    """Generate the state and get_context_data guidance section."""
+    return _STATE_SECTION
 
 
 def _section_project_views(project: dict) -> str:
