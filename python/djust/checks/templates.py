@@ -21,6 +21,7 @@ from djust.checks.utils import (
     _is_check_suppressed,
     _iter_template_files,
     _get_template_dirs,
+    _blank_template_comments,
     _strip_verbatim_blocks,
     _walk_subclasses,
     _LIVE_RENDER_TAG_RE,
@@ -590,7 +591,10 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     scan = _T012Scan(engine)
     real_dirs = [os.path.realpath(d) for d in tpl_dirs]
 
-    for filepath, content in sources.items():
+    for filepath, raw_content in sources.items():
+        # Comments render nothing: scan the page without them (#3283), but read
+        # pragmas that live in comments from ``raw_content``.
+        content = _blank_template_comments(raw_content)
         relpath = os.path.relpath(filepath)
 
         # T001 -- deprecated @click/@input syntax
@@ -687,7 +691,7 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                 has_liveview_include = any(
                     re.search(r"liveview|live_view", path, re.IGNORECASE) for path in include_paths
                 )
-                has_noqa = "{# noqa: T003 #}" in content or "{# noqa #}" in content
+                has_noqa = "{# noqa: T003 #}" in raw_content or "{# noqa #}" in raw_content
                 if has_liveview_include and not has_noqa:
                     errors.append(
                         DjustInfo(
@@ -740,14 +744,14 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
         _check_click_for_navigation(content, relpath, filepath, errors)
 
         # T011 -- unsupported Django template tags (not implemented in Rust renderer)
-        _check_unsupported_tags(content, relpath, filepath, errors)
+        _check_unsupported_tags(content, relpath, filepath, errors, raw_content)
 
         # T012 -- template uses dj-* event directives but missing dj-root or dj-view (#3171)
         if (
             # Cheap text gate; an {% include %} may inline a partial's directives
             (_dj_event_directives_re().search(content) or _INCLUDE_RE.search(content))
             # #1096: partial-template opt-out marker
-            and not _DJ_PARTIAL_MARKER_RE.search(content)
+            and not _DJ_PARTIAL_MARKER_RE.search(raw_content)
             # A partial another template includes: checked inlined there
             and not _included_elsewhere(os.path.realpath(filepath), real_dirs, included_by)
             # Global suppression via DJUST_CONFIG['suppress_checks']
@@ -1357,14 +1361,19 @@ _UNSUPPORTED_TAGS_RE = _unsupported_tags_re(_UNSUPPORTED_TAGS)
 
 
 def _check_unsupported_tags(
-    content: str, relpath: str, filepath: str, errors: list[CheckMessage]
+    content: str,
+    relpath: str,
+    filepath: str,
+    errors: list[CheckMessage],
+    raw_content: Optional[str] = None,
 ) -> None:
     """T011: Detect unsupported Django template tags in LiveView templates.
 
     The Rust renderer silently ignores these tags, rendering an HTML comment
     instead. This check warns developers at startup so they can use workarounds.
     """
-    has_noqa = "{# noqa: T011 #}" in content or "{# noqa #}" in content
+    pragmas = content if raw_content is None else raw_content
+    has_noqa = "{# noqa: T011 #}" in pragmas or "{# noqa #}" in pragmas
     if has_noqa:
         return
 

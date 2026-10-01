@@ -38,6 +38,7 @@ __all__ = [
     "_has_noqa",
     "_walk_subclasses",
     "_strip_verbatim_blocks",
+    "_blank_template_comments",
     # shared scanner regexes
     "_LIVE_RENDER_TAG_RE",
     "_LIVE_RENDER_STICKY_TRUTHY_RE",
@@ -372,6 +373,31 @@ _VERBATIM_BLOCK_RE = re.compile(
     r"\{%\s*verbatim\b[^%]*%\}.*?\{%\s*endverbatim\b[^%]*%\}",
     re.DOTALL,
 )
+
+
+# Django's two comment forms. ``{# ... #}`` is single-line only (Django renders a
+# multi-line one as literal text); ``{% comment %}`` may carry a note and spans
+# lines, and the first ``{% endcomment %}`` closes it.
+_TEMPLATE_COMMENT_RE = re.compile(
+    r"\{#[^\n]*?#\}|\{%\s*comment\b[^%]*%\}.*?\{%\s*endcomment\s*%\}",
+    re.DOTALL,
+)
+
+
+def _blank_template_comments(content: str) -> str:
+    """Replace every ``{# #}`` and ``{% comment %}...{% endcomment %}`` region
+    with whitespace, keeping newlines so line numbers stay aligned (#3283).
+
+    A comment renders nothing, so markup it mentions (an ``<input>``, ``dj-root``,
+    ``<script src>``) is not part of the page. Scan with this, but read pragmas
+    that live in comments (``{# noqa: T011 #}``, ``{# djust:partial #}``) from
+    the original source.
+    """
+    if "{#" not in content and "comment" not in content:
+        return content
+    return _TEMPLATE_COMMENT_RE.sub(
+        lambda match: "".join("\n" if ch == "\n" else " " for ch in match.group(0)), content
+    )
 
 
 def _strip_verbatim_blocks(content: str) -> str:

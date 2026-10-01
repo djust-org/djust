@@ -26,6 +26,7 @@ from djust.checks.utils import (
     _parse_python_file,
     _walk_subclasses,
     _get_template_dirs,
+    _blank_template_comments,
     _strip_verbatim_blocks,
     _LIVE_RENDER_TAG_RE,
     _LIVE_RENDER_STICKY_TRUTHY_RE,
@@ -767,7 +768,7 @@ def check_sticky_child_optin(app_configs: Any, **kwargs: Any) -> list[CheckMessa
         if relname is None:
             continue
 
-        scan_source = _strip_verbatim_blocks(content)
+        scan_source = _blank_template_comments(_strip_verbatim_blocks(content))
         for match in _LIVE_RENDER_TAG_RE.finditer(scan_source):
             args = match.group(1)
 

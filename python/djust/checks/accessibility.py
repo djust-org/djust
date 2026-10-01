@@ -15,6 +15,7 @@ from djust.checks.utils import (
     _is_check_suppressed,
     _iter_template_files,
     _get_template_dirs,
+    _blank_template_comments,
     _strip_verbatim_blocks,
 )
 
@@ -215,7 +216,7 @@ def check_accessibility(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
         # Docs / marketing pages routinely show literal HTML examples
         # inside {% verbatim %} regions — blank those out so they don't
         # false-positive (mirrors the A070 / #1004 fix).
-        scan_source = _strip_verbatim_blocks(content)
+        scan_source = _blank_template_comments(_strip_verbatim_blocks(content))
 
         # Y001 — interactive element missing an accessible name.
         if not y001_suppressed:
