@@ -225,7 +225,16 @@ to run before `make dev`.
 marked settings block (apps, `ASGI_APPLICATION`, and a channel layer; it does
 not change `TEMPLATES`), a djust `asgi.py` (only when the existing one is
 Django's default for the same settings module), the `djust`, `channels`, and
-`uvicorn[standard]` packages, and a final `manage.py check`.
+`uvicorn[standard]` packages, and a final `manage.py check`. A package the
+project already declares keeps its specifier: on a uv project `init` runs
+`uv add` only for the ones missing from `[project].dependencies`, and on a
+`requirements.txt` project it appends only the missing lines. A declared
+package keeps its version specifier, including one looser than the running
+djust (`djust>=1.0` is left as it is). If the declared `uvicorn` lacks the
+`[standard]` extra, which carries the WebSocket library, `init` adds the extra
+and keeps the specifier: `uv add 'uvicorn[standard]'` on a uv project, and an
+in-place edit of that line in `requirements.txt`. A requirement in an included
+file (`-r base.txt`) is never edited.
 
 | Option | Effect |
 |---|---|
@@ -255,3 +264,28 @@ references. Add project-specific rules there. Note that `djust new` does not
 rewrite an existing project directory; for an existing application, add the
 pointer to whatever agent entry file it already has. Agents do not
 automatically read a dependency's docs.
+
+### `djust_ai_context`
+
+`python manage.py djust_ai_context` generates a context file for an AI coding
+assistant from the installed djust version and your project: the template
+directives, lifecycle methods, decorators and conventions, a short security
+section, and (when the project defines them) your views, handlers, components and
+URL routes. It is generated output: rerun it after upgrading djust or adding
+views, and keep your own rules in a separate file.
+
+| Option | Effect |
+|---|---|
+| `--format claude` (default) | Write `CLAUDE.md` |
+| `--format cursor` | Write `.cursorrules` |
+| `--format copilot` | Write `.github/copilot-instructions.md` |
+| `--output PATH` | Write to `PATH` instead of the format's default location |
+| `--print` | Print the text to stdout and write nothing |
+| `--force` | Replace the target file if it already exists |
+
+The default paths are relative to the directory you run the command from. If
+the target file already exists the command refuses, prints the path, and exits
+with status 1 without touching it: the generated file replaces the whole file,
+so a hand-written `CLAUDE.md` would otherwise be lost. Pass `--force` to
+overwrite it, `--output` to write somewhere else, or `--print` to look at the
+generated text first.
