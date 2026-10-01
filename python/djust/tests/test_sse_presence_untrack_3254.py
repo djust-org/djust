@@ -4,8 +4,13 @@
 stream closed: ``SSESession.shutdown()`` is synchronous and ``untrack_presence``
 broadcasts through the synchronous channel-layer API, so the record lingered
 for ``PRESENCE_TIMEOUT``. ``shutdown`` now schedules the untrack on a worker
-thread, from whichever loop closes the session, unless a reconnect under the
-same session id has replaced (or is mounting to replace) the closing session.
+thread, from whichever loop closes the session.
+
+Presence is one record per view (per-connection presence, #3254), so the close
+of an old stream can only remove the old view's own connection. A same-owner
+EventSource reconnect reuses the session id but its new view joined under its
+own connection: no registry or in-flight-mount guard is needed, and the
+reconnect tests below pin that.
 
 Same harness as ``test_sse_legacy_close_3232.py``: the real stream and message
 views, the in-memory presence backend, and a stream closed the way Django
@@ -13,6 +18,7 @@ closes it when the client goes away (the generator is closed at a ``yield``).
 """
 
 import asyncio
+import json
 import threading
 import uuid
 
@@ -26,12 +32,15 @@ from django.utils.functional import SimpleLazyObject
 
 from djust import LiveView, sse
 from djust.presence import PresenceManager, PresenceMixin
-from djust.sse import DjustSSEStreamView, _sse_sessions
+from djust.backends.memory import InMemoryPresenceBackend
+from djust.backends.registry import reset_presence_backend, set_presence_backend
+from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
 
 pytestmark = [pytest.mark.django_db(transaction=True)]
 
 ROOM = "sse3254"
 LEFT: list = []
+JOINED: list = []
 #: Held by a reconnect's mount (after it joined presence) so a test can close
 #: the old stream while the new GET is still mounting.
 MOUNT_GATE = {"gate": None, "reached": threading.Event()}
@@ -52,8 +61,17 @@ class PresentPage(PresenceMixin, LiveView):
     def get_presence_user_id(self):
         return "user-3254"
 
+    def handle_presence_join(self, presence):
+        JOINED.append(presence["id"])
+
     def handle_presence_leave(self, presence):
         LEFT.append(presence["id"])
+
+
+class PresentPageTwo(PresentPage):
+    """The same room, another page (same-room navigation)."""
+
+    template = "<div dj-root><span>two {{ online_count }}</span></div>"
 
 
 class PlainPage(LiveView):
@@ -65,6 +83,7 @@ class PlainPage(LiveView):
 
 urlpatterns = [
     path("present/", PresentPage.as_view()),
+    path("present2/", PresentPageTwo.as_view()),
     path("plain/", PlainPage.as_view()),
 ]
 
@@ -73,14 +92,13 @@ urlpatterns = [
 def setup(monkeypatch):
     monkeypatch.setattr(sse, "_SESSION_LINGER_S", 0)
     LEFT.clear()
+    JOINED.clear()
     MOUNT_GATE["gate"] = None
     MOUNT_GATE["reached"].clear()
     _sse_sessions.clear()
-    sse._sse_mounting.clear()
     with override_settings(ROOT_URLCONF=__name__, LIVEVIEW_ALLOWED_MODULES=["djust"], DEBUG=False):
         yield
     _sse_sessions.clear()
-    sse._sse_mounting.clear()
     PresenceManager.leave_presence(ROOM, "user-3254")
 
 
@@ -155,8 +173,8 @@ async def test_a_forced_close_untracks_the_views_presence():
 
 async def test_a_reconnect_keeps_the_user_present_when_the_old_stream_closes():
     """EventSource auto-reconnect reuses the session id and owner: the new GET
-    mounts (and joins the same (room, user) record) and replaces the old
-    session; the old stream's cleanup must not delete the new view's record."""
+    mounts (and joins as its own connection of the user) and replaces the old
+    session; the old stream's cleanup removes only the old view's connection."""
     old, old_stream, sid, key = await _open(PresentPage, "/present/")
     new, new_stream, _, _ = await _open(PresentPage, "/present/", sid, key)
     assert new is not old and _sse_sessions[sid] is new
@@ -253,3 +271,115 @@ def test_a_loopless_sync_caller_untracks_inline():
     assert PresenceManager.list_presences(ROOM) == []
     assert LEFT == ["user-3254"]
     assert not session._presence_untrack_tasks
+
+
+# --------------------------------------------------------------------------- #
+# Per-connection presence (#3254): two tabs of one user, and same-room navigation
+# --------------------------------------------------------------------------- #
+
+
+class SpyBackend(InMemoryPresenceBackend):
+    """Records each connection operation, with who is present right after it."""
+
+    def __init__(self):
+        super().__init__(timeout=60)
+        self.ops: list = []
+
+    def join_connection(self, presence_key, user_id, connection_id, meta):
+        record, first = super().join_connection(presence_key, user_id, connection_id, meta)
+        self.ops.append(("join", first, [p["id"] for p in self.list(presence_key)]))
+        return record, first
+
+    def leave_connection(self, presence_key, user_id, connection_id):
+        record = super().leave_connection(presence_key, user_id, connection_id)
+        self.ops.append(("leave", record is not None, [p["id"] for p in self.list(presence_key)]))
+        return record
+
+
+@pytest.fixture
+def spy():
+    JOINED.clear()
+    backend = SpyBackend()
+    set_presence_backend(backend)
+    yield backend
+    reset_presence_backend()
+
+
+async def _post(session, key, body):
+    request = RequestFactory().post(
+        f"/djust/sse/{session.session_id}/message/",
+        data=json.dumps(body),
+        content_type="application/json",
+    )
+    request.session = SessionStore(key)
+    request.user = SimpleLazyObject(lambda: get_user(request))
+    request.tenant = None
+    response = await DjustSSEMessageView().post(request, session_id=session.session_id)
+    assert response.status_code == 200
+    return response
+
+
+async def test_two_sse_tabs_of_one_user_closing_one_keeps_the_user(spy):
+    """One user, two EventSource streams (two tabs, one browser session)."""
+    key = await sync_to_async(_fresh_key)()
+    a, stream_a, _, _ = await _open(PresentPage, "/present/", key=key)
+    b, stream_b, _, _ = await _open(PresentPage, "/present/", key=key)
+    assert [p["id"] for p in await _members()] == ["user-3254"]
+    assert JOINED == ["user-3254"]  # tab B joined silently
+
+    await stream_a.aclose()
+    await _until(lambda: a.view_instance is None, "tab A to drop its view")
+    await asyncio.sleep(0.2)  # a wrongly scheduled removal would have run by now
+    assert [p["id"] for p in await _members()] == ["user-3254"]
+    assert LEFT == []
+
+    await stream_b.aclose()
+    await _until(lambda: LEFT, "tab B's leave")
+    assert await _members() == []
+    assert LEFT == ["user-3254"]
+
+
+async def test_sse_same_room_navigation_never_shows_the_user_as_gone(spy):
+    session, stream, _, key = await _open(PresentPage, "/present/")
+    spy.ops.clear()
+    JOINED.clear()
+
+    await _post(session, key, {"type": "live_redirect_mount", "url": "/present2/", "params": {}})
+
+    assert type(session.view_instance) is PresentPageTwo
+    assert [p["id"] for p in await _members()] == ["user-3254"]
+    # The new page joined as a second connection before the old one left: the
+    # user was present after every backend operation, with no leave or rejoin.
+    assert [(op, flag) for op, flag, _ in spy.ops] == [("join", False), ("leave", False)]
+    assert all(present == ["user-3254"] for _, _, present in spy.ops)
+    assert JOINED == [] and LEFT == []
+
+    await stream.aclose()
+    await _until(lambda: LEFT, "the close to leave")
+    assert await _members() == []
+
+
+async def test_sse_navigation_to_a_page_without_presence_leaves(spy):
+    session, stream, _, key = await _open(PresentPage, "/present/")
+
+    await _post(session, key, {"type": "live_redirect_mount", "url": "/plain/", "params": {}})
+
+    assert await _members() == []
+    assert LEFT == ["user-3254"]
+    await stream.aclose()
+
+
+async def test_a_reconnect_old_close_removes_only_the_old_connection(spy):
+    """The reconnect's view and the old stream's view share a session id; the
+    connection ids differ."""
+    old, old_stream, sid, key = await _open(PresentPage, "/present/")
+    new, new_stream, _, _ = await _open(PresentPage, "/present/", sid, key)
+    assert old.view_instance._presence_connection_id != new.view_instance._presence_connection_id
+
+    await old_stream.aclose()
+    await _until(lambda: old.view_instance is None, "the old session to drop its view")
+    await asyncio.sleep(0.2)
+
+    assert [p["id"] for p in await _members()] == ["user-3254"]
+    assert [op for op, flag, _ in spy.ops if op == "leave"] == ["leave"]  # the old one only
+    await new_stream.aclose()
