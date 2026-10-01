@@ -122,6 +122,14 @@ REQUIRED_LINES = [
     "from djust import LoginRequiredMixin, PermissionRequiredMixin",
     "X008",
     "--force",
+    # #3304: login-over-WebSocket and the HTTP fallback's get_context_data()
+    "Do not call `login()` in an event handler",
+    "dj-trigger-action",
+    "self.trigger_submit(",
+    "djust_auth:login",
+    "## State and `get_context_data()`",
+    "super().get_context_data(**kwargs)",
+    "Set state in `mount()`",
 ]
 
 
@@ -149,3 +157,15 @@ def test_audit_codes_named_in_the_context_exist():
     assert cited, "the security section should cite audit codes"
     for code in cited:
         assert code in AST_FINDING_CODES
+
+
+def test_login_and_state_notes_name_real_apis_3304():
+    # The notes name self.trigger_submit() and the djust_auth:login URL; both must exist.
+    from djust import LiveView
+    from djust.auth import urls as auth_urls
+
+    assert auth_urls.app_name == "djust_auth"
+
+    assert callable(getattr(LiveView, "trigger_submit", None))
+    content = _run("--print")
+    assert "djust_auth:login" in content
