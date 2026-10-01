@@ -1221,25 +1221,6 @@ itself.
 
 ---
 
-### T024: Template reads a field djust never serializes
-
-**Severity**: Warning
-
-**What causes it**: A template a LiveView or LiveComponent renders (its parents
-and includes too) reads `is_staff`, `is_superuser` or `password` through a
-`user` variable, such as `request.user.is_staff`. djust withholds those fields
-from every template context, so the expression is always empty or false and
-nothing says so. Only paths through a `user` or `*_user` variable are reported;
-`{{ form.password }}` is left alone.
-
-**Fix**: Expose a derived boolean from `mount()` or a context processor and test
-that in the template, as described in
-[Staff and superuser checks](BEST_PRACTICES.md#staff-and-superuser-checks).
-Suppress one reference with `{# noqa: T024 -- <reason> #}` on its line or the
-line above, or all of them with `DJUST_CONFIG = {"suppress_checks": ["T024"]}`.
-
----
-
 ### T023: Event binding checks skipped
 
 **Severity**: Info
@@ -1252,6 +1233,28 @@ when `TEMPLATES` configures neither, so there is nothing to scan with and the
 binding checks did not run.
 
 **Fix**: Add a `DjustTemplateBackend` or `DjangoTemplates` entry to `TEMPLATES`.
+Silence it with `DJUST_CONFIG = {"suppress_checks": ["T023"]}`.
+
+---
+
+### T024: Template reads a field djust never serializes
+
+**Severity**: Warning
+
+**What causes it**: A template a LiveView or LiveComponent renders (its parents
+and includes too, and an inline `template` string) reads `is_staff`,
+`is_superuser` or `password` through a `user` variable, such as
+`request.user.is_staff`. djust withholds those fields from every template
+context, so the expression is always empty or false and nothing says so. Paths
+through a `user` or `*_user` variable are reported, and so is a
+`{% with u=request.user %}` alias of one. A loop variable, a user held under any
+other name, and `{{ form.password }}` are not.
+
+**Fix**: Expose a derived boolean from `mount()` or a context processor and test
+that in the template, as described in
+[Staff and superuser checks](BEST_PRACTICES.md#staff-and-superuser-checks).
+Suppress one reference with `{# noqa: T024 -- <reason> #}` on its line or the
+line above, or all of them with `DJUST_CONFIG = {"suppress_checks": ["T024"]}`.
 
 ---
 

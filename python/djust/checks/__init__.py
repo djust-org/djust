@@ -11,7 +11,8 @@ Registers checks with Django's check framework that also run via
 - Code Quality (Q0xx) -- AST-based quality checks
 - Accessibility (Y0xx) -- template ARIA/WCAG scanning
 - Event parameters (V016-V018) -- ADR-036 strict handler contracts
-- Event bindings (T019-T022) -- ADR-037 template bindings against their owners
+- Event bindings (T019-T022, T023) -- ADR-037 template bindings against their owners
+- Serialization floor (T024) -- user fields a template reads that djust never serializes
 - Assets (B0xx) -- vendored third-party files and SBOMs
 """
 

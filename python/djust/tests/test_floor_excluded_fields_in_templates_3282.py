@@ -29,6 +29,17 @@ from djust import LiveView
 class Nav(LiveView):
     template_name = "floor/page.html"
     login_required = False
+
+
+class Inline(LiveView):
+    login_required = False
+    template = '''<div dj-root>
+{% if request.user.is_staff %}admin{% endif %}
+{% with u=request.user %}{{ u.is_superuser }}{% endwith %}
+{% with request.user as me %}{{ me.password }}{% endwith %}
+{% for person in others %}{{ person.is_staff }}{% endfor %}
+{{ form.is_staff }}
+</div>'''
 """
 
 TEMPLATES = {
@@ -77,6 +88,7 @@ def fixture(tmp_path):
     finally:
         sys.modules.pop(MODULE, None)
         module.Nav.abstract = True
+        module.Inline.abstract = True
         gc.collect()
 
 
@@ -85,13 +97,29 @@ def _t024():
 
 
 def test_user_floor_fields_in_the_page_and_its_parent_are_reported(fixture):
-    found = _t024()
+    found = [m for m in _t024() if m.file_path.endswith(".html")]
     assert sorted((m.file_path.rsplit("/", 1)[1], m.line_number) for m in found) == [
         ("base.html", 2),
         ("page.html", 3),
     ]
     assert "request.user.is_staff" in found[0].msg or "request.user.is_staff" in found[1].msg
     assert all("derived boolean" in m.hint for m in found)
+
+
+def test_an_inline_template_is_checked_at_its_line_in_the_python_file(fixture):
+    inline = [m for m in _t024() if m.file_path.endswith(".py")]
+    source = open(inline[0].file_path, encoding="utf-8").read().splitlines()
+    expected = [
+        next(i for i, line in enumerate(source, 1) if text in line)
+        for text in ("{% if request.user.is_staff", "{% with u=request.user", "as me %}")
+    ]
+    assert sorted(m.line_number for m in inline) == expected
+    messages = " ".join(m.msg for m in inline)
+    assert "request.user.is_staff" in messages
+    assert "u.is_superuser" in messages and "me.password" in messages  # {% with %} aliases
+    # A loop variable and a form field are not user paths.
+    assert "person.is_staff" not in messages
+    assert "form.is_staff" not in messages
 
 
 def test_form_fields_commented_out_and_noqa_references_are_not_reported(fixture):

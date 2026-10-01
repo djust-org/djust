@@ -74,6 +74,8 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | T020 | Templates | Warning | An event binding's arguments are missing, unexpected or supplied twice (ADR-037) |
 | T021 | Templates | Warning | An event binding's literal value or wire-type hint does not fit the handler (ADR-037) |
 | T022 | Templates | Warning | Markup supplies routing context (`view_id` / `component_id`) as an argument (ADR-037) |
+| T023 | Templates | Info | T019-T022 were skipped: no template engine is configured to scan with |
+| T024 | Templates | Warning | A template an owner renders reads `is_staff`, `is_superuser` or `password` through a `user` variable; djust never serializes them |
 | Q001 | Quality | Info | print() statement found |
 | Q002 | Quality | Warning | f-string in logger call |
 | Q003 | Quality | Info | console.log without djustDebug guard |
@@ -760,6 +762,21 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Scope**: Static check only; abstract base LiveViews (`abstract = True`)
   are skipped, matching the other V/T checks' convention.
 
+### T024 — Floor-excluded user field in a template
+- **Severity**: Warning
+- **Detects**: `{{ request.user.is_staff }}`, `user.is_superuser`,
+  `current_user.password` and the like, in any template a LiveView or
+  LiveComponent renders (parents and includes too, and an inline `template`
+  string). The serializer never ships `is_staff`, `is_superuser` or
+  `password`, so these always render empty or false.
+- **Sees**: paths through a variable named `user` or ending `_user`, and a
+  `{% with u=request.user %}` / `{% with request.user as u %}` alias of one.
+- **Does not see**: a loop variable (`{% for u in users %}`), a user held under
+  any other name, or a form field named `password`.
+- **Fix**: expose a derived boolean from `mount()` or a context processor; see
+  [Staff and superuser checks](website/guides/BEST_PRACTICES.md#staff-and-superuser-checks).
+  Suppress one line with `{# noqa: T024 -- <reason> #}`.
+
 ### T019–T022 — Template event bindings (ADR-037)
 - **Severity**: Warning (all four, in 1.3)
 - **Method**: Each LiveView's and LiveComponent's template is compiled with
@@ -799,6 +816,12 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
     checked;
   - an attribute set that is itself conditional (missing arguments are then
     unknown).
+- **Engine**: a project that lists `DjangoTemplates` is scanned with its
+  engine. A project that lists only `DjustTemplateBackend` (the `djust new`
+  default) is scanned with a compile-only Django engine built from the same
+  directories, installed-app tag libraries, `OPTIONS["libraries"]` and
+  builtins. If `TEMPLATES` configures neither, `T023` (Info) says the checks
+  were skipped; silence it with `DJUST_CONFIG = {"suppress_checks": ["T023"]}`.
 - **Not seen**: markup rendered by a third-party template tag or a dynamic
   `{% include %}`. Each is recorded as a gap, and the owner's event graph is
   reported as incomplete.

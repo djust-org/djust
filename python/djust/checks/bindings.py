@@ -900,8 +900,49 @@ def check_event_bindings(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
 #: A ``user`` path (``request.user``, ``current_user``) naming a field the
 #: serialization floor excludes (``serialization._ALWAYS_EXCLUDED_FIELDS``).
-_FLOOR_FIELD = re.compile(r"\b((?:\w+\.)*(?:user|\w+_user))\.(is_staff|is_superuser|password)\b")
+_USER_ROOT = r"(?:\w+\.)*(?:user|\w+_user)"
+_FLOOR_FIELD = re.compile(r"\b(%s)\.(is_staff|is_superuser|password)\b" % _USER_ROOT)
+#: ``{% with u=request.user %}`` and ``{% with request.user as u %}``.
+_USER_ALIAS = re.compile(
+    r"\b(\w+)=\s*%(root)s\b(?!\.)|\b%(root)s\s+as\s+(\w+)" % {"root": _USER_ROOT}
+)
 _TEMPLATE_TAG = re.compile(r"\{\{.*?\}\}|\{%.*?%\}", re.DOTALL)
+
+
+def _floor_references(source: str) -> list[tuple[int, str, str]]:
+    """``(offset, path, field)`` for each floor-excluded user field ``source`` reads.
+
+    A ``{% with %}`` alias of a user (``u``) is followed too, wherever in the
+    template it is used; a loop variable or any other name is not.
+    """
+    tags = [(tag.start(), tag.group(0)) for tag in _TEMPLATE_TAG.finditer(source)]
+    aliases = {
+        alias
+        for _, text in tags
+        if text.startswith("{%")
+        for found in _USER_ALIAS.finditer(text)
+        for alias in found.groups()
+        if alias
+    }
+    pattern = _FLOOR_FIELD
+    if aliases:
+        pattern = re.compile(
+            r"(?<![\w.])(%s)\.(is_staff|is_superuser|password)\b|\b(%s)\.(is_staff|is_superuser|password)\b"
+            % ("|".join(sorted(re.escape(a) for a in aliases)), _USER_ROOT)
+        )
+    references = []
+    for start, text in tags:
+        for match in pattern.finditer(text):
+            path, member = (
+                (match.group(1), match.group(2))
+                if match.group(1)
+                else (
+                    match.group(3),
+                    match.group(4),
+                )
+            )
+            references.append((start + match.start(), "%s.%s" % (path, member), member))
+    return references
 
 
 def _floor_messages(reports: list[OwnerReport]) -> list[CheckMessage]:
@@ -910,44 +951,55 @@ def _floor_messages(reports: list[OwnerReport]) -> list[CheckMessage]:
     ``{% if request.user.is_staff %}`` is false on every LiveView page and in
     its shell, with no error, because the serializer never ships ``is_staff``,
     ``is_superuser`` or ``password`` (#3282). Only paths through a ``user``
-    variable are reported, so a form field named ``password`` is left alone.
+    variable (or a ``{% with %}`` alias of one) are reported, so a form field
+    named ``password`` is left alone. Covers the template files an owner reads
+    and an inline ``template`` string.
     """
     if _is_check_suppressed("djust.T024"):
         return []
+    from djust._template_bindings import _inline_location
     from djust.checks.utils import _blank_template_comments, _strip_verbatim_blocks
 
-    messages: list[CheckMessage] = []
-    seen: set[str] = set()
+    sources: list[tuple[str, int, str]] = []  # (file, line the text starts on, text)
+    seen: set[Any] = set()
     for report in reports:
+        inline = getattr(report.owner, "template", None)
+        if isinstance(inline, str) and inline:
+            file, first_line = _inline_location(report.owner)
+            if (file, first_line) not in seen:
+                seen.add((file, first_line))
+                sources.append((file, first_line, inline))
         for file in report.files:
-            if file in seen or not file.endswith((".html", ".htm", ".txt")):
+            if file in seen or file.endswith(".py"):
                 continue
             seen.add(file)
             try:
                 with open(file, encoding="utf-8", errors="replace") as handle:
-                    source = handle.read()
+                    sources.append((file, 1, handle.read()))
             except OSError:
                 continue
-            scan = _blank_template_comments(_strip_verbatim_blocks(source))
-            for tag in _TEMPLATE_TAG.finditer(scan):
-                for match in _FLOOR_FIELD.finditer(tag.group(0)):
-                    line = scan.count("\n", 0, tag.start() + match.start()) + 1
-                    if noqa_state(file, line, "T024") == "suppressed":
-                        continue
-                    path = match.group(0)
-                    messages.append(
-                        DjustWarning(
-                            "%s:%d: `%s` is always empty in a LiveView template: djust never "
-                            "serializes `%s`." % (file, line, path, match.group(2)),
-                            hint=(
-                                "`is_staff`, `is_superuser` and `password` are withheld from the "
-                                "template context. Expose a derived boolean instead, for example "
-                                "`self.can_manage = request.user.is_staff` in mount(), or a "
-                                "context processor, and test that in the template."
-                            ),
-                            id="djust.T024",
-                            file_path=file,
-                            line_number=line,
-                        )
-                    )
+
+    messages: list[CheckMessage] = []
+    for file, first_line, source in sources:
+        scan = _blank_template_comments(_strip_verbatim_blocks(source))
+        for offset, path, member in _floor_references(scan):
+            line = first_line + scan.count("\n", 0, offset)
+            if noqa_state(file, line, "T024") == "suppressed":
+                continue
+            messages.append(
+                DjustWarning(
+                    "%s:%d: `%s` is always empty in a LiveView template: djust never "
+                    "serializes `%s`." % (file, line, path, member),
+                    hint=(
+                        "`is_staff`, `is_superuser` and `password` are withheld from the "
+                        "template context. Expose a derived boolean instead, for example "
+                        "`self.can_manage = request.user.is_staff` in mount(), or a "
+                        "context processor, and test that in the template. Only `user` "
+                        "variables and `{% with %}` aliases of them are checked."
+                    ),
+                    id="djust.T024",
+                    file_path=file,
+                    line_number=line,
+                )
+            )
     return messages
