@@ -72,6 +72,12 @@
     border-color: hsl(var(--border));
 }
 
+.alert-info {
+    background-color: hsl(var(--info) / 0.1);
+    color: hsl(var(--info));
+    border-color: hsl(var(--info) / 0.2);
+}
+
 .alert-success {
     background-color: hsl(var(--success) / 0.1);
     color: hsl(var(--success));

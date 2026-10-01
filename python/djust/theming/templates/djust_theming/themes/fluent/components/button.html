@@ -1,7 +1,16 @@
+{% if tag == "a" %}
+<a class="{{ css_prefix }}btn {{ css_prefix }}btn-{{ variant }} {{ css_prefix }}btn-{{ size }} {% if attrs.class %}{{ attrs.class }}{% endif %}"
+        {% if attrs.id %}id="{{ attrs.id }}"{% endif %}
+        {% if attrs.onclick %}onclick="{{ attrs.onclick }}"{% endif %}
+        {% if href %}href="{{ href }}"{% endif %}
+        {{ extra_attrs }}>
+{% else %}
 <button class="{{ css_prefix }}btn {{ css_prefix }}btn-{{ variant }} {{ css_prefix }}btn-{{ size }} {% if attrs.class %}{{ attrs.class }}{% endif %}"
         {% if attrs.id %}id="{{ attrs.id }}"{% endif %}
         {% if attrs.onclick %}onclick="{{ attrs.onclick }}"{% endif %}
-        {% if attrs.type %}type="{{ attrs.type }}"{% endif %}>
+        {% if attrs.type %}type="{{ attrs.type }}"{% endif %}
+        {{ extra_attrs }}>
+{% endif %}
     <span class="{{ css_prefix }}btn-reveal"></span>
     {% if slot_loading %}{{ slot_loading|safe }}{% else %}{% if slot_icon %}{{ slot_icon|safe }} {% endif %}{% if slot_content %}{{ slot_content|safe }}{% else %}{{ text }}{% endif %}{% endif %}
-</button>
+{% if tag == "a" %}</a>{% else %}</button>{% endif %}

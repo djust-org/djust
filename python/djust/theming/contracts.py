@@ -68,6 +68,9 @@ BUTTON_CONTRACT = ComponentContract(
     optional_context=(
         ContextVar(name="variant", type="str", default="primary"),
         ContextVar(name="size", type="str", default="md"),
+        ContextVar(name="tag", type="str", default="button"),
+        ContextVar(name="href", type="Optional[str]", default=None),
+        ContextVar(name="extra_attrs", type="str", default=""),
         ContextVar(name="css_prefix", type="str", default=""),
         ContextVar(name="attrs", type="dict", default=None),
         ContextVar(name="slot_icon", type="str", default=None),
@@ -106,6 +109,7 @@ ALERT_CONTRACT = ComponentContract(
         ContextVar(name="title", type="Optional[str]", default=None),
         ContextVar(name="variant", type="str", default="default"),
         ContextVar(name="dismissible", type="bool", default=False),
+        ContextVar(name="role", type="str", default="alert"),
         ContextVar(name="css_prefix", type="str", default=""),
         ContextVar(name="attrs", type="dict", default=None),
         ContextVar(name="slot_icon", type="str", default=None),
@@ -113,6 +117,9 @@ ALERT_CONTRACT = ComponentContract(
         ContextVar(name="slot_actions", type="str", default=None),
         ContextVar(name="slot_dismiss", type="str", default=None),
     ),
+    # The template source must carry ``role="alert"`` (the compat check reads
+    # source); ``theme_alert`` renders ``role="status"`` instead for the
+    # non-urgent variants (#3280), so rendered-HTML checks use an urgent variant.
     required_elements=(RequiredElement(tag="div", attrs={"role": "alert"}),),
     accessibility=(
         AccessibilityRequirement(
@@ -148,6 +155,8 @@ INPUT_CONTRACT = ComponentContract(
         ContextVar(name="label", type="Optional[str]", default=None),
         ContextVar(name="placeholder", type="str", default=""),
         ContextVar(name="type", type="str", default="text"),
+        ContextVar(name="field_id", type="str", default=None),
+        ContextVar(name="extra_attrs", type="str", default=""),
         ContextVar(name="css_prefix", type="str", default=""),
         ContextVar(name="attrs", type="dict", default=None),
         ContextVar(name="slot_label", type="str", default=None),
@@ -319,6 +328,9 @@ SELECT_CONTRACT = ComponentContract(
         ContextVar(name="label", type="Optional[str]", default=None),
         ContextVar(name="options", type="list", default=None),
         ContextVar(name="placeholder", type="str", default=""),
+        ContextVar(name="field_id", type="str", default=None),
+        ContextVar(name="has_selected_option", type="bool", default=False),
+        ContextVar(name="extra_attrs", type="str", default=""),
         ContextVar(name="css_prefix", type="str", default=""),
         ContextVar(name="attrs", type="dict", default=None),
         ContextVar(name="slot_label", type="str", default=None),
@@ -348,6 +360,7 @@ TEXTAREA_CONTRACT = ComponentContract(
         ContextVar(name="label", type="Optional[str]", default=None),
         ContextVar(name="placeholder", type="str", default=""),
         ContextVar(name="rows", type="int", default=4),
+        ContextVar(name="field_id", type="str", default=None),
         ContextVar(name="css_prefix", type="str", default=""),
         ContextVar(name="attrs", type="dict", default=None),
         ContextVar(name="slot_label", type="str", default=None),

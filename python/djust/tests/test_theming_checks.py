@@ -404,6 +404,7 @@ class TestContrastPairsCompleteness:
             # #3281 / #3165: theme colours used as text or as a border.
             "link",
             "primary",
+            "info",
             "success",
             "warning",
             "destructive",
