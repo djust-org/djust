@@ -92,12 +92,19 @@ def fixture(tmp_path):
         gc.collect()
 
 
-def _t024():
-    return [m for m in check_event_bindings(None) if m.id == "djust.T024"]
+def _t024(templates=None):
+    """The T024 findings; with ``templates`` (the fixture's directory), only this
+    test's own files. The check scans every live view in the process, and another
+    test's view can still be reachable until cyclic GC."""
+    found = [m for m in check_event_bindings(None) if m.id == "djust.T024"]
+    if templates is None:
+        return found
+    root = str(templates.parent)
+    return [m for m in found if str(m.file_path).startswith(root)]
 
 
 def test_user_floor_fields_in_the_page_and_its_parent_are_reported(fixture):
-    found = [m for m in _t024() if m.file_path.endswith(".html")]
+    found = [m for m in _t024(fixture) if m.file_path.endswith(".html")]
     assert sorted((m.file_path.rsplit("/", 1)[1], m.line_number) for m in found) == [
         ("base.html", 2),
         ("page.html", 3),
@@ -107,7 +114,7 @@ def test_user_floor_fields_in_the_page_and_its_parent_are_reported(fixture):
 
 
 def test_an_inline_template_is_checked_at_its_line_in_the_python_file(fixture):
-    inline = [m for m in _t024() if m.file_path.endswith(".py")]
+    inline = [m for m in _t024(fixture) if m.file_path.endswith(".py")]
     source = open(inline[0].file_path, encoding="utf-8").read().splitlines()
     expected = [
         next(i for i, line in enumerate(source, 1) if text in line)
@@ -123,7 +130,7 @@ def test_an_inline_template_is_checked_at_its_line_in_the_python_file(fixture):
 
 
 def test_form_fields_commented_out_and_noqa_references_are_not_reported(fixture):
-    lines = {(m.file_path.rsplit("/", 1)[1], m.line_number) for m in _t024()}
+    lines = {(m.file_path.rsplit("/", 1)[1], m.line_number) for m in _t024(fixture)}
     assert ("base.html", 3) not in lines  # inside {# #}
     assert ("page.html", 4) not in lines  # form.password: not a user path
     assert ("page.html", 5) not in lines  # {# noqa: T024 -- reason #}

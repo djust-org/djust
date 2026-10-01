@@ -74,7 +74,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | T020 | Templates | Warning | An event binding's arguments are missing, unexpected or supplied twice (ADR-037) |
 | T021 | Templates | Warning | An event binding's literal value or wire-type hint does not fit the handler (ADR-037) |
 | T022 | Templates | Warning | Markup supplies routing context (`view_id` / `component_id`) as an argument (ADR-037) |
-| T023 | Templates | Info | T019-T022 were skipped: no template engine is configured to scan with |
+| T023 | Templates | Info | T019-T022 were skipped: no usable template engine (none configured, or it could not be built) |
 | T024 | Templates | Warning | A template an owner renders reads `is_staff`, `is_superuser` or `password` through a `user` variable; djust never serializes them |
 | Q001 | Quality | Info | print() statement found |
 | Q002 | Quality | Warning | f-string in logger call |
@@ -820,7 +820,7 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
   engine. A project that lists only `DjustTemplateBackend` (the `djust new`
   default) is scanned with a compile-only Django engine built from the same
   directories, installed-app tag libraries, `OPTIONS["libraries"]` and
-  builtins. If `TEMPLATES` configures neither, `T023` (Info) says the checks
+  builtins. If `TEMPLATES` configures neither, or the engine cannot be built, `T023` (Info) says the checks
   were skipped; silence it with `DJUST_CONFIG = {"suppress_checks": ["T023"]}`.
 - **Not seen**: markup rendered by a third-party template tag or a dynamic
   `{% include %}`. Each is recorded as a gap, and the owner's event graph is

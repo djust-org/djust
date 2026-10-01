@@ -1228,11 +1228,13 @@ itself.
 **What causes it**: `T019`-`T022` compile each template with a Django template
 engine. A `TEMPLATES` list with a `DjangoTemplates` entry supplies one, and a
 list with only `DjustTemplateBackend` (what `djust new` writes) has one built
-from the same directories, libraries and builtins. This message appears only
-when `TEMPLATES` configures neither, so there is nothing to scan with and the
-binding checks did not run.
+from the same directories, libraries and builtins. This message appears when
+`TEMPLATES` configures neither, or when that engine cannot be built (an
+`OPTIONS` `libraries` or `builtins` entry that does not import), so there is
+nothing to scan with and the binding checks did not run.
 
-**Fix**: Add a `DjustTemplateBackend` or `DjangoTemplates` entry to `TEMPLATES`.
+**Fix**: Add a `DjustTemplateBackend` or `DjangoTemplates` entry to `TEMPLATES`,
+and check that its `OPTIONS` `libraries` and `builtins` import cleanly.
 Silence it with `DJUST_CONFIG = {"suppress_checks": ["T023"]}`.
 
 ---
