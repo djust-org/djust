@@ -1,6 +1,7 @@
 <a href="{{ url }}"
    class="{{ css_prefix }}nav-link theme-nav-link{% if is_active %} active{% endif %} {% if attrs.class %}{{ attrs.class }}{% endif %}"
    {% if is_active %}aria-current="page"{% endif %}
+   {% if track_active %}data-dj-nav="{{ url }}"{% endif %}
    {% if attrs.id %}id="{{ attrs.id }}"{% endif %}
    {% if attrs.navigate and url %}dj-navigate="{{ url }}"{% endif %}>
     {% if slot_icon %}{{ slot_icon|safe }}{% elif icon %}<span class="{{ css_prefix }}nav-link-icon">{{ icon }}</span>{% endif %}

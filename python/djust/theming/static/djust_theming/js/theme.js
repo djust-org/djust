@@ -401,6 +401,7 @@
             // Batch updates in next frame
             this.pendingUpdate = requestAnimationFrame(() => {
                 localStorage.setItem(STORAGE_KEY_PRESET, preset);
+                this._livePreset = preset;
 
                 // Set cookie for server-side rendering
                 document.cookie = `${COOKIE_KEY_PRESET}=${preset};path=/;max-age=31536000;SameSite=Lax`;
@@ -489,14 +490,22 @@
                         btn.classList.toggle('active', btnMode === mode);
                     });
 
-                    // Update preset selects
-                    const presetSelects = document.querySelectorAll('.theme-preset-select');
-                    presetSelects.forEach(select => {
-                        const preset = this.getPreset();
-                        if (select.value !== preset) {
-                            select.value = preset;
-                        }
-                    });
+                    // Update preset selects, but only to a preset THIS page
+                    // switched to live. Otherwise the server-rendered selected
+                    // option is the truth: it is the preset the server
+                    // resolved (cookie, session, pack, or the configured
+                    // default). getPreset() reads localStorage alone and falls
+                    // back to 'default', so syncing from it flipped the
+                    // selector to "Default" on a mode toggle whenever the
+                    // active preset had never been picked in this browser
+                    // (#3320).
+                    if (this._livePreset) {
+                        document.querySelectorAll('.theme-preset-select').forEach(select => {
+                            if (select.value !== this._livePreset) {
+                                select.value = this._livePreset;
+                            }
+                        });
+                    }
                 });
             }, 16); // ~1 frame at 60fps for instant feel
         }
