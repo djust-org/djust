@@ -482,14 +482,23 @@ def theme_preset_selector(
     layout: str = "dropdown",
     show_descriptions: bool = True,
     dropdown_class: str = "",
+    presets: Any = None,
 ) -> SafeString:
     """
     Render theme preset selector.
+
+    Args:
+        presets: Limit the list to these presets, in this order: a
+            comma-separated string or a list of names. Defaults to
+            ``LIVEVIEW_CONFIG["theme"]["selectable_presets"]``, then to every
+            registered preset; the tag argument wins over the setting. An
+            unknown name raises ``ValueError``.
 
     Usage:
         {% theme_preset_selector %}
         {% theme_preset_selector layout="grid" %}
         {% theme_preset_selector layout="list" show_descriptions=True %}
+        {% theme_preset_selector presets="legal,medical,default" %}
     """
     request = context.get("request")
     manager = get_theme_manager(request)
@@ -499,6 +508,7 @@ def theme_preset_selector(
         show_descriptions=show_descriptions,
         layout=layout,
         dropdown_class=dropdown_class,
+        presets=presets,
     )
     return mark_safe(selector.render())
 

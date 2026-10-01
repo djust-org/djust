@@ -5,10 +5,12 @@ Manages theme preset and mode preferences, with session persistence.
 """
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Literal
 
 from django.conf import settings
+from django.core.exceptions import ImproperlyConfigured
 from django.http import HttpRequest
 
 from .._log_utils import sanitize_for_log
@@ -25,6 +27,18 @@ from ._config import (  # noqa: F401 — re-exported for back-compat
     _validate_cookie_namespace,
     get_theme_config,
 )
+
+
+def _parse_preset_names(value: "str | Iterable[str] | None") -> list[str] | None:
+    """Normalise a preset allow-list: ``"legal, medical"`` or ``["legal", "medical"]``
+    become ``["legal", "medical"]``. ``None`` and an empty list or string mean
+    "no limit" (``None``), so ``presets=""`` is not an empty picker."""
+    if value is None:
+        return None
+    items = value.split(",") if isinstance(value, str) else list(value)
+    names = [str(item).strip() for item in items if str(item).strip()]
+    return names or None
+
 
 # NOTE: ``get_preset`` is imported lazily inside ``ThemeManager.get_preset``
 # (the only call site) to avoid the
@@ -527,20 +541,56 @@ class ThemeManager:
         state = self.get_state()
         return get_preset(state.preset)
 
-    def get_available_presets(self) -> list[dict]:
-        """Get list of available preset metadata."""
+    def get_available_presets(self, presets: "str | Iterable[str] | None" = None) -> list[dict]:
+        """Get list of available preset metadata.
+
+        Args:
+            presets: Limit the list to these preset names (a comma-separated
+                string or an iterable), in the order given. ``None`` falls back
+                to ``LIVEVIEW_CONFIG["theme"]["selectable_presets"]``; when that
+                is unset too, every registered preset is listed. An explicit
+                argument wins over the setting. A name that is not a registered
+                preset raises: a typo that silently drops a preset from the
+                picker is harder to notice than an error.
+
+        Raises:
+            ValueError: ``presets`` names an unregistered preset.
+            ImproperlyConfigured: ``selectable_presets`` names an unregistered
+                preset.
+        """
         from ._registry_accessor import get_registry
 
+        registered = get_registry().list_presets()
+        names = _parse_preset_names(presets)
+        if names is None:
+            names = _parse_preset_names(self.config.get("selectable_presets"))
+            error_class: type[Exception] = ImproperlyConfigured
+            source = "LIVEVIEW_CONFIG['theme']['selectable_presets']"
+        else:
+            error_class = ValueError
+            source = "presets"
+        if names is None:
+            selected = list(registered.values())
+        else:
+            unknown = [name for name in names if name not in registered]
+            if unknown:
+                raise error_class(
+                    f"{source} names unknown preset(s) {', '.join(map(repr, unknown))}. "
+                    f"Run `python manage.py djust_theme list-presets` for the registered names."
+                )
+            selected = [registered[name] for name in names]
+
+        active = self.get_state().preset
         return [
             {
                 "name": preset.name,
                 "display_name": preset.display_name,
                 "description": preset.description,
-                "is_active": preset.name == self.get_state().preset,
+                "is_active": preset.name == active,
                 "primary_hsl": preset.dark.primary.to_hsl(),
                 "primary_hsl_light": preset.light.primary.to_hsl(),
             }
-            for preset in get_registry().list_presets().values()
+            for preset in selected
         ]
 
     def get_context(self) -> dict:
