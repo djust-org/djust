@@ -15,6 +15,7 @@ from djust.checks.utils import (
     _is_check_suppressed,
     _iter_template_files,
     _get_template_dirs,
+    _blank_template_comments,
     _strip_verbatim_blocks,
 )
 
@@ -72,7 +73,6 @@ _SELF_CLOSING_TAG_RE = re.compile(r"<[a-zA-Z][^>]*/\s*>")
 _ICON_WRAPPER_RE = re.compile(
     r"<(?P<w>i|span|em)\b[^>]*>(?P<wi>.*?)</(?P=w)>", re.IGNORECASE | re.DOTALL
 )
-_TEMPLATE_COMMENT_RE = re.compile(r"\{#.*?#\}", re.DOTALL)
 
 # Y002 — <img> tag missing an `alt` attribute. `alt=""` is the WCAG-
 # correct way to mark a decorative image, so the regex only flags an
@@ -146,7 +146,7 @@ def _content_is_icon_only(inner: str) -> bool:
     """
     stripped = inner
     # Template comments carry no rendered content.
-    stripped = _TEMPLATE_COMMENT_RE.sub(" ", stripped)
+    stripped = _blank_template_comments(stripped)
     # A {{ ... }} or {% ... %} could render visible text — bail out
     # (treat as "has a name", no flag).
     if "{{" in stripped or "{%" in stripped:
@@ -215,7 +215,7 @@ def check_accessibility(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
         # Docs / marketing pages routinely show literal HTML examples
         # inside {% verbatim %} regions — blank those out so they don't
         # false-positive (mirrors the A070 / #1004 fix).
-        scan_source = _strip_verbatim_blocks(content)
+        scan_source = _blank_template_comments(_strip_verbatim_blocks(content))
 
         # Y001 — interactive element missing an accessible name.
         if not y001_suppressed:

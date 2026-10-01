@@ -230,7 +230,10 @@ def plan_asgi(project: Project) -> Tuple[Optional[FileChange], Step, Optional[st
 
 
 _REQUIREMENT_NAME_RE = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
+_REQUIREMENT_EXTRAS_RE = re.compile(r"^\s*[A-Za-z0-9][A-Za-z0-9._-]*\s*\[([^\]]*)\]")
 _INCLUDE_RE = re.compile(r"^\s*(?:-r|--requirement)[\s=]+(\S+)")
+_ALREADY_DECLARED = "djust, channels and uvicorn already declared in pyproject.toml"
+_NOTHING_FOR_UV = "nothing for uv to add (see the pyproject.toml step)"
 FIRST_LIVEVIEW_URL = "https://docs.djust.org/getting-started/first-liveview/"
 
 
@@ -262,13 +265,111 @@ class PackageAction:
     kind: str  # "uv", "poetry", "requirements", or "none"
     command: List[str]
     runnable: bool
+    # Requirements the command cannot add safely (a marker-declared package that
+    # lacks an extra): the user adds them by hand, ``init_project`` reports them.
+    manual: List[str] = field(default_factory=list)
+
+
+def _extras(requirement: str) -> set:
+    """The extras a PEP 508 requirement string asks for, canonicalised."""
+    found = _REQUIREMENT_EXTRAS_RE.match(requirement)
+    if not found:
+        return set()
+    return {_canonical_name(extra) for extra in found.group(1).split(",") if extra.strip()}
+
+
+def _has_marker(requirement: str) -> bool:
+    """Whether a PEP 508 requirement carries an environment marker (``; python_version...``).
+
+    After a URL reference the marker must be separated by whitespace, because a
+    URL may itself contain ``;``.
+    """
+    body = requirement.split(" #", 1)[0]
+    if "@" in body:
+        return re.search(r"\s;", body) is not None
+    return ";" in body
+
+
+def _declared_dependencies(pyproject: Path) -> Optional[dict]:
+    """``[project].dependencies`` as {canonical name: [(extras, marked)]}, or None when unreadable.
+
+    One tuple per declaration, so duplicate declarations (a marked pair) stay
+    separate instead of their extras being unioned. Names and extras are read,
+    the specifier is deliberately left alone. Every PEP 508 form counts
+    (markers, a ``name @ url`` reference).
+    """
+    try:
+        try:
+            import tomllib
+        except ImportError:  # Python 3.10
+            import tomli as tomllib
+        data = tomllib.loads(_read(pyproject))
+    except (ImportError, OSError, ValueError):
+        return None
+    declared: dict = {}
+    for entry in data.get("project", {}).get("dependencies", []):
+        match = _REQUIREMENT_NAME_RE.match(entry) if isinstance(entry, str) else None
+        if match:
+            declared.setdefault(_canonical_name(match.group(1)), []).append(
+                (_extras(entry), _has_marker(entry))
+            )
+    return declared
+
+
+def _plan_uv_requirements(pyproject: Path) -> Tuple[List[str], List[str]]:
+    """``(needed, manual)``: what ``uv add`` is given, and what the user adds by hand.
+
+    ``uv add`` rewrites the specifier of a package it is given, so one the
+    project already declares is left out (#3296), as ``plan_requirements`` does
+    for requirements.txt. A declared package that lacks an extra the scaffold
+    needs (``uvicorn`` without ``[standard]``, which carries the WebSocket
+    library) is passed as ``name[extras]`` with NO specifier: uv keeps the
+    existing specifier and adds the extra, so the user's bounds survive.
+
+    The extra has to sit on an unmarked declaration to count: a marked one
+    (``uvicorn[standard]>=0.30; python_version>'3.9'``) installs it only where
+    the marker holds, and a marked pair must not add up to "satisfied". When it
+    is missing and any declaration of the package carries a marker, ``uv add``
+    would append a second, unconditional line (#3312), so the requirement goes
+    to ``manual`` instead.
+    """
+    declared = _declared_dependencies(pyproject) if pyproject.exists() else None
+    if declared is None:
+        return requirements(), []
+    needed, manual = [], []
+    for req in requirements():
+        name = _REQUIREMENT_NAME_RE.match(req).group(1)
+        entries = declared.get(_canonical_name(name))
+        if entries is None:
+            needed.append(req)
+            continue
+        wanted = _extras(req)
+        if not wanted:
+            continue  # declared, and no extra to check: a marker on it is the user's business
+        if any(wanted <= extras for extras, marked in entries if not marked):
+            continue
+        if any(marked for _, marked in entries):
+            manual.append("%s[%s]" % (name, ",".join(sorted(wanted))))
+            continue
+        have = set().union(*(extras for extras, _ in entries))
+        needed.append("%s[%s]" % (name, ",".join(sorted(wanted | have))))
+    return needed, manual
+
+
+def _undeclared_requirements(pyproject: Path) -> List[str]:
+    """The requirements ``uv add`` must be given (see ``_plan_uv_requirements``)."""
+    return _plan_uv_requirements(pyproject)[0]
 
 
 def choose_package_action(root: Path, python: Optional[Path], uv_available: bool) -> PackageAction:
     reqs = requirements()
     pyproject = root / "pyproject.toml"
     if (root / "uv.lock").exists() or (pyproject.exists() and "[tool.uv]" in pyproject.read_text()):
-        return PackageAction("uv", ["uv", "add", *reqs], runnable=uv_available)
+        missing, manual = _plan_uv_requirements(pyproject)
+        # An empty command means there is nothing for uv to add.
+        return PackageAction(
+            "uv", ["uv", "add", *missing] if missing else [], runnable=uv_available, manual=manual
+        )
     if (root / "poetry.lock").exists():
         return PackageAction("poetry", ["poetry", "add", *reqs], runnable=False)
     if (root / "requirements.txt").exists():
@@ -286,23 +387,25 @@ def _canonical_name(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
-def _requirement_lines(path: Path, seen: Optional[set] = None) -> List[str]:
-    """Non-comment lines of a requirements file and the files it includes."""
+def _requirement_entries(path: Path, seen: Optional[set] = None) -> List[Tuple[str, Path]]:
+    """Non-comment lines of a requirements file and the files it includes, each
+    with the file it was read from."""
     seen = set() if seen is None else seen
-    if path in seen or not path.is_file():
+    key = os.path.realpath(path)  # `a/../b.txt` and `b.txt` are one file
+    if key in seen or not path.is_file():
         return []
-    seen.add(path)
-    lines: List[str] = []
+    seen.add(key)
+    entries: List[Tuple[str, Path]] = []
     for line in _read(path).splitlines():
         line = line.split(" #", 1)[0].strip()
         if not line or line.startswith("#"):
             continue
         include = _INCLUDE_RE.match(line)
         if include:
-            lines += _requirement_lines(path.parent / include.group(1), seen)
+            entries += _requirement_entries(path.parent / include.group(1), seen)
         else:
-            lines.append(line)
-    return lines
+            entries.append((line, path))
+    return entries
 
 
 def _mentions(line: str, name: str) -> bool:
@@ -318,20 +421,187 @@ def _mentions(line: str, name: str) -> bool:
     return False
 
 
+def _add_extras_to_line(line: str, name: str, extras: set) -> Optional[str]:
+    """``line`` with ``extras`` added after the package name, or None when the
+    line is not a plain ``name[extras] spec`` requirement for ``name``."""
+    found = _REQUIREMENT_NAME_RE.match(line)
+    if not found or _canonical_name(found.group(1)) != _canonical_name(name):
+        return None
+    if line[found.end() :].lstrip().startswith("@"):
+        return None  # a direct URL reference: leave it alone
+    have = _extras(line)
+    if extras <= have:
+        return line
+    rest = line[found.end() :]
+    existing = _REQUIREMENT_EXTRAS_RE.match(line)
+    if existing:
+        rest = line[existing.end() :]
+    return "%s[%s]%s" % (line[: found.end()], ",".join(sorted(extras | have)), rest)
+
+
+_HASH_OPTION_RE = re.compile(r"(?:^|\s)--(?:hash[=\s]|require-hashes(?:\s|$))")
+
+
+def _uses_hashes(path: Path, seen: Optional[set] = None) -> bool:
+    """Whether ``path`` or a file it includes carries a ``--hash=`` option.
+
+    pip and uv switch to ``--require-hashes`` as soon as ONE requirement has a
+    hash, so every requirement in the tree then needs one.
+    """
+    seen = set() if seen is None else seen
+    key = os.path.realpath(path)
+    if key in seen or not path.is_file():
+        return False
+    seen.add(key)
+    for line in _read(path).splitlines():
+        line = line.split(" #", 1)[0].strip()
+        if not line or line.startswith("#"):
+            continue
+        if _HASH_OPTION_RE.search(line):
+            return True
+        include = _INCLUDE_RE.match(line)
+        if include and _uses_hashes(path.parent / include.group(1), seen):
+            return True
+    return False
+
+
+@dataclass
+class _RequirementEdits:
+    missing: List[str] = field(default_factory=list)  # requirements to append
+    rewrites: dict = field(default_factory=dict)  # name -> extras to add on an existing line
+    # Requirements djust init cannot fix in the file it edits: the extra exists
+    # only on marked lines (a marker limits where the extra applies, so adding
+    # it there, or counting it as present, would both be guesses).
+    by_hand: List[str] = field(default_factory=list)
+    # name -> included files that hold the only line lacking the extra; those
+    # files are the user's, so they are reported, never edited.
+    included: dict = field(default_factory=dict)
+
+
+def _requirement_edits(path: Path) -> _RequirementEdits:
+    """What ``path`` needs: requirements to append, extras still needed on a line
+    that already names the package, and what has to be done by hand."""
+    entries = _requirement_entries(path)
+    edits = _RequirementEdits()
+    for req in requirements():
+        name = _REQUIREMENT_NAME_RE.match(req).group(1)
+        mentioning = [(line, origin) for line, origin in entries if _mentions(line, name)]
+        if not mentioning:
+            edits.missing.append(req)
+            continue
+        wanted = _extras(req)
+        if not wanted:
+            continue
+        # Only an unmarked line counts: ``uvicorn[standard]; python_version>'3.9'``
+        # next to ``uvicorn; python_version<='3.9'`` is not "satisfied" (#3312).
+        unmarked = [(line, origin) for line, origin in mentioning if not _has_marker(line)]
+        if any(
+            wanted <= _extras(line) or _add_extras_to_line(line, name, set()) is None
+            for line, _ in unmarked
+        ):
+            # Has the extra, or is a form with no specifier to extend (an
+            # editable path, a URL reference): leave it alone.
+            continue
+        if not unmarked:
+            edits.by_hand.append(req)
+        elif any(os.path.realpath(origin) == os.path.realpath(path) for _, origin in unmarked):
+            edits.rewrites[name] = wanted
+        else:
+            edits.included[name] = sorted({str(origin) for _, origin in unmarked})
+    return edits
+
+
+def hash_locked_requirements(root: Path) -> Optional[List[str]]:
+    """What a hash-locked ``requirements.txt`` needs, or None.
+
+    A hash-locked file is never edited (a changed line no longer matches its
+    ``--hash``, an appended one has none, and ``--require-hashes`` refuses the
+    install either way), so ``djust init`` reports these instead. None when the
+    file is not hash-locked or already has everything.
+    """
+    path = root / "requirements.txt"
+    if not _uses_hashes(path):
+        return None
+    edits = _requirement_edits(path)
+    touched = {*edits.rewrites, *edits.included, *(_requirement_name(r) for r in edits.by_hand)}
+    needed = [r for r in requirements() if r in edits.missing or _requirement_name(r) in touched]
+    return needed or None
+
+
+def requirements_by_hand(root: Path) -> List[str]:
+    """Requirements ``plan_requirements`` cannot fix, as the lines to add by hand.
+
+    One entry per requirement whose extra is missing on every unmarked line and
+    which is either only declared on marked lines, or declared in an included
+    file (which djust init does not edit). Empty for a hash-locked file, which
+    ``hash_locked_requirements`` reports instead.
+    """
+    path = root / "requirements.txt"
+    if _uses_hashes(path):
+        return []
+    edits = _requirement_edits(path)
+    lines = []
+    for req in requirements():
+        name = _requirement_name(req)
+        if req in edits.by_hand:
+            lines.append(
+                "%s: its extra is only on lines with an environment marker. "
+                "Add `%s` on an unmarked line." % (name, _extras_requirement(req))
+            )
+        elif name in edits.included:
+            lines.append(
+                "%s: its `[%s]` extra is missing in %s, which djust init does not edit. "
+                "Add `%s` there."
+                % (
+                    name,
+                    ",".join(sorted(_extras(req))),
+                    ", ".join(edits.included[name]),
+                    _extras_requirement(req),
+                )
+            )
+    return lines
+
+
+def _extras_requirement(req: str) -> str:
+    """``name[extras]`` for a scaffold requirement, with no specifier."""
+    return "%s[%s]" % (_requirement_name(req), ",".join(sorted(_extras(req))))
+
+
+def _requirement_name(req: str) -> str:
+    return _REQUIREMENT_NAME_RE.match(req).group(1)
+
+
 def plan_requirements(root: Path) -> Optional[FileChange]:
     path = root / "requirements.txt"
+    if _uses_hashes(path):
+        return None  # see hash_locked_requirements: reported, never edited
     old = _read(path)
-    lines = _requirement_lines(path)
-    missing = [
-        req
-        for req in requirements()
-        if not any(_mentions(line, _REQUIREMENT_NAME_RE.match(req).group(1)) for line in lines)
-    ]
-    if not missing:
+    edits = _requirement_edits(path)
+    missing, rewrites = edits.missing, dict(edits.rewrites)
+    if not missing and not rewrites:
         return None
     newline = "\r\n" if "\r\n" in old else "\n"
-    prefix = old if not old or old.endswith("\n") else old + newline
-    return FileChange(path, old, prefix + "".join(req + newline for req in missing))
+    out = []
+    for raw in old.splitlines(keepends=True):
+        body = raw.rstrip("\r\n")
+        tail = raw[len(body) :]
+        for name, extras in rewrites.items():
+            if _has_marker(body):
+                break  # a marked line is never the one that gets the extra
+            changed = _add_extras_to_line(body, name, extras)
+            if changed is not None and changed != body:
+                body = changed
+                rewrites = {k: v for k, v in rewrites.items() if k != name}
+                break
+        out.append(body + tail)
+    new = "".join(out)
+    if missing:
+        new = (new if not new or new.endswith("\n") else new + newline) + "".join(
+            req + newline for req in missing
+        )
+    if new == old:
+        return None
+    return FileChange(path, old, new)
 
 
 def dirty_files(root: Path, paths: List[Path]) -> List[str]:
@@ -420,9 +690,55 @@ def init_project(
     result.steps.append(step)
     if snippet:
         result.notes.append("%s is customized. Merge in:\n\n%s" % (step.name, snippet))
-    requirements_change = (
-        plan_requirements(root) if install and action.kind == "requirements" else None
-    )
+    requirements_change = None
+    if install and action.kind == "requirements":
+        needed = hash_locked_requirements(root)
+        if needed:
+            result.steps.append(
+                Step(
+                    "requirements.txt",
+                    ATTENTION,
+                    "hash-locked (--hash): not edited, add %d requirement(s) yourself"
+                    % len(needed),
+                )
+            )
+            result.notes.append(
+                "requirements.txt pins hashes, so djust init left it alone (a changed or "
+                "appended line breaks --require-hashes). Add these to your source "
+                "requirements and recompile with hashes (e.g. pip-compile --generate-hashes "
+                "or uv pip compile --generate-hashes):\n\n%s" % "\n".join(needed)
+            )
+        else:
+            requirements_change = plan_requirements(root)
+            by_hand = requirements_by_hand(root)
+            if by_hand:
+                result.steps.append(
+                    Step(
+                        "requirements.txt",
+                        ATTENTION,
+                        "add %d extra(s) yourself: not safe to edit" % len(by_hand),
+                    )
+                )
+                result.notes.append(
+                    "djust init did not touch these requirements (an extra that only a "
+                    "marked line or an included file carries is not edited or counted):\n\n%s"
+                    % "\n".join("- %s" % line for line in by_hand)
+                )
+    if install and action.manual:
+        result.steps.append(
+            Step(
+                "pyproject.toml",
+                ATTENTION,
+                "add %d extra(s) yourself: declared with an environment marker"
+                % len(action.manual),
+            )
+        )
+        result.notes.append(
+            "These packages are declared in pyproject.toml with an environment marker, and "
+            "`uv add` would append a second, unconditional line instead of keeping your "
+            "specifier. Add the extra by hand, on an unmarked dependency line:\n\n%s"
+            % "\n".join("- %s" % req for req in action.manual)
+        )
     result.changes = [c for c in (settings_change, asgi_change, requirements_change) if c]
 
     if action.kind == "uv":
@@ -432,14 +748,20 @@ def init_project(
         result.run_command = "%s -m uvicorn %s:application --reload" % (runner, project.asgi_module)
 
     command = shlex.join(action.command)
+    nothing_to_add = action.kind == "uv" and not action.command
+    # Not "already declared" when an extra is still for the user to add by hand.
+    declared_detail = _NOTHING_FOR_UV if action.manual else _ALREADY_DECLARED
     if dry_run:
         result.steps = [
             Step(step.name, PLANNED, step.planned or step.detail) if step.status == DONE else step
             for step in result.steps
         ]
-        result.steps.append(
-            Step("packages", SKIPPED, "would run: %s" % command if install else "--no-install")
-        )
+        if not install:
+            result.steps.append(Step("packages", SKIPPED, "--no-install"))
+        elif nothing_to_add:
+            result.steps.append(Step("packages", UNCHANGED, declared_detail))
+        else:
+            result.steps.append(Step("packages", SKIPPED, "would run: %s" % command))
         return result
 
     if result.changes and not force:
@@ -456,17 +778,23 @@ def init_project(
         result.steps.append(Step("check", SKIPPED, "install packages, then run manage.py check"))
         return result
     if not action.runnable:
-        result.steps.append(Step("packages", SKIPPED, "run: %s" % command))
+        if nothing_to_add:
+            result.steps.append(Step("packages", UNCHANGED, declared_detail))
+        else:
+            result.steps.append(Step("packages", SKIPPED, "run: %s" % command))
         result.steps.append(Step("check", SKIPPED, "run manage.py check after installing"))
         return result
 
-    installed = _run(action.command, root)
-    if installed.returncode != 0:
-        result.steps.append(Step("packages", ATTENTION, "failed: %s" % command))
-        result.notes.append("%s\n%s" % (command, (installed.stdout + installed.stderr).strip()))
-        result.steps.append(Step("check", SKIPPED, "packages did not install"))
-        return result
-    result.steps.append(Step("packages", DONE, command))
+    if nothing_to_add:
+        result.steps.append(Step("packages", UNCHANGED, declared_detail))
+    else:
+        installed = _run(action.command, root)
+        if installed.returncode != 0:
+            result.steps.append(Step("packages", ATTENTION, "failed: %s" % command))
+            result.notes.append("%s\n%s" % (command, (installed.stdout + installed.stderr).strip()))
+            result.steps.append(Step("check", SKIPPED, "packages did not install"))
+            return result
+        result.steps.append(Step("packages", DONE, command))
 
     if action.kind == "uv":
         check_cmd = ["uv", "run", "python", "manage.py", "check"]

@@ -8,7 +8,10 @@
 //   dj-upload="name"         — file input bound to upload slot
 //   dj-upload-drop="name"    — drop zone for drag-and-drop
 //   dj-upload-preview="name" — container for image previews
-//   dj-upload-progress="name"— container for progress bars
+//   dj-upload-progress="name"— container for progress bars. If it already holds
+//                              a progress bar (e.g. {% theme_progress %}), that
+//                              bar is bound to the running upload; if it is
+//                              empty the client renders a <progress> per file.
 
 (function() {
 
@@ -315,6 +318,8 @@
             });
         }
 
+        attachProgressUI(uploadName, ref, file);
+
         return new Promise((resolve, reject) => {
             activeUploads.set(ref, {
                 file, config, uploadName, refBytes, resolve, reject,
@@ -525,6 +530,155 @@
         }
     }
 
+    // ========================================================================
+    // Progress UI (#3289)
+    // ========================================================================
+    //
+    // The upload ref is minted client-side when a file is picked, so a server
+    // template can't render `data-upload-ref` ahead of time. Instead the
+    // client attaches the ref to each `[dj-upload-progress="<slot>"]`
+    // container when the upload starts:
+    //   - bind mode: the container already holds a progress bar (a
+    //     `[role=progressbar]`, `.upload-progress-bar` or <progress>, e.g.
+    //     rendered by {% theme_progress %}); the container itself becomes the
+    //     ref host and that bar is driven by the upload. One bar per slot, so
+    //     files uploaded one after another reuse it.
+    //   - render mode: the container is empty, so a per-file item (name,
+    //     <progress>, percent text) is appended. Items carry
+    //     `data-upload-generated` and are cleared at the next file selection.
+
+    const PROGRESS_BAR_SELECTOR = '.upload-progress-bar, [role="progressbar"], progress';
+    const INDETERMINATE_SUFFIX = 'progress-indeterminate';
+
+    // Slot names and refs reach a selector from the DOM / the wire; escape them
+    // so a quote or backslash can't break (or widen) the attribute selector.
+    function cssEscape(value) {
+        const str = String(value);
+        if (typeof CSS !== 'undefined' && CSS && typeof CSS.escape === 'function') {
+            return CSS.escape(str);
+        }
+        return str.replace(/["\\]/g, '\\$&');
+    }
+
+    function hasProgressBar(container) {
+        // A bare <progress dj-upload-progress> (or a bar element carrying the
+        // directive itself) is the bar.
+        if (container.matches(PROGRESS_BAR_SELECTOR)) return true;
+        const bars = container.querySelectorAll(PROGRESS_BAR_SELECTOR);
+        for (const bar of bars) {
+            if (!bar.closest('[data-upload-generated]')) return true;
+        }
+        return false;
+    }
+
+    function progressBars(host) {
+        const bars = Array.from(host.querySelectorAll(PROGRESS_BAR_SELECTOR));
+        if (host.matches(PROGRESS_BAR_SELECTOR)) bars.unshift(host);
+        return bars;
+    }
+
+    /**
+     * A themed indeterminate track has no fill and animates via a
+     * `*progress-indeterminate` class. Once a real percentage arrives, drop the
+     * class and add the fill (`<prefix>progress-bar`) the determinate markup has.
+     */
+    function leaveIndeterminate(track) {
+        const cls = Array.from(track.classList).find(c => c.endsWith(INDETERMINATE_SUFFIX));
+        if (!cls) return;
+        track.classList.remove(cls);
+        if (!track.firstElementChild) {
+            const fill = document.createElement('div');
+            fill.className = cls.slice(0, -INDETERMINATE_SUFFIX.length) + 'progress-bar';
+            track.appendChild(fill);
+        }
+    }
+
+    function setProgressValue(host, progress, initial) {
+        progressBars(host).forEach(el => {
+            if (el.tagName === 'PROGRESS') {
+                el.value = progress;
+                return;
+            }
+            const isTrack = el.getAttribute('role') === 'progressbar';
+            const isBar = el.classList.contains('upload-progress-bar');
+            if (isTrack && !isBar) {
+                const indeterminate = Array.from(el.classList)
+                    .some(c => c.endsWith(INDETERMINATE_SUFFIX));
+                // The initial 0% is not a measurement: keep an indeterminate
+                // bar indeterminate until the first real percentage.
+                if (indeterminate && initial) return;
+                leaveIndeterminate(el);
+            }
+            if (isBar) {
+                el.style.width = progress + '%';
+            } else if (isTrack && el.firstElementChild
+                       && !el.querySelector('.upload-progress-bar')) {
+                // Themed markup: the track carries role=progressbar, its
+                // first child is the fill.
+                el.firstElementChild.style.width = progress + '%';
+            }
+            if (isTrack || isBar) {
+                el.setAttribute('aria-valuenow', progress);
+            }
+        });
+        host.querySelectorAll('.upload-progress-text').forEach(el => {
+            el.textContent = progress + '%';
+        });
+    }
+
+    /**
+     * Idempotently give every `[dj-upload-progress="<uploadName>"]` container a
+     * host for `ref`. Safe to call again mid-upload: a DOM morph can strip the
+     * `data-upload-ref` marker (or the generated item), so progress messages
+     * re-attach before updating.
+     */
+    function attachProgressUI(uploadName, ref, file) {
+        const containers = document.querySelectorAll(
+            `[dj-upload-progress="${cssEscape(uploadName)}"]`);
+        const refSel = `[data-upload-ref="${cssEscape(ref)}"]`;
+        containers.forEach(container => {
+            if (container.getAttribute('data-upload-ref') === ref
+                || container.querySelector(refSel)) {
+                return;
+            }
+            if (hasProgressBar(container)) {
+                container.setAttribute('data-upload-ref', ref);
+                setProgressValue(container, 0, true);
+                return;
+            }
+            const item = document.createElement('div');
+            item.className = 'upload-progress-item';
+            item.setAttribute('data-upload-ref', ref);
+            item.setAttribute('data-upload-generated', '');
+
+            const name = document.createElement('span');
+            name.className = 'upload-progress-name';
+            name.textContent = file && file.name ? file.name : '';
+            item.appendChild(name);
+
+            const bar = document.createElement('progress');
+            bar.className = 'upload-progress-bar';
+            bar.max = 100;
+            bar.value = 0;
+            if (file && file.name) bar.setAttribute('aria-label', file.name);
+            item.appendChild(bar);
+
+            const text = document.createElement('span');
+            text.className = 'upload-progress-text';
+            text.textContent = '0%';
+            item.appendChild(text);
+
+            container.appendChild(item);
+        });
+    }
+
+    /** Drop the per-file items rendered for a previous selection. */
+    function clearProgressUI(uploadName) {
+        document.querySelectorAll(
+            `[dj-upload-progress="${cssEscape(uploadName)}"] [data-upload-generated]`)
+            .forEach(item => item.remove());
+    }
+
     /**
      * Handle upload progress message from server.
      */
@@ -532,15 +686,12 @@
         const { ref, progress, status } = data;
         const upload = activeUploads.get(ref);
 
-        // Update progress bars in DOM
-        document.querySelectorAll(`[data-upload-ref="${ref}"] .upload-progress-bar`).forEach(bar => {
-            bar.style.width = progress + '%';
-            bar.setAttribute('aria-valuenow', progress);
-        });
+        if (upload) attachProgressUI(upload.uploadName, ref, upload.file);
 
-        // Update progress text
-        document.querySelectorAll(`[data-upload-ref="${ref}"] .upload-progress-text`).forEach(el => {
-            el.textContent = progress + '%';
+        // Update progress bars and text in DOM
+        document.querySelectorAll(`[data-upload-ref="${cssEscape(ref)}"]`).forEach(host => {
+            setProgressValue(host, progress);
+            host.setAttribute('data-upload-status', status);
         });
 
         // Dispatch custom event for app-level handling
@@ -589,7 +740,7 @@
      * Show previews in a dj-upload-preview container.
      */
     async function showPreviews(uploadName, files) {
-        const containers = document.querySelectorAll(`[dj-upload-preview="${uploadName}"]`);
+        const containers = document.querySelectorAll(`[dj-upload-preview="${cssEscape(uploadName)}"]`);
         if (containers.length === 0) return;
 
         for (const container of containers) {
@@ -644,6 +795,7 @@
         const config = uploadConfigs[uploadName];
 
         // Show previews
+        clearProgressUI(uploadName);
         await showPreviews(uploadName, files);
 
         // Auto-upload if configured (default)
@@ -761,6 +913,7 @@
 
                 // eslint-disable-next-line security/detect-object-injection
                 const config = uploadConfigs[uploadName];
+                clearProgressUI(uploadName);
                 await showPreviews(uploadName, files);
 
                 if (!isWSConnected()) {
@@ -810,6 +963,7 @@
         const config = uploadConfigs[uploadName];
         const files = Array.from(fileList);
 
+        clearProgressUI(uploadName);
         await showPreviews(uploadName, files);
 
         if (!isWSConnected()) {

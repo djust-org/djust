@@ -764,7 +764,7 @@ class TestExistingComponentsStillWork(ComponentTestCase):
         self.assert_contract(html, "card")
 
     def test_alert_renders(self):
-        html = self.render_component("alert", message="M")
+        html = self.render_component("alert", message="M", variant="destructive")
         self.assert_contract(html, "alert")
 
     def test_badge_renders(self):

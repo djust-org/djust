@@ -62,6 +62,7 @@ def check_theme_compat(theme_dir: Path) -> list[CompatIssue]:
         issues.extend(_check_required_elements(component_name, source, contract))
         issues.extend(_check_required_context(component_name, source, contract))
         issues.extend(_check_slots(component_name, source, contract))
+        issues.extend(_check_attr_passthrough(component_name, source))
 
     return issues
 
@@ -166,3 +167,26 @@ def _check_slots(
             )
 
     return issues
+
+
+# Variables a component template must render for the matching tag to work.
+# ``{% theme_button dj_click=... href=... %}`` hands them over as ``extra_attrs``,
+# ``href`` and ``tag``; an override that ignores them still renders, but drops
+# the bindings and the link.
+_PASSTHROUGH_VARS: dict[str, tuple[str, ...]] = {"button": ("extra_attrs", "href", "tag")}
+
+
+def _check_attr_passthrough(component_name: str, source: str) -> list[CompatIssue]:
+    """Warn when an override ignores the attributes its tag passes through."""
+    return [
+        CompatIssue(
+            component=component_name,
+            severity="warning",
+            message=(
+                f"{component_name}.html: does not render '{var}', so the matching "
+                f"theme_{component_name} tag's extra attributes / href are dropped"
+            ),
+        )
+        for var in _PASSTHROUGH_VARS.get(component_name, ())
+        if var not in source
+    ]

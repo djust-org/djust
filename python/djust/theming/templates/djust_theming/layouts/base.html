@@ -4,12 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block page_title %}{% endblock %}</title>
-  {% theme_head %}
+  {% block client_config %}{% endblock %}{% theme_head %}
   <link rel="stylesheet" href="{% static 'djust_theming/css/layouts.css' %}">
   {% block head_extra %}{% endblock %}
   {% block extra_css %}{% endblock %}
 </head>
-<body class="layout-base {% block body_class %}{% endblock %}">
+<body class="layout-base {% block body_class %}{% endblock %}"{% block body_attrs %}{% endblock %}>
   {% block content %}{% endblock %}
   {% block footer %}{% endblock %}
   {% block extra_js %}{% endblock %}

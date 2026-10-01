@@ -571,7 +571,10 @@ def test_target_lost_between_events_is_denied(sql, change):
         user.groups.remove(mine)
     sql.clear()
     response = _edit(ScopedEdit, user, mine.pk, session, name="Late")
-    assert (response.status_code, json.loads(response.content)) == (403, {"error": DENIED})
+    assert (response.status_code, json.loads(response.content)) == (
+        403,
+        {"error": DENIED, "code": "permission_denied"},
+    )
     assert _writes(sql) == []
     assert not any(event[0].startswith("form_") for event in EVENTS)
 

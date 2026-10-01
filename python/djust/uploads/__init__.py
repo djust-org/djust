@@ -281,6 +281,13 @@ FRAME_CANCEL = 0x03
 # Header: 1 byte type + 16 bytes UUID
 FRAME_HEADER_SIZE = 17
 
+# A chunk frame is the header, a 4-byte big-endian chunk index, then the payload.
+UPLOAD_CHUNK_FRAME_OVERHEAD = FRAME_HEADER_SIZE + 4
+
+# 63 KiB payload + 21 B header = 64 533 B < the default ``max_message_size``
+# (65 536). Must match ``DEFAULT_CHUNK_SIZE`` in ``static/djust/src/15-uploads.js``.
+DEFAULT_CHUNK_SIZE = 63 * 1024
+
 
 def parse_upload_frame(data: bytes) -> Optional[Dict[str, Any]]:
     """Parse a binary upload frame from the WebSocket."""
@@ -580,6 +587,35 @@ class BufferedUploadWriter(UploadWriter):
         return None
 
 
+def _clamp_chunk_size(name: str, chunk_size: int) -> int:
+    """Return ``chunk_size`` limited so a chunk frame fits ``max_message_size``.
+
+    The client sends each chunk as one binary frame of
+    ``UPLOAD_CHUNK_FRAME_OVERHEAD + len(chunk)`` bytes, and
+    ``LiveViewConsumer.receive`` rejects any frame over ``max_message_size``
+    (0 means no limit). An oversized slot would fail every multi-chunk upload
+    (#3287), so clamp it and say so.
+    """
+    from djust.config import config as djust_config
+
+    max_message_size = djust_config.get("max_message_size", 65536)
+    if not max_message_size:
+        return chunk_size
+    limit = max(1, max_message_size - UPLOAD_CHUNK_FRAME_OVERHEAD)
+    if chunk_size > limit:
+        logger.warning(
+            "Upload slot '%s': chunk_size %d + %d B frame header exceeds max_message_size %d; "
+            "using chunk_size %d",
+            name,
+            chunk_size,
+            UPLOAD_CHUNK_FRAME_OVERHEAD,
+            max_message_size,
+            limit,
+        )
+        return limit
+    return chunk_size
+
+
 @dataclass
 class UploadConfig:
     """Configuration for an upload slot."""
@@ -588,7 +624,7 @@ class UploadConfig:
     accept: str = ""  # Comma-separated extensions: ".jpg,.png"
     max_entries: int = 1
     max_file_size: int = 10_000_000  # 10MB default
-    chunk_size: int = 64 * 1024  # 64KB chunks
+    chunk_size: int = DEFAULT_CHUNK_SIZE  # 63KB: payload + header fits max_message_size
     auto_upload: bool = True  # Start upload immediately on file selection
     accepted_extensions: Set[str] = field(default_factory=set)
     accepted_mimes: Set[str] = field(default_factory=set)
@@ -816,13 +852,14 @@ class UploadManager:
         accept: str = "",
         max_entries: int = 1,
         max_file_size: int = 10_000_000,
-        chunk_size: int = 64 * 1024,
+        chunk_size: int = DEFAULT_CHUNK_SIZE,
         auto_upload: bool = True,
         writer: Optional[Type[UploadWriter]] = None,
         resumable: bool = False,
         allow_active_content: bool = False,
     ) -> UploadConfig:
         """Configure an upload slot."""
+        chunk_size = _clamp_chunk_size(name, chunk_size)
         config = UploadConfig(
             name=name,
             accept=accept,
@@ -1441,7 +1478,7 @@ class UploadMixin:
         accept: str = "",
         max_entries: int = 1,
         max_file_size: int = 10_000_000,
-        chunk_size: int = 64 * 1024,
+        chunk_size: int = DEFAULT_CHUNK_SIZE,
         auto_upload: bool = True,
         writer: Optional[Type[UploadWriter]] = None,
         resumable: bool = False,
@@ -1455,7 +1492,8 @@ class UploadMixin:
             accept: Comma-separated accepted file extensions (e.g., ".jpg,.png")
             max_entries: Maximum number of files for this slot
             max_file_size: Maximum file size in bytes (default 10MB)
-            chunk_size: Chunk size for transfer (default 64KB)
+            chunk_size: Chunk size for transfer (default 63KB). Clamped so a
+                chunk frame fits the ``max_message_size`` setting.
             auto_upload: Start upload immediately on selection
             allow_active_content: Permit browser-executable "active content"
                 (SVG, HTML, XHTML, JS). **Defaults to False** — such files

@@ -3,9 +3,9 @@
 {% block body_class %}layout-centered{% endblock %}
 
 {% block content %}
-<main class="layout-centered__main">
+{% block centered_main %}<main class="layout-centered__main">
   <div class="layout-centered__container">
     {% block centered_content %}{% endblock %}
   </div>
-</main>
+</main>{% endblock %}
 {% endblock %}

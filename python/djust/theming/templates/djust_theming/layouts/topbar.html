@@ -6,7 +6,7 @@
 <header class="layout-topbar__header" role="banner">
   {% block topbar %}{% endblock %}
 </header>
-<main class="layout-topbar__main">
+{% block topbar_main %}<main class="layout-topbar__main">
   {% block topbar_content %}{% endblock %}
-</main>
+</main>{% endblock %}
 {% endblock %}

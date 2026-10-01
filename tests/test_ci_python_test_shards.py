@@ -242,6 +242,25 @@ def test_durations_file_is_committed_and_the_invocation_points_at_it() -> None:
     assert not foreign, foreign[:5]
 
 
+def test_prerelease_interpreters_cannot_block_the_merge_gate() -> None:
+    """A release-candidate interpreter in the matrix must be allowed to fail (#3255).
+
+    ``needs.python-tests.result`` is the matrix-wide result, so one red 3.15
+    cell would fail the test-summary gate unless the job's
+    ``continue-on-error`` names it. Once 3.15.0 is final, drop it from both.
+    """
+    job = _python_tests()
+    allow_failure = str(job.get("continue-on-error", "false"))
+    for version in _matrix_python_versions():
+        if version == "3.15":
+            assert "matrix.python-version == '3.15'" in allow_failure, (
+                "3.15 is a release candidate: add it to python-tests' job-level "
+                f"continue-on-error (got {allow_failure!r})"
+            )
+        else:
+            assert version not in allow_failure, (version, allow_failure)
+
+
 @pytest.mark.parametrize("job", ["test-summary"])
 def test_aggregate_gate_still_ands_the_matrix_wide_python_result(job: str) -> None:
     """`needs.python-tests.result` is the matrix-wide result (success only if

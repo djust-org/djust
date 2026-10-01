@@ -5,6 +5,8 @@ Manages theme preset and mode preferences, with session persistence.
 """
 
 import re
+import logging
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -24,7 +26,51 @@ from ._config import (  # noqa: F401 — re-exported for back-compat
     DEFAULT_CONFIG,
     _validate_cookie_namespace,
     get_theme_config,
+    parse_preset_names,
 )
+
+
+_log = logging.getLogger(__name__)
+
+# ``selectable_presets`` values already warned about, so a bad setting logs once
+# per process rather than once per request.
+_WARNED_SELECTABLE: set[str] = set()
+
+
+def _configured_preset_names(raw: object, registered: Any) -> list[str] | None:
+    """The names ``LIVEVIEW_CONFIG["theme"]["selectable_presets"]`` limits the
+    picker to, or ``None`` for no limit.
+
+    A bad setting must not take the site down: it is read on every request by
+    the context processor, and a preset can disappear in a later release. So an
+    unusable value logs one warning (``djust_theming.W003`` reports it at
+    ``manage.py check``) and unknown names are dropped; when nothing usable is
+    left every preset is listed.
+    """
+    try:
+        names = parse_preset_names(raw)
+    except ValueError as exc:
+        _warn_selectable_once(repr(raw), "ignoring it: %s", sanitize_for_log(str(exc)))
+        return None
+    if not names:
+        return None
+    unknown = [name for name in names if name not in registered]
+    if unknown:
+        _warn_selectable_once(
+            repr(raw),
+            "ignoring unknown preset name(s) %s",
+            sanitize_for_log(", ".join(map(repr, unknown))),
+        )
+        names = [name for name in names if name in registered]
+    return names or None
+
+
+def _warn_selectable_once(key: str, message: str, *args: object) -> None:
+    if key in _WARNED_SELECTABLE:
+        return
+    _WARNED_SELECTABLE.add(key)
+    _log.warning("LIVEVIEW_CONFIG['theme']['selectable_presets'] is invalid; " + message, *args)
+
 
 # NOTE: ``get_preset`` is imported lazily inside ``ThemeManager.get_preset``
 # (the only call site) to avoid the
@@ -527,20 +573,50 @@ class ThemeManager:
         state = self.get_state()
         return get_preset(state.preset)
 
-    def get_available_presets(self) -> list[dict]:
-        """Get list of available preset metadata."""
+    def get_available_presets(self, presets: "str | Iterable[str] | None" = None) -> list[dict]:
+        """Get list of available preset metadata.
+
+        Args:
+            presets: Limit the list to these preset names (a comma-separated
+                string or an iterable), in the order given. ``None`` falls back
+                to ``LIVEVIEW_CONFIG["theme"]["selectable_presets"]``; when that
+                is unset too, every registered preset is listed. An explicit
+                argument wins over the setting, and an empty one means "no
+                limit". A name that is not a registered preset raises: a typo
+                that silently drops a preset from the picker is harder to
+                notice than an error.
+
+        Raises:
+            ValueError: ``presets`` is not a string or list of names, or names
+                an unregistered preset. The SETTING never raises: see
+                :func:`_configured_preset_names`.
+        """
         from ._registry_accessor import get_registry
 
+        registered = get_registry().list_presets()
+        if presets is not None:
+            names = parse_preset_names(presets) or None
+            unknown = [name for name in names or () if name not in registered]
+            if unknown:
+                raise ValueError(
+                    f"presets names unknown preset(s) {', '.join(map(repr, unknown))}. "
+                    f"Run `python manage.py djust_theme list-presets` for the registered names."
+                )
+        else:
+            names = _configured_preset_names(self.config.get("selectable_presets"), registered)
+        selected = list(registered.values()) if names is None else [registered[n] for n in names]
+
+        active = self.get_state().preset
         return [
             {
                 "name": preset.name,
                 "display_name": preset.display_name,
                 "description": preset.description,
-                "is_active": preset.name == self.get_state().preset,
+                "is_active": preset.name == active,
                 "primary_hsl": preset.dark.primary.to_hsl(),
                 "primary_hsl_light": preset.light.primary.to_hsl(),
             }
-            for preset in get_registry().list_presets().values()
+            for preset in selected
         ]
 
     def get_context(self) -> dict:

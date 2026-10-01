@@ -85,6 +85,19 @@ Browser                    Server
    |<--JSON patches---------|
 ```
 
+### What the page-POST fallback keeps between events
+
+Every POST to the page URL builds a fresh view instance. A view on the default state policy gets its attributes back from the dict that `get_context_data()` returned on the previous request, which djust saved in the session, and `mount()` is not called again once that saved state exists. An attribute that `get_context_data()` leaves out is therefore unset on the next POST, and a handler that reads it raises `AttributeError` (a 500), while the same event works over the WebSocket, where the one view instance stays alive.
+
+So:
+
+- Set your state in `mount()`.
+- Always call `super().get_context_data(**kwargs)` in an override, and add to its result rather than replacing it. See [`get_context_data`](../api-reference/liveview.md#get_context_datakwargs---dict).
+
+A view that declares [explicit exposure](../state/explicit-exposure.md) is rebuilt differently: `mount()` runs on each POST and only the declared server fields are restored.
+
+A `live_redirect()` or `live_patch()` that a handler queues is returned in the answer's `_navigation` list, in the shape of the WebSocket `navigation` frame, and the client applies it. After a `live_redirect()` nothing is rendered or saved for that request, so a handler can call `logout()` and then redirect. The flip side: a handler that changes state and then calls `live_redirect()` back to the same view's URL does not keep that change over the HTTP fallback, because the state is not saved. A `live_patch()` renders as usual and carries its frame beside the patches.
+
 ## Behavior Differences
 
 | Feature | WebSocket Mode | SSE / HTTP Mode |

@@ -2,12 +2,14 @@
 Server-driven modal. `is_open` comes from the host LiveView's `Modal`
 descriptor, and the close control dispatches `toggle_modal`.
 
-Visibility is an inline `display`, not the `hidden` attribute, and that is
-forced: `.modal-backdrop` is `display: flex` in BOTH
-`theming/css/components.css` and `scaffold.css`, and an author rule beats the
-UA's `[hidden] { display: none }` regardless of specificity — so `hidden` here
-would render the dialog permanently visible. Emitting the inline style is also
-what the retired JS did, so nothing about the cascade changes.
+Visibility is an inline `display`, and it was forced to be: `.modal-backdrop` is
+`display: flex` in BOTH `theming/css/components.css` and `scaffold.css`, and an
+author rule beats the UA's `[hidden] { display: none }`, so `hidden` here would
+have rendered the dialog permanently visible. `components.css` now carries a
+`[hidden]` guard with `!important` (#3290), so the attribute would work for a
+page that links it. The inline style stays anyway: it is what the retired JS
+did, and it keeps working for a page that loads `scaffold.css` without
+`components.css`.
 
 Escape-to-close now works through the framework rather than `components.js`:
 `51-keyboard-nav.js:_closeModal` locates a dialog's close control with

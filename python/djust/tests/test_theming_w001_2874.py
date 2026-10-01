@@ -26,7 +26,7 @@ Each test below encodes one clause of that contract.
 import pytest
 
 from djust.theming.accessibility import AccessibilityValidator
-from djust.theming.a11y_exemptions import A11Y_EXEMPTIONS, CONTRAST_PAIRS
+from djust.theming.a11y_exemptions import A11Y_EXEMPTIONS, CONTRAST_PAIRS, NEW_PAIR_KEYS
 from djust.theming.checks import check_preset_contrast
 from djust.theming.presets import THEME_PRESETS, ColorScale, ThemePreset, ThemeTokens
 
@@ -216,7 +216,11 @@ class TestFixedCorePresets:
         documented exemption left — a stale entry would fail
         TestExemptionsStillNeeded, and an active one would mean the fix
         was incomplete."""
-        stale = [k for k in A11Y_EXEMPTIONS if k[0] == preset_name]
+        # The pairs #3281 added are legacy-palette debt owned by #2885, not part
+        # of the #2874 fix this pins.
+        stale = [
+            k for k in A11Y_EXEMPTIONS if k[0] == preset_name and (k[2], k[3]) not in NEW_PAIR_KEYS
+        ]
         assert stale == [], (
             f"{preset_name} was fixed in #2874 but A11Y_EXEMPTIONS still "
             f"carries entries for it: {stale} — remove them"

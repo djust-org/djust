@@ -6,6 +6,7 @@ Split from the former monolithic ``checks.py`` (#1822). No behavior change.
 import ast
 import os
 import re
+import sys
 from collections.abc import Iterable, Iterator
 from typing import Any, Optional
 
@@ -27,6 +28,7 @@ __all__ = [
     "DjustInfo",
     # discovery / parsing helpers
     "_is_check_suppressed",
+    "_is_production",
     "_get_project_app_dirs",
     "_get_template_dirs",
     "_iter_python_files",
@@ -36,6 +38,7 @@ __all__ = [
     "_has_noqa",
     "_walk_subclasses",
     "_strip_verbatim_blocks",
+    "_blank_template_comments",
     # shared scanner regexes
     "_LIVE_RENDER_TAG_RE",
     "_LIVE_RENDER_STICKY_TRUTHY_RE",
@@ -77,6 +80,22 @@ class DjustInfo(_DjustCheckMixin, Info):
     """Info with fix_hint metadata."""
 
     pass
+
+
+def _is_production() -> bool:
+    """True when ``DEBUG`` is off and this is not ``manage.py test`` (#3293).
+
+    Django's test runner forces ``DEBUG = False`` before it runs the system
+    checks, so a check gated on ``not settings.DEBUG`` alone reads a development
+    project's test run as production and, at error level, aborts it. Django
+    dispatches the subcommand from ``argv[1]``, which makes that the exact
+    signal. ``check --deploy`` and real servers are unaffected.
+    """
+    from django.conf import settings
+
+    if getattr(settings, "DEBUG", False):
+        return False
+    return not (len(sys.argv) > 1 and sys.argv[1] == "test")
 
 
 def _is_check_suppressed(check_id: str) -> bool:
@@ -354,6 +373,72 @@ _VERBATIM_BLOCK_RE = re.compile(
     r"\{%\s*verbatim\b[^%]*%\}.*?\{%\s*endverbatim\b[^%]*%\}",
     re.DOTALL,
 )
+
+
+# Django's two comment forms, found the way its lexer finds them: a tag is
+# ``{% ... %}`` / ``{# ... #}`` on ONE line (a multi-line ``{# #}`` renders as
+# literal text, and a ``{% comment "100% sure" %}`` note may contain ``%``);
+# ``{% comment %}`` then runs to the first ``{% endcomment %}``.
+_COMMENT_OPENER = re.compile(r"\{#|\{%\s*comment\b")
+_ENDCOMMENT = re.compile(r"\{%\s*endcomment\s*%\}")
+# Every character ``str.splitlines`` breaks on survives blanking, so a scan that
+# splits the blanked text sees the same lines as one that splits the original.
+_LINE_BREAKS = frozenset("\n\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029")
+
+
+def _blank_template_comments(content: str) -> str:
+    """Replace every ``{# #}`` and ``{% comment %}...{% endcomment %}`` region
+    with whitespace, keeping line breaks so line numbers stay aligned (#3283).
+
+    A comment renders nothing, so markup it mentions (an ``<input>``, ``dj-root``,
+    ``<script src>``) is not part of the page. Scan with this, but read pragmas
+    that live in comments (``{# noqa: T011 #}``, ``{# djust:partial #}``) from
+    the original source.
+
+    Linear in the template: a search that fails once cannot succeed later, so an
+    unterminated opener is remembered rather than re-searched for each repeat.
+    """
+    if "{#" not in content and "{%" not in content:
+        return content
+    pieces: list[str] = []
+    done = 0
+    position = 0
+    no_endcomment = False
+    # Per opener kind: no closer exists on the current line before this offset.
+    dead_until = {True: -1, False: -1}
+    while True:
+        opener = _COMMENT_OPENER.search(content, position)
+        if opener is None:
+            break
+        position = opener.end()
+        inline = opener.group(0) == "{#"
+        if position <= dead_until[inline]:
+            continue
+        line_end = content.find("\n", position)
+        if line_end == -1:
+            line_end = len(content)
+        closer = content.find("#}" if inline else "%}", position, line_end)
+        if closer == -1:
+            dead_until[inline] = line_end
+            continue
+        end = closer + 2
+        if not inline:
+            if no_endcomment:
+                continue
+            endcomment = _ENDCOMMENT.search(content, end)
+            if endcomment is None:
+                no_endcomment = True
+                continue
+            end = endcomment.end()
+        pieces.append(content[done : opener.start()])
+        pieces.append(
+            "".join(ch if ch in _LINE_BREAKS else " " for ch in content[opener.start() : end])
+        )
+        done = position = end
+    if not pieces:
+        return content
+    pieces.append(content[done:])
+    return "".join(pieces)
 
 
 def _strip_verbatim_blocks(content: str) -> str:

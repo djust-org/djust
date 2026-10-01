@@ -197,6 +197,54 @@ $ python manage.py djust_audit
 
 JSON output includes an `"unprotected_with_state"` count in the summary.
 
+## Signing in from an event handler
+
+Don't call Django's `login()` inside an event handler and expect it to work over the WebSocket. `login()` rotates the session key (`request.session.cycle_key()`), and the browser only learns a new session key from a `Set-Cookie` header on an HTTP response. A WebSocket frame can't carry one, so the browser keeps the old, dead key. After the handler returns, a `GET /` with the same cookies is still anonymous, even though `login()` returned normally.
+
+The HTTP page-POST fallback (see [HTTP-Only Mode](http-only-mode.md)) happens to work, because its response is a real HTTP response that sets the cookie. Don't rely on that: the same handler fails on the WebSocket transport.
+
+Sign in through an ordinary HTTP request instead:
+
+- Use a plain Django login view, or the account pages djust ships ([Accounts](accounts.md)), and link to them with `{% url 'djust_auth:login' %}`.
+- To keep a LiveView form for the UX, validate on the server and then hand the credentials to the real login view with a native form submit. Put `dj-submit` and `dj-trigger-action` on the form, with the login URL as its `action`. `dj-submit` sends the form's fields to the handler (a `dj-click` button outside the form would send none of them). When validation passes, the handler calls `self.trigger_submit(selector)` and the browser submits the form natively, which bypasses the djust submit handler for that final step. See [`dj-trigger-action`](declarative-ux-attrs.md#dj-trigger-action--selftrigger_submitselector--bridge-to-native-post).
+
+```python
+from djust import LiveView
+from djust.decorators import event_handler
+
+
+class SignInView(LiveView):
+    template_name = "signin.html"
+
+    def mount(self, request, **kwargs):
+        self.error = ""
+
+    @event_handler
+    def check(self, username="", **kwargs):
+        if not username:
+            self.error = "Enter a username."
+            return
+        self.error = ""
+        self.trigger_submit("#login-form")  # the browser POSTs the form natively
+```
+
+```django
+<div dj-root>
+  <p>{{ error }}</p>
+  <form id="login-form" action="{% url 'login' %}" method="POST"
+        dj-submit="check" dj-trigger-action>
+    {% csrf_token %}
+    <input name="username">
+    <input name="password" type="password">
+    <button type="submit">Sign in</button>
+  </form>
+</div>
+```
+
+The handler receives every field of the form, the password included, so don't store or log them; only the native POST to the login view should act on the credentials.
+
+Logging out is different: `logout()` flushes the session on the server, so the old key stops working at once and nothing has to reach the browser.
+
 ## Best Practices
 
 1. **Always set `login_required`** — even `login_required = False` is better than leaving it as `None`, because it shows intent
@@ -235,5 +283,46 @@ window.addEventListener('djust:auth-refused', ({ detail }) => {
 ```
 
 Reload the page after restoring authentication to establish a new connection.
+
+### Refusal codes
+
+Don't match the text of a refusal; its wording can change. Every refusal error frame
+and HTTP 403 body carries the fixed code `permission_denied`, next to the
+human-readable `error` text, on every transport:
+
+| Refusal | WebSocket / SSE frame | HTTP fallback |
+|---|---|---|
+| Authority revoked or session ended before an event or server push (`exposure_policy="explicit"`) | `{"type": "error", "error": "Event authorization failed. Please reload the page.", "code": "permission_denied"}`, then close 4403 (WebSocket) or end of stream (SSE) | Not applicable: the HTTP fallback re-checks each POST, see the next row |
+| `reauth_on_event` re-check failed | SSE: the same error frame (`"error": "Session is no longer authorized. Please reload the page."`), then end of stream. WebSocket: a `navigate` frame to the login URL, then close 4403, with no error frame, so `detail.error_code` is `null` | Not applicable |
+| `@permission_required` handler or view-level `permission_required` refused | `{"type": "error", "error": "Permission denied", "code": "permission_denied"}` | `403` with `{"error": "Permission denied", "code": "permission_denied"}` |
+| Object-level refusal (`has_object_permission`) | `{"type": "error", "error": "Access denied for this object.", "code": "permission_denied"}` | `403` with `{"error": "Access denied for this object.", "code": "permission_denied"}` |
+
+The code is a constant. It is never built from the user's input or from an
+exception message. A login redirect is not a refusal frame: the HTTP fallback
+answers `403` with `{"redirect": "<login url>"}`, and the WebSocket sends a
+`navigate` frame.
+
+The code reaches the page in two places:
+
+- `djust:error`: `detail.code` is the code of the error frame or HTTP body that
+  produced it, or `null` when it carried none. Use it for a refusal that leaves the
+  connection open, such as a denied handler.
+- `djust:auth-refused`: `detail.error_code` is the code of the refusal frame that
+  immediately preceded the 4401/4403 close, or `null` when the close had none.
+  `detail.code` stays the numeric close code.
+
+```javascript
+window.addEventListener('djust:auth-refused', ({ detail }) => {
+    if (detail.error_code === 'permission_denied') {
+        document.body.hidden = true;        // authority ended: hide the page
+        window.location.assign('/accounts/login/');
+    }
+});
+window.addEventListener('djust:error', ({ detail }) => {
+    if (detail.code === 'permission_denied') {
+        showToast('You are not allowed to do that.');
+    }
+});
+```
 
 - For object-level access, use `get_object()` + `has_object_permission()`, which are re-checked on every event (see [Authorization](authorization.md))

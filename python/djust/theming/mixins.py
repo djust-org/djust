@@ -29,6 +29,7 @@ except ImportError:
 from django.template.loader import render_to_string
 from django.utils.safestring import mark_safe
 
+from ..utils import get_csp_nonce
 from .manager import ThemeManager, generate_css_for_state, get_css_prefix, get_theme_manager
 from .presets import THEME_PRESETS
 
@@ -67,6 +68,9 @@ class ThemeMixin:
     # Internal state (prefixed to avoid serialization)
     _theme_manager: ThemeManager | None = None
     _theme_state: Any = None
+    # CSP nonce of the request that mounted the view ("" when none), so the
+    # inline <script>/<style> in ``theme_head`` carry it like the tag does (#3284).
+    _theme_csp_nonce: str = ""
 
     def mount(self, request: Any, **kwargs: Any) -> None:
         """Initialize theme manager and add theme context as instance attributes."""
@@ -79,6 +83,7 @@ class ThemeMixin:
         # Initialize theme manager (underscore prefix to avoid serialization)
         self._theme_manager = get_theme_manager(request)
         self._theme_state = self._theme_manager.get_state()
+        self._theme_csp_nonce = get_csp_nonce(request)
 
         # Add theme context as instance attributes
         # These get picked up by get_context_data() in LiveView
@@ -112,6 +117,7 @@ class ThemeMixin:
             None,
             loading_class=False,
             manager=self._theme_manager,
+            nonce=self._theme_csp_nonce,
         )
 
         # Render theme_head via shared template

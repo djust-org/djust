@@ -14,7 +14,13 @@ from django.conf import settings
 from django.core.checks import CheckMessage, Error, Warning, register
 from django.core.exceptions import SuspiciousFileOperation
 
-from .utils import _get_template_dirs, _is_check_suppressed, _iter_template_files, _walk_subclasses
+from .utils import (
+    _blank_template_comments,
+    _get_template_dirs,
+    _is_check_suppressed,
+    _iter_template_files,
+    _walk_subclasses,
+)
 
 _SBOM_SUFFIXES = (".cdx.json", ".spdx.json", ".bom.json")
 _TAG = re.compile(r"<(script|link)\b([^>]*)>", re.I)
@@ -309,10 +315,13 @@ def check_undeclared_origins(app_configs: Any, **kwargs: Any) -> list[CheckMessa
         except OSError:
             continue
         lines = content.splitlines()
-        for lineno, line in enumerate(lines, start=1):
+        # A load named inside a comment fetches nothing; ``{# noqa: B010 #}`` is
+        # itself a comment, so it is read from the original line.
+        scanned = _blank_template_comments(content).splitlines()
+        for lineno, (line, visible) in enumerate(zip(lines, scanned), start=1):
             if "noqa: B010" in line:
                 continue
-            for ref in _external_loads(line):
+            for ref in _external_loads(visible):
                 origin = urlsplit(ref if ref.startswith("http") else "https:" + ref).netloc
                 if origin not in declared and origin.lower() not in allowed:
                     messages.append(

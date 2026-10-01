@@ -15,6 +15,7 @@ Each check is exercised via ``django.test.override_settings`` and the
 pipeline, not a mock.
 """
 
+import os
 from unittest.mock import patch
 
 from django.test import override_settings
@@ -160,6 +161,63 @@ class TestInsecureSecretKey:
     def test_a014_passes_with_real_key(self):
         errors = check_configuration(None)
         assert "djust.A014" not in _ids(errors)
+
+
+class TestProductionChecksUnderTestRunner:
+    """#3293 — the test runner forces DEBUG=False; that is not production."""
+
+    @override_settings(
+        DEBUG=False, SECRET_KEY="django-insecure-abc123", ALLOWED_HOSTS=["myapp.example.com"]
+    )
+    def test_a014_exempt_under_manage_py_test(self, monkeypatch):
+        monkeypatch.setattr("sys.argv", ["manage.py", "test"])
+        assert "djust.A014" not in _ids(check_configuration(None))
+
+    @override_settings(
+        DEBUG=False, SECRET_KEY="django-insecure-abc123", ALLOWED_HOSTS=["myapp.example.com"]
+    )
+    def test_a014_still_fires_for_check_deploy(self, monkeypatch):
+        monkeypatch.setattr("sys.argv", ["manage.py", "check", "--deploy"])
+        assert "djust.A014" in _ids(check_configuration(None))
+
+    @override_settings(DEBUG=False, ALLOWED_HOSTS=["*"])
+    def test_a010_exempt_under_manage_py_test(self, monkeypatch):
+        monkeypatch.setattr("sys.argv", ["manage.py", "test"])
+        assert "djust.A010" not in _ids(check_configuration(None))
+        monkeypatch.setattr("sys.argv", ["manage.py", "runserver"])
+        assert "djust.A010" in _ids(check_configuration(None))
+
+    def test_manage_py_test_runs_on_a_startproject_key(self, tmp_path):
+        """The real path: ``django test`` on a DEBUG=True project with the scaffold key."""
+        import subprocess
+        import sys
+
+        (tmp_path / "cfg_a014.py").write_text(
+            "DEBUG = True\n"
+            "SECRET_KEY = 'django-insecure-abc123'\n"
+            "ALLOWED_HOSTS = []\n"
+            "INSTALLED_APPS = ['django.contrib.contenttypes', 'django.contrib.auth', 'djust']\n"
+            "DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': ':memory:'}}\n"
+            "DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'\n"
+            "USE_TZ = True\n"
+            "ASGI_APPLICATION = 'cfg_a014.application'\n"
+            "CHANNEL_LAYERS = {'default': {'BACKEND': 'channels.layers.InMemoryChannelLayer'}}\n"
+            "TEMPLATES = [{'BACKEND': 'django.template.backends.django.DjangoTemplates',"
+            " 'APP_DIRS': True, 'OPTIONS': {}}]\n",
+            encoding="utf-8",
+        )
+        env = {**os.environ, "PYTHONPATH": str(tmp_path), "DJANGO_SETTINGS_MODULE": "cfg_a014"}
+        run = subprocess.run(
+            [sys.executable, "-m", "django", "test"],
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert "djust.A014" not in run.stderr + run.stdout
+        assert "SystemCheckError" not in run.stderr
+        assert run.returncode == 0, run.stderr
 
 
 # ---------------------------------------------------------------------------

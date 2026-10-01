@@ -429,7 +429,8 @@ a:hover {
 
 .form-input:focus,
 .form-select:focus {
-  outline: none;
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
   border-color: hsl(var(--primary));
   box-shadow: 0 0 0 3px hsl(var(--ring) / 0.4);
 }
@@ -527,7 +528,8 @@ a:hover {
 }
 
 .search-input:focus {
-  outline: none;
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
   border-color: hsl(var(--primary));
   box-shadow: 0 0 0 3px hsl(var(--ring) / 0.4);
 }
@@ -1270,7 +1272,8 @@ a:hover {
 
 /* Focus ring */
 *:focus-visible {
-  outline: none;
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
   box-shadow: 0 0 0 3px hsl(var(--ring) / 0.4);
 }
 

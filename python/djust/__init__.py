@@ -399,14 +399,19 @@ def enable_hot_reload():
         hot_reload_server.start(
             watch_dirs=watch_dirs, on_change=on_file_change, exclude_dirs=exclude_dirs
         )
-        print(
-            f"[HotReload] Hot reload enabled for directories: {', '.join(str(d) for d in watch_dirs)}"
+        banner = "[HotReload] Hot reload enabled for directories: %s" % ", ".join(
+            str(d) for d in watch_dirs
         )
-        logger.info(
-            f"[HotReload] Hot reload enabled for directories: {', '.join(str(d) for d in watch_dirs)}"
-        )
+        # Never stdout: ready() runs this for every management command, and
+        # ``manage.py <cmd> > file`` would otherwise start with the banner
+        # (#3298). Always straight to stderr, never through ``logger``: whether a
+        # log record reaches a terminal depends on handlers and levels this code
+        # cannot see (``apps.py`` always installs one, so a ``hasHandlers()``
+        # guard is vacuous), and routing here printed it nowhere under a
+        # non-console handler or a WARNING-level console handler (#3312).
+        sys.stderr.write(banner + "\n")
     except Exception as e:
-        print(f"[HotReload] Failed to start hot reload server: {e}")
+        # logger.error reaches stderr through logging's last-resort handler.
         logger.error("[HotReload] Failed to start hot reload server: %s", e)
 
 

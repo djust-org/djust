@@ -2,10 +2,12 @@
 
 Light mode's ``link`` was the brand orange fill (28 80% 53%), 2.66:1 on the
 page background: ``.link`` / ``.text-link`` render it as body text, so it
-needs 4.5:1. The pair is not in ``CONTRAST_PAIRS`` yet — adding it there
-fails dozens of legacy presets, whose remediation #2885 owns — so this file
-pins the framework's own preset directly. ``primary`` keeps the bright fill:
-it carries dark ink labels (#2996), and darkening it would break them.
+needs 4.5:1. The pair is in ``CONTRAST_PAIRS`` now (#3281), with the legacy
+presets' failures documented under #2885; this file keeps pinning the
+framework's own preset across ``link_hover`` and ``muted`` too. ``primary``
+keeps the bright fill: it carries dark ink labels (#2996), and darkening it
+would break them, so its light-mode text pairs are exempted (see
+``test_djust_preset_contrast_2996.py``).
 """
 
 from __future__ import annotations

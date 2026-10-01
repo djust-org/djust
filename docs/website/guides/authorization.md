@@ -116,10 +116,10 @@ def reassign_owner(self, owner_id: int = 0):
 
 | Path | Wire shape | Effect |
 |---|---|---|
-| Mount-time denial | WS close code 4403 + `{"type": "error", "error": "Permission denied"}` | Browser drops the connection; client treats as full reload |
+| Mount-time denial | WS close code 4403 + `{"type": "error", "error": "Permission denied", "code": "permission_denied"}` | Browser drops the connection; client treats as full reload |
 | Per-event denial | `{"type": "error", "error": "Access denied for this object.", "code": "permission_denied"}` | WS stays open; client can revert optimistic UI updates and let the user navigate elsewhere |
 
-Use the structured `code` field on the per-event frame to distinguish permission denial from other error types in your client-side handlers.
+Use the structured `code` field on the per-event frame to distinguish permission denial from other error types in your client-side handlers. Every refusal carries it, including the HTTP fallback's 403 body; see [Refusal codes](authentication.md#refusal-codes).
 
 ## Defense in depth: manager-level filtering
 

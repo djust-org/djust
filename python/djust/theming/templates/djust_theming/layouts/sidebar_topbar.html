@@ -11,9 +11,9 @@
     <header class="layout-sidebar-topbar__header" role="banner">
       {% block topbar %}{% endblock %}
     </header>
-    <main class="layout-sidebar-topbar__main">
+    {% block sidebar_topbar_main %}<main class="layout-sidebar-topbar__main">
       {% block sidebar_topbar_content %}{% endblock %}
-    </main>
+    </main>{% endblock %}
   </div>
 </div>
 {% endblock %}

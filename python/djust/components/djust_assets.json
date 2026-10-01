@@ -276,21 +276,21 @@
       "files": [
         {
           "path": "djust_components/vendor/xterm/xterm.mjs",
-          "integrity": "sha384-s0JwKMRXSBBDUlPbf3oli3dDVk65q2lo7eKxkRdQ5lDWCmm7q6Nnygi5WjTHiOg4"
+          "integrity": "sha384-Ga3vVPXUe0IfsWMOdTRPOo07yJaXkYMDqMtfDfl1CEj0rr90ekPrDNPt3uZ6tslg"
         },
         {
           "path": "djust_components/vendor/xterm/xterm.css",
-          "integrity": "sha384-8Xk9wy/gzEDUKrXtrmCFa2bBuK3BpjpDuL/p0SeKQX19Khl/M+lHOgD/CyYf7efP"
+          "integrity": "sha384-n2n7twoohnW+d3myBKaUgl7DSiwidw6MkQy9oesGzkPpMjejKRR3XlnD+5yCdtBD"
         }
       ],
       "license_file": "djust_components/vendor/xterm/xterm.LICENSE.txt",
       "packages": [
         {
-          "purl": "pkg:npm/%40xterm/addon-fit@0.10.0",
+          "purl": "pkg:npm/%40xterm/addon-fit@0.11.0",
           "license": "MIT"
         },
         {
-          "purl": "pkg:npm/%40xterm/xterm@5.5.0",
+          "purl": "pkg:npm/%40xterm/xterm@6.0.0",
           "license": "MIT"
         }
       ]

@@ -366,6 +366,30 @@
         }
 
         /**
+         * Build the <style id="djust-theme-css"> for a live preset switch.
+         *
+         * Under a CSP without 'unsafe-inline' an un-nonced <style> is blocked, so
+         * the nonce is copied on: from the global the server-rendered anti-FOUC
+         * script set (window.__djust_theme_nonce, present when theme_head had a
+         * nonce), else from the element being replaced, else from any nonced
+         * theme <style> already in the page. `el.nonce` is read first because
+         * browsers hide the nonce attribute once parsed.
+         */
+        _createThemeStyle(css, replaced) {
+            const style = document.createElement('style');
+            style.id = 'djust-theme-css';
+            style.setAttribute('data-djust-theme', '');
+            style.textContent = css;
+            const nonceOf = (el) => (el && (el.nonce || el.getAttribute('nonce'))) || '';
+            const nonce = window.__djust_theme_nonce || nonceOf(replaced) ||
+                nonceOf(document.querySelector('style[data-djust-theme], style[data-djust-theme-critical], style[data-djust-components]'));
+            if (nonce) {
+                style.setAttribute('nonce', nonce);
+            }
+            return style;
+        }
+
+        /**
          * Update preset and CSS without reloading the page (for LiveView reactive updates)
          */
         setPresetWithoutReload(preset, css) {
@@ -377,6 +401,7 @@
             // Batch updates in next frame
             this.pendingUpdate = requestAnimationFrame(() => {
                 localStorage.setItem(STORAGE_KEY_PRESET, preset);
+                this._livePreset = preset;
 
                 // Set cookie for server-side rendering
                 document.cookie = `${COOKIE_KEY_PRESET}=${preset};path=/;max-age=31536000;SameSite=Lax`;
@@ -387,21 +412,14 @@
                 if (styleElement && css) {
                     if (styleElement.tagName === 'LINK') {
                         // Replace <link> with <style> so we can set textContent
-                        const newStyle = document.createElement('style');
-                        newStyle.id = 'djust-theme-css';
-                        newStyle.setAttribute('data-djust-theme', '');
-                        newStyle.textContent = css;
+                        const newStyle = this._createThemeStyle(css, styleElement);
                         styleElement.replaceWith(newStyle);
                     } else {
                         styleElement.textContent = css;
                     }
                 } else if (css) {
                     // Create style element if it doesn't exist
-                    const newStyle = document.createElement('style');
-                    newStyle.id = 'djust-theme-css';
-                    newStyle.setAttribute('data-djust-theme', '');
-                    newStyle.textContent = css;
-                    document.head.appendChild(newStyle);
+                    document.head.appendChild(this._createThemeStyle(css, null));
                 }
 
                 // Dispatch event
@@ -472,14 +490,22 @@
                         btn.classList.toggle('active', btnMode === mode);
                     });
 
-                    // Update preset selects
-                    const presetSelects = document.querySelectorAll('.theme-preset-select');
-                    presetSelects.forEach(select => {
-                        const preset = this.getPreset();
-                        if (select.value !== preset) {
-                            select.value = preset;
-                        }
-                    });
+                    // Update preset selects, but only to a preset THIS page
+                    // switched to live. Otherwise the server-rendered selected
+                    // option is the truth: it is the preset the server
+                    // resolved (cookie, session, pack, or the configured
+                    // default). getPreset() reads localStorage alone and falls
+                    // back to 'default', so syncing from it flipped the
+                    // selector to "Default" on a mode toggle whenever the
+                    // active preset had never been picked in this browser
+                    // (#3320).
+                    if (this._livePreset) {
+                        document.querySelectorAll('.theme-preset-select').forEach(select => {
+                            if (select.value !== this._livePreset) {
+                                select.value = this._livePreset;
+                            }
+                        });
+                    }
                 });
             }, 16); // ~1 frame at 60fps for instant feel
         }
