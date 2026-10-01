@@ -198,6 +198,31 @@ class ThemeTokens:
     surface_2: ColorScale
     surface_3: ColorScale
 
+    # Derived surfaces. Not tokens: no preset sets them and no CSS variable is
+    # emitted. They exist so the contrast matrix can name the background that
+    # ``.alert-*`` and ``.toast-*`` actually paint, which is the status colour
+    # at 10% alpha over the page (``hsl(var(--success) / 0.1)``), and so check
+    # the status colour used as text on it (#3281).
+    def _tint(self, colour: ColorScale, alpha: float = 0.1) -> ColorScale:
+        """``colour`` at ``alpha`` composited over ``background`` (what the browser paints)."""
+        fg = colour.to_rgb()
+        bg = self.background.to_rgb()
+        return ColorScale.from_rgb(
+            *(round(alpha * f + (1 - alpha) * b) for f, b in zip(fg, bg, strict=True))
+        )
+
+    @property
+    def success_tint(self) -> ColorScale:
+        return self._tint(self.success)
+
+    @property
+    def warning_tint(self) -> ColorScale:
+        return self._tint(self.warning)
+
+    @property
+    def destructive_tint(self) -> ColorScale:
+        return self._tint(self.destructive)
+
 
 VALID_SURFACE_TREATMENT_STYLES: "FrozenSet[str]" = frozenset({"glass", "gradient", "noise"})
 

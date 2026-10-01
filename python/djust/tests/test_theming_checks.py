@@ -401,6 +401,13 @@ class TestContrastPairsCompleteness:
             "info_foreground",
             "code_foreground",
             "brand_foreground",
+            # #3281 / #3165: theme colours used as text or as a border.
+            "link",
+            "primary",
+            "success",
+            "warning",
+            "destructive",
+            "input",
         }
         actual_fg_attrs = {pair[0] for pair in CONTRAST_PAIRS}
         assert actual_fg_attrs == expected_pairs

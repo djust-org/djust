@@ -33,7 +33,7 @@ django.setup()
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "python"))
 
-from djust.theming.a11y_exemptions import CONTRAST_PAIRS  # noqa: E402
+from djust.theming.a11y_exemptions import CONTRAST_PAIRS, NEW_PAIR_KEYS  # noqa: E402
 from djust.theming.accessibility import AccessibilityValidator  # noqa: E402
 from djust.theming.presets import THEME_PRESETS  # noqa: E402
 
@@ -75,10 +75,25 @@ def main() -> None:
         default="at gate introduction (2026-07, #2060)",
         help="Reason text baked into --python-dict entries (cite the issue).",
     )
+    parser.add_argument(
+        "--debt-table",
+        action="store_true",
+        help=(
+            "Emit one `(preset, mode, fg, bg): ratio,` line per failure of the pairs "
+            "added by #3281/#3165 (NEW_PAIR_KEYS), in the shape of `_PAIR_DEBT_2885` "
+            "in a11y_exemptions.py. Regenerate that table with this when a palette changes."
+        ),
+    )
     args = parser.parse_args()
     reason = args.reason
 
     failures = collect_failures()
+
+    if args.debt_table:
+        for theme_name, mode, fg_name, bg_name, ratio, _minimum in failures:
+            if (fg_name, bg_name) in NEW_PAIR_KEYS:
+                print(f'    ("{theme_name}", "{mode}", "{fg_name}", "{bg_name}"): {ratio:.2f},')
+        return
     total_checks = len(THEME_PRESETS) * len(MODES) * len(PAIRS)
 
     if args.python_dict:
