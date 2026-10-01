@@ -361,6 +361,17 @@ existing `join(key, user_id, meta)`, `leave(key, user_id)` and
 the old contract keeps **one record per user**: a second tab collapses onto the
 first, the first tab to close removes the user, and `handle_presence_join` /
 `handle_presence_leave` run on every track and untrack, exactly as before.
+That includes navigation: djust only holds a replaced view's untrack until
+after the replacement mounts when the backend is per-connection
+(`PresenceManager.per_connection()`, the `per_connection` class attribute). With
+one record per user the order stays leave, mount, join, because the
+replacement's join and the old view's leave would address the same record.
+
+A subclass of a built-in backend that overrides `join`, `leave` or `heartbeat`
+**without** a `connection_id` parameter is treated the same way (it is a
+one-record-per-user backend, and your override is called as it always was). To
+keep the built-in per-connection behaviour, give the override a
+`connection_id=None` parameter and pass it on to `super()`.
 
 To get per-connection presence in a custom backend, store one record per
 `(presence_key, user_id, connection_id)` and override the three methods:
@@ -385,3 +396,9 @@ several nodes share the store: the Redis backends read them in the same
 id, no connection id) reads as that user's one legacy connection, so a rolling
 deploy does not lose anyone. During the roll an old node lists a user once per
 connection of a new node, so finish the deploy promptly.
+
+A connection a stopped pod left behind lingers until its 60 s timeout beside the
+connection the restored view makes. If the user closes that tab inside the
+window they stay listed, with no `handle_presence_leave` and no peer
+notification, until it expires. Expiry has never run the hook, and a rolling
+deploy makes this routine for a minute, so expect it.

@@ -8,11 +8,12 @@ from threading import RLock
 from typing import Any, Dict, List, Optional, Tuple
 
 from .base import (
-    PresenceBackend,
+    PerConnectionPresenceBackend,
     aggregate_by_user,
     connection_member,
     member_belongs_to,
     merge_connection_records,
+    note_first,
 )
 
 logger = logging.getLogger(__name__)
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 PRESENCE_TIMEOUT = 60  # seconds
 
 
-class InMemoryPresenceBackend(PresenceBackend):
+class InMemoryPresenceBackend(PerConnectionPresenceBackend):
     """
     Thread-safe in-memory presence store.
 
@@ -66,10 +67,7 @@ class InMemoryPresenceBackend(PresenceBackend):
     ) -> Dict[str, Any]:
         return self._join(presence_key, user_id, connection_id, meta)[0]
 
-    def join_connection(
-        self, presence_key: str, user_id: str, connection_id: str, meta: Dict[str, Any]
-    ) -> Tuple[Dict[str, Any], bool]:
-        return self._join(presence_key, user_id, connection_id, meta)
+    _builtin_join = join
 
     def _join(
         self, presence_key: str, user_id: str, connection_id: Optional[str], meta: Dict[str, Any]
@@ -92,7 +90,7 @@ class InMemoryPresenceBackend(PresenceBackend):
             self._heartbeats[(presence_key, member)] = now
             record = self._user_record(group, user_id)
         logger.debug("User %s joined presence %s", user_id, presence_key)
-        return record, first
+        return record, note_first(first)
 
     def leave(
         self, presence_key: str, user_id: str, connection_id: Optional[str] = None
@@ -116,11 +114,6 @@ class InMemoryPresenceBackend(PresenceBackend):
             logger.debug("User %s left presence %s", user_id, presence_key)
         return record
 
-    def leave_connection(
-        self, presence_key: str, user_id: str, connection_id: str
-    ) -> Optional[Dict[str, Any]]:
-        return self.leave(presence_key, user_id, connection_id)
-
     def list(self, presence_key: str) -> List[Dict[str, Any]]:
         self.cleanup_stale(presence_key)
         with self._lock:
@@ -143,9 +136,6 @@ class InMemoryPresenceBackend(PresenceBackend):
             for member in members:
                 if (presence_key, member) in self._heartbeats:
                     self._heartbeats[(presence_key, member)] = now
-
-    def heartbeat_connection(self, presence_key: str, user_id: str, connection_id: str) -> None:
-        self.heartbeat(presence_key, user_id, connection_id)
 
     def cleanup_stale(self, presence_key: str) -> int:
         with self._lock:

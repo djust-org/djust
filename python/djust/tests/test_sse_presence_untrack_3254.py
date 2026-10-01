@@ -96,9 +96,11 @@ def setup(monkeypatch):
     MOUNT_GATE["gate"] = None
     MOUNT_GATE["reached"].clear()
     _sse_sessions.clear()
+    sse._sse_mounting.clear()
     with override_settings(ROOT_URLCONF=__name__, LIVEVIEW_ALLOWED_MODULES=["djust"], DEBUG=False):
         yield
     _sse_sessions.clear()
+    sse._sse_mounting.clear()
     PresenceManager.leave_presence(ROOM, "user-3254")
 
 
@@ -382,4 +384,83 @@ async def test_a_reconnect_old_close_removes_only_the_old_connection(spy):
 
     assert [p["id"] for p in await _members()] == ["user-3254"]
     assert [op for op, flag, _ in spy.ops if op == "leave"] == ["leave"]  # the old one only
+    await new_stream.aclose()
+
+
+# --------------------------------------------------------------------------- #
+# A backend on the old one-record-per-user contract keeps its old behaviour
+# --------------------------------------------------------------------------- #
+
+
+def _old_contract_backend():
+    from djust.backends.base import PresenceBackend
+
+    class Old(PresenceBackend):
+        def __init__(self):
+            self.records = {}
+            self.calls = []
+
+        def join(self, presence_key, user_id, meta):
+            self.calls.append("join")
+            record = {"id": user_id, "joined_at": 0.0, "meta": meta}
+            self.records[(presence_key, user_id)] = record
+            return record
+
+        def leave(self, presence_key, user_id):
+            self.calls.append("leave")
+            return self.records.pop((presence_key, user_id), None)
+
+        def list(self, presence_key):
+            return [r for (k, _), r in self.records.items() if k == presence_key]
+
+        def count(self, presence_key):
+            return len(self.list(presence_key))
+
+        def heartbeat(self, presence_key, user_id):
+            pass
+
+        def cleanup_stale(self, presence_key):
+            return 0
+
+        def health_check(self):
+            return {"status": "healthy"}
+
+    return Old()
+
+
+@pytest.fixture
+def old_backend():
+    JOINED.clear()
+    backend = _old_contract_backend()
+    set_presence_backend(backend)
+    yield backend
+    reset_presence_backend()
+
+
+async def test_old_contract_backend_sse_same_room_navigation_ends_present(old_backend):
+    """The replacement's join and the old page's leave address one record, so the
+    leave must come first, as it did before per-connection presence."""
+    session, stream, _, key = await _open(PresentPage, "/present/")
+    old_backend.calls.clear()
+
+    await _post(session, key, {"type": "live_redirect_mount", "url": "/present2/", "params": {}})
+
+    assert type(session.view_instance) is PresentPageTwo
+    assert [p["id"] for p in await _members()] == ["user-3254"]  # on the page, and present
+    assert old_backend.calls == ["leave", "join"]
+    await stream.aclose()
+
+
+async def test_old_contract_backend_reconnect_keeps_the_user_when_the_old_stream_closes(
+    old_backend,
+):
+    """The #3313 guard still protects a backend whose record the two views share."""
+    old, old_stream, sid, key = await _open(PresentPage, "/present/")
+    new, new_stream, _, _ = await _open(PresentPage, "/present/", sid, key)
+
+    await old_stream.aclose()
+    await _until(lambda: old.view_instance is None, "the old session to drop its view")
+    await asyncio.sleep(0.2)
+
+    assert [p["id"] for p in await _members()] == ["user-3254"]
     await new_stream.aclose()

@@ -2765,7 +2765,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         finally:
             # A mount frame replaced the views mounted before it: now that the
             # replacement has mounted (or failed to), their presence goes (#3254).
-            await self._untrack_presence_of(self._take_deferred_presence_untrack())
+            await self._flush_deferred_presence_untrack()
 
     async def handle_mount(
         self,
@@ -3900,6 +3900,25 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         pending.extend(v for v in views if getattr(v, "_presence_tracked", False))
         self._deferred_presence_untrack = pending
 
+    async def _flush_deferred_presence_untrack(self) -> None:
+        """Untrack the deferred views one by one (#3254).
+
+        A view leaves the queue only once it is untracked, so a cancellation
+        partway through puts the rest (and the view in flight, whose untrack is
+        idempotent) back for the disconnect to take instead of dropping them.
+        """
+        pending = self._take_deferred_presence_untrack()
+        try:
+            while pending:
+                await self._untrack_presence_of([pending[0]])
+                pending.pop(0)
+        finally:
+            if pending:
+                self._deferred_presence_untrack = [
+                    *pending,
+                    *(getattr(self, "_deferred_presence_untrack", None) or []),
+                ]
+
     def _take_deferred_presence_untrack(self) -> List[Any]:
         """The views whose presence is waiting to be untracked, forgotten here (#3254)."""
         pending = getattr(self, "_deferred_presence_untrack", None) or []
@@ -3954,13 +3973,20 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         (#3254; ``_defer_presence_untrack``).
         """
         from ._child_lifecycle import release_root_view
+        from .presence import PresenceManager
         from .runtime import leave_consumer_view_groups
 
         views = self._mounted_views()
         await leave_consumer_view_groups(self, self._take_batch_sibling_groups())
         # Presence waits for the replacement mount (#3254): see
-        # ``_defer_presence_untrack``.
-        self._defer_presence_untrack(views)
+        # ``_defer_presence_untrack``. Not for a backend with one record per
+        # user (the old contract): there the replacement's join and this
+        # view's leave address the same record, so the order stays leave, mount.
+        tracked = [v for v in views if getattr(v, "_presence_tracked", False)]
+        if tracked and await sync_to_async(PresenceManager.per_connection)():
+            self._defer_presence_untrack(tracked)
+        else:
+            await self._untrack_presence_of(tracked)
 
         # Cancel old tick task
         if self._tick_task:

@@ -22,11 +22,13 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from .base import (
-    PresenceBackend,
+    PerConnectionPresenceBackend,
     aggregate_by_user,
     connection_member,
     member_belongs_to,
     merge_connection_records,
+    note_first,
+    user_of_member,
 )
 
 logger = logging.getLogger(__name__)
@@ -131,6 +133,12 @@ def read_presences(
             continue
         connections.append(record)
     return aggregate_by_user(connections)
+
+
+def count_presences(client: Any, zset_key: str, cutoff: float) -> int:
+    """The users with a live connection: one ``ZRANGEBYSCORE``, member names only (#3254)."""
+    members = client.zrangebyscore(zset_key, min=cutoff, max="+inf")
+    return len({user_of_member(m) for m in members})
 
 
 def join_connection_records(
@@ -274,7 +282,7 @@ def cleanup_stale_records(client: Any, zset_key: str, meta_key: str, cutoff: flo
     return len(stale)
 
 
-class RedisPresenceBackend(PresenceBackend):
+class RedisPresenceBackend(PerConnectionPresenceBackend):
     """
     Redis-backed presence store using sorted sets.
 
@@ -333,10 +341,7 @@ class RedisPresenceBackend(PresenceBackend):
     ) -> Dict[str, Any]:
         return self._join(presence_key, user_id, connection_id, meta)[0]
 
-    def join_connection(
-        self, presence_key: str, user_id: str, connection_id: str, meta: Dict[str, Any]
-    ) -> Tuple[Dict[str, Any], bool]:
-        return self._join(presence_key, user_id, connection_id, meta)
+    _builtin_join = join
 
     def _join(
         self, presence_key: str, user_id: str, connection_id: Optional[str], meta: Dict[str, Any]
@@ -354,6 +359,7 @@ class RedisPresenceBackend(PresenceBackend):
             ttl=self._timeout * 3,
         )
         logger.debug("User %s joined presence %s (Redis)", user_id, presence_key)
+        note_first(result[1])
         return result
 
     def leave(
@@ -370,11 +376,6 @@ class RedisPresenceBackend(PresenceBackend):
         if record:
             logger.debug("User %s left presence %s (Redis)", user_id, presence_key)
         return record
-
-    def leave_connection(
-        self, presence_key: str, user_id: str, connection_id: str
-    ) -> Optional[Dict[str, Any]]:
-        return self.leave(presence_key, user_id, connection_id)
 
     def list(self, presence_key: str) -> List[Dict[str, Any]]:
         """Active presences of ``presence_key``, one per user, oldest heartbeat first.
@@ -397,13 +398,8 @@ class RedisPresenceBackend(PresenceBackend):
         )
 
     def count(self, presence_key: str) -> int:
-        return len(
-            read_presences(
-                self._client,
-                self._zset_key(presence_key),
-                self._meta_key(presence_key),
-                time.time() - self._timeout,
-            )
+        return count_presences(
+            self._client, self._zset_key(presence_key), time.time() - self._timeout
         )
 
     def heartbeat(
@@ -418,9 +414,6 @@ class RedisPresenceBackend(PresenceBackend):
             now=time.time(),
             ttl=self._timeout * 3,
         )
-
-    def heartbeat_connection(self, presence_key: str, user_id: str, connection_id: str) -> None:
-        self.heartbeat(presence_key, user_id, connection_id)
 
     def cleanup_stale(self, presence_key: str) -> int:
         removed = cleanup_stale_records(

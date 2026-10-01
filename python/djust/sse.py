@@ -131,6 +131,11 @@ def _max_sessions_total() -> int:
 # checks includes the mounts still in flight. The lock also makes the
 # registry's check-and-set / check-and-pop steps atomic across loops.
 _sse_registry_lock = threading.Lock()
+#: Stream GETs still mounting, per session id (#3254). Only read for a presence
+#: backend on the old one-record-per-user contract: a reconnect's mount joins
+#: presence BEFORE the new session is registered, so the old session's close
+#: must treat an id with a mount in flight as already replaced.
+_sse_mounting: Dict[str, int] = {}
 #: In-flight reservations per cap key (see ``_client_cap_key``).
 _sse_reserved: Dict[str, int] = {}
 #: Sum of ``_sse_reserved``.
@@ -221,6 +226,29 @@ def _release_sse_slot(cap_key: str) -> None:
     """Give back a reservation whose mount did not register a session."""
     with _sse_registry_lock:
         _release_reservation_locked(cap_key)
+
+
+def _begin_sse_mount(session_id: str) -> None:
+    with _sse_registry_lock:
+        _sse_mounting[session_id] = _sse_mounting.get(session_id, 0) + 1
+
+
+def _end_sse_mount(session_id: str) -> None:
+    with _sse_registry_lock:
+        left = _sse_mounting.get(session_id, 0) - 1
+        if left > 0:
+            _sse_mounting[session_id] = left
+        else:
+            _sse_mounting.pop(session_id, None)
+
+
+def _sse_session_superseded(session: "SSESession") -> bool:
+    """Whether a reconnect has replaced ``session`` under its id, or is mounting to (#3254)."""
+    with _sse_registry_lock:
+        current = _sse_sessions.get(session.session_id)
+        if current is not None and current is not session:
+            return True
+        return _sse_mounting.get(session.session_id, 0) > 0
 
 
 def _register_sse_session(cap_key: str, session_id: str, session: "SSESession") -> bool:
@@ -551,6 +579,18 @@ class SSESession:
                 old_runtime, old_view = self.runtime, self.view_instance
                 old_runtime.view_instance = None
                 self.view_instance = None
+                # With one record per user (a backend on the old contract) the
+                # old page's presence goes BEFORE the new page mounts, as it
+                # always did: the new page's join and this leave would address
+                # the same record. A per-connection backend waits (#3254).
+                untrack_after_mount = False
+                if old_view is not None and getattr(old_view, "_presence_tracked", False):
+                    from .presence import PresenceManager
+
+                    if await sync_to_async(PresenceManager.per_connection)():
+                        untrack_after_mount = True
+                    else:
+                        await self._untrack_replaced_presence(old_view)
                 if old_view is not None:
                     try:
                         from ._child_lifecycle import release_root_view
@@ -588,7 +628,7 @@ class SSESession:
                     else:
                         await self.runtime._flush_all_pending()
                 finally:
-                    if old_view is not None:
+                    if untrack_after_mount:
                         # Same-room navigation: the new page joined the room as
                         # a second connection of the user, so the user is never
                         # absent and nothing leaves or rejoins (#3254).
@@ -679,8 +719,17 @@ class SSESession:
         view's connection. An EventSource reconnect reuses the session id, but
         its new view joined under its own connection id: the old stream's late
         close cannot remove the user the reconnect just brought back.
+
+        A backend on the old one-record-per-user contract shares one record
+        between the old and new view, so there the #3313 guard still applies: a
+        session that a same-owner reconnect has replaced under its id, or that
+        a reconnect is still mounting to, is not untracked.
         """
         if not getattr(view, "_presence_tracked", False):
+            return
+        from .presence import PresenceManager
+
+        if _sse_session_superseded(self) and not PresenceManager.per_connection():
             return
         from ._child_lifecycle import untrack_view_presence
 
@@ -1052,6 +1101,7 @@ class DjustSSEStreamView(View):
                 status=429,
             )
         reserved = True
+        _begin_sse_mount(session_id)
         try:
             # Create the session and bind it to its owner. NOTE: not yet registered
             # in _sse_sessions — registration happens only after a successful mount
@@ -1153,6 +1203,7 @@ class DjustSSEStreamView(View):
                 # closes promptly.
                 session.shutdown()
         finally:
+            _end_sse_mount(session_id)
             if reserved:
                 _release_sse_slot(cap_key)
 

@@ -140,6 +140,19 @@ class PresenceManager:
         return f"{PRESENCE_GROUP_PREFIX}_{presence_key.replace(':', '_').replace('{', '').replace('}', '')}"
 
     @classmethod
+    def per_connection(cls) -> bool:
+        """Whether the configured backend stores one record per connection (#3254).
+
+        False for a third-party backend on the old three-method contract. The
+        transports hold a replaced view's untrack until after the replacement
+        mounts only when this is true: with one record per user the replacement's
+        join and the old view's leave would address the same record.
+        """
+        from djust.backends.base import uses_per_connection
+
+        return uses_per_connection(cls._backend())
+
+    @classmethod
     def join_presence(
         cls,
         presence_key: str,

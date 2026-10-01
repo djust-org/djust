@@ -17,16 +17,19 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 
 from ..backends.base import (
+    PerConnectionPresenceBackend,
     PresenceBackend,
     aggregate_by_user,
     connection_member,
     member_belongs_to,
     merge_connection_records,
+    note_first,
 )
 from ..backends.redis import (
     CLEANUP_INTERVAL,
     CleanupThrottle,
     cleanup_stale_records,
+    count_presences,
     heartbeat_connection_records,
     join_connection_records,
     leave_connection_records,
@@ -58,7 +61,7 @@ class TenantAwareBackendMixin:
         return f"tenant:{self._tenant_id}:{key}"
 
 
-class TenantAwareRedisBackend(TenantAwareBackendMixin, PresenceBackend):
+class TenantAwareRedisBackend(TenantAwareBackendMixin, PerConnectionPresenceBackend):
     """
     Tenant-scoped Redis backend for presence tracking.
 
@@ -134,10 +137,7 @@ class TenantAwareRedisBackend(TenantAwareBackendMixin, PresenceBackend):
         """Join presence group, scoped to tenant."""
         return self._join(presence_key, user_id, connection_id, meta)[0]
 
-    def join_connection(
-        self, presence_key: str, user_id: str, connection_id: str, meta: Dict[str, Any]
-    ) -> Tuple[Dict[str, Any], bool]:
-        return self._join(presence_key, user_id, connection_id, meta)
+    _builtin_join = join
 
     def _join(
         self, presence_key: str, user_id: str, connection_id: Optional[str], meta: Dict[str, Any]
@@ -156,6 +156,7 @@ class TenantAwareRedisBackend(TenantAwareBackendMixin, PresenceBackend):
             extra={"tenant_id": self._tenant_id},
         )
         logger.debug("User %s joined tenant %s presence %s", user_id, self._tenant_id, presence_key)
+        note_first(result[1])
         return result
 
     def leave(
@@ -176,11 +177,6 @@ class TenantAwareRedisBackend(TenantAwareBackendMixin, PresenceBackend):
             )
         return record
 
-    def leave_connection(
-        self, presence_key: str, user_id: str, connection_id: str
-    ) -> Optional[Dict[str, Any]]:
-        return self.leave(presence_key, user_id, connection_id)
-
     def list(self, presence_key: str) -> List[Dict[str, Any]]:
         """List all active presences in the group, one per user.
 
@@ -199,13 +195,8 @@ class TenantAwareRedisBackend(TenantAwareBackendMixin, PresenceBackend):
 
     def count(self, presence_key: str) -> int:
         """Count active users in the group."""
-        return len(
-            read_presences(
-                self._client,
-                self._zset_key(presence_key),
-                self._meta_key(presence_key),
-                time.time() - self._timeout,
-            )
+        return count_presences(
+            self._client, self._zset_key(presence_key), time.time() - self._timeout
         )
 
     def heartbeat(
@@ -221,9 +212,6 @@ class TenantAwareRedisBackend(TenantAwareBackendMixin, PresenceBackend):
             now=time.time(),
             ttl=self._timeout * 3,
         )
-
-    def heartbeat_connection(self, presence_key: str, user_id: str, connection_id: str) -> None:
-        self.heartbeat(presence_key, user_id, connection_id)
 
     def cleanup_stale(self, presence_key: str) -> int:
         """Remove stale presences."""
@@ -283,7 +271,7 @@ def _tenant_memory_locked(fn: _F) -> _F:
     return wrapper  # type: ignore[return-value]
 
 
-class TenantAwareMemoryBackend(TenantAwareBackendMixin, PresenceBackend):
+class TenantAwareMemoryBackend(TenantAwareBackendMixin, PerConnectionPresenceBackend):
     """
     Tenant-scoped in-memory backend for presence tracking.
 
@@ -336,12 +324,9 @@ class TenantAwareMemoryBackend(TenantAwareBackendMixin, PresenceBackend):
         """Join presence group."""
         return self._join(presence_key, user_id, connection_id, meta)[0]
 
-    @_tenant_memory_locked
-    def join_connection(
-        self, presence_key: str, user_id: str, connection_id: str, meta: Dict[str, Any]
-    ) -> Tuple[Dict[str, Any], bool]:
-        return self._join(presence_key, user_id, connection_id, meta)
+    _builtin_join = join
 
+    @_tenant_memory_locked
     def _join(
         self, presence_key: str, user_id: str, connection_id: Optional[str], meta: Dict[str, Any]
     ) -> Tuple[Dict[str, Any], bool]:
@@ -371,7 +356,7 @@ class TenantAwareMemoryBackend(TenantAwareBackendMixin, PresenceBackend):
         record = merge_connection_records(
             r for m, r in presences.items() if member_belongs_to(m, user_id)
         )
-        return record, first
+        return record, note_first(first)
 
     @_tenant_memory_locked
     def leave(
@@ -405,12 +390,6 @@ class TenantAwareMemoryBackend(TenantAwareBackendMixin, PresenceBackend):
         return merge_connection_records(removed)
 
     @_tenant_memory_locked
-    def leave_connection(
-        self, presence_key: str, user_id: str, connection_id: str
-    ) -> Optional[Dict[str, Any]]:
-        return self.leave(presence_key, user_id, connection_id)
-
-    @_tenant_memory_locked
     def list(self, presence_key: str) -> List[Dict[str, Any]]:
         """List active presences, one per user."""
         self.cleanup_stale(presence_key)
@@ -433,12 +412,12 @@ class TenantAwareMemoryBackend(TenantAwareBackendMixin, PresenceBackend):
         else:
             members = [connection_member(user_id, connection_id)]
         now = time.time()
+        live = self._get_tenant_presences(presence_key)
         for member in members:
-            self._heartbeats.setdefault(self._tenant_id, {})[f"{presence_key}:{member}"] = now
-
-    @_tenant_memory_locked
-    def heartbeat_connection(self, presence_key: str, user_id: str, connection_id: str) -> None:
-        self.heartbeat(presence_key, user_id, connection_id)
+            # Only a connection that exists: a heartbeat after it left or expired
+            # must not leave an entry behind that nothing reclaims.
+            if member in live:
+                self._heartbeats.setdefault(self._tenant_id, {})[f"{presence_key}:{member}"] = now
 
     @_tenant_memory_locked
     def cleanup_stale(self, presence_key: str) -> int:

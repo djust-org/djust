@@ -19,6 +19,9 @@ the earliest of the user's connections and ``meta`` is the one the user's
 most recently joined connection supplied.
 """
 
+import inspect
+import threading
+import weakref
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -73,6 +76,54 @@ def aggregate_by_user(records: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]
     for record in records:
         by_user.setdefault(record["id"], []).append(record)
     return [merge_connection_records(group) for group in by_user.values()]
+
+
+def user_of_member(member: str) -> str:
+    """The user id of a :func:`connection_member` key (names only, no record read)."""
+    return member.split(CONNECTION_SEPARATOR, 1)[0]
+
+
+def _accepts_connection_id(fn: Any) -> bool:
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return True
+    return "connection_id" in params or any(
+        p.kind in (p.VAR_KEYWORD, p.VAR_POSITIONAL) for p in params.values()
+    )
+
+
+_per_connection_classes: "weakref.WeakKeyDictionary[type, bool]" = weakref.WeakKeyDictionary()
+
+
+def _class_is_per_connection(cls: type) -> bool:
+    cached = _per_connection_classes.get(cls)
+    if cached is not None:
+        return cached
+    # A subclass of a built-in backend that overrides join/leave/heartbeat with
+    # the old signature (no ``connection_id``) is a one-record-per-user backend.
+    result = bool(getattr(cls, "per_connection", False)) and all(
+        _accepts_connection_id(getattr(cls, n)) for n in ("join", "leave", "heartbeat")
+    )
+    _per_connection_classes[cls] = result
+    return result
+
+
+def uses_per_connection(backend: Any) -> bool:
+    """Whether ``backend`` stores one record per connection (#3254).
+
+    True for the built-in backends and for a subclass that keeps their
+    ``connection_id``-aware ``join`` / ``leave`` / ``heartbeat``. False for a
+    backend on the old three-method contract, and for a built-in subclass that
+    overrides any of the three with the old signature: those keep one record
+    per user, so ``PresenceMixin`` treats them as it always did.
+    """
+    return _class_is_per_connection(type(backend))
+
+
+#: Carries ``first`` from a built-in ``_join`` to ``join_connection`` when a
+#: subclass overrides ``join`` and calls ``super().join(...)``.
+_join_signal = threading.local()
 
 
 class PresenceBackend(ABC):
@@ -145,6 +196,12 @@ class PresenceBackend(ABC):
         """Check backend health."""
         raise NotImplementedError
 
+    #: True when the backend stores one record per connection (the built-ins).
+    #: ``PresenceMixin`` only holds a replaced view's untrack until after the
+    #: replacement mounts for such a backend: with one record per user the
+    #: replacement's join and the old view's leave address the same record.
+    per_connection: bool = False
+
     # -- per-connection entry points (#3254) --------------------------------
 
     def join_connection(
@@ -174,3 +231,52 @@ class PresenceBackend(ABC):
     def heartbeat_connection(self, presence_key: str, user_id: str, connection_id: str) -> None:
         """Refresh one connection of ``user_id``. The default calls ``heartbeat``."""
         self.heartbeat(presence_key, user_id)
+
+
+class PerConnectionPresenceBackend(PresenceBackend):
+    """Shared ``*_connection`` entry points of the built-in backends (#3254).
+
+    A concrete backend sets ``per_connection``, implements ``_join`` (which
+    reports the user's ``first`` connection through :func:`note_first`) and
+    gives ``join`` / ``leave`` / ``heartbeat`` an optional ``connection_id``.
+    A subclass that overrides one of the three with the old signature is
+    routed through the old contract (:func:`uses_per_connection`); one that
+    keeps the new signature is called, so an audit or metrics override still
+    sees every join, leave and heartbeat the mixin makes.
+    """
+
+    per_connection = True
+
+    def _join(
+        self, presence_key: str, user_id: str, connection_id: Optional[str], meta: Dict[str, Any]
+    ) -> Tuple[Dict[str, Any], bool]:
+        raise NotImplementedError
+
+    def join_connection(
+        self, presence_key: str, user_id: str, connection_id: str, meta: Dict[str, Any]
+    ) -> Tuple[Dict[str, Any], bool]:
+        if not uses_per_connection(self):
+            return PresenceBackend.join_connection(self, presence_key, user_id, connection_id, meta)
+        if type(self).join is getattr(type(self), "_builtin_join", None):
+            return self._join(presence_key, user_id, connection_id, meta)
+        _join_signal.first = True
+        record = self.join(presence_key, user_id, meta, connection_id)  # type: ignore[call-arg]
+        return record, bool(_join_signal.first)
+
+    def leave_connection(
+        self, presence_key: str, user_id: str, connection_id: str
+    ) -> Optional[Dict[str, Any]]:
+        if not uses_per_connection(self):
+            return PresenceBackend.leave_connection(self, presence_key, user_id, connection_id)
+        return self.leave(presence_key, user_id, connection_id)  # type: ignore[call-arg]
+
+    def heartbeat_connection(self, presence_key: str, user_id: str, connection_id: str) -> None:
+        if not uses_per_connection(self):
+            return PresenceBackend.heartbeat_connection(self, presence_key, user_id, connection_id)
+        self.heartbeat(presence_key, user_id, connection_id)  # type: ignore[call-arg]
+
+
+def note_first(first: bool) -> bool:
+    """Record ``first`` for ``join_connection`` (see ``_join_signal``); returns it."""
+    _join_signal.first = first
+    return first

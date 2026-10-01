@@ -271,19 +271,95 @@ def test_a_record_written_before_connections_existed_is_one_legacy_connection():
     assert ids(backend) == ["alice"]
 
 
-def test_two_nodes_joining_a_users_first_connections_do_not_both_see_an_empty_group():
-    """The ``first`` decision is read in the same MULTI that writes the connection."""
+def test_concurrent_first_joins_of_one_user_report_exactly_one_first(backend):
+    """The ``first`` decision is atomic: with 16 threads joining one user's first
+    connections at once, exactly one sees an empty group. A check-then-set fails this."""
+    import threading
+
+    barrier = threading.Barrier(16)
+    firsts = []
+
+    def join(i):
+        barrier.wait()
+        firsts.append(backend.join_connection(ROOM, "alice", f"tab-{i}", {})[1])
+
+    threads = [threading.Thread(target=join, args=(i,)) for i in range(16)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert sorted(firsts) == [False] * 15 + [True]
+    assert ids(backend) == ["alice"]
+
+
+def test_concurrent_leaves_report_exactly_one_last(backend):
+    import threading
+
+    for i in range(16):
+        backend.join_connection(ROOM, "alice", f"tab-{i}", {})
+    barrier = threading.Barrier(16)
+    lasts = []
+
+    def leave(i):
+        barrier.wait()
+        lasts.append(backend.leave_connection(ROOM, "alice", f"tab-{i}") is not None)
+
+    threads = [threading.Thread(target=leave, args=(i,)) for i in range(16)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert sorted(lasts) == [False] * 15 + [True]
+    assert backend.list(ROOM) == []
+
+
+def test_two_redis_nodes_share_one_store():
     client = _fake_redis()
     with patch("redis.from_url", return_value=client):
         node1 = RedisPresenceBackend(redis_url="redis://fake:6379/0", timeout=60)
         node2 = RedisPresenceBackend(redis_url="redis://fake:6379/0", timeout=60)
-    firsts = [
-        node1.join_connection(ROOM, "alice", "n1", {})[1],
-        node2.join_connection(ROOM, "alice", "n2", {})[1],
-    ]
-    assert firsts == [True, False]
+    assert node1.join_connection(ROOM, "alice", "n1", {})[1] is True
+    assert node2.join_connection(ROOM, "alice", "n2", {})[1] is False
     assert node2.leave_connection(ROOM, "alice", "n2") is None
     assert node1.leave_connection(ROOM, "alice", "n1") is not None
+
+
+def test_redis_count_reads_member_names_only(backend):
+    if not isinstance(backend, (RedisPresenceBackend, TenantAwareRedisBackend)):
+        pytest.skip("Redis only")
+    from collections import Counter
+
+    from fakeredis._basefakesocket import BaseFakeSocket
+
+    backend.join_connection(ROOM, "alice", "a1", {})
+    backend.join_connection(ROOM, "alice", "a2", {})
+    backend.join_connection(ROOM, "bob", "b1", {})
+    seen: Counter = Counter()
+    original = BaseFakeSocket._process_command
+
+    def record(self, fields):
+        if fields:
+            name = fields[0]
+            seen[(name.decode() if isinstance(name, bytes) else str(name)).upper()] += 1
+        return original(self, fields)
+
+    with patch.object(BaseFakeSocket, "_process_command", record):
+        assert backend.count(ROOM) == 2
+    assert dict(seen) == {"ZRANGEBYSCORE": 1}
+
+
+def test_a_tenant_memory_heartbeat_does_not_create_an_entry_for_a_missing_connection():
+    TenantAwareMemoryBackend.clear_all()
+    backend = TenantAwareMemoryBackend(tenant_id="acme", timeout=60)
+    backend.heartbeat_connection(ROOM, "alice", "never-joined")
+    backend.heartbeat(ROOM, "alice")
+    backend.join_connection(ROOM, "alice", "tab-a", {})
+    backend.leave_connection(ROOM, "alice", "tab-a")
+    backend.heartbeat_connection(ROOM, "alice", "tab-a")
+    assert TenantAwareMemoryBackend._heartbeats["acme"] == {}
+    TenantAwareMemoryBackend.clear_all()
 
 
 # --------------------------------------------------------------------------- #
@@ -387,6 +463,82 @@ def test_the_mixin_on_an_old_contract_backend_behaves_as_it_always_did(installed
     b.untrack_presence()  # nothing left to remove: no second leave
 
     assert seen == ["join", "join", "leave"]
+
+
+class AuditedMemory(InMemoryPresenceBackend):
+    """A subclass of a built-in backend that overrides the old-signature methods."""
+
+    def __init__(self):
+        super().__init__(timeout=60)
+        self.log = []
+
+    def join(self, key, user, meta):
+        self.log.append(("join", user))
+        return super().join(key, user, meta)
+
+    def leave(self, key, user):
+        self.log.append(("leave", user))
+        return super().leave(key, user)
+
+    def heartbeat(self, key, user):
+        self.log.append(("heartbeat", user))
+        return super().heartbeat(key, user)
+
+
+def test_a_builtin_subclass_with_old_signature_overrides_is_driven_the_old_way(installed):
+    """No TypeError, and the override sees every call: it is a one-record-per-user backend."""
+    from djust.backends.base import uses_per_connection
+
+    audited = installed(AuditedMemory())
+    assert uses_per_connection(audited) is False
+    assert PresenceManager.per_connection() is False
+
+    record, first = PresenceManager.join_connection(ROOM, "alice", "tab-a", {"c": 1})
+    assert record["id"] == "alice" and first is True
+    PresenceManager.update_heartbeat(ROOM, "alice", "tab-a")
+    assert PresenceManager.leave_connection(ROOM, "alice", "tab-a")["id"] == "alice"
+
+    assert audited.log == [("join", "alice"), ("heartbeat", "alice"), ("leave", "alice")]
+    assert PresenceManager.list_presences(ROOM) == []
+
+
+class AuditedNewSignature(InMemoryPresenceBackend):
+    def __init__(self):
+        super().__init__(timeout=60)
+        self.log = []
+
+    def join(self, key, user, meta, connection_id=None):
+        self.log.append(("join", user, connection_id))
+        return super().join(key, user, meta, connection_id)
+
+    def leave(self, key, user, connection_id=None):
+        self.log.append(("leave", user, connection_id))
+        return super().leave(key, user, connection_id)
+
+
+def test_a_builtin_subclass_with_new_signature_overrides_stays_per_connection(installed):
+    audited = installed(AuditedNewSignature())
+    assert PresenceManager.per_connection() is True
+
+    _, first_a = PresenceManager.join_connection(ROOM, "alice", "tab-a", {})
+    _, first_b = PresenceManager.join_connection(ROOM, "alice", "tab-b", {})
+    assert (first_a, first_b) == (True, False)
+    assert PresenceManager.leave_connection(ROOM, "alice", "tab-a") is None
+    assert PresenceManager.leave_connection(ROOM, "alice", "tab-b") is not None
+    assert audited.log == [
+        ("join", "alice", "tab-a"),
+        ("join", "alice", "tab-b"),
+        ("leave", "alice", "tab-a"),
+        ("leave", "alice", "tab-b"),
+    ]
+
+
+def test_the_builtins_and_a_plain_old_contract_backend_are_classified(installed):
+    from djust.backends.base import uses_per_connection
+
+    assert uses_per_connection(InMemoryPresenceBackend()) is True
+    assert uses_per_connection(TenantAwareMemoryBackend(tenant_id="acme")) is True
+    assert uses_per_connection(OldContractBackend()) is False
 
 
 # --------------------------------------------------------------------------- #
@@ -925,4 +1077,51 @@ async def test_a_ping_keeps_every_view_of_a_mount_batch_alive(ws_env):
             ages = [time.time() - ts for (k, _), ts in ws_env._heartbeats.items() if k == room]
             assert ages and all(age < 5 for age in ages), (room, ages)
     finally:
+        await _close(tab)
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_old_contract_backend_same_room_navigation_ends_with_the_user_present(ws_env):
+    """One record per user: the replacement's join and the old view's leave address
+    the same record, so the order must stay leave, mount, join as before #3254."""
+    old = OldContractBackend()
+    set_presence_backend(old)
+    tab = await _connect(await sync_to_async(_fresh_key)())
+    try:
+        await _mount(tab, WsRoom, "/room/")
+        (user,) = await _present(WS_ROOM)
+        old.calls.clear()
+
+        await _redirect(tab, WsRoomTwo, "/room2/")
+
+        assert await _present(WS_ROOM) == [user]  # on the page, and present
+        assert [c[0] for c in old.calls] == ["leave", "join"]
+        assert tab.consumer.view_instance._presence_tracked is True
+    finally:
+        await _close(tab)
+    assert await _present(WS_ROOM) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_a_cancelled_flush_requeues_the_views_it_did_not_reach(ws_env):
+    tab = await _connect(await sync_to_async(_fresh_key)())
+    try:
+        await _mount(tab, WsRoom, "/room/")
+        consumer = tab.consumer
+        first, second = object(), object()
+        consumer._deferred_presence_untrack = [first, second]
+
+        async def cancelled(views):
+            raise asyncio.CancelledError
+
+        consumer._untrack_presence_of = cancelled
+        with pytest.raises(asyncio.CancelledError):
+            await consumer._flush_deferred_presence_untrack()
+
+        assert consumer._deferred_presence_untrack == [first, second]
+    finally:
+        del consumer._untrack_presence_of
+        consumer._deferred_presence_untrack = []
         await _close(tab)
