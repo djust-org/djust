@@ -79,3 +79,39 @@ def test_no_banner_when_auto_enable_is_off(tmp_path):
     extra = 'LIVEVIEW_CONFIG = {"hot_reload_auto_enable": False}'
     proc = _run(tmp_path, "djust_audit", "--dump-permissions", extra=extra)
     assert "[HotReload]" not in proc.stdout + proc.stderr
+
+
+def _enable(monkeypatch, tmp_path):
+    import djust
+    from djust.dev_server import hot_reload_server
+
+    monkeypatch.setattr(hot_reload_server, "is_running", lambda: False)
+    monkeypatch.setattr(hot_reload_server, "start", lambda **kwargs: None)
+    from django.test import override_settings
+
+    return djust, override_settings(DEBUG=True, BASE_DIR=tmp_path)
+
+
+def test_banner_is_not_written_twice_when_logging_carries_it(monkeypatch, tmp_path, caplog, capsys):
+    import logging
+
+    djust, ctx = _enable(monkeypatch, tmp_path)
+    with ctx, caplog.at_level(logging.INFO, logger="djust"):
+        djust.enable_hot_reload()
+    assert "Hot reload enabled for directories" in caplog.text
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "[HotReload]" not in captured.err
+
+
+def test_banner_falls_back_to_stderr_when_nothing_listens(monkeypatch, tmp_path, capsys):
+    import logging
+
+    djust, ctx = _enable(monkeypatch, tmp_path)
+    root = logging.getLogger()
+    monkeypatch.setattr(root, "handlers", [])
+    with ctx:
+        djust.enable_hot_reload()
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.count("[HotReload] Hot reload enabled for directories") == 1

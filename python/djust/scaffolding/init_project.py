@@ -230,6 +230,7 @@ def plan_asgi(project: Project) -> Tuple[Optional[FileChange], Step, Optional[st
 
 
 _REQUIREMENT_NAME_RE = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
+_REQUIREMENT_EXTRAS_RE = re.compile(r"^\s*[A-Za-z0-9][A-Za-z0-9._-]*\s*\[([^\]]*)\]")
 _INCLUDE_RE = re.compile(r"^\s*(?:-r|--requirement)[\s=]+(\S+)")
 _ALREADY_DECLARED = "djust, channels and uvicorn already declared in pyproject.toml"
 FIRST_LIVEVIEW_URL = "https://docs.djust.org/getting-started/first-liveview/"
@@ -265,11 +266,19 @@ class PackageAction:
     runnable: bool
 
 
-def _declared_dependencies(pyproject: Path) -> Optional[set]:
-    """Canonical names in ``[project].dependencies``, or None when unreadable.
+def _extras(requirement: str) -> set:
+    """The extras a PEP 508 requirement string asks for, canonicalised."""
+    found = _REQUIREMENT_EXTRAS_RE.match(requirement)
+    if not found:
+        return set()
+    return {_canonical_name(extra) for extra in found.group(1).split(",") if extra.strip()}
 
-    Only the name is read, so every PEP 508 form counts (extras, markers, a
-    ``name @ url`` reference); the specifier is deliberately left alone.
+
+def _declared_dependencies(pyproject: Path) -> Optional[dict]:
+    """``[project].dependencies`` as {canonical name: extras}, or None when unreadable.
+
+    Names and extras are read, the specifier is deliberately left alone. Every
+    PEP 508 form counts (markers, a ``name @ url`` reference).
     """
     try:
         try:
@@ -279,26 +288,36 @@ def _declared_dependencies(pyproject: Path) -> Optional[set]:
         data = tomllib.loads(_read(pyproject))
     except (ImportError, OSError, ValueError):
         return None
-    names = set()
+    declared: dict = {}
     for entry in data.get("project", {}).get("dependencies", []):
         match = _REQUIREMENT_NAME_RE.match(entry) if isinstance(entry, str) else None
         if match:
-            names.add(_canonical_name(match.group(1)))
-    return names
+            declared.setdefault(_canonical_name(match.group(1)), set()).update(_extras(entry))
+    return declared
 
 
 def _undeclared_requirements(pyproject: Path) -> List[str]:
-    """The requirements ``uv add`` must add: ``uv add`` rewrites the specifier
-    of a package it is given, so one the project already declares is left out
-    (#3296), as ``plan_requirements`` does for requirements.txt."""
+    """The requirements ``uv add`` must be given.
+
+    ``uv add`` rewrites the specifier of a package it is given, so one the
+    project already declares is left out (#3296), as ``plan_requirements`` does
+    for requirements.txt. A declared package that lacks an extra the scaffold
+    needs (``uvicorn`` without ``[standard]``, which carries the WebSocket
+    library) is passed as ``name[extras]`` with NO specifier: uv keeps the
+    existing specifier and adds the extra, so the user's bounds survive.
+    """
     declared = _declared_dependencies(pyproject) if pyproject.exists() else None
     if declared is None:
         return requirements()
-    return [
-        req
-        for req in requirements()
-        if _canonical_name(_REQUIREMENT_NAME_RE.match(req).group(1)) not in declared
-    ]
+    needed = []
+    for req in requirements():
+        name = _REQUIREMENT_NAME_RE.match(req).group(1)
+        have = declared.get(_canonical_name(name))
+        if have is None:
+            needed.append(req)
+        elif _extras(req) - have:
+            needed.append("%s[%s]" % (name, ",".join(sorted(_extras(req) | have))))
+    return needed
 
 
 def choose_package_action(root: Path, python: Optional[Path], uv_available: bool) -> PackageAction:
@@ -359,20 +378,64 @@ def _mentions(line: str, name: str) -> bool:
     return False
 
 
+def _add_extras_to_line(line: str, name: str, extras: set) -> Optional[str]:
+    """``line`` with ``extras`` added after the package name, or None when the
+    line is not a plain ``name[extras] spec`` requirement for ``name``."""
+    found = _REQUIREMENT_NAME_RE.match(line)
+    if not found or _canonical_name(found.group(1)) != _canonical_name(name):
+        return None
+    if line[found.end() :].lstrip().startswith("@"):
+        return None  # a direct URL reference: leave it alone
+    have = _extras(line)
+    if extras <= have:
+        return line
+    rest = line[found.end() :]
+    existing = _REQUIREMENT_EXTRAS_RE.match(line)
+    if existing:
+        rest = line[existing.end() :]
+    return "%s[%s]%s" % (line[: found.end()], ",".join(sorted(extras | have)), rest)
+
+
 def plan_requirements(root: Path) -> Optional[FileChange]:
     path = root / "requirements.txt"
     old = _read(path)
     lines = _requirement_lines(path)
-    missing = [
-        req
-        for req in requirements()
-        if not any(_mentions(line, _REQUIREMENT_NAME_RE.match(req).group(1)) for line in lines)
-    ]
-    if not missing:
+    missing = []
+    rewrites = {}  # name -> extras still needed on an existing line
+    for req in requirements():
+        name = _REQUIREMENT_NAME_RE.match(req).group(1)
+        mentioning = [line for line in lines if _mentions(line, name)]
+        if not mentioning:
+            missing.append(req)
+        elif _extras(req) and not any(
+            _extras(req) <= _extras(line) or _add_extras_to_line(line, name, set()) is None
+            for line in mentioning
+        ):
+            # Only plain ``name spec`` lines mention it, and none has the extra
+            # the scaffold needs (``uvicorn>=0.30`` lacks ``[standard]``).
+            rewrites[name] = _extras(req)
+    if not missing and not rewrites:
         return None
     newline = "\r\n" if "\r\n" in old else "\n"
-    prefix = old if not old or old.endswith("\n") else old + newline
-    return FileChange(path, old, prefix + "".join(req + newline for req in missing))
+    out = []
+    for raw in old.splitlines(keepends=True):
+        body = raw.rstrip("\r\n")
+        tail = raw[len(body) :]
+        for name, extras in rewrites.items():
+            changed = _add_extras_to_line(body, name, extras)
+            if changed is not None and changed != body:
+                body = changed
+                rewrites = {k: v for k, v in rewrites.items() if k != name}
+                break
+        out.append(body + tail)
+    new = "".join(out)
+    if missing:
+        new = (new if not new or new.endswith("\n") else new + newline) + "".join(
+            req + newline for req in missing
+        )
+    if new == old:
+        return None
+    return FileChange(path, old, new)
 
 
 def dirty_files(root: Path, paths: List[Path]) -> List[str]:

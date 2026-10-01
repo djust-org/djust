@@ -228,7 +228,13 @@ Django's default for the same settings module), the `djust`, `channels`, and
 `uvicorn[standard]` packages, and a final `manage.py check`. A package the
 project already declares keeps its specifier: on a uv project `init` runs
 `uv add` only for the ones missing from `[project].dependencies`, and on a
-`requirements.txt` project it appends only the missing lines.
+`requirements.txt` project it appends only the missing lines. A declared
+package keeps its version specifier, including one looser than the running
+djust (`djust>=1.0` is left as it is). If the declared `uvicorn` lacks the
+`[standard]` extra, which carries the WebSocket library, `init` adds the extra
+and keeps the specifier: `uv add 'uvicorn[standard]'` on a uv project, and an
+in-place edit of that line in `requirements.txt`. A requirement in an included
+file (`-r base.txt`) is never edited.
 
 | Option | Effect |
 |---|---|

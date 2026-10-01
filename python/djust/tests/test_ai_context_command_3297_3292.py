@@ -69,6 +69,25 @@ def test_refusal_names_the_file_and_the_alternatives(in_tmp):
     assert "--force" in message and "--output" in message and "--print" in message
 
 
+def test_file_created_by_another_process_mid_run_is_refused(in_tmp, monkeypatch):
+    # The file appears after the command decided to write but before it opens
+    # the target: exclusive-create must refuse rather than truncate it.
+    target = in_tmp / "CLAUDE.md"
+    real_open = open
+
+    def create_then_open(path, mode="r", *args, **kwargs):
+        if os.fspath(path) == "CLAUDE.md":
+            target.write_text(HAND_WRITTEN)
+        return real_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(
+        "djust.management.commands.djust_ai_context.open", create_then_open, raising=False
+    )
+    with pytest.raises(CommandError, match="already exists"):
+        _run()
+    assert target.read_text() == HAND_WRITTEN
+
+
 def test_force_replaces_an_existing_file(in_tmp):
     (in_tmp / "CLAUDE.md").write_text(HAND_WRITTEN)
     assert "Wrote CLAUDE.md" in _run("--force")
@@ -99,6 +118,10 @@ REQUIRED_LINES = [
     "login_required",
     "permission_required",
     "{% csrf_token %}",
+    '["myapp.views", "djust"]',
+    "from djust import LoginRequiredMixin, PermissionRequiredMixin",
+    "X008",
+    "--force",
 ]
 
 

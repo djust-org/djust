@@ -402,11 +402,15 @@ def enable_hot_reload():
         banner = "[HotReload] Hot reload enabled for directories: %s" % ", ".join(
             str(d) for d in watch_dirs
         )
-        # stderr, never stdout: ready() runs this for every management command,
-        # and ``manage.py <cmd> > file`` would otherwise start with the banner
-        # (#3298). The dev-server banner stays visible; logging may be unset.
-        sys.stderr.write(banner + "\n")
-        logger.info("%s", banner)
+        # Never stdout: ready() runs this for every management command, and
+        # ``manage.py <cmd> > file`` would otherwise start with the banner
+        # (#3298). Use logging when something is listening for it, else write
+        # to stderr so the dev-server banner stays visible; not both, which
+        # printed it twice when INFO records also reach the terminal.
+        if logger.isEnabledFor(logging.INFO) and logger.hasHandlers():
+            logger.info("%s", banner)
+        else:
+            sys.stderr.write(banner + "\n")
     except Exception as e:
         # logger.error reaches stderr through logging's last-resort handler.
         logger.error("[HotReload] Failed to start hot reload server: %s", e)
