@@ -9,6 +9,15 @@
  * djust-components defaults so theming overrides take effect.
  */
 
+/* The `hidden` attribute must hide a component (#3290). Many component classes
+   set `display: flex|grid|inline-flex`, and an author `display` beats the UA's
+   `[hidden] { display: none }`, so `<div class="progress-wrapper" hidden>` stayed
+   visible. `!important` makes the attribute win over every one of them, as
+   Tailwind's preflight does; `until-found` keeps find-in-page reveal working. */
+[hidden]:not([hidden="until-found"]) {
+    display: none !important;
+}
+
 /* ==========================================================================
    Alert
    ========================================================================== */
