@@ -896,7 +896,7 @@ name = "{dist_name}"
 version = "0.1.0"
 description = "djust-theming theme package: {name}"
 {author_line}
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = {{text = "MIT"}}
 
 dependencies = [

@@ -4,7 +4,7 @@ Get a LiveView running in under 5 minutes.
 
 ## Prerequisites
 
-- Python 3.10+
+- Python 3.11+
 - Django 4.2+
 - Django Channels 4.0+ (for WebSocket support)
 

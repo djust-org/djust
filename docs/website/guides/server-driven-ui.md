@@ -292,7 +292,7 @@ async def wait_for_event(
 ```
 
 - **`name`** — the name of the event handler to wait for. Must match a method decorated with `@event_handler`. Any call to that handler resolves the waiter (unless a predicate filters it out).
-- **`timeout`** — optional seconds to wait. Raises `asyncio.TimeoutError` when exceeded. `None` (the default) waits indefinitely. Catch `asyncio.TimeoutError`, not the builtin `TimeoutError`: on Python 3.10 they are different classes.
+- **`timeout`** — optional seconds to wait. Raises `asyncio.TimeoutError` when exceeded. `None` (the default) waits indefinitely. `asyncio.TimeoutError` is the builtin `TimeoutError` on every supported Python (3.11+), so either name catches it.
 - **`predicate`** — optional callable that takes the handler's kwargs dict and returns `True` to resolve or `False` to keep waiting. Useful for "wait for the user to click *this specific* button" when multiple events might fire the same handler with different arguments.
 - **Returns** — the kwargs dict that was passed to the matching handler.
 

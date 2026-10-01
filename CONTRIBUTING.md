@@ -17,7 +17,7 @@ Thank you for your interest in contributing! We welcome contributions from every
 
 ### Prerequisites
 
-- Python 3.10+
+- Python 3.11+
 - Rust 1.70+
 - Django 4.2+ (see `pyproject.toml` for the exact pin)
 

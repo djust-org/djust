@@ -15,5 +15,3 @@
 # - The reason and the review-by date are both required. The gate fails once a
 #   review-by date has passed, so an exception cannot outlive its review.
 # - Remove the entry as soon as a fixed version is locked.
-
-CVE-2026-77528  # autobahn 24.4.2 (Python 3.10 installs only, via channels[daphne]): the fix, 26.7.1, requires Python >=3.11, so no fixed autobahn exists for 3.10. Python 3.11+ locks 26.7.1. Drop with 3.10 support or if a 3.10 backport ships; review-by 2026-12-31

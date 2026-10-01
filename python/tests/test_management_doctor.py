@@ -49,6 +49,18 @@ class TestCheckPythonVersion(SimpleTestCase):
         result = check_python_version()
         self.assertEqual(result.status, _CheckResult.FAIL)
 
+    @patch.object(sys, "version_info", (3, 10, 14, "final", 0))
+    def test_python_310_fails(self):
+        # 3.11 is the floor since 1.3 (#3059); 3.10 users stay on 1.2.
+        result = check_python_version()
+        self.assertEqual(result.status, _CheckResult.FAIL)
+        self.assertIn(">= 3.11", result.message)
+
+    @patch.object(sys, "version_info", (3, 11, 0, "final", 0))
+    def test_python_311_is_the_floor(self):
+        result = check_python_version()
+        self.assertEqual(result.status, _CheckResult.OK)
+
 
 class TestCheckDjangoVersion(SimpleTestCase):
     def test_current_django(self):
