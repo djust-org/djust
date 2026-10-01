@@ -227,3 +227,88 @@ def test_hash_locked_report_includes_a_marker_only_extra(tmp_path):
         "uvicorn[standard]==0.35; sys_platform == 'win32' \\\n    --hash=sha256:c\n",
     )
     assert init.hash_locked_requirements(tmp_path) == ["uvicorn[standard]>=0.30"]
+
+
+# --- review of #3321 ------------------------------------------------------------
+
+
+def test_marker_declared_packages_that_need_no_extra_are_not_reported(tmp_path):
+    # djust and channels need no extra: a marker on them is not for init to report.
+    action = _uv(tmp_path, '"uvicorn[standard]>=0.30"')  # baseline: nothing to do
+    assert action.command == [] and action.manual == []
+    uv_project(
+        tmp_path,
+        "\"djust==1.2.2; python_version>'3.9'\", \"channels>=4.2; sys_platform != 'win32'\", "
+        '"uvicorn[standard]>=0.30"',
+    )
+    action = init.choose_package_action(tmp_path, None, uv_available=True)
+    assert action.command == []
+    assert action.manual == []
+
+
+def test_rerunning_init_on_marker_declared_packages_is_clean(tmp_path):
+    make_project(tmp_path)
+    uv_project(
+        tmp_path,
+        "\"djust==1.2.2; python_version>'3.9'\", \"channels>=4.2; sys_platform != 'win32'\", "
+        '"uvicorn[standard]>=0.30"',
+    )
+    result, _ = _run_init(tmp_path)
+    again, _ = _run_init(tmp_path)
+    for run in (result, again):
+        assert run.exit_code == 0
+        assert not any(s.status == init.ATTENTION for s in run.steps)
+        assert not any(s.name == "pyproject.toml" for s in run.steps)
+
+
+def test_attention_and_already_declared_are_not_both_printed(tmp_path):
+    make_project(tmp_path)
+    uv_project(tmp_path, "%s, \"uvicorn>=0.30; python_version>'3.9'\"" % BASE)
+    result, _ = _run_init(tmp_path)
+    packages = next(s for s in result.steps if s.name == "packages")
+    assert "already declared" not in packages.detail
+    assert "pyproject.toml" in packages.detail
+    assert any(s.name == "pyproject.toml" and s.status == init.ATTENTION for s in result.steps)
+
+
+def test_init_reports_a_marked_only_requirements_extra(tmp_path):
+    make_project(tmp_path)
+    _requirements(tmp_path, SATISFIED + "uvicorn[standard]>=0.30; sys_platform == 'win32'\n")
+    with patch.object(init.shutil, "which", return_value=None):
+        result = init.init_project(tmp_path, install=True, force=True, dry_run=True)
+    step = next(s for s in result.steps if s.name == "requirements.txt")
+    assert step.status == init.ATTENTION
+    assert "environment marker" in "\n".join(result.notes)
+    assert (tmp_path / "requirements.txt").read_text().endswith("sys_platform == 'win32'\n")
+
+
+def test_a_hash_locked_tree_is_reported_once_not_twice(tmp_path):
+    # requirements_by_hand defers to hash_locked_requirements for a locked file,
+    # so an included file lacking the extra does not add a second requirements.txt step.
+    make_project(tmp_path)
+    (tmp_path / "base.txt").write_text(
+        "djust==1.2.2 \\\n    --hash=sha256:a\nchannels==4.2 \\\n    --hash=sha256:b\n"
+        "uvicorn==0.35 \\\n    --hash=sha256:c\n"
+    )
+    _requirements(tmp_path, "-r base.txt\n")
+    assert init.requirements_by_hand(tmp_path) == []
+    with patch.object(init.shutil, "which", return_value=None):
+        result = init.init_project(tmp_path, install=True, force=True, dry_run=True)
+    steps = [s for s in result.steps if s.name == "requirements.txt"]
+    assert len(steps) == 1
+    assert "hash-locked" in steps[0].detail
+
+
+# --- a `-r` cycle spelled with `..` (pre-existing) -----------------------------
+
+
+def test_an_include_cycle_spelled_with_dotdot_terminates(tmp_path):
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "requirements.txt").write_text("-r sub/../requirements.txt\ndjust\nchannels\n")
+    assert init.plan_requirements(tmp_path) is not None  # uvicorn is missing, and no crash
+    (tmp_path / "sub" / "a.txt").write_text("-r ../sub/a.txt\n")
+    (tmp_path / "requirements.txt").write_text("-r sub/a.txt\ndjust\nchannels\nuvicorn[standard]\n")
+    assert init.plan_requirements(tmp_path) is None
+    assert init.hash_locked_requirements(tmp_path) is None
+    (tmp_path / "requirements.txt").write_text("-r sub/../sub/a.txt\ndjust\n")
+    assert init.requirements_by_hand(tmp_path) == []

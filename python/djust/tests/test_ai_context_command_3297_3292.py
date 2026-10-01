@@ -125,6 +125,7 @@ REQUIRED_LINES = [
     # #3304: login-over-WebSocket and the HTTP fallback's get_context_data()
     "Do not call `login()` in an event handler",
     "dj-trigger-action",
+    "`dj-submit`",
     "self.trigger_submit(",
     "djust_auth:login",
     "## State and `get_context_data()`",
@@ -159,13 +160,44 @@ def test_audit_codes_named_in_the_context_exist():
         assert code in AST_FINDING_CODES
 
 
-def test_login_and_state_notes_name_real_apis_3304():
-    # The notes name self.trigger_submit() and the djust_auth:login URL; both must exist.
+def _login_note():
+    content = _run("--print")
+    start = content.index("**Do not call `login()` in an event handler.**")
+    return content[start : content.index("\n", start)]
+
+
+def test_login_note_names_only_apis_that_exist_3304():
+    # Parse the names out of the generated note, so removing or renaming one of
+    # them breaks this test (and the note gets updated with it).
+    import re
+
     from djust import LiveView
     from djust.auth import urls as auth_urls
+    from djust.schema import DIRECTIVES
 
-    assert auth_urls.app_name == "djust_auth"
+    note = _login_note()
 
-    assert callable(getattr(LiveView, "trigger_submit", None))
+    methods = re.findall(r"self\.(\w+)\(", note)
+    assert methods == ["trigger_submit"]
+    for name in methods:
+        assert callable(getattr(LiveView, name, None)), name
+
+    directives = {d["name"] for d in DIRECTIVES}
+    attrs = re.findall(r"`(dj-[\w-]+)`", note)
+    assert {"dj-submit", "dj-trigger-action"} <= set(attrs)
+    for attr in attrs:
+        assert attr in directives, attr
+
+    for namespace, name in re.findall(r"'(\w+):(\w+)'", note):
+        assert namespace == auth_urls.app_name
+        assert name in {p.name for p in auth_urls.urlpatterns}, name
+    assert "djust_auth:login" in note
+
+
+def test_state_note_calls_a_real_method_3304():
+    from djust import LiveView
+
     content = _run("--print")
-    assert "djust_auth:login" in content
+    assert "super().get_context_data(**kwargs)" in content
+    assert callable(getattr(LiveView, "get_context_data", None))
+    assert callable(getattr(LiveView, "mount", None))

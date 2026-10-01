@@ -5,5 +5,5 @@
   declaration, so a marked pair no longer adds up to "satisfied" (pyproject.toml and requirements.txt); a marked-only
   extra in requirements.txt is reported, and an unmarked line still gets the extra in place while marked lines are left
   alone. An extra missing only in a `-r` included file, which `init` does not edit, is reported (ATTENTION step plus a
-  note naming the file) instead of skipped silently. 20 regression cases in
+  note naming the file) instead of skipped silently. An include cycle spelled with `..` (a `-r` path that goes through `..`) no longer recurses forever. 26 regression cases in
   `python/djust/tests/test_djust_init_markers_3312.py`.

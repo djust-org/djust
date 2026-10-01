@@ -233,6 +233,7 @@ _REQUIREMENT_NAME_RE = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
 _REQUIREMENT_EXTRAS_RE = re.compile(r"^\s*[A-Za-z0-9][A-Za-z0-9._-]*\s*\[([^\]]*)\]")
 _INCLUDE_RE = re.compile(r"^\s*(?:-r|--requirement)[\s=]+(\S+)")
 _ALREADY_DECLARED = "djust, channels and uvicorn already declared in pyproject.toml"
+_NOTHING_FOR_UV = "nothing for uv to add (see the pyproject.toml step)"
 FIRST_LIVEVIEW_URL = "https://docs.djust.org/getting-started/first-liveview/"
 
 
@@ -343,6 +344,8 @@ def _plan_uv_requirements(pyproject: Path) -> Tuple[List[str], List[str]]:
             needed.append(req)
             continue
         wanted = _extras(req)
+        if not wanted:
+            continue  # declared, and no extra to check: a marker on it is the user's business
         if any(wanted <= extras for extras, marked in entries if not marked):
             continue
         if any(marked for _, marked in entries):
@@ -388,9 +391,10 @@ def _requirement_entries(path: Path, seen: Optional[set] = None) -> List[Tuple[s
     """Non-comment lines of a requirements file and the files it includes, each
     with the file it was read from."""
     seen = set() if seen is None else seen
-    if path in seen or not path.is_file():
+    key = os.path.realpath(path)  # `a/../b.txt` and `b.txt` are one file
+    if key in seen or not path.is_file():
         return []
-    seen.add(path)
+    seen.add(key)
     entries: List[Tuple[str, Path]] = []
     for line in _read(path).splitlines():
         line = line.split(" #", 1)[0].strip()
@@ -445,9 +449,10 @@ def _uses_hashes(path: Path, seen: Optional[set] = None) -> bool:
     hash, so every requirement in the tree then needs one.
     """
     seen = set() if seen is None else seen
-    if path in seen or not path.is_file():
+    key = os.path.realpath(path)
+    if key in seen or not path.is_file():
         return False
-    seen.add(path)
+    seen.add(key)
     for line in _read(path).splitlines():
         line = line.split(" #", 1)[0].strip()
         if not line or line.startswith("#"):
@@ -499,7 +504,7 @@ def _requirement_edits(path: Path) -> _RequirementEdits:
             continue
         if not unmarked:
             edits.by_hand.append(req)
-        elif any(origin == path for _, origin in unmarked):
+        elif any(os.path.realpath(origin) == os.path.realpath(path) for _, origin in unmarked):
             edits.rewrites[name] = wanted
         else:
             edits.included[name] = sorted({str(origin) for _, origin in unmarked})
@@ -744,6 +749,8 @@ def init_project(
 
     command = shlex.join(action.command)
     nothing_to_add = action.kind == "uv" and not action.command
+    # Not "already declared" when an extra is still for the user to add by hand.
+    declared_detail = _NOTHING_FOR_UV if action.manual else _ALREADY_DECLARED
     if dry_run:
         result.steps = [
             Step(step.name, PLANNED, step.planned or step.detail) if step.status == DONE else step
@@ -752,7 +759,7 @@ def init_project(
         if not install:
             result.steps.append(Step("packages", SKIPPED, "--no-install"))
         elif nothing_to_add:
-            result.steps.append(Step("packages", UNCHANGED, _ALREADY_DECLARED))
+            result.steps.append(Step("packages", UNCHANGED, declared_detail))
         else:
             result.steps.append(Step("packages", SKIPPED, "would run: %s" % command))
         return result
@@ -772,14 +779,14 @@ def init_project(
         return result
     if not action.runnable:
         if nothing_to_add:
-            result.steps.append(Step("packages", UNCHANGED, _ALREADY_DECLARED))
+            result.steps.append(Step("packages", UNCHANGED, declared_detail))
         else:
             result.steps.append(Step("packages", SKIPPED, "run: %s" % command))
         result.steps.append(Step("check", SKIPPED, "run manage.py check after installing"))
         return result
 
     if nothing_to_add:
-        result.steps.append(Step("packages", UNCHANGED, _ALREADY_DECLARED))
+        result.steps.append(Step("packages", UNCHANGED, declared_detail))
     else:
         installed = _run(action.command, root)
         if installed.returncode != 0:
