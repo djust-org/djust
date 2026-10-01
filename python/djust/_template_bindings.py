@@ -1039,12 +1039,17 @@ def _engine_for_djust_backend(backend: Any) -> Any:
     if cached is not None:
         return cached
     from django.template import Engine
+    from django.template.backends.django import get_installed_libraries
 
+    # ``DjangoTemplates`` registers every installed app's tag library
+    # (``static``, ``humanize``, ``i18n``, a project's own ``templatetags``);
+    # without them ``{% load static %}`` in a base template fails to compile and
+    # the scan never reaches the children it extends.
     engine = Engine(
         dirs=[str(d) for d in getattr(backend, "template_dirs", [])],
         app_dirs=False,
         debug=bool(getattr(backend, "debug", False)),
-        libraries=dict(getattr(backend, "template_libraries", {})),
+        libraries={**get_installed_libraries(), **dict(getattr(backend, "template_libraries", {}))},
         builtins=list(getattr(backend, "template_builtins", [])),
     )
     backend._binding_scan_engine = engine

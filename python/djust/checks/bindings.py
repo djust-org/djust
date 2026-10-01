@@ -881,6 +881,8 @@ def check_event_bindings(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     except ImportError:
         return []
     if _django_engine() is None:
+        if _is_check_suppressed("djust.T023") or not _owners():
+            return []
         return [
             Info(
                 "T019-T022 were skipped: no template engine is configured to scan templates with.",
