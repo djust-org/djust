@@ -1282,7 +1282,7 @@ class DjustSSEEventView(View):
                 "SSE: rejected event POST for session %s — requester is not the owner",
                 sanitize_for_log(session_id),
             )
-            return JsonResponse({"error": "forbidden"}, status=403)
+            return JsonResponse({"error": "forbidden", "code": "permission_denied"}, status=403)
 
         if not session.view_instance:
             return JsonResponse({"error": "View not mounted yet"}, status=503)
@@ -1387,7 +1387,7 @@ class DjustSSEMessageView(View):
                 "SSE: rejected message POST for session %s — requester is not the owner",
                 sanitize_for_log(session_id),
             )
-            return JsonResponse({"error": "forbidden"}, status=403)
+            return JsonResponse({"error": "forbidden", "code": "permission_denied"}, status=403)
 
         try:
             body = json.loads(request.body)

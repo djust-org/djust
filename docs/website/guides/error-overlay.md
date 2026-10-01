@@ -18,7 +18,7 @@ The overlay is modeled on the Next.js / Vite dev overlays: full-screen dim, clos
 Three pieces cooperate:
 
 1. **Server** — Event-handler exceptions are turned into an error frame by the runtime's safe-error path. In `DEBUG=True` the frame carries a prefixed message (`Error in View.handler(): ExcType: message`) and the full Python `traceback`. Other server errors go through `djust.websocket.send_error`, which in `DEBUG=True` adds `traceback` (last three frames only). In production, the traceback is omitted.
-2. **Transport (`djust:error` CustomEvent)** — `03-websocket.js` dispatches this event on the `window` carrying `{error, traceback, event, validation_details}`; `03b-sse.js` dispatches `{error, traceback}`.
+2. **Transport (`djust:error` CustomEvent)** — `03-websocket.js` dispatches this event on the `window` carrying `{error, code, traceback, event, validation_details}`; `03b-sse.js` dispatches `{error, code, traceback}`. `code` is the frame's stable machine-readable code (for example `permission_denied`, see [Refusal codes](authentication.md#refusal-codes)) or `null`.
 3. **Overlay (`36-error-overlay.js`)** — Listens for `djust:error`, renders a full-screen panel when `window.DEBUG_MODE === true`, no-ops otherwise.
 
 `window.DEBUG_MODE` is written into the config `<script>` that djust injects into every LiveView page, based on Django's `DEBUG` setting, so production deployments automatically get zero overlay code paths.

@@ -163,7 +163,7 @@ class TestHandlerPermissionIntegration:
             handler = await _validate_event_security(ws, "delete_item", view, rate_limiter)
 
         assert handler is None
-        ws.send_error.assert_called_once_with("Permission denied")
+        ws.send_error.assert_called_once_with("Permission denied", code="permission_denied")
 
     @pytest.mark.asyncio
     async def test_handler_without_permission_decorator_passes(self):

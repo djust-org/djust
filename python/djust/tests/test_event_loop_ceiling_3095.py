@@ -671,7 +671,7 @@ async def test_a_permission_required_handler_is_still_denied(rf):
     view.request = request
     ws = MagicMock(send_error=AsyncMock(), close=AsyncMock(), _client_ip="127.0.0.1")
     assert await wu._validate_event_security(ws, "guarded", view, MagicMock()) is None
-    ws.send_error.assert_awaited_with("Permission denied")
+    ws.send_error.assert_awaited_with("Permission denied", code="permission_denied")
     # The undecorated handler on the same view passes without a hop.
     assert await wu._validate_event_security(ws, "open_door", view, MagicMock()) is not None
 

@@ -440,7 +440,12 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
                 try {
                     const body = await response.json();
                     if (body && typeof body.error === 'string') {
-                        detail = {error: body.error, traceback: body.traceback || null};
+                        detail = {
+                            error: body.error,
+                            // Stable refusal code (#3319), e.g. 'permission_denied'.
+                            code: typeof body.code === 'string' ? body.code : null,
+                            traceback: body.traceback || null,
+                        };
                     }
                 } catch (_e) { /* a non-JSON error body keeps the status message */ }
                 window.dispatchEvent(new CustomEvent('djust:error', {detail}));

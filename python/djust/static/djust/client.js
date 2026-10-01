@@ -1301,8 +1301,12 @@ class LiveViewWebSocket {
                 document.body.removeAttribute('data-dj-reconnect-attempt');
                 document.body.style.removeProperty('--dj-reconnect-attempt');
                 this._removeReconnectBanner();
+                // `code` is the numeric close code; `error_code` is the string
+                // code of the refusal frame that preceded it, if one did (#3319).
+                const refusalCode = this._lastRefusalCode || null;
+                this._lastRefusalCode = null;
                 window.dispatchEvent(new CustomEvent('djust:auth-refused', {
-                    detail: { code: event.code, reason: event.reason || '' }
+                    detail: { code: event.code, reason: event.reason || '', error_code: refusalCode }
                 }));
                 return;
             }
@@ -1445,6 +1449,11 @@ class LiveViewWebSocket {
         // not be described as one.
         stripClientOwnedFrameFlags(data);
         _recordParameterContractFrame(this, data);
+        // #3319: a refusal frame is followed at once by its 4401/4403 close.
+        // Remember its code here, at receipt and ahead of the message queue, so
+        // `djust:auth-refused` reports it; any other frame makes it stale.
+        if (data.type !== 'error') this._lastRefusalCode = null;
+        else if (data.code === 'permission_denied') this._lastRefusalCode = data.code;
         const prev = this._inflight || Promise.resolve();
         const next = prev
             .then(() => {
@@ -1926,6 +1935,8 @@ class LiveViewWebSocket {
                 window.dispatchEvent(new CustomEvent('djust:error', {
                     detail: {
                         error: data.error,
+                        // Stable machine-readable code (#3319), e.g. 'permission_denied'.
+                        code: typeof data.code === 'string' ? data.code : null,
                         traceback: data.traceback || null,
                         event: data.event || this.lastEventName || null,
                         validation_details: data.validation_details || null
@@ -2898,7 +2909,11 @@ class LiveViewSSE {
             case 'error':
                 console.error('[SSE] Server error:', data.error);
                 window.dispatchEvent(new CustomEvent('djust:error', {
-                    detail: { error: data.error, traceback: data.traceback || null }
+                    detail: {
+                        error: data.error,
+                        code: typeof data.code === 'string' ? data.code : null,
+                        traceback: data.traceback || null
+                    }
                 }));
                 if (data.source !== 'async') {
                     cancelEventRequests(this, data.ref ?? null);
@@ -8173,7 +8188,12 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
                 try {
                     const body = await response.json();
                     if (body && typeof body.error === 'string') {
-                        detail = {error: body.error, traceback: body.traceback || null};
+                        detail = {
+                            error: body.error,
+                            // Stable refusal code (#3319), e.g. 'permission_denied'.
+                            code: typeof body.code === 'string' ? body.code : null,
+                            traceback: body.traceback || null,
+                        };
                     }
                 } catch (_e) { /* a non-JSON error body keeps the status message */ }
                 window.dispatchEvent(new CustomEvent('djust:error', {detail}));
