@@ -70,7 +70,7 @@ def mount(self, request, **kwargs):
 
 Called before every render — both the initial HTTP render and every WebSocket update. Return the template context.
 
-Always call `super().get_context_data(**kwargs)` so the JIT serialization and change-detection machinery runs:
+Always call `super().get_context_data(**kwargs)` so the JIT serialization and change-detection machinery runs. It also matters on the HTTP page-POST fallback: there a view on the default state policy is rebuilt from the dict this method returned on the previous request, so an attribute your override leaves out is unset when the next event handler runs (see [HTTP-Only Mode](../guides/http-only-mode.md#what-the-page-post-fallback-keeps-between-events)). Set state in `mount()`, and add to the result instead of replacing it:
 
 ```python
 def get_context_data(self, **kwargs):

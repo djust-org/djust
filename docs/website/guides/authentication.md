@@ -197,6 +197,50 @@ $ python manage.py djust_audit
 
 JSON output includes an `"unprotected_with_state"` count in the summary.
 
+## Signing in from an event handler
+
+Don't call Django's `login()` inside an event handler and expect it to work over the WebSocket. `login()` rotates the session key (`request.session.cycle_key()`), and the browser only learns a new session key from a `Set-Cookie` header on an HTTP response. A WebSocket frame can't carry one, so the browser keeps the old, dead key. After the handler returns, a `GET /` with the same cookies is still anonymous, even though `login()` returned normally.
+
+The HTTP page-POST fallback (see [HTTP-Only Mode](http-only-mode.md)) happens to work, because its response is a real HTTP response that sets the cookie. Don't rely on that: the same handler fails on the WebSocket transport.
+
+Sign in through an ordinary HTTP request instead:
+
+- Use a plain Django login view, or the account pages djust ships ([Accounts](accounts.md)), and link to them with `{% url 'djust_auth:login' %}`.
+- To keep a LiveView form for the UX, validate on the server and then hand the credentials to the real login view with a native form submit: put `dj-trigger-action` on a form whose `action` is the login URL, and call `self.trigger_submit(selector)` from the handler once validation passes. See [`dj-trigger-action`](declarative-ux-attrs.md#dj-trigger-action--selftrigger_submitselector--bridge-to-native-post).
+
+```python
+from djust import LiveView
+from djust.decorators import event_handler
+
+
+class SignInView(LiveView):
+    template_name = "signin.html"
+
+    def mount(self, request, **kwargs):
+        self.error = ""
+
+    @event_handler
+    def check(self, username="", **kwargs):
+        if not username:
+            self.error = "Enter a username."
+            return
+        self.trigger_submit("#login-form")  # the browser POSTs the form natively
+```
+
+```django
+<div dj-root>
+  <p>{{ error }}</p>
+  <button dj-click="check">Sign in</button>
+  <form id="login-form" action="{% url 'login' %}" method="POST" dj-trigger-action>
+    {% csrf_token %}
+    <input name="username">
+    <input name="password" type="password">
+  </form>
+</div>
+```
+
+Logging out is different: `logout()` flushes the session on the server, so the old key stops working at once and nothing has to reach the browser.
+
 ## Best Practices
 
 1. **Always set `login_required`** — even `login_required = False` is better than leaving it as `None`, because it shows intent
