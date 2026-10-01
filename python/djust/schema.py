@@ -320,8 +320,10 @@ DIRECTIVES: List[Dict[str, Any]] = [
         "name": "dj-upload-progress",
         "category": "upload",
         "description": (
-            "INERT — registered as an attribute but no client code reads it; "
-            "no progress bar is created. Render progress server-side instead."
+            "Progress for the slot's running upload. An empty container gets a "
+            "<progress> item per file; a container (or <progress>) that already "
+            "holds a bar, such as theme_progress output, has that bar driven by "
+            "the upload."
         ),
         "value": "upload_slot_name",
         "example": '<div dj-upload-progress="attachments"></div>',

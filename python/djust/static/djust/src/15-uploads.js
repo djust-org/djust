@@ -548,8 +548,22 @@
     //     `data-upload-generated` and are cleared at the next file selection.
 
     const PROGRESS_BAR_SELECTOR = '.upload-progress-bar, [role="progressbar"], progress';
+    const INDETERMINATE_SUFFIX = 'progress-indeterminate';
+
+    // Slot names and refs reach a selector from the DOM / the wire; escape them
+    // so a quote or backslash can't break (or widen) the attribute selector.
+    function cssEscape(value) {
+        const str = String(value);
+        if (typeof CSS !== 'undefined' && CSS && typeof CSS.escape === 'function') {
+            return CSS.escape(str);
+        }
+        return str.replace(/["\\]/g, '\\$&');
+    }
 
     function hasProgressBar(container) {
+        // A bare <progress dj-upload-progress> (or a bar element carrying the
+        // directive itself) is the bar.
+        if (container.matches(PROGRESS_BAR_SELECTOR)) return true;
         const bars = container.querySelectorAll(PROGRESS_BAR_SELECTOR);
         for (const bar of bars) {
             if (!bar.closest('[data-upload-generated]')) return true;
@@ -557,14 +571,45 @@
         return false;
     }
 
-    function setProgressValue(host, progress) {
-        host.querySelectorAll(PROGRESS_BAR_SELECTOR).forEach(el => {
+    function progressBars(host) {
+        const bars = Array.from(host.querySelectorAll(PROGRESS_BAR_SELECTOR));
+        if (host.matches(PROGRESS_BAR_SELECTOR)) bars.unshift(host);
+        return bars;
+    }
+
+    /**
+     * A themed indeterminate track has no fill and animates via a
+     * `*progress-indeterminate` class. Once a real percentage arrives, drop the
+     * class and add the fill (`<prefix>progress-bar`) the determinate markup has.
+     */
+    function leaveIndeterminate(track) {
+        const cls = Array.from(track.classList).find(c => c.endsWith(INDETERMINATE_SUFFIX));
+        if (!cls) return;
+        track.classList.remove(cls);
+        if (!track.firstElementChild) {
+            const fill = document.createElement('div');
+            fill.className = cls.slice(0, -INDETERMINATE_SUFFIX.length) + 'progress-bar';
+            track.appendChild(fill);
+        }
+    }
+
+    function setProgressValue(host, progress, initial) {
+        progressBars(host).forEach(el => {
             if (el.tagName === 'PROGRESS') {
                 el.value = progress;
                 return;
             }
             const isTrack = el.getAttribute('role') === 'progressbar';
-            if (el.classList.contains('upload-progress-bar')) {
+            const isBar = el.classList.contains('upload-progress-bar');
+            if (isTrack && !isBar) {
+                const indeterminate = Array.from(el.classList)
+                    .some(c => c.endsWith(INDETERMINATE_SUFFIX));
+                // The initial 0% is not a measurement: keep an indeterminate
+                // bar indeterminate until the first real percentage.
+                if (indeterminate && initial) return;
+                leaveIndeterminate(el);
+            }
+            if (isBar) {
                 el.style.width = progress + '%';
             } else if (isTrack && el.firstElementChild
                        && !el.querySelector('.upload-progress-bar')) {
@@ -572,7 +617,7 @@
                 // first child is the fill.
                 el.firstElementChild.style.width = progress + '%';
             }
-            if (isTrack || el.classList.contains('upload-progress-bar')) {
+            if (isTrack || isBar) {
                 el.setAttribute('aria-valuenow', progress);
             }
         });
@@ -588,15 +633,17 @@
      * re-attach before updating.
      */
     function attachProgressUI(uploadName, ref, file) {
-        const containers = document.querySelectorAll(`[dj-upload-progress="${uploadName}"]`);
+        const containers = document.querySelectorAll(
+            `[dj-upload-progress="${cssEscape(uploadName)}"]`);
+        const refSel = `[data-upload-ref="${cssEscape(ref)}"]`;
         containers.forEach(container => {
             if (container.getAttribute('data-upload-ref') === ref
-                || container.querySelector(`[data-upload-ref="${ref}"]`)) {
+                || container.querySelector(refSel)) {
                 return;
             }
             if (hasProgressBar(container)) {
                 container.setAttribute('data-upload-ref', ref);
-                setProgressValue(container, 0);
+                setProgressValue(container, 0, true);
                 return;
             }
             const item = document.createElement('div');
@@ -627,7 +674,8 @@
 
     /** Drop the per-file items rendered for a previous selection. */
     function clearProgressUI(uploadName) {
-        document.querySelectorAll(`[dj-upload-progress="${uploadName}"] [data-upload-generated]`)
+        document.querySelectorAll(
+            `[dj-upload-progress="${cssEscape(uploadName)}"] [data-upload-generated]`)
             .forEach(item => item.remove());
     }
 
@@ -641,7 +689,7 @@
         if (upload) attachProgressUI(upload.uploadName, ref, upload.file);
 
         // Update progress bars and text in DOM
-        document.querySelectorAll(`[data-upload-ref="${ref}"]`).forEach(host => {
+        document.querySelectorAll(`[data-upload-ref="${cssEscape(ref)}"]`).forEach(host => {
             setProgressValue(host, progress);
             host.setAttribute('data-upload-status', status);
         });
@@ -692,7 +740,7 @@
      * Show previews in a dj-upload-preview container.
      */
     async function showPreviews(uploadName, files) {
-        const containers = document.querySelectorAll(`[dj-upload-preview="${uploadName}"]`);
+        const containers = document.querySelectorAll(`[dj-upload-preview="${cssEscape(uploadName)}"]`);
         if (containers.length === 0) return;
 
         for (const container of containers) {

@@ -156,6 +156,57 @@ describe('upload progress UI (#3289)', () => {
         });
     });
 
+    describe('bare <progress> container', () => {
+        it('drives the element itself instead of appending a div inside it', () => {
+            const { window, document } = createEnv('<progress dj-upload-progress="docs" max="100" value="0"></progress>');
+            const { ref } = startUpload(window, 'docs');
+
+            const bar = document.querySelector('progress[dj-upload-progress="docs"]');
+            expect(bar.getAttribute('data-upload-ref')).toBe(ref);
+            expect(bar.children.length).toBe(0);
+
+            window.djust.uploads.handleProgress({ ref, progress: 70, status: 'uploading' });
+            expect(bar.value).toBe(70);
+        });
+    });
+
+    describe('indeterminate theme_progress', () => {
+        const indeterminate =
+            '<div class="dj-progress-wrapper" dj-upload-progress="docs">' +
+            '<div class="dj-progress dj-progress-indeterminate" role="progressbar" ' +
+            'aria-valuemin="0" aria-valuemax="100"></div></div>';
+
+        it('stays indeterminate until a real percentage arrives', () => {
+            const { window, document } = createEnv(indeterminate);
+            const { ref } = startUpload(window, 'docs');
+            const track = document.querySelector('[role="progressbar"]');
+            expect(track.classList.contains('dj-progress-indeterminate')).toBe(true);
+            expect(track.hasAttribute('aria-valuenow')).toBe(false);
+
+            window.djust.uploads.handleProgress({ ref, progress: 30, status: 'uploading' });
+            expect(track.classList.contains('dj-progress-indeterminate')).toBe(false);
+            expect(track.getAttribute('aria-valuenow')).toBe('30');
+            const fill = track.querySelector('.dj-progress-bar');
+            expect(fill).not.toBeNull();
+            expect(fill.style.width).toBe('30%');
+        });
+    });
+
+    describe('selector escaping', () => {
+        it('does not throw on a slot name or ref containing quotes', () => {
+            const { window } = createEnv('<div dj-upload-progress="docs"></div>');
+            const { ref } = startUpload(window, 'docs');
+            expect(() => window.djust.uploads.handleProgress({ ref: 'x"] , [y="', progress: 1, status: 'uploading' }))
+                .not.toThrow();
+            const file = new window.File(['a'], 'a.txt', { type: 'text/plain' });
+            const p = window.djust.uploads.uploadFile(file, 'we"ird\\slot', {});
+            p.catch(() => {});
+            // the real slot is untouched and still updates
+            window.djust.uploads.handleProgress({ ref, progress: 5, status: 'uploading' });
+            expect(window.document.querySelector('[dj-upload-progress="docs"] progress').value).toBe(5);
+        });
+    });
+
     describe('existing contract', () => {
         it('still updates .upload-progress-bar under a hand-written data-upload-ref', () => {
             const { window, document } = createEnv(
