@@ -543,6 +543,8 @@ class TestThemeMixinThemeHead:
             # assets had none, so a browser kept the components.js / css it had
             # already downloaded and an edit to either never showed up.
             "asset_version",
+            # ` nonce="..."` for the inline <script>/<style> blocks, or "" (#3284).
+            "nonce_attr",
         }
         assert set(ctx.keys()) == expected, (
             "build_theme_head_context() key set drifted from the variables "

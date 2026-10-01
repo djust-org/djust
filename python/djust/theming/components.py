@@ -137,17 +137,24 @@ class PresetSelector:
         show_descriptions: bool = True,
         layout: str = "dropdown",  # dropdown, grid, list
         dropdown_class: str = "",
+        presets: "str | list[str] | None" = None,
     ):
         self.manager = theme_manager or ThemeManager()
         self.show_descriptions = show_descriptions
         self.layout = layout
         self.dropdown_class = dropdown_class
+        # Allow-list of preset names (see ``ThemeManager.get_available_presets``).
+        self.presets = presets
 
     def get_context(self) -> dict:
         state = self.manager.get_state()
         return {
             "current_preset": state.preset,
-            "presets": self.manager.get_available_presets(),
+            "presets": (
+                self.manager.get_available_presets()
+                if self.presets is None
+                else self.manager.get_available_presets(presets=self.presets)
+            ),
             "show_descriptions": self.show_descriptions,
             "layout": self.layout,
             "dropdown_class": self.dropdown_class,

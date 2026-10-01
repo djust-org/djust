@@ -179,6 +179,7 @@ FLAGSHIP_DEBT = {
     "djust": {
         ("light", "primary", "background"),
         ("light", "primary", "card"),
+        ("light", "info", "info_tint"),
         ("light", "success", "success_tint"),
         ("light", "warning", "warning_tint"),
         ("light", "destructive", "destructive_tint"),
@@ -187,6 +188,7 @@ FLAGSHIP_DEBT = {
         ("dark", "input", "background"),
     },
     "default": {
+        ("light", "info", "info_tint"),
         ("light", "success", "success_tint"),
         ("light", "warning", "warning_tint"),
         ("light", "destructive", "destructive_tint"),
@@ -198,6 +200,7 @@ FLAGSHIP_DEBT = {
 }
 FLAGSHIP_DEBT["shadcn"] = FLAGSHIP_DEBT["blue"] = FLAGSHIP_DEBT["default"]
 FLAGSHIP_DEBT["slate"] = {
+    ("light", "info", "info_tint"),
     ("light", "success", "success_tint"),
     ("light", "warning", "warning_tint"),
     ("light", "destructive", "destructive_tint"),

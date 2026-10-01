@@ -7,8 +7,8 @@
   <aside class="layout-sidebar__aside" role="navigation" aria-label="Sidebar">
     {% block sidebar %}{% endblock %}
   </aside>
-  <main class="layout-sidebar__main">
+  {% block sidebar_main %}<main class="layout-sidebar__main">
     {% block sidebar_content %}{% endblock %}
-  </main>
+  </main>{% endblock %}
 </div>
 {% endblock %}

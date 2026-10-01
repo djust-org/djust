@@ -1,5 +1,5 @@
 <div class="{{ css_prefix }}alert {{ css_prefix }}alert-{{ variant }} {% if attrs.class %}{{ attrs.class }}{% endif %}"
-     role="alert"
+     {% if role == "status" %}role="status"{% elif role == "log" %}role="log"{% else %}role="alert"{% endif %}
      {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
     {% if slot_icon %}
     <div class="{{ css_prefix }}alert-icon">

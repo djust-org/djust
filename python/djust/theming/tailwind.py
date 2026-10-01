@@ -259,6 +259,11 @@ def generate_tailwind_apply_examples() -> str:
 }
 
 /* Alert variants */
+.alert-info {
+  @apply bg-info/10 text-info border border-info/20;
+  @apply rounded-md p-4;
+}
+
 .alert-success {
   @apply bg-success/10 text-success border border-success/20;
   @apply rounded-md p-4;

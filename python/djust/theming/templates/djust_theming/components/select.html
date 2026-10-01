@@ -2,20 +2,21 @@
     {% if slot_label %}
     {{ slot_label|safe }}
     {% elif label %}
-    <label for="{{ name }}" class="{{ css_prefix }}select-label">{{ label }}</label>
+    <label for="{{ field_id|default:name }}" class="{{ css_prefix }}select-label">{{ label }}</label>
     {% endif %}
     {% if slot_select %}
     {{ slot_select|safe }}
     {% else %}
     <select
         name="{{ name }}"
-        id="{{ name }}"
+        id="{{ field_id|default:name }}"
         class="{{ css_prefix }}select"
         {% if attrs.required %}required{% endif %}
         {% if attrs.disabled %}disabled{% endif %}
+        {{ extra_attrs }}
     >
         {% if placeholder %}
-        <option value="" disabled selected>{{ placeholder }}</option>
+        <option value="" disabled{% if not has_selected_option %} selected{% endif %}>{{ placeholder }}</option>
         {% endif %}
         {% for opt in options %}
         <option value="{{ opt.value }}" {% if opt.selected %}selected{% endif %}>{{ opt.label }}</option>
