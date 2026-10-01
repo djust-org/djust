@@ -885,7 +885,8 @@ def check_event_bindings(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
             return []
         return [
             Info(
-                "T019-T022 were skipped: no template engine is configured to scan templates with.",
+                "T019-T022 were skipped: no template engine is configured, or none could be built, "
+                "to scan templates with.",
                 hint="Add a DjustTemplateBackend or DjangoTemplates entry to TEMPLATES.",
                 id="djust.T023",
             )

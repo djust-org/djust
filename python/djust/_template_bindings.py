@@ -19,10 +19,13 @@ from __future__ import annotations
 
 import bisect
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 # Placeholders for output that is not known statically. Private-use code
 # points never occur in templates, contain no newline, and are opaque to the
@@ -1030,28 +1033,70 @@ def django_engine() -> Any:
     return _engine_for_djust_backend(djust_backend)
 
 
+def _installed_libraries() -> dict[str, str]:
+    """Every tag library the installed apps register, skipping the ones that fail.
+
+    ``django.template.backends.django.get_installed_libraries`` raises
+    ``InvalidTemplateLibrary`` for the first ``templatetags`` module that does
+    not import (a missing optional dependency, say), which would abort the system
+    checks over one app. The scan only needs the libraries that do load; a
+    template that uses a skipped one is then recorded as a gap, as any template
+    the scan cannot compile is.
+    """
+    from importlib import import_module
+    from pkgutil import walk_packages
+
+    from django.apps import apps
+
+    libraries: dict[str, str] = {}
+    packages = ["django.templatetags", *(c.name + ".templatetags" for c in apps.get_app_configs())]
+    for package_name in packages:
+        try:
+            package = import_module(package_name)
+        except ImportError:
+            continue  # an app without ``templatetags``
+        for entry in walk_packages(package.__path__, package.__name__ + "."):
+            try:
+                module = import_module(entry[1])
+            except Exception as exc:  # noqa: BLE001 -- one broken library must not stop the scan
+                logger.debug("Skipping template library %s: %s", entry[1], type(exc).__name__)
+                continue
+            if hasattr(module, "register"):
+                libraries[entry[1].rsplit(".", 1)[1]] = entry[1]
+    return libraries
+
+
 def _engine_for_djust_backend(backend: Any) -> Any:
     """A compile-only ``django.template.Engine`` mirroring a ``DjustTemplateBackend``.
 
     Cached on the backend, which Django rebuilds whenever ``TEMPLATES`` changes.
+    None when the engine cannot be built (a configured builtin that does not
+    import, say): the callers then skip the scan instead of raising.
     """
     cached = getattr(backend, "_binding_scan_engine", None)
     if cached is not None:
-        return cached
+        return cached or None
     from django.template import Engine
-    from django.template.backends.django import get_installed_libraries
 
     # ``DjangoTemplates`` registers every installed app's tag library
     # (``static``, ``humanize``, ``i18n``, a project's own ``templatetags``);
     # without them ``{% load static %}`` in a base template fails to compile and
     # the scan never reaches the children it extends.
-    engine = Engine(
-        dirs=[str(d) for d in getattr(backend, "template_dirs", [])],
-        app_dirs=False,
-        debug=bool(getattr(backend, "debug", False)),
-        libraries={**get_installed_libraries(), **dict(getattr(backend, "template_libraries", {}))},
-        builtins=list(getattr(backend, "template_builtins", [])),
-    )
+    try:
+        engine: Any = Engine(
+            dirs=[str(d) for d in getattr(backend, "template_dirs", [])],
+            app_dirs=False,
+            debug=bool(getattr(backend, "debug", False)),
+            libraries={
+                **_installed_libraries(),
+                **dict(getattr(backend, "template_libraries", {})),
+            },
+            builtins=list(getattr(backend, "template_builtins", [])),
+        )
+    except Exception as exc:  # noqa: BLE001 -- the checks must not abort over the scan engine
+        logger.debug("Cannot build the template scan engine: %s", type(exc).__name__)
+        backend._binding_scan_engine = False
+        return None
     backend._binding_scan_engine = engine
     return engine
 
