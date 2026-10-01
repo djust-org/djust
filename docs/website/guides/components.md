@@ -1096,6 +1096,85 @@ once per request); use the `{% theme_X %}` tag form when you need
 customization-with-args, e.g. `{% theme_panel show_packs=False %}` or
 `{% theme_preset_selector layout="grid" %}`.
 
+### Component tags: bindings, attributes, selects and alerts
+
+The component tags in `{% load theme_components %}` pass extra keyword arguments
+through to the element they render, so a themed control can carry a djust
+binding. Names are written with underscores and emitted with hyphens
+(`dj_click` becomes `dj-click`, `dj_value_id` becomes `dj-value-id`, `data_*` and
+`aria_*` likewise). Each value is escaped. `True` emits a bare attribute and
+`False` / `None` emit nothing. A name that is not a plain attribute identifier
+raises `ValueError`, and so does any `on*` event-handler attribute: use a `dj-*`
+binding instead (`theme_button` keeps its documented `onclick=`).
+
+```html
+{% load theme_components %}
+
+{# An event button #}
+{% theme_button "Advance" dj_click="advance" dj_value_id=item.id name="go" %}
+
+{# A link styled as a button: href= renders <a class="btn ...">, not <button> #}
+{% theme_button "Open record" href=record.url variant="secondary" %}
+
+{# A select that opens on the stored choice and reports changes #}
+{% theme_select "category" options=categories value=doc.category dj_change="set_category" %}
+
+{# A field that repeats on a page needs ids that differ from its name #}
+{% theme_input "note" id=row.note_id label="Note" %}
+
+{# A persistent banner: info variant, polite role="status" #}
+{% theme_alert "Viewing the record as of 2026-01-01" variant="info" %}
+```
+
+- `theme_button`: `href=` renders an `<a>`; `element="a"` or `"button"` chooses
+  explicitly (`href=` with `element="button"` raises). `javascript:`,
+  `vbscript:` and `data:` URLs are refused for `href`, `src`, `action` and
+  `formaction`.
+- `theme_select`: `value=` marks the option whose `value` equals it (compared
+  as strings, so `3` matches `"3"`) as `selected`; an option dict's own
+  `"selected"` still works, and the placeholder is selected only when nothing
+  else is. `dj_change`, `aria_*` and the other extra keywords land on the
+  `<select>`.
+- `theme_input`, `theme_select`, `theme_textarea`: `id=` sets the control's id
+  and the label's `for`. It defaults to `name`.
+- `theme_alert`: variants are `default`, `info`, `success`, `warning` and
+  `destructive`. `role=` is `alert` (assertive), `status` (polite) or `log`; it
+  defaults to `alert` for `warning` and `destructive` and `status` for the rest.
+
+`{% theme_card %}` and `{% theme_alert %}` still take their body as a string;
+block-tag forms are not part of this.
+
+### Limiting the preset picker
+
+`{% theme_preset_selector presets="legal,medical,default" %}` lists only those
+presets, in that order (a list works too). To limit every picker on the site,
+set `LIVEVIEW_CONFIG["theme"]["selectable_presets"]` to the same names; the tag
+argument wins over the setting. A name that is not a registered preset raises
+(`ValueError` for the tag argument, `ImproperlyConfigured` for the setting)
+rather than silently dropping a preset from the picker.
+
+### Content-Security-Policy
+
+`{% theme_head %}` carries `nonce="..."` on its inline anti-flash `<script>` and
+on its inline `<style>` blocks when it has one. The nonce is `request.csp_nonce`
+automatically when django-csp sets it, or pass it yourself with
+`{% theme_head nonce=request.csp_nonce %}`; `nonce=""` turns it off. Without a
+nonce the output is unchanged. The deferred-stylesheet `<link>` still swaps
+itself in with an inline `onload` handler, which a nonce does not authorise, so
+under a strict policy use `{% theme_head link_css=True %}` or set
+`critical_css` to `False`.
+
+### Layouts under a LiveView base template
+
+The layouts in `djust_theming/layouts/` expose blocks a LiveView page needs, and
+render exactly what they did before while those blocks are not overridden:
+
+| Block | Where | Use |
+| --- | --- | --- |
+| `body_attrs` | the `<body>` tag, after `class` | `{% block body_attrs %} dj-hook="Shell"{% endblock %}` (include the leading space) |
+| `client_config` | `<head>`, before `{% theme_head %}` | `{% load live_tags %}{% djust_client_config %}` |
+| `sidebar_topbar_main`, `sidebar_main`, `topbar_main`, `centered_main` | the layout's whole `<main>` element | supply your own `<main dj-root>` so there is only one |
+
 ### Reactive Theme Switching with LiveView
 
 ```python
