@@ -1221,6 +1221,45 @@ itself.
 
 ---
 
+### T023: Event binding checks skipped
+
+**Severity**: Info
+
+**What causes it**: `T019`-`T022` compile each template with a Django template
+engine. A `TEMPLATES` list with a `DjangoTemplates` entry supplies one, and a
+list with only `DjustTemplateBackend` (what `djust new` writes) has one built
+from the same directories, libraries and builtins. This message appears when
+`TEMPLATES` configures neither, or when that engine cannot be built (an
+`OPTIONS` `libraries` or `builtins` entry that does not import), so there is
+nothing to scan with and the binding checks did not run.
+
+**Fix**: Add a `DjustTemplateBackend` or `DjangoTemplates` entry to `TEMPLATES`,
+and check that its `OPTIONS` `libraries` and `builtins` import cleanly.
+Silence it with `DJUST_CONFIG = {"suppress_checks": ["T023"]}`.
+
+---
+
+### T024: Template reads a field djust never serializes
+
+**Severity**: Warning
+
+**What causes it**: A template a LiveView or LiveComponent renders (its parents
+and includes too, and an inline `template` string) reads `is_staff`,
+`is_superuser` or `password` through a `user` variable, such as
+`request.user.is_staff`. djust withholds those fields from every template
+context, so the expression is always empty or false and nothing says so. Paths
+through a `user` or `*_user` variable are reported, and so is a
+`{% with u=request.user %}` alias of one. A loop variable, a user held under any
+other name, and `{{ form.password }}` are not.
+
+**Fix**: Expose a derived boolean from `mount()` or a context processor and test
+that in the template, as described in
+[Staff and superuser checks](BEST_PRACTICES.md#staff-and-superuser-checks).
+Suppress one reference with `{# noqa: T024 -- <reason> #}` on its line or the
+line above, or all of them with `DJUST_CONFIG = {"suppress_checks": ["T024"]}`.
+
+---
+
 ## Code Quality (Q0xx)
 
 ### Q001: print() statement
@@ -1392,7 +1431,7 @@ Not raised when `DEBUG=True`, or when both `SECURE_PROXY_SSL_HEADER` and `DJUST_
 
 **Severity**: Error
 
-**What causes it**: The Django scaffold default `SECRET_KEY` is a placeholder that starts with `"django-insecure-"`. It's meant to be replaced before deployment. An attacker who knows the value (anyone with access to the source repo) can forge session cookies and password-reset tokens.
+**What causes it**: The Django scaffold default `SECRET_KEY` is a placeholder that starts with `"django-insecure-"`. It's meant to be replaced before deployment. An attacker who knows the value (anyone with access to the source repo) can forge session cookies and password-reset tokens. "Production" means `DEBUG = False`; the check does not fire during `manage.py test`, where Django's test runner forces `DEBUG = False` on a development project. `A010`-`A012` follow the same rule.
 
 **Fix**: Generate a new key and load it from an environment variable:
 

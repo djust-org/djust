@@ -22,6 +22,7 @@ import djust.checks as _root
 from djust.checks.utils import (
     DjustError,
     DjustWarning,
+    _blank_template_comments,
     _get_template_dirs,
     _has_noqa,
     _is_check_suppressed,
@@ -926,7 +927,7 @@ def check_inline_script_csp(app_configs: Any, **kwargs: Any) -> list[CheckMessag
             continue
 
         # Blank <pre>/<code> example markup so escaped/doc scripts never match.
-        scan = _blank_pre_code(content)
+        scan = _blank_pre_code(_blank_template_comments(content))
 
         # Only flag scripts that fall INSIDE a real dj-root/dj-view subtree —
         # that is the #1610/#1848 morph region. A page script after the dj-root
