@@ -282,7 +282,7 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
             _refreshRenderParameterContracts(transport, data);
             reinitAfterDOMUpdate();
         } else {
-            if (globalThis.djustDebug) console.warn('[LiveView] Response has neither patches nor html!', data);
+            if (globalThis.djustDebug && !data._navigation) console.warn('[LiveView] Response has neither patches nor html!', data);
         }
 
         // Handle form reset
@@ -290,6 +290,15 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
             if (globalThis.djustDebug) console.log('[LiveView] Resetting form');
             const form = document.querySelector('[dj-root] form');
             if (form) form.reset();
+        }
+
+        // Navigation the handler queued over the HTTP fallback (live_patch /
+        // live_redirect, #3303): each entry is a WebSocket-shaped navigation
+        // frame. Unconnected, a live_redirect becomes a full-page navigation.
+        if (Array.isArray(data._navigation) && window.djust.navigation) {
+            data._navigation.forEach(function(frame) {
+                window.djust.navigation.handleNavigation(frame);
+            });
         }
 
         // Process side-channel commands from HTTP response (flash, page metadata)
