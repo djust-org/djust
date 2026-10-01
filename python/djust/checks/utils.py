@@ -6,6 +6,7 @@ Split from the former monolithic ``checks.py`` (#1822). No behavior change.
 import ast
 import os
 import re
+import sys
 from collections.abc import Iterable, Iterator
 from typing import Any, Optional
 
@@ -27,6 +28,7 @@ __all__ = [
     "DjustInfo",
     # discovery / parsing helpers
     "_is_check_suppressed",
+    "_is_production",
     "_get_project_app_dirs",
     "_get_template_dirs",
     "_iter_python_files",
@@ -77,6 +79,22 @@ class DjustInfo(_DjustCheckMixin, Info):
     """Info with fix_hint metadata."""
 
     pass
+
+
+def _is_production() -> bool:
+    """True when ``DEBUG`` is off and this is not ``manage.py test`` (#3293).
+
+    Django's test runner forces ``DEBUG = False`` before it runs the system
+    checks, so a check gated on ``not settings.DEBUG`` alone reads a development
+    project's test run as production and, at error level, aborts it. Django
+    dispatches the subcommand from ``argv[1]``, which makes that the exact
+    signal. ``check --deploy`` and real servers are unaffected.
+    """
+    from django.conf import settings
+
+    if getattr(settings, "DEBUG", False):
+        return False
+    return not (len(sys.argv) > 1 and sys.argv[1] == "test")
 
 
 def _is_check_suppressed(check_id: str) -> bool:

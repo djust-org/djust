@@ -17,6 +17,7 @@ from djust.checks.utils import (
     DjustInfo,
     DjustWarning,
     _is_check_suppressed,
+    _is_production,
     _walk_subclasses,
     _get_template_dirs,
 )
@@ -1340,7 +1341,7 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     trusted_proxies = getattr(settings, "DJUST_TRUSTED_PROXIES", None)
     proxy_ssl_header = getattr(settings, "SECURE_PROXY_SSL_HEADER", None)
     proxy_trusted = bool(trusted_proxies) and bool(proxy_ssl_header)
-    if not getattr(settings, "DEBUG", False) and not proxy_trusted:
+    if _is_production() and not proxy_trusted:
         if "*" in allowed_hosts and len(allowed_hosts) == 1:
             errors.append(
                 DjustError(
@@ -1400,7 +1401,7 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
     # A014 -- SECRET_KEY still has the insecure scaffold prefix in production
     secret_key = getattr(settings, "SECRET_KEY", "") or ""
-    if not getattr(settings, "DEBUG", False) and secret_key.startswith("django-insecure-"):
+    if _is_production() and secret_key.startswith("django-insecure-"):
         errors.append(
             DjustError(
                 "SECRET_KEY starts with 'django-insecure-' in production.",

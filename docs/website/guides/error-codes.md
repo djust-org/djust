@@ -1407,7 +1407,7 @@ Not raised when `DEBUG=True`, or when both `SECURE_PROXY_SSL_HEADER` and `DJUST_
 
 **Severity**: Error
 
-**What causes it**: The Django scaffold default `SECRET_KEY` is a placeholder that starts with `"django-insecure-"`. It's meant to be replaced before deployment. An attacker who knows the value (anyone with access to the source repo) can forge session cookies and password-reset tokens.
+**What causes it**: The Django scaffold default `SECRET_KEY` is a placeholder that starts with `"django-insecure-"`. It's meant to be replaced before deployment. An attacker who knows the value (anyone with access to the source repo) can forge session cookies and password-reset tokens. "Production" means `DEBUG = False`; the check does not fire during `manage.py test`, where Django's test runner forces `DEBUG = False` on a development project. `A010`-`A012` follow the same rule.
 
 **Fix**: Generate a new key and load it from an environment variable:
 
