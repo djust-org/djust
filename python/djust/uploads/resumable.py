@@ -42,7 +42,7 @@ import time
 from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Type
 
-from . import UploadWriter
+from . import DEFAULT_CHUNK_SIZE, UploadWriter
 from .storage import (
     DEFAULT_TTL_SECONDS,
     UploadStateStore,
@@ -162,7 +162,7 @@ class ResumableUploadWriter(UploadWriter):
     #: Default chunk size used to estimate ``bytes_received`` from the
     #: compacted ranges — should match the slot's ``chunk_size``. The
     #: accurate value is set on the first ``write_chunk`` call.
-    _chunk_size: int = 64 * 1024
+    _chunk_size: int = DEFAULT_CHUNK_SIZE
 
     def __init__(
         self,

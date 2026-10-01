@@ -14,7 +14,7 @@ djust provides chunked binary file uploads over WebSocket, with client-side prev
 ## What You Get
 
 - **UploadMixin** -- Server-side configuration with `allow_upload()` and `consume_uploaded_entries()`
-- **Chunked transfer** -- Files are split into 64KB chunks as binary WebSocket frames
+- **Chunked transfer** -- Files are split into 63KB chunks as binary WebSocket frames
 - **Template directives** -- `dj-upload`, `dj-upload-drop`, `dj-upload-preview`, `dj-upload-progress`
 - **Validation** -- File size limits, extension filtering, MIME type checking, magic byte verification
 - **Progress tracking** -- Real-time updates via `djust:upload:progress` DOM events
@@ -89,7 +89,7 @@ class ProfileView(UploadMixin, LiveView):
 | `accept` | `str` | `""` | Comma-separated extensions or MIME types (e.g., `".jpg,.png"` or `"image/*"`) |
 | `max_entries` | `int` | `1` | Maximum files for this slot. Sets `multiple` automatically if > 1. |
 | `max_file_size` | `int` | `10_000_000` | Maximum file size in bytes (default 10MB) |
-| `chunk_size` | `int` | `65536` | Chunk size for transfer (default 64KB) |
+| `chunk_size` | `int` | `64512` | Chunk size for transfer (default 63KB; clamped so a chunk frame, header included, fits `max_message_size`) |
 | `auto_upload` | `bool` | `True` | Start upload immediately when files are selected |
 
 ```python
