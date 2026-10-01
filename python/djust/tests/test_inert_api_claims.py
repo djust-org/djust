@@ -400,3 +400,71 @@ def test_wired_decorators_are_not_marked_inert() -> None:
             f"{name}'s schema.py description should name the module that implements "
             "it, so the claim is checkable rather than merely asserted"
         )
+
+
+# --- the `dj-submit` description is what an agent reads about form reset ------
+#
+# `DIRECTIVES["dj-submit"]["description"]` said the client "Calls
+# e.preventDefault() and e.target.reset()". It does not reset anything: the
+# only `e.target.reset()` in the tree is in the stale `client.js.backup`. The
+# live client clears a form only when the server's response frame carries
+# `reset_form` (02-response-handler.js), which `FormMixin.reset_form()` — or a
+# handler setting `_should_reset_form` — arranges. Three AI-built apps trusted
+# the old sentence and bolted on their own JS to clear the form.
+
+CLIENT_SRC = ROOT / "python" / "djust" / "static" / "djust" / "src"
+
+
+def _dj_submit_description() -> str:
+    from djust.schema import DIRECTIVES
+
+    matches = [d for d in DIRECTIVES if d.get("name") == "dj-submit"]
+    assert len(matches) == 1, f"expected exactly one dj-submit entry, got {len(matches)}"
+    return str(matches[0]["description"])
+
+
+def test_dj_submit_description_does_not_claim_an_automatic_form_reset() -> None:
+    description = _dj_submit_description()
+    assert "e.target.reset()" not in description, (
+        "dj-submit's schema.py description says the client calls e.target.reset(). "
+        "It does not: the client resets a form only when the server response carries "
+        "`reset_form` (02-response-handler.js). Say who asks for the reset instead."
+    )
+    assert "_should_reset_form" in description and "FormMixin.reset_form()" in description, (
+        "dj-submit's description should name the server-side mechanism that resets the "
+        "form (FormMixin.reset_form() / the _should_reset_form flag), so an agent knows "
+        "what to call instead of writing client JS to clear it."
+    )
+
+
+def test_generated_ai_context_does_not_teach_an_automatic_submit_reset() -> None:
+    """The text that actually reaches CLAUDE.md / .cursorrules / copilot."""
+    from djust.management.commands.djust_ai_context import _generate_content
+    from djust.schema import get_framework_schema
+
+    framework = get_framework_schema()
+    for fmt in ("claude", "cursor", "copilot"):
+        content = _generate_content(framework, {}, fmt)
+        assert "e.target.reset()" not in content, f"{fmt} context teaches e.target.reset()"
+        assert "_should_reset_form" in content, f"{fmt} context lost the reset mechanism"
+
+
+def test_the_client_does_not_reset_a_form_on_submit_itself() -> None:
+    """The premise of the description above, checked against the shipped source.
+
+    If the client ever starts resetting on submit, this fails and the
+    description has to change with it — rather than the two silently drifting
+    apart again.
+    """
+    binding = (CLIENT_SRC / "09-event-binding.js").read_text(encoding="utf-8")
+    start = binding.index("async function _handleDjSubmit(")
+    submit_handler = binding[start : binding.index("\n}\n", start)]
+    assert ".reset(" not in submit_handler, (
+        "_handleDjSubmit now resets the form itself; update dj-submit's schema.py "
+        "description (and docs/website/guides/forms.md) to say so."
+    )
+
+    response = (CLIENT_SRC / "02-response-handler.js").read_text(encoding="utf-8")
+    assert "if (data.reset_form)" in response and "form.reset()" in response, (
+        "the server-requested reset path moved; re-check dj-submit's schema.py description"
+    )
