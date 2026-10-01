@@ -914,7 +914,7 @@ VDOM identity:
 Data passing:
   data-*                          (string kwargs; data-x:int etc. to coerce)
   dj-value-*                      (extra value kwargs)
-  dj-target="#selector"           (scoped DOM updates)
+  dj-target="#selector"           (INERT: read, then dropped; does not scope updates)
 ```
 
 ## Gotchas

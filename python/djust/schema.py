@@ -33,7 +33,10 @@ DIRECTIVES: List[Dict[str, Any]] = [
     {
         "name": "dj-submit",
         "category": "event",
-        "description": "Send form data to server on submit. Calls e.preventDefault() and e.target.reset().",
+        "description": "Send form data to server on submit. The client calls e.preventDefault() but does not clear the form: "
+        "it resets the first <form> inside [dj-root] only when the server response carries reset_form, "
+        "which FormMixin.reset_form() sets (never automatically after a valid submit) "
+        "and a plain @event_handler can request with self._should_reset_form = True.",
         "value": "handler_name",
         "dom_event": "submit",
         "example": '<form dj-submit="create_item"><input name="title"><button>Add</button></form>',
@@ -160,7 +163,8 @@ DIRECTIVES: List[Dict[str, Any]] = [
     {
         "name": "dj-target",
         "category": "dom",
-        "description": "Scope the server re-render to a specific element (CSS selector)",
+        "description": "INERT — the selector is read on dj-click, dj-change and key events but "
+        "dropped before the event is sent, so it does not scope or change the server re-render.",
         "value": "CSS selector (e.g., #sidebar, .panel)",
         "example": '<button dj-click="refresh_sidebar" dj-target="#sidebar">Refresh</button>',
     },
@@ -196,20 +200,21 @@ DIRECTIVES: List[Dict[str, Any]] = [
     {
         "name": "dj-loading",
         "category": "loading",
-        "description": "Shorthand form: disable this element while the named event is in "
-        "flight (equivalent to dj-loading.disable, but scoped to a specific event name "
-        "rather than the element's own triggering event).",
+        "description": "Shorthand for dj-loading.for plus dj-loading.show: the element is hidden "
+        "when it registers and shown (its own inline display, else block) while the named "
+        "event is in flight. It does not disable anything.",
         "value": "event_name",
-        "example": '<button dj-loading="save">Save</button>',
+        "example": '<span dj-loading="save">Saving...</span>',
     },
     {
         "name": "dj-loading.for",
         "category": "loading",
-        "description": "Explicit form of the dj-loading shorthand: works on any element "
-        "(not just the one triggering the event) — react while the named event is "
-        "in flight anywhere on the page.",
+        "description": "Names the event whose in-flight state this element follows, so the "
+        "element can sit away from the trigger (within the same LiveView or component). It "
+        "only picks the event: combine it with dj-loading.show, .hide, .disable or .class; "
+        "on its own it does nothing.",
         "value": "event_name",
-        "example": '<span dj-loading.for="save">Saving...</span>',
+        "example": '<span dj-loading.for="save" dj-loading.show style="display:none">Saving...</span>',
     },
     # --- Client-side actions (no server round-trip) ---
     {
@@ -423,8 +428,9 @@ DIRECTIVES: List[Dict[str, Any]] = [
     {
         "name": "dj-prefetch",
         "category": "performance",
-        "description": "Prefetch a same-origin link's page via the service worker when the "
-        "user hovers over it. Value 'false' opts a link out.",
+        "description": "Prefetch a same-origin link's page after a 65 ms hover (immediately on "
+        'touchstart) by adding <link rel="prefetch">, or a low-priority fetch where that is '
+        "unsupported. Skipped when Save-Data is on. Value 'false' opts a link out.",
         "value": "(no value needed) | 'false'",
         "example": '<a href="/reports/" dj-prefetch>View reports</a>',
     },
@@ -488,10 +494,11 @@ DIRECTIVES: List[Dict[str, Any]] = [
         "category": "performance",
         "description": (
             "Stable identity for an item in a list, so the VDOM differ can MOVE a "
-            "row instead of destroying and rebuilding it when the list reorders. "
-            "Without it the differ falls back to positional diffing, which "
-            "discards the DOM node — losing focus, input values, scroll position "
-            "and any client-side state attached to it. Read by the Rust template "
+            "row when the list reorders. Without it the differ falls back to "
+            "positional diffing: rows are paired by position and each existing row "
+            "is rewritten in place, so focus, input values, scroll position and any "
+            "client-side state attached to a row stay with the position instead of "
+            "following the item. Read by the Rust template "
             "parser into VNode.key (crates/djust_vdom/src/parser.rs), where "
             "`data-key` is accepted as an equivalent spelling. Keys must be "
             "UNIQUE among siblings: a duplicate is ambiguous, so the differ "
@@ -678,17 +685,18 @@ DIRECTIVES: List[Dict[str, Any]] = [
     {
         "name": "dj-trigger-action",
         "category": "modifier",
-        "description": "Native POST bridge: when the server pushes a trigger-action "
-        "event, submit this form natively (full page navigation) instead of over the "
-        "WebSocket — for flows that need a real HTTP redirect (e.g. payment providers).",
+        "description": "Native POST bridge: marks a form the server may submit natively (full "
+        "page navigation, not over the WebSocket) by calling self.trigger_submit('#form-id') "
+        "in a handler; a form without this attribute is refused. For flows that need a real "
+        "HTTP redirect (e.g. payment providers).",
         "value": "(no value needed)",
         "example": '<form action="/checkout/" method="post" dj-trigger-action>...</form>',
     },
     {
         "name": "dj-patch-reload",
         "category": "navigation",
-        "description": "Opt-in escape hatch: force a full page navigation for this "
-        "dj-patch/dj-navigate link instead of an in-place client-side URL update.",
+        "description": "Opt-in escape hatch: force a full page navigation for this dj-patch "
+        "element instead of an in-place client-side URL update. dj-navigate ignores it.",
         "value": "(no value needed)",
         "example": '<a dj-patch="?page=2" dj-patch-reload>Page 2</a>',
     },
@@ -722,9 +730,10 @@ DIRECTIVES: List[Dict[str, Any]] = [
     {
         "name": "dj-document-*",
         "category": "event",
-        "description": "Bind a keydown/keyup/click/scroll/resize listener scoped to "
-        "`document` instead of the element. Supports an optional '.key' modifier "
-        "suffix for key events.",
+        "description": "Bind a keydown/keyup/click listener scoped to `document` instead of the "
+        "element. Supports an optional '.key' modifier suffix for key events. "
+        "dj-document-scroll and dj-document-resize are parsed but never fire; use "
+        "dj-window-scroll / dj-window-resize.",
         "value": "handler_name",
         "example": '<div dj-document-click="track_page_click">...</div>',
     },
