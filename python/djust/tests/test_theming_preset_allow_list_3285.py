@@ -13,7 +13,12 @@ pytestmark = pytest.mark.theming
 @pytest.fixture(autouse=True)
 def _fresh_warning_state():
     from djust.theming import manager
+    from djust.theming.registry import get_registry
 
+    # Other theming tests ``ThemeRegistry._reset()`` and leave an undiscovered, empty
+    # registry behind; whether this file then sees the built-in presets depended
+    # on which tests shared its xdist worker.
+    get_registry().discover()
     manager._WARNED_SELECTABLE.clear()
     yield
     manager._WARNED_SELECTABLE.clear()
