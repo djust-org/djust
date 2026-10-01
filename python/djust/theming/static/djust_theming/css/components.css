@@ -1784,12 +1784,12 @@ label .text-danger, .form-label .text-danger { color: hsl(var(--destructive)); }
 }
 
 .nav-link:hover {
-    color: hsl(var(--foreground));
+    color: hsl(var(--accent-foreground));
     background-color: hsl(var(--accent));
 }
 
 .nav-link.active {
-    color: hsl(var(--foreground));
+    color: hsl(var(--accent-foreground));
     background-color: hsl(var(--accent));
 }
 
