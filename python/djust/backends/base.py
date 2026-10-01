@@ -271,9 +271,10 @@ class PerConnectionPresenceBackend(PresenceBackend):
         return self.leave(presence_key, user_id, connection_id)  # type: ignore[call-arg]
 
     def heartbeat_connection(self, presence_key: str, user_id: str, connection_id: str) -> None:
-        if not uses_per_connection(self):
-            return PresenceBackend.heartbeat_connection(self, presence_key, user_id, connection_id)
-        self.heartbeat(presence_key, user_id, connection_id)  # type: ignore[call-arg]
+        if uses_per_connection(self):
+            self.heartbeat(presence_key, user_id, connection_id)  # type: ignore[call-arg]
+        else:
+            PresenceBackend.heartbeat_connection(self, presence_key, user_id, connection_id)
 
 
 def note_first(first: bool) -> bool:
