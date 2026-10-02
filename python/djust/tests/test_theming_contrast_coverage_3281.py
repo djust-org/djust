@@ -182,19 +182,15 @@ FLAGSHIP_DEBT = {
         ("light", "info", "info_tint"),
         ("light", "success", "success_tint"),
         ("light", "warning", "warning_tint"),
-        ("light", "destructive", "destructive_tint"),
         ("light", "input", "background"),
-        ("dark", "destructive", "destructive_tint"),
         ("dark", "input", "background"),
     },
     "default": {
         ("light", "info", "info_tint"),
         ("light", "success", "success_tint"),
         ("light", "warning", "warning_tint"),
-        ("light", "destructive", "destructive_tint"),
         ("light", "input", "background"),
         ("dark", "success", "success_tint"),
-        ("dark", "destructive", "destructive_tint"),
         ("dark", "input", "background"),
     },
 }
@@ -203,7 +199,6 @@ FLAGSHIP_DEBT["slate"] = {
     ("light", "info", "info_tint"),
     ("light", "success", "success_tint"),
     ("light", "warning", "warning_tint"),
-    ("light", "destructive", "destructive_tint"),
     ("light", "input", "background"),
     ("dark", "input", "background"),
 }

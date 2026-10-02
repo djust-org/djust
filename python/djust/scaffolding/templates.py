@@ -840,7 +840,7 @@ LOGIN_HTML = """\
             {%% csrf_token %%}
             <input type="hidden" name="next" value="{{ next }}">
             {%% if form.errors %%}
-            <p class="muted" style="margin: 0 0 1rem; color: hsl(var(--destructive))">
+            <p class="muted" style="margin: 0 0 1rem; color: hsl(var(--destructive-text, var(--destructive)))">
                 Invalid username or password.
             </p>
             {%% endif %%}
@@ -1163,7 +1163,7 @@ SCHEMA_LIST_HTML = """\
             <button dj-click="delete"
                     data-item_id:int="{{ item.id }}"
                     dj-confirm="Delete this %(model_display_singular_lower)s?"
-                    class="btn btn-ghost" style="color: hsl(var(--destructive))">
+                    class="btn btn-ghost" style="color: hsl(var(--destructive-text, var(--destructive)))">
                 Delete
             </button>
         </div>

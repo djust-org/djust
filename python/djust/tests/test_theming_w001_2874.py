@@ -26,7 +26,12 @@ Each test below encodes one clause of that contract.
 import pytest
 
 from djust.theming.accessibility import AccessibilityValidator
-from djust.theming.a11y_exemptions import A11Y_EXEMPTIONS, CONTRAST_PAIRS, NEW_PAIR_KEYS
+from djust.theming.a11y_exemptions import (
+    A11Y_EXEMPTIONS,
+    CONTRAST_PAIRS,
+    NEW_PAIR_KEYS,
+    SOLVED_PAIR_KEYS,
+)
 from djust.theming.checks import check_preset_contrast
 from djust.theming.presets import THEME_PRESETS, ColorScale, ThemePreset, ThemeTokens
 
@@ -136,8 +141,10 @@ class TestCheckStaysArmedForCustomPresets:
             mock_reg.return_value.has_preset.return_value = True
             warnings = check_preset_contrast(app_configs=None)
 
-        # bad preset is white-on-white: every canonical pair fails in both modes
-        assert len(warnings) == len(CONTRAST_PAIRS) * 2
+        # bad preset is white-on-white: every canonical pair fails in both modes,
+        # except the ones ``destructive_text`` is solved to satisfy (#3320)
+        warnable = [p for p in CONTRAST_PAIRS if (p[0], p[1]) not in SOLVED_PAIR_KEYS]
+        assert len(warnings) == len(warnable) * 2
         for w in warnings:
             assert w.id == "djust_theming.W001"
             assert "user_bad_preset" in w.msg

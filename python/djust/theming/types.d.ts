@@ -255,6 +255,7 @@ export interface DesignSystemCSSVariables {
   '--accent-foreground': string;
   '--destructive': string;
   '--destructive-foreground': string;
+  '--destructive-text': string;
   '--success': string;
   '--success-foreground': string;
   '--warning': string;

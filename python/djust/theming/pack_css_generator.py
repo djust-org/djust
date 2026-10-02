@@ -50,7 +50,7 @@ label, .form-label { color: hsl(var(--foreground)); }
 .alert-info { background-color: hsl(var(--info) / 0.1); border-color: hsl(var(--info) / 0.3); color: hsl(var(--info)); }
 .alert-success { background-color: hsl(var(--success) / 0.1); border-color: hsl(var(--success) / 0.3); color: hsl(var(--success)); }
 .alert-warning { background-color: hsl(var(--warning) / 0.1); border-color: hsl(var(--warning) / 0.3); color: hsl(var(--warning)); }
-.alert-danger { background-color: hsl(var(--destructive) / 0.1); border-color: hsl(var(--destructive) / 0.3); color: hsl(var(--destructive)); }
+.alert-danger { background-color: hsl(var(--destructive) / 0.1); border-color: hsl(var(--destructive) / 0.3); color: hsl(var(--destructive-text)); }
 
 /* Cards */
 .card { background-color: hsl(var(--card)); color: hsl(var(--card-foreground)); border-color: hsl(var(--border)); }
@@ -68,7 +68,7 @@ a:hover { color: hsl(var(--link-hover)); }
 /* Text utilities */
 .text-muted { color: hsl(var(--muted-foreground)) !important; }
 .text-primary { color: hsl(var(--primary)) !important; }
-.text-danger { color: hsl(var(--destructive)) !important; }
+.text-danger { color: hsl(var(--destructive-text)) !important; }
 .text-success { color: hsl(var(--success)) !important; }
 .text-warning { color: hsl(var(--warning)) !important; }
 
@@ -94,7 +94,7 @@ hr { border-color: hsl(var(--border)); }
 .alert-info { background-color: hsl(var(--info) / 0.1); border-color: hsl(var(--info) / 0.3); color: hsl(var(--info)); }
 .alert-success { background-color: hsl(var(--success) / 0.1); border-color: hsl(var(--success) / 0.3); color: hsl(var(--success)); }
 .alert-warning { background-color: hsl(var(--warning) / 0.1); border-color: hsl(var(--warning) / 0.3); color: hsl(var(--warning)); }
-.alert-danger { background-color: hsl(var(--destructive) / 0.1); border-color: hsl(var(--destructive) / 0.3); color: hsl(var(--destructive)); }
+.alert-danger { background-color: hsl(var(--destructive) / 0.1); border-color: hsl(var(--destructive) / 0.3); color: hsl(var(--destructive-text)); }
 
 /* Cards */
 .card { background-color: hsl(var(--card)); color: hsl(var(--card-foreground)); border-color: hsl(var(--border)); }

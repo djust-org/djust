@@ -14,11 +14,16 @@ from unittest.mock import patch
 
 import pytest
 
+from djust.theming.a11y_exemptions import SOLVED_PAIR_KEYS
 from djust.theming.accessibility import AccessibilityValidator
 from djust.theming.checks import CONTRAST_PAIRS, check_preset_contrast
 from djust.theming.presets import ColorScale, ThemePreset, ThemeTokens
 
 pytestmark = pytest.mark.theming
+
+#: What a preset that fails every pair can still be warned about: the pairs the
+#: derived ``destructive_text`` satisfies by construction never fire (#3320).
+WARNABLE_PAIRS = [p for p in CONTRAST_PAIRS if (p[0], p[1]) not in SOLVED_PAIR_KEYS]
 
 
 class TestHslToRgbBugFix:
@@ -137,7 +142,7 @@ class TestCheckPresetContrast:
             warnings = check_preset_contrast(app_configs=None)
 
         # 12 pairs x 2 modes = 24 warnings expected
-        assert len(warnings) == len(CONTRAST_PAIRS) * 2
+        assert len(warnings) == len(WARNABLE_PAIRS) * 2
         for w in warnings:
             assert w.id == "djust_theming.W001"
             assert "bad" in w.msg
@@ -309,7 +314,7 @@ class TestCheckPresetContrastScope:
         assert not any("inactive-bad" in w.msg for w in warnings)
         # 13 contrast pairs × 2 modes = 26 warnings for the bad active preset
         # (verifying we still get a full sweep on the active preset).
-        assert len(warnings) == len(CONTRAST_PAIRS) * 2
+        assert len(warnings) == len(WARNABLE_PAIRS) * 2
 
     def test_opt_in_all_scope_checks_every_preset(self, settings):
         """`DJUST_THEMING = {"contrast_check_scope": "all"}` restores
@@ -332,7 +337,7 @@ class TestCheckPresetContrastScope:
             warnings = check_preset_contrast(app_configs=None)
 
         # Both presets are checked → 2 presets × 13 pairs × 2 modes = 52
-        assert len(warnings) == 2 * len(CONTRAST_PAIRS) * 2
+        assert len(warnings) == 2 * len(WARNABLE_PAIRS) * 2
         assert any("pack-a" in w.msg for w in warnings)
         assert any("pack-b" in w.msg for w in warnings)
 
@@ -407,7 +412,7 @@ class TestContrastPairsCompleteness:
             "info",
             "success",
             "warning",
-            "destructive",
+            "destructive_text",
             "input",
         }
         actual_fg_attrs = {pair[0] for pair in CONTRAST_PAIRS}
