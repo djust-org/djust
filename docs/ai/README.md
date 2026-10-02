@@ -14,6 +14,8 @@ these references. The topic sections below are concise API examples.
 - [templates.md](templates.md) -- Template directives (dj-click, dj-model, etc.)
 - [security.md](security.md) -- Authorization and input validation patterns
 - [forms.md](forms.md) -- FormMixin and form handling
+- [components.md](components.md) -- Components: the two component types and how views use them
+- [loading-states.md](loading-states.md) -- Loading directives and background work
 
 ## Usage
 
