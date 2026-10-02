@@ -835,9 +835,14 @@ class RequestMixin:
             # The event leaves the page: nothing is rendered or saved for it.
             return JsonResponse(response)
 
-        if sticky_child_should_persist(child, self):
-            save_sticky_child_state_sync(child, request.session, request.path)
-            write_sticky_index_and_prune_sync(self, request.session, request.path)
+        # Under the tenant scope the page's saved state lives under (#2973); a
+        # tenant view with no resolved tenant saves nothing.
+        from .._tenant_state import scoped_path
+
+        sticky_path = scoped_path(self, request.path)
+        if sticky_path is not None and sticky_child_should_persist(child, self):
+            save_sticky_child_state_sync(child, request.session, sticky_path)
+            write_sticky_index_and_prune_sync(self, request.session, sticky_path)
         else:
             warn_sticky_child_optin_skip(child, self)
 
