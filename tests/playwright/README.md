@@ -24,6 +24,7 @@ python tests/playwright/test_draft_mode.py
 
 ## Available Tests
 
+- **test_page_shell_fallback_3036.py** - #3036 page-shell fallback in headless Chromium, self-contained (builds and serves its own three-page project; `DJUST_SERVER_PYTHON`, optional `CHROMIUM_EXECUTABLE`): a destination with a different shell is a real load, including with a `#fragment` and on Back onto a hashed entry
 - **test_loading_attribute.py** - Tests @loading HTML attributes (disable, class, show, hide)
 - **test_interactive_acceptance.py** - ADR-034 C4 acceptance: async and failing callbacks, `close`, duplicate/stale observations, keyboard focus, legacy plain `DropdownMenu`, two-browser isolation (`ACCEPTANCE_BASE`, default `http://localhost:18438`; standalone)
 - **test_interactive_navigation.py** - ADR-034 fixed dropdown across Back navigation: session-restore and signed-snapshot paths (`NAVIGATION_BASE`, default `http://localhost:18438`; standalone)

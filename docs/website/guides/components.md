@@ -492,10 +492,10 @@ Prefer to read rather than click? The same components are written up at
 generated from the same registry, and every catalogue page links to its
 entry there.
 
-Link to the catalogue with a plain `href`, never `dj-navigate`: these pages
-bring their own stylesheet and script in `<head>`, and a `dj-root`-only SPA
-swap would drop the reader on unstyled markup
-([why](navigation.md#when-not-to-use-dj-navigate)).
+Link to the catalogue with a plain `href`: these pages bring their own
+stylesheet and script in `<head>`, so `dj-navigate` would fall back to a full
+page load after a wasted round trip
+([why](navigation.md#when-the-destination-has-a-different-page-shell)).
 
 **Hosting the catalogue inside your own site.** The pages render inside
 `djust_theming/catalogue/_document.html`. Ship a template at that path from an

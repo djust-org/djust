@@ -455,6 +455,8 @@ class SSESession:
         # Set once shutdown() queued the close sentinel: the stream reads
         # nothing after it, so later pushes are dropped (#3232).
         self._closed_sentinel_queued = False
+        # True while a live_redirect_mount mounts its destination (#3036).
+        self._replacing_view = False
         # Presence untracks scheduled by shutdown() (#3254): held so a task is
         # not garbage-collected before it finishes, dropped when it does.
         self._presence_untrack_tasks: set[asyncio.Task] = set()
@@ -618,15 +620,20 @@ class SSESession:
                 # page's saves wait for it, so it cannot land over them.
                 _carry_save_ordering(old_runtime, self.runtime)
                 watch_diagnostic_owner(self.runtime, "view_instance")
-                await self.runtime.dispatch_mount(
-                    {
-                        **data,
-                        "type": "mount",
-                        "view": f"{view_class.__module__}.{view_class.__qualname__}",
-                        "url": target_request.path_info,
-                        "has_prerendered": False,
-                    }
-                )
+                # #3036: the mount frame carries the destination's page shell.
+                self._replacing_view = True
+                try:
+                    await self.runtime.dispatch_mount(
+                        {
+                            **data,
+                            "type": "mount",
+                            "view": f"{view_class.__module__}.{view_class.__qualname__}",
+                            "url": target_request.path_info,
+                            "has_prerendered": False,
+                        }
+                    )
+                finally:
+                    self._replacing_view = False
                 if self.runtime.view_instance is None:
                     self.view_instance = None
                     self.shutdown()
