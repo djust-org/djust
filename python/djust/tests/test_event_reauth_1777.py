@@ -30,6 +30,17 @@ from djust.decorators import event_handler  # noqa: E402
 _HANDLER_RAN = False
 
 
+@pytest.fixture(autouse=True)
+def _reset_config_after_override():
+    """Drop the cached ``reauth_on_event`` value once ``override_settings`` exits.
+
+    The tests call ``config.reset()`` while the override is still active, so the
+    cache would keep ``reauth_on_event=True`` for later tests in the worker.
+    """
+    yield
+    config.reset()
+
+
 class _LoginView(LiveView):
     login_required = True
     template = '<div dj-view="djust.tests.test_event_reauth_1777._LoginView" dj-id="0">x</div>'
