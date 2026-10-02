@@ -23,7 +23,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C015 | Config | Error | Unknown adapter name in DJUST_CONFIG['extensions'] |
 | C016 | Config | Warning | DjangoTemplates listed before DjustTemplateBackend, no DjangoTemplates fallback for admin, or a djust-first entry lacking the admin's context processors |
 | C018 | Config | Warning | A LIVEVIEW_CONFIG key removed in 1.3 (never read) is still set |
-| C019 | Config | Warning | Unknown DJUST_CONFIG['PRESENCE_BACKEND'] value (presence falls back to in-process memory) |
+| C019 | Config | Error | Unknown DJUST_CONFIG['PRESENCE_BACKEND'] value (the first presence call raises `ImproperlyConfigured`) |
 | C020 | Config | Error | `DJUST_SERVER_STATE_MAX_AGE` is not an integer from 1 to 86400 |
 | C021 | Config | Error | `LIVEVIEW_CONFIG['worker_threads']` is not `None`, `False`, `True`, `"auto"` or an integer >= 0 |
 | C022 | Config | Error | `LIVEVIEW_CONFIG['event_parameter_policy']` is not `'legacy'` or `'strict'` (ADR-036) |
