@@ -306,21 +306,68 @@ class OnboardingView(TenantMixin, LiveView):
 
 ## View state and tenants
 
-There is no tenant-aware *state* backend. `DJUST_STATE_BACKEND` (or
-`DJUST_CONFIG['STATE_BACKEND']`) accepts only `'redis'` (or a `redis://` URL)
-and `'memory'`; **any other value, including a dotted path to a class, silently
-falls back to the in-process memory backend**. Don't point it at the classes in
-`djust.tenants.backends`: those are *presence* backends, not state backends.
+Saved view state is keyed by tenant. A view that uses `TenantMixin` keeps its
+state in two places, and both are scoped by `TenantMixin.get_state_key_prefix()`
+(`tenant:<id>`, the id percent-encoded):
 
-View state is keyed by the user's session and the page path, not by tenant, so
-two users never share view state, whichever tenant they belong to. The keys
-don't include the tenant id, though. If one session can reach several tenants
-on the **same URL** (a header or session resolver, or `set_tenant()`), don't
-rely on the state cache to separate them: include the tenant in the URL, or
-re-derive tenant data in the event handler. `TenantMixin.get_state_key_prefix()`
-returns `tenant:<id>`, but no built-in state backend calls it at this release;
-it is a hook for your own storage (see
-[#2973](https://github.com/djust-org/djust/issues/2973)).
+- **The state backend** (`memory` or `redis`), under
+  `tenant:<id>:<session>_<page>...`: the Rust view the framework stores per
+  session and page.
+- **The Django session**, under `liveview_tenant:<id>:<path>` (plus the
+  `__private`, `_components` and `__sticky__` siblings): the saved public and
+  private state that the HTTP fallback POST restores, and that a WebSocket or
+  SSE reconnect restores when the view sets `enable_state_snapshot = True`.
+
+A session that reaches two tenants on the same URL (a cookie shared across
+`*.example.com`, a header or session resolver, or `set_tenant()`) therefore
+holds separate entries per tenant, and tenant A's request never reads state
+tenant B saved.
+
+- **A view without `TenantMixin`** is keyed exactly as before. A project that
+  does not use tenants keeps every saved state across the upgrade. This holds
+  even on a project that runs `TenantMiddleware`: the middleware alone does not
+  scope saved state, because it resolves the tenant for HTTP requests only, so
+  the same view would get a different key over HTTP and over the WebSocket.
+  Use `TenantMixin` on any view that must not share state across tenants.
+- **Fail closed:** a tenant view whose tenant is unresolved (for example
+  `tenant_required = False` on a page with no tenant yet) saves and loads no
+  state in either place. It never falls back to the shared, unprefixed key. On
+  a reconnect it mounts fresh, and an HTTP fallback POST re-runs `mount()`.
+- **Your own tenant-aware views:** a view that defines its own
+  `get_state_key_prefix()` is keyed by what it returns, and returning an empty
+  string means "no saved state", not "shared state".
+- **Server-persisted fields (`persist="server"`, ADR-038)** live in the Django
+  session too, in an envelope bound to the tenant that the request resolved
+  when the view mounted. An envelope saved under one tenant is refused under
+  another, so the view remounts fresh instead of leaking. They are not re-keyed
+  by tenant: there is one entry per session and view, so switching tenants
+  inside one session remounts. The binding takes the tenant from the request,
+  not from `self.tenant`, so a tenant you change in-process with
+  `set_tenant()` is not part of it; resolve the tenant from the request
+  (subdomain, path, header) for views that persist server fields.
+- **The signed `state_snapshot` token** the client holds is bound to the view
+  and the session, not the tenant.
+
+**Upgrading to 1.3:** the keys for tenant views changed, so the saved view
+state those views held under the old keys is no longer found: a **one-time
+reset** of the saved view state of tenant views.
+
+- State backend: the first reconnect or page load of each tenant view builds a
+  new Rust view and sends a full render instead of a patch. The orphaned
+  entries expire with `SESSION_TTL`.
+- Django session: the first HTTP fallback POST after the deploy, or the first
+  reconnect of a view with `enable_state_snapshot = True`, finds no saved state
+  and re-runs `mount()`, so in-page state (a counter, a half-filled form) is
+  lost once. The orphaned `liveview_<path>` entries stay in the session until
+  it expires or is cleared.
+
+Nothing needs migrating. Views that do not use `TenantMixin` are not affected.
+
+`DJUST_STATE_BACKEND` (or `DJUST_CONFIG['STATE_BACKEND']`) accepts only
+`'redis'` (or a `redis://` URL) and `'memory'`; **any other value, including a
+dotted path to a class, falls back to the in-process memory backend**. There is
+no tenant-specific state backend to configure, and the classes in
+`djust.tenants.backends` are *presence* backends, not state backends.
 
 ## Tenant-Aware Presence
 
@@ -389,9 +436,11 @@ turned `'tenant_redis'` into in-process memory
 ([#2973](https://github.com/djust-org/djust/issues/2973)).
 
 Any other value, including a dotted path such as
-`'djust.tenants.backends.TenantAwareRedisBackend'`, falls back to in-process
-memory, which isn't shared between workers. The registry logs a warning and
-the `djust.C019` system check flags it at startup.
+`'djust.tenants.backends.TenantAwareRedisBackend'`, raises
+`ImproperlyConfigured` the first time presence is used, and the `djust.C019`
+system check reports it as an error at startup. Before 1.3 it fell back to
+in-process memory, which isn't shared between workers, with only a log
+warning.
 
 ## Template Context
 

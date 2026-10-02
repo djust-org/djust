@@ -477,15 +477,18 @@ class RustBridgeMixin:
                     if isinstance(slot_target, str) and slot_target
                     else ""
                 )
-                self._cache_key = f"{session_key}_{view_key}{template_hash_slot}{slot_slot}"
+                cache_key = self._saved_state_key(
+                    session_key, view_key, f"{template_hash_slot}{slot_slot}"
+                )
+                self._cache_key = cache_key
                 # codeql[py/log-injection] — cache_key may contain request.path; sanitize
                 logger.debug(
                     "[LiveView] Cache lookup (WebSocket): cache_key=%s",
                     sanitize_for_log(self._cache_key),
                 )
 
-                cached = backend.get(self._cache_key)
-                if cached:
+                cached = backend.get(cache_key) if cache_key is not None else None
+                if cached and cache_key is not None:
                     cached_view, timestamp = cached
                     self._rust_view = cached_view
                     # template_dirs are not serialized; restore them after cache hit
@@ -495,7 +498,7 @@ class RustBridgeMixin:
                     self._apply_loop_render_cache_flag()
                     self._apply_template_auto_call_flag()
                     logger.debug("[LiveView] Cache HIT! Using cached RustLiveView")
-                    backend.set(self._cache_key, cached_view)
+                    backend.set(cache_key, cached_view)
                     return
                 else:
                     logger.debug("[LiveView] Cache MISS! Will create new RustLiveView")
@@ -514,15 +517,16 @@ class RustBridgeMixin:
                 from ..state_backend import get_backend
 
                 backend = get_backend()
-                self._cache_key = f"{session_key}_{view_key}{template_hash_slot}"
+                cache_key = self._saved_state_key(session_key, view_key, template_hash_slot)
+                self._cache_key = cache_key
                 # codeql[py/log-injection] — cache_key may contain request.path; sanitize
                 logger.debug(
                     "[LiveView] Cache lookup (HTTP): cache_key=%s",
                     sanitize_for_log(self._cache_key),
                 )
 
-                cached = backend.get(self._cache_key)
-                if cached:
+                cached = backend.get(cache_key) if cache_key is not None else None
+                if cached and cache_key is not None:
                     cached_view, timestamp = cached
                     self._rust_view = cached_view
                     # template_dirs are not serialized; restore them after cache hit
@@ -532,7 +536,7 @@ class RustBridgeMixin:
                     self._apply_loop_render_cache_flag()
                     self._apply_template_auto_call_flag()
                     logger.debug("[LiveView] Cache HIT! Using cached RustLiveView")
-                    backend.set(self._cache_key, cached_view)
+                    backend.set(cache_key, cached_view)
                     return
                 else:
                     logger.debug("[LiveView] Cache MISS! Will create new RustLiveView")
@@ -564,6 +568,35 @@ class RustBridgeMixin:
 
                 backend = get_backend()
                 backend.set(self._cache_key, self._rust_view)
+
+    def _saved_state_key(
+        self, session_key: str, view_key: str, template_hash_slot: str
+    ) -> Optional[str]:
+        """Return the state-backend key for this view's saved state, or ``None``.
+
+        A view with a ``get_state_key_prefix()`` hook (``TenantMixin``) keys its
+        saved state by tenant: ``tenant:<id>:<session>_<view>_t<hash>``. One
+        session that reaches two tenants on the same URL then holds two
+        separate entries instead of one shared one (#2973). Views without the
+        hook (no multi-tenancy) keep the unprefixed key, so a project that does
+        not use tenants loses nothing.
+
+        Fail-closed: when the hook is present but returns no prefix (a tenant
+        view whose tenant is unresolved, e.g. ``tenant_required = False``),
+        the key is ``None`` and nothing is read from or written to the
+        backend. Falling back to the unprefixed key would put that request in
+        the namespace every non-tenant view shares.
+        """
+        from .._tenant_state import state_scope
+
+        tenant_scope = state_scope(self)
+        if tenant_scope is None:
+            logger.debug(
+                "[LiveView] %s has no tenant; saved view state is not used",
+                type(self).__name__,
+            )
+            return None
+        return f"{tenant_scope}{session_key}_{view_key}{template_hash_slot}"
 
     def _get_cached_template_hash_slot(self) -> str:
         """Return the ``_t<8hex>`` cache-key slot for this view's template.
