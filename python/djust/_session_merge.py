@@ -84,6 +84,8 @@ logger = logging.getLogger(__name__)
 
 #: djust's own session keys: written explicitly by a save, never compared.
 _OWN_PREFIXES = ("liveview_", "_djust_")
+#: Instance attributes of a session that are not carried to the writer.
+_NOT_COPIED = frozenset({"_session_cache", "_SessionBase__session_key"})
 #: A value ``copy.deepcopy`` could not copy: assumed changed when it is read.
 #: The same goes for a value whose ``==`` is identity (an object without
 #: ``__eq__``, only possible with a pickle-based ``SESSION_SERIALIZER``): its
@@ -263,12 +265,15 @@ class TrackedSessionData(dict):
             for key in list(dict.keys(self)):
                 if key in snap.changed or self._stamp.get(key, 0) > snap.gen:
                     continue
+                now = dict.__getitem__(self, key)
+                if key in self._seen and _differs(self._seen[key], now):
+                    continue  # changed in place since the snapshot: the next save writes it
                 if key not in merged:
                     dict.__delitem__(self, key)  # another writer removed it
-                    continue
-                now = dict.__getitem__(self, key)
-                if now is not merged[key] and _differs(merged[key], now):
+                    self._seen.pop(key, None)
+                elif now is not merged[key] and _differs(merged[key], now):
                     dict.__setitem__(self, key, merged[key])
+                    self._rebaseline(key, merged[key])
             for key, value in merged.items():
                 if (
                     not dict.__contains__(self, key)
@@ -276,6 +281,15 @@ class TrackedSessionData(dict):
                     and self._stamp.get(key, 0) <= snap.gen
                 ):
                     dict.__setitem__(self, key, value)  # another writer added it
+                    self._rebaseline(key, value)
+
+    def _rebaseline(self, key: Any, value: Any) -> None:
+        """The in-memory value is now the stored one: that is what later changes
+        are measured against, not the value it replaced."""
+        if _watches(key, value):
+            self._seen[key] = _baseline(value)
+        else:
+            self._seen.pop(key, None)
 
     def settle(self, snap: Snapshot) -> None:
         """The store has what ``snap`` held: forget it, and only it."""
@@ -446,6 +460,11 @@ def _merge_and_save(
     # touched while the write is in flight, and a handler's write meanwhile
     # stays recorded for the next save.
     writer = type(session)(session_key=key)
+    # State a subclass keeps on the instance (a middleware's ip, user agent...)
+    # that its ``save()`` may read.
+    for name, value in session.__dict__.copy().items():  # a copy: another thread may set one
+        if name not in _NOT_COPIED:
+            setattr(writer, name, value)
     writer._session_cache = merged
     after_commit = _write(writer)
     data.reconcile(merged, snap)

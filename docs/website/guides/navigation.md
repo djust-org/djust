@@ -307,8 +307,13 @@ Limits, so you know what this does and does not close:
   by the stored value, and a reference taken to the old value is stale (the
   stored value is the one that wins for a key you did not write).
 - A write made while a save is still running (a save past its 150 ms bound
-  overlaps the next event's handler) is not lost: it is newer than that save, so
-  the next save writes it.
+  overlaps the next event's handler) is not lost, whether it is an assignment or
+  an in-place change to a list or dict the view holds: it is newer than that
+  save, so the next save writes it.
+- The store object the save writes through is a new instance of the session's
+  class that carries over the attributes set on the live session (for example an
+  IP address a middleware stored on a custom session class), so a custom
+  `SessionStore.save()` sees them.
 
 What is restored is **historical view state**, the page as it was when the user
 navigated away. It does not make the cached data authoritative: handlers still
