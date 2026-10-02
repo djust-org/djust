@@ -9,15 +9,10 @@ uses by design. Intentional exceptions elsewhere carry an inline ``# nosec``.
 from __future__ import annotations
 
 import re
+import tomllib
 from pathlib import Path
 
-import pytest
 import yaml
-
-try:
-    import tomllib
-except ModuleNotFoundError:  # Python 3.10
-    tomllib = pytest.importorskip("tomli")
 
 ROOT = Path(__file__).resolve().parents[1]
 REVIEWED = {"B703", "B308"}

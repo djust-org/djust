@@ -39,7 +39,7 @@ def next_steps(app_name: str, setup_ran: bool) -> List[str]:
     steps = ["cd %s" % app_name]
     if not setup_ran:
         steps += [
-            'uv venv --python ">=3.10" .venv',
+            'uv venv --python ">=3.11" .venv',
             "uv pip install --python .venv -r requirements.txt",
             "%s manage.py makemigrations" % python,
             "%s manage.py migrate" % python,
@@ -795,7 +795,7 @@ def _run_auto_setup(project_dir: Path) -> None:
     # Create virtualenv
     if uv_available:
         print("Creating virtualenv (uv)...")
-        _run_cmd(["uv", "venv", "--python", ">=3.10", str(venv_dir)], cwd=project_dir)
+        _run_cmd(["uv", "venv", "--python", ">=3.11", str(venv_dir)], cwd=project_dir)
     else:
         print("Creating virtualenv (python -m venv)...")
         _run_cmd([sys.executable, "-m", "venv", str(venv_dir)], cwd=project_dir)

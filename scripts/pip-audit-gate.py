@@ -13,7 +13,8 @@ and without the project itself — djust is not on PyPI until the release this
 audit gates has been published, so pip-audit could not look it up. Environment
 markers are stripped before auditing: pip-audit would otherwise evaluate them
 against its own interpreter and silently skip the packages the lock pins only
-for other Python versions or platforms (e.g. the Python 3.10 autobahn fork).
+for other Python versions or platforms (a lock can pin a package only for one
+Python range).
 
 Usage:
     python scripts/pip-audit-gate.py                     # audit uv.lock
