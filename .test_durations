@@ -4545,6 +4545,7 @@
     "python/djust/tests/test_multi_view_socket_3252.py::test_each_view_has_its_own_wire_version": 0.04284833278506994,
     "python/djust/tests/test_multi_view_socket_3252.py::test_every_batch_view_joins_and_leaves_its_own_groups": 0.03884741710498929,
     "python/djust/tests/test_multi_view_socket_3252.py::test_explicit_views_beside_each_other_each_restore_their_own_state": 0.07672420819289982,
+    "python/djust/tests/test_multi_view_socket_3252.py::test_hydrating_a_container_again_does_not_make_the_user_leave_and_rejoin": 0.053866291185840964,
     "python/djust/tests/test_multi_view_socket_3252.py::test_hydrating_a_lazy_sibling_does_not_replace_the_page_view": 0.04534574970602989,
     "python/djust/tests/test_multi_view_socket_3252.py::test_hydrating_the_same_container_again_replaces_only_that_view": 0.0796249583363533,
     "python/djust/tests/test_multi_view_socket_3252.py::test_presence_follows_each_view_s_own_lifetime": 0.06524920812807977,
