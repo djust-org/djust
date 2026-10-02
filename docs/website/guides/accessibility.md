@@ -403,9 +403,46 @@ fills, borders and dots:
 The fallback in the first rule keeps the stylesheet working in a project that
 defines its own `--destructive` and does not use djust's theme generator.
 
+**If you override `--destructive` while the generator is active, override
+`--destructive-text` too.** The generator derives `--destructive-text` from the
+*preset's* `destructive`, once, when it writes the stylesheet. CSS cannot recompute
+a contrast-solved colour from another variable, so a later
+`:root { --destructive: <brand red> }` recolours fills, borders and dots but leaves
+error text in the preset's derived red. Set both, and pick a text colour that reads
+(4.5:1) on your page and card:
+
+```css
+:root {
+  --destructive: 350 80% 40%;       /* fills, borders */
+  --destructive-text: 350 80% 40%;  /* error text; here the fill already reads on white */
+}
+```
+
+The same goes for a preset's `extra_css_vars`: a `destructive` entry there recolours
+the fill only, so add a `destructive-text` entry next to it. (No shipped preset does
+either.) Without the generator, the `var(--destructive-text, var(--destructive))`
+fallback means overriding `--destructive` alone already moves error text.
+
+**Tailwind.** `text-destructive` (Tailwind v3 `destructive.DEFAULT`, v4
+`--color-destructive`) still resolves to the *fill*, deliberately: `DEFAULT` is the
+same colour as `bg-destructive` and `border-destructive`, so Tailwind cannot give it
+a different value as text. Use `text-destructive-text` for error text. Only the
+`.text-destructive` utility djust itself generates reads the text token.
+
 `W001` measures `destructive_text` against the background, the card and the
 destructive alert tint, and the all-presets test gate requires every shipped
 preset to pass all three in both modes with no exemption.
+
+**What the solver does not cover.** `destructive_text` is solved against the page,
+a card and the 10% and 15% destructive washes. It is not solved against the
+`muted`, `accent` or `secondary` surfaces, so error text placed on one of them (a
+chip, a zebra row, a hovered item) can still be under 4.5:1: across the 136
+preset-modes, 46 miss on `muted`, 49 on `accent` and 25 on `secondary` (70 miss on at
+least one). Solving against them would recolour error text in those 70 preset-modes,
+which pass page and card today, and those surfaces are often mid-tone, where one text
+colour cannot clear all of them.
+Until that is done, put error text on the page or a card, or override
+`--destructive-text` for the surface.
 
 This validation runs over *theme* color tokens — it does not look at your
 component markup, which is what the `Y` checks and the built-in component ARIA

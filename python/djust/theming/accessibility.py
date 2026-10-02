@@ -137,6 +137,9 @@ class AccessibilityValidator:
                 ("primary_text", mode_tokens.primary_foreground, mode_tokens.primary),
                 ("secondary_text", mode_tokens.secondary_foreground, mode_tokens.secondary),
                 ("muted_text", mode_tokens.muted_foreground, mode_tokens.muted),
+                # The label-on-fill pair, named like ``primary_text``. It is NOT the
+                # derived ``ThemeTokens.destructive_text`` (error text, #3320); the
+                # key is kept so existing reports and consumers do not break.
                 ("destructive_text", mode_tokens.destructive_foreground, mode_tokens.destructive),
                 ("success_text", mode_tokens.success_foreground, mode_tokens.success),
                 ("warning_text", mode_tokens.warning_foreground, mode_tokens.warning),

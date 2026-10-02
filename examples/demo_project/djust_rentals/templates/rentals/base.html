@@ -34,6 +34,7 @@
                     destructive: {
                       DEFAULT: "hsl(var(--destructive))",
                       foreground: "hsl(var(--destructive-foreground))",
+                      text: "hsl(var(--destructive-text))",
                     },
                     muted: {
                       DEFAULT: "hsl(var(--muted))",
@@ -84,6 +85,8 @@
         --accent-foreground: 210 40% 98%;
         --destructive: 0 62.8% 30.6%;
         --destructive-foreground: 210 40% 98%;
+        /* error TEXT (#3344): the fill above is 1.9:1 on this page; this reads (5:1+) */
+        --destructive-text: 0 63% 57%;
         --border: 217.2 32.6% 17.5%;
         --input: 217.2 32.6% 17.5%;
         --ring: 224.3 76.3% 48%;
@@ -108,6 +111,8 @@
         --accent-foreground: 222.2 47.4% 11.2%;
         --destructive: 0 84.2% 60.2%;
         --destructive-foreground: 210 40% 98%;
+        /* error TEXT (#3344): the fill above is 3.8:1 on white; this reads */
+        --destructive-text: 0 84% 44%;
         --border: 214.3 31.8% 91.4%;
         --input: 214.3 31.8% 91.4%;
         --ring: 221.2 83.2% 53.3%;
@@ -132,7 +137,7 @@
       .text-secondary-foreground { color: hsl(var(--secondary-foreground)); }
       .text-muted-foreground { color: hsl(var(--muted-foreground)); }
       .text-accent-foreground { color: hsl(var(--accent-foreground)); }
-      .text-destructive { color: hsl(var(--destructive)); }
+      .text-destructive { color: hsl(var(--destructive-text, var(--destructive))); }
       .text-destructive-foreground { color: hsl(var(--destructive-foreground)); }
 
       .border-border { border-color: hsl(var(--border)); }
