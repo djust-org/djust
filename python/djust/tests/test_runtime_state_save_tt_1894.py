@@ -435,7 +435,7 @@ def test_runtime_save_block_present_and_gated():
 
     # --- Body (in _persist_state_after_event): key shape + writes ---
     # Mirrors WS pin lines 301-303.
-    assert 'save_view_key = f"liveview_{save_path}"' in body_collapsed
+    assert "save_view_key = _session_view_key(target_view, save_path)" in body_collapsed
     # #3212: one sync Django-thread hop, so the sync session API.
     assert "save_session[save_view_key] = _normalize(" in body_collapsed
     assert "save_session.save()" in body_collapsed

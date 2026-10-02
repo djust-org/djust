@@ -34,6 +34,7 @@ Configuration::
 import logging
 from contextlib import nullcontext
 from typing import Any, Dict, Optional, TYPE_CHECKING
+from urllib.parse import quote
 
 from .._exposure import ProviderContract
 from .._exposure_providers import provide_context
@@ -65,7 +66,7 @@ class TenantMixin:
     - Makes tenant available as self.tenant in all methods
     - Adds tenant to template context automatically
     - Provides tenant-scoped presence keys
-    - Integrates with tenant-aware state backends
+    - Keys saved view state by tenant (``get_state_key_prefix()``)
 
     Usage::
 
@@ -270,6 +271,19 @@ class TenantMixin:
         provide_context(self, context, "djust.tenants", context_name, self._tenant)
         return context
 
+    def _djust_render_only_context_keys(self) -> frozenset:
+        """The tenant key renders but is never saved state.
+
+        A legacy session save drops these keys. Without this the saved
+        ``tenant`` value was restored through the ``tenant`` property setter,
+        so the first HTTP fallback POST or snapshot reconnect after a save
+        replaced ``self.tenant`` with its serialized form.
+        """
+        parent = getattr(super(), "_djust_render_only_context_keys", None)
+        keys = set(parent()) if callable(parent) else set()
+        keys.add(_tenant_context_name(type(self)))
+        return frozenset(keys)
+
     def get_presence_key(self) -> str:
         """
         Override presence key to be tenant-scoped.
@@ -289,12 +303,19 @@ class TenantMixin:
 
     def get_state_key_prefix(self) -> str:
         """
-        Get prefix for state storage keys.
+        Get the tenant prefix for this view's saved-state key.
 
-        Used by tenant-aware state backends to isolate state per tenant.
+        ``_initialize_rust_view`` prepends ``<prefix>:`` to the state-backend
+        key, so one session that reaches two tenants on the same URL keeps two
+        entries (#2973). Returns ``"tenant:<id>"``, or ``""`` when no tenant is
+        resolved; the empty string means *no saved state* for this view, never
+        the shared unprefixed key. Override it to change the scope, keeping
+        that rule.
         """
         if self._tenant:
-            return f"tenant:{self._tenant.id}"
+            # Quoted so a ``:`` in the id (header/session/custom resolvers
+            # can produce one) cannot blur where the id ends.
+            return f"tenant:{quote(str(self._tenant.id), safe='')}"
         return ""
 
     # Hook into LiveView lifecycle

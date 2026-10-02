@@ -3363,8 +3363,11 @@ class ViewRuntime:
         # legacy snapshot restore mechanism for an explicit view.
         opt_in = opt_in and legacy_exposure
         session = getattr(request, "session", None)
-        if opt_in and session is not None:
-            view_key = f"liveview_{page_url}"
+        from ._tenant_state import session_view_key
+
+        # None = tenant view with no resolved tenant: restore nothing (#2973).
+        view_key = session_view_key(view_instance, page_url)
+        if opt_in and session is not None and view_key is not None:
             try:
                 saved_state = await session.aget(view_key, {})
             except Exception:  # noqa: BLE001 — session backend may be absent
@@ -5043,8 +5046,12 @@ class ViewRuntime:
 
             from .serialization import normalize_django_value as _normalize
 
+            from ._tenant_state import session_view_key as _session_view_key
+
             save_path = mount_request.path if mount_request is not None else "/"
-            save_view_key = f"liveview_{save_path}"
+            save_view_key = _session_view_key(target_view, save_path)
+            if save_view_key is None:  # tenant view, no tenant resolved (#2973)
+                return
 
             # Save order mirrors HTTP path (mixins/request.py:593-609): private
             # attrs FIRST, then public via get_context_data().
@@ -5165,7 +5172,13 @@ class ViewRuntime:
             if guard is not None and expected_key != guard[0]:
                 raise LateSaveDropped("the session key changed since the state was rendered")
 
-            parent_path = mount_request.path if mount_request is not None else "/"
+            from ._tenant_state import scoped_path
+
+            parent_path = scoped_path(
+                parent, mount_request.path if mount_request is not None else "/"
+            )
+            if parent_path is None:  # tenant parent, no tenant resolved (#2973)
+                return
 
             save_sticky_child_state_sync(target_view, save_session, parent_path)
             write_sticky_index_and_prune_sync(parent, save_session, parent_path)

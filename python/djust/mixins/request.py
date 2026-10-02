@@ -329,7 +329,10 @@ class RequestMixin:
         # Save state to session after GET so the WebSocket mount can restore it
         # instead of re-running mount() (which doubles page load cost).
         # Also used by HTTP-only POST path to restore state before event handling.
-        view_key = f"liveview_{request.path}"
+        from .._tenant_state import session_view_key
+
+        # None = a tenant view with no resolved tenant: nothing is saved (#2973).
+        view_key = session_view_key(self, request.path)
         # Use _cached_context (pre-context-processor copy) to avoid
         # non-serializable processor objects (PermWrapper, csrf, etc.)
         _cached = self._cached_context or {}
@@ -359,17 +362,21 @@ class RequestMixin:
                 and k != "streams"
                 and k not in _render_only
             }
-            request.session[view_key] = normalize_django_value(_session_state, state_roundtrip=True)
-
-            # Legacy private/component persistence is separate from explicit
-            # declared server fields. Never let it run as an explicit fallback.
-            private_state = self._get_private_state()
-            if private_state:
-                request.session[f"{view_key}__private"] = normalize_django_value(
-                    private_state, state_roundtrip=True
-                )
             t0_sc = time.perf_counter()
-            self._save_components_to_session(request, _cached)
+            if view_key is not None:
+                request.session[view_key] = normalize_django_value(
+                    _session_state, state_roundtrip=True
+                )
+
+                # Legacy private/component persistence is separate from explicit
+                # declared server fields. Never let it run as an explicit fallback.
+                private_state = self._get_private_state()
+                if private_state:
+                    request.session[f"{view_key}__private"] = normalize_django_value(
+                        private_state, state_roundtrip=True
+                    )
+                t0_sc = time.perf_counter()
+                self._save_components_to_session(request, _cached)
         else:
             from .._exposure_sessions import save_server_state
 
@@ -828,9 +835,13 @@ class RequestMixin:
                 return JsonResponse({"error": "Invalid event name"}, status=400)
 
             # Restore state from session
-            view_key = f"liveview_{request.path}"
+            from .._tenant_state import session_view_key
+
+            # None = tenant view with no resolved tenant: restore and save nothing (#2973).
+            view_key = session_view_key(self, request.path)
             legacy_exposure = uses_legacy_exposure(self)
-            saved_state = request.session.get(view_key, {}) if legacy_exposure else {}
+            session_state = legacy_exposure and view_key is not None
+            saved_state = request.session.get(view_key, {}) if session_state else {}
 
             # #2252: the write side tagged every Decimal
             # (``normalize_django_value(..., state_roundtrip=True)`` above), so
@@ -843,9 +854,7 @@ class RequestMixin:
                     safe_setattr(self, key, value, allow_private=False)
 
             # Restore user-defined _private attributes
-            private_state = (
-                request.session.get(f"{view_key}__private", {}) if legacy_exposure else {}
-            )
+            private_state = request.session.get(f"{view_key}__private", {}) if session_state else {}
             if private_state:
                 self._restore_private_state(private_state)
 
@@ -882,7 +891,7 @@ class RequestMixin:
 
             # Restore component state
             component_state = (
-                request.session.get(f"{view_key}_components", {}) if legacy_exposure else {}
+                request.session.get(f"{view_key}_components", {}) if session_state else {}
             )
             from ..components.base import is_session_component
 
@@ -1057,13 +1066,14 @@ class RequestMixin:
             # because get_context_data() sets render-cycle internals that we
             # don't want to accidentally capture.
             if legacy_exposure:
-                private_state = self._get_private_state()
-                if private_state:
-                    request.session[f"{view_key}__private"] = normalize_django_value(
-                        private_state, state_roundtrip=True
-                    )
-                else:
-                    request.session.pop(f"{view_key}__private", None)
+                if session_state:
+                    private_state = self._get_private_state()
+                    if private_state:
+                        request.session[f"{view_key}__private"] = normalize_django_value(
+                            private_state, state_roundtrip=True
+                        )
+                    else:
+                        request.session.pop(f"{view_key}__private", None)
 
                 updated_context = self.get_context_data()
                 from .context import legacy_render_only_keys
@@ -1077,8 +1087,9 @@ class RequestMixin:
                     and not is_component_collection(v)
                     and k not in render_only
                 }
-                request.session[view_key] = normalize_django_value(state, state_roundtrip=True)
-                self._save_components_to_session(request, updated_context)
+                if session_state:
+                    request.session[view_key] = normalize_django_value(state, state_roundtrip=True)
+                    self._save_components_to_session(request, updated_context)
             else:
                 from .._exposure_sessions import save_server_state
 
@@ -1212,10 +1223,15 @@ class RequestMixin:
             # stale ledger exists (so a parent whose last sticky child was
             # removed still gets its orphans pruned). A parent that never had
             # sticky children pays zero cost — no ledger key, empty sweep.
-            if _sticky_to_save or _sticky_index_key(request.path) in request.session:
+            from .._tenant_state import scoped_path
+
+            _sticky_path = scoped_path(self, request.path)
+            if _sticky_path is not None and (
+                _sticky_to_save or _sticky_index_key(_sticky_path) in request.session
+            ):
                 for _child in _sticky_to_save:
-                    save_sticky_child_state_sync(_child, request.session, request.path)
-                write_sticky_index_and_prune_sync(self, request.session, request.path)
+                    save_sticky_child_state_sync(_child, request.session, _sticky_path)
+                write_sticky_index_and_prune_sync(self, request.session, _sticky_path)
 
             import json as json_module
 
