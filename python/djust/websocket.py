@@ -2767,6 +2767,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             try:
                 fields["ref"] = int(ref)
             except (ValueError, OverflowError):
+                # A forged NaN/infinity ref is not echoed; the refusal still goes out.
                 pass
         await self.send_error("View not mounted. Please reload the page.", **fields)
 

@@ -533,6 +533,7 @@ class SSESession:
                         try:
                             fields["ref"] = int(ref)
                         except (ValueError, OverflowError):
+                            # A forged NaN/infinity ref is not echoed.
                             pass
                     await self.send_error(
                         "A view mounted beside the page view needs the WebSocket transport.",
