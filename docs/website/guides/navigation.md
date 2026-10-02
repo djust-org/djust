@@ -260,7 +260,14 @@ object the view holds:
   copy taken at that point and again after every save, so a list you keep a
   reference to (`self.cart = request.session.setdefault("cart", [])` in
   `mount()`, `self.cart.append(item)` in handlers) keeps being saved. A value
-  that was only read is not written back. A change reached some other way
+  that was only read is not written back. The copy is a `deepcopy` taken when
+  the value is first read or stored and again after each save, so a large
+  mutable value costs about its size each time (about 1 ms for a 30 KB value in
+  a measurement on SQLite); djust's own state keys are never copied. A value
+  that cannot be copied or compared (an object without `__eq__`, only possible
+  with a pickle-based `SESSION_SERIALIZER`) counts as always changed: it is
+  written on every save, as the whole-session save did, and the stored copy
+  replaces the in-memory object. A change reached some other way
   (through `.items()` or `.values()`, or just `request.session.modified = True`)
   is not seen: assign the key.
 

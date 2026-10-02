@@ -85,6 +85,12 @@ logger = logging.getLogger(__name__)
 #: djust's own session keys: written explicitly by a save, never compared.
 _OWN_PREFIXES = ("liveview_", "_djust_")
 #: A value ``copy.deepcopy`` could not copy: assumed changed when it is read.
+#: The same goes for a value whose ``==`` is identity (an object without
+#: ``__eq__``, only possible with a pickle-based ``SESSION_SERIALIZER``): its
+#: copy never compares equal, so a container holding one counts as changed at
+#: every save (written each time, as the whole-session save did) and, when the
+#: store holds that key, the in-memory object is replaced by the stored copy
+#: rather than kept (``reconcile``).
 _UNCOPYABLE = object()
 
 

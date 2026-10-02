@@ -587,6 +587,22 @@ def test_a_key_rotation_in_a_handler_is_saved_and_tracking_continues(engine):
     assert stored["idle_ts"] == "NEW" and stored["liveview_/x/"] == {"count": 2}
 
 
+def test_a_value_that_cannot_be_compared_counts_as_changed():
+    """An object whose ``==`` is identity (pickle serializers only) is written
+    on every save, as the whole-session save did, and never silently dropped."""
+
+    class Opaque:
+        pass
+
+    data = TrackedSessionData({"k": {"o": Opaque()}, "plain": {"a": 1}})
+    data["k"]
+    data["plain"]
+    snap = data.snapshot()
+    assert "k" in snap.changed and "plain" not in snap.changed
+    data.settle(snap)
+    assert "k" in data.snapshot().changed, "still compared by identity after a save"
+
+
 def test_non_string_keys_are_tolerated():
     """``PickleSerializer`` sessions can carry any key."""
     data = TrackedSessionData({1: [1], "a": [2]})
