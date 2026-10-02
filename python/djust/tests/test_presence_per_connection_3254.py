@@ -533,6 +533,61 @@ def test_a_builtin_subclass_with_new_signature_overrides_stays_per_connection(in
     ]
 
 
+class KwargsOnly(InMemoryPresenceBackend):
+    """Overrides accept ``**kw`` and pass it on: ``connection_id`` arrives as a keyword."""
+
+    def join(self, key, user, meta, **kw):
+        return super().join(key, user, meta, **kw)
+
+    def leave(self, key, user, **kw):
+        return super().leave(key, user, **kw)
+
+    def heartbeat(self, key, user, **kw):
+        return super().heartbeat(key, user, **kw)
+
+
+class VarArgsOnly(InMemoryPresenceBackend):
+    """``*args`` cannot take ``connection_id=``: an old-contract override."""
+
+    def leave(self, key, user, *args):
+        return super().leave(key, user)
+
+
+def test_a_kwargs_override_gets_connection_id_as_a_keyword(installed):
+    """Passing it positionally raised TypeError for ``def join(self, key, user, meta, **kw)``."""
+    from djust.backends.base import uses_per_connection
+
+    backend = installed(KwargsOnly())
+    assert uses_per_connection(backend) is True
+
+    assert PresenceManager.join_connection(ROOM, "alice", "tab-a", {})[1] is True
+    assert PresenceManager.join_connection(ROOM, "alice", "tab-b", {})[1] is False
+    PresenceManager.update_heartbeat(ROOM, "alice", "tab-a")
+    assert PresenceManager.leave_connection(ROOM, "alice", "tab-a") is None
+    assert PresenceManager.leave_connection(ROOM, "alice", "tab-b") is not None
+    assert backend.list(ROOM) == []
+
+
+def test_a_varargs_only_override_is_an_old_contract_backend(installed):
+    from djust.backends.base import uses_per_connection
+
+    backend = installed(VarArgsOnly())
+    assert uses_per_connection(backend) is False
+    PresenceManager.join_connection(ROOM, "alice", "tab-a", {})
+    assert PresenceManager.leave_connection(ROOM, "alice", "tab-a") is not None  # no TypeError
+
+
+def test_the_classification_follows_a_monkeypatched_method(installed, monkeypatch):
+    from djust.backends.base import uses_per_connection
+
+    backend = InMemoryPresenceBackend()
+    assert uses_per_connection(backend) is True
+    monkeypatch.setattr(InMemoryPresenceBackend, "leave", lambda self, key, user: None)
+    assert uses_per_connection(backend) is False
+    monkeypatch.undo()
+    assert uses_per_connection(backend) is True
+
+
 def test_the_builtins_and_a_plain_old_contract_backend_are_classified(installed):
     from djust.backends.base import uses_per_connection
 

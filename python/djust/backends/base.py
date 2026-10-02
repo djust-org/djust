@@ -84,28 +84,37 @@ def user_of_member(member: str) -> str:
 
 
 def _accepts_connection_id(fn: Any) -> bool:
+    """Whether ``fn`` can be called with ``connection_id=...`` as a keyword."""
     try:
         params = inspect.signature(fn).parameters
     except (TypeError, ValueError):
         return True
-    return "connection_id" in params or any(
-        p.kind in (p.VAR_KEYWORD, p.VAR_POSITIONAL) for p in params.values()
-    )
+    named = params.get("connection_id")
+    if named is not None and named.kind is not named.POSITIONAL_ONLY:
+        return True
+    return any(p.kind is p.VAR_KEYWORD for p in params.values())
 
 
-_per_connection_classes: "weakref.WeakKeyDictionary[type, bool]" = weakref.WeakKeyDictionary()
+_METHODS = ("join", "leave", "heartbeat")
+#: class -> (the three methods the answer was computed from, the answer). The
+#: methods are part of the entry so a test that monkeypatches one is not served
+#: a stale answer.
+_per_connection_classes: "weakref.WeakKeyDictionary[type, Tuple[Tuple[Any, ...], bool]]" = (
+    weakref.WeakKeyDictionary()
+)
 
 
 def _class_is_per_connection(cls: type) -> bool:
+    methods = tuple(getattr(cls, n, None) for n in _METHODS)
     cached = _per_connection_classes.get(cls)
-    if cached is not None:
-        return cached
+    if cached is not None and cached[0] == methods:
+        return cached[1]
     # A subclass of a built-in backend that overrides join/leave/heartbeat with
     # the old signature (no ``connection_id``) is a one-record-per-user backend.
     result = bool(getattr(cls, "per_connection", False)) and all(
-        _accepts_connection_id(getattr(cls, n)) for n in ("join", "leave", "heartbeat")
+        m is not None and _accepts_connection_id(m) for m in methods
     )
-    _per_connection_classes[cls] = result
+    _per_connection_classes[cls] = (methods, result)
     return result
 
 
@@ -260,7 +269,7 @@ class PerConnectionPresenceBackend(PresenceBackend):
         if type(self).join is getattr(type(self), "_builtin_join", None):
             return self._join(presence_key, user_id, connection_id, meta)
         _join_signal.first = True
-        record = self.join(presence_key, user_id, meta, connection_id)  # type: ignore[call-arg]
+        record = self.join(presence_key, user_id, meta, connection_id=connection_id)  # type: ignore[call-arg]
         return record, bool(_join_signal.first)
 
     def leave_connection(
@@ -268,11 +277,11 @@ class PerConnectionPresenceBackend(PresenceBackend):
     ) -> Optional[Dict[str, Any]]:
         if not uses_per_connection(self):
             return PresenceBackend.leave_connection(self, presence_key, user_id, connection_id)
-        return self.leave(presence_key, user_id, connection_id)  # type: ignore[call-arg]
+        return self.leave(presence_key, user_id, connection_id=connection_id)  # type: ignore[call-arg]
 
     def heartbeat_connection(self, presence_key: str, user_id: str, connection_id: str) -> None:
         if uses_per_connection(self):
-            self.heartbeat(presence_key, user_id, connection_id)  # type: ignore[call-arg]
+            self.heartbeat(presence_key, user_id, connection_id=connection_id)  # type: ignore[call-arg]
         else:
             PresenceBackend.heartbeat_connection(self, presence_key, user_id, connection_id)
 
