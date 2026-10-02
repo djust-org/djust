@@ -1185,8 +1185,12 @@ tag's name plus `_block`, and it closes with `{% end_<name>_block %}`.
 A block form takes the inline tag's arguments except the one the block fills
 (`{% theme_alert_block %}` has no `message`, `{% theme_card_block %}` no `body`).
 Passing that argument, or its `slot_*` spelling, as well is a
-`TemplateSyntaxError` rather than a body that silently wins or loses. The block
-form renders the same component template as the inline form, theme overrides
+`TemplateSyntaxError` rather than a body that silently wins or loses.
+Positional arguments bind as they do inline, with one exception: `theme_alert`'s
+first positional argument is the message, which the block fills, so
+`{% theme_alert_block "Heads up" %}` is refused. Pass `title="Heads up"`. The
+block forms render in place and do not support `as <variable>`. The block form
+renders the same component template as the inline form, theme overrides
 included, so the two cannot drift apart.
 
 When to use which:
@@ -1201,9 +1205,12 @@ When to use which:
   data does not belong there.
 
 Both forms work in LiveView templates (the Rust engine) as well as in Django
-templates, inside `dj-root`, in `{% for %}` and `{% if %}`, and nested. Surrounding
-whitespace in a block body is trimmed. `{% theme_card %}…{% end_theme_card %}` is
-not valid: the inline tag has no closing tag, so use `theme_card_block`.
+templates, inside `dj-root`, in `{% for %}` and `{% if %}`, nested, and in a
+template that `{% extends %}` a base. Leading and trailing whitespace of a block
+body is trimmed (so a `<pre>` body should put its content inside the `<pre>`).
+`{% theme_card %}…{% end_theme_card %}` is not valid: the inline tag has no
+closing tag, and `end_theme_card` raises an error that points to
+`theme_card_block`.
 
 Not covered: `theme_tabs` takes a list of `{label, content}` dicts and
 `theme_table`, `theme_nav` and `theme_sidebar_nav` take data, not a body, so a

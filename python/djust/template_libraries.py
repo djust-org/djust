@@ -1149,9 +1149,6 @@ def _wrapper_refusal(
     request = HttpRequest()
     request.path = request.path_info = "/"
     ctx.request = request  # type: ignore[attr-defined]
-    # A wrapper that reads `context["request"]` (the theming block forms do, to
-    # pick the active theme) must get the probe request, not the lenient "".
-    dict.__setitem__(ctx.dicts[-1], "request", request)
     string_if_invalid, debug = _render_engine_options()
     ctx.template = _stub_template_with(string_if_invalid, debug)
     try:

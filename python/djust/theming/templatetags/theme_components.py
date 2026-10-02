@@ -1337,6 +1337,10 @@ def _register_block_form(inline: Any, body_param: str, reserved: tuple[str, ...]
     spec = getfullargspec(unwrap(inline))
     params = list(spec.args)
     defaults = list(spec.defaults or ())
+    # Where the body parameter sat among the inline tag's positional arguments,
+    # when it was one (alert's `message` is the first). Positional arguments at
+    # or past that position would bind to different names than they do inline.
+    body_position = params[1:].index(body_param) if body_param in params else None
     if body_param in params:
         # A required body parameter (alert's `message`) is filled by the block,
         # so it must not be asked for by the tag.
@@ -1351,6 +1355,10 @@ def _register_block_form(inline: Any, body_param: str, reserved: tuple[str, ...]
 
     def compile_block(parser: Any, token: Any) -> _ThemeBlockNode:
         bits = token.split_contents()[1:]
+        if len(bits) >= 2 and bits[-2] == "as":
+            raise TemplateSyntaxError(
+                f"'{name}' does not support 'as <variable>'; it renders in place"
+            )
         args, kwargs = parse_bits(
             parser,
             bits,
@@ -1363,6 +1371,12 @@ def _register_block_form(inline: Any, body_param: str, reserved: tuple[str, ...]
             True,
             name,
         )
+        if body_position is not None and len(args) > body_position:
+            raise TemplateSyntaxError(
+                f"'{name}' takes its {body_param} from the block between the tags, so "
+                f"positional arguments would bind differently than in '{inline.__name__}': "
+                "pass them as keywords"
+            )
         clash = sorted(set(kwargs) & set(reserved))
         if clash:
             raise TemplateSyntaxError(
@@ -1383,3 +1397,38 @@ _register_block_form(theme_modal, "slot_body", ("slot_body",))
 _register_block_form(theme_dropdown, "slot_menu", ("slot_menu",))
 _register_block_form(theme_tooltip, "slot_content", ("slot_content",))
 _register_block_form(theme_nav_group, "slot_items", ("slot_items", "items"))
+
+
+def _register_misspelt_end_tag(inline: Any) -> None:
+    """``{% end_<inline> %}`` is an error that says where the block form is.
+
+    ``{% theme_card %}…{% end_theme_card %}`` is the spelling the scaffold and
+    the old docs showed (#2894). The inline tags stay inline tags, so the
+    closing tag is NOT accepted; this only replaces Django's generic "Invalid
+    block tag" with a pointer to the block form.
+    """
+    from django.template import TemplateSyntaxError
+
+    end_name = f"end_{inline.__name__}"
+    block = f"{inline.__name__}_block"
+
+    def refuse(parser: Any, token: Any) -> Any:
+        raise TemplateSyntaxError(
+            f"'{end_name}' is not a closing tag: '{inline.__name__}' is an inline tag with "
+            f"no body. To put template tags in the body use "
+            f"{{% {block} %}}...{{% end_{block} %}}."
+        )
+
+    register.tag(end_name, refuse)
+
+
+for _inline in (
+    theme_card,
+    theme_alert,
+    theme_modal,
+    theme_dropdown,
+    theme_tooltip,
+    theme_nav_group,
+):
+    _register_misspelt_end_tag(_inline)
+del _inline

@@ -1379,7 +1379,14 @@ fn node_to_template_string(node: &Node) -> String {
             }
             result.push_str(" %}");
             result.push_str(&nodes_to_template_string(children));
-            result.push_str(&format!("{{% end{name} %}}"));
+            // The end tag the handler REGISTERED, not `end{name}`: a tag may
+            // name its own closing tag (`end_theme_card_block`, #2894), and
+            // re-emitting `endtheme_card_block` is a parse error on the
+            // resolved template.
+            result.push_str(&format!(
+                "{{% {} %}}",
+                crate::registry::block_handler_exists(name).unwrap_or_else(|| format!("end{name}"))
+            ));
             result
         }
         Node::RawBlockCustomTag { name, args, body } => {
@@ -1392,7 +1399,12 @@ fn node_to_template_string(node: &Node) -> String {
             }
             result.push_str(" %}");
             result.push_str(body);
-            result.push_str(&format!("{{% end{name} %}}"));
+            // Registered end tag, as for `BlockCustomTag` above (#2894).
+            result.push_str(&format!(
+                "{{% {} %}}",
+                crate::registry::raw_block_handler_exists(name)
+                    .unwrap_or_else(|| format!("end{name}"))
+            ));
             result
         }
         Node::Language { expr, children } => {
