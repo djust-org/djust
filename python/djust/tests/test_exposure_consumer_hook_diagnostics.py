@@ -335,9 +335,9 @@ async def test_mount_batch_escape_is_value_free_for_nonlegacy_views(
     monkeypatch, caplog, debug, policy
 ):
     """``_mount_one`` is the batch's last line of defense for anything that
-    escapes ``handle_mount``. It logged the exception with its traceback and,
+    escapes the entry's mount. It logged the exception with its traceback and,
     under DEBUG, sent ``str(exc)`` to the client in ``failed[]``. The trigger is
-    synthetic — ``handle_mount`` is stubbed to raise — because the catch exists
+    synthetic — the entry's ``dispatch_mount`` is stubbed to raise — because the catch exists
     for whatever escapes, not for one known path. The owner is the class the
     batch entry names, resolved by the shared allowlist-first resolver."""
     monkeypatch.setattr(BatchFailureView, "exposure_policy", policy)
@@ -345,7 +345,10 @@ async def test_mount_batch_escape_is_value_free_for_nonlegacy_views(
     async def escape(self, data, **kwargs):
         raise ValueError("MOUNT_BATCH_SENTINEL")
 
-    monkeypatch.setattr(LiveViewConsumer, "handle_mount", escape)
+    # A batch entry is mounted by its own runtime (a slot of the socket, #3252).
+    from djust.runtime import ViewRuntime
+
+    monkeypatch.setattr(ViewRuntime, "dispatch_mount", escape)
     with override_settings(
         LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=debug, DJUST_TENANTS=None, DJUST_CONFIG={}
     ):

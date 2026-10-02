@@ -55,7 +55,6 @@ LEGACY_GATED = {
 }
 
 FRAMEWORK_ONLY = {
-    ("disconnect", "Error leaving channel group %s: %s"): ("channel-layer group_discard"),
     ("_find_sticky_slot_ids", "sticky-slot parse failed; returning empty set"): "slot markup parse",
     ("_clear_live_handles", "%s failed during teardown"): (
         "teardown step names; confirm no application hook runs there"
@@ -73,12 +72,12 @@ FRAMEWORK_ONLY = {
     ("_handle_upload_resume", "upload_resume: active-ref check failed"): "upload ref check",
     ("_send_frame", "Dropping outbound frame: WebSocket closed during"): "socket closed",
     ("_clear_template_caches", "Could not clear template cache for %s: %s"): "cache clear",
-    ("hotreload", "Template not found for hot reload: %s"): "dev-only, file-derived",
-    ("hotreload", "Failed to parse patches JSON: %s"): "dev-only, file-derived",
+    ("_hotreload_view", "Template not found for hot reload: %s"): "dev-only, file-derived",
+    ("_hotreload_view", "Failed to parse patches JSON: %s"): "dev-only, file-derived",
     ("handle_live_redirect_mount", "sticky children staging failed; proceeding witho"): (
         "outer catch of the staging block; hooks inside it are legacy-gated"
     ),
-    ("disconnect", "Error leaving db_notify group for %s: %s"): (
+    ("_leave_view_groups", "Error leaving db_notify group for %s: %s"): (
         "channel-layer group_discard; the channel name is an identifier, not state"
     ),
 }

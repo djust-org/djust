@@ -468,7 +468,16 @@ class RustBridgeMixin:
                 from ..state_backend import get_backend
 
                 backend = get_backend()
-                self._cache_key = f"{session_key}_{view_key}{template_hash_slot}"
+                # A view mounted beside the page view (#3252) has a slot of its
+                # own: two views of one class on one page must not share the
+                # cached Rust view (their VDOM baselines would interleave).
+                slot_target = getattr(self, "_djust_slot_target", None)
+                slot_slot = (
+                    "_s" + hashlib.md5(slot_target.encode(), usedforsecurity=False).hexdigest()[:8]
+                    if isinstance(slot_target, str) and slot_target
+                    else ""
+                )
+                self._cache_key = f"{session_key}_{view_key}{template_hash_slot}{slot_slot}"
                 # codeql[py/log-injection] — cache_key may contain request.path; sanitize
                 logger.debug(
                     "[LiveView] Cache lookup (WebSocket): cache_key=%s",

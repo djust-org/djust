@@ -272,6 +272,7 @@ async def _sync_presence_scope_group(
                     "state": None,
                     "handler": "_on_presence_change",
                     "payload": {},
+                    "group": wanted,
                     "sender_channel": None,
                 },
             )
@@ -313,12 +314,16 @@ def _server_push_message(
     state: Optional[dict[str, Any]],
     handler: Optional[str],
     payload: Optional[dict[str, Any]],
+    group: Optional[str] = None,
 ) -> dict[str, Any]:
     return {
         "type": "server_push",
         "state": state,
         "handler": handler,
         "payload": payload,
+        # The group this push was sent to. A socket that hosts several views
+        # delivers the push to the views that joined it (#3252).
+        "group": group,
         # Originating session's channel (#1677), if pushed from within an event
         # handler — lets that session skip its redundant self-broadcast.
         "sender_channel": origin_channel.get(),
@@ -344,7 +349,9 @@ def push_to_presence_scope(
         )
     group = presence_scope_group_name(view_path, presence_key)
     channel_layer = get_channel_layer()
-    async_to_sync(channel_layer.group_send)(group, _server_push_message(None, handler, payload))
+    async_to_sync(channel_layer.group_send)(
+        group, _server_push_message(None, handler, payload, group)
+    )
 
 
 def push_to_view(
@@ -394,7 +401,7 @@ def push_to_view(
     """
     group = _push_group(view_path, scope)
     channel_layer = get_channel_layer()
-    message = _server_push_message(state, handler, payload)
+    message = _server_push_message(state, handler, payload, group)
     async_to_sync(channel_layer.group_send)(group, message)
 
 
@@ -419,5 +426,5 @@ async def apush_to_view(
     """
     group = _push_group(view_path, scope)
     channel_layer = get_channel_layer()
-    message = _server_push_message(state, handler, payload)
+    message = _server_push_message(state, handler, payload, group)
     await channel_layer.group_send(group, message)

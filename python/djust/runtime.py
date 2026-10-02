@@ -501,7 +501,7 @@ def take_consumer_view_groups(consumer: Any) -> List[str]:
     attributes are reset, so they describe the next mounted view only, but no
     group is left: the caller either leaves them
     (:func:`leave_consumer_view_groups`) or keeps them on record for the view
-    they belong to (a ``mount_batch`` sibling, #3245).
+    they belong to.
     """
     groups: List[str] = []
     from .presence import presence_groups_of
@@ -522,6 +522,30 @@ def take_consumer_view_groups(consumer: Any) -> List[str]:
     if isinstance(scoped, dict) and scoped:
         groups.extend(scoped.values())
         consumer._push_scope_groups = {}
+    return groups
+
+
+def view_groups_of(consumer: Any) -> set:
+    """The channel-layer groups the consumer's current view has joined, as names.
+
+    What :func:`take_consumer_view_groups` hands over, read without forgetting
+    it: a channel-layer message addressed to one of these groups is for this
+    view (#3252).
+    """
+    groups: set = set()
+    from .presence import presence_groups_of
+
+    groups.update(presence_groups_of(consumer))
+    for attr in ("_view_group", "_presence_scope_group"):
+        group = getattr(consumer, attr, None)
+        if isinstance(group, str) and group:
+            groups.add(group)
+    channels = getattr(consumer, "_db_notify_channels", None)
+    if isinstance(channels, set):
+        groups.update(f"djust_db_notify_{ch}" for ch in channels)
+    scoped = getattr(consumer, "_push_scope_groups", None)
+    if isinstance(scoped, dict):
+        groups.update(scoped.values())
     return groups
 
 
@@ -1727,7 +1751,10 @@ class WSConsumerTransport:
         # (#1677). Reset in the finally below (websocket.py:3398-3400 / 4311).
         from djust import push as _djust_push
 
-        _origin_token = _djust_push.origin_channel.set(getattr(consumer, "channel_name", None))
+        _origin = getattr(consumer, "_origin_token", None)
+        _origin_token = _djust_push.origin_channel.set(
+            _origin() if callable(_origin) else getattr(consumer, "channel_name", None)
+        )
 
         # Observability: comprehensive performance tracking (websocket.py:3150-3154)
         # + per-handler SQL-query capture (websocket.py:3469-3475). Both are
@@ -2086,6 +2113,10 @@ class WSConsumerTransport:
         """
         consumer = self._consumer
         view._ws_consumer = consumer
+        # A view mounted beside the page view knows its slot (#3252).
+        slot_target = getattr(consumer, "target_id", None)
+        if isinstance(slot_target, str) and slot_target:
+            view._djust_slot_target = slot_target
         if hasattr(view, "_push_events_flush_callback"):
             view._push_events_flush_callback = consumer._flush_push_events
 

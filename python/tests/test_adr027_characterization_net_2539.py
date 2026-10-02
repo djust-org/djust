@@ -1488,8 +1488,9 @@ class TestTheHandleNeverReachesTheWire2539:
         assert (
             'release_root_view(view, navigation=False, reason="view_disconnect")' in disconnect
         ), "the shared teardown is not wired at the disconnect"
+        # (each view's consumer, the page view's or a slot's, #3252).
         assert disconnect.index("release_root_view(view,") < disconnect.index(
-            "self.view_instance = None"
+            "consumer.view_instance = None"
         )
 
 

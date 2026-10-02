@@ -42,6 +42,8 @@ urlpatterns = [
     path("interactive-nav/forget/", forget_saved_state, name="interactive-nav-forget"),
     # ADR-037 row 20 live surface (tests/playwright/test_embedded_directives.py).
     path("embedded-directives/", EmbeddedDirectivesView.as_view(), name="embedded-directives"),
+    # #3252 live surface (tests/playwright/test_multi_view.py).
+    path("multi-view/", MultiViewPage.as_view(), name="multi-view"),
     path(
         "interactive-collection/",
         InteractiveCollectionView.as_view(),

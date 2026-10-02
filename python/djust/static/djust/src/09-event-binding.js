@@ -2290,6 +2290,9 @@ function throttle(func, limit) {
 // targets are reached via the scoped applier in 45-child-view.js, NOT
 // via getLiveViewRoot().
 function getLiveViewRoot() {
+    // While a frame for a view mounted beside the page view is applied, that
+    // view's container is the root (#3252).
+    if (_activeSlot) return _activeSlot.root;
     return findPageViewContainer() || document.querySelector('[dj-root]') || document.body;
 }
 

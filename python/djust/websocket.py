@@ -8,6 +8,7 @@ import inspect
 import json
 import logging
 import msgpack
+import uuid
 import weakref
 from typing import Any, Awaitable, Callable, ContextManager, Deque, Dict, List, Optional, Tuple
 from asgiref.sync import sync_to_async
@@ -43,6 +44,7 @@ from .websocket_utils import (
 )
 from .signals import full_html_update, liveview_server_error
 from .mixins.async_work import has_pending_async_work
+from ._view_slots import ViewSlot, valid_target_id
 
 logger = logging.getLogger(__name__)
 hotreload_logger = logging.getLogger("djust.hotreload")
@@ -744,15 +746,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # old view is torn down. Re-registered on the new parent after
         # its mount completes.
         self._sticky_preserved: Dict[str, Any] = {}
-        # mount_batch siblings (#3245): the views a ``mount_batch`` mounted
-        # before its last one, each with every channel-layer group it joined.
-        # The socket holds one ``view_instance``, and only it receives events
-        # and pushes: a sibling is not independently live (#3252), and a push
-        # to a group a sibling joined is handled by ``view_instance``. The
-        # siblings are torn down, and exactly their groups left, when the
-        # socket's views are replaced or it disconnects.
-        self._batch_siblings: List[Tuple[Any, Tuple[str, ...]]] = []
-        self._mount_batch_active = False
+        # The other views on this socket (#3252): every view a ``mount`` frame
+        # with a ``target_id`` or a ``mount_batch`` entry mounted, keyed by that
+        # ``target_id``, each a full root view with its own runtime and
+        # per-view state (see ``_view_slots``). The attributes above and
+        # ``view_instance`` describe the page view, mounted without one.
+        self._slots: Dict[str, "ViewSlot"] = {}
         # Sticky auto-detect (ADR-014): IDs that ``{% live_render sticky=True %}``
         # already re-registered onto the new parent during template render.
         # The post-render slot-scan reads this set and skips the second
@@ -862,6 +861,18 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             if not getattr(self, "_disconnect_entered", False):
                 self._disconnect_dispatched = False
             raise
+
+    def _origin_token(self) -> Optional[str]:
+        """What a push sent from one of this socket's handlers is tagged with (#1677).
+
+        The channel name for the page view. A view mounted beside it adds its
+        ``target_id``, so a push from a handler of one view to another view
+        of the same socket is delivered, and only a view's push to itself is
+        skipped as its own self-broadcast.
+        """
+        name = getattr(self, "channel_name", None)
+        target = getattr(self, "target_id", None)
+        return f"{name}|{target}" if name and target else name
 
     async def _flush_push_events(self) -> None:
         """
@@ -2444,14 +2455,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         # Release observability registry entry first — it's weakly-held
         # anyway but explicit cleanup avoids a brief stale entry window.
-        session_id = getattr(self, "session_id", None)
-        if session_id:
-            try:
-                from djust.observability.registry import unregister_view
-
-                unregister_view(session_id)
-            except Exception:  # noqa: BLE001
-                pass  # Observability never blocks shutdown.
+        self._forget_observed_view(self)
 
         # Release IP connection slot
         client_ip = getattr(self, "_client_ip", None)
@@ -2461,58 +2465,42 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # Remove from hot reload broadcast group
         await self.channel_layer.group_discard("djust_hotreload", self.channel_name)
 
-        # Leave per-view channel group
-        if self._view_group:
-            await self.channel_layer.group_discard(self._view_group, self.channel_name)
-        # ... and every group the views a mount_batch mounted beside it joined
-        # (#3245). The siblings themselves are torn down with the view below.
-        mounted_views = self._mounted_views()
-        for group in self._take_batch_sibling_groups():
-            try:
-                await self.channel_layer.group_discard(group, self.channel_name)
-            except Exception as e:  # noqa: BLE001 — leaving is best effort
-                logger.warning("Error leaving channel group %s: %s", group, e)
+        # Every view on the socket is torn down: the page view, then each view
+        # mounted beside it (#3252). ``consumers`` holds the page view's
+        # consumer (this one) and the stand-in of each slot, which read and
+        # write their own view's state through the same attribute names.
+        slots = list(self._slot_map().values())
+        self._slot_map().clear()
+        for slot in slots:
+            slot.closing = True
+        consumers: List[Any] = [self, *(slot.facade for slot in slots)]
+        mounted_views = [c.view_instance for c in consumers if c.view_instance is not None]
+        for slot in slots:
+            self._forget_observed_view(slot.facade)
 
-        # Leave every presence group the mounts joined (#3202)
-        from .presence import leave_presence_groups
-
-        await leave_presence_groups(self)
-
-        # Leave the scoped server-push groups of the view's push_scope (#3004)
-        from .push import leave_push_scope_groups
-
-        await leave_push_scope_groups(self)
-
-        # Leave db_notify groups registered by NotificationMixin.listen()
-        db_notify_channels = getattr(self, "_db_notify_channels", None)
-        if db_notify_channels:
-            for ch in list(db_notify_channels):
-                try:
-                    await self.channel_layer.group_discard(
-                        f"djust_db_notify_{ch}", self.channel_name
-                    )
-                except Exception as e:  # noqa: BLE001
-                    logger.warning("Error leaving db_notify group for %s: %s", ch, e)
+        for consumer in consumers:
+            await self._leave_view_groups(consumer)
 
         # Clean up presence tracking for every mounted view (#3250 review M3:
-        # the mount_batch siblings too, not only view_instance)
+        # the views mounted beside the page view too, not only view_instance)
         await self._untrack_presence_of(mounted_views)
 
-        # Cancel tick task and wait for it to finish
-        if self._tick_task:
-            self._tick_task.cancel()
-            try:
-                await self._tick_task
-            except asyncio.CancelledError:
-                pass  # Expected when cancelling a running tick task during disconnect
-            self._tick_task = None
+        for consumer in consumers:
+            # Cancel tick task and wait for it to finish
+            if consumer._tick_task:
+                consumer._tick_task.cancel()
+                try:
+                    await consumer._tick_task
+                except asyncio.CancelledError:
+                    pass  # Expected when cancelling a running tick task during disconnect
+                consumer._tick_task = None
 
-        # Clean up actor if using actors
-        if self.use_actors and self.actor_handle:
-            try:
-                await self.actor_handle.shutdown()
-            except Exception as e:
-                logger.warning("Error shutting down actor: %s", e)
+            # Clean up actor if using actors
+            if consumer.use_actors and consumer.actor_handle:
+                try:
+                    await consumer.actor_handle.shutdown()
+                except Exception as e:
+                    logger.warning("Error shutting down actor: %s", e)
 
         # Tear each mounted view down (#3244): an explicit root is disposed with
         # its whole subtree, including async work; a legacy root has its uploads
@@ -2536,14 +2524,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             self._sticky_preserved = {}
 
         # Clean up session state (the live handles went with the views above)
-        self.view_instance = None
-        self.actor_handle = None
-        # (#1919, Finding A) Also null the shared runtime's view so a later
-        # re-mount on a reused consumer/runtime is never silently no-op'd by
-        # ``dispatch_mount``'s ``if view_instance is not None`` idempotency guard.
-        runtime = getattr(self, "_runtime", None)
-        if runtime is not None:
-            runtime.view_instance = None
+        for consumer in consumers:
+            consumer.view_instance = None
+            consumer.actor_handle = None
+            # (#1919, Finding A) Also null the shared runtime's view so a later
+            # re-mount on a reused consumer/runtime is never silently no-op'd by
+            # ``dispatch_mount``'s ``if view_instance is not None`` idempotency guard.
+            runtime = getattr(consumer, "_runtime", None)
+            if runtime is not None:
+                runtime.view_instance = None
 
     @owned_diagnostic_scope
     async def receive(
@@ -2709,42 +2698,45 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 # ``mount`` (#1919, THE MOUNT FLIP) both land here — NOT the deleted
                 # ``elif`` arms that used to call the bespoke ``handle_event`` /
                 # ``handle_mount``.
-                await self._dispatch_runtime_owned(data)
+                await self._route_runtime_owned(data)
             elif msg_type == "mount_batch":
                 await self.handle_mount_batch(data)
+            elif msg_type == "unmount":
+                await self.handle_unmount(data)
             elif msg_type == "ping":
                 # The client pings every 30 s and never sends
                 # ``presence_heartbeat``, so the ping is the heartbeat: without
                 # it a tracked user expired after PRESENCE_TIMEOUT (60 s) on an
                 # open page (#2968). Refreshed before the pong, so the pong
-                # means the heartbeat landed.
-                if getattr(self.view_instance, "_presence_tracked", False):
+                # means the heartbeat landed. Every mounted view is refreshed,
+                # not only the page view (#3252).
+                if any(getattr(v, "_presence_tracked", False) for v in self._mounted_views()):
                     await self.handle_presence_heartbeat(data)
                 await self.send_json({"type": "pong"})
             elif msg_type == "live_redirect_mount":
                 await self.handle_live_redirect_mount(data)
             elif msg_type == "upload_register":
-                await self._handle_upload_register(data)
+                await self._route_to_view(data, "_handle_upload_register")
             elif msg_type == "upload_resume":
-                await self._handle_upload_resume(data)
+                await self._route_to_view(data, "_handle_upload_resume")
             elif msg_type == "presence_heartbeat":
                 await self.handle_presence_heartbeat(data)
             elif msg_type == "cursor_move":
-                await self.handle_cursor_move(data)
+                await self._route_to_view(data, "handle_cursor_move")
             elif msg_type == "request_html":
-                await self.handle_request_html(data)
+                await self._route_to_view(data, "handle_request_html")
             elif msg_type == "debug_panel_open":
                 self._debug_panel_active = True
             elif msg_type == "debug_panel_close":
                 self._debug_panel_active = False
             elif msg_type == "time_travel_jump":
-                await self.handle_time_travel_jump(data)
+                await self._route_to_view(data, "handle_time_travel_jump")
             elif msg_type == "time_travel_component_jump":
-                await self.handle_time_travel_component_jump(data)
+                await self._route_to_view(data, "handle_time_travel_component_jump")
             elif msg_type == "forward_replay":
-                await self.handle_forward_replay(data)
+                await self._route_to_view(data, "handle_forward_replay")
             elif msg_type == "bug_capture_share":
-                await self.handle_bug_capture_share(data)
+                await self._route_to_view(data, "handle_bug_capture_share")
             else:
                 logger.warning("Unknown message type: %s", msg_type)
                 await self.send_error(f"Unknown message type: {msg_type}")
@@ -2762,6 +2754,49 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 log_message="Error in WebSocket receive",
             )
             await self.send_json(response)
+
+    async def _refuse_unmounted_target(self, data: Dict[str, Any]) -> None:
+        """Answer a frame addressed to a view that is not mounted (#3252).
+
+        The frame is not run on any other view. An ``event`` keeps its ``ref``
+        so the client can settle the request it sent.
+        """
+        fields: Dict[str, Any] = {}
+        ref = data.get("ref")
+        if type(ref) is int or type(ref) is float:
+            try:
+                fields["ref"] = int(ref)
+            except (ValueError, OverflowError):
+                pass
+        await self.send_error("View not mounted. Please reload the page.", **fields)
+
+    async def _route_runtime_owned(self, data: Dict[str, Any]) -> None:
+        """Send a runtime-owned frame (``mount``, ``event``, ``url_change``) to its view.
+
+        A ``mount`` without a ``target_id`` mounts the page view, replacing
+        the views mounted before it. One with a ``target_id`` adds a view
+        beside them (#3252). ``event`` and ``url_change`` run on the view their
+        ``target_id`` names; without one, on the page view.
+        """
+        if data.get("type") == "mount":
+            if data.get("target_id") is not None:
+                await self._mount_slot(data)
+            else:
+                await self._dispatch_runtime_owned(data)
+            return
+        consumer = self._route_consumer(data)
+        if consumer is None:
+            await self._refuse_unmounted_target(data)
+            return
+        await consumer._dispatch_runtime_owned(data)
+
+    async def _route_to_view(self, data: Dict[str, Any], handler: str) -> None:
+        """Run the consumer handler ``handler`` for the view ``data`` addresses."""
+        consumer = self._route_consumer(data)
+        if consumer is None:
+            await self._refuse_unmounted_target(data)
+            return
+        await getattr(consumer, handler)(data)
 
     async def handle_mount(
         self,
@@ -2816,9 +2851,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
           recovery (mount establishes the baseline; it has no prior frame to
           recover to).
         """
-        # A mount on a socket that already has a view replaces it (a lazy
-        # hydration mount after the page view, #3245): tear it down first. A
-        # ``mount_batch`` entry keeps the batch's earlier views as siblings.
+        # A page mount on a socket that already has views replaces them
+        # (#3245): tear them down first. A view mounted with a ``target_id``
+        # (lazy hydration, a ``mount_batch`` entry) is a slot beside the others
+        # and never comes through here (#3252).
         await self._release_before_mount()
         runtime = self._get_runtime()
         # (A) Null the runtime's view BEFORE dispatch so a reconnect / live_redirect
@@ -2884,35 +2920,27 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         target_id = data_view.get("target_id") or ""
         view_path = data_view.get("view") or ""
 
-        # Temporarily swap send_json with a collector so handle_mount's
-        # frame-sending becomes a frame-collecting call. Restore on exit.
+        # The view is mounted as a slot of the socket (#3252): beside the page
+        # view and the batch's other views, none of which it replaces. Its
+        # frames are collected instead of sent, so the caller can aggregate
+        # them into one ``mount_batch`` reply. An entry that names no (or an
+        # unusable) ``target_id`` is not addressable by the client afterwards,
+        # but is still mounted, under an id of the server's own.
         captured: list = []
-        orig_send_json = self.send_json
-
-        async def _collect(payload: Dict[str, Any]) -> None:
-            captured.append(payload)
-
-        self.send_json = _collect  # type: ignore[assignment]
-        # Signal to handle_mount that it runs inside a multiplexed batch on a
-        # shared socket: an auth/hook redirect must NOT close() the socket here
-        # (that would kill sibling mounts + the collected navigate[] and
-        # reconnect-storm the client). handle_mount still clears view_instance,
-        # and the redirect's navigate frame is collected into navigate[] — so a
-        # batched login-required view is reported as a redirect, not a bypass.
-        self._mounting_in_batch = True
-        # Mount-batch is never combined with sticky preservation (sticky
-        # only runs through live_redirect_mount which doesn't batch) or
-        # state_snapshot (snapshot is for popstate restoration, also
-        # live_redirect_mount path). Always pass None for both.
+        key = target_id if valid_target_id(target_id) else f"batch-{uuid.uuid4().hex}"
+        failed = {"target_id": target_id, "view": view_path}
+        slot, refusal = await self._open_slot(key)
+        if slot is None:
+            return False, failed, refusal or "mount failed", None, []
+        slot.capture = captured
+        # Auth/hook redirects inside the batch must NOT close() the socket
+        # (that would kill the sibling views and the collected navigate[], and
+        # reconnect-storm the client): a slot mount never closes it. The
+        # redirect's navigate frame is collected into navigate[], so a batched
+        # login-required view is reported as a redirect, not a bypass.
         try:
-            await self.handle_mount(
-                data_view,
-                sticky_preserved=None,
-                state_snapshot=None,
-            )
+            await self._run_slot_mount(slot, data_view, via_message=False)
         except Exception as exc:  # noqa: BLE001 — isolate per-view failures
-            self.send_json = orig_send_json  # type: ignore[assignment]
-            self._mounting_in_batch = False
             # ADR-038: the failed view may never have become view_instance, so
             # its owner is the class the batch entry names, resolved by the
             # shared allowlist-first resolver. An unresolvable class, or any
@@ -2942,12 +2970,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             safe_err = "mount failed"
             if legacy and getattr(_settings, "DEBUG", False):
                 safe_err = str(exc)[:200]
-            return False, {"target_id": target_id, "view": view_path}, safe_err, None, []
+            return False, failed, safe_err, None, []
         finally:
-            # Only restore if the try-block didn't already restore (else
-            # we'd double-restore harmlessly). Idempotent.
-            self.send_json = orig_send_json  # type: ignore[assignment]
-            self._mounting_in_batch = False
+            slot.capture = None
 
         # Extract the successful mount frame; any "error" frame means failure.
         # Fix #4: capture "navigate" frames too — those are emitted when
@@ -3006,6 +3031,99 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         mount_frame["target_id"] = target_id
         return True, mount_frame, None, None, push_events
 
+    def _max_slots(self) -> int:
+        """How many views may be mounted beside the page view."""
+        from ._view_slots import DEFAULT_MAX_SLOTS
+
+        limit = djust_config.get("max_views_per_connection", DEFAULT_MAX_SLOTS)
+        return limit if type(limit) is int and limit > 0 else DEFAULT_MAX_SLOTS
+
+    async def _open_slot(self, target_id: Any) -> Tuple[Optional["ViewSlot"], Optional[str]]:
+        """Register an empty slot for a view about to mount (#3252).
+
+        Returns ``(slot, None)``, or ``(None, reason)`` when the address is
+        unusable or the socket hosts as many views as it may. A view already
+        mounted under ``target_id`` is replaced: the same container hydrating
+        again tears its previous view down, and only that one.
+        """
+        if not valid_target_id(target_id):
+            return None, "Invalid mount target"
+        slots = self._slot_map()
+        previous = slots.get(target_id)
+        if previous is not None:
+            await self._release_slot(previous, reason="view_replaced", navigation=True)
+        elif len(slots) >= self._max_slots():
+            logger.warning("Refused a mount: this connection already hosts %d views", len(slots))
+            return None, "Too many views on this connection"
+        slot = ViewSlot(self, target_id)
+        slots[target_id] = slot
+        return slot, None
+
+    async def _run_slot_mount(
+        self, slot: "ViewSlot", data: Dict[str, Any], *, via_message: bool
+    ) -> bool:
+        """Mount the view of ``data`` into a slot; returns whether it mounted.
+
+        The slot's own runtime does the mount (view resolution, auth, hooks,
+        state restore, render), exactly as the page view's does: the slot is
+        another root view. A refused or failed mount leaves no slot behind.
+        ``via_message`` routes through the runtime's ``dispatch_message``
+        chokepoint (a ``mount`` frame); the ``mount_batch`` collector calls
+        ``dispatch_mount`` directly, as it always has.
+        """
+        runtime = slot.runtime
+        # (#1919, Finding A) A mount must never be no-op'd by the idempotency
+        # guard of ``dispatch_mount``.
+        runtime.view_instance = None
+        # A slot mount never closes the socket on an auth refusal: the socket
+        # carries other views (``finalize_mount_auth`` reads this flag).
+        slot.facade._mounting_in_batch = True
+        try:
+            if via_message:
+                await runtime.dispatch_message({**data, "type": "mount"})
+            else:
+                await runtime.dispatch_mount(data)
+        except Exception:
+            slot.facade._mounting_in_batch = False
+            await self._release_slot(slot, reason="mount_failed")
+            raise
+        slot.facade._mounting_in_batch = False
+        # Mount CREATES the view on the runtime: read it back onto the slot.
+        slot.facade.view_instance = runtime.view_instance
+        if runtime.view_instance is None:
+            # Refused (the verdict frame was sent) or failed: no view, no groups.
+            await self._release_slot(slot, reason="mount_failed")
+            return False
+        return True
+
+    async def _mount_slot(self, data: Dict[str, Any]) -> None:
+        """Handle a ``mount`` frame that names a ``target_id`` (#3252).
+
+        The view is added beside the page view and the other slots; none of
+        them is torn down. Its ``mount`` reply carries the ``target_id``, and
+        so does every later frame of that view.
+        """
+        slot, refusal = await self._open_slot(data.get("target_id"))
+        if slot is None:
+            await self.send_error(refusal or "mount failed")
+            return
+        await self._run_slot_mount(slot, data, via_message=True)
+
+    async def handle_unmount(self, data: Dict[str, Any]) -> None:
+        """Tear down one view the client no longer shows (#3252).
+
+        ``{"type": "unmount", "target_id": ...}``. The page view and the other
+        slots stay live. Unmounting a view that is not mounted is a no-op, so
+        the client may send it for a container whose mount never completed.
+        """
+        target_id = data.get("target_id")
+        if not valid_target_id(target_id):
+            await self.send_error("Invalid unmount target")
+            return
+        slot = self._slot_map().get(target_id)
+        if slot is not None:
+            await self._release_slot(slot, reason="view_unmounted")
+
     async def handle_mount_batch(self, data: Dict[str, Any]) -> None:
         """Mount multiple views in one frame and reply with one batch frame.
 
@@ -3031,22 +3149,18 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         client_timezone = data.get("client_timezone")
 
-        # The views mounted on this socket so far are replaced by this batch
-        # (#3245). The batch's own views are siblings, not replacements of one
-        # another: ``handle_mount`` keeps each earlier one mounted beside the
-        # next (``_batch_siblings``).
-        await self._release_before_mount()
+        # The batch's views are mounted beside the views already on the socket
+        # (#3252): the page view and any view hydrated earlier stay live, and
+        # each entry is a slot of its own (``_mount_one``). An entry whose
+        # ``target_id`` names a view that is already mounted replaces that view
+        # only.
         successes: list = []
         failures: list = []
         navigates: list = []
         all_push_events: list = []
-        self._mount_batch_active = True
-        try:
-            await self._mount_batch_entries(
-                views_list, client_timezone, successes, failures, navigates, all_push_events
-            )
-        finally:
-            self._mount_batch_active = False
+        await self._mount_batch_entries(
+            views_list, client_timezone, successes, failures, navigates, all_push_events
+        )
 
         response: Dict[str, Any] = {
             "type": "mount_batch",
@@ -3324,18 +3438,37 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
     async def _handle_upload_frame(self, data: bytes) -> None:
         """Handle binary upload frame (chunk, complete, cancel)."""
-        from .uploads import parse_upload_frame, build_progress_message
+        from .uploads import parse_upload_frame
+
+        frame = parse_upload_frame(data)
+        if not frame:
+            if self.view_instance and hasattr(self.view_instance, "_upload_manager"):
+                logger.warning("Invalid upload frame received")
+            return
+
+        # An upload belongs to the view that registered it: with several views
+        # on the socket, the one whose manager holds this ref (#3252).
+        owner = self._upload_owner(frame["ref"])
+        await type(self)._handle_upload_frame_for_view(owner, frame)
+
+    def _upload_owner(self, ref: Any) -> Any:
+        """The consumer-like whose view registered the upload ``ref``."""
+        for consumer in self._view_consumers():
+            manager = getattr(consumer.view_instance, "_upload_manager", None)
+            entries = getattr(manager, "_entries", None)
+            if isinstance(entries, dict) and ref in entries:
+                return consumer
+        return self._default_consumer()
+
+    async def _handle_upload_frame_for_view(self, frame: Dict[str, Any]) -> None:
+        """Apply a parsed upload frame to the upload manager of the view ``self`` runs."""
+        from .uploads import build_progress_message
 
         if not self.view_instance or not hasattr(self.view_instance, "_upload_manager"):
             return
 
         mgr = self.view_instance._upload_manager
         if not mgr:
-            return
-
-        frame = parse_upload_frame(data)
-        if not frame:
-            logger.warning("Invalid upload frame received")
             return
 
         ref = frame["ref"]
@@ -3477,8 +3610,27 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         return caches_cleared
 
     async def hotreload(self, event: Dict[str, Any]) -> None:
+        """Handle a hot reload broadcast: refresh every view mounted on the socket.
+
+        A reload burst is applied once per socket (``reload_id`` dedup), then
+        each view re-renders (:meth:`_hotreload_view`).
         """
-        Handle hot reload broadcast messages from channel layer.
+        consumers = self._view_consumers()
+        hvr_meta = event.get("hvr_meta")
+        if hvr_meta and consumers:
+            reload_id = hvr_meta.get("reload_id")
+            if reload_id and reload_id == self._hvr_last_reload_id:
+                # Same reload burst — already handled on this consumer.
+                return
+            if reload_id:
+                self._hvr_last_reload_id = reload_id
+        for consumer in consumers or [self]:
+            await type(self)._hotreload_view(consumer, event)
+
+    async def _hotreload_view(self, event: Dict[str, Any]) -> None:
+        """
+        Handle hot reload broadcast messages from channel layer for the view
+        ``self`` runs.
 
         This is called when a file change is detected and a reload message
         is broadcast to the djust_hotreload group.
@@ -3513,13 +3665,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         #     return (no point re-rendering old state against new slots).
         hvr_meta = event.get("hvr_meta")
         if hvr_meta and self.view_instance:
-            reload_id = hvr_meta.get("reload_id")
-            if reload_id and reload_id == self._hvr_last_reload_id:
-                # Same reload burst — already handled on this consumer.
-                return
-            if reload_id:
-                self._hvr_last_reload_id = reload_id
-
             from djust.hot_view_replacement import (
                 _resolve_class_pairs,
                 apply_class_swap,
@@ -3850,28 +3995,109 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         runtime.view_instance = self.view_instance
         await runtime.dispatch_url_change(data)
 
+    # ------------------------------------------------------------------ #
+    # Views on the socket (#3252)
+    # ------------------------------------------------------------------ #
+
+    def _slot_map(self) -> Dict[str, "ViewSlot"]:
+        """The views mounted beside the page view, keyed by ``target_id``.
+
+        Created on first use: tests build consumers without ``__init__``.
+        """
+        slots = getattr(self, "_slots", None)
+        if slots is None:
+            slots = self._slots = {}
+        return slots
+
+    def _view_consumers(self) -> List[Any]:
+        """The consumer-like of every mounted view, in mount order.
+
+        The consumer itself when the page view is mounted, then the stand-in
+        (``SlotConsumer``) of each mounted slot. Code that must act on every
+        view of the socket loops over these: each reads and writes its own
+        view's state through the same attribute names.
+        """
+        consumers: List[Any] = []
+        if self.view_instance is not None:
+            consumers.append(self)
+        for slot in list(self._slot_map().values()):
+            if slot.facade.view_instance is not None:
+                consumers.append(slot.facade)
+        return consumers
+
     def _mounted_views(self) -> List[Any]:
-        """Every view mounted on this socket: the ``mount_batch`` siblings, then
-        ``view_instance``. Each once, in mount order."""
+        """Every view mounted on this socket, each once, in mount order."""
         views: List[Any] = []
-        for view, _group in getattr(self, "_batch_siblings", None) or []:
-            if view is not None and all(view is not v for v in views):
+        for consumer in self._view_consumers():
+            view = consumer.view_instance
+            if all(view is not v for v in views):
                 views.append(view)
-        current = self.view_instance
-        if current is not None and all(current is not v for v in views):
-            views.append(current)
         return views
 
-    def _take_batch_sibling_groups(self) -> List[str]:
-        """Forget the ``mount_batch`` siblings and return every channel-layer
-        group they joined (view, presence, presence-scope, db_notify, scoped
-        push), for the caller to leave (#3245, #3250 review M1)."""
-        siblings = getattr(self, "_batch_siblings", None) or []
-        self._batch_siblings = []
-        groups: List[str] = []
-        for _view, joined in siblings:
-            groups.extend(g for g in joined if g not in groups)
-        return groups
+    def _default_consumer(self) -> Any:
+        """The view a frame that names no ``target_id`` is for.
+
+        The page view. A socket that only hosts ``mount_batch`` views has none;
+        a client that predates ``target_id`` addresses the view it mounted
+        last, as it always did.
+        """
+        if self.view_instance is not None:
+            return self
+        for slot in reversed(list(self._slot_map().values())):
+            if slot.facade.view_instance is not None:
+                return slot.facade
+        return self
+
+    def _route_consumer(self, data: Dict[str, Any]) -> Optional[Any]:
+        """The consumer-like a frame is addressed to, or ``None`` to refuse it.
+
+        A frame names its view with ``target_id``. Naming a view that is not
+        mounted (torn down, never mounted, forged) is refused, never answered
+        by another view: running an event on the page view because its sibling
+        went away would change the wrong view's state.
+        """
+        if "target_id" not in data or data.get("target_id") is None:
+            return self._default_consumer()
+        target = data.get("target_id")
+        if not valid_target_id(target):
+            return None
+        slot = self._slot_map().get(target)
+        if slot is None or slot.facade.view_instance is None:
+            return None
+        return slot.facade
+
+    def _consumer_for_view(self, view: Any) -> Optional[Any]:
+        """The consumer-like whose mounted view is ``view``."""
+        if view is None:
+            return None
+        for consumer in self._view_consumers():
+            if consumer.view_instance is view:
+                return consumer
+        return None
+
+    def _channel_targets(self, event: Dict[str, Any]) -> List[Any]:
+        """The consumer-likes a channel-layer message is for.
+
+        A push, presence event or db_notify reaches the socket once, however
+        many of its views joined the group, so the message is routed here. With
+        one view mounted it is that view's, as it always was. With several it
+        goes to every view that joined the group it was sent to
+        (``event["group"]``, stamped by the framework's senders); a message that
+        names no group is dropped, because applying a push to the wrong view
+        would change the wrong view's state.
+        """
+        consumers = self._view_consumers()
+        if len(consumers) <= 1:
+            return consumers
+        group = event.get("group")
+        if isinstance(group, str) and group:
+            from .runtime import view_groups_of
+
+            return [c for c in consumers if group in view_groups_of(c)]
+        logger.debug(
+            "[djust] channel message without a group dropped: %d views mounted", len(consumers)
+        )
+        return []
 
     async def _untrack_presence_of(self, views: List[Any]) -> None:
         """Untrack the presence of every view being torn down (#3250 review M3)."""
@@ -3881,70 +4107,103 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             if hasattr(view, "untrack_presence"):
                 await sync_to_async(untrack_view_presence)(view)
 
-    async def _release_before_mount(self) -> None:
-        """Make room for a mount on this socket (#3245).
+    @staticmethod
+    def _forget_observed_view(consumer: Any) -> None:
+        """Drop one view's observability registry entry (it is weakly held
+        anyway, but explicit cleanup avoids a brief stale entry window)."""
+        session_id = getattr(consumer, "session_id", None)
+        if session_id:
+            try:
+                from djust.observability.registry import unregister_view
 
-        A ``mount`` frame on a socket that already has a view replaces it: the
-        stock client sends one for each lazily hydrated view
-        (13-lazy-hydration.js ``mountElement``, and its per-view fallback when a
-        server refuses ``mount_batch``). The replaced view is torn down as
-        ``live_redirect`` tears the old page down.
+                unregister_view(session_id)
+            except Exception:  # noqa: BLE001
+                pass  # Observability never blocks shutdown.
 
-        Inside a ``mount_batch`` the entries are siblings: the view the
-        previous entry mounted is not torn down, and is recorded in
-        ``_batch_siblings`` with every group it joined, taken off the
-        consumer's group attributes so the next entry's mount neither resets
-        nor diffs them away (#3250 review M1). A later replacement, or the
-        disconnect, tears it down and leaves exactly those groups. The sibling
-        is not independently live meanwhile: events and pushes are handled by
-        ``view_instance`` alone (#3252).
+    async def _leave_view_groups(self, consumer: Any) -> None:
+        """Leave every channel-layer group one view of the socket joined (disconnect).
+
+        Its server-push view group, its presence groups, its scoped-push and
+        presence-scope groups and its ``db_notify`` groups. ``consumer`` is the
+        consumer itself (the page view) or a slot's stand-in.
         """
-        if getattr(self, "_mount_batch_active", False):
-            current = self.view_instance
-            if current is not None:
-                from .runtime import take_consumer_view_groups
+        # Leave per-view channel group
+        if consumer._view_group:
+            await self.channel_layer.group_discard(consumer._view_group, self.channel_name)
 
-                joined = tuple(take_consumer_view_groups(self))
-                siblings = getattr(self, "_batch_siblings", None) or []
-                self._batch_siblings = [*siblings, (current, joined)]
-            return
-        if self._mounted_views():
+        # Leave every presence group the mounts joined (#3202)
+        from .presence import leave_presence_groups
+
+        await leave_presence_groups(consumer)
+
+        # Leave the scoped server-push groups of the view's push_scope (#3004)
+        from .push import leave_push_scope_groups
+
+        await leave_push_scope_groups(consumer)
+
+        # Leave db_notify groups registered by NotificationMixin.listen()
+        db_notify_channels = getattr(consumer, "_db_notify_channels", None)
+        if db_notify_channels:
+            for ch in list(db_notify_channels):
+                try:
+                    await self.channel_layer.group_discard(
+                        f"djust_db_notify_{ch}", self.channel_name
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("Error leaving db_notify group for %s: %s", ch, e)
+
+    async def _release_before_mount(self) -> None:
+        """Make room for a page ``mount`` (one with no ``target_id``) (#3245).
+
+        A page mount replaces the views mounted on the socket, as
+        ``live_redirect`` does: they are torn down first. A view mounted with a
+        ``target_id`` is added beside the others instead (``_mount_slot``).
+        """
+        if self._view_consumers():
             await self._release_mounted_views(reason="view_replaced")
 
-    async def _release_mounted_views(
-        self, *, reason: str, keep: Optional[Dict[str, Any]] = None
+    async def _release_consumer_view(
+        self,
+        consumer: Any,
+        *,
+        reason: str,
+        navigation: bool,
+        keep: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Tear down every view mounted on this socket before it is replaced.
+        """Tear down the view one consumer-like runs (the page view or a slot).
 
-        The teardown ``live_redirect`` always did, now shared with a second
-        ``mount`` / ``mount_batch`` frame (#3245): leave the channel groups the
-        views joined (view, presence, presence-scope, db_notify, scoped push),
-        untrack their presence, stop the tick task, drop the pushes deferred
-        for them (#3001), and tear each view down (``release_root_view``:
-        waiters, embedded children, uploads, live handles; #3244). ``keep`` holds the sticky children a
-        ``live_redirect`` preserves: they are removed from the old view's
-        registry first, so they survive with their waiters and background work.
+        Leaves the channel groups the view joined (view, presence,
+        presence-scope, db_notify, scoped push), untracks its presence, stops
+        its tick task, drops the pushes deferred for it (#3001), and releases
+        the view (``release_root_view``: waiters, embedded children, uploads,
+        live handles; #3244). ``keep`` holds the sticky children a
+        ``live_redirect`` preserves: they are removed from the view's registry
+        first, so they survive with their waiters and background work.
         """
         from ._child_lifecycle import release_root_view
         from .runtime import leave_consumer_view_groups
 
-        views = self._mounted_views()
-        await leave_consumer_view_groups(self, self._take_batch_sibling_groups())
-        await self._untrack_presence_of(views)
+        view = consumer.view_instance
+        await leave_consumer_view_groups(consumer)
+        if view is not None:
+            await self._untrack_presence_of([view])
 
-        # Cancel old tick task
-        if self._tick_task:
-            self._tick_task.cancel()
-            try:
-                await self._tick_task
-            except asyncio.CancelledError:
-                pass  # Expected when cancelling a running tick task
-            self._tick_task = None
+        task = consumer._tick_task
+        if task:
+            # A view refused during its own tick ends that tick's task here:
+            # cancelling the task that is running this would cancel the rest
+            # of the teardown. The loop stops on its own, the view being gone.
+            if task is not asyncio.current_task():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass  # Expected when cancelling a running tick task
+            consumer._tick_task = None
 
         # Pushes deferred for the old view must not reach the new one (#3001).
-        self._cancel_deferred_pushes()
-
-        for view in views:
+        if view is not None:
+            self._cancel_deferred_pushes(view)
             # Drop the kept sticky children from the old view's registry first,
             # WITHOUT ``_unregister_child`` (which would tear them down): they
             # survive this navigation and keep running on their stash refs.
@@ -3957,17 +4216,45 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         if c is sticky_child:
                             registry.pop(vid, None)
                             break
-            release_root_view(view, navigation=True, reason=reason)
+            release_root_view(view, navigation=navigation, reason=reason)
 
-        self.view_instance = None
+        consumer.view_instance = None
         # (#1919, Finding A) Null the shared runtime's view too BEFORE the
         # re-mount. ``handle_mount`` (the shim) also nulls it, but doing it
         # here keeps the teardown self-consistent: a re-mount on this connection
         # must never be no-op'd by ``dispatch_mount``'s idempotency early-return —
         # this is the live_redirect re-mount landmine the Finding-A net guards.
-        runtime = getattr(self, "_runtime", None)
+        runtime = getattr(consumer, "_runtime", None)
         if runtime is not None:
             runtime.view_instance = None
+
+    async def _release_mounted_views(
+        self, *, reason: str, keep: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """Tear down every view mounted on this socket before it is replaced.
+
+        The teardown ``live_redirect`` always did, shared with a page ``mount``
+        frame (#3245): the page view and every slot go, each as
+        :meth:`_release_consumer_view` describes. ``keep`` is the page view's
+        preserved sticky children.
+        """
+        slots = list(self._slot_map().values())
+        self._slot_map().clear()
+        await self._release_consumer_view(self, reason=reason, navigation=True, keep=keep)
+        for slot in slots:
+            slot.closing = True
+            await self._release_consumer_view(slot.facade, reason=reason, navigation=True)
+        self._cancel_deferred_pushes()
+
+    async def _release_slot(
+        self, slot: "ViewSlot", *, reason: str, navigation: bool = False
+    ) -> None:
+        """Tear down one slot's view and leave the others live."""
+        if self._slot_map().get(slot.target_id) is slot:
+            del self._slot_map()[slot.target_id]
+        slot.closing = True
+        self._forget_observed_view(slot.facade)
+        await self._release_consumer_view(slot.facade, reason=reason, navigation=navigation)
 
     async def handle_live_redirect_mount(self, data: Dict[str, Any]) -> None:
         """
@@ -4281,15 +4568,24 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             runtime._replacement_sessions[presented] = replacement
 
     async def handle_presence_heartbeat(self, data: Dict[str, Any]) -> None:
-        """Handle presence heartbeat from client."""
-        if not self.view_instance or not hasattr(self.view_instance, "update_presence_heartbeat"):
-            return
+        """Handle presence heartbeat from client.
 
-        view = self.view_instance
-        try:
-            await sync_to_async(view.update_presence_heartbeat)()
-        except Exception as e:
-            self._log_view_hook_failure(view, e, "Error updating presence heartbeat: %s", e)
+        Refreshes the presence of every view mounted on the socket, or of the
+        one view the frame names with ``target_id`` (#3252): each tracks its
+        own presence, so a view mounted beside the page view is kept alive too.
+        """
+        if data.get("target_id") is not None:
+            consumer = self._route_consumer(data)
+            views = [consumer.view_instance] if consumer is not None else []
+        else:
+            views = self._mounted_views()
+        for view in views:
+            if not hasattr(view, "update_presence_heartbeat"):
+                continue
+            try:
+                await sync_to_async(view.update_presence_heartbeat)()
+            except Exception as e:
+                self._log_view_hook_failure(view, e, "Error updating presence heartbeat: %s", e)
 
     async def handle_cursor_move(self, data: Dict[str, Any]) -> None:
         """Handle cursor movement for live cursors."""
@@ -4998,24 +5294,34 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         These events are broadcasted to all users in a presence group. They are
         forwarded only while this connection has a mounted view; with none (the
-        mount was refused or never happened) the event is dropped.
+        mount was refused or never happened) the event is dropped. With several
+        views mounted, it is forwarded for each that joined the group (#3252).
         """
-        if not self.view_instance:
-            return
-        await self.send_json(
-            {
-                "type": "presence_event",
-                "event": event.get("event", ""),
-                "payload": event.get("payload", {}),
-            }
-        )
+        for consumer in self._channel_targets(event):
+            await consumer.send_json(
+                {
+                    "type": "presence_event",
+                    "event": event.get("event", ""),
+                    "payload": event.get("payload", {}),
+                }
+            )
 
     async def server_push(self, event: Dict[str, Any]) -> None:
         """
         Handle a server-push message from the channel layer.
 
         Called when external code (Celery tasks, management commands, etc.)
-        sends an update via push_to_view().
+        sends an update via push_to_view(). The push is applied to the views
+        that joined the group it was sent to (#3252): the view of that path
+        among those mounted on the socket, each in its own turn.
+        """
+        for consumer in self._channel_targets(event):
+            await type(self)._server_push_to_view(consumer, event)
+
+    async def _server_push_to_view(self, event: Dict[str, Any]) -> None:
+        """
+        Apply a server-push message to the view ``self`` runs (the consumer's
+        page view, or a slot through its stand-in).
 
         Event sequencing: acquires _render_lock to serialize with tick and
         event handlers. Yields to user events: a push that finds the session
@@ -5042,7 +5348,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # (sender_channel != ours) and external pushes (sender_channel is
             # None — Celery, cross-view, etc.) are unaffected.
             sender_channel = event.get("sender_channel")
-            if sender_channel and sender_channel == self.channel_name:
+            if sender_channel and sender_channel == self._origin_token():
                 logger.debug(
                     "[djust] server_push on %s skipped — own self-broadcast (#1677)",
                     self.view_instance.__class__.__name__,
@@ -5454,22 +5760,40 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # the dispatch loop, so it blocks nothing; whoever holds the lock
             # (a user event, a background result, a tick) releases it.
             await self._render_lock.acquire()
-            # Take everything queued so far: one turn, one render (#3001).
-            # Entries for a view that has since been replaced are dropped.
-            events = []
-            while queue:
-                view, event = queue.popleft()
-                if view is not None and view is self.view_instance:
+            # Take what is queued for the first view still mounted: one turn,
+            # one render for it (#3001). Entries for a view that has since been
+            # replaced are dropped; another mounted view's entries wait for
+            # their own turn (the loop comes back for them).
+            events: List[Dict[str, Any]] = []
+            target: Any = None
+            for view, event in list(queue):
+                consumer = self._consumer_for_view(view)
+                if consumer is None:
+                    queue.remove((view, event))
+                    continue
+                if target is None:
+                    target = consumer
+                if consumer is target:
+                    queue.remove((view, event))
                     events.append(event)
             if not events:
                 self._render_lock.release()
                 continue
-            await self._run_server_push_turn(self.view_instance, *events)
+            await type(self)._run_server_push_turn(target, target.view_instance, *events)
 
-    def _cancel_deferred_pushes(self) -> None:
-        """Drop queued pushes and stop the drain (disconnect / view teardown)."""
+    def _cancel_deferred_pushes(self, view: Any = None) -> None:
+        """Drop queued pushes and stop the drain (disconnect / view teardown).
+
+        With ``view``, only the pushes queued for that view go: its siblings
+        keep theirs, and the drain keeps running for them.
+        """
         # getattr: test doubles and subclasses may skip __init__.
         queue = getattr(self, "_deferred_pushes", None)
+        if view is not None:
+            if queue:
+                for queued in [q for q in queue if q[0] is view]:
+                    queue.remove(queued)
+            return
         if queue is not None:
             queue.clear()
         task = getattr(self, "_push_drain_task", None)
@@ -5484,18 +5808,28 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         Sends the event directly to the client without re-rendering. Dropped
         when this connection has no mounted view, like ``server_push``.
         """
-        if not self.view_instance:
-            return
-        await self.send_json(
-            {
-                "type": "push_event",
-                "event": event.get("event", ""),
-                "payload": event.get("payload", {}),
-            }
-        )
+        for consumer in self._channel_targets(event):
+            await consumer.send_json(
+                {
+                    "type": "push_event",
+                    "event": event.get("event", ""),
+                    "payload": event.get("payload", {}),
+                }
+            )
 
     async def db_notify(self, event: Dict[str, Any]) -> None:
         """Handle a PostgreSQL NOTIFY forwarded by ``PostgresNotifyListener``.
+
+        Each mounted view that subscribed to the channel handles it in its own
+        turn (#3252); see :meth:`_db_notify_to_view`.
+        """
+        channel = event.get("channel", "")
+        routed = {**event, "group": f"djust_db_notify_{channel}"}
+        for consumer in self._channel_targets(routed):
+            await type(self)._db_notify_to_view(consumer, event)
+
+    async def _db_notify_to_view(self, event: Dict[str, Any]) -> None:
+        """Handle a PostgreSQL NOTIFY for the view ``self`` runs.
 
         The listener calls ``group_send("djust_db_notify_<channel>", ...)``
         when a NOTIFY arrives on the wire. Every consumer whose view

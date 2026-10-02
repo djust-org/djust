@@ -89,6 +89,8 @@ function reinitLiveViewForTurboNav() {
 
     // Reset client VDOM version
     clientVdomVersion = null;
+    // The views hydrated beside the old page view went with it (#3252).
+    clearSlots();
 
     // Clear lazy hydration state
     lazyHydrationManager.init();

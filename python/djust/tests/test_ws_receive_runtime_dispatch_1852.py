@@ -196,11 +196,17 @@ class TestUrlChangeRoutedThroughChokepoint:
             "receive() must route runtime-owned verbs by RUNTIME_OWNED_VERBS "
             'membership (load-bearing, #1852), not a hardcoded == "url_change".'
         )
-        # The runtime-owned arm must dispatch through the chokepoint helper.
-        assert "_dispatch_runtime_owned(data)" in src, (
+        # The runtime-owned arm must dispatch through the chokepoint helper:
+        # ``_route_runtime_owned`` picks the view the frame addresses (#3252)
+        # and runs it through ``_dispatch_runtime_owned``.
+        assert "_route_runtime_owned(data)" in src, (
             "receive() must route runtime-owned verbs through "
-            "_dispatch_runtime_owned (→ dispatch_message), the #1852 chokepoint."
+            "_route_runtime_owned (→ _dispatch_runtime_owned → dispatch_message), "
+            "the #1852 chokepoint."
         )
+        assert "_dispatch_runtime_owned(data)" in inspect.getsource(
+            LiveViewConsumer._route_runtime_owned
+        ), "_route_runtime_owned must hand the frame to _dispatch_runtime_owned (#1852)."
         # And must NOT call the old direct shim from receive().
         assert "self.handle_url_change(" not in src, (
             "receive() must NOT call handle_url_change directly — that bypassed "

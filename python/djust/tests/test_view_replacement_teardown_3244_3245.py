@@ -26,10 +26,10 @@ message views. Waiters are awaited by each view's own ``start_async`` work.
 Views are told apart by a tag set at mount, never by ``id()``. Each step
 waits for the frame it produces (``_ws_until``), never for a quiet window.
 
-A ``mount_batch``'s views are siblings on one socket, but only the last one is
-live: events and pushes are handled by ``view_instance`` alone (#3252). These
-tests pin the teardown (what each view joined is left, and each is torn down),
-not multi-view routing.
+A ``mount_batch``'s views are slots of one socket beside the page view (#3252),
+each live in its own right: ``test_multi_view_socket_3252.py`` pins the routing.
+These tests pin the teardown: what each view joined is left, and each is torn
+down, when the socket's views are replaced or it disconnects.
 """
 
 import asyncio
@@ -332,8 +332,14 @@ CONSUMERS: list = []
 
 
 def communicator_consumer_siblings():
-    """The newest socket's ``mount_batch`` sibling records."""
-    return list(CONSUMERS[-1]._batch_siblings)
+    """The newest socket's views mounted beside the page view, each with the
+    channel-layer groups it joined: ``[(view, groups)]``."""
+    from djust.runtime import view_groups_of
+
+    return [
+        (slot.facade.view_instance, view_groups_of(slot.facade))
+        for slot in CONSUMERS[-1]._slot_map().values()
+    ]
 
 
 async def _ws_connect():
@@ -650,7 +656,13 @@ async def test_a_second_mount_tears_down_the_replaced_view(caplog, monkeypatch):
     assert _members(_view_group(Beta)) == []
 
 
-async def test_a_mount_batch_tears_down_the_view_mounted_before_it(caplog):
+async def test_a_mount_batch_keeps_the_view_mounted_before_it_and_the_disconnect_tears_down_all(
+    caplog,
+):
+    """A ``mount_batch`` adds its views beside the page view (#3252): it no
+    longer replaces it (#3245 had it torn down, the view dying as soon as a lazy
+    sibling hydrated). Every view, the batch's and the page's, is torn down
+    with the socket: groups left, waiters cancelled, children unregistered."""
     caplog.set_level(logging.ERROR, logger="asyncio")
     communicator = await _ws_connect()
     try:
@@ -668,29 +680,31 @@ async def test_a_mount_batch_tears_down_the_view_mounted_before_it(caplog):
         frames = await _ws_until(communicator, "mount_batch")
         assert [v["target_id"] for v in frames[-1]["views"]] == ["b", "g"]
 
-        # The previously mounted view is replaced: torn down, groups left.
-        assert _members(_view_group(Alpha)) == []
-        await _until(lambda: ("cleanup", alpha) in EVENTS, "Alpha's waiter cleanup")
-        await _until(lambda: ("cleanup", kid) in EVENTS, "Alpha's child's waiter cleanup")
-        _assert_waiter_cleaned(alpha)
-        _assert_waiter_cleaned(kid)
+        # The page view and its children are still mounted and waiting.
+        assert len(_members(_view_group(Alpha))) == 1
+        _assert_waiter_alive(alpha)
+        _assert_waiter_alive(kid)
+        # A push to each view reaches that view, and only it.
         await _push(Alpha)
         await _push(Gamma)
         gamma = _one(Gamma)
-        await _until(lambda: ("pushed", gamma) in EVENTS, "the push to Gamma")
-        assert [e for e in EVENTS if e[0] == "pushed"] == [("pushed", gamma)]
-
-        # The batch's first view is not torn down by the second (it is a
-        # sibling, recorded for the teardown). It is not live either: only the
-        # last view gets events and pushes (#3252), so nothing is asserted
-        # about its group membership while the socket is open.
+        await _until(
+            lambda: ("pushed", alpha) in EVENTS and ("pushed", gamma) in EVENTS,
+            "the pushes to Alpha and Gamma",
+        )
+        assert sorted(e for e in EVENTS if e[0] == "pushed") == sorted(
+            [("pushed", alpha), ("pushed", gamma)]
+        )
         assert VIEWS[_one(Beta)]._waiters_refused() is False
     finally:
         await _close(communicator)
-    # The disconnect leaves every group of every batch view (Beta's view group
-    # used to leak).
-    assert _members(_view_group(Beta)) == []
-    assert _members(_view_group(Gamma)) == []
+    # The disconnect leaves every group of every view and tears each down.
+    for cls in (Alpha, Beta, Gamma):
+        assert _members(_view_group(cls)) == []
+    await _until(lambda: ("cleanup", alpha) in EVENTS, "Alpha's waiter cleanup")
+    await _until(lambda: ("cleanup", kid) in EVENTS, "Alpha's child's waiter cleanup")
+    _assert_waiter_cleaned(alpha)
+    _assert_waiter_cleaned(kid)
     VIEWS.clear()
     await _collect_garbage()
     assert _destroyed_pending(caplog) == []
@@ -768,9 +782,10 @@ async def test_a_batch_siblings_groups_are_left_when_it_is_torn_down(end):
         from djust.push import push_scope_group_name
 
         scoped = push_scope_group_name(MOD + ".ScopedListener", "wsx-room")
-        ((sibling, joined),) = communicator_consumer_siblings()
-        assert type(sibling) is ScopedListener
-        assert {notify, scoped, _view_group(ScopedListener)} <= set(joined)
+        (scoped_view, scoped_groups), (gamma_view, _gamma_groups) = communicator_consumer_siblings()
+        assert type(scoped_view) is ScopedListener
+        assert type(gamma_view) is Gamma
+        assert {notify, scoped, _view_group(ScopedListener)} <= scoped_groups
         if end == "mount":
             await _ws_mount(communicator, Beta, "/beta/")
             assert _members(notify) == []

@@ -21,7 +21,10 @@
  * @returns {Element|null}
  */
 function findPageViewContainer() {
-    return document.querySelector('[dj-view]:not([dj-sticky-root]):not([data-djust-embedded])');
+    // Not a view that hydrates beside the page view (`dj-lazy`, or mounted at a
+    // `data-djust-target`, #3252): it is not the page.
+    return document.querySelector(
+        '[dj-view]:not([dj-sticky-root]):not([data-djust-embedded]):not([dj-lazy]):not([data-djust-target])');
 }
 
 /**
@@ -643,17 +646,32 @@ class LiveViewWebSocket {
         return next;
     }
 
-    async _handleMessageImpl(data) {
-        if (globalThis.djustDebug) console.log('[LiveView] Received: %s %o', String(data.type), data);
-        // ADR-038 D-n: compared before anything from this mount is cached.
-        if (window.djust._sw) window.djust._sw.applyMountMetadata(data);
-        storeSignedSnapshot(data, this.primaryViewPath);
+    async _handleMessageImpl(data, inSlot = false) {
+        // `inSlot`: the frame was already received; this is its application in
+        // the context of the slot it is addressed to (`_handleSlotFrame`).
+        if (!inSlot) {
+            if (globalThis.djustDebug) console.log('[LiveView] Received: %s %o', String(data.type), data);
+            // ADR-038 D-n: compared before anything from this mount is cached.
+            if (window.djust._sw) window.djust._sw.applyMountMetadata(data);
+            storeSignedSnapshot(data, this.primaryViewPath);
+
+            // A frame addressed to a view mounted beside the page view (#3252)
+            // is applied to that view's container, in its own context.
+            if (typeof data.target_id === 'string' && data.target_id &&
+                _SLOT_FRAME_TYPES.has(data.type)) {
+                await this._handleSlotFrame(data);
+                return;
+            }
+        }
 
         switch (data.type) {
             case 'connect':
                 this.sessionId = data.session_id;
                 if (globalThis.djustDebug) console.log('[LiveView] Session ID:', this.sessionId);
                 this.autoMount();
+                // The views hydrated beside the page view lived on the socket
+                // that closed: mount them on this one (#3252).
+                this.remountSlots();
                 break;
 
             case 'mount': {
@@ -917,6 +935,10 @@ class LiveViewWebSocket {
                         // eslint-disable-next-line security/detect-object-injection
                         window.djust._clientVdomVersions[targetId] = entry.version;
                     }
+                    // Each batched view is a view of its own on the socket
+                    // (#3252): it keeps its own VDOM cursor, and its events
+                    // and frames are addressed to it by this target.
+                    applySlotMount(this, entry, { html: 'none' });
                 }
                 for (const f of failed) {
                     if (globalThis.djustDebug) {
@@ -1401,6 +1423,32 @@ class LiveViewWebSocket {
     }
 
     /**
+     * Apply a frame the server addressed to a view mounted beside the page view
+     * (``target_id``, #3252). A ``mount`` reply fills the slot's container; any
+     * other frame is handled by the code that handles the page view's frames,
+     * run in the slot's context (``withSlot``), so it patches the slot's
+     * container against the slot's own VDOM version.
+     */
+    async _handleSlotFrame(data) {
+        if (data.type === 'mount') {
+            this.viewMounted = true;
+            const container = slotContainer(data.target_id);
+            const hadContent = !!container && container.innerHTML.trim().length > 0;
+            applySlotMount(this, data, { html: hadContent ? 'morph' : 'replace' });
+            document.querySelectorAll('[dj-cloak]').forEach(el => el.removeAttribute('dj-cloak'));
+            return;
+        }
+        const applied = await withSlot(data.target_id, () => this._handleMessageImpl(data, true));
+        if (applied === undefined) {
+            // The slot's container is gone (the page replaced it): its frames
+            // have nowhere to go, but an event reply must still settle its request.
+            const event = acknowledgeEventRequest(this, data);
+            if (event && event.eventName) globalLoadingManager.stopLoading(event.eventName, event.trigger);
+        }
+        return;
+    }
+
+    /**
      * Send a mount frame.
      *
      * @param {string} viewPath  Dotted view path.
@@ -1409,6 +1457,8 @@ class LiveViewWebSocket {
      *   (`autoMount`). #2721: everything else mounting on this socket — lazy
      *   hydration, `hydrateAll`, the `mount_batch` fallback — is an ADDITIONAL
      *   view whose mount reply must not reset the page view's client config.
+     *   ``{targetId}`` names the container such a view fills (#3252), and
+     *   ``{hasPrerendered}`` says whether it already holds server-rendered HTML.
      */
     /**
      * Send a ``live_redirect_mount`` — the client-initiated view REPLACEMENT
@@ -1440,6 +1490,10 @@ class LiveViewWebSocket {
      */
     liveRedirectMount(outgoing) {
         cancelPendingRateLimits();
+        // The server tears down every view on the socket (the views hydrated
+        // beside the page view too, #3252); the destination page's own lazy
+        // containers are not hydrated yet.
+        clearSlots();
         this.primaryViewPath = outgoing.view;
         this.sendMessage(outgoing);
     }
@@ -1465,9 +1519,13 @@ class LiveViewWebSocket {
             view: viewPath,
             params: params,
             url: window.location.pathname,
-            has_prerendered: this.skipMountHtml || false,  // Tell server we have pre-rendered content
+            has_prerendered: options.hasPrerendered ?? (this.skipMountHtml || false),  // Tell server we have pre-rendered content
             client_timezone: clientTimezone  // IANA timezone string (e.g. "America/New_York")
         };
+        // A view mounted beside the page view (lazy hydration, #3252) names the
+        // container it fills: the server adds it to the socket instead of
+        // replacing the page view, and addresses its frames with this id.
+        if (options.targetId) frame.target_id = options.targetId;
         // #2966: a reconnecting page view asks whether its tracked assets
         // are stale (dj-track-static). Shared with the SSE mount (#1646).
         const trackStatic = globalThis.djust.djTrackStatic;
@@ -1523,6 +1581,35 @@ class LiveViewWebSocket {
         }
     }
 
+    /**
+     * Mount again every view hydrated beside the page view, on a new socket
+     * (reconnect): the server holds no view for a connection that closed.
+     */
+    remountSlots() {
+        const urlParams = Object.fromEntries(new URLSearchParams(window.location.search));
+        for (const [targetId, slot] of Array.from(_mountedSlots.entries())) {
+            const container = slotContainer(targetId);
+            if (!container) {
+                forgetSlot(targetId);
+                continue;
+            }
+            _slotVersions.set(targetId, null);
+            this.mount(slot.viewPath, urlParams, { targetId: targetId, hasPrerendered: true });
+        }
+    }
+
+    /**
+     * Tell the server a view hydrated beside the page view is gone (its
+     * container was removed). The page view and the other views stay live.
+     */
+    unmountView(targetId) {
+        if (!_mountedSlots.has(targetId)) return false;
+        forgetSlot(targetId);
+        if (!this.enabled || !this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
+        this.sendMessage({ type: 'unmount', target_id: targetId });
+        return true;
+    }
+
     autoMount() {
         // The page-level container (#2632). The former
         // `[dj-root][dj-view]` fallback was dead code — `[dj-view]` is a
@@ -1571,7 +1658,10 @@ class LiveViewWebSocket {
                 type: 'event',
                 event: eventName,
                 params: params,
-                ref: request.ref
+                ref: request.ref,
+                // An event from inside a view mounted beside the page view
+                // runs on that view (#3252).
+                ...slotFrameFields(slotIdFor(triggerElement))
             });
         } catch (error) {
             cancelEventRequests(this, request.ref);
