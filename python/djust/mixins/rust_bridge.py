@@ -468,18 +468,9 @@ class RustBridgeMixin:
                 from ..state_backend import get_backend
 
                 backend = get_backend()
-                # A view mounted beside the page view (#3252) has a slot of its
-                # own: two views of one class on one page must not share the
-                # cached Rust view (their VDOM baselines would interleave).
-                slot_target = getattr(self, "_djust_slot_target", None)
-                slot_slot = (
-                    "_s" + hashlib.md5(slot_target.encode(), usedforsecurity=False).hexdigest()[:8]
-                    if isinstance(slot_target, str) and slot_target
-                    else ""
-                )
-                cache_key = self._saved_state_key(
-                    session_key, view_key, f"{template_hash_slot}{slot_slot}"
-                )
+                # (A view mounted beside the page view has a scope of its own in
+                # the key: ``_tenant_state.state_scope``, #3252.)
+                cache_key = self._saved_state_key(session_key, view_key, template_hash_slot)
                 self._cache_key = cache_key
                 # codeql[py/log-injection] — cache_key may contain request.path; sanitize
                 logger.debug(

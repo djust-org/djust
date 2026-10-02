@@ -5012,6 +5012,10 @@ class ViewRuntime:
             save_view_key = _session_view_key(target_view, save_path)
             if save_view_key is None:  # tenant view, no tenant resolved (#2973)
                 return
+            # The views beside this one saved into the same session (#3252).
+            from ._tenant_state import refresh_other_views_state
+
+            refresh_other_views_state(save_session, save_view_key)
 
             # Save order mirrors HTTP path (mixins/request.py:593-609): private
             # attrs FIRST, then public via get_context_data().
@@ -5109,13 +5113,18 @@ class ViewRuntime:
             # Read before anything loads the session (#3247, see _late_save).
             expected_key = getattr(save_session, "session_key", None)
 
-            from ._tenant_state import scoped_path
-
-            parent_path = scoped_path(
-                parent, mount_request.path if mount_request is not None else "/"
+            from ._tenant_state import (
+                refresh_other_views_state,
+                scoped_path,
+                session_view_key,
             )
+
+            page_path = mount_request.path if mount_request is not None else "/"
+            parent_path = scoped_path(parent, page_path)
             if parent_path is None:  # tenant parent, no tenant resolved (#2973)
                 return
+            # The views beside this one saved into the same session (#3252).
+            refresh_other_views_state(save_session, session_view_key(parent, page_path) or "")
 
             save_sticky_child_state_sync(target_view, save_session, parent_path)
             write_sticky_index_and_prune_sync(parent, save_session, parent_path)

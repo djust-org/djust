@@ -978,3 +978,91 @@ async def test_a_push_from_one_view_to_another_on_the_same_socket_is_delivered()
         assert VIEWS[page].count == 0
     finally:
         await _close(communicator)
+
+
+# --------------------------------------------------------------------------- #
+# Saved state: each view has its own
+# --------------------------------------------------------------------------- #
+
+
+class SnapPage(_Counted, LiveView):
+    enable_state_snapshot = True
+    template = '<div dj-root dj-view="' + MOD + '.SnapPage"><b>page {{ count }}</b></div>'
+
+
+class SnapLazy(_Counted, LiveView):
+    enable_state_snapshot = True
+    template = '<div dj-root dj-view="' + MOD + '.SnapLazy"><b>lazy {{ count }}</b></div>'
+
+
+async def test_the_page_view_and_a_lazy_view_keep_separate_saved_state():
+    """They share one URL and one session. Without a scope of their own, each
+    would write the other's state under ``liveview_<path>``."""
+    key = await sync_to_async(_fresh_key)()
+    communicator = await _connect(session=SessionStore(key))
+    try:
+        await _mount_page(communicator, SnapPage)
+        await _hydrate(communicator, SnapLazy, "lazy-1")
+        await _event(communicator, "click")
+        await _event(communicator, "click", target_id="lazy-1")
+        await _event(communicator, "click", target_id="lazy-1")
+        await _event(communicator, "on_push", target_id="lazy-1")
+    finally:
+        await _close(communicator)
+
+    def saved():
+        store = SessionStore(key)
+        return {
+            k: v.get("count")
+            for k, v in store.items()
+            if k.startswith("liveview_") and isinstance(v, dict) and "count" in v
+        }
+
+    assert await sync_to_async(saved)() == {
+        "liveview_/page/": 1,
+        "liveview_slot:lazy-1:/page/": 102,
+    }
+
+
+class ExplicitPage(LiveView):
+    exposure_policy = "explicit"
+    template = "<div dj-root>{{ count }}</div>"
+
+    count = state(0, persist="server")
+
+    def get_context_data(self, **kwargs):
+        return super().get_context_data(count=self.count, **kwargs)
+
+    @event_handler()
+    def bump(self, **kwargs):
+        self.count += 1
+
+
+async def test_explicit_views_beside_each_other_each_restore_their_own_state():
+    """Two explicit views with persisted server state share one session; each
+    saves, and each gets its own back on the next mount."""
+    from djust.tests.test_exposure_runtime import make_request
+
+    request = await sync_to_async(make_request)()
+    communicator = await _connect(session=request.session, user=request.user)
+    try:
+        await _mount_page(communicator, ExplicitPage)
+        await _hydrate(communicator, ExplicitSlot, "explicit")
+        for target, times in ((None, 1), ("explicit", 3), (None, 1)):
+            for _ in range(times):
+                reply = await _event(communicator, "bump", target_id=target)
+                assert reply["type"] in ("patch", "html_update"), reply
+    finally:
+        await _close(communicator)
+
+    # A new socket on the same session: both views mount with their saved count.
+    communicator = await _connect(
+        session=SessionStore(request.session.session_key), user=request.user
+    )
+    try:
+        page = await _mount_page(communicator, ExplicitPage)
+        slot = await _hydrate(communicator, ExplicitSlot, "explicit")
+        assert page["html"].strip() == "2", page["html"]
+        assert slot["html"].strip() == "3", slot["html"]
+    finally:
+        await _close(communicator)
