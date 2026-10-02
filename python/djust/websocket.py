@@ -2496,7 +2496,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         # Clean up presence tracking for every mounted view (#3250 review M3:
         # the mount_batch siblings too, not only view_instance)
-        await self._untrack_presence_of(mounted_views)
+        await self._untrack_presence_of([*self._take_deferred_presence_untrack(), *mounted_views])
 
         # Cancel tick task and wait for it to finish
         if self._tick_task:
@@ -2718,7 +2718,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 # it a tracked user expired after PRESENCE_TIMEOUT (60 s) on an
                 # open page (#2968). Refreshed before the pong, so the pong
                 # means the heartbeat landed.
-                if getattr(self.view_instance, "_presence_tracked", False):
+                if any(getattr(v, "_presence_tracked", False) for v in self._mounted_views()):
                     await self.handle_presence_heartbeat(data)
                 await self.send_json({"type": "pong"})
             elif msg_type == "live_redirect_mount":
@@ -2762,6 +2762,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 log_message="Error in WebSocket receive",
             )
             await self.send_json(response)
+        finally:
+            # A mount frame replaced the views mounted before it: now that the
+            # replacement has mounted (or failed to), their presence goes (#3254).
+            await self._flush_deferred_presence_untrack()
 
     async def handle_mount(
         self,
@@ -3881,6 +3885,46 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             if hasattr(view, "untrack_presence"):
                 await sync_to_async(untrack_view_presence)(view)
 
+    def _defer_presence_untrack(self, views: List[Any]) -> None:
+        """Hold the presence of views a mount frame replaces until it has mounted (#3254).
+
+        Presence is one record per mounted view, so the replacement joins the
+        room as a second connection of the user while the old view's is still
+        there: the user is never absent between the two, and same-room
+        navigation neither fires a leave nor drops the peers' count. The rest
+        of the old view's teardown (groups, tick, waiters, uploads) is not
+        deferred. ``receive`` untracks these when the frame is done, and the
+        disconnect does if the socket dies first.
+        """
+        pending = getattr(self, "_deferred_presence_untrack", None) or []
+        pending.extend(v for v in views if getattr(v, "_presence_tracked", False))
+        self._deferred_presence_untrack = pending
+
+    async def _flush_deferred_presence_untrack(self) -> None:
+        """Untrack the deferred views one by one (#3254).
+
+        A view leaves the queue only once it is untracked, so a cancellation
+        partway through puts the rest (and the view in flight, whose untrack is
+        idempotent) back for the disconnect to take instead of dropping them.
+        """
+        pending = self._take_deferred_presence_untrack()
+        try:
+            while pending:
+                await self._untrack_presence_of([pending[0]])
+                pending.pop(0)
+        finally:
+            if pending:
+                self._deferred_presence_untrack = [
+                    *pending,
+                    *(getattr(self, "_deferred_presence_untrack", None) or []),
+                ]
+
+    def _take_deferred_presence_untrack(self) -> List[Any]:
+        """The views whose presence is waiting to be untracked, forgotten here (#3254)."""
+        pending = getattr(self, "_deferred_presence_untrack", None) or []
+        self._deferred_presence_untrack = []
+        return pending
+
     async def _release_before_mount(self) -> None:
         """Make room for a mount on this socket (#3245).
 
@@ -3919,18 +3963,30 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         The teardown ``live_redirect`` always did, now shared with a second
         ``mount`` / ``mount_batch`` frame (#3245): leave the channel groups the
         views joined (view, presence, presence-scope, db_notify, scoped push),
-        untrack their presence, stop the tick task, drop the pushes deferred
+        stop the tick task, drop the pushes deferred
         for them (#3001), and tear each view down (``release_root_view``:
         waiters, embedded children, uploads, live handles; #3244). ``keep`` holds the sticky children a
         ``live_redirect`` preserves: they are removed from the old view's
         registry first, so they survive with their waiters and background work.
+
+        Their presence is untracked after the replacement mounts, not here
+        (#3254; ``_defer_presence_untrack``).
         """
         from ._child_lifecycle import release_root_view
+        from .presence import PresenceManager
         from .runtime import leave_consumer_view_groups
 
         views = self._mounted_views()
         await leave_consumer_view_groups(self, self._take_batch_sibling_groups())
-        await self._untrack_presence_of(views)
+        # Presence waits for the replacement mount (#3254): see
+        # ``_defer_presence_untrack``. Not for a backend with one record per
+        # user (the old contract): there the replacement's join and this
+        # view's leave address the same record, so the order stays leave, mount.
+        tracked = [v for v in views if getattr(v, "_presence_tracked", False)]
+        if tracked and await sync_to_async(PresenceManager.per_connection)():
+            self._defer_presence_untrack(tracked)
+        else:
+            await self._untrack_presence_of(tracked)
 
         # Cancel old tick task
         if self._tick_task:
@@ -4281,15 +4337,19 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             runtime._replacement_sessions[presented] = replacement
 
     async def handle_presence_heartbeat(self, data: Dict[str, Any]) -> None:
-        """Handle presence heartbeat from client."""
-        if not self.view_instance or not hasattr(self.view_instance, "update_presence_heartbeat"):
-            return
+        """Handle presence heartbeat from client.
 
-        view = self.view_instance
-        try:
-            await sync_to_async(view.update_presence_heartbeat)()
-        except Exception as e:
-            self._log_view_hook_failure(view, e, "Error updating presence heartbeat: %s", e)
+        Refreshes the presence connection of every view mounted on the socket
+        (#3254): each is its own connection with its own timeout, so a
+        ``mount_batch`` sibling is kept alive too.
+        """
+        for view in self._mounted_views():
+            if not hasattr(view, "update_presence_heartbeat"):
+                continue
+            try:
+                await sync_to_async(view.update_presence_heartbeat)()
+            except Exception as e:
+                self._log_view_hook_failure(view, e, "Error updating presence heartbeat: %s", e)
 
     async def handle_cursor_move(self, data: Dict[str, Any]) -> None:
         """Handle cursor movement for live cursors."""

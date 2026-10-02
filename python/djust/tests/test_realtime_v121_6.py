@@ -96,14 +96,16 @@ class TestPingIsThePresenceHeartbeat:
             try:
                 beats = _heartbeats("room_2968")
                 assert len(beats) == 1, beats
-                (uid,) = beats
+                # The backend keys a heartbeat by connection: "<user>\x1f<connection>" (#3254).
+                (member,) = beats
+                uid = member.split("\x1f")[0]
                 backend = PresenceManager._backend()
                 # Age the heartbeat to just under the 60 s timeout.
-                backend._heartbeats[("room_2968", uid)] = time.time() - 59
+                backend._heartbeats[("room_2968", member)] = time.time() - 59
                 await communicator.send_json_to({"type": "ping"})
                 pong = await _receive_until(communicator, "pong")
                 assert pong["type"] == "pong"
-                assert time.time() - _heartbeats("room_2968")[uid] < 5
+                assert time.time() - _heartbeats("room_2968")[member] < 5
                 # Still listed after the old heartbeat would have expired.
                 assert uid in {p["id"] for p in PresenceManager.list_presences("room_2968")}
             finally:

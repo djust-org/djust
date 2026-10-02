@@ -3,7 +3,8 @@
 Sibling bugs to #889 (fixed in PR #891):
 
 - #893: ``PresenceMixin.track_presence()`` calls
-  ``PresenceManager.join_presence(...)`` as a process-wide side effect.
+  ``PresenceManager.join_connection(...)`` as a process-wide side effect
+  (``join_presence`` before per-connection presence, #3254).
   On WS state-restore (when ``mount()`` is skipped), the flag attrs
   (``_presence_tracked`` etc.) survive the session round-trip, but the
   PresenceManager registration does not — the user's own presence is
@@ -55,10 +56,14 @@ class TestPresenceRestoration:
         v._presence_user_id = "user-7"
         v._presence_meta = {"name": "Ada", "color": "#f00"}
 
-        with patch("djust.presence.PresenceManager.join_presence") as mock_join:
+        with patch("djust.presence.PresenceManager.join_connection") as mock_join:
             v._restore_presence()
 
-        mock_join.assert_called_once_with("doc:42", "user-7", {"name": "Ada", "color": "#f00"})
+        # Per-connection presence (#3254): the replay joins under a fresh connection id.
+        mock_join.assert_called_once_with(
+            "doc:42", "user-7", v._presence_connection_id, {"name": "Ada", "color": "#f00"}
+        )
+        assert v._presence_connection_id
 
     def test_restore_when_not_tracked_is_noop(self, mock_push):
         v = _PresenceView()
@@ -67,7 +72,7 @@ class TestPresenceRestoration:
         v._presence_user_id = "user-1"
         v._presence_meta = {}
 
-        with patch("djust.presence.PresenceManager.join_presence") as mock_join:
+        with patch("djust.presence.PresenceManager.join_connection") as mock_join:
             v._restore_presence()
 
         mock_join.assert_not_called()
@@ -84,7 +89,7 @@ class TestPresenceRestoration:
         v._presence_user_id = None  # corrupted / partial state
         v._presence_meta = {"name": "Ada"}
 
-        with patch("djust.presence.PresenceManager.join_presence") as mock_join:
+        with patch("djust.presence.PresenceManager.join_connection") as mock_join:
             v._restore_presence()
 
         mock_join.assert_not_called()
@@ -96,10 +101,10 @@ class TestPresenceRestoration:
         v._presence_user_id = "user-1"
         v._presence_meta = None  # defensive — treat as empty
 
-        with patch("djust.presence.PresenceManager.join_presence") as mock_join:
+        with patch("djust.presence.PresenceManager.join_connection") as mock_join:
             v._restore_presence()
 
-        mock_join.assert_called_once_with("doc:1", "user-1", {})
+        mock_join.assert_called_once_with("doc:1", "user-1", v._presence_connection_id, {})
 
     def test_restore_swallows_backend_exceptions(self, mock_push, caplog):
         """The WS must not die if the presence backend is temporarily
@@ -114,7 +119,7 @@ class TestPresenceRestoration:
         v._presence_meta = {}
 
         with patch(
-            "djust.presence.PresenceManager.join_presence",
+            "djust.presence.PresenceManager.join_connection",
             side_effect=RuntimeError("backend down"),
         ):
             with caplog.at_level(logging.WARNING, logger="djust.presence"):
@@ -295,7 +300,7 @@ class TestEndToEndSessionRoundTrip:
         mock_listener.ensure_listening = _fake_listen
 
         with patch("djust.presence.push_to_view"):
-            with patch("djust.presence.PresenceManager.join_presence") as mock_join:
+            with patch("djust.presence.PresenceManager.join_connection") as mock_join:
                 with patch(
                     "djust.db.notifications.PostgresNotifyListener.instance"
                 ) as mock_instance:
@@ -304,5 +309,7 @@ class TestEndToEndSessionRoundTrip:
                     ws_view._restore_presence()
                     ws_view._restore_listen_channels()
 
-        assert presence_calls == [("doc:7", "u-7", {"name": "Grace"})]
+        assert presence_calls == [
+            ("doc:7", "u-7", ws_view._presence_connection_id, {"name": "Grace"})
+        ]
         assert listen_calls == ["doc:7"]
