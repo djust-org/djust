@@ -370,6 +370,8 @@ _TRAILING_FLUSH_TIMEOUT_S = 3.0
 #: finish: the trailing save is ordered after it and cannot start, so teardown
 #: does not wait (hung storage must not hold a navigation, #3212).
 _TRAILING_STUCK_AFTER_S = 1.0
+#: How often teardown re-checks whether the pending save has become "stuck".
+_TRAILING_POLL_S = 0.1
 #: The guard of a session whose key is gone (an in-handler ``logout()``): it
 #: equals no real session key, so a trailing save under it is always dropped.
 _SESSION_FLUSHED = "<flushed>"
@@ -5401,8 +5403,18 @@ class ViewRuntime:
             self._ensure_trailing_save()
             task = self._trailing_save
         if task is not None and not task.done():
-            if not stuck:
-                await asyncio.wait({task}, timeout=_TRAILING_FLUSH_TIMEOUT_S)
+            # Poll, not one long wait: a save that started moments ago has not
+            # shown yet whether it is hung. The hold is bounded to about
+            # ``_TRAILING_STUCK_AFTER_S`` from when the hang began.
+            loop = asyncio.get_running_loop()
+            give_up = loop.time() + _TRAILING_FLUSH_TIMEOUT_S
+            while (
+                not stuck
+                and not task.done()
+                and loop.time() < give_up
+                and _save_running_for(self._explicit_save_pending) < _TRAILING_STUCK_AFTER_S
+            ):
+                await asyncio.wait({task}, timeout=_TRAILING_POLL_S)
             if not task.done():
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
@@ -5411,8 +5423,9 @@ class ViewRuntime:
                 "The latest LiveView state was not saved before teardown; Back "
                 "restores the last state storage holds"
             )
-        for view_ref, *_rest in self._unsaved_state.values():
-            self._release_saves(view_ref())
+        # Only the root is released here. A sticky child a ``live_redirect``
+        # keeps (the flush runs before that decision) must keep saving; one
+        # that is removed is torn down by ``release_root_view``.
         self._release_saves(self.view_instance)
         self._unsaved_state.clear()
         self._trailing_save = None

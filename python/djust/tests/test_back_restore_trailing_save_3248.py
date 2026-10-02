@@ -458,46 +458,51 @@ async def test_a_session_logged_out_elsewhere_gets_no_trailing_write_over_sse(mo
 # --------------------------------------------------------------------------- #
 
 
-@pytest.fixture
-def stuck_soon(monkeypatch):
-    monkeypatch.setattr(runtime_module, "_TRAILING_STUCK_AFTER_S", 0.2)
-
-
-async def _hang(monkeypatch, session, key):
+async def _hang(monkeypatch, session, key, wait):
     """Hung storage: the first save never answers, so every later event's save
-    never starts and its state is recorded as unsaved."""
+    never starts and its state is recorded as unsaved. ``wait`` is how long
+    teardown comes after the last event: the default thresholds apply."""
     store = Store(monkeypatch, block_first=True)
     for _ in range(3):
         await _sse_event(session, key)
-    await asyncio.sleep(0.4)  # the first save has now been running past the threshold
+    await asyncio.sleep(wait)
     assert session.runtime._unsaved_state, "vacuous: nothing was left unsaved"
     return store
 
 
-async def test_hung_storage_does_not_hold_an_sse_close(monkeypatch, stuck_soon):
+# Real default constants. Teardown right after the events is the case a
+# stuck-threshold check made once up front missed: the hang had not yet lasted
+# long enough to look hung, and teardown waited the full 3 s.
+@pytest.mark.parametrize("wait", [0.0, 0.5])
+async def test_hung_storage_does_not_hold_an_sse_close(monkeypatch, wait):
     from djust.sse import _shutdown_closed_session
 
     key = await sync_to_async(_fresh_key)()
     session = await _sse_start(key)
-    store = await _hang(monkeypatch, session, key)
+    store = await _hang(monkeypatch, session, key, wait)
     try:
         started = time.monotonic()
         await _shutdown_closed_session(session)
         assert time.monotonic() - started < 1.5
     finally:
+        # The abandoned save must land before the database is flushed.
         store.release.set()
+        await _settled(session)
 
 
-async def test_hung_storage_does_not_hold_an_sse_navigation(monkeypatch, stuck_soon):
+@pytest.mark.parametrize("wait", [0.0, 0.5])
+async def test_hung_storage_does_not_hold_an_sse_navigation(monkeypatch, wait):
     key = await sync_to_async(_fresh_key)()
     session = await _sse_start(key)
-    store = await _hang(monkeypatch, session, key)
+    store = await _hang(monkeypatch, session, key, wait)
     try:
         started = time.monotonic()
         await _sse_event(session, key, {"type": "live_redirect_mount", "url": "/other/"})
         assert time.monotonic() - started < 1.5
     finally:
+        # The abandoned save must land before the database is flushed.
         store.release.set()
+        await _settled(session)
 
 
 async def test_an_sse_navigation_stores_the_latest_state_before_the_new_page(monkeypatch):
@@ -676,3 +681,25 @@ async def test_a_sticky_childs_failed_save_gets_a_trailing_save(monkeypatch):
 
     assert await sync_to_async(load)() == {"clicks": 3}
     assert runtime._unsaved_state == {}
+
+
+async def test_a_sticky_child_the_redirect_keeps_still_gets_trailing_saves():
+    """The teardown flush runs before ``live_redirect`` decides which sticky
+    children survive: only the root is released, not every child with unsaved
+    state."""
+    parent = Counter()
+    runtime = _bare_runtime(parent, _FakeSession("k1"))
+    child = StickyChild()
+    child.clicks = 1
+    unsaved = runtime_module._UNSAVED
+    runtime._settle_legacy_save(id(child), child, "click", unsaved, sticky=True)
+    runtime._trailing_save.cancel()
+    assert runtime._unsaved_state
+
+    await runtime.finish_state_saves()
+
+    assert getattr(parent, "_djust_state_saves_released", False)
+    assert not getattr(child, "_djust_state_saves_released", False)
+    runtime._settle_legacy_save(id(child), child, "click", unsaved, sticky=True)
+    assert runtime._unsaved_state, "a kept sticky child's later failed save was not recorded"
+    runtime._trailing_save.cancel()

@@ -223,11 +223,13 @@ leave the session older than the last render. djust therefore writes the
   at the moment it runs, which on SSE can include a handler that is still
   mid-way; the turn's own save then replaces it.
 - Leaving the page (a `live_redirect`, a new mount, a disconnect, an SSE
-  close) waits for the trailing save, for at most 3 seconds, before the view
-  is released. A save that has already been running for over a second is
-  treated as hung and not waited for, so unresponsive storage never holds a
-  navigation. In either case the latest state is then dropped with a warning
-  and Back restores the last state storage holds.
+  close) waits for the trailing save before the view is released, for at most
+  3 seconds. The wait is cut short as soon as the save in progress has been
+  running for 1 second: a save that slow is treated as hung and abandoned, so
+  unresponsive storage holds a navigation for about 1 second at most. A save
+  still running after 1 second at navigation or close is abandoned, the latest
+  state is dropped with a warning, and Back restores the last copy storage
+  holds.
 - Nothing is written into a session that was logged out or whose key changed
   since the state was rendered: a logout in another request, a `logout()` in a
   handler (which flushes the session), or a login that rotates the key. A
