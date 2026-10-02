@@ -16,7 +16,8 @@ djust provides a presence system for tracking which users are currently viewing 
 - **PresenceMixin** -- Track user presence in any LiveView with join/leave callbacks
 - **CursorTracker** -- Track and broadcast live cursor positions
 - **LiveCursorMixin** -- Combined presence + cursor tracking in a single mixin
-- **Stale-presence cleanup** -- Presences with no heartbeat for 60 seconds are pruned. The client's connection ping (every 30 seconds) is the heartbeat
+- **One presence per user, however many tabs** -- Each open tab is its own connection; a user stays present until their last connection leaves (v1.3+)
+- **Stale-presence cleanup** -- A connection with no heartbeat for 60 seconds is pruned. The client's connection ping (every 30 seconds) is the heartbeat
 
 ## Quick Start
 
@@ -47,9 +48,9 @@ class DemoView(PresenceMixin, LiveView):
 
 That's the entire surface. `online_count` is set as an instance attribute
 (so djust's diff dirty-tracking emits patches when it changes) and the
-broadcast fans out to other sessions automatically. Open the page in two
-browser tabs — both chips show `2 online`. Close one — the other drops to
-`1 online` when the closed tab's WebSocket disconnects.
+broadcast fans out to other sessions automatically. Open the page as two
+different users — both chips show `2 online`. When one of them closes their
+last tab, the other drops to `1 online` as that tab's WebSocket disconnects.
 
 > **Note: HTTP vs WebSocket mounts.** `track_presence()` is a no-op
 > during the HTTP-prerender phase of the page load — presence only
@@ -113,14 +114,54 @@ class DemoView(PresenceMixin, LiveView):
 ```
 
 Authenticated users always use `request.user.id` regardless of the flag
-— logged-in tabs still collapse to one identity (intentional).
+— logged-in tabs still collapse to one identity (intentional). Collapsing
+means one entry in `list_presences()` and one count, not one tab: see
+[One user, several tabs](#one-user-several-tabs-connections).
 
 Each presence record is `{"id": <user id>, "joined_at": <timestamp>, "meta": <the dict you passed to track_presence>}`, so your metadata lives under `meta`.
+
+### One user, several tabs (connections)
+
+*(v1.3+)* Presence is stored **per connection** and reported **per user**. Each
+view that calls `track_presence()` is one *connection* of its user in the room
+(a browser tab, or each view of a `mount_batch`). A user is present from the
+moment their first connection arrives until their last one leaves or times out:
+
+- `list_presences()`, `presence_count()` and `online_count` have **one entry
+  per user**, however many tabs that user has open.
+- Closing or navigating away from one tab never removes the user while another
+  tab is still open, and a peer never sees the count dip.
+- `handle_presence_join` runs when the user's **first** connection arrives and
+  `handle_presence_leave` when their **last** one leaves. A second tab of a user
+  who is already present joins and leaves silently.
+- Each connection has its own heartbeat and its own 60-second timeout: a tab
+  that died is dropped on its own and the user's other tabs stay listed.
+- Navigating to another page of the **same room** (`live_redirect`, a second
+  `mount`) is not a leave and a rejoin. The new page joins as a second
+  connection before the old page's connection is removed, so the user is never
+  absent in between and no join or leave callback runs.
+- When a user's tabs supply different `meta`, the record carries the `meta`
+  of the connection that joined (or refreshed itself) last, and `joined_at` is
+  the earliest connection's.
+
+The record shape did not change: `{"id", "joined_at", "meta"}`. A timed-out
+user (every connection stale) is removed without calling
+`handle_presence_leave`, as before: there is no sweeper to run the hook.
+
+Before v1.3 a record was keyed by `(room, user)`: a second tab collapsed onto
+the first tab's record, so the first tab to close removed the user and a
+same-room navigation made them leave and rejoin. If you worked around that by
+giving each tab its own `get_presence_user_id()` and collapsing the tabs by name
+when rendering, you can delete the workaround.
 
 ### 3. Handle Join/Leave Events
 
 These callbacks run on the view that is itself joining or leaving, not on the
-other users' sessions. Use them for per-session work such as a welcome message:
+other users' sessions. They report the **user** arriving or leaving, not each
+tab: `handle_presence_join` runs for a user's first connection and
+`handle_presence_leave` for their last
+([above](#one-user-several-tabs-connections)). Use them for per-session work
+such as a welcome message:
 
 ```python
 class DocumentView(PresenceMixin, LiveView):
@@ -190,8 +231,8 @@ and leaves under *other* presence keys.
 | Method | Description |
 |--------|-------------|
 | `track_presence(meta=None)` | Start tracking this user. Meta dict can include name, color, avatar, etc. No-op during HTTP-prerender (registers only under WebSocket). |
-| `untrack_presence()` | Stop tracking. Called automatically on disconnect. |
-| `list_presences()` | Returns all active presences in the group as a list of dicts. |
+| `untrack_presence()` | Stop tracking this view's connection. Called automatically on disconnect, navigation and view replacement. The user stays present while another of their connections is open. |
+| `list_presences()` | Returns all active presences in the group as a list of dicts, one per user. |
 | `presence_count()` | Returns count of active users (imperative method; for template binding prefer `{{ online_count }}`). |
 | `get_presence_key()` | Returns formatted presence key. Override for dynamic keys. |
 | `get_presence_user_id()` | Returns unique user ID. Defaults to `request.user.id` for authenticated users, `anon_conn_<ws_session_id>` if `presence_unique_per_connection=True`, else `anon_<session_key>`. |
@@ -201,8 +242,8 @@ and leaves under *other* presence keys.
 
 | Callback | When Called |
 |----------|------------|
-| `handle_presence_join(presence)` | This view's own `track_presence()` joins the group (runs on the joining session only) |
-| `handle_presence_leave(presence)` | This view's own `untrack_presence()` leaves the group (runs on the leaving session only) |
+| `handle_presence_join(presence)` | This view's own `track_presence()` makes the user present: it is the user's **first** connection (runs on the joining session only) |
+| `handle_presence_leave(presence)` | This view's own `untrack_presence()` removes the user's **last** connection (runs on the leaving session only) |
 | `_on_presence_change(**kwargs)` *(v1.0.0rc12+)* | Auto-fires on other sessions when this view's `track`/`untrack` runs: every session of the view, or only those sharing the presence key (see `presence_broadcast_scoped`). Default body refreshes `online_count`. Override to do additional work; call `super()._on_presence_change(**kwargs)` to preserve the count refresh. |
 
 ## CursorTracker
@@ -299,8 +340,65 @@ class ChatView(PresenceMixin, LiveView):
 
 ## Best Practices
 
-- **Heartbeat**: A presence is stale, and pruned by the next `list_presences()` / count refresh, if no heartbeat arrives within 60 seconds (`PRESENCE_TIMEOUT`). The client pings its WebSocket every 30 seconds and the server refreshes the view's tracked presence on each ping, so a user stays listed while the page is open. (Before 1.2.1 nothing refreshed it and users dropped out after about a minute; #2968.) Browsers throttle timers in background tabs, so a tab hidden for several minutes can ping less often than every 30 seconds.
+- **Heartbeat**: A connection is stale, and pruned by the next `list_presences()` / count refresh, if no heartbeat arrives within 60 seconds (`PRESENCE_TIMEOUT`). The client pings its WebSocket every 30 seconds and the server refreshes the presence connection of every view mounted on the socket on each ping, so a user stays listed while the page is open. A user is gone when every one of their connections is stale. (Before 1.2.1 nothing refreshed it and users dropped out after about a minute; #2968.) Browsers throttle timers in background tabs, so a tab hidden for several minutes can ping less often than every 30 seconds.
 - **Cursor timeout**: Positions expire after 10 seconds. Use `CursorTracker` for high-frequency cursor updates.
 - **Presence keys**: Use descriptive, hierarchical keys like `"document:{doc_id}"` or `"room:{room_id}"`. Format variables resolve from view attributes.
-- **Cleanup**: Presences are removed automatically on WebSocket disconnect. Stale presences (missed heartbeats) are pruned when the group is next listed or counted.
+- **Cleanup**: A view's connection is removed automatically on WebSocket disconnect, on navigation and when the view is replaced. Stale connections (missed heartbeats) are pruned when the group is next listed or counted.
 - **Backend selection**: Use the memory backend for development, Redis for multi-server production deployments. Configure via `DJUST_CONFIG['PRESENCE_BACKEND']` (`'memory'` or `'redis'`) and `PRESENCE_REDIS_URL`.
+
+## Custom presence backends
+
+`DJUST_CONFIG['PRESENCE_BACKEND']` takes `'memory'` or `'redis'` (and the
+`tenant_*` aliases); the four built-in backends (`InMemoryPresenceBackend`,
+`RedisPresenceBackend`, and the tenant-aware pair in `djust.tenants.backends`)
+all store one record per connection. If you wrote your own `PresenceBackend`
+subclass and install it with `set_presence_backend()`, nothing breaks:
+
+*(v1.3+)* The per-connection methods have defaults on the base class
+(`join_connection`, `leave_connection`, `heartbeat_connection`). They call your
+existing `join(key, user_id, meta)`, `leave(key, user_id)` and
+`heartbeat(key, user_id)` with no connection id, so a backend written against
+the old contract keeps **one record per user**: a second tab collapses onto the
+first, the first tab to close removes the user, and `handle_presence_join` /
+`handle_presence_leave` run on every track and untrack, exactly as before.
+That includes navigation: djust only holds a replaced view's untrack until
+after the replacement mounts when the backend is per-connection
+(`PresenceManager.per_connection()`, the `per_connection` class attribute). With
+one record per user the order stays leave, mount, join, because the
+replacement's join and the old view's leave would address the same record.
+
+A subclass of a built-in backend that overrides `join`, `leave` or `heartbeat`
+**without** a `connection_id` parameter is treated the same way (it is a
+one-record-per-user backend, and your override is called as it always was). To
+keep the built-in per-connection behaviour, give the override a
+`connection_id=None` parameter and pass it on to `super()`.
+
+To get per-connection presence in a custom backend, store one record per
+`(presence_key, user_id, connection_id)` and override the three methods:
+
+| Method | Contract |
+|---|---|
+| `join_connection(key, user_id, connection_id, meta)` | Add or refresh that connection (re-joining a live connection is not a new arrival). Return `(record, first)`: the user's aggregated record, and `True` when no live connection of the user was in the group. |
+| `leave_connection(key, user_id, connection_id)` | Remove that connection. Return the user's aggregated record when it was their last live connection, else `None` (also `None` for an unknown connection). |
+| `heartbeat_connection(key, user_id, connection_id)` | Refresh that connection only. Do not recreate one that expired. |
+| `list(key)` / `count(key)` | One record per user, skipping connections with no heartbeat in the timeout. |
+
+`djust.backends.base` has helpers for the aggregation
+(`merge_connection_records`, `aggregate_by_user`, `connection_member`). The
+built-in `join` / `leave` / `heartbeat` also accept an optional
+`connection_id`; without one they address the user's single legacy connection
+(`join`, `heartbeat`) or every connection of the user (`leave`, which is also
+how an operator removes a user outright). Make `first` and `last` atomic if
+several nodes share the store: the Redis backends read them in the same
+`MULTI` that writes the connection.
+
+**Upgrading Redis.** A record written by an older node (keyed by the bare user
+id, no connection id) reads as that user's one legacy connection, so a rolling
+deploy does not lose anyone. During the roll an old node lists a user once per
+connection of a new node, so finish the deploy promptly.
+
+A connection a stopped pod left behind lingers until its 60 s timeout beside the
+connection the restored view makes. If the user closes that tab inside the
+window they stay listed, with no `handle_presence_leave` and no peer
+notification, until it expires. Expiry has never run the hook, and a rolling
+deploy makes this routine for a minute, so expect it.

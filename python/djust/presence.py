@@ -38,6 +38,19 @@ Template usage:
       {% endfor %}
     </div>
 
+Connections and users (#3254):
+
+Presence is stored per connection and reported per user. Each mounted presence
+view (one browser tab) is one *connection* of its user in the room. A user is
+present until their LAST connection leaves or times out, so closing or
+navigating one tab never removes the user while another tab is open:
+
+* ``list_presences()`` / ``presence_count()`` have one entry per user;
+* ``handle_presence_join`` fires when the user's FIRST connection arrives, and
+  ``handle_presence_leave`` when their LAST one leaves;
+* each connection has its own heartbeat and its own 60 s timeout, so a dead tab
+  is dropped without touching the user's other tabs.
+
 Presence-record shape (every backend):
 
     {"id": <user_id>, "joined_at": <epoch>, "meta": {<caller-supplied dict>}}
@@ -51,7 +64,8 @@ import contextlib
 import logging
 import threading
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+import uuid
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 from django.core.cache import cache
@@ -126,7 +140,26 @@ class PresenceManager:
         return f"{PRESENCE_GROUP_PREFIX}_{presence_key.replace(':', '_').replace('{', '').replace('}', '')}"
 
     @classmethod
-    def join_presence(cls, presence_key: str, user_id: str, meta: Dict[str, Any]) -> Dict[str, Any]:
+    def per_connection(cls) -> bool:
+        """Whether the configured backend stores one record per connection (#3254).
+
+        False for a third-party backend on the old three-method contract. The
+        transports hold a replaced view's untrack until after the replacement
+        mounts only when this is true: with one record per user the replacement's
+        join and the old view's leave would address the same record.
+        """
+        from djust.backends.base import uses_per_connection
+
+        return uses_per_connection(cls._backend())
+
+    @classmethod
+    def join_presence(
+        cls,
+        presence_key: str,
+        user_id: str,
+        meta: Dict[str, Any],
+        connection_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         Add a user to a presence group.
 
@@ -134,25 +167,63 @@ class PresenceManager:
             presence_key: The presence group identifier
             user_id: Unique identifier for the user
             meta: Metadata about the user (name, color, etc.)
+            connection_id: Which of the user's connections this is (#3254). The
+                user stays present until every connection has left. Omitted,
+                it is the user's one legacy connection: the user as a whole.
 
         Returns:
-            The presence record that was added
+            The user's presence record
         """
-        return cls._backend().join(presence_key, user_id, meta)
+        backend = cls._backend()
+        if connection_id is None:
+            return backend.join(presence_key, user_id, meta)
+        return backend.join_connection(presence_key, user_id, connection_id, meta)[0]
 
     @classmethod
-    def leave_presence(cls, presence_key: str, user_id: str) -> Optional[Dict[str, Any]]:
+    def join_connection(
+        cls, presence_key: str, user_id: str, connection_id: str, meta: Dict[str, Any]
+    ) -> Tuple[Dict[str, Any], bool]:
+        """Add one connection of a user (#3254).
+
+        Returns ``(record, first)``: the user's presence record and whether this
+        connection made the user present, which is when ``handle_presence_join``
+        fires.
         """
-        Remove a user from a presence group.
+        return cls._backend().join_connection(presence_key, user_id, connection_id, meta)
+
+    @classmethod
+    def leave_presence(
+        cls, presence_key: str, user_id: str, connection_id: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Remove a user, or one of their connections, from a presence group.
 
         Args:
             presence_key: The presence group identifier
             user_id: Unique identifier for the user
+            connection_id: The connection to remove (#3254). Omitted, every
+                connection of the user is removed.
 
         Returns:
-            The presence record that was removed, or None if not found
+            The user's presence record when they are no longer in the group,
+            or None if they were not found or are still present through
+            another connection
         """
-        return cls._backend().leave(presence_key, user_id)
+        backend = cls._backend()
+        if connection_id is None:
+            return backend.leave(presence_key, user_id)
+        return backend.leave_connection(presence_key, user_id, connection_id)
+
+    @classmethod
+    def leave_connection(
+        cls, presence_key: str, user_id: str, connection_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Remove one connection of a user (#3254).
+
+        Returns the user's record when that was their last connection, which is
+        when ``handle_presence_leave`` fires, and None otherwise.
+        """
+        return cls._backend().leave_connection(presence_key, user_id, connection_id)
 
     @classmethod
     def list_presences(cls, presence_key: str) -> List[Dict[str, Any]]:
@@ -163,7 +234,7 @@ class PresenceManager:
             presence_key: The presence group identifier
 
         Returns:
-            List of presence records
+            List of presence records, one per user
         """
         return cls._backend().list(presence_key)
 
@@ -173,9 +244,18 @@ class PresenceManager:
         return cls._backend().count(presence_key)
 
     @classmethod
-    def update_heartbeat(cls, presence_key: str, user_id: str) -> None:
-        """Update the heartbeat timestamp for a user."""
-        cls._backend().heartbeat(presence_key, user_id)
+    def update_heartbeat(
+        cls, presence_key: str, user_id: str, connection_id: Optional[str] = None
+    ) -> None:
+        """Update the heartbeat timestamp for a user's connection (#3254).
+
+        Without ``connection_id`` every connection of the user is refreshed.
+        """
+        backend = cls._backend()
+        if connection_id is None:
+            backend.heartbeat(presence_key, user_id)
+        else:
+            backend.heartbeat_connection(presence_key, user_id, connection_id)
 
 
 class PresenceMixin:
@@ -252,6 +332,21 @@ class PresenceMixin:
         self._presence_tracked = False
         self._presence_user_id: Optional[str] = None
         self._presence_meta: Optional[Dict[str, Any]] = None
+        # Which of the user's connections this view is (#3254). One per
+        # tracking view, minted by ``track_presence`` / ``_restore_presence``.
+        self._presence_connection_id: Optional[str] = None
+
+    def _new_presence_connection_id(self) -> str:
+        """A fresh id for this view's presence connection (#3254).
+
+        Per view, not per socket: the transport session id leads it (for
+        diagnostics) and a random suffix makes it unique. A replacement view on
+        the same socket (navigation) and a reconnect's view (SSE reuses its
+        session id) each get their own, so tearing down the old view can only
+        ever remove the old view's connection.
+        """
+        transport = getattr(self, "_websocket_session_id", None) or "view"
+        return f"{transport}:{uuid.uuid4().hex[:12]}"
 
     def _refresh_online_count(self) -> None:
         """Recompute ``self.online_count`` from the backend.
@@ -347,7 +442,9 @@ class PresenceMixin:
         1. Authenticated users → ``str(request.user.id)``. ALWAYS collapses
            across tabs to one presence; ``presence_unique_per_connection``
            does NOT affect authenticated users — multi-tab same-user is a
-           single online presence by design.
+           single online presence by design. Each tab is still its own
+           connection (#3254): the user stays present until the last one
+           leaves.
         2. Anonymous + ``presence_unique_per_connection=True`` →
            ``f"anon_conn_{_websocket_session_id}"`` so each tab counts as
            a distinct presence. Falls back to ``f"anon_{id(self)}"`` if
@@ -400,6 +497,11 @@ class PresenceMixin:
         ``user_id`` filled in when absent. Under ``exposure_policy="explicit"``
         (ADR-038 D-c) nothing is added: only the meta you pass is tracked.
 
+        This view becomes one *connection* of the user in the room (#3254).
+        ``handle_presence_join`` fires only when it is the user's first
+        connection; a second tab of a user who is already present joins
+        silently.
+
         Args:
             meta: Metadata to associate with the user (name, color, avatar, etc.)
         """
@@ -440,8 +542,12 @@ class PresenceMixin:
         self._presence_meta = meta
         self._presence_scope_key = presence_key
 
-        # Join presence
-        presence_data = PresenceManager.join_presence(presence_key, user_id, meta)
+        # Join presence as one connection of the user (#3254).
+        connection_id = self._new_presence_connection_id()
+        presence_data, first_connection = PresenceManager.join_connection(
+            presence_key, user_id, connection_id, meta
+        )
+        self._presence_connection_id = connection_id
 
         self._presence_tracked = True
 
@@ -455,8 +561,9 @@ class PresenceMixin:
         # so the broadcast terminates after one hop.
         self._broadcast_presence_change()
 
-        # Call presence join handler if it exists
-        if hasattr(self, "handle_presence_join"):
+        # Call presence join handler if it exists. It means "this user arrived":
+        # a user already present through another connection did not.
+        if first_connection and hasattr(self, "handle_presence_join"):
             try:
                 self.handle_presence_join(presence_data)
             except Exception as e:
@@ -491,7 +598,12 @@ class PresenceMixin:
         meta = getattr(self, "_presence_meta", None) or {}
         try:
             presence_key = self.get_presence_key()
-            PresenceManager.join_presence(presence_key, user_id, meta)
+            # A fresh connection, never the id the saved state carries: that one
+            # belongs to the connection the state was saved from, which another
+            # live tab of this user may still hold (#3254).
+            connection_id = self._new_presence_connection_id()
+            PresenceManager.join_connection(presence_key, user_id, connection_id, meta)
+            self._presence_connection_id = connection_id
             self._presence_scope_key = presence_key
             # #1611 / #1614 — also refresh local count and broadcast so the
             # reconnected session has online_count set for its first
@@ -507,36 +619,57 @@ class PresenceMixin:
             )
 
     def untrack_presence(self) -> None:
-        """Stop tracking this user's presence."""
+        """Stop tracking this view's presence.
+
+        Removes this view's connection only (#3254). ``handle_presence_leave``
+        fires when it was the user's LAST connection; a user who is still open
+        in another tab stays present and gets no leave event.
+        """
         if not self._presence_tracked:
             return
 
         presence_key = self.get_presence_key()
         user_id = self._presence_user_id
+        connection_id = self._presence_connection_id
 
-        if user_id:
-            presence_data = PresenceManager.leave_presence(presence_key, user_id)
+        if user_id and connection_id:
+            presence_data = PresenceManager.leave_connection(presence_key, user_id, connection_id)
 
             # Call presence leave handler if it exists
-            if presence_data and hasattr(self, "handle_presence_leave"):
-                try:
-                    self.handle_presence_leave(presence_data)
-                except Exception as e:
-                    from ._exposure_diagnostics import log_failure_for
+            if presence_data:
+                self._on_presence_user_left(presence_key, user_id)
+                if hasattr(self, "handle_presence_leave"):
+                    try:
+                        self.handle_presence_leave(presence_data)
+                    except Exception as e:
+                        from ._exposure_diagnostics import log_failure_for
 
-                    # handle_presence_leave is application code (ADR-038).
-                    log_failure_for(
-                        logger, (self,), e, "Error in handle_presence_leave: %s", e, traceback=True
-                    )
+                        # handle_presence_leave is application code (ADR-038).
+                        log_failure_for(
+                            logger,
+                            (self,),
+                            e,
+                            "Error in handle_presence_leave: %s",
+                            e,
+                            traceback=True,
+                        )
 
         self._presence_tracked = False
         self._presence_user_id = None
         self._presence_meta = None
+        self._presence_connection_id = None
 
-        # #1611 / #1614 — refresh local count (now excludes the leaving user)
-        # and broadcast to peer sessions.
+        # #1611 / #1614 — refresh local count (now excludes the leaving user
+        # unless another tab keeps them present) and broadcast to peer sessions.
         self._refresh_online_count()
         self._broadcast_presence_change()
+
+    def _on_presence_user_left(self, presence_key: str, user_id: str) -> None:
+        """Hook: ``user_id``'s last connection left ``presence_key`` (#3254).
+
+        Runs before ``handle_presence_leave``. ``LiveCursorMixin`` drops the
+        user's cursor here.
+        """
 
     @event_handler
     def _on_presence_change(self, **kwargs: Any) -> None:
@@ -566,16 +699,24 @@ class PresenceMixin:
         return PresenceManager.presence_count(presence_key)
 
     def update_presence_heartbeat(self) -> None:
-        """Update the heartbeat for this user's presence."""
-        if not self._presence_tracked or not self._presence_user_id:
+        """Update the heartbeat for this view's presence connection (#3254)."""
+        if (
+            not self._presence_tracked
+            or not self._presence_user_id
+            or not self._presence_connection_id
+        ):
             return
 
         presence_key = self.get_presence_key()
-        PresenceManager.update_heartbeat(presence_key, self._presence_user_id)
+        PresenceManager.update_heartbeat(
+            presence_key, self._presence_user_id, self._presence_connection_id
+        )
 
     def handle_presence_join(self, presence: Dict[str, Any]) -> None:
         """
-        Called when a user joins the presence group.
+        Called when a user joins the presence group: when their FIRST
+        connection arrives (#3254). A second tab of a user who is already
+        present does not call it.
 
         Override this method to handle presence join events.
 
@@ -586,7 +727,9 @@ class PresenceMixin:
 
     def handle_presence_leave(self, presence: Dict[str, Any]) -> None:
         """
-        Called when a user leaves the presence group.
+        Called when a user leaves the presence group: when their LAST
+        connection leaves (#3254). Closing or navigating away from one of
+        several tabs does not call it.
 
         Override this method to handle presence leave events.
 
@@ -787,10 +930,6 @@ class LiveCursorMixin(PresenceMixin):
         """
         self.update_cursor_position(x, y)
 
-    def untrack_presence(self) -> None:
-        """Override to also remove cursor when leaving presence."""
-        if self._presence_tracked and self._presence_user_id:
-            presence_key = self.get_presence_key()
-            CursorTracker.remove_cursor(presence_key, self._presence_user_id)
-
-        super().untrack_presence()
+    def _on_presence_user_left(self, presence_key: str, user_id: str) -> None:
+        """Also remove the cursor once the user's last connection has left (#3254)."""
+        CursorTracker.remove_cursor(presence_key, user_id)
