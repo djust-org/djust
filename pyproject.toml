@@ -8,7 +8,7 @@ version = "1.3.0rc6"
 description = "Phoenix LiveView-style reactive components for Django with Rust-powered performance. Real-time UI updates over WebSocket, no JavaScript build step required."
 authors = [{name = "djust contributors"}]
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = {text = "MIT"}
 keywords = ["django", "rust", "reactive", "server-side-rendering", "websocket"]
 classifiers = [
@@ -21,7 +21,6 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -188,7 +187,7 @@ asyncio_default_fixture_loop_scope = "function"
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py311"
 
 [tool.mypy]
 # --------------------------------------------------------------------------- #
@@ -203,7 +202,7 @@ target-version = "py310"
 # API (live_view / component / decorators / forms) since py.typed exposes our
 # types to consumers, with `_rust.pyi` typing the PyO3 boundary.
 # --------------------------------------------------------------------------- #
-python_version = "3.10"
+python_version = "3.11"
 warn_unused_configs = true
 # `import-untyped` is raised in the IMPORTING (strict-island) module for a 3rd-party
 # lib that is INSTALLED but ships no stubs (yaml/requests in a full dev env). It is a

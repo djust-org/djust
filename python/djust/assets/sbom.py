@@ -210,7 +210,7 @@ def rust_components(manifest_path: Path) -> list[dict]:
 def _project_version(pyproject_text: str) -> str:
     """The ``[project]`` table's ``version``, read with a regex so this
     module never needs tomllib/tomli: it is imported at runtime inside
-    users' apps (Python 3.10+, where tomli is dev-only)."""
+    users' apps."""
     project_start = pyproject_text.find("[project]")
     if project_start == -1:
         raise SystemExit("pyproject.toml has no [project] section")

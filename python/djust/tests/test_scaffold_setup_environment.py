@@ -143,7 +143,7 @@ def test_setup_pins_python_and_runs_check_last(tmp_path):
         patch.object(generator, "_run_cmd", side_effect=lambda cmd, cwd: commands.append(cmd)),
     ):
         generator._run_auto_setup(tmp_path)
-    assert commands[0][:4] == ["uv", "venv", "--python", ">=3.10"]
+    assert commands[0][:4] == ["uv", "venv", "--python", ">=3.11"]
     assert commands[-1][1:] == ["manage.py", "check"]
 
 

@@ -12,6 +12,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Mapping, Optional, Tuple
@@ -299,12 +300,8 @@ def _declared_dependencies(pyproject: Path) -> Optional[dict]:
     (markers, a ``name @ url`` reference).
     """
     try:
-        try:
-            import tomllib
-        except ImportError:  # Python 3.10
-            import tomli as tomllib
         data = tomllib.loads(_read(pyproject))
-    except (ImportError, OSError, ValueError):
+    except (OSError, ValueError):
         return None
     declared: dict = {}
     for entry in data.get("project", {}).get("dependencies", []):
