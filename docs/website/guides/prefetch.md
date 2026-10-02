@@ -34,6 +34,11 @@ use it on the handful of links that dominate your in-app navigation.
 <a dj-prefetch="false" href="/logout/">Log out</a>
 ```
 
+`dj-prefetch="false"` opts the link out of both prefetch layers: this
+intent path and the service-worker hover prefetch described above, which
+would otherwise warm any same-origin link under an active service worker.
+`data-no-prefetch` opts a link out of the service-worker path only.
+
 No Python change. No handler. No WebSocket frame. The browser does the
 work.
 

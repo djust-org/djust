@@ -43,6 +43,26 @@ describe('prefetch module', () => {
         expect(window.djust._prefetch._shouldPrefetch(link)).toBe(false);
     });
 
+    it('_shouldPrefetch honours dj-prefetch="false" as well as data-no-prefetch (#3327)', () => {
+        const { window } = createEnv();
+        // Give the SW layer a controller so only the opt-out attributes decide.
+        Object.defineProperty(window.navigator, 'serviceWorker', {
+            configurable: true,
+            value: { controller: { postMessage: () => {} } },
+        });
+        const make = (attrs) => {
+            const link = window.document.createElement('a');
+            link.href = 'http://localhost:8000/about/';
+            for (const [k, v] of Object.entries(attrs)) link.setAttribute(k, v);
+            return link;
+        };
+        const should = window.djust._prefetch._shouldPrefetch;
+        expect(should(make({}))).toBe(true);
+        expect(should(make({ 'dj-prefetch': '' }))).toBe(true);
+        expect(should(make({ 'data-no-prefetch': '' }))).toBe(false);
+        expect(should(make({ 'dj-prefetch': 'false' }))).toBe(false);
+    });
+
     it('clear() empties the _prefetched set', () => {
         const { window } = createEnv();
         const set = window.djust._prefetch._prefetched;
