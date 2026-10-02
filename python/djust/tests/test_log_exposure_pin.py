@@ -113,12 +113,6 @@ RUNTIME_LEGACY_GATED = {
     ("dispatch_mount", "state_snapshot _restore_snapshot failed for %s; "): (
         "restore runs only when `opt_in and legacy_exposure`"
     ),
-    ("recheck_event_auth", "reauth_on_event re-check skipped (non-fatal, WS)"): (
-        "its sole caller, _dispatch_event, runs it only when uses_legacy_exposure(view)"
-    ),
-    ("recheck_event_auth", "reauth_on_event re-check skipped (non-fatal, SSE"): (
-        "its sole caller, _dispatch_event, runs it only when uses_legacy_exposure(view)"
-    ),
     ("dispatch_mount", "Failed to emit state_snapshot_signed for %s; pro"): (
         "a nonlegacy view reaches only the explicit branch, wrapped in its own value-free catch"
     ),
