@@ -7366,7 +7366,7 @@ function clearOptimisticState(eventName) {
  * Call this after any operation that replaces or morphs DOM content
  * (html_update, html_recovery, TurboNav, embedded view update, etc.)
  * instead of manually calling initReactCounters + initTodoItems +
- * bindLiveViewEvents + updateHooks individually.
+ * bindLiveViewEvents + updateHooks + bindModelElements individually.
  */
 // WeakSet to track elements that have already been scrolled into view.
 // Fresh DOM nodes (from VDOM replacement) won't be in the set, so they
@@ -7394,6 +7394,12 @@ function reinitAfterDOMUpdate(scope) {
         });
     }
     updateHooks();
+
+    // dj-model: an input this update inserted (or whose dj-model attributes it
+    // changed) is bound here, not only at init (#3334). Idempotent: the bind
+    // guard is a JS property on the element, never a DOM attribute a morph
+    // would strip, so an unchanged input is skipped on every pass.
+    if (window.djust.bindModelElements) window.djust.bindModelElements(scope || document);
 
     // {% djust_offline_indicator %} text / status class for any indicator
     // this update inserted (#3051, 52-offline-state.js).
@@ -11718,6 +11724,14 @@ function _confirmSlotRemoval(candidates) {
         } else {
             forgetSlot(id);
         }
+    }
+    // A container removed while this one's grace period ran was not a
+    // candidate, and the observer does not schedule a sweep while a timer is
+    // pending. Sweep again, or it stays mounted until the next DOM mutation
+    // anywhere on the page (#3335). One pending timer at a time.
+    if (_slotSweepTimer === null && _missingSlots().length) {
+        _slotSweepTimer = setTimeout(_sweepSlotContainers, SLOT_SWEEP_DELAY_MS);
+        return;
     }
     _stopWatchingIfIdle();
 }

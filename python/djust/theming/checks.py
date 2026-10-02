@@ -65,6 +65,19 @@ def _presets_to_check() -> Iterator[tuple[str, Any]]:
 
 
 def _contrast_hint(fg_attr: str, bg_attr: str, minimum: float) -> str:
+    if fg_attr == "destructive_text":
+        # Derived (#3320): solved from ``destructive`` by lightness against the page
+        # and card, so a preset author cannot set it. It only misses when those
+        # surfaces are so mid-tone that neither a dark nor a light text clears the
+        # bar, and the surfaces are what to change. (Not to be confused with the
+        # ``destructive_text`` label of the label-on-fill pair in
+        # ``AccessibilityValidator``, which is ``destructive_foreground`` on
+        # ``destructive``.)
+        return (
+            "destructive_text is derived from destructive and cannot be set. It misses 4.5:1 only "
+            "when the page and card are mid-tone; make background or card lighter or darker, "
+            f"or change destructive's hue or saturation, to reach at least {minimum}:1 contrast."
+        )
     if bg_attr.endswith("_tint"):
         # ``*_tint`` is derived (the colour at 10% over the page or a card), so
         # a preset author has no such token to set: they change the colour itself.

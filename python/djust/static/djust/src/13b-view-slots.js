@@ -116,6 +116,14 @@ function _confirmSlotRemoval(candidates) {
             forgetSlot(id);
         }
     }
+    // A container removed while this one's grace period ran was not a
+    // candidate, and the observer does not schedule a sweep while a timer is
+    // pending. Sweep again, or it stays mounted until the next DOM mutation
+    // anywhere on the page (#3335). One pending timer at a time.
+    if (_slotSweepTimer === null && _missingSlots().length) {
+        _slotSweepTimer = setTimeout(_sweepSlotContainers, SLOT_SWEEP_DELAY_MS);
+        return;
+    }
     _stopWatchingIfIdle();
 }
 
