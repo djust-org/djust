@@ -70,8 +70,14 @@ def refresh_other_views_state(session: Any, own_key: str) -> None:
 
     Best effort: a store that cannot be read keeps the save as it was.
     """
+    key = getattr(session, "session_key", None)
+    if not key:
+        return
     try:
-        stored = session.load()
+        # A second store object reads it: ``load()`` on a session whose row is
+        # gone (or whose cache blipped) resets that object's key, which would
+        # turn this save into the creation of a new session (#3247).
+        stored = type(session)(key).load()
         cache = session._session
     except Exception:  # noqa: BLE001 - the save goes ahead with this copy
         return

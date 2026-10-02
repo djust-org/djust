@@ -2348,6 +2348,11 @@ class WSConsumerTransport:
         if not self.mounting_in_batch:
             await consumer.close(code=4403)
 
+    def hosts_other_views(self) -> bool:
+        """Whether views besides this runtime's own are mounted on the socket (#3252)."""
+        slot_map = getattr(self._consumer, "_slot_map", None)
+        return bool(slot_map is not None and slot_map())
+
     @property
     def capture_document_title(self) -> bool:
         """True while the consumer mounts a ``live_redirect`` destination
@@ -5041,9 +5046,10 @@ class ViewRuntime:
             if save_view_key is None:  # tenant view, no tenant resolved (#2973)
                 return
             # The views beside this one saved into the same session (#3252).
-            from ._tenant_state import refresh_other_views_state
+            if getattr(self.transport, "hosts_other_views", lambda: False)():
+                from ._tenant_state import refresh_other_views_state
 
-            refresh_other_views_state(save_session, save_view_key)
+                refresh_other_views_state(save_session, save_view_key)
 
             # Save order mirrors HTTP path (mixins/request.py:593-609): private
             # attrs FIRST, then public via get_context_data().
@@ -5152,7 +5158,8 @@ class ViewRuntime:
             if parent_path is None:  # tenant parent, no tenant resolved (#2973)
                 return
             # The views beside this one saved into the same session (#3252).
-            refresh_other_views_state(save_session, session_view_key(parent, page_path) or "")
+            if getattr(self.transport, "hosts_other_views", lambda: False)():
+                refresh_other_views_state(save_session, session_view_key(parent, page_path) or "")
 
             save_sticky_child_state_sync(target_view, save_session, parent_path)
             write_sticky_index_and_prune_sync(parent, save_session, parent_path)
