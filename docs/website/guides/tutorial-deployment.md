@@ -293,7 +293,7 @@ memory is lost (typed-in form fields are re-sent by the client, so
 those survive). To keep view state across processes, persist it in
 the session:
 
-- legacy views: set `enable_state_snapshot = True` on the view;
+- legacy views: set `enable_state_snapshot = True` on the view (or inherit from `djust.PersistentLiveView`, which sets it);
 - [explicit exposure](../state/explicit-exposure.md) views: declare
   the fields with `state(..., persist="server")`.
 

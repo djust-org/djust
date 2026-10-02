@@ -516,6 +516,35 @@ describe('a container that leaves the page', () => {
         expect(sentOf(socket, 'unmount')).toEqual([]);
         expect(win.djust.viewSlots.mounted().sort()).toEqual(['w1', 'w2']);
     });
+
+    // #3335: a container removed during ANOTHER container's grace window was
+    // only noticed on the next DOM mutation anywhere on the page. With no
+    // other DOM activity it stayed mounted indefinitely.
+    it('unmounts a container removed during another one\'s grace window, with no other DOM activity', async () => {
+        const { socket, doc, win } = await pageWithHydratedLazies();
+        doc.getElementById('w1').remove();
+        await tick(400);
+        doc.getElementById('w2').remove();
+        // w1 is confirmed ~1.1 s after its removal; w2 needs one more sweep
+        // (100 ms) and its own grace period (1 s). Nothing else touches the DOM.
+        await tick(2400);
+        expect(sentOf(socket, 'unmount').map((f) => f.target_id).sort()).toEqual(['w1', 'w2']);
+        expect(win.djust.viewSlots.mounted()).toEqual([]);
+    });
+
+    it('still gives the second container its grace period, and never unmounts a view twice', async () => {
+        const { socket, doc, win } = await pageWithHydratedLazies();
+        const w2 = doc.getElementById('w2');
+        const parent = w2.parentNode;
+        doc.getElementById('w1').remove();
+        await tick(400);
+        w2.remove();
+        await tick(900); // w1 is confirmed (~1.1 s); w2 has been gone ~500 ms
+        parent.appendChild(w2);
+        await tick(2400);
+        expect(sentOf(socket, 'unmount')).toEqual([{ type: 'unmount', target_id: 'w1' }]);
+        expect(win.djust.viewSlots.mounted()).toEqual(['w2']);
+    });
 });
 
 describe('events from a container whose view was unmounted', () => {

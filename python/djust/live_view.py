@@ -77,6 +77,7 @@ except ImportError:
 
 __all__ = [
     "LiveView",
+    "PersistentLiveView",
     "live_view",
     "DjangoJSONEncoder",
     "DEFAULT_SESSION_TTL",
@@ -1882,6 +1883,38 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         reassigned while user was disconnected" case automatically.
         """
         self._object = None
+
+
+class PersistentLiveView(LiveView):
+    """Base class for legacy-exposure views that opt in to state snapshots.
+
+    The only difference from :class:`LiveView` is
+    ``enable_state_snapshot = True``, so every subclass saves its public
+    state through the Django session and restores it on a reconnect or
+    back-navigation instead of running ``mount()`` again (see the scaling
+    guide, "Opt in to state that survives a reconnect").
+
+    * A subclass can set ``enable_state_snapshot = False`` to opt out.
+    * It applies to the ``"legacy"`` exposure policy only. Under
+      ``exposure_policy = "explicit"`` the flag has no effect: such a view
+      persists exactly its ``state(..., persist=...)`` fields, as without
+      this class.
+    * It is a base class, not a routable view (``abstract = True`` is not
+      inherited). Each subclass is still checked on its own: ``djust.C304``
+      warns about PII-like attribute names.
+
+    Security: the flag also drives the signed client snapshot. The view's
+    public state is sent to the browser as a signed but NOT encrypted blob
+    and echoed back on reconnect and back-navigation, so the client can read
+    it. Never use this class (or ``enable_state_snapshot``) for views whose
+    public attributes hold credentials, PII or other users' data, whoever
+    controls the session store. For sensitive fields use explicit exposure
+    with ``state(..., persist="server")``, which stores only the named fields
+    on the server.
+    """
+
+    abstract = True
+    enable_state_snapshot = True
 
 
 def _declares_interactive_collection(view_class: type) -> bool:

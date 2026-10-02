@@ -380,7 +380,7 @@ In development, pages render without Tailwind utilities until you compile the CS
 
 **What causes it**: A LiveView sets `enable_state_snapshot = True` and declares public class attributes or annotations whose names look sensitive (matching `password`, `token`, `secret`, `api_key`, `pii`, `ssn`, `credit_card`, `bearer`, `private_key`, `auth_header`, `sensitive` or `credential`). Message: "<view>: enable_state_snapshot=True with PII-like attribute names: ...". State snapshots are cached client-side by the service worker, so these values would be stored in browser cache storage.
 
-**Fix**: Make the attributes private (leading `_`), or turn off `enable_state_snapshot` for this view.
+**Fix**: Make the attributes private (leading `_`), or turn off `enable_state_snapshot` for this view. The check also covers subclasses of `PersistentLiveView`, which set the flag.
 
 ---
 
@@ -1962,7 +1962,7 @@ The processor is optional. `{% theme_head %}`, `{% theme_switcher %}` and `{% th
 
 **What causes it**: The active theme preset has a colour pair below the WCAG AA minimum. Message: 'Preset "<name>" <mode> mode: <label> contrast ratio X:1 < Y:1 (WCAG AA)'. The pairs are every `*_foreground` label on its fill (4.5:1), `link` and `primary` used as text on the background and on a card (4.5:1), `success` and `warning` used as text on the 10% tint of an alert or toast (4.5:1), the derived `destructive_text` (`--destructive-text`, error text) on the background, on a card and on the destructive alert tint (4.5:1; it is solved from `destructive` by lightness, so ordinary palettes cannot trip it), and the `input` border on the background (3:1, WCAG 1.4.11).
 
-**Fix**: Adjust the named foreground or background colour to reach at least the minimum ratio.
+**Fix**: Adjust the named foreground or background colour to reach at least the minimum ratio. For the `destructive_text` pairs there is no such token to set (it is derived): change `background`, `card` or `destructive`'s hue or saturation instead; it only misses when the page and card are mid-tone.
 
 ---
 

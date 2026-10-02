@@ -43,7 +43,7 @@ Put a lazy container **beside** the page view's `dj-root`, as in the example, no
 | **Tick, async work** | `tick_interval` / `handle_tick` and `start_async` work run per view, and their updates go to that view's container. |
 | **Uploads** | A file input (`dj-upload`, `dj-upload-drop`, `dj-paste`) inside a lazy view registers its upload with that view, so the view's `allow_upload` slots apply. The binary chunks carry the upload's `ref` and reach the view that registered it. |
 | **Hooks** | `this.pushEvent()` in a `dj-hook` inside a lazy view runs the event on that view. |
-| **Teardown** | Navigating (`live_redirect`), a new page mount or a disconnect tears every view down. Removing a container from the page tears down just its view: the client sends [`unmount`](#unmounting-a-view) for it once it has stayed out of the document for about a second (a container a morph or a view transition puts back in time keeps its view). |
+| **Teardown** | Navigating (`live_redirect`), a new page mount or a disconnect tears every view down. Removing a container from the page tears down just its view: the client sends [`unmount`](#unmounting-a-view) for it once it has stayed out of the document for about a second (a container a morph or a view transition puts back in time keeps its view). Each container gets its own grace period: one removed while another's is running is unmounted about a second after it left, even if nothing else on the page changes in between. |
 
 A view replaced by a new mount of the same container (hydrating `#stats` again) is torn down on its own.
 
