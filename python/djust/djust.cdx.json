@@ -1828,28 +1828,28 @@
       "version": "0.5.0"
     },
     {
-      "bom-ref": "rust:pkg:cargo/thiserror-impl@2.0.20",
+      "bom-ref": "rust:pkg:cargo/thiserror-impl@2.0.21",
       "licenses": [
         {
           "expression": "MIT OR Apache-2.0"
         }
       ],
       "name": "thiserror-impl",
-      "purl": "pkg:cargo/thiserror-impl@2.0.20",
+      "purl": "pkg:cargo/thiserror-impl@2.0.21",
       "type": "library",
-      "version": "2.0.20"
+      "version": "2.0.21"
     },
     {
-      "bom-ref": "rust:pkg:cargo/thiserror@2.0.20",
+      "bom-ref": "rust:pkg:cargo/thiserror@2.0.21",
       "licenses": [
         {
           "expression": "MIT OR Apache-2.0"
         }
       ],
       "name": "thiserror",
-      "purl": "pkg:cargo/thiserror@2.0.20",
+      "purl": "pkg:cargo/thiserror@2.0.21",
       "type": "library",
-      "version": "2.0.20"
+      "version": "2.0.21"
     },
     {
       "bom-ref": "rust:pkg:cargo/tinyvec@1.12.0",
