@@ -416,7 +416,9 @@ def test_runtime_save_block_present_and_gated():
     import djust.runtime as rt_mod
 
     gate_src = inspect.getsource(rt_mod.ViewRuntime._dispatch_event_render)
-    body_src = inspect.getsource(rt_mod.ViewRuntime._persist_state_after_event)
+    body_src = inspect.getsource(rt_mod.ViewRuntime._persist_state_after_event) + (
+        inspect.getsource(rt_mod.ViewRuntime._save_root_state)
+    )
     gate_collapsed = " ".join(gate_src.split())
     body_collapsed = " ".join(body_src.split())
 
@@ -446,8 +448,13 @@ def test_runtime_save_block_present_and_gated():
     # #3212: bounded through the shared one-hop helper, whose deadline starts
     # when the save starts running (the bound itself is pinned in
     # test_sticky_child_persistence_1471::test_the_event_save_is_still_bounded).
-    assert "_run_explicit_save(self, _save, deadline=EVENT_STATE_SAVE_TIMEOUT_S)" in (
-        body_collapsed
+    # #3248: the wrapper hands the bound to the save body, which passes it on.
+    body_compact = body_collapsed.replace(" ", "")
+    assert "_save_root_state(target_view,event_name,deadline=EVENT_STATE_SAVE_TIMEOUT_S)" in (
+        body_compact
+    )
+    assert "_run_explicit_save(self,_detached_when(trailing,_save),deadline=deadline)" in (
+        body_compact
     )
     assert "asyncio.TimeoutError" in body_collapsed
 
@@ -458,7 +465,12 @@ def test_runtime_save_reads_scope_or_mount_request():
     session (websocket.py:3710-3720)."""
     import djust.runtime as rt_mod
 
-    body = " ".join(inspect.getsource(rt_mod.ViewRuntime._persist_state_after_event).split())
+    body = " ".join(
+        (
+            inspect.getsource(rt_mod.ViewRuntime._persist_state_after_event)
+            + inspect.getsource(rt_mod.ViewRuntime._save_root_state)
+        ).split()
+    )
     assert "_djust_mount_request" in body
     assert 'self.scope.get("session")' in body
 
@@ -594,7 +606,10 @@ def test_runtime_sticky_save_present_and_gated():
         inspect.getsource(rt_mod.ViewRuntime._dispatch_sticky_child_event).split()
     )
     helper_src = " ".join(
-        inspect.getsource(rt_mod.ViewRuntime._persist_sticky_child_after_event).split()
+        (
+            inspect.getsource(rt_mod.ViewRuntime._persist_sticky_child_after_event)
+            + inspect.getsource(rt_mod.ViewRuntime._save_sticky_state)
+        ).split()
     )
 
     # Gate + warning in the dispatch method.
@@ -605,6 +620,12 @@ def test_runtime_sticky_save_present_and_gated():
     assert "write_sticky_index_and_prune" in helper_src
     assert "save_session.save()" in helper_src
     # #3212: one Django-thread hop through the shared bounded helper.
-    assert "_run_explicit_save(self, _save_sticky, deadline=EVENT_STATE_SAVE_TIMEOUT_S)" in (
-        helper_src
+    helper_compact = helper_src.replace(" ", "")
+    assert (
+        "_save_sticky_state(target_view,event_name,deadline=EVENT_STATE_SAVE_TIMEOUT_S)"
+        in helper_compact
+    )
+    assert (
+        "_run_explicit_save(self,_detached_when(trailing,_save_sticky),deadline=deadline)"
+        in helper_compact
     )

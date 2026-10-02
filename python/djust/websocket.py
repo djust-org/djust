@@ -2502,6 +2502,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 except Exception as e:
                     logger.warning("Error shutting down actor: %s", e)
 
+        # Store the latest state before the view goes (#3248): a save that
+        # slow storage deferred is written now, so a reconnect restores it.
+        for consumer in consumers:
+            await consumer._finish_state_saves()
+
         # Tear each mounted view down (#3244): an explicit root is disposed with
         # its whole subtree, including async work; a legacy root has its uploads
         # cleaned up, its wait_for_event waiters closed (ADR-002 Phase 1b,
@@ -3062,6 +3067,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             return None, "Too many views on this connection"
         slot = ViewSlot(self, target_id)
         slots[target_id] = slot
+        # From now on the views' saves read one another's (``hosts_other_views``).
+        self._hosted_several_views = True
         return slot, None
 
     async def _run_slot_mount(
@@ -4207,6 +4214,19 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if self._view_consumers():
             await self._release_mounted_views(reason="view_replaced")
 
+    async def _finish_state_saves(self) -> None:
+        """Wait for the runtime's trailing state save before a view is released (#3248).
+
+        Run on a view's own consumer-like: a slot's runtime saves its state too.
+        """
+        runtime = getattr(self, "_runtime", None)
+        if runtime is None:
+            return
+        try:
+            await runtime.finish_state_saves()
+        except Exception:  # noqa: BLE001 — teardown goes on; storage errors may carry values
+            logger.warning("Finishing the trailing state save failed")
+
     async def _release_consumer_view(
         self,
         consumer: Any,
@@ -4263,6 +4283,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # Pushes deferred for the old view must not reach the new one (#3001).
         if view is not None:
             self._cancel_deferred_pushes(view)
+
+        # Store the latest state before the view goes (#3248), so Back to this
+        # page restores what the user left, not an older session copy.
+        await consumer._finish_state_saves()
+
+        if view is not None:
             # Drop the kept sticky children from the old view's registry first,
             # WITHOUT ``_unregister_child`` (which would tear them down): they
             # survive this navigation and keep running on their stash refs.

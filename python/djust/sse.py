@@ -326,6 +326,8 @@ async def _shutdown_closed_session(session: "SSESession") -> None:
                 sanitize_for_log(session.session_id),
                 _CLOSE_DISPATCH_WAIT_S,
             )
+        # The latest state is stored before the view goes (#3248).
+        await session.runtime.finish_state_saves()
         session.shutdown()
     except Exception:  # noqa: BLE001 — view hooks are app code; values stay out of logs
         logger.warning(
@@ -595,6 +597,9 @@ class SSESession:
             watch_diagnostic_owner(self, "view_instance")
             async with self._render_lock:
                 old_runtime, old_view = self.runtime, self.view_instance
+                # The latest state is stored before the old page goes (#3248):
+                # the new runtime's mount may restore from it.
+                await old_runtime.finish_state_saves()
                 old_runtime.view_instance = None
                 self.view_instance = None
                 # With one record per user (a backend on the old contract) the

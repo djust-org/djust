@@ -222,6 +222,7 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         "_websocket_host",
         "_websocket_secure",
         "_django_session_key",
+        "_djust_state_saves_released",
         "_djust_mount_view_path",
         # The ``target_id`` of the slot a view mounted beside the page view
         # (``on_view_instantiated``, #3252); keys its cached Rust view.

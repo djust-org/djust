@@ -839,11 +839,14 @@ def test_the_event_save_is_still_bounded():
         for node in ast.parse(src).body
         if isinstance(node, ast.ClassDef) and node.name == "ViewRuntime"
     )
+    # #3248: the inline saves keep their bound at the call to the save body
+    # (``_save_root_state`` / ``_save_sticky_state``), which hands it to the
+    # shared helper as a variable; the trailing save passes the 10 s cap.
     bounded_sites = {
         method.name: sum(
             isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == "_run_explicit_save"
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in {"_save_root_state", "_save_sticky_state"}
             and any(
                 keyword.arg == "deadline"
                 and isinstance(keyword.value, ast.Name)
@@ -911,8 +914,8 @@ def test_the_event_save_is_still_bounded():
     assert explicit_callers == {
         "commit_explicit_turn",
         "_persist_explicit_children_after_event",
-        "_persist_state_after_event",
-        "_persist_sticky_child_after_event",
+        "_save_root_state",
+        "_save_sticky_state",
     }, explicit_callers
     # With no setting, the explicit deadline IS the pinned production bound.
     from django.test import override_settings
@@ -950,7 +953,7 @@ def test_a_save_that_exceeds_the_bound_is_dropped_not_raised():
     # purpose: an explicit turn withholds its success frame instead.
     src = _inspect.getsource(runtime.ViewRuntime)
     # #3212: the legacy sites catch the shared helper's deadline too.
-    segments = src.split("except (asyncio.TimeoutError, ExplicitSaveDeferred):")[1:]
+    segments = src.split("except (asyncio.TimeoutError, ExplicitSaveDeferred) as exc:")[1:]
     assert len(segments) == 2, (
         f"expected exactly 2 bounded save sites, found {len(segments)}. If a "
         f"third was added, bound it too and update this count; if the two were "
