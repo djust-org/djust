@@ -344,3 +344,4 @@ Default mode and `--permissions` exit non-zero only under `--strict`: without it
 - [Declarative Permissions Document](permissions-document.md) — permissions.yaml schema
 - [Security Guide](../advanced/security.md) — LiveView-level security best practices
 - [Best Practices](BEST_PRACTICES.md) — architectural recommendations
+- [AI Guardrails](ai-guardrails.md) — how the audit fits with the other checks for AI-written code, and what they do not cover
