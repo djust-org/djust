@@ -225,11 +225,12 @@ jobs:
           UV_PYTHON: ${{ steps.python.outputs.python-path }}
           EXPECTED_PYTHON: ${{ matrix.python-version }}
         run: |
-          # Keep every later uv command on setup-python's exact executable.
-          echo "UV_PYTHON=$UV_PYTHON" >> "$GITHUB_ENV"
           uv sync --frozen --extra dev --no-install-project --python "$UV_PYTHON"
           .venv/bin/python scripts/check-ci-python.py "$EXPECTED_PYTHON"
-          uv run --no-sync maturin develop --release --interpreter .venv/bin/python
+          # maturin also invokes uv pip: target the verified venv, not the base.
+          export UV_PYTHON="$PWD/.venv/bin/python"
+          echo "UV_PYTHON=$UV_PYTHON" >> "$GITHUB_ENV"
+          uv run --no-sync maturin develop --release
 
       # pytest-split is also in the [dev] extra; installing it here as well
       # mirrors the existing pytest-xdist belt-and-braces so a stale uv.lock

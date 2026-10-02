@@ -1,5 +1,6 @@
 """Regression coverage for the matrix that previously ran every cell on 3.12."""
 
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -35,9 +36,37 @@ def test_matrix_selects_interpreter_and_checks_before_build():
     assert setup["id"] == "python"
     run = build["run"]
     assert '--python "$UV_PYTHON"' in run
+    assert 'export UV_PYTHON="$PWD/.venv/bin/python"' in run
+    assert (
+        run.index("check-ci-python.py")
+        < run.index("export UV_PYTHON")
+        < run.index("maturin develop")
+    )
     assert 'echo "UV_PYTHON=$UV_PYTHON" >> "$GITHUB_ENV"' in run
     assert run.index("check-ci-python.py") < run.index("maturin develop")
-    assert "--interpreter .venv/bin/python" in run
     tools = next(step for step in steps if step.get("name") == "Install test tools")
     assert "uv pip install --python .venv/bin/python" in tools["run"]
     assert job["continue-on-error"] == "${{ matrix.python-version == '3.15' }}"
+
+
+def test_maturin_develop_command_uses_supported_cli_arguments():
+    """Exercise the installed CLI parser, not a string pin on an invalid flag."""
+    job = yaml.safe_load((ROOT / ".github/workflows/test.yml").read_text())["jobs"]["python-tests"]
+    build = next(
+        step
+        for step in job["steps"]
+        if step.get("name") == "Install Python dependencies and build extension"
+    )
+    command = next(
+        line.strip()
+        for line in build["run"].splitlines()
+        if line.strip().startswith("uv run --no-sync maturin ")
+    )
+    arguments = shlex.split(command)[4:]
+    result = subprocess.run(
+        [sys.executable, "-m", "maturin", *arguments, "--help"],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
