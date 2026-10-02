@@ -9,11 +9,11 @@ description: "The checks and tooling that catch mistakes an AI coding assistant 
 
 # AI Guardrails
 
-djust ships checks and tooling that catch mistakes an AI coding assistant makes in a LiveView app. They cover four things: context that tells the assistant how djust works, tools the assistant can call to check code it just wrote, Django system checks that run at startup and in CI, and an audit command that reports what each view exposes. This page lists each one, the command that runs it, and what it catches.
+djust ships checks and tooling that catch mistakes an AI coding assistant makes in a LiveView app. They fall into five layers: context that tells the assistant how djust works, tools the assistant can call to check code it just wrote, Django system checks that run at startup and in CI, an audit command that reports what each view exposes, and framework defaults that need no command. This page lists each one, the command that runs it, and what it catches.
 
 Here, "guardrails" means checks on code and configuration. It does not mean content filtering of a language model, and it makes no claim that AI-written code is correct. Most of the checks are static and heuristic: they find some mistakes and miss others. [What this does not do](#what-this-does-not-do) lists the limits, and none of this replaces tests and code review.
 
-Items marked **1.3** are not in djust 1.2.2. They are in the 1.3.0 release candidates. The claims on this page were checked against the `main` source tree (1.3.0rc6 plus the changes merged after it), and against the `v1.2.2` tag wherever a row says whether something is in 1.2.2. The check tables below are generated from the check messages in that source. Each ID and message lives in `python/djust/checks/`, so you can search for an ID there to see the code behind a row.
+Two labels mark what is newer than djust 1.2.2. **1.3** means the item is in the 1.3.0 release candidates (it is in the `v1.3.0rc6` tag) and not in 1.2.2. **main** means it was merged to `main` after `v1.3.0rc6` and is in no release yet, so it will be in the next 1.3 release candidate and not in rc6. The claims on this page were checked against the `main` source tree, against the `v1.3.0rc6` tag for the labels above, and against the `v1.2.2` tag wherever a row says whether something is in 1.2.2. The check tables below are generated from the check messages in that source. Each ID and message lives in `python/djust/checks/`, so you can search for an ID there to see the code behind a row.
 
 ## The layers
 
@@ -75,7 +75,7 @@ python manage.py djust_ai_context --format cursor    # .cursorrules
 python manage.py djust_ai_context --format copilot   # .github/copilot-instructions.md
 python manage.py djust_ai_context --print            # stdout instead of a file
 python manage.py djust_ai_context --output docs/djust-context.md
-python manage.py djust_ai_context --force            # replace an existing file (1.3)
+python manage.py djust_ai_context --force            # replace an existing file (main)
 ```
 
 Those three formats are the only ones, and `claude` is the default. The file has two parts. The first is a framework reference: template directives, lifecycle methods, decorators, and conventions. The second is read from your project: each view's template, mixins, auth settings, handlers with their parameters and the variables its template can use, plus components and URL routes. For the example view, the project part is:
@@ -99,9 +99,9 @@ Template variables: `client`, `pings`
 
 Only methods decorated with `@event_handler` are listed as handlers. The example view also has an undecorated `toggle_cart` method. The file leaves it out, and the browser cannot call it either.
 
-Between the two parts, **1.3** adds two short sections of advice. A Security section says to avoid `|safe`, `{% autoescape off %}` and `mark_safe()` on user content, to set `login_required` or `permission_required`, to re-check permissions in handlers that change data, to include `{% csrf_token %}`, not to call `login()` in an event handler (the session cookie cannot change over a WebSocket, so the browser stays anonymous), and to run `manage.py check` and `djust_audit --ast` before finishing. It opens by saying that these practices do not make generated code secure on their own. A State section says to set state in `mount()` and to call `super().get_context_data(**kwargs)` in an override, because the HTTP fallback rebuilds a view from the dict `get_context_data()` returned on the previous request. Both are text for the assistant to read. Nothing checks that it followed them.
+Between the two parts, **main** adds two short sections of advice. A Security section says to avoid `|safe`, `{% autoescape off %}` and `mark_safe()` on user content, to set `login_required` or `permission_required`, to re-check permissions in handlers that change data, to include `{% csrf_token %}`, not to call `login()` in an event handler (the session cookie cannot change over a WebSocket, so the browser stays anonymous), and to run `manage.py check` and `djust_audit --ast` before finishing. It opens by saying that these practices do not make generated code secure on their own. A State section says to set state in `mount()` and to call `super().get_context_data(**kwargs)` in an override, because the HTTP fallback rebuilds a view from the dict `get_context_data()` returned on the previous request. Both are text for the assistant to read. Nothing checks that it followed them.
 
-**1.3** also refuses to overwrite a file that already exists. The command exits with an error that names the file and says so. Pass `--force` to replace it, `--output` to write elsewhere, or `--print` to read the text first. A forced replacement is written to a temporary file beside the real target and renamed over it, so a failure keeps the old file, and the file keeps its permission bits and any symlink. In 1.2.2 the command replaced an existing file without asking, so check `git diff` after running it there. Keep hand-written rules in a separate file, and re-run the command after you add or change views.
+**main** also refuses to overwrite a file that already exists. The command exits with an error that names the file and says so. Pass `--force` to replace it, `--output` to write elsewhere, or `--print` to read the text first. A forced replacement is written to a temporary file beside the real target and renamed over it, so a failure keeps the old file, and the file keeps its permission bits and any symlink. In 1.2.2 and the 1.3 release candidates the command replaced an existing file without asking, so check `git diff` after running it there. Keep hand-written rules in a separate file, and re-run the command after you add or change views.
 
 ### The `docs/ai/` reference pages
 
@@ -145,7 +145,7 @@ claude mcp add --transport stdio djust -- python manage.py djust_mcp
 - a public attribute named `service`, `client`, `session`, `connection`, `conn`, `api` or `sdk`, or assigned from `boto3`, `requests`, `httpx`, `redis` or `paramiko`
 - a public attribute assigned a QuerySet, as in `self.items = Item.objects.all()`
 
-`run_system_checks` runs every djust system check and returns the id, severity, message and hint of each, with the file and line when the check has them. The category names filter by ID prefix, and without a category you get every check, including families the names do not cover. `run_audit` returns the default `djust_audit` report as JSON: per view, the exposed state, auth configuration, handlers and their decorators.
+`run_system_checks` runs the checks registered under the `djust` tag (the same set as `manage.py check --tag djust`, without `--deploy`) and returns the id, severity, message and hint of each, with the file and line when the check has them. The category names filter by ID prefix, and without a category you get every check in that set, including families the names do not cover. A category name it does not know is not an error: you get the unfiltered set. `run_audit` returns the default `djust_audit` report as JSON: per view, the exposed state, auth configuration, handlers and their decorators.
 
 The two tools that take source text read one string. They do not see the rest of the project, and they match handler names by the prefixes above, so an undecorated method called `increment` is not reported. `manage.py check` and `djust_audit` have the project-wide view. On the example view, `validate_view` returns:
 
@@ -174,23 +174,26 @@ An assistant calls these tools only if it is told to. Add a line to `AGENTS.md` 
 
 ```bash
 python manage.py check --tag djust --fail-level WARNING
+python manage.py check --tag djust --deploy --fail-level WARNING
 ```
+
+The second line runs the checks that are registered as deployment checks, which `check` skips without `--deploy`: the vendored-asset and SBOM checks `B011`, `B013` and `B014`, and `B008` when `djust` is listed above `django.contrib.staticfiles`. Django's own deployment checks run with it too, so expect findings that are not djust's. Run it in the job that sees your production settings.
 
 Without `--fail-level`, `check` exits non-zero only for errors. The hints after each finding say how to fix it, and `manage.py djust_check` prints the same findings grouped by category, with `--json` and `--format json` for machine-readable output.
 
-`--tag djust` selects the checks registered under that tag, which is nearly all of them. The theming checks, whose IDs start with `djust_theming.`, are registered under Django's `compatibility` tag. A plain `manage.py check` runs them, and `--tag djust` and the MCP `run_system_checks` tool do not. One of them, `djust_theming.W003` (**1.3**), warns when `LIVEVIEW_CONFIG["theme"]["selectable_presets"]` is not a list of preset names or names a preset that is not registered. At render time such a value is logged and ignored.
+`--tag djust` selects the checks registered under that tag, which is nearly all of them. The theming checks, whose IDs start with `djust_theming.`, are registered under Django's `compatibility` tag. A plain `manage.py check` runs them, and `--tag djust` and the MCP `run_system_checks` tool do not. One of them, `djust_theming.W003` (**main**), warns when `LIVEVIEW_CONFIG["theme"]["selectable_presets"]` is not a list of preset names or names a preset that is not registered. At render time such a value is logged and ignored.
 
-Four checks read `DEBUG = False` as "production": `A010`, `A011`, `A012` and `A014` (the `ALLOWED_HOSTS` wildcard and `SECRET_KEY` checks). From **1.3** they stay quiet during `manage.py test`, because Django's test runner sets `DEBUG = False` before it runs the checks. They still run under `manage.py check` and `check --deploy`. A CI job that only runs the test suite therefore does not cover them. The `check` step above does, when the settings CI uses have `DEBUG = False`.
+Several checks treat `DEBUG = False` as production. Four of them are errors: `A010`, `A011`, `A012` and `A014` (the `ALLOWED_HOSTS` wildcard and `SECRET_KEY` checks). From **main** they stay quiet during `manage.py test`, because Django's test runner sets `DEBUG = False` before it runs the checks. They still run under `manage.py check` and `check --deploy`, and `A010` to `A012` are also skipped when both `DJUST_TRUSTED_PROXIES` and `SECURE_PROXY_SSL_HEADER` are set. Warnings such as `C010` (Tailwind CDN) and `A103` read `DEBUG` too and still run under `manage.py test`. A CI job that only runs the test suite does not cover the four errors. The `check` step above does, when the settings CI uses have `DEBUG = False`.
 
-Template checks skip `{# ... #}` comments and `{% comment %}` blocks (**1.3**), so a binding or tag mentioned in a comment is not reported.
+Template checks skip `{# ... #}` comments and `{% comment %}` blocks (**main**), so a binding or tag mentioned in a comment is not reported.
 
 The checks are heuristic. They read class definitions, settings and templates. The binding checks, for example, construct no view, run no handler and evaluate no queryset. A check reports what it can see in the source and says nothing about the rest.
 
 ### Families
 
-Each check has an ID such as `djust.V004`: a family letter and a number. The theming package adds `djust_theming.`-prefixed IDs (`E001`, `W001`, `W003` and others) that this page does not tabulate. The [error code reference](error-codes.md) explains every ID and its fix. This table is generated from the checks package:
+Each check has an ID such as `djust.V004`: a family letter and a number. The theming package adds `djust_theming.`-prefixed IDs (`E001`, `W001`, `W003` and others) that this page does not tabulate. The [error code reference](error-codes.md) has an entry for each ID in this section, with its cause and fix. This table is generated from the checks package:
 
-| Prefix | Family | IDs first seen after 1.2.2 (marked 1.3) |
+| Prefix | Family | IDs first seen after 1.2.2 (1.3, or main where noted) |
 | --- | --- | --- |
 | `A` | Audit / static security checks | A100 to A107 |
 | `B` | Vendored assets and SBOMs | B001 to B014 |
@@ -198,7 +201,7 @@ Each check has an ID such as `djust.V004`: a family letter and a number. The the
 | `D` | Database notifications | none |
 | `Q` | Code quality | Q004 |
 | `S` | Security | S013 |
-| `T` | Templates | T019 to T025 |
+| `T` | Templates | T019 to T022; T023 to T025 (main) |
 | `U` | Update notice | none |
 | `V` | Validation of LiveView classes and handlers | V016 to V020 |
 | `Y` | Accessibility | none |
@@ -227,8 +230,8 @@ Templates:
 | `djust.T012` | Warning | `template uses dj-* directives that need a connected LiveView but has no dj-root or dj-view attribute, so the page never connects.` | Yes, wording differs |
 | `djust.T015` | Warning | `legacy '<attribute>' attribute detected.` | Yes |
 | `djust.T018` | Warning | `template references undefined variable '<name>' at line <line> (<template>) -- it resolves to nothing and renders as empty string, with no error.` | Yes |
-| `djust.T024` | Warning | `` `<path>` is always empty in a LiveView template: djust never serializes `<field>`. `` | No (1.3) |
-| `djust.T025` | Warning | `'<attribute>' is on <<tag>>. The HTTP render is complete, but the WebSocket mount keeps only the first element inside <body>, so the live page silently loses the rest.` | No (1.3) |
+| `djust.T024` | Warning | `` `<path>` is always empty in a LiveView template: djust never serializes `<field>`. `` | No (main) |
+| `djust.T025` | Warning | `'<attribute>' is on <<tag>>. The HTTP render is complete, but the WebSocket mount keeps only the first element inside <body>, so the live page silently loses the rest.` | No (main) |
 
 Event bindings compare every literal `dj-*` binding in a template with the handler it names:
 
@@ -240,7 +243,7 @@ Event bindings compare every literal `dj-*` binding in a template with the handl
 | `djust.T020` | Warning | `<name>() requires <names>, which this binding never sends.` | No (1.3) |
 | `djust.T021` | Warning | `<attribute>=<value> is not a valid <hint> literal; the browser rejects the event.` | No (1.3) |
 | `djust.T022` | Warning | `<attribute> supplies <key>, which the server reads as routing context, not an argument.` | No (1.3) |
-| `djust.T023` | Info | `T019-T022 were skipped: no usable template engine to scan templates with.` | No (1.3) |
+| `djust.T023` | Info | `T019-T022 were skipped: no usable template engine to scan templates with.` | No (main) |
 
 Authentication and exposure:
 
@@ -253,7 +256,7 @@ Authentication and exposure:
 
 `T024` reports `request.user.is_staff`, `is_superuser` and `password` (and a `{% with %}` alias of a user) in a template a LiveView renders. djust never serializes those three fields, so the expression is always empty and a `{% if request.user.is_staff %}` block never shows. It looks only at paths through a `user` variable, so a form field named `password` is not reported. `T025` reports `dj-root` or `dj-view` on `<html>`, `<head>` or `<body>`. The HTTP render of such a page is complete, but over the WebSocket only the first element inside `<body>` mounts.
 
-The binding checks (`T019` to `T022`) read templates through a Django template engine. When these checks first shipped, a project whose `TEMPLATES` setting listed only `DjustTemplateBackend` (the layout `djust new` writes) got no binding findings. From **1.3** the scan builds a compile-only engine from the Djust backend's directories, libraries and builtins, so that layout is checked too. If neither a `DjangoTemplates` nor a Djust backend gives an engine, or the engine cannot be built, the checks do not run and `djust.T023` says so at info level. What the checks cannot decide from the source is reported as dynamic or unsupported in the coverage object of `manage.py djust_check --format json`, not guessed. A single finding can be silenced with a `{# noqa: T019 -- reason #}` comment, and the comment needs a reason. `T024` and `T025` take the same comment.
+The binding checks (`T019` to `T022`) read templates through a Django template engine. In 1.3.0rc6 and earlier, a project whose `TEMPLATES` setting listed only `DjustTemplateBackend` (the layout `djust new` writes) got no binding findings. From **main** the scan builds a compile-only engine from the Djust backend's directories, libraries and builtins, so that layout is checked too. If neither a `DjangoTemplates` nor a Djust backend gives an engine, or the engine cannot be built, the checks do not run and `djust.T023` says so at info level. What the checks cannot decide from the source is reported as dynamic or unsupported in the coverage object of `manage.py djust_check --format json`, not guessed. A single finding can be silenced with a `{# noqa: T019 -- reason #}` comment, and the comment needs a reason. `T024` and `T025` take the same comment.
 
 ### A run on the example view
 
@@ -329,8 +332,8 @@ Some behavior needs no command. These are the defaults when you write nothing, a
 | Per-object access | `get_object()` returns `None` and `has_object_permission()` returns `True`, so there is no object-level check. | Override both. The check then runs at mount and again before each event ([authorization guide](authorization.md)). | Yes |
 | HTTP API | A handler is not reachable over HTTP. | `@event_handler(expose_api=True)`, plus the `djust.api` URLs in your URLconf ([HTTP API guide](http-api.md)). `djust_audit` lists exposed handlers. | Yes |
 | State exposure | `exposure_policy = "legacy"`: public attributes on `self` become template context, and much of it also reaches session state and the client state mirror. | `exposure_policy = "explicit"` on a view: a value reaches the template, session or browser only when you declare it ([explicit exposure](../state/explicit-exposure.md)). The default stays `legacy`. | No (1.3) |
-| Refusal codes | A refused `@permission_required` handler or object-level check sends an error frame with `code: "permission_denied"`, and the HTTP fallback answers `403` with the same code. A page can listen for `djust:error` (`detail.code`) and, for a 4401/4403 close, `djust:auth-refused` (`detail.error_code`). | Match the code in client code, not the error text ([refusal codes](authentication.md#refusal-codes)). | Partly: the uniform code and `detail.error_code` are new in 1.3 |
-| djust warnings | WARNING and ERROR records from the `djust` logger reach standard error even with no `LOGGING` setting. INFO stays quiet. | Configure `LOGGING` to send them elsewhere. A record that another handler already receives is not printed a second time. | No (1.3) |
+| Refusal codes | A refused `@permission_required` handler or object-level check sends an error frame with `code: "permission_denied"`, and the HTTP fallback answers `403` with the same code. A page can listen for `djust:error` (`detail.code`) and, for a 4401/4403 close, `djust:auth-refused` (`detail.error_code`). | Match the code in client code, not the error text ([refusal codes](authentication.md#refusal-codes)). | Partly: the uniform code and `detail.error_code` are on main only |
+| djust warnings | WARNING and ERROR records from the `djust` logger reach standard error even with no `LOGGING` setting. INFO stays quiet. | Configure `LOGGING` to send them elsewhere. A record that another handler already receives is not printed a second time. | No (main) |
 | `reauth_on_event` | Off. | Opt in with `LIVEVIEW_CONFIG = {"reauth_on_event": True}`. See the Known Limitations section of the [authentication guide](authentication.md). | Yes |
 
 ## What this does not do
@@ -338,7 +341,7 @@ Some behavior needs no command. These are the defaults when you write nothing, a
 - Heuristics miss things. A check that finds nothing has found nothing it knows how to look for. A method such as `increment` with no decorator matches none of the handler-name prefixes, so `validate_view` and `V004` stay silent about it. Under the default `strict` mode the browser is still refused, and from 1.3 `T019` reports a template binding to it.
 - Checks run at startup and in CI, not at request time. They read the project when the command runs, nothing re-checks a request as it arrives, and a server started without `manage.py` runs no checks at all. `--live` probes a deployment once, when you run it.
 - The `--ast` scan covers five Python patterns plus the three related findings above. It cannot follow a value across function calls. `X005` looks only at the argument passed to `mark_safe`, and building the string in a variable first slips through. `X003` reads only the first argument of the SQL call. Templates are read with regular expressions, not Django's template compiler.
-- The binding checks (`T019` to `T022`) need a template engine to compile with: a `DjangoTemplates` backend, or from 1.3 a `DjustTemplateBackend`. Without either they report nothing, and `T023` says that they were skipped. A binding it cannot resolve from the source (an owner that resolves attributes at runtime, say) is counted as dynamic in the coverage object, not checked.
+- The binding checks (`T019` to `T022`) need a template engine to compile with: a `DjangoTemplates` backend, or, on main, a `DjustTemplateBackend`. Without either they report nothing, and `T023` says that they were skipped. A binding it cannot resolve from the source (an owner that resolves attributes at runtime, say) is counted as dynamic in the coverage object, not checked.
 - `T024` looks for three fields (`is_staff`, `is_superuser`, `password`), and only on a `user` or `*_user` variable or a `{% with %}` alias of one. A user held under another name is not reported.
 - `T025` reads the template source. It does not check what the WebSocket mount actually found.
 - `T018` skips views whose template uses `{% extends %}` and says so at info level. `manage.py djust_typecheck` analyses extending templates for views that set `template_name`.
@@ -355,7 +358,7 @@ Write tests for the behavior you care about, and review generated code before yo
 Once per project, and again when views change:
 
 ```bash
-# Context for the assistant (1.3 refuses to overwrite an existing CLAUDE.md; 1.2.2 replaces it)
+# Context for the assistant (main refuses to overwrite an existing file; 1.2.2 and 1.3.0rc6 replace it)
 python manage.py djust_ai_context --format claude
 
 # Optional: let the assistant check its own code
@@ -387,7 +390,7 @@ Against staging, after a deploy:
 python manage.py djust_audit --live https://staging.example.com --strict
 ```
 
-With `DEBUG = True` and `watchdog` installed, djust 1.2.2 printed a `[HotReload]` line to standard output, so the line landed at the top of any file you redirected the output into, and `--dump-permissions >` produced a file that did not parse. From **1.3** the line goes to standard error, or to the `djust` logger when a logging handler is listening. On 1.2.2, run `--dump-permissions >` and `--json >` with `DEBUG` off.
+With `DEBUG = True` and `watchdog` installed, djust 1.2.2 and the 1.3 release candidates print a `[HotReload]` line to standard output on every management command, so the line lands at the top of any file you redirect the output into. `--dump-permissions >`, `--json >` and `djust_ai_context --print >` then produce files that do not parse, and so can `manage.py check`. On those versions, run them with `DEBUG` off. On **main** the line is always written to standard error.
 
 ## See also
 
