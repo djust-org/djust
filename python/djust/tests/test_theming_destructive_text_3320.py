@@ -2,7 +2,8 @@
 
 ``destructive`` is a FILL colour: in 51 of 68 presets' dark mode it is a deep red
 (``0 62% 30%``) under a white label, which as text on the dark page is 1.7:1 to
-1.9:1, and in 42 light modes the bright red is under 4.5:1 on white. Recolouring the
+1.9:1, and in 42 light modes (41 on exact float math: magazine is 4.4976 rounded,
+4.5009 exact) the bright red is under 4.5:1 on the page or a card. Recolouring the
 brand palettes is #2885 and stays parked; instead ``ThemeTokens.destructive_text``
 is the same hue and saturation moved in lightness until it reads, and every place
 that paints destructive as TEXT uses it.
