@@ -18,6 +18,7 @@ Usage:
 """
 
 import contextlib
+import inspect
 import logging
 import re
 import threading
@@ -1658,7 +1659,8 @@ def _discard_sticky_child(parent: Any, view_id: str, child: Any) -> None:
 
 
 #: Attribute on a sticky child holding the ``{% live_render %}`` kwargs it was
-#: mounted with, and the last kwargs a change warning was logged for (#2919).
+#: last given (at mount, or by its ``_on_sticky_update`` hook), and the last
+#: kwargs a change warning was logged for (#2919).
 _STICKY_MOUNT_KWARGS_ATTR = "_djust_sticky_mount_kwargs"
 _STICKY_KWARGS_WARNED_ATTR = "_djust_sticky_kwargs_warned"
 
@@ -1671,14 +1673,72 @@ def _record_sticky_mount_kwargs(child: Any, kwargs: Dict[str, Any]) -> None:
         pass
 
 
-def _warn_if_sticky_kwargs_changed(child: Any, kwargs: Dict[str, Any], view_path: str) -> None:
-    """Warn when a reused sticky child is rendered with different kwargs.
+def _changed_sticky_kwargs(child: Any, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """The kwargs that are new or differ from those the child was last given.
+
+    Empty when nothing was recorded. A value that cannot be compared counts as
+    changed: the child's hook decides what to do with it.
+    """
+    recorded = getattr(child, _STICKY_MOUNT_KWARGS_ATTR, None)
+    if not isinstance(recorded, dict):
+        return {}
+    changed: Dict[str, Any] = {}
+    for key, value in kwargs.items():
+        if key not in recorded:
+            changed[key] = value
+            continue
+        try:
+            same = bool(recorded[key] == value)
+        except Exception:  # noqa: BLE001 — e.g. an array's ambiguous truth value
+            same = False
+        if not same:
+            changed[key] = value
+    return changed
+
+
+def _apply_sticky_input_changes(child: Any, kwargs: Dict[str, Any], view_path: str) -> None:
+    """Hand changed ``{% live_render %}`` kwargs to a reused sticky child (#2919).
+
+    Called on the live-instance-reuse path, after the child was re-authorized
+    and before it renders. When the tag's kwargs differ from those the child
+    was last given and the child overrides ``_on_sticky_update`` (see
+    :meth:`StickyChildRegistry._on_sticky_update`), the hook receives ONLY the
+    changed kwargs; the child is not remounted and its state is not reset. The
+    new kwargs are recorded after the hook returns, so it runs once per
+    change, and again on the next render if it raised.
+
+    A child without the override keeps the pre-hook behaviour: the new values
+    are ignored and :func:`_warn_if_sticky_kwargs_changed` says so.
+    """
+    from ..mixins.sticky import StickyChildRegistry
+
+    hook = getattr(type(child), "_on_sticky_update", None)
+    if hook is None or hook is StickyChildRegistry._on_sticky_update:
+        _warn_if_sticky_kwargs_changed(child, kwargs, view_path)
+        return
+    changed = _changed_sticky_kwargs(child, kwargs)
+    if not changed:
+        return
+    if inspect.iscoroutinefunction(hook):
+        raise TypeError(
+            "%s._on_sticky_update must be a plain function: it runs while the "
+            "parent renders and cannot be awaited." % type(child).__name__
+        )
+    child._on_sticky_update(changed)
+    _record_sticky_mount_kwargs(child, kwargs)
+
+
+def _warn_if_sticky_kwargs_changed(
+    child: Any, kwargs: Dict[str, Any], view_path: str, *, preserved: bool = False
+) -> None:
+    """Warn when a sticky child that has no update hook is given different kwargs.
 
     A sticky child keeps its live instance across parent renders and
-    navigations, so the tag's kwargs reach ``mount()`` only once; later values
-    are ignored (#2919). Re-applying them is a 1.3 change. Until then, say so
-    once per distinct set of changed kwarg names rather than silently rendering
-    stale state.
+    navigations, so the tag's kwargs reach ``mount()`` only once. A child that
+    overrides ``_on_sticky_update`` takes the later values through it (#2919);
+    for any other child, and for one preserved across a navigation (which is
+    not rendered again), say so once per distinct set of changed kwarg names
+    rather than silently rendering stale state.
     """
     recorded = getattr(child, _STICKY_MOUNT_KWARGS_ATTR, None)
     if not isinstance(recorded, dict):
@@ -1702,11 +1762,17 @@ def _warn_if_sticky_kwargs_changed(child: Any, kwargs: Dict[str, Any], view_path
     logger.warning(
         "{%% live_render %%} %s sticky=True: kwargs %s changed since the child was "
         "mounted, but a sticky child keeps its live instance, so its kwargs are "
-        "mount-time only and the new values are ignored. Pass changing data "
-        "another way (for example a push to the child) — see the sticky "
+        "mount-time only and the new values are ignored. %s — see the sticky "
         "LiveViews guide.",
         view_path,
         ", ".join(repr(k) for k in changed),
+        (
+            "A child preserved across a navigation keeps its DOM and is not "
+            "given new kwargs; push changing data to it"
+            if preserved
+            else "Define _on_sticky_update(self, changed) on the child to take "
+            "the new values, or push changing data to it"
+        ),
     )
 
 
@@ -2103,7 +2169,10 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                 # the survivor's handlers will read.
                 survivor.request = request
                 _warn_if_sticky_kwargs_changed(
-                    survivor, {k: v for k, v in kwargs.items() if k != "lazy"}, view_path
+                    survivor,
+                    {k: v for k, v in kwargs.items() if k != "lazy"},
+                    view_path,
+                    preserved=True,
                 )
                 # ``consumer`` is guaranteed non-None here: ``survivor`` was
                 # read from ``preserved_map``, which is only set when
@@ -2474,9 +2543,10 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
             # (auth, session) read from the CURRENT parent render's request —
             # mirrors the ``_sticky_preserved`` auto-reattach path above.
             existing_child.request = request
-            # The tag's kwargs are mount-time only for a reused sticky child
-            # (#2919): warn when they differ from the ones it was mounted with.
-            _warn_if_sticky_kwargs_changed(existing_child, kwargs, view_path)
+            # (#2919) Hand kwargs that changed since the child was last given
+            # them to its ``_on_sticky_update`` hook, before it renders; a child
+            # without the hook keeps mount-time kwargs and a warning.
+            _apply_sticky_input_changes(existing_child, kwargs, view_path)
             # ``sticky_kwarg`` is True here, so ``sticky_id_value`` passed the
             # non-empty guard above and is a ``str``. Narrow for the helper's
             # ``str`` slot-key contract (inert at runtime).

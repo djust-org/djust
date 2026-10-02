@@ -528,6 +528,15 @@ class PostProcessingMixin:
                 full_script = csrf_meta + full_script
         if debug_css_link and head_close >= 0:
             head_inject += debug_css_link
+        # #3036: what this page's shell loads, so a live navigation to a page
+        # with a different shell becomes a full load. Needs a real <head> to
+        # live in; without one the client keeps the in-place swap.
+        if head_close >= 0:
+            from .._page_shell import page_shell
+
+            shell = page_shell(self)
+            if shell:
+                head_inject += f'<meta name="djust-page-shell" content="{shell}">'
         if head_inject:
             html = html[:head_close] + head_inject + html[head_close:]
 
