@@ -1397,7 +1397,8 @@ class WSConsumerTransport:
         Re-resolves the user from the scope session, reflects it onto
         ``view.request.user`` (the mount request stored on the view), and re-runs
         the view's auth check. On failure: navigate to the login url + ``close(4403)``
-        and return ``False``. On success or any error (fail-safe): return ``True``.
+        and return ``False``. On success return ``True``; on any error in the re-check,
+        deny (fail closed).
 
         Gated on ``reauth_on_event`` + ``login_required``/``permission_required``
         so default views never pay the session read. DORMANT until Phase 2.3b for
@@ -1431,19 +1432,29 @@ class WSConsumerTransport:
                 return True
             request.user = fresh_user  # reflect current auth for the check + handler
             authorized = await sync_to_async(check_view_auth_lightweight)(view, request)
-            if not authorized:
-                from django.conf import settings as _dj_settings
+        except Exception as exc:  # noqa: BLE001 — fail CLOSED: an unverifiable check denies
+            # Only the exception TYPE and view class are logged — never the
+            # message, traceback or request data (log-exposure pin).
+            exc_type = type(exc).__name__
+            logger.warning(
+                "reauth_on_event re-check raised %s on view %s (WS); denying the event",
+                exc_type,
+                type(view).__name__,
+            )
+            authorized = False
+        if not authorized:
+            from django.conf import settings as _dj_settings
 
-                login_url = getattr(view, "login_url", None) or getattr(
-                    _dj_settings, "LOGIN_URL", "/accounts/login/"
-                )
+            login_url = getattr(view, "login_url", None) or getattr(
+                _dj_settings, "LOGIN_URL", "/accounts/login/"
+            )
+            # Best-effort refusal frames: the event is denied even if the peer is gone.
+            with contextlib.suppress(Exception):
                 await consumer.send_json({"type": "navigate", "to": login_url})
+            with contextlib.suppress(Exception):
                 await consumer.close(code=4403)
-                return False
-            return True
-        except Exception:  # noqa: BLE001 — re-auth is defense-in-depth; never break events
-            logger.debug("reauth_on_event re-check skipped (non-fatal, WS)", exc_info=True)
-            return True
+            return False
+        return True
 
     # ------------------------------------------------------------------ #
     # Mount hooks (ADR-022 Iter 3 Phase 3.2 — DORMANT, #1915)
@@ -1933,7 +1944,7 @@ class SSESessionTransport:
         by the SSE endpoint just before ``dispatch_event`` — the live POSTer's
         ``request.user``, NOT the stale mount request that ``build_request``
         returns). On failure: send an auth-error frame + end the stream and return
-        ``False``. Fail-safe: any error skips the re-check and returns ``True``.
+        ``False``. Fail closed: any error in the re-check denies and returns ``False``.
 
         LIVE for SSE today: SSE events route through ``dispatch_event`` →
         ``_dispatch_event_inner`` since Iter 1 (#1887), so this hook fires on the
@@ -1962,17 +1973,27 @@ class SSESessionTransport:
             if request is None:
                 return True
             authorized = await sync_to_async(check_view_auth_lightweight)(view, request)
-            if not authorized:
+        except Exception as exc:  # noqa: BLE001 — fail CLOSED: an unverifiable check denies
+            # Only the exception TYPE and view class are logged — never the
+            # message, traceback or request data (log-exposure pin).
+            exc_type = type(exc).__name__
+            logger.warning(
+                "reauth_on_event re-check raised %s on view %s (SSE); denying the event",
+                exc_type,
+                type(view).__name__,
+            )
+            authorized = False
+        if not authorized:
+            # Best-effort refusal frames: the event is denied even if the stream is gone.
+            with contextlib.suppress(Exception):
                 await session.send_error(
                     "Session is no longer authorized. Please reload the page.",
                     code=4403,
                 )
+            with contextlib.suppress(Exception):
                 await session.close(code=4403)
-                return False
-            return True
-        except Exception:  # noqa: BLE001 — re-auth is defense-in-depth; never break events
-            logger.debug("reauth_on_event re-check skipped (non-fatal, SSE)", exc_info=True)
-            return True
+            return False
+        return True
 
     # ------------------------------------------------------------------ #
     # Mount hooks (ADR-022 Iter 3 Phase 3.2 — DORMANT, #1915)
