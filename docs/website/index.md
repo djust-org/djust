@@ -48,6 +48,7 @@ How to build specific features.
 | **[Declarative UX Attributes](guides/declarative-ux-attrs.md)** | `dj-mutation`, `dj-sticky-scroll`, `dj-track-static` — small attrs that replace custom hooks |
 | **[Runtime Layout Switching](guides/layouts.md)** | `self.set_layout(path)` — swap outer layout without losing inner state |
 | **[Sticky LiveViews](guides/sticky-liveviews.md)**     | `sticky=True` child LiveViews that survive `live_redirect` — audio players, sidebars, notification centers |
+| **[Several LiveViews on One Page](guides/multiple-views.md)** | An eager page view, `dj-lazy` views and a `mount_batch` on one socket, each independently live |
 | **[Sticky-Child State Persistence](guides/sticky-child-persistence.md)** | Persist sticky child LiveView state across WebSocket reconnects — the both-opt-in `enable_state_snapshot` contract |
 | **[Loading States](guides/loading-states.md)**         | Spinners, skeleton screens, disabled states               |
 

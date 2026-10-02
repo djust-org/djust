@@ -2665,7 +2665,7 @@ Source: [decisions and acceptance](037-event-contract-checks-and-executable-docu
     - Over HTTP-only, every embedded-child event reaches the root view: #3104,
       not fixed here. The browser test holds those cases as strict expected
       failures. (Follow-up, drain/adr-followups: the HTTP fallback now refuses
-      those events instead; routing them to the child remains open in #3104.)
+      those events instead. Fixed in #3104: it routes them to the child.)
   - `get_debug_info()` crashes on a property that raises something other than
     `AttributeError`: tracked as #3103, not fixed here. (Fixed in the
     drain/adr-followups follow-up: properties are listed without being run.)
@@ -2784,7 +2784,8 @@ Source: [decisions and acceptance](037-event-contract-checks-and-executable-docu
       and signed state.
     - `test_embedded_directives` passes. Over HTTP-only, every embedded-child
       directive reaches the parent, as #3104 records. (Since the
-      drain/adr-followups follow-up the HTTP fallback refuses them instead.)
+      drain/adr-followups follow-up the HTTP fallback refuses them instead;
+      since #3104 it routes them to the child.)
     - `test_interactive_acceptance` failed once in three runs, on WebSocket only
       (stage 2, a fixed 800 ms wait), and passed on all three transports in the
       next two runs. Tracked as #3137, the same class as #3130.

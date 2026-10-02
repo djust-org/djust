@@ -339,8 +339,10 @@ child through the stamped wrapper. It found two defects the list does not decide
 - Over HTTP-only, every event from an embedded child reached the root view
   (#3104). Since the #3104 follow-up the HTTP fallback refuses such an event
   ("Embedded view not found"), as the socket runtime refuses an unknown
-  `view_id`, and the test expects the refusal. Routing it to the child over
-  HTTP is still open in #3104.
+  `view_id`, and the test expected the refusal. Since #3104 the HTTP fallback
+  routes the event to the child (the id repeats between requests because auto
+  ids are numbered per render over HTTP), and the test expects the child on
+  all three transports.
 
 Row 13's output (N1): `find_handlers_for_template` keeps its JSON keys, computed
 from the D1 extractor and real loader resolution (includes and parents). It gains
@@ -419,12 +421,14 @@ Two limits outside the checks, recorded at D2 and D3:
   665 Python blocks, 8 run as fixtures, 467 are parse- and import-checked
   (`scripts/check-doc-snippets.py` reads `guides/*.md` only), and 190 are not
   checked at all (`scripts/doc-examples-report.py`).
-- **Over HTTP-only, an embedded child's events do not reach the child** (#3104).
-  The HTTP fallback refuses them instead of running them on the root view: an
-  HTTP request registers its children only while it renders, after dispatch,
-  and under new process-wide `child_N` ids, so no child the client addressed
-  exists to route to. `tests/playwright/test_embedded_directives.py` expects
-  the refusal.
+- **Over HTTP-only, an embedded child's events did not reach the child** (#3104,
+  fixed). The HTTP fallback refused them instead of running them on the root
+  view: an HTTP request registers its children only while it renders, after
+  dispatch, and under new process-wide `child_N` ids, so no child the client
+  addressed existed to route to. It now renders the page once to register its
+  children, under ids numbered per render, and runs the event on the child
+  (`docs/website/guides/http-only-mode.md`). An explicit-exposure child, and any
+  child of an explicit-exposure page, is still refused over HTTP.
 
 ## Consequences and non-goals
 

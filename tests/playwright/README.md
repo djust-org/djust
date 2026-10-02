@@ -31,6 +31,8 @@ python tests/playwright/test_draft_mode.py
 - **test_interactive_dropdown.py** - ADR-034 interactive `DropdownMenu`: two same-type server menus, forged selections, client-owned popover observations (click/Escape/outside/keyboard), no-op observers, reconnect reporting (`DROPDOWN_BASE`, default `http://localhost:18438`; standalone)
 - **test_model_form.py** - ADR-035 managed edit object (`ModelFormMixin`) over WebSocket, SSE and HTTP-only: render, field error, save, Back navigation, forged identity, identical denials (`MODEL_FORM_BASE`, default `http://localhost:18437`; standalone, exits non-zero on failure)
 - **test_strict_parameters.py** - ADR-036 strict event parameters over WebSocket, SSE and HTTP-only (`STRICT_BASE`, default `http://localhost:18436`; standalone, exits non-zero on failure)
+- **test_multi_view.py** - #3252: the page view, two lazy views hydrated by one `mount_batch` and a click-hydrated view on one WebSocket answer their own clicks and pushes, and mount again after a reconnect (`MULTI_VIEW_BASE`, default `http://localhost:18439`; standalone, exits non-zero on failure)
+- **test_embedded_directives.py** - ADR-037 row 20 / #3104: `dj-shortcut`, `dj-click-away`, `dj-paste` and `dj-click` inside an embedded `{% live_render %}` child reach the child over WebSocket, SSE and HTTP-only (`EMBEDDED_BASE`, default `http://localhost:18438`; standalone)
 - **test_cache_decorator.py** - Tests @cache decorator client-side caching
 - **test_draft_mode.py** - Tests DraftModeMixin functionality
 

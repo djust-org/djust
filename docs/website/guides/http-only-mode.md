@@ -98,6 +98,19 @@ A view that declares [explicit exposure](../state/explicit-exposure.md) is rebui
 
 A `live_redirect()` or `live_patch()` that a handler queues is returned in the answer's `_navigation` list, in the shape of the WebSocket `navigation` frame, and the client applies it. After a `live_redirect()` nothing is rendered or saved for that request, so a handler can call `logout()` and then redirect. The flip side: a handler that changes state and then calls `live_redirect()` back to the same view's URL does not keep that change over the HTTP fallback, because the state is not saved. A `live_patch()` renders as usual and carries its frame beside the patches.
 
+### Embedded views over the HTTP fallback
+
+An event that comes from inside a `{% live_render %}` child carries the child's `view_id`. Over the page-POST fallback the request renders the page once to register its children, then runs the event on the child, and answers with an `embedded_update` holding the child's own HTML, the frame the WebSocket and SSE transports send. Authorization and parameter checks are the page's own, applied to the child: the page's view-level and object permission, the child's own view-level auth and object permission (checked when the page registers it), `@permission_required` on the handler, `@event_handler` and the handler's parameter policy.
+
+A child's id has to be the same on the page GET and on the POST that follows, so over HTTP the auto-assigned `child_<N>` ids are numbered per render (the process-wide counter used over a socket never repeats between requests). A child pinned with `view_id="..."`, and a sticky child, keep their own ids.
+
+What carries over and what does not:
+
+- A [sticky child that opted in to state persistence](sticky-child-persistence.md) keeps its state across events, saved under its sticky key as on the socket.
+- A child that did not opt in is re-created on each request, as it is on every parent render over HTTP: its state does not accumulate between events.
+- An id that names no child of the page, an [explicit-exposure](../state/explicit-exposure.md) child, and any child of an explicit-exposure page are refused with `{"error": "Embedded view not found"}`. An explicit child's turn is authorized against the mount binding of a socket session, which a stateless request has not.
+- Views mounted beside the page view (lazy and batched views, see [Several LiveViews on One Page](multiple-views.md)) need the WebSocket: the client refuses their events over this fallback instead of posting them to the page.
+
 ## Behavior Differences
 
 | Feature | WebSocket Mode | SSE / HTTP Mode |

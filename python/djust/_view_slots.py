@@ -29,7 +29,6 @@ consumer itself, its frames carry no ``target_id``, and no slot is created.
 
 import inspect
 import logging
-import re
 import types
 from typing import Any, Callable, Dict, List, Optional, TypeGuard
 
@@ -44,9 +43,10 @@ MAX_TARGET_ID_LENGTH = 200
 #: a runtime, a tick task and several channel-layer group memberships.
 DEFAULT_MAX_SLOTS = 64
 
-# Printable ASCII without whitespace or quoting characters. The stock client
-# sends the container's ``id`` or ``dj-target-<random>``.
-_TARGET_ID_RE = re.compile(r"^[A-Za-z0-9_.:\-/@#\[\]=+%~]+$")
+# Printable ASCII with no whitespace, and none of the characters that quote or
+# open markup. The stock client sends the container's ``id`` or
+# ``dj-target-<random>``.
+_FORBIDDEN_TARGET_CHARS = frozenset("\"'`\\<>")
 
 
 def valid_target_id(value: Any) -> TypeGuard[str]:
@@ -54,7 +54,7 @@ def valid_target_id(value: Any) -> TypeGuard[str]:
     return (
         type(value) is str
         and 0 < len(value) <= MAX_TARGET_ID_LENGTH
-        and _TARGET_ID_RE.match(value) is not None
+        and all(0x21 <= ord(c) <= 0x7E and c not in _FORBIDDEN_TARGET_CHARS for c in value)
     )
 
 
