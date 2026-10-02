@@ -26,7 +26,7 @@ the server verifies the HMAC signature, the TTL, and the identity binding
 expired, or cross-view/cross-session snapshot is rejected and the view falls
 back to a normal ``mount()``.
 
-The signed payload binds three things so a valid signature cannot be replayed
+The signed payload binds four things so a valid signature cannot be replayed
 out of context:
 
 - ``slug`` — the view path the snapshot was captured for. A snapshot signed
@@ -36,6 +36,14 @@ out of context:
   onto session S2. When there is no session key on either side (anonymous),
   ``sid`` is ``""`` on both, so the binding degrades to slug-only — but the
   HMAC signature still closes forgery for anonymous users too.
+- ``tenant`` — the tenant scope of the view that captured the snapshot
+  (``"tenant:<id>"`` for a ``TenantMixin`` view, ``""`` for a view that is not
+  tenant-scoped). A snapshot is accepted only by a mount under the tenant that
+  captured it, even with the same session and view path. A tenant view that has
+  resolved no tenant neither mints nor accepts a token. A blob issued before
+  this field existed has no ``tenant`` and counts as ``""``, so it still serves
+  a view that is not tenant-scoped and is refused by a tenant view (one fresh
+  mount, then a new token).
 - ``state`` — the serialized public-state JSON itself.
 
 Both halves (emit + restore) go through this single module so the envelope
@@ -50,6 +58,7 @@ from typing import Optional
 
 from django.conf import settings
 from django.core import signing
+from django.utils.crypto import constant_time_compare
 
 from .log_sanitizer import sanitize_for_log
 
@@ -98,14 +107,22 @@ def _signer() -> signing.TimestampSigner:
     return signing.TimestampSigner(salt=SNAPSHOT_SALT)
 
 
-def sign_snapshot(state_json: str, view_slug: str, session_key: Optional[str]) -> str:
-    """Sign a serialized public-state snapshot, binding it to slug + session.
+def sign_snapshot(
+    state_json: str,
+    view_slug: str,
+    session_key: Optional[str],
+    tenant_scope: str = "",
+) -> str:
+    """Sign a serialized public-state snapshot, binding it to slug + session + tenant.
 
     Args:
         state_json: The ``json.dumps`` string of the view's public state
             (already serialized by ``_capture_snapshot_state`` + ``json.dumps``).
         view_slug: The dotted view path the snapshot was captured for.
         session_key: The Django session key, or ``None``/empty for anonymous.
+        tenant_scope: The view's tenant scope (``""`` for a view that is not
+            tenant-scoped, ``"tenant:<id>"`` otherwise). A caller whose scope
+            is ``None`` (a tenant view with no resolved tenant) must not sign.
 
     Returns:
         An opaque signed string the client stores verbatim and echoes back.
@@ -117,6 +134,7 @@ def sign_snapshot(state_json: str, view_slug: str, session_key: Optional[str]) -
             "slug": view_slug,
             "sid": session_key or "",
             "state": state_json,
+            "tenant": tenant_scope,
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -129,6 +147,7 @@ def unsign_snapshot(
     view_slug: str,
     session_key: Optional[str],
     max_age: Optional[int] = None,
+    tenant_scope: Optional[str] = "",
 ) -> Optional[str]:
     """Verify a signed snapshot and return its inner ``state_json`` string.
 
@@ -205,6 +224,21 @@ def unsign_snapshot(
     if envelope.get("sid", "") != (session_key or ""):
         logger.warning(
             "state_snapshot: session mismatch for %s; rejecting cross-session replay",
+            sanitize_for_log(view_slug),
+        )
+        return None
+
+    # Identity binding — the tenant must match. A blob without the field
+    # predates the binding and is unscoped (""). ``None`` is a tenant view that
+    # resolved no tenant: it accepts nothing.
+    signed_tenant = envelope.get("tenant", "")
+    if (
+        tenant_scope is None
+        or not isinstance(signed_tenant, str)
+        or not constant_time_compare(signed_tenant, tenant_scope)
+    ):
+        logger.warning(
+            "state_snapshot: tenant mismatch for %s; rejecting",
             sanitize_for_log(view_slug),
         )
         return None

@@ -33,6 +33,7 @@ Configuration::
 
 import logging
 from typing import Any, Dict, Optional, TYPE_CHECKING
+from urllib.parse import quote
 
 from .resolvers import TenantInfo, resolve_tenant
 
@@ -165,14 +166,35 @@ class TenantMixin:
             return f"tenant:{self._tenant.id}:{base_key}"
         return base_key
 
+    def _djust_render_only_context_keys(self) -> frozenset:
+        """The tenant key renders but is never saved state.
+
+        A session save drops these keys. Without this the saved ``tenant``
+        value was restored through the ``tenant`` property setter, so the first
+        HTTP fallback POST or reconnect after a save replaced ``self.tenant``
+        with its serialized form.
+        """
+        from ..config import get_djust_config
+
+        parent = getattr(super(), "_djust_render_only_context_keys", None)
+        keys = set(parent()) if callable(parent) else set()
+        keys.add(get_djust_config().get("TENANT_CONTEXT_NAME", self.tenant_context_name))
+        return frozenset(keys)
+
     def get_state_key_prefix(self) -> str:
         """
-        Get prefix for state storage keys.
+        Get the tenant prefix for this view's saved-state key.
 
-        Used by tenant-aware state backends to isolate state per tenant.
+        Saved view state (state backend and Django session) is keyed by it, so
+        one session that reaches two tenants on the same URL keeps two entries.
+        Returns ``"tenant:<id>"``, or ``""`` when no tenant is resolved; the
+        empty string means *no saved state* for this view, never the shared
+        unprefixed key. Override it to change the scope, keeping that rule.
         """
         if self._tenant:
-            return f"tenant:{self._tenant.id}"
+            # Quoted so a ``:`` in the id (header/session/custom resolvers
+            # can produce one) cannot blur where the id ends.
+            return f"tenant:{quote(str(self._tenant.id), safe='')}"
         return ""
 
     # Hook into LiveView lifecycle

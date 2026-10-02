@@ -2392,10 +2392,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # preserving #1466's reconnect-resume capability for opt-in
             # views (``enable_state_snapshot = True``).
             mounted = False
-            view_key = f"liveview_{page_url}"
+            from ._tenant_state import session_view_key
+
+            # None = tenant view with no resolved tenant: restore nothing.
+            view_key = session_view_key(self.view_instance, page_url)
             saved_state = (
                 await request.session.aget(view_key, {})
-                if request.session and getattr(self.view_instance, "enable_state_snapshot", False)
+                if request.session
+                and view_key is not None
+                and getattr(self.view_instance, "enable_state_snapshot", False)
                 else {}
             )
             if has_prerendered or saved_state:
@@ -2489,7 +2494,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
                         signed_blob = state_snapshot.get("state_json", "")
                         session_key = getattr(self.view_instance, "_django_session_key", None)
-                        raw_state = unsign_snapshot(signed_blob, view_path, session_key)
+                        from ._tenant_state import snapshot_tenant_scope
+
+                        raw_state = unsign_snapshot(
+                            signed_blob,
+                            view_path,
+                            session_key,
+                            tenant_scope=snapshot_tenant_scope(self.view_instance),
+                        )
                         if raw_state is None:
                             # Rejected at the signature/identity/TTL gate.
                             # unsign_snapshot already logged the reason.
@@ -2745,6 +2757,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 if callable(snapshot_fn):
                     public_state = await sync_to_async(snapshot_fn)()
                     if isinstance(public_state, dict) and public_state:
+                        from ._tenant_state import snapshot_tenant_scope
                         from .security import sign_snapshot
 
                         # Canonical serialization so the signed bytes are
@@ -2752,9 +2765,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         # json.loads-es after unsigning).
                         state_json = json.dumps(public_state, sort_keys=True, separators=(",", ":"))
                         session_key = getattr(self.view_instance, "_django_session_key", None)
-                        response["state_snapshot_signed"] = sign_snapshot(
-                            state_json, view_path, session_key
-                        )
+                        # Bound to the tenant. A tenant view with no
+                        # resolved tenant (None) mints nothing.
+                        tenant_scope = snapshot_tenant_scope(self.view_instance)
+                        if tenant_scope is not None:
+                            response["state_snapshot_signed"] = sign_snapshot(
+                                state_json, view_path, session_key, tenant_scope
+                            )
         except Exception:  # noqa: BLE001 — snapshot emission must never break mount
             logger.exception(
                 "Failed to emit state_snapshot_signed for %s; proceeding without snapshot",
@@ -3672,7 +3689,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                 )
 
                                 save_path = mount_request.path if mount_request is not None else "/"
-                                save_view_key = f"liveview_{save_path}"
+                                from ._tenant_state import (
+                                    render_only_keys,
+                                    session_view_key as _session_view_key,
+                                )
+
+                                save_view_key = _session_view_key(target_view, save_path)
+                                if save_view_key is None:  # tenant view, no tenant resolved
+                                    return
 
                                 # Save order mirrors HTTP path
                                 # (mixins/request.py:593-609):
@@ -3712,8 +3736,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                 else:
                                     save_context = await sync_to_async(_gcd_save)()
 
+                                _render_only = render_only_keys(target_view)
                                 save_state = {
-                                    k: v for k, v in save_context.items() if not isinstance(v, _LC)
+                                    k: v
+                                    for k, v in save_context.items()
+                                    if not isinstance(v, _LC) and k not in _render_only
                                 }
                                 await save_session.aset(save_view_key, _normalize(save_state))
 
@@ -3795,9 +3822,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                 if save_session is None:
                                     return
 
-                                parent_path = (
-                                    mount_request.path if mount_request is not None else "/"
+                                from ._tenant_state import scoped_path
+
+                                parent_path = scoped_path(
+                                    parent, mount_request.path if mount_request is not None else "/"
                                 )
+                                if parent_path is None:  # tenant parent, no tenant resolved
+                                    return
 
                                 await save_sticky_child_state(
                                     target_view, save_session, parent_path

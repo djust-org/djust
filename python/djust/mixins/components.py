@@ -108,7 +108,11 @@ class ComponentMixin:
         """
         from ..components.base import Component, LiveComponent
 
-        view_key = f"liveview_{request.path}"
+        from .._tenant_state import session_view_key
+
+        view_key = session_view_key(self, request.path)
+        if view_key is None:  # tenant view, no tenant resolved: save nothing
+            return
         component_state = {}
 
         for key, component in context.items():
