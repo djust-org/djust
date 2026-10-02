@@ -1369,3 +1369,29 @@ async def test_a_slot_of_a_tenant_view_with_no_tenant_saves_nothing():
         await _close(communicator)
     saved = await sync_to_async(_saved_counts)(key)
     assert not any("slot:t-1" in k for k in saved), saved
+
+
+class Scoped(_Counted, LiveView):
+    template = '<div dj-root dj-view="' + MOD + '.Scoped"><b>s {{ count }}</b></div>'
+    push_scope = "r1"
+
+    @event_handler()
+    def go_r2(self, **kwargs):
+        self.push_scope = "r2"
+
+
+async def test_a_view_leaving_a_push_scope_leaves_the_other_view_in_it():
+    """Review of #3333 (N2): the scoped group is the channel's, shared by every
+    view in the scope: one view moving to another scope must not drop it."""
+    communicator = await _connect()
+    try:
+        await _mount_page(communicator, Scoped)
+        await _hydrate(communicator, Scoped, "s2")
+        await _event(communicator, "go_r2")  # the page view moves; the slot stays in r1
+        EVENTS.clear()
+        await apush_to_view(MOD + ".Scoped", handler="on_push", scope="r1")
+        frames = await _frames_until(communicator, "patch", "html_update", timeout=5)
+        assert frames[-1]["target_id"] == "s2"
+        assert [e[0] for e in EVENTS] == ["pushed"]
+    finally:
+        await _close(communicator)

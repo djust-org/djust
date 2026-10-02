@@ -151,9 +151,13 @@ async def sync_push_scope_groups(consumer: Any, view: Any) -> None:
     if channel_layer is None or (not wanted and not joined):
         return
     current = dict(joined)
+    # A group another view of the socket still names stays joined: the channel
+    # is one member of it for every view (#3252).
+    kept = _groups_of_other_views(consumer)
     for key in sorted(set(current) - wanted):
         try:
-            await channel_layer.group_discard(current[key], consumer.channel_name)
+            if current[key] not in kept:
+                await channel_layer.group_discard(current[key], consumer.channel_name)
         except Exception:  # noqa: BLE001 - kept, so the next sync retries the leave
             logger.warning("Error leaving a scoped push group of %s", view_path)
             continue
@@ -167,6 +171,12 @@ async def sync_push_scope_groups(consumer: Any, view: Any) -> None:
             continue
         current[key] = group
     consumer._push_scope_groups = current
+
+
+def _groups_of_other_views(consumer: Any) -> set:
+    from .runtime import _groups_of_other_views as groups
+
+    return groups(consumer)
 
 
 def _presence_probe(view: Any, need_key: bool, need_count: bool) -> tuple:
@@ -246,7 +256,8 @@ async def _sync_presence_scope_group(
         return
     if current:
         try:
-            await channel_layer.group_discard(current, consumer.channel_name)
+            if current not in _groups_of_other_views(consumer):
+                await channel_layer.group_discard(current, consumer.channel_name)
         except Exception:  # noqa: BLE001 - kept, so the next sync retries the leave
             logger.warning("Error leaving the presence-scope group of %s", view_path)
             return

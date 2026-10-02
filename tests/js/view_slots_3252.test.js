@@ -490,8 +490,57 @@ describe('a container that leaves the page', () => {
     it('unmounts its view on the server, and only that one', async () => {
         const { socket, doc, win } = await pageWithHydratedLazies();
         doc.getElementById('w1').remove();
-        await tick(250);
+        await tick(1400);
         expect(sentOf(socket, 'unmount')).toEqual([{ type: 'unmount', target_id: 'w1' }]);
         expect(win.djust.viewSlots.mounted()).toEqual(['w2']);
+    });
+
+    it('keeps its view when it comes back within the grace period', async () => {
+        const { socket, doc, win } = await pageWithHydratedLazies();
+        const container = doc.getElementById('w1');
+        const parent = container.parentNode;
+        container.remove();
+        await tick(250);
+        parent.appendChild(container);
+        await tick(1400);
+        expect(sentOf(socket, 'unmount')).toEqual([]);
+        expect(win.djust.viewSlots.mounted().sort()).toEqual(['w1', 'w2']);
+    });
+
+    it('keeps its view when a fresh element with its address replaces it', async () => {
+        const { socket, doc, win } = await pageWithHydratedLazies();
+        const container = doc.getElementById('w1');
+        const fresh = container.cloneNode(true);
+        container.replaceWith(fresh);
+        await tick(1400);
+        expect(sentOf(socket, 'unmount')).toEqual([]);
+        expect(win.djust.viewSlots.mounted().sort()).toEqual(['w1', 'w2']);
+    });
+});
+
+describe('events from a container whose view was unmounted', () => {
+    it('keep its address, so the server refuses them rather than the page view running them', async () => {
+        const { socket, doc, win } = await pageWithHydratedLazies();
+        await serve(socket, mountFrame('app.Widget', 4,
+            '<button id="w1-btn" dj-click="bump" dj-id="1">+</button>', { target_id: 'w1' }));
+        win.djust.liveViewInstance.unmountView('w1');
+        expect(win.djust.viewSlots.mounted()).toEqual(['w2']);
+        doc.getElementById('w1-btn').click();
+        await tick();
+        const events = sentOf(socket, 'event');
+        expect(events.map((e) => [e.event, e.target_id])).toEqual([['bump', 'w1']]);
+    });
+
+    it('are not sent to the page over the HTTP fallback either', async () => {
+        const { socket, doc, win } = await pageWithHydratedLazies();
+        await serve(socket, mountFrame('app.Widget', 4,
+            '<button id="w1-btn" dj-click="bump" dj-id="1">+</button>', { target_id: 'w1' }));
+        win.djust.liveViewInstance.unmountView('w1');
+        let fetched = 0;
+        win.fetch = () => { fetched += 1; return Promise.resolve({ ok: true, json: () => ({}) }); };
+        socket.readyState = 3;
+        doc.getElementById('w1-btn').click();
+        await tick(40);
+        expect(fetched).toBe(0);
     });
 });

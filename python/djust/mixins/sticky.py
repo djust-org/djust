@@ -22,12 +22,15 @@ minimal makes the diff reviewable.
 
 from __future__ import annotations
 
-import hashlib
+import datetime
+import decimal
+import enum
 import inspect
 import itertools
 import logging
 import re
-from typing import Any, Dict, Optional
+import uuid
+from typing import Any, Callable, Dict, Optional, Union
 
 from asgiref.sync import async_to_sync, sync_to_async
 
@@ -54,13 +57,20 @@ def _canonical_kwarg(value: Any, depth: int = 0) -> str:
     """
     if value is None or isinstance(value, (bool, int, float, str, bytes)):
         return repr(value)
+    if isinstance(value, (datetime.date, datetime.time, decimal.Decimal, uuid.UUID, enum.Enum)):
+        # By value, with the type: ``Decimal(1)`` and ``date(1, 1, 1)`` differ,
+        # and so do two dates.
+        return f"<{type(value).__qualname__}:{value}>"
     if depth < 4:
         if isinstance(value, (list, tuple)):
             return "[" + ",".join(_canonical_kwarg(v, depth + 1) for v in value) + "]"
         if isinstance(value, (set, frozenset)):
             return "{" + ",".join(sorted(_canonical_kwarg(v, depth + 1) for v in value)) + "}"
         if isinstance(value, dict):
-            items = sorted((str(k), _canonical_kwarg(v, depth + 1)) for k, v in value.items())
+            items = sorted(
+                (_canonical_kwarg(k, depth + 1), _canonical_kwarg(v, depth + 1))
+                for k, v in value.items()
+            )
             return "{" + ",".join(f"{k}:{v}" for k, v in items) + "}"
         meta = getattr(value, "_meta", None)
         label = getattr(meta, "label_lower", None)
@@ -73,11 +83,18 @@ def _canonical_kwarg(value: Any, depth: int = 0) -> str:
 def _child_identity(view_path: str, kwargs: Dict[str, Any]) -> str:
     """What a ``{% live_render %}`` child is: its view path and the kwargs it was given.
 
-    Twelve hex digits of a digest of both. Two tags with the same view and the
-    same arguments have one identity; a tag with other arguments, another.
+    Twelve hex digits of a keyed digest (HMAC with the project's ``SECRET_KEY``)
+    of both. Two tags with the same view and the same arguments have one
+    identity; a tag with other arguments, another. The id reaches the browser,
+    so the digest is keyed: an unkeyed one would let a client confirm guesses
+    about arguments it cannot see (a low-entropy primary key, a session key).
+    The key is the same in every process, so the id repeats between requests.
     """
+    from django.utils.crypto import salted_hmac
+
     text = view_path + "|" + ",".join(f"{k}={_canonical_kwarg(kwargs[k])}" for k in sorted(kwargs))
-    return hashlib.blake2b(text.encode("utf-8", "replace"), digest_size=6).hexdigest()
+    digest: str = salted_hmac("djust.child_identity", text, algorithm="sha256").hexdigest()
+    return digest[:12]
 
 
 # ---------------------------------------------------------------------------
@@ -469,7 +486,9 @@ class StickyChildRegistry:
     # ------------------------------------------------------------------
 
     def _assign_view_id(
-        self, preferred: Optional[str] = None, identity: Optional[str] = None
+        self,
+        preferred: Optional[str] = None,
+        identity: Union[str, Callable[[], str], None] = None,
     ) -> str:
         """Return a unique ``view_id`` for a new child.
 
@@ -493,7 +512,9 @@ class StickyChildRegistry:
         per_render = self.__dict__.get("_render_child_ids")
         if per_render is not None:
             if identity:
-                base = f"child_{identity}"
+                # A callable is only run here: over a socket the id is the
+                # counter's and the (possibly large) arguments are not hashed.
+                base = f"child_{identity() if callable(identity) else identity}"
                 candidate, n = base, 1
                 while candidate in registry:
                     n += 1

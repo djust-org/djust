@@ -2745,7 +2745,7 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
     view_id = (
         explicit_slot
         if explicit_slot is not None
-        else parent._assign_view_id(preferred_view_id, child_identity(view_path, kwargs))
+        else parent._assign_view_id(preferred_view_id, lambda: child_identity(view_path, kwargs))
     )
     parent._register_child(view_id, child)
 

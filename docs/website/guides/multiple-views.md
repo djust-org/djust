@@ -29,6 +29,8 @@ They share one WebSocket. Each is a LiveView of its own on it: it has its own st
 <div id="chat" dj-view="myapp.views.ChatWidget" dj-lazy="click"></div>
 ```
 
+Put a lazy container **beside** the page view's `dj-root`, as in the example, not inside it. A page mount morphs the root's content and strips the `data-djust-target` the client set on a container inside it, so the lazy view's mount reply finds no target (the client logs `mount: target not found` and unmounts it).
+
 ## What each view gets
 
 | | |
@@ -41,7 +43,7 @@ They share one WebSocket. Each is a LiveView of its own on it: it has its own st
 | **Tick, async work** | `tick_interval` / `handle_tick` and `start_async` work run per view, and their updates go to that view's container. |
 | **Uploads** | A file input (`dj-upload`, `dj-upload-drop`, `dj-paste`) inside a lazy view registers its upload with that view, so the view's `allow_upload` slots apply. The binary chunks carry the upload's `ref` and reach the view that registered it. |
 | **Hooks** | `this.pushEvent()` in a `dj-hook` inside a lazy view runs the event on that view. |
-| **Teardown** | Navigating (`live_redirect`), a new page mount or a disconnect tears every view down. Removing a container from the page tears down just its view: the client sends [`unmount`](#unmounting-a-view) for it a moment after it leaves the document. |
+| **Teardown** | Navigating (`live_redirect`), a new page mount or a disconnect tears every view down. Removing a container from the page tears down just its view: the client sends [`unmount`](#unmounting-a-view) for it once it has stayed out of the document for about a second (a container a morph or a view transition puts back in time keeps its view). |
 
 A view replaced by a new mount of the same container (hydrating `#stats` again) is torn down on its own.
 
@@ -56,7 +58,7 @@ Every view on the socket has an address, the `target_id` of its container. The s
 - The page view has no address. A frame that names none is for the page view, so a page with no lazy views behaves exactly as before and its frames are unchanged.
 - A `mount` frame with a `target_id` adds a view beside the others. A `mount` without one is the page view's own mount and replaces every view on the socket, as `live_redirect` does.
 - Each `mount_batch` entry names its container with `target_id`.
-- The client puts `target_id` on every frame it sends for an element inside a lazy view's container: `event` frames (clicks, `dj-input`, `dj-model`, `dj-poll`, forms, `dj-hook` `pushEvent`, `djust.js` commands run from an element), `request_html`, `upload_register` and `upload_resume`. The server puts it on every frame a lazy view sends (`patch`, `html_update`, `html_recovery`, `noop`, `error`, `embedded_update`, ...). Binary upload chunk, complete and cancel frames carry only the upload's `ref`; the server resolves it to the view that registered it. Page-level frames (`navigate`, `flash`, `page_metadata`, `push_event`, ...) are not stamped. The server puts it on every frame a lazy view sends (`patch`, `html_update`, `html_recovery`, `noop`, `error`, `embedded_update`, ...). Page-level frames (`navigate`, `flash`, `page_metadata`, `push_event`, ...) are not stamped.
+- The client puts `target_id` on every frame it sends for an element inside a lazy view's container: `event` frames (clicks, `dj-input`, `dj-model`, `dj-poll`, forms, `dj-hook` `pushEvent`, `djust.js` commands run from an element), `request_html`, `upload_register` and `upload_resume`. The server puts it on every frame a lazy view sends (`patch`, `html_update`, `html_recovery`, `noop`, `error`, `embedded_update`, ...). Binary upload chunk, complete and cancel frames carry only the upload's `ref`; the server resolves it to the view that registered it. Page-level frames (`navigate`, `flash`, `page_metadata`, `push_event`, ...) are not stamped.
 - Each view numbers its own VDOM frames: the client keeps one cursor per container, so a gap in one view asks for that view's recovery HTML and not the page's.
 - A frame that names a view that is not mounted (torn down, forged, never mounted) is refused. It is never answered by another view.
 
@@ -68,7 +70,7 @@ An older client that predates `target_id` sends events with none: they go to the
 window.djust.liveViewInstance.unmountView("stats");
 ```
 
-sends `{"type": "unmount", "target_id": "stats"}`. The server releases that view (its groups, its tick, its waiters, its presence, its uploads) and leaves the others live. Unmounting a view that is not mounted does nothing. The client calls it for you when a view's container is removed from the document; call it yourself to release a view whose container stays.
+sends `{"type": "unmount", "target_id": "stats"}`. The server releases that view (its groups, its tick, its waiters, its presence, its uploads) and leaves the others live. Unmounting a view that is not mounted does nothing. The client calls it for you when a view's container is removed from the document; call it yourself to release a view whose container stays. An event from inside a container whose view was unmounted keeps the container's address and is refused; it never runs on the page view.
 
 Two views that share a channel-layer group (two views of one class, the same `listen()` channel, the same presence key) each keep it until the last of them goes: unmounting one does not silence the other.
 

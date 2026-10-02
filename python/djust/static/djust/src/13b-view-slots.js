@@ -42,15 +42,17 @@ function slotContainer(targetId) {
 }
 
 /**
- * The slot an element belongs to: its nearest `[dj-view][data-djust-target]`
- * ancestor, when the server has mounted a view there. Null for the page view.
- * An event from inside a slot is addressed to it with this.
+ * The slot an element belongs to: the address of its nearest
+ * `[dj-view][data-djust-target]` ancestor, whether or not a view is mounted
+ * there now. Null for the page view. An event from inside a slot is addressed
+ * to it with this; if its view was unmounted, the server refuses the address,
+ * where leaving it off would run the event on the page view.
  */
 function slotIdFor(element) {
-    if (!element || typeof element.closest !== 'function' || _mountedSlots.size === 0) return null;
+    if (!element || typeof element.closest !== 'function') return null;
     const container = element.closest('[dj-view][data-djust-target]');
     const id = container && container.getAttribute('data-djust-target');
-    return id && _mountedSlots.has(id) ? id : null;
+    return id || null;
 }
 
 /**
@@ -79,23 +81,45 @@ function registerSlot(targetId, viewPath, version) {
 
 // A container that leaves the document takes its view with it: the server is
 // told, so the view's groups, presence, tick and uploads go (and its place in
-// the connection's cap is freed). Checked a moment after the DOM settles, so a
-// morph that moves a container is not taken for its removal.
+// the connection's cap is freed). A mistaken unmount is a dead view, so a
+// container is given time to come back first: a morph or a view transition can
+// detach a container and put it (or a fresh element with its address) back a
+// moment later. A container missing at one check is unmounted only if it is
+// still missing at the next, a grace period later.
 let _slotWatcher = null;
 let _slotSweepTimer = null;
 const SLOT_SWEEP_DELAY_MS = 100;
+const SLOT_UNMOUNT_GRACE_MS = 1000;
+
+function _missingSlots() {
+    return Array.from(_mountedSlots.keys()).filter((id) => !slotContainer(id));
+}
 
 function _sweepSlotContainers() {
     _slotSweepTimer = null;
+    const missing = _missingSlots();
+    if (missing.length) {
+        _slotSweepTimer = setTimeout(() => _confirmSlotRemoval(missing), SLOT_UNMOUNT_GRACE_MS);
+        return;
+    }
+    _stopWatchingIfIdle();
+}
+
+function _confirmSlotRemoval(candidates) {
+    _slotSweepTimer = null;
     const instance = window.djust && window.djust.liveViewInstance;
-    for (const id of Array.from(_mountedSlots.keys())) {
-        if (slotContainer(id)) continue;
+    for (const id of candidates) {
+        if (!_mountedSlots.has(id) || slotContainer(id)) continue;
         if (instance && typeof instance.unmountView === 'function') {
             instance.unmountView(id);
         } else {
             forgetSlot(id);
         }
     }
+    _stopWatchingIfIdle();
+}
+
+function _stopWatchingIfIdle() {
     if (_mountedSlots.size === 0 && _slotWatcher) {
         _slotWatcher.disconnect();
         _slotWatcher = null;

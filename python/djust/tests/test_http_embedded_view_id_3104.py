@@ -522,3 +522,45 @@ def test_a_model_argument_names_the_row_not_the_python_object(user):
 
     same_row = User.objects.get(pk=user.pk)
     assert _child_identity("a.B", {"u": user}) == _child_identity("a.B", {"u": same_row})
+
+
+@pytest.mark.django_db
+def test_the_identity_is_keyed_and_tells_decimals_and_dates_apart(settings):
+    import datetime
+    import decimal
+
+    from djust.mixins.sticky import _child_identity
+
+    assert _child_identity("a.B", {"d": decimal.Decimal(1)}) != _child_identity(
+        "a.B", {"d": decimal.Decimal(2)}
+    )
+    assert _child_identity("a.B", {"d": datetime.date(2026, 1, 1)}) != _child_identity(
+        "a.B", {"d": datetime.date(2026, 1, 2)}
+    )
+    assert _child_identity("a.B", {"k": {1: "a"}}) != _child_identity("a.B", {"k": {"1": "a"}})
+    # Keyed: another SECRET_KEY names the same child differently, so a client
+    # cannot confirm a guessed argument by hashing it.
+    settings.SECRET_KEY = "one-key"
+    first = _child_identity("a.B", {"pk": 5})
+    assert first == _child_identity("a.B", {"pk": 5})
+    settings.SECRET_KEY = "another-key"
+    assert _child_identity("a.B", {"pk": 5}) != first
+
+
+@pytest.mark.django_db
+def test_the_identity_is_not_computed_when_ids_come_from_the_counter(monkeypatch):
+    """Over a socket the id is the counter's: the tag's arguments are not hashed."""
+    from djust.mixins import sticky
+
+    calls = []
+    monkeypatch.setattr(sticky, "_child_identity", lambda *a: calls.append(a) or "x" * 12)
+    parent = Page()
+    assert parent._assign_view_id(None, lambda: sticky._child_identity("a", {})).startswith(
+        "child_"
+    )
+    assert calls == []
+    parent.__dict__["_render_child_ids"] = __import__("itertools").count(1)
+    assert (
+        parent._assign_view_id(None, lambda: sticky._child_identity("a", {})) == "child_" + "x" * 12
+    )
+    assert len(calls) == 1
