@@ -626,6 +626,11 @@ def _view_document_source(view: Any) -> Optional[str]:
     template_name = getattr(view, "template_name", None)
     if not template_name:
         return None
+    return template_source(template_name)
+
+
+def template_source(template_name: str) -> str:
+    """The source of ``template_name`` with inheritance flattened."""
     from django.template import loader
 
     source = loader.get_template(template_name).template.source
@@ -2318,6 +2323,12 @@ class WSConsumerTransport:
         (#3036), so the runtime records the page's document ``<title>``."""
         return bool(getattr(self._consumer, "_live_redirect_mounting", False))
 
+    @property
+    def capture_page_shell(self) -> bool:
+        """True while the consumer mounts a ``live_redirect`` destination
+        (#3036), so the mount frame carries its page-shell fingerprint."""
+        return bool(getattr(self._consumer, "_live_redirect_mounting", False))
+
     async def on_mount_failed(self, view: Any) -> None:
         """Stop the tick task ``on_view_mounted`` started for a view whose
         mount then failed (#3027). Only a task still ticking for THIS view is
@@ -2381,6 +2392,12 @@ class SSESessionTransport:
     @property
     def _client_ip(self) -> Optional[str]:
         return self.client_ip
+
+    @property
+    def capture_page_shell(self) -> bool:
+        """True while the session mounts a ``live_redirect_mount`` destination
+        (#3036), so the mount frame carries its page-shell fingerprint."""
+        return bool(getattr(self._session, "_replacing_view", False))
 
     async def send(self, data: Dict[str, Any]) -> None:
         # SSESession.push is a sync method (it uses queue.put_nowait).
@@ -3741,6 +3758,15 @@ class ViewRuntime:
         ):
             self.mount_document_title = await sync_to_async(navigation_title)(view_instance)
 
+        # #3036: a live_redirect mount also names the destination's page
+        # shell, so the client can fall back to a full load when the document
+        # it holds loads different stylesheets or scripts. See ``_page_shell``.
+        page_shell_fingerprint: Optional[str] = None
+        if getattr(self.transport, "capture_page_shell", False):
+            from ._page_shell import page_shell
+
+            page_shell_fingerprint = await sync_to_async(page_shell)(view_instance)
+
         # ---- Post-render mount hook (#1917, Finding B residual) ----
         # ``on_mount_render_ready`` runs AFTER the render produced ``html`` but
         # BEFORE the mount frame is sent, so a transport can adjust the outgoing
@@ -3779,6 +3805,8 @@ class ViewRuntime:
             "view": view_path,
             "version": version,
         }
+        if page_shell_fingerprint:
+            mount_msg["page_shell"] = page_shell_fingerprint
 
         # has_prerendered / skip_html_for_resume (ADR-022 Iter 3 Phase 3.0 grow,
         # WS websocket.py:2804-2816). When the client carries pre-rendered HTML

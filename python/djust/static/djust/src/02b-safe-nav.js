@@ -108,4 +108,59 @@
     }
 
     window.djust.safeNavigationTarget = safeNavigationTarget;
+
+    // ------------------------------------------------------------------
+    // Page-shell fallback (#3036)
+    // ------------------------------------------------------------------
+    //
+    // A live navigation swaps only the dj-root, so the document around it (the
+    // <head> stylesheets and scripts, scripts outside the root) stays the
+    // PREVIOUS page's. The server renders the current page's shell fingerprint
+    // into <meta name="djust-page-shell"> and sends the destination's on the
+    // `mount` frame that answers a live_redirect_mount (dj-navigate,
+    // live_redirect, back/forward). When the two differ the destination cannot
+    // render correctly in place, so we do a normal page load of the URL the
+    // address bar already holds (history.replaceState/pushState ran before the
+    // mount was requested), replacing that entry rather than adding another.
+    //
+    // No loop: only a live_redirect_mount reply carries `page_shell`, and the
+    // full load that follows mounts normally. No open redirect: the target is
+    // never read from the frame; it is our own current URL, validated by the
+    // same guard as every other navigation sink.
+
+    function pageShellMismatch(frame) {
+        if (!frame || typeof frame.page_shell !== 'string' || frame.page_shell === '') return false;
+        const meta = document.querySelector('meta[name="djust-page-shell"]');
+        const current = meta ? meta.getAttribute('content') : null;
+        // A page without a fingerprint (not rendered by djust, or no <head>)
+        // keeps the in-place swap, exactly as before.
+        if (!current) return false;
+        return current !== frame.page_shell;
+    }
+
+    // The one place a shell mismatch leaves the page; a seam so tests can
+    // observe it (jsdom cannot navigate).
+    window.djust._fullPageLoad = function (url) {
+        window.location.replace(url); // codeql[js/xss] -- validated via safeNavigationTarget
+    };
+
+    /**
+     * Returns true (and starts a full page load) when ``frame`` is a mount
+     * reply whose page shell differs from the document's. The caller must
+     * then drop the frame instead of applying it.
+     */
+    function fallBackToFullLoadOnShellChange(frame) {
+        if (!frame || frame.type !== 'mount' || !pageShellMismatch(frame)) return false;
+        const safe = safeNavigationTarget(
+            window.location.pathname + window.location.search + window.location.hash
+        );
+        if (!safe) return false;
+        if (globalThis.djustDebug) {
+            console.log('[djust] page shell differs from the destination, full page load: %s', safe);
+        }
+        window.djust._fullPageLoad(safe);
+        return true;
+    }
+
+    window.djust.fallBackToFullLoadOnShellChange = fallBackToFullLoadOnShellChange;
 })();
