@@ -228,6 +228,13 @@ def test_tailwind_docs_explain_text_destructive():
     assert "bg-destructive" in doc and "text-destructive`" in doc
 
 
+def test_docs_say_to_override_both_tokens_and_state_the_surface_limit():
+    doc = " ".join((REPO / "docs/website/guides/accessibility.md").read_text().split())
+    assert "override `--destructive-text` too" in doc
+    assert "extra_css_vars" in doc
+    assert "`muted`, `accent` or `secondary`" in doc
+
+
 # --- 3. the demo project -------------------------------------------------------
 
 
