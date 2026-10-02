@@ -65,10 +65,15 @@
         `;
 
         // Set content with icon
-        toast.innerHTML = `
-            <span style="font-size: 16px;">${color.icon}</span>
-            <span>${message}</span>
-        `;
+        // Built with DOM nodes + textContent: `message` can carry server- or
+        // file-derived text and must never be parsed as markup.
+        const iconSpan = document.createElement('span');
+        iconSpan.style.fontSize = '16px';
+        iconSpan.textContent = color.icon;
+        const messageSpan = document.createElement('span');
+        messageSpan.textContent = String(message);
+        toast.appendChild(iconSpan);
+        toast.appendChild(messageSpan);
 
         container.appendChild(toast);
 

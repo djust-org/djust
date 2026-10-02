@@ -1,10 +1,4 @@
 
-        escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
-
         renderPerformanceTree(performance) {
             if (!performance || !performance.timing) {
                 return '';
@@ -19,7 +13,7 @@
                 // Node header with timing
                 html += '<div class="timing-node-header">';
                 html += '<span class="timing-node-prefix">' + prefix + '</span>';
-                html += '<span class="timing-node-name">' + node.name + '</span>';
+                html += '<span class="timing-node-name">' + this.escapeHtml(node.name) + '</span>';
 
                 if (node.duration_ms) {
                     let colorClass = 'timing-fast';
@@ -42,16 +36,16 @@
                     html += '<div class="timing-warnings-details">';
                     node.warnings.forEach(warning => {
                         const severityClass = this.getWarningSeverity(warning.type || 'unknown');
-                        html += '<div class="timing-warning-item ' + severityClass + '">';
+                        html += '<div class="timing-warning-item ' + this.escapeHtml(severityClass) + '">';
                         html += '<div class="timing-warning-header">';
                         html += '<span class="timing-warning-type">' + this.getWarningIcon(warning.type) + ' ';
                         html += this.formatWarningType(warning.type) + '</span>';
                         html += '</div>';
-                        html += '<div class="timing-warning-message">' + warning.message + '</div>';
+                        html += '<div class="timing-warning-message">' + this.escapeHtml(warning.message) + '</div>';
 
                         // Handle legacy single recommendation
                         if (warning.recommendation) {
-                            html += '<div class="timing-warning-recommendation">💡 ' + warning.recommendation + '</div>';
+                            html += '<div class="timing-warning-recommendation">💡 ' + this.escapeHtml(warning.recommendation) + '</div>';
                         }
 
                         // Handle new recommendations array with detailed info
@@ -61,7 +55,7 @@
 
                         // Add docs link if available
                         if (warning.docs_url) {
-                            html += '<a href="' + warning.docs_url + '" target="_blank" class="timing-warning-docs-link">📖 View documentation</a>';
+                            html += '<a href="' + this.safeHref(warning.docs_url) + '" target="_blank" rel="noopener noreferrer" class="timing-warning-docs-link">📖 View documentation</a>';
                         }
 
                         html += '</div>';
@@ -74,7 +68,7 @@
                     if (node.metadata.query_count) {
                         html += '<div class="timing-metadata">';
                         html += '<span class="metadata-label">Queries:</span> ';
-                        html += '<span class="metadata-value">' + node.metadata.query_count + '</span>';
+                        html += '<span class="metadata-value">' + this.escapeHtml(node.metadata.query_count) + '</span>';
                         html += ' <span class="metadata-detail">(' +
                                 (node.metadata.query_time_ms || 0).toFixed(1) + 'ms)</span>';
                         html += '</div>';
@@ -84,7 +78,7 @@
                         const mem = node.metadata.memory;
                         html += '<div class="timing-metadata">';
                         html += '<span class="metadata-label">Memory:</span> ';
-                        html += '<span class="metadata-value">+' + mem.delta_mb + 'MB</span>';
+                        html += '<span class="metadata-value">+' + this.escapeHtml(mem.delta_mb) + 'MB</span>';
                         html += '</div>';
                     }
                 }
@@ -118,10 +112,23 @@
 
         escapeHtml(str) {
             if (str === null || str === undefined) return '';
-            const text = String(str);
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
+            // Escapes & < > " ' so the result is safe in both text and
+            // quoted-attribute positions. Always pass RAW values: escaping an
+            // already-escaped string would double-escape it.
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        // Escaped URL for an href attribute; anything that is not http(s) or a
+        // relative URL (e.g. javascript:) is replaced with '#'.
+        safeHref(url) {
+            const u = String(url == null ? '' : url).trim();
+            if (/^(https?:\/\/|\/|#|\.)/i.test(u)) return this.escapeHtml(u);
+            return '#';
         }
 
         renderElementBadge(element) {
@@ -132,7 +139,7 @@
                 label = `#${element.id}`;
             } else if (element.className) {
                 // Get first class name
-                const firstClass = element.className.split(' ')[0];
+                const firstClass = String(element.className).split(' ')[0];
                 label = `.${firstClass}`;
             }
 
@@ -140,9 +147,10 @@
             tooltip.push(`<${element.tagName}>`);
             if (element.id) tooltip.push(`id="${element.id}"`);
             if (element.className) tooltip.push(`class="${element.className}"`);
-            if (element.text) tooltip.push(`text="${element.text.substring(0, 30)}..."`);
+            if (element.text) tooltip.push(`text="${String(element.text).substring(0, 30)}..."`);
 
-            return `<span class="element-badge" title="${tooltip.join(' ')}">${label}</span>`;
+            // Values above are raw; escape once, at the sink (title is an attribute).
+            return `<span class="element-badge" title="${this.escapeHtml(tooltip.join(' '))}">${this.escapeHtml(label)}</span>`;
         }
 
         renderTimingBadges(timing) {

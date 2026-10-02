@@ -28,8 +28,8 @@
                             <div class="patch-item ${hasDetails ? 'expandable' : ''}" data-index="${index}">
                                 <div class="patch-header" ${hasDetails ? 'onclick="window.djustDebugPanel.toggleExpand(this)"' : ''}>
                                     ${hasDetails ? '<span class="expand-icon">▶</span>' : ''}
-                                    <span class="patch-count">${entry.count} patch${entry.count === 1 ? '' : 'es'}</span>
-                                    <span class="patch-types">[${patchTypes.join(', ')}]</span>
+                                    <span class="patch-count">${this.escapeHtml(entry.count)} patch${entry.count === 1 ? '' : 'es'}</span>
+                                    <span class="patch-types">[${this.escapeHtml(patchTypes.join(', '))}]</span>
                                     ${this.renderTimingBadges(entry.timing)}
                                     <span class="patch-time">${this.formatTime(entry.timestamp)}</span>
                                 </div>
@@ -39,13 +39,13 @@
                                         ${entry.patches.map((patch, pIdx) => `
                                             <div class="patch-op">
                                                 <span class="patch-index">#${pIdx + 1}</span>
-                                                <span class="patch-type">${patch.type || patch.op || 'unknown'}</span>
-                                                ${patch.path ? `<span class="patch-path">${patch.path}</span>` : ''}
+                                                <span class="patch-type">${this.escapeHtml(patch.type || patch.op || 'unknown')}</span>
+                                                ${patch.path ? `<span class="patch-path">${this.escapeHtml(patch.path)}</span>` : ''}
                                                 ${patch.value ? `
                                                     <div class="patch-value">
-                                                        <pre>${typeof patch.value === 'string' ?
+                                                        <pre>${this.escapeHtml(typeof patch.value === 'string' ?
                                                             (patch.value.length > 200 ? patch.value.substring(0, 200) + '...' : patch.value) :
-                                                            JSON.stringify(patch.value, null, 2)}</pre>
+                                                            JSON.stringify(patch.value, null, 2))}</pre>
                                                     </div>
                                                 ` : ''}
                                             </div>
