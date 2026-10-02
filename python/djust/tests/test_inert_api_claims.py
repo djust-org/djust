@@ -15,6 +15,7 @@ teaches `@client_state` as a working feature fails this test.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -415,6 +416,15 @@ def test_wired_decorators_are_not_marked_inert() -> None:
 CLIENT_SRC = ROOT / "python" / "djust" / "static" / "djust" / "src"
 
 
+def _js_code(path: Path) -> str:
+    """A client source file with whole-line `//` and `*` comments dropped."""
+    return "\n".join(
+        ln
+        for ln in path.read_text(encoding="utf-8").splitlines()
+        if not ln.lstrip().startswith(("//", "*", "/*"))
+    )
+
+
 def _dj_submit_description() -> str:
     from djust.schema import DIRECTIVES
 
@@ -484,9 +494,33 @@ def test_dj_target_is_documented_as_inert_where_agents_read_it() -> None:
         "dj-target is dropped by the client; its schema.py description must say it is inert"
     )
 
-    handler = (CLIENT_SRC / "11-event-handler.js").read_text(encoding="utf-8")
-    assert "key === '_djTargetSelector'" in handler, (
-        "the client may now send dj-target's selector; re-check dj-target's description"
+    # The marker must travel with the pasteable snippet, not only the description
+    # (#2696): an agent copies `example`, not the sentence above it.
+    assert "INERT" in str(entry.get("example", "")), (
+        "dj-target's schema.py `example` is what an agent pastes; it must carry the "
+        "INERT marker (or be dropped). A marker in `description` does not travel with it."
+    )
+
+    # Where the selector lives in the client. Pinning a literal strip expression
+    # (`key === '_djTargetSelector'`) failed on a harmless refactor of the strip
+    # site, and could not see a NEW consumer added before it. Pin the census
+    # instead: the identifier is written by the three binders and named exactly
+    # once more, by the strip site. A fifth occurrence is a consumer, and the
+    # claim "dropped before the event is sent" needs re-checking.
+    census = {
+        path.name: len(re.findall(r"_djTargetSelector", _js_code(path)))
+        for path in sorted(CLIENT_SRC.glob("*.js"))
+    }
+    census = {name: n for name, n in census.items() if n}
+    assert census == {"09-event-binding.js": 3, "11-event-handler.js": 1}, (
+        "`_djTargetSelector` moved. Expected exactly the three writers in "
+        "09-event-binding.js (click, change, keyboard) and the one strip site in "
+        "11-event-handler.js; re-check that the selector is still dropped before the "
+        f"event is sent, then update dj-target's description. Found: {census}"
+    )
+    binding = _js_code(CLIENT_SRC / "09-event-binding.js")
+    assert len(re.findall(r"params\._djTargetSelector\s*=", binding)) == 3, (
+        "dj-target's three writers (click, change, keyboard) changed shape"
     )
 
     cheatsheet = (ROOT / "docs" / "website" / "guides" / "template-cheatsheet.md").read_text(
