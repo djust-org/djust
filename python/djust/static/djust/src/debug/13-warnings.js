@@ -63,8 +63,8 @@
                                 </div>
                                 ${items.slice(0, 3).map(warning => `
                                     <div class="warning-item ${this.getWarningSeverity(type)}">
-                                        <div class="warning-message">${warning.message}</div>
-                                        ${warning.node ? `<div class="warning-source">in ${warning.node}</div>` : ''}
+                                        <div class="warning-message">${this.escapeHtml(warning.message)}</div>
+                                        ${warning.node ? `<div class="warning-source">in ${this.escapeHtml(warning.node)}</div>` : ''}
                                         ${this.renderWarningDetails(warning)}
                                     </div>
                                 `).join('')}
@@ -102,8 +102,9 @@
                 'memory_usage': 'Memory Issues',
                 'missing_limit': 'Missing LIMIT Clauses'
             };
+            // Returns HTML-safe text (callers interpolate it into markup).
             // eslint-disable-next-line security/detect-object-injection
-            return names[type] || type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+            return this.escapeHtml(names[type] || String(type).replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()));
         }
 
         getWarningSeverity(type) {
@@ -124,20 +125,20 @@
             const details = [];
 
             if (warning.query_count) {
-                details.push(`<span class="warning-detail">Queries: ${warning.query_count}</span>`);
+                details.push(`<span class="warning-detail">Queries: ${this.escapeHtml(warning.query_count)}</span>`);
             }
 
             if (warning.patch_count) {
-                details.push(`<span class="warning-detail">Patches: ${warning.patch_count}</span>`);
+                details.push(`<span class="warning-detail">Patches: ${this.escapeHtml(warning.patch_count)}</span>`);
             }
 
             if (warning.threshold) {
-                details.push(`<span class="warning-detail">Threshold: ${warning.threshold}ms</span>`);
+                details.push(`<span class="warning-detail">Threshold: ${this.escapeHtml(warning.threshold)}ms</span>`);
             }
 
             // Handle legacy single recommendation
             if (warning.recommendation) {
-                details.push(`<span class="warning-recommendation">💡 ${warning.recommendation}</span>`);
+                details.push(`<span class="warning-recommendation">💡 ${this.escapeHtml(warning.recommendation)}</span>`);
             }
 
             // Handle new recommendations array with detailed info
@@ -147,7 +148,7 @@
 
             // Add docs link if available
             if (warning.docs_url) {
-                details.push(`<a href="${warning.docs_url}" target="_blank" class="warning-docs-link">📖 View documentation</a>`);
+                details.push(`<a href="${this.safeHref(warning.docs_url)}" target="_blank" rel="noopener noreferrer" class="warning-docs-link">📖 View documentation</a>`);
             }
 
             return details.length > 0 ? `<div class="warning-details">${details.join('')}</div>` : '';
@@ -167,12 +168,12 @@
             html += '<div class="recommendations-header">💡 Recommendations:</div>';
 
             sortedRecs.forEach((rec, idx) => {
-                const priorityClass = `priority-${rec.priority || 'medium'}`;
+                const priorityClass = `priority-${this.escapeHtml(rec.priority || 'medium')}`;
                 html += `<div class="recommendation-item ${priorityClass}">`;
-                html += `<div class="recommendation-title">${idx + 1}. ${rec.title || 'Suggestion'}</div>`;
+                html += `<div class="recommendation-title">${idx + 1}. ${this.escapeHtml(rec.title || 'Suggestion')}</div>`;
 
                 if (rec.description) {
-                    html += `<div class="recommendation-description">${rec.description}</div>`;
+                    html += `<div class="recommendation-description">${this.escapeHtml(rec.description)}</div>`;
                 }
 
                 if (rec.code_example) {
