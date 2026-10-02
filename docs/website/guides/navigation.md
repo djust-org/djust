@@ -219,14 +219,19 @@ leave the session older than the last render. djust therefore writes the
 
 - A burst of events ends in one trailing write of the final state, not one
   write per event, and never an older state over a newer one: it waits for the
-  pending save and the runtime orders its saves.
+  pending save and the runtime orders its saves. The write is the view's state
+  at the moment it runs, which on SSE can include a handler that is still
+  mid-way; the turn's own save then replaces it.
 - Leaving the page (a `live_redirect`, a new mount, a disconnect, an SSE
-  close) waits for the trailing save, for at most a few seconds, before the
-  view is released. If storage is still not answering by then the latest state
-  is dropped with a warning and Back restores the last state storage holds.
+  close) waits for the trailing save, for at most 3 seconds, before the view
+  is released. A save that has already been running for over a second is
+  treated as hung and not waited for, so unresponsive storage never holds a
+  navigation. In either case the latest state is then dropped with a warning
+  and Back restores the last state storage holds.
 - Nothing is written into a session that was logged out or whose key changed
-  since the state was rendered (a login rotates the key, a logout flushes it).
-  A trailing save never resurrects a logged-out user's state and never writes
+  since the state was rendered: a logout in another request, a `logout()` in a
+  handler (which flushes the session), or a login that rotates the key. A
+  trailing save never resurrects a logged-out user's state and never writes
   into the new session.
 - A save that keeps failing is retried once, then the latest state is kept and
   logged; the next event's save or the teardown tries again.

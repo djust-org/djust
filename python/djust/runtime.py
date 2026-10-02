@@ -366,6 +366,15 @@ _EXPLICIT_MAX_DEFERRALS = 3
 _TRAILING_SAVE_ATTEMPTS = 2
 _TRAILING_RETRY_DELAY_S = 0.5
 _TRAILING_FLUSH_TIMEOUT_S = 3.0
+#: A save already running this long (loop seconds) is hung, not about to
+#: finish: the trailing save is ordered after it and cannot start, so teardown
+#: does not wait (hung storage must not hold a navigation, #3212).
+_TRAILING_STUCK_AFTER_S = 1.0
+#: The guard of a session whose key is gone (an in-handler ``logout()``): it
+#: equals no real session key, so a trailing save under it is always dropped.
+_SESSION_FLUSHED = "<flushed>"
+#: Flag on a view whose runtime has finished with its saves (teardown).
+_SAVES_RELEASED_ATTR = "_djust_state_saves_released"
 
 #: Outcomes of one legacy state save.
 _SAVED = "saved"  # written, or there is no session to write into
@@ -2971,8 +2980,11 @@ class ViewRuntime:
         self._in_explicit_catch_up = False
         # #3248: legacy state a best-effort save did not store, by save target
         # ("root" or a sticky child), and the one trailing task that writes it.
-        self._unsaved_state: Dict[Any, Tuple[Any, Optional[str], Tuple[Optional[str]], bool]] = {}
-        self._released_views: "weakref.WeakSet[Any]" = weakref.WeakSet()
+        # (weak ref to the view, event name, session guard, sticky?). Weak: a
+        # sticky child removed from the page must not be kept alive, or saved.
+        self._unsaved_state: Dict[
+            Any, Tuple["weakref.ref[Any]", Optional[str], Optional[Tuple[Optional[str]]], bool]
+        ] = {}
         self._trailing_save: Optional["asyncio.Task[None]"] = None
         # #3201: vanished session key -> the replacement session this
         # connection created, so repeated mounts reuse one replacement.
@@ -5271,15 +5283,28 @@ class ViewRuntime:
         work.add_done_callback(settled)
         return _RUNNING
 
-    def _legacy_save_guard(self, view: Any, *, sticky: bool) -> Tuple[Optional[str]]:
-        """The session key a save of ``view``'s state would write into, now."""
+    def _legacy_save_guard(self, view: Any, *, sticky: bool) -> Optional[Tuple[Optional[str]]]:
+        """The session key a trailing save of ``view``'s state may write into.
+
+        ``(key,)`` for a persisted session. A session with no key that HAD one
+        at mount was flushed by a handler's ``logout()``: ``(_SESSION_FLUSHED,)``,
+        which no save matches, so the trailing save is dropped instead of
+        creating a new cookie-less session. A session that never had a key
+        (anonymous, not yet persisted) has no guard: an earlier queued save may
+        create its key, and the state must still be written.
+        """
         mount_request = getattr(view, "_djust_mount_request", None)
         if sticky:
             mount_request = getattr(self.view_instance, "_djust_mount_request", None)
         session = getattr(mount_request, "session", None) or (
             self.scope.get("session") if self.scope else None
         )
-        return (getattr(session, "session_key", None),)
+        key = getattr(session, "session_key", None)
+        if key is not None:
+            return (key,)
+        if getattr(self.view_instance, "_django_session_key", None):
+            return (_SESSION_FLUSHED,)
+        return None
 
     def _settle_legacy_save(
         self, slot: Any, view: Any, event_name: Optional[str], outcome: str, *, sticky: bool
@@ -5291,10 +5316,10 @@ class ViewRuntime:
             # to write. A running save that then FAILS comes back here.
             self._unsaved_state.pop(slot, None)
             return
-        if view in self._released_views:
+        if getattr(view, _SAVES_RELEASED_ATTR, False):
             return  # torn down: no save may run after it
         self._unsaved_state[slot] = (
-            view,
+            weakref.ref(view),
             event_name,
             self._legacy_save_guard(view, sticky=sticky),
             sticky,
@@ -5322,7 +5347,10 @@ class ViewRuntime:
                 entry = self._unsaved_state.pop(slot, None)
                 if entry is None:
                     continue
-                view, event_name, guard, sticky = entry
+                view_ref, event_name, guard, sticky = entry
+                view = view_ref()
+                if view is None:
+                    continue  # the view is gone (a removed sticky child)
                 if not sticky and view is not self.view_instance:
                     logger.debug("Trailing state save skipped: its view was replaced")
                     continue
@@ -5364,12 +5392,17 @@ class ViewRuntime:
         unsaved then is dropped with a warning: no save may run after the
         view's teardown.
         """
+        stuck = (
+            bool(self._unsaved_state)
+            and _save_running_for(self._explicit_save_pending) >= _TRAILING_STUCK_AFTER_S
+        )
         task = self._trailing_save
-        if self._unsaved_state and (task is None or task.done()):
+        if not stuck and self._unsaved_state and (task is None or task.done()):
             self._ensure_trailing_save()
             task = self._trailing_save
         if task is not None and not task.done():
-            await asyncio.wait({task}, timeout=_TRAILING_FLUSH_TIMEOUT_S)
+            if not stuck:
+                await asyncio.wait({task}, timeout=_TRAILING_FLUSH_TIMEOUT_S)
             if not task.done():
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
@@ -5378,11 +5411,24 @@ class ViewRuntime:
                 "The latest LiveView state was not saved before teardown; Back "
                 "restores the last state storage holds"
             )
-        self._released_views.update(entry[0] for entry in self._unsaved_state.values())
-        if self.view_instance is not None:
-            self._released_views.add(self.view_instance)
+        for view_ref, *_rest in self._unsaved_state.values():
+            self._release_saves(view_ref())
+        self._release_saves(self.view_instance)
         self._unsaved_state.clear()
         self._trailing_save = None
+
+    @staticmethod
+    def _release_saves(view: Any) -> None:
+        """Flag ``view`` so no later save of its state is recorded or run.
+
+        A flag in the instance dict, not a set: a view that defines ``__eq__``
+        is unhashable."""
+        if view is None:
+            return
+        try:
+            view.__dict__[_SAVES_RELEASED_ATTR] = True
+        except (AttributeError, TypeError):
+            logger.debug("A released view could not be flagged")
 
     # ------------------------------------------------------------------ #
     # Embedded-child routing (ADR-022 Iter 2 Phase 2.1)

@@ -69,6 +69,11 @@ class Counter(LiveView):
         self.count += 1
 
     @event_handler()
+    def log_out(self, **kwargs):
+        self.count += 1
+        self._djust_mount_request.session.flush()  # an in-handler logout()
+
+    @event_handler()
     @permission_required("trailing.delete_everything")
     def wipe(self, **kwargs):
         self.count = -1
@@ -93,7 +98,7 @@ class Store:
     write); ``fail`` raises for every save while it is truthy.
     """
 
-    def __init__(self, monkeypatch, *, block_first=False, fail=False):
+    def __init__(self, monkeypatch, *, block_first=False, fail=False, engine=None):
         self.release = threading.Event()
         if not block_first:
             self.release.set()
@@ -102,11 +107,12 @@ class Store:
         self.fail = fail
         self.fail_next = 0  # fail only the next N saves
         self._lock = threading.Lock()
-        original = SessionStore.save
+        engine = engine or SessionStore
+        original = engine.save
         store = self
 
         def save(this, *args, **kwargs):
-            if kwargs.get("must_create"):
+            if (args and args[0]) or kwargs.get("must_create"):
                 return original(this, *args, **kwargs)  # create(): cycle_key, login
             cache = getattr(this, "_session_cache", None) or {}
             state = cache.get(KEY)
@@ -126,7 +132,7 @@ class Store:
                 store.written.append(state["count"])
             return original(this, *args, **kwargs)
 
-        monkeypatch.setattr(SessionStore, "save", save)
+        monkeypatch.setattr(engine, "save", save)
 
 
 @pytest.fixture(autouse=True)
@@ -349,11 +355,11 @@ async def _sse_start(key):
     return session
 
 
-async def _sse_event(session, key):
+async def _sse_event(session, key, body=None):
     request = await sync_to_async(_request)(
         "POST",
         f"/djust/sse/{session.session_id}/message/",
-        {"type": "event", "event": "increment", "params": {}},
+        body or {"type": "event", "event": "increment", "params": {}},
         key,
     )
     async with ThreadSensitiveContext():  # what Django's ASGIHandler wraps
@@ -445,3 +451,228 @@ async def test_a_session_logged_out_elsewhere_gets_no_trailing_write_over_sse(mo
     # found its session gone.
     assert store.attempts == 1, store.attempts
     assert not await sync_to_async(SessionStore(key).exists)(key)
+
+
+# --------------------------------------------------------------------------- #
+# Hung storage must not hold a navigation (#3212), review I1
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def stuck_soon(monkeypatch):
+    monkeypatch.setattr(runtime_module, "_TRAILING_STUCK_AFTER_S", 0.2)
+
+
+async def _hang(monkeypatch, session, key):
+    """Hung storage: the first save never answers, so every later event's save
+    never starts and its state is recorded as unsaved."""
+    store = Store(monkeypatch, block_first=True)
+    for _ in range(3):
+        await _sse_event(session, key)
+    await asyncio.sleep(0.4)  # the first save has now been running past the threshold
+    assert session.runtime._unsaved_state, "vacuous: nothing was left unsaved"
+    return store
+
+
+async def test_hung_storage_does_not_hold_an_sse_close(monkeypatch, stuck_soon):
+    from djust.sse import _shutdown_closed_session
+
+    key = await sync_to_async(_fresh_key)()
+    session = await _sse_start(key)
+    store = await _hang(monkeypatch, session, key)
+    try:
+        started = time.monotonic()
+        await _shutdown_closed_session(session)
+        assert time.monotonic() - started < 1.5
+    finally:
+        store.release.set()
+
+
+async def test_hung_storage_does_not_hold_an_sse_navigation(monkeypatch, stuck_soon):
+    key = await sync_to_async(_fresh_key)()
+    session = await _sse_start(key)
+    store = await _hang(monkeypatch, session, key)
+    try:
+        started = time.monotonic()
+        await _sse_event(session, key, {"type": "live_redirect_mount", "url": "/other/"})
+        assert time.monotonic() - started < 1.5
+    finally:
+        store.release.set()
+
+
+async def test_an_sse_navigation_stores_the_latest_state_before_the_new_page(monkeypatch):
+    """``_replace_view`` waits for the trailing save, as the WebSocket redirect does."""
+    key = await sync_to_async(_fresh_key)()
+    session = await _sse_start(key)
+    store = Store(monkeypatch, fail=True)
+    for _ in range(3):
+        await _sse_event(session, key)
+    # The trailing save has given up: only the teardown's last attempt is left.
+    assert await _until(lambda: session.runtime._trailing_save.done())
+    assert store.written == []
+    store.fail = False
+    await _sse_event(session, key, {"type": "live_redirect_mount", "url": "/other/"})
+    assert store.written == [3], store.written
+    assert (await _stored(key))["count"] == 3
+
+
+# --------------------------------------------------------------------------- #
+# Logout, review M2/M3; teardown flag, M4; other session backends, M5
+# --------------------------------------------------------------------------- #
+
+
+async def test_an_in_handler_logout_gets_no_trailing_write(monkeypatch):
+    """``session.flush()`` in a handler (``logout()``) leaves the object with no
+    key. The trailing save must not create a new cookie-less session row."""
+    key = await sync_to_async(_fresh_key)()
+    store = Store(monkeypatch, fail=True)
+    sock = Socket(key)
+    await sock.open()
+    try:
+        await sock.event("log_out", ref=1)  # the flush, then its own save raises
+        assert store.attempts == 1
+        store.fail = False
+        await asyncio.sleep(0.4)
+    finally:
+        await sock.close()
+    assert store.attempts == 1, "a trailing save wrote after the session was flushed"
+    assert store.written == []
+
+
+def _bare_runtime(view, session=None):
+    from djust.runtime import ViewRuntime
+    from djust.tests.test_runtime_state_save_tt_1894 import MockTransport
+
+    runtime = ViewRuntime(MockTransport())
+    runtime.view_instance = view
+    view._djust_mount_request = type("R", (), {"session": session, "path": PATH})()
+    return runtime
+
+
+class _FakeSession:
+    def __init__(self, key):
+        self.session_key = key
+
+
+def test_the_save_guard_follows_the_session_key():
+    view = Counter()
+    # A persisted session: guarded by its key.
+    assert _bare_runtime(view, _FakeSession("k1"))._legacy_save_guard(view, sticky=False) == ("k1",)
+    # No key now, one at mount: flushed by an in-handler logout.
+    view._django_session_key = "k1"
+    runtime = _bare_runtime(view, _FakeSession(None))
+    assert runtime._legacy_save_guard(view, sticky=False) == (runtime_module._SESSION_FLUSHED,)
+    # Never persisted (anonymous): an earlier queued save may create the key.
+    view._django_session_key = None
+    assert runtime._legacy_save_guard(view, sticky=False) is None
+
+
+class Unhashable(Counter):
+    """A view that defines ``__eq__`` is unhashable (a dataclass, for one)."""
+
+    def __eq__(self, other):
+        return self is other
+
+    __hash__ = None
+
+
+async def test_no_save_is_recorded_for_a_released_view_even_if_unhashable():
+    view = Unhashable()
+    runtime = _bare_runtime(view, _FakeSession("k1"))
+    runtime._settle_legacy_save("root", view, "e", runtime_module._UNSAVED, sticky=False)
+    assert "root" in runtime._unsaved_state  # recorded before teardown
+    runtime._trailing_save.cancel()
+
+    await runtime.finish_state_saves()  # must not raise on an unhashable view
+    assert runtime._unsaved_state == {}
+
+    runtime._settle_legacy_save("root", view, "e", runtime_module._UNSAVED, sticky=False)
+    assert runtime._unsaved_state == {}, "a save was recorded after teardown"
+    assert runtime._trailing_save is None
+
+
+@pytest.mark.parametrize(
+    "engine",
+    ["django.contrib.sessions.backends.cached_db", "django.contrib.sessions.backends.cache"],
+)
+async def test_logout_elsewhere_gets_no_trailing_write_on_other_session_backends(
+    monkeypatch, engine
+):
+    from importlib import import_module
+
+    store_cls = import_module(engine).SessionStore
+    with override_settings(SESSION_ENGINE=engine):
+
+        def create():
+            session = store_cls()
+            session.create()
+            return session.session_key
+
+        key = await sync_to_async(create)()
+        store = Store(monkeypatch, fail=True, engine=store_cls)
+        sock = Socket(key)
+        await sock.open()
+        try:
+            for i in range(2):
+                await sock.event(ref=i)
+            await sync_to_async(store_cls(key).delete)()  # logout, in another request
+            attempts = store.attempts
+            assert attempts >= 1, "vacuous: no save reached the store"
+            store.fail = False
+            await asyncio.sleep(0.4)
+        finally:
+            await sock.close()
+        assert store.attempts == attempts, "a save was attempted into a logged-out session"
+        assert store.written == []
+        assert not await sync_to_async(store_cls(key).exists)(key)
+
+
+# --------------------------------------------------------------------------- #
+# Sticky children (the parallel path)
+# --------------------------------------------------------------------------- #
+
+
+class StickyChild(LiveView):
+    exposure_policy = "legacy"
+    enable_state_snapshot = True
+    sticky = True
+    sticky_id = "side"
+    template = "<div>{{ clicks }}</div>"
+
+    def get_context_data(self, **kwargs):
+        return {"clicks": self.clicks}
+
+
+async def test_a_sticky_childs_failed_save_gets_a_trailing_save(monkeypatch):
+    from djust.mixins.sticky import sticky_child_session_key
+
+    key = await sync_to_async(_fresh_key)()
+    request = await sync_to_async(_request)("GET", PATH, {}, key)
+    request.path = PATH
+    parent = Counter()
+    parent.count = 0
+    parent._djust_mount_request = request
+    runtime = _bare_runtime(parent, request.session)
+    child = StickyChild()
+    child.clicks = 3
+    parent._register_child("side", child)
+
+    original = SessionStore.save
+    calls = []
+
+    def flaky(this, *args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("storage unavailable")
+        return original(this, *args, **kwargs)
+
+    monkeypatch.setattr(SessionStore, "save", flaky)
+    await runtime._persist_sticky_child_after_event(child, "click")
+    assert runtime._unsaved_state, "the failed sticky save was not recorded"
+    await asyncio.wait_for(runtime._trailing_save, 10)
+
+    def load():
+        return SessionStore(key).load().get(sticky_child_session_key(PATH, "side"))
+
+    assert await sync_to_async(load)() == {"clicks": 3}
+    assert runtime._unsaved_state == {}
