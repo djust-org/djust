@@ -177,7 +177,7 @@ python manage.py check --tag djust --fail-level WARNING
 python manage.py check --tag djust --deploy --fail-level WARNING
 ```
 
-The second line runs the checks that are registered as deployment checks, which `check` skips without `--deploy`: the vendored-asset and SBOM checks `B011`, `B013` and `B014`, and `B008` when `djust` is listed above `django.contrib.staticfiles`. Django's own deployment checks run with it too, so expect findings that are not djust's. Run it in the job that sees your production settings.
+The second line runs the checks that are registered as deployment checks, which `check` skips without `--deploy`: the vendored-asset and SBOM checks `B011`, `B013` and `B014`, and `B008` when `djust` is listed above `django.contrib.staticfiles`. `--tag djust` keeps this to djust's checks; drop `--tag` to include Django's own deployment checks too. Run it in the job that sees your production settings.
 
 Without `--fail-level`, `check` exits non-zero only for errors. The hints after each finding say how to fix it, and `manage.py djust_check` prints the same findings grouped by category, with `--json` and `--format json` for machine-readable output.
 
