@@ -2483,7 +2483,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         # Clean up presence tracking for every mounted view (#3250 review M3:
         # the views mounted beside the page view too, not only view_instance)
-        await self._untrack_presence_of(mounted_views)
+        await self._untrack_presence_of([*self._take_deferred_presence_untrack(), *mounted_views])
 
         for consumer in consumers:
             # Cancel tick task and wait for it to finish
@@ -2709,7 +2709,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 # it a tracked user expired after PRESENCE_TIMEOUT (60 s) on an
                 # open page (#2968). Refreshed before the pong, so the pong
                 # means the heartbeat landed. Every mounted view is refreshed,
-                # not only the page view (#3252).
+                # not only the page view (#3252, #3254).
                 if any(getattr(v, "_presence_tracked", False) for v in self._mounted_views()):
                     await self.handle_presence_heartbeat(data)
                 await self.send_json({"type": "pong"})
@@ -2754,6 +2754,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 log_message="Error in WebSocket receive",
             )
             await self.send_json(response)
+        finally:
+            # A mount frame replaced the views mounted before it: now that the
+            # replacement has mounted (or failed to), their presence goes (#3254).
+            await self._flush_deferred_presence_untrack()
 
     async def _refuse_unmounted_target(self, data: Dict[str, Any]) -> None:
         """Answer a frame addressed to a view that is not mounted (#3252).
@@ -4121,6 +4125,46 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             except Exception:  # noqa: BLE001
                 pass  # Observability never blocks shutdown.
 
+    def _defer_presence_untrack(self, views: List[Any]) -> None:
+        """Hold the presence of views a mount frame replaces until it has mounted (#3254).
+
+        Presence is one record per mounted view, so the replacement joins the
+        room as a second connection of the user while the old view's is still
+        there: the user is never absent between the two, and same-room
+        navigation neither fires a leave nor drops the peers' count. The rest
+        of the old view's teardown (groups, tick, waiters, uploads) is not
+        deferred. ``receive`` untracks these when the frame is done, and the
+        disconnect does if the socket dies first.
+        """
+        pending = getattr(self, "_deferred_presence_untrack", None) or []
+        pending.extend(v for v in views if getattr(v, "_presence_tracked", False))
+        self._deferred_presence_untrack = pending
+
+    async def _flush_deferred_presence_untrack(self) -> None:
+        """Untrack the deferred views one by one (#3254).
+
+        A view leaves the queue only once it is untracked, so a cancellation
+        partway through puts the rest (and the view in flight, whose untrack is
+        idempotent) back for the disconnect to take instead of dropping them.
+        """
+        pending = self._take_deferred_presence_untrack()
+        try:
+            while pending:
+                await self._untrack_presence_of([pending[0]])
+                pending.pop(0)
+        finally:
+            if pending:
+                self._deferred_presence_untrack = [
+                    *pending,
+                    *(getattr(self, "_deferred_presence_untrack", None) or []),
+                ]
+
+    def _take_deferred_presence_untrack(self) -> List[Any]:
+        """The views whose presence is waiting to be untracked, forgotten here (#3254)."""
+        pending = getattr(self, "_deferred_presence_untrack", None) or []
+        self._deferred_presence_untrack = []
+        return pending
+
     async def _leave_view_groups(self, consumer: Any) -> None:
         """Leave every channel-layer group one view of the socket joined (disconnect).
 
@@ -4170,6 +4214,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         reason: str,
         navigation: bool,
         keep: Optional[Dict[str, Any]] = None,
+        defer_presence: bool = False,
     ) -> None:
         """Tear down the view one consumer-like runs (the page view or a slot).
 
@@ -4180,14 +4225,27 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         live handles; #3244). ``keep`` holds the sticky children a
         ``live_redirect`` preserves: they are removed from the view's registry
         first, so they survive with their waiters and background work.
+
+        With ``defer_presence`` (a view a mount replaces), its presence is
+        untracked after the replacement mounts, not here (#3254;
+        ``_defer_presence_untrack``). A view that goes with nothing replacing it
+        (an unmount, a refusal) is untracked at once.
         """
         from ._child_lifecycle import release_root_view
+        from .presence import PresenceManager
         from .runtime import leave_consumer_view_groups
 
         view = consumer.view_instance
         await leave_consumer_view_groups(consumer)
-        if view is not None:
-            await self._untrack_presence_of([view])
+        # Presence waits for the replacement mount (#3254): see
+        # ``_defer_presence_untrack``. Not for a backend with one record per
+        # user (the old contract): there the replacement's join and this
+        # view's leave address the same record, so the order stays leave, mount.
+        if view is not None and getattr(view, "_presence_tracked", False):
+            if defer_presence and await sync_to_async(PresenceManager.per_connection)():
+                self._defer_presence_untrack([view])
+            else:
+                await self._untrack_presence_of([view])
 
         task = consumer._tick_task
         if task:
@@ -4241,10 +4299,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         """
         slots = list(self._slot_map().values())
         self._slot_map().clear()
-        await self._release_consumer_view(self, reason=reason, navigation=True, keep=keep)
+        await self._release_consumer_view(
+            self, reason=reason, navigation=True, keep=keep, defer_presence=True
+        )
         for slot in slots:
             slot.closing = True
-            await self._release_consumer_view(slot.facade, reason=reason, navigation=True)
+            await self._release_consumer_view(
+                slot.facade, reason=reason, navigation=True, defer_presence=True
+            )
         self._cancel_deferred_pushes()
 
     async def _release_slot(
@@ -4255,7 +4317,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             del self._slot_map()[slot.target_id]
         slot.closing = True
         self._forget_observed_view(slot.facade)
-        await self._release_consumer_view(slot.facade, reason=reason, navigation=navigation)
+        await self._release_consumer_view(
+            slot.facade, reason=reason, navigation=navigation, defer_presence=navigation
+        )
 
     async def handle_live_redirect_mount(self, data: Dict[str, Any]) -> None:
         """
@@ -4571,9 +4635,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
     async def handle_presence_heartbeat(self, data: Dict[str, Any]) -> None:
         """Handle presence heartbeat from client.
 
-        Refreshes the presence of every view mounted on the socket, or of the
-        one view the frame names with ``target_id`` (#3252): each tracks its
-        own presence, so a view mounted beside the page view is kept alive too.
+        Refreshes the presence connection of every view mounted on the socket,
+        or of the one view the frame names with ``target_id`` (#3254, #3252):
+        each is its own connection with its own timeout, so a view mounted
+        beside the page view is kept alive too.
         """
         if data.get("target_id") is not None:
             consumer = self._route_consumer(data)

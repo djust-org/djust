@@ -11,16 +11,28 @@ data leakage.
 """
 
 import functools
-import json
 import logging
 import threading
 import time
-from typing import Any, Callable, Dict, List, Optional, TypeVar
+from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 
-from ..backends.base import PresenceBackend
+from ..backends.base import (
+    PerConnectionPresenceBackend,
+    PresenceBackend,
+    aggregate_by_user,
+    connection_member,
+    member_belongs_to,
+    merge_connection_records,
+    note_first,
+)
 from ..backends.redis import (
     CLEANUP_INTERVAL,
     CleanupThrottle,
+    cleanup_stale_records,
+    count_presences,
+    heartbeat_connection_records,
+    join_connection_records,
+    leave_connection_records,
     presence_cleanup_interval,
     read_presences,
 )
@@ -49,7 +61,7 @@ class TenantAwareBackendMixin:
         return f"tenant:{self._tenant_id}:{key}"
 
 
-class TenantAwareRedisBackend(TenantAwareBackendMixin, PresenceBackend):
+class TenantAwareRedisBackend(TenantAwareBackendMixin, PerConnectionPresenceBackend):
     """
     Tenant-scoped Redis backend for presence tracking.
 
@@ -115,37 +127,50 @@ class TenantAwareRedisBackend(TenantAwareBackendMixin, PresenceBackend):
         """Get tenant-scoped metadata key."""
         return f"{self._base_prefix}:tenant:{self._tenant_id}:{presence_key}:meta"
 
-    def join(self, presence_key: str, user_id: str, meta: Dict[str, Any]) -> Dict[str, Any]:
+    def join(
+        self,
+        presence_key: str,
+        user_id: str,
+        meta: Dict[str, Any],
+        connection_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Join presence group, scoped to tenant."""
+        return self._join(presence_key, user_id, connection_id, meta)[0]
+
+    _builtin_join = join
+
+    def _join(
+        self, presence_key: str, user_id: str, connection_id: Optional[str], meta: Dict[str, Any]
+    ) -> Tuple[Dict[str, Any], bool]:
         now = time.time()
-        record = {
-            "id": user_id,
-            "tenant_id": self._tenant_id,
-            "joined_at": now,
-            "meta": meta,
-        }
-
-        pipe = self._client.pipeline()
-        pipe.zadd(self._zset_key(presence_key), {user_id: now})
-        pipe.hset(self._meta_key(presence_key), user_id, json.dumps(record))
-        ttl = self._timeout * 3
-        pipe.expire(self._zset_key(presence_key), ttl)
-        pipe.expire(self._meta_key(presence_key), ttl)
-        pipe.execute()
-
+        result = join_connection_records(
+            self._client,
+            self._zset_key(presence_key),
+            self._meta_key(presence_key),
+            user_id,
+            connection_id,
+            meta,
+            now=now,
+            cutoff=now - self._timeout,
+            ttl=self._timeout * 3,
+            extra={"tenant_id": self._tenant_id},
+        )
         logger.debug("User %s joined tenant %s presence %s", user_id, self._tenant_id, presence_key)
-        return record
+        note_first(result[1])
+        return result
 
-    def leave(self, presence_key: str, user_id: str) -> Optional[Dict[str, Any]]:
-        """Leave presence group."""
-        raw = self._client.hget(self._meta_key(presence_key), user_id)
-        record = json.loads(raw) if raw else None
-
-        pipe = self._client.pipeline()
-        pipe.zrem(self._zset_key(presence_key), user_id)
-        pipe.hdel(self._meta_key(presence_key), user_id)
-        pipe.execute()
-
+    def leave(
+        self, presence_key: str, user_id: str, connection_id: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Leave presence group (one connection, or every connection of the user)."""
+        record = leave_connection_records(
+            self._client,
+            self._zset_key(presence_key),
+            self._meta_key(presence_key),
+            user_id,
+            connection_id,
+            cutoff=time.time() - self._timeout,
+        )
         if record:
             logger.debug(
                 "User %s left tenant %s presence %s", user_id, self._tenant_id, presence_key
@@ -153,7 +178,7 @@ class TenantAwareRedisBackend(TenantAwareBackendMixin, PresenceBackend):
         return record
 
     def list(self, presence_key: str) -> List[Dict[str, Any]]:
-        """List all active presences in the group.
+        """List all active presences in the group, one per user.
 
         Two Redis commands in one round trip, with ``cleanup_stale`` at most
         once per ``cleanup_interval`` per key (#3203), as
@@ -170,41 +195,40 @@ class TenantAwareRedisBackend(TenantAwareBackendMixin, PresenceBackend):
 
     def count(self, presence_key: str) -> int:
         """Count active users in the group."""
-        cutoff = time.time() - self._timeout
-        active_count: int = self._client.zcount(self._zset_key(presence_key), cutoff, "+inf")
-        return active_count
+        return count_presences(
+            self._client, self._zset_key(presence_key), time.time() - self._timeout
+        )
 
-    def heartbeat(self, presence_key: str, user_id: str) -> None:
-        """Update heartbeat timestamp."""
-        now = time.time()
-        pipe = self._client.pipeline()
-        pipe.zadd(self._zset_key(presence_key), {user_id: now})
-        ttl = self._timeout * 3
-        pipe.expire(self._zset_key(presence_key), ttl)
-        pipe.expire(self._meta_key(presence_key), ttl)
-        pipe.execute()
+    def heartbeat(
+        self, presence_key: str, user_id: str, connection_id: Optional[str] = None
+    ) -> None:
+        """Update heartbeat timestamp (one connection, or every connection of the user)."""
+        heartbeat_connection_records(
+            self._client,
+            self._zset_key(presence_key),
+            self._meta_key(presence_key),
+            user_id,
+            connection_id,
+            now=time.time(),
+            ttl=self._timeout * 3,
+        )
 
     def cleanup_stale(self, presence_key: str) -> int:
         """Remove stale presences."""
-        cutoff = time.time() - self._timeout
-        stale = self._client.zrangebyscore(self._zset_key(presence_key), "-inf", cutoff)
-
-        if not stale:
-            return 0
-
-        pipe = self._client.pipeline()
-        pipe.zremrangebyscore(self._zset_key(presence_key), "-inf", cutoff)
-        for uid in stale:
-            pipe.hdel(self._meta_key(presence_key), uid)
-        pipe.execute()
-
-        logger.debug(
-            "Cleaned %d stale presences from tenant %s:%s",
-            len(stale),
-            self._tenant_id,
-            presence_key,
+        removed = cleanup_stale_records(
+            self._client,
+            self._zset_key(presence_key),
+            self._meta_key(presence_key),
+            time.time() - self._timeout,
         )
-        return len(stale)
+        if removed:
+            logger.debug(
+                "Cleaned %d stale presences from tenant %s:%s",
+                removed,
+                self._tenant_id,
+                presence_key,
+            )
+        return removed
 
     def health_check(self) -> Dict[str, Any]:
         """Check backend health."""
@@ -247,7 +271,7 @@ def _tenant_memory_locked(fn: _F) -> _F:
     return wrapper  # type: ignore[return-value]
 
 
-class TenantAwareMemoryBackend(TenantAwareBackendMixin, PresenceBackend):
+class TenantAwareMemoryBackend(TenantAwareBackendMixin, PerConnectionPresenceBackend):
     """
     Tenant-scoped in-memory backend for presence tracking.
 
@@ -261,8 +285,10 @@ class TenantAwareMemoryBackend(TenantAwareBackendMixin, PresenceBackend):
 
     PRESENCE_TIMEOUT = 60
 
-    # Class-level storage for all tenants
-    _presences: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    # Class-level storage for all tenants. Per tenant and presence key, one
+    # record per CONNECTION keyed by ``connection_member`` (the bare user id
+    # for a legacy connection), aggregated per user when read (#3254).
+    _presences: Dict[str, Dict[str, Dict[str, Dict[str, Any]]]] = {}
     _heartbeats: Dict[str, Dict[str, float]] = {}
 
     @_tenant_memory_locked
@@ -277,110 +303,151 @@ class TenantAwareMemoryBackend(TenantAwareBackendMixin, PresenceBackend):
             self._heartbeats[tenant_id] = {}
 
     def _get_tenant_presences(self, presence_key: str) -> Dict[str, Dict[str, Any]]:
-        """Get presences dict for current tenant and key."""
+        """Get the connection records dict for current tenant and key."""
         tenant_data = self._presences.get(self._tenant_id, {})
         return tenant_data.get(presence_key, {})
 
     def _set_tenant_presences(self, presence_key: str, data: Dict[str, Dict[str, Any]]) -> None:
-        """Set presences dict for current tenant and key."""
+        """Set the connection records dict for current tenant and key."""
         if self._tenant_id not in self._presences:
             self._presences[self._tenant_id] = {}
         self._presences[self._tenant_id][presence_key] = data
 
     @_tenant_memory_locked
-    def join(self, presence_key: str, user_id: str, meta: Dict[str, Any]) -> Dict[str, Any]:
+    def join(
+        self,
+        presence_key: str,
+        user_id: str,
+        meta: Dict[str, Any],
+        connection_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Join presence group."""
+        return self._join(presence_key, user_id, connection_id, meta)[0]
+
+    _builtin_join = join
+
+    @_tenant_memory_locked
+    def _join(
+        self, presence_key: str, user_id: str, connection_id: Optional[str], meta: Dict[str, Any]
+    ) -> Tuple[Dict[str, Any], bool]:
         now = time.time()
-        record = {
+        member = connection_member(user_id, connection_id)
+        self.cleanup_stale(presence_key)
+        presences = self._get_tenant_presences(presence_key)
+        first = not any(member_belongs_to(m, user_id) for m in presences)
+        existing = presences.get(member)
+        presences[member] = {
             "id": user_id,
             "tenant_id": self._tenant_id,
-            "joined_at": now,
+            "connection_id": connection_id,
+            # A re-join of a live connection is a refresh, not a new arrival.
+            "joined_at": existing["joined_at"] if existing else now,
+            "updated_at": now,
             "meta": meta,
         }
-
-        presences = self._get_tenant_presences(presence_key)
-        presences[user_id] = record
         self._set_tenant_presences(presence_key, presences)
 
         # Set heartbeat
-        self._heartbeats.setdefault(self._tenant_id, {})[f"{presence_key}:{user_id}"] = now
+        self._heartbeats.setdefault(self._tenant_id, {})[f"{presence_key}:{member}"] = now
 
         logger.debug(
             "User %s joined tenant %s presence %s (memory)", user_id, self._tenant_id, presence_key
         )
-        return record
+        record = merge_connection_records(
+            r for m, r in presences.items() if member_belongs_to(m, user_id)
+        )
+        return record, note_first(first)
 
     @_tenant_memory_locked
-    def leave(self, presence_key: str, user_id: str) -> Optional[Dict[str, Any]]:
-        """Leave presence group."""
+    def leave(
+        self, presence_key: str, user_id: str, connection_id: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Leave presence group (one connection, or every connection of the user)."""
         presences = self._get_tenant_presences(presence_key)
-        record = presences.pop(user_id, None)
+        if connection_id is None:
+            members = [m for m in presences if member_belongs_to(m, user_id)]
+        else:
+            members = [m for m in (connection_member(user_id, connection_id),) if m in presences]
+        if not members:
+            return None
+        removed = [presences.pop(m) for m in members]
         self._set_tenant_presences(presence_key, presences)
 
-        # Remove heartbeat
-        heartbeat_key = f"{presence_key}:{user_id}"
-        if self._tenant_id in self._heartbeats:
-            self._heartbeats[self._tenant_id].pop(heartbeat_key, None)
+        # Remove heartbeats
+        tenant_heartbeats = self._heartbeats.get(self._tenant_id)
+        if tenant_heartbeats is not None:
+            for m in members:
+                tenant_heartbeats.pop(f"{presence_key}:{m}", None)
 
-        if record:
-            logger.debug(
-                "User %s left tenant %s presence %s (memory)",
-                user_id,
-                self._tenant_id,
-                presence_key,
-            )
-        return record
+        if any(member_belongs_to(m, user_id) for m in presences):
+            return None
+        logger.debug(
+            "User %s left tenant %s presence %s (memory)",
+            user_id,
+            self._tenant_id,
+            presence_key,
+        )
+        return merge_connection_records(removed)
 
     @_tenant_memory_locked
     def list(self, presence_key: str) -> List[Dict[str, Any]]:
-        """List active presences."""
+        """List active presences, one per user."""
         self.cleanup_stale(presence_key)
-        presences = self._get_tenant_presences(presence_key)
-        return list(presences.values())
+        return aggregate_by_user(self._get_tenant_presences(presence_key).values())
 
     @_tenant_memory_locked
     def count(self, presence_key: str) -> int:
         """Count active users."""
-        self.cleanup_stale(presence_key)
-        presences = self._get_tenant_presences(presence_key)
-        return len(presences)
+        return len(self.list(presence_key))
 
     @_tenant_memory_locked
-    def heartbeat(self, presence_key: str, user_id: str) -> None:
-        """Update heartbeat."""
-        heartbeat_key = f"{presence_key}:{user_id}"
-        self._heartbeats.setdefault(self._tenant_id, {})[heartbeat_key] = time.time()
+    def heartbeat(
+        self, presence_key: str, user_id: str, connection_id: Optional[str] = None
+    ) -> None:
+        """Update heartbeat (one connection, or every connection of the user)."""
+        if connection_id is None:
+            members = [
+                m for m in self._get_tenant_presences(presence_key) if member_belongs_to(m, user_id)
+            ]
+        else:
+            members = [connection_member(user_id, connection_id)]
+        now = time.time()
+        live = self._get_tenant_presences(presence_key)
+        for member in members:
+            # Only a connection that exists: a heartbeat after it left or expired
+            # must not leave an entry behind that nothing reclaims.
+            if member in live:
+                self._heartbeats.setdefault(self._tenant_id, {})[f"{presence_key}:{member}"] = now
 
     @_tenant_memory_locked
     def cleanup_stale(self, presence_key: str) -> int:
-        """Remove stale presences."""
+        """Remove stale presences (connections with no heartbeat within the timeout)."""
         now = time.time()
         cutoff = now - self._timeout
 
         presences = self._get_tenant_presences(presence_key)
         tenant_heartbeats = self._heartbeats.get(self._tenant_id, {})
 
-        stale_users = []
-        for user_id in list(presences.keys()):
-            heartbeat_key = f"{presence_key}:{user_id}"
-            last_heartbeat = tenant_heartbeats.get(heartbeat_key, 0)
-            if last_heartbeat < cutoff:
-                stale_users.append(user_id)
+        stale = [
+            member
+            for member in list(presences.keys())
+            if tenant_heartbeats.get(f"{presence_key}:{member}", 0) < cutoff
+        ]
 
-        for user_id in stale_users:
-            presences.pop(user_id, None)
-            tenant_heartbeats.pop(f"{presence_key}:{user_id}", None)
+        for member in stale:
+            presences.pop(member, None)
+            tenant_heartbeats.pop(f"{presence_key}:{member}", None)
 
         self._set_tenant_presences(presence_key, presences)
 
-        if stale_users:
+        if stale:
             logger.debug(
                 "Cleaned %d stale presences from tenant %s:%s (memory)",
-                len(stale_users),
+                len(stale),
                 self._tenant_id,
                 presence_key,
             )
-        return len(stale_users)
+        return len(stale)
 
     @_tenant_memory_locked
     def health_check(self) -> Dict[str, Any]:
@@ -390,7 +457,8 @@ class TenantAwareMemoryBackend(TenantAwareBackendMixin, PresenceBackend):
             "backend": "tenant_memory",
             "tenant_id": self._tenant_id,
             "presence_count": sum(
-                len(v) for v in self._presences.get(self._tenant_id, {}).values()
+                len(aggregate_by_user(v.values()))
+                for v in self._presences.get(self._tenant_id, {}).values()
             ),
         }
 

@@ -1066,3 +1066,40 @@ async def test_explicit_views_beside_each_other_each_restore_their_own_state():
         assert slot["html"].strip() == "3", slot["html"]
     finally:
         await _close(communicator)
+
+
+class SameUser(PresenceMixin, _Counted, LiveView):
+    presence_key = "mv3252-same"
+    template = '<div dj-root dj-view="' + MOD + '.SameUser"><b>same {{ count }}</b></div>'
+
+    def mount(self, request, **kwargs):
+        self._tagged()
+        self.track_presence(meta={})
+
+    def get_presence_user_id(self):
+        return "one-user"
+
+    def handle_presence_join(self, presence):
+        EVENTS.append(("joined", presence["id"]))
+
+    def handle_presence_leave(self, presence):
+        EVENTS.append(("left", presence["id"]))
+
+
+async def test_hydrating_a_container_again_does_not_make_the_user_leave_and_rejoin():
+    """Per-connection presence (#3254): the replacement view joins as a second
+    connection before the replaced one leaves, so the user is present throughout
+    and no leave/join fires; the leave comes with their last view."""
+    communicator = await _connect()
+    try:
+        await _hydrate(communicator, SameUser, "same")
+        assert EVENTS == [("joined", "one-user")]
+        await _hydrate(communicator, SameUser, "same")
+        assert [e[0] for e in EVENTS] == ["joined"]
+        assert len(await sync_to_async(PresenceManager.list_presences)("mv3252-same")) == 1
+
+        await communicator.send_json_to({"type": "unmount", "target_id": "same"})
+        await _until(lambda: ("left", "one-user") in EVENTS, "the leave after the last view")
+        assert [e[0] for e in EVENTS] == ["joined", "left"]
+    finally:
+        await _close(communicator)

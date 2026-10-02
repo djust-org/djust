@@ -131,9 +131,10 @@ def _max_sessions_total() -> int:
 # checks includes the mounts still in flight. The lock also makes the
 # registry's check-and-set / check-and-pop steps atomic across loops.
 _sse_registry_lock = threading.Lock()
-#: Stream GETs still mounting, per session id (#3254). A reconnect's mount
-#: joins presence BEFORE the new session is registered, so the old session's
-#: close must treat an id with a mount in flight as already replaced.
+#: Stream GETs still mounting, per session id (#3254). Only read for a presence
+#: backend on the old one-record-per-user contract: a reconnect's mount joins
+#: presence BEFORE the new session is registered, so the old session's close
+#: must treat an id with a mount in flight as already replaced.
 _sse_mounting: Dict[str, int] = {}
 #: In-flight reservations per cap key (see ``_client_cap_key``).
 _sse_reserved: Dict[str, int] = {}
@@ -596,49 +597,76 @@ class SSESession:
                 old_runtime, old_view = self.runtime, self.view_instance
                 old_runtime.view_instance = None
                 self.view_instance = None
+                # With one record per user (a backend on the old contract) the
+                # old page's presence goes BEFORE the new page mounts, as it
+                # always did: the new page's join and this leave would address
+                # the same record. A per-connection backend waits (#3254).
+                untrack_after_mount = False
+                if old_view is not None and getattr(old_view, "_presence_tracked", False):
+                    from .presence import PresenceManager
+
+                    if await sync_to_async(PresenceManager.per_connection)():
+                        untrack_after_mount = True
+                    else:
+                        await self._untrack_replaced_presence(old_view)
                 if old_view is not None:
                     try:
-                        from ._child_lifecycle import (
-                            release_root_view,
-                            untrack_view_presence,
-                        )
+                        from ._child_lifecycle import release_root_view
 
                         # The teardown the WebSocket live_redirect shares
                         # (#3244); SSE keeps no sticky children, so every
-                        # child goes with the page.
-                        await sync_to_async(untrack_view_presence)(old_view)
+                        # child goes with the page. Its presence is untracked
+                        # below, after the new page has mounted (#3254).
                         await sync_to_async(release_root_view)(
                             old_view, navigation=True, reason="view_navigation"
                         )
                     except Exception:
                         logger.warning("SSE old view cleanup failed during navigation")
-                self._request = target_request
-                self.runtime = ViewRuntime(
-                    SSESessionTransport(self), rate_limiter=self._rate_limiter
-                )
-                # The old page's save may still be running (#3212): the new
-                # page's saves wait for it, so it cannot land over them.
-                _carry_save_ordering(old_runtime, self.runtime)
-                watch_diagnostic_owner(self.runtime, "view_instance")
-                # #3036: the mount frame carries the destination's page shell.
-                self._replacing_view = True
                 try:
-                    await self.runtime.dispatch_mount(
-                        {
-                            **data,
-                            "type": "mount",
-                            "view": f"{view_class.__module__}.{view_class.__qualname__}",
-                            "url": target_request.path_info,
-                            "has_prerendered": False,
-                        }
+                    self._request = target_request
+                    self.runtime = ViewRuntime(
+                        SSESessionTransport(self), rate_limiter=self._rate_limiter
                     )
+                    # The old page's save may still be running (#3212): the new
+                    # page's saves wait for it, so it cannot land over them.
+                    _carry_save_ordering(old_runtime, self.runtime)
+                    watch_diagnostic_owner(self.runtime, "view_instance")
+                    # #3036: the mount frame carries the destination's page shell.
+                    self._replacing_view = True
+                    try:
+                        await self.runtime.dispatch_mount(
+                            {
+                                **data,
+                                "type": "mount",
+                                "view": f"{view_class.__module__}.{view_class.__qualname__}",
+                                "url": target_request.path_info,
+                                "has_prerendered": False,
+                            }
+                        )
+                    finally:
+                        self._replacing_view = False
+                    if self.runtime.view_instance is None:
+                        self.view_instance = None
+                        self.shutdown()
+                    else:
+                        await self.runtime._flush_all_pending()
                 finally:
-                    self._replacing_view = False
-                if self.runtime.view_instance is None:
-                    self.view_instance = None
-                    self.shutdown()
-                else:
-                    await self.runtime._flush_all_pending()
+                    if untrack_after_mount:
+                        # Same-room navigation: the new page joined the room as
+                        # a second connection of the user, so the user is never
+                        # absent and nothing leaves or rejoins (#3254).
+                        await self._untrack_replaced_presence(old_view)
+
+    async def _untrack_replaced_presence(self, old_view: Any) -> None:
+        """Untrack the presence of the page a navigation replaced (#3254); never raises."""
+        from ._child_lifecycle import untrack_view_presence
+
+        if not getattr(old_view, "_presence_tracked", False):
+            return
+        try:
+            await sync_to_async(untrack_view_presence)(old_view)
+        except Exception:  # noqa: BLE001 — presence cleanup is best effort
+            logger.warning("SSE old view presence cleanup failed during navigation")
 
     def push(self, msg: Dict[str, Any]) -> None:
         """Enqueue a message to be sent to the SSE client.
@@ -704,19 +732,27 @@ class SSESession:
         ``untrack_presence`` broadcasts through the synchronous channel-layer
         API, which cannot run on a loop thread, so ``shutdown()`` (synchronous
         itself) schedules it onto a worker thread. ``_replace_view`` awaits it
-        before releasing the view; here the release runs at once on the loop
-        thread and the untrack runs beside it, so a ``handle_presence_leave``
+        after the replacement has mounted; here the release runs at once on the
+        loop thread and the untrack runs beside it, so a ``handle_presence_leave``
         hook must not rely on the view's uploads, waiters or children still
         being in place. With no running loop there is nothing to schedule
         onto: it runs inline. A view that never tracked presence costs nothing.
 
-        A session that a same-owner reconnect (EventSource auto-reconnect) has
-        replaced under its id, or that a reconnect is still mounting to, is
-        not untracked: the presence record is keyed by (room, user), so
-        leaving it would delete the record the reconnect's view just created,
-        and SSE has no heartbeat to put it back.
+        Presence is one record per view (#3254), so this removes only this
+        view's connection. An EventSource reconnect reuses the session id, but
+        its new view joined under its own connection id: the old stream's late
+        close cannot remove the user the reconnect just brought back.
+
+        A backend on the old one-record-per-user contract shares one record
+        between the old and new view, so there the #3313 guard still applies: a
+        session that a same-owner reconnect has replaced under its id, or that
+        a reconnect is still mounting to, is not untracked.
         """
-        if not getattr(view, "_presence_tracked", False) or _sse_session_superseded(self):
+        if not getattr(view, "_presence_tracked", False):
+            return
+        from .presence import PresenceManager
+
+        if _sse_session_superseded(self) and not PresenceManager.per_connection():
             return
         from ._child_lifecycle import untrack_view_presence
 

@@ -121,23 +121,11 @@ class DocumentView(PresenceMixin, LiveView):
         # Your access rule. Here: the document's members.
         return obj.members.filter(pk=request.user.pk).exists()
 
-    def get_presence_user_id(self):
-        # One presence per TAB, not per user. With the default (one per
-        # user), closing one of alice's two tabs would remove her from
-        # the list while the other tab is still open. The id is hashed
-        # because every viewer receives it: list_presences() returns it,
-        # and a legacy view also copies it into meta["user_id"].
-        per_tab = f"{self.request.user.pk}:{self._websocket_session_id}"
-        return hashlib.sha256(per_tab.encode()).hexdigest()[:16]
-
     def _viewers(self):
         # Each presence record is {"id", "joined_at", "meta"}; the dict
-        # passed to track_presence() is under "meta". Several tabs of one
-        # user are several records, so collapse them by name.
-        viewers = {}
-        for p in self.list_presences():
-            viewers.setdefault(p["meta"].get("name", ""), p["meta"])
-        return viewers
+        # passed to track_presence() is under "meta". There is one record
+        # per user, however many tabs they have open.
+        return {p["meta"].get("name", ""): p["meta"] for p in self.list_presences()}
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
@@ -182,11 +170,11 @@ Five things to call out:
    key, so put in it only what every viewer may see (`name`,
    `color`, `is_typing`, etc.). Presence registers only over the
    WebSocket; the first HTTP render skips it.
-4. **`get_presence_user_id()`** decides what one presence is. The
-   default is one per logged-in user, which collapses tabs and makes
-   the first closed tab remove the user. Keying by tab keeps the
-   user listed until their last tab closes, and `_viewers()`
-   collapses their tabs back into one dot.
+4. **One presence per user.** The default `get_presence_user_id()` is the
+   logged-in user's id, and each open tab is its own connection of that
+   user. The user stays listed (one dot) until their LAST tab closes,
+   and `handle_presence_join` / `handle_presence_leave` run once per
+   user, not once per tab.
 5. **`_on_presence_change`** is the hook that fires on the OTHER
    viewers' sessions when someone joins or leaves. It carries no
    payload, so the view diffs the viewer list against the one it
@@ -326,10 +314,9 @@ you want. Three reasons:
 
 1. **What one presence is, is your choice.** By default a
    logged-in user's presence id is their user id, so alice with the
-   doc open in two tabs is one presence, and closing either tab
-   removes it. This tutorial keys presence by tab instead
-   (`get_presence_user_id()`) and collapses tabs by name when it
-   renders. Anonymous visitors collapse per browser session; set
+   doc open in two tabs is one presence, and she stays listed until
+   her last tab closes (each tab is a connection of that one
+   presence). Anonymous visitors collapse per browser session; set
    `presence_unique_per_connection = True` to count each anonymous
    tab separately.
 2. **A session that's been idle for an hour isn't presence.** The
