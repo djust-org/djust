@@ -468,6 +468,8 @@ class RustBridgeMixin:
                 from ..state_backend import get_backend
 
                 backend = get_backend()
+                # (A view mounted beside the page view has a scope of its own in
+                # the key: ``_tenant_state.state_scope``, #3252.)
                 cache_key = self._saved_state_key(session_key, view_key, template_hash_slot)
                 self._cache_key = cache_key
                 # codeql[py/log-injection] — cache_key may contain request.path; sanitize

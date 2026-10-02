@@ -8,6 +8,16 @@
 // eslint-disable-next-line prefer-const
 let clientVdomVersion = null;
 
+// Views mounted beside the page view (#3252; the logic is in 13b-view-slots.js).
+// The slot whose frame is being applied: {id, root, viewPath}, else null.
+// `let` (NOT const) — reassigned by withSlot() in 13b-view-slots.js (#1351).
+// eslint-disable-next-line prefer-const
+let _activeSlot = null;
+// target_id -> the client's VDOM version for that slot's container.
+const _slotVersions = new Map();
+// target_id -> {viewPath}: the slots the server has mounted for this socket.
+const _mountedSlots = new Map();
+
 // Event sequencing (#560): monotonic ref counter for matching event
 // responses to requests, and buffering server-initiated pushes during
 // pending events. Uses a Set to track multiple concurrent pending refs.
@@ -54,7 +64,12 @@ async function flushServerUpdates(transport) {
     while (!hasPendingEventRequests(transport)) {
         const [frame] = takeServerUpdates(transport, 1);
         if (!frame) return;
-        await handleServerResponse(frame, null, null, transport);
+        // A frame buffered for a slot is replayed in that slot's context (#3252).
+        if (typeof frame.target_id === 'string' && frame.target_id) {
+            await withSlot(frame.target_id, () => handleServerResponse(frame, null, null, transport));
+        } else {
+            await handleServerResponse(frame, null, null, transport);
+        }
         completeLegacyAsyncBatches(transport, frame);
     }
 }

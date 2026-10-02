@@ -2737,11 +2737,15 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
         ):
             raise ExposureError("Child reuse identity changed during authorization")
 
+    from ..mixins.sticky import _child_identity as child_identity
+
     # 5. Assign the view_id and register on the parent. _register_child
     #    wires parent/view_id back-references on the child. An explicit child
     #    registers under exactly the slot its identity was compiled for.
     view_id = (
-        explicit_slot if explicit_slot is not None else parent._assign_view_id(preferred_view_id)
+        explicit_slot
+        if explicit_slot is not None
+        else parent._assign_view_id(preferred_view_id, lambda: child_identity(view_path, kwargs))
     )
     parent._register_child(view_id, child)
 

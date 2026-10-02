@@ -105,6 +105,9 @@ class LiveViewConfig:
         "worker_threads": None,
         # Maximum incoming WebSocket message size in bytes (0 = no limit)
         "max_message_size": 65536,  # 64KB
+        # How many views one WebSocket may host besides the page view: the
+        # ``dj-lazy`` and ``mount_batch`` views, each a view of its own (#3252).
+        "max_views_per_connection": 64,
         # Event security mode: "open", "warn", or "strict"
         # "open"   - no decorator check (legacy behavior)
         # "warn"   - allow unmarked methods but log deprecation warning

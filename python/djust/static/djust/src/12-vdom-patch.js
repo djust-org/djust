@@ -2742,6 +2742,8 @@ async function applyPatches(patches, rootEl = null) {
     if (!patches || patches.length === 0) {
         return true;
     }
+    // A frame for a view mounted beside the page view patches its container (#3252).
+    if (!rootEl && _activeSlot) rootEl = _activeSlot.root;
 
     if (_shouldUseViewTransition()) {
         let innerResult = true;

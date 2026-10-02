@@ -120,9 +120,24 @@ const lazyHydrationManager = {
         }
     },
 
+    // The address a view hydrated into `element` has on the socket (#3252): the
+    // container's `data-djust-target`, else its id, else a generated one. The
+    // server addresses every frame of that view with it.
+    targetIdFor(element) {
+        let targetId = element.getAttribute('data-djust-target') || element.id;
+        if (!targetId) {
+            targetId = 'dj-target-' + Math.random().toString(36).slice(2, 10);
+        }
+        if (!element.getAttribute('data-djust-target')) {
+            element.setAttribute('data-djust-target', targetId);
+        }
+        return targetId;
+    },
+
     // Hydrate a single element
     hydrateElement(element) {
-        const elementId = element.id || element.getAttribute('dj-view');
+        // Two lazy views of one class are two views: key by the container.
+        const elementId = this.targetIdFor(element);
 
         // Prevent double hydration
         if (this.hydratedElements.has(elementId)) {
@@ -188,12 +203,9 @@ const lazyHydrationManager = {
             const viewEntries = [];
             const urlParams = Object.fromEntries(new URLSearchParams(window.location.search));
             mounts.forEach(({ element, viewPath }) => {
-                const targetId = element.getAttribute('data-djust-target')
-                    || element.id
-                    || ('dj-target-' + Math.random().toString(36).slice(2, 10));
-                if (!element.getAttribute('data-djust-target')) {
-                    element.setAttribute('data-djust-target', targetId);
-                }
+                const targetId = this.targetIdFor(element);
+                registerSlot(targetId, viewPath, null);
+                installSlotListeners(element);
                 const hasContent = element.innerHTML && element.innerHTML.trim().length > 0;
                 viewEntries.push({
                     view: viewPath,
@@ -254,19 +266,28 @@ const lazyHydrationManager = {
 
         if (hasContent) {
             if (globalThis.djustDebug) console.log('[LiveView:lazy] Using pre-rendered content');
-            liveViewWS.skipMountHtml = true;
         }
+
+        // The view is mounted beside the page view and every other hydrated
+        // view (#3252): it names its container, so the server adds it to the
+        // socket instead of replacing the page view, and addresses every frame
+        // of it with this id. Events from inside it are addressed the same way,
+        // from now on: before its mount reply arrives, the server refuses them
+        // instead of running them on the page view.
+        const targetId = this.targetIdFor(element);
+        registerSlot(targetId, viewPath, null);
 
         // Pass URL query params
         const urlParams = Object.fromEntries(new URLSearchParams(window.location.search));
-        liveViewWS.mount(viewPath, urlParams);
+        liveViewWS.mount(viewPath, urlParams, { targetId: targetId, hasPrerendered: !!hasContent });
 
         // Remove lazy attribute to indicate hydration complete
         element.removeAttribute('dj-lazy');
         element.setAttribute('data-live-hydrated', 'true');
 
         // Bind events and hooks to the newly hydrated content
-        reinitAfterDOMUpdate();
+        installSlotListeners(element);
+        reinitAfterDOMUpdate(element);
     },
 
     // Check if an element is lazily loaded

@@ -224,6 +224,11 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         "_django_session_key",
         "_djust_state_saves_released",
         "_djust_mount_view_path",
+        # The ``target_id`` of the slot a view mounted beside the page view
+        # (``on_view_instantiated``, #3252); keys its cached Rust view.
+        "_djust_slot_target",
+        # The HTTP fallback's per-render child id counter (``_assign_view_id``).
+        "_render_child_ids",
         # The SSE transport's stream id (``on_view_mounted``), the twin of
         # ``_websocket_session_id`` (#3248 review).
         "_sse_session_id",

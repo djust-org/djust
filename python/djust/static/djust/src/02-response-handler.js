@@ -54,7 +54,10 @@ function applyEmbeddedUpdate(data, transport) {
         if (globalThis.djustDebug) console.warn('[LiveView] Invalid embedded update');
         return false;
     }
-    const container = document.querySelector(`[data-djust-embedded="${CSS.escape(data.view_id)}"]`);
+    // An embedded view's id is unique per root view, not per page: a frame for a
+    // slot looks inside the slot's container (#3252).
+    const scope = (_activeSlot && _activeSlot.root) || document;
+    const container = scope.querySelector(`[data-djust-embedded="${CSS.escape(data.view_id)}"]`);
     if (!container) return false;
     const incoming = document.createElement('div');
     // codeql[js/xss] -- html is rendered by the trusted Django/Rust server template engine
@@ -95,6 +98,31 @@ async function handleEmbeddedResponse(data, transport) {
         await flushServerUpdates(transport);
     }
     return true;
+}
+
+/**
+ * Apply the side-channel commands an HTTP fallback response carries: the
+ * navigation the handler queued (live_patch / live_redirect, #3303; each entry
+ * is a WebSocket-shaped navigation frame, and unconnected a live_redirect
+ * becomes a full-page navigation), flash messages and page metadata. Shared by
+ * the page's own answers and an embedded child's (#3104): one path, not two.
+ */
+function applyHttpSideChannels(data) {
+    if (Array.isArray(data._navigation) && window.djust.navigation) {
+        data._navigation.forEach(function(frame) {
+            window.djust.navigation.handleNavigation(frame);
+        });
+    }
+    if (data._flash && window.djust.flash) {
+        data._flash.forEach(function(cmd) {
+            window.djust.flash.handleFlash(cmd);
+        });
+    }
+    if (data._page_metadata && window.djust.pageMetadata) {
+        data._page_metadata.forEach(function(cmd) {
+            window.djust.pageMetadata.handlePageMetadata(cmd);
+        });
+    }
 }
 
 /**
@@ -158,7 +186,7 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
 
                 // Request full HTML for recovery morph
                 if (isWSConnected()) {
-                    liveViewWS.sendMessage({ type: 'request_html' });
+                    liveViewWS.sendMessage({ type: 'request_html', ...slotFrameFields(_activeSlot && _activeSlot.id) });
                 } else {
                     window.location.reload();
                 }
@@ -232,7 +260,7 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
                 clientVdomVersion = data.version - 1;
 
                 if (isWSConnected()) {
-                    liveViewWS.sendMessage({ type: 'request_html' });
+                    liveViewWS.sendMessage({ type: 'request_html', ...slotFrameFields(_activeSlot && _activeSlot.id) });
                 } else {
                     // No WebSocket available — last resort page reload
                     window.location.reload();
@@ -288,30 +316,11 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
         // Handle form reset
         if (data.reset_form) {
             if (globalThis.djustDebug) console.log('[LiveView] Resetting form');
-            const form = document.querySelector('[dj-root] form');
+            const form = _activeSlot ? _activeSlot.root.querySelector('form') : document.querySelector('[dj-root] form');
             if (form) form.reset();
         }
 
-        // Navigation the handler queued over the HTTP fallback (live_patch /
-        // live_redirect, #3303): each entry is a WebSocket-shaped navigation
-        // frame. Unconnected, a live_redirect becomes a full-page navigation.
-        if (Array.isArray(data._navigation) && window.djust.navigation) {
-            data._navigation.forEach(function(frame) {
-                window.djust.navigation.handleNavigation(frame);
-            });
-        }
-
-        // Process side-channel commands from HTTP response (flash, page metadata)
-        if (data._flash && window.djust.flash) {
-            data._flash.forEach(function(cmd) {
-                window.djust.flash.handleFlash(cmd);
-            });
-        }
-        if (data._page_metadata && window.djust.pageMetadata) {
-            data._page_metadata.forEach(function(cmd) {
-                window.djust.pageMetadata.handlePageMetadata(cmd);
-            });
-        }
+        applyHttpSideChannels(data);
 
         // Forward debug info to debug panel (HTTP-only mode)
         if (data._debug && window.djustDebugPanel && typeof window.djustDebugPanel.processDebugInfo === 'function') {

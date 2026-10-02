@@ -273,6 +273,9 @@ those into a single `mount_batch` frame; the server replies with one
 isolated in a `failed[]` array — one bad view no longer kills the
 batch.
 
+Each batched view is a LiveView of its own beside the page view and the
+other views: see [Several LiveViews on One Page](multiple-views.md).
+
 No code changes are required to opt in — the batching is automatic
 when the client and server are both ≥ v0.6.0. To opt out (e.g. for
 debugging), set:

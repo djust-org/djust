@@ -545,10 +545,16 @@ function _recordParameterContractFrame(transport, data) {
     transport._parameterContractFrames.set(data, transport._parameterContractSequence);
 }
 
+// The mount whose contracts a render frame refreshes: the page view's, or the
+// slot's while a slot's frame is applied (#3252).
+function _contractScopePath(transport) {
+    return _activeSlot ? _activeSlot.viewPath : transport?.primaryViewPath;
+}
+
 // A failed/partial DOM application cannot keep advertising the last successful
 // strict snapshot. Invalidate only this transport's primary scope, never peers.
 function _invalidateRenderParameterContracts(transport, data) {
-    const path = transport?.primaryViewPath;
+    const path = _contractScopePath(transport);
     const mounts = transport?._parameterContracts;
     if (mounts?.has(path) && (mounts.get(path) !== null || Object.hasOwn(data, 'parameter_contracts'))) {
         mounts.set(path, false);
@@ -567,20 +573,21 @@ function _refreshRenderParameterContracts(transport, data) {
         return;
     }
     const order = transport._parameterContractFrames?.get(data);
-    const applied = transport._parameterContractApplied?.get(transport.primaryViewPath);
+    const scopePath = _contractScopePath(transport);
+    const applied = transport._parameterContractApplied?.get(scopePath);
     // A newer applied response already supplied a whole-tree snapshot. Replaying
     // an older buffered delta must not replace it, even with a missing snapshot.
     if (order !== undefined && applied !== undefined && order <= applied) return;
     if (!supplied) {
         _invalidateRenderParameterContracts(transport, data);
         if (order !== undefined && applied !== undefined) {
-            transport._parameterContractApplied.set(transport.primaryViewPath, order);
+            transport._parameterContractApplied.set(scopePath, order);
         }
         return;
     }
     const path = data.parameter_contract_view;
     const root = getLiveViewRoot();
-    if (order === undefined || typeof path !== 'string' || path !== transport.primaryViewPath ||
+    if (order === undefined || typeof path !== 'string' || path !== scopePath ||
         root.getAttribute('dj-view') !== path || !transport._parameterContracts?.has(path)) {
         _invalidateRenderParameterContracts(transport, data);
         if (globalThis.djustDebug) console.warn('[LiveView] Unknown render parameter contract mount');

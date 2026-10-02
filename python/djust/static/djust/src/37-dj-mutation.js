@@ -69,6 +69,7 @@ function _installDjMutationFor(el) {
         // Route to the standard djust event pipeline so the server-side
         // handler named in dj-mutation="..." actually runs.
         if (globalThis.djust && typeof globalThis.djust.handleEvent === 'function') {
+            if (typeof globalThis.djust._markSlotOf === 'function') globalThis.djust._markSlotOf(payload, el);
             globalThis.djust.handleEvent(handlerName, payload);
         }
     }

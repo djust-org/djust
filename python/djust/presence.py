@@ -758,6 +758,9 @@ class PresenceMixin:
                 "type": "presence_event",
                 "event": event,
                 "payload": payload,
+                # The group it was sent to: a socket that hosts several views
+                # forwards it for the views that joined it (#3252).
+                "group": group_name,
             }
             async_to_sync(channel_layer.group_send)(group_name, message)
 

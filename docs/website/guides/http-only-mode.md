@@ -98,6 +98,22 @@ A view that declares [explicit exposure](../state/explicit-exposure.md) is rebui
 
 A `live_redirect()` or `live_patch()` that a handler queues is returned in the answer's `_navigation` list, in the shape of the WebSocket `navigation` frame, and the client applies it. After a `live_redirect()` nothing is rendered or saved for that request, so a handler can call `logout()` and then redirect. The flip side: a handler that changes state and then calls `live_redirect()` back to the same view's URL does not keep that change over the HTTP fallback, because the state is not saved. A `live_patch()` renders as usual and carries its frame beside the patches.
 
+### Embedded views over the HTTP fallback
+
+An event that comes from inside a `{% live_render %}` child carries the child's `view_id`. Over the page-POST fallback the request renders the page once to register its children, then runs the event on the child, and answers with an `embedded_update` holding the child's own HTML, the frame the WebSocket and SSE transports send. Authorization and parameter checks are the page's own, applied to the child: the page's view-level and object permission, the child's own view-level auth and object permission (checked when the page registers it), `@permission_required` on the handler, `@event_handler` and the handler's parameter policy.
+
+A child's id has to be the same on the page GET and on the POST that follows, and has to name the same child even when the page changed in between. Over HTTP an auto-assigned id is therefore named for what the child is, `child_<12 hex digits>` from its view path and the arguments of its `{% live_render %}` tag (a digest keyed with `SECRET_KEY`, so the id does not let a client confirm guesses about the arguments; it is the same in every process) (the process-wide counter used over a socket never repeats between requests, and a position in the render would point at a different row once the list changed). Two tags with the same view and arguments get `_2`, `_3` suffixes. A child pinned with `view_id="..."`, and a sticky child, keep their own ids.
+
+So a list of children stays addressable while it changes: a row added in front of it in another tab leaves every row's id as it was, and an event for a row that has gone is refused (`Embedded view not found`) rather than run on a neighbour. The arguments must give the same value on both requests: scalars, model instances (by primary key), and containers of them do. An argument that is some other object counts by its type only, and one that changes between the GET and the POST (a timestamp) makes the child unreachable until the page is reloaded. Pin such a child with `view_id="..."`.
+
+What carries over and what does not:
+
+- A [sticky child that opted in to state persistence](sticky-child-persistence.md) keeps its state across events, saved under its sticky key as on the socket.
+- A child that did not opt in is re-created on each request, as it is on every parent render over HTTP: its state does not accumulate between events (two `inc` events on a counter child both answer `count=1`). Routing works; persistence does not. Give a child that must keep state `sticky=True` with state persistence, or use the WebSocket or SSE transport.
+- Each event re-renders the page once to register its children: a second `get_context_data` and a mount per child. Fine for a page; worth knowing for a page with many children.
+- An id that names no child of the page, an [explicit-exposure](../state/explicit-exposure.md) child, and any child of an explicit-exposure page are refused with `{"error": "Embedded view not found"}`. An explicit child's turn is authorized against the mount binding of a socket session, which a stateless request has not.
+- Views mounted beside the page view (lazy and batched views, see [Several LiveViews on One Page](multiple-views.md)) need the WebSocket: the client refuses their events over this fallback instead of posting them to the page.
+
 ## Behavior Differences
 
 | Feature | WebSocket Mode | SSE / HTTP Mode |

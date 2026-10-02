@@ -22,10 +22,15 @@ minimal makes the diff reviewable.
 
 from __future__ import annotations
 
+import datetime
+import decimal
+import enum
 import inspect
 import itertools
 import logging
-from typing import Any, Dict, Optional
+import re
+import uuid
+from typing import Any, Callable, Dict, Optional, Union
 
 from asgiref.sync import async_to_sync, sync_to_async
 
@@ -36,6 +41,60 @@ logger = logging.getLogger(__name__)
 # matters for WS event routing when two embeds of the same class live
 # under the same parent.
 _view_id_counter = itertools.count(1)
+
+# The shape of an auto-assigned child id: ``child_<N>`` (the process-wide
+# counter), or ``child_<hash>`` / ``child_<hash>_<N>`` (named for what the child
+# is, over the HTTP fallback: see ``_child_identity``).
+_AUTO_VIEW_ID = re.compile(r"child_(?:[0-9]+|[0-9a-f]{12}(?:_[0-9]+)?)")
+
+
+def _canonical_kwarg(value: Any, depth: int = 0) -> str:
+    """A stable text for one ``{% live_render %}`` kwarg, for ``_child_identity``.
+
+    Scalars by value, a model instance by its label and primary key, containers
+    by their members, and anything else by its type alone: never an object's
+    ``repr``, which may carry a memory address and so differ between requests.
+    """
+    if value is None or isinstance(value, (bool, int, float, str, bytes)):
+        return repr(value)
+    if isinstance(value, (datetime.date, datetime.time, decimal.Decimal, uuid.UUID, enum.Enum)):
+        # By value, with the type: ``Decimal(1)`` and ``date(1, 1, 1)`` differ,
+        # and so do two dates.
+        return f"<{type(value).__qualname__}:{value}>"
+    if depth < 4:
+        if isinstance(value, (list, tuple)):
+            return "[" + ",".join(_canonical_kwarg(v, depth + 1) for v in value) + "]"
+        if isinstance(value, (set, frozenset)):
+            return "{" + ",".join(sorted(_canonical_kwarg(v, depth + 1) for v in value)) + "}"
+        if isinstance(value, dict):
+            items = sorted(
+                (_canonical_kwarg(k, depth + 1), _canonical_kwarg(v, depth + 1))
+                for k, v in value.items()
+            )
+            return "{" + ",".join(f"{k}:{v}" for k, v in items) + "}"
+        meta = getattr(value, "_meta", None)
+        label = getattr(meta, "label_lower", None)
+        if isinstance(label, str):
+            return f"<{label}#{getattr(value, 'pk', None)!r}>"
+    cls = type(value)
+    return f"<{cls.__module__}.{cls.__qualname__}>"
+
+
+def _child_identity(view_path: str, kwargs: Dict[str, Any]) -> str:
+    """What a ``{% live_render %}`` child is: its view path and the kwargs it was given.
+
+    Twelve hex digits of a keyed digest (HMAC with the project's ``SECRET_KEY``)
+    of both. Two tags with the same view and the same arguments have one
+    identity; a tag with other arguments, another. The id reaches the browser,
+    so the digest is keyed: an unkeyed one would let a client confirm guesses
+    about arguments it cannot see (a low-entropy primary key, a session key).
+    The key is the same in every process, so the id repeats between requests.
+    """
+    from django.utils.crypto import salted_hmac
+
+    text = view_path + "|" + ",".join(f"{k}={_canonical_kwarg(kwargs[k])}" for k in sorted(kwargs))
+    digest: str = salted_hmac("djust.child_identity", text, algorithm="sha256").hexdigest()
+    return digest[:12]
 
 
 # ---------------------------------------------------------------------------
@@ -426,17 +485,79 @@ class StickyChildRegistry:
     # view_id assignment
     # ------------------------------------------------------------------
 
-    def _assign_view_id(self, preferred: Optional[str] = None) -> str:
+    def _assign_view_id(
+        self,
+        preferred: Optional[str] = None,
+        identity: Union[str, Callable[[], str], None] = None,
+    ) -> str:
         """Return a unique ``view_id`` for a new child.
 
         If ``preferred`` is supplied and is not already in use on this
         parent, it is honored — otherwise a monotonic ``child_N`` stamp
         is generated. The auto-generated form is the default path used
         by ``{% live_render %}`` when the caller doesn't pin a stable id.
+
+        Over the HTTP fallback the stamp names what the child is instead
+        (:meth:`_scope_child_ids_to_render`): ``identity`` (the view path and
+        kwargs of the tag, ``_child_identity``) makes the id, and a repeat of
+        the same child within one render gets a numeric suffix. The same
+        template yields the same ids on every request (#3104), and an id never
+        names a different child because the page changed in between: a list
+        that gained an item in another tab leaves each row's id as it was
+        (a position in the render would not).
         """
-        if preferred and preferred not in getattr(self, "_child_views", {}):
+        registry = getattr(self, "_child_views", {})
+        if preferred and preferred not in registry:
             return preferred
+        per_render = self.__dict__.get("_render_child_ids")
+        if per_render is not None:
+            if identity:
+                # A callable is only run here: over a socket the id is the
+                # counter's and the (possibly large) arguments are not hashed.
+                base = f"child_{identity() if callable(identity) else identity}"
+                candidate, n = base, 1
+                while candidate in registry:
+                    n += 1
+                    candidate = f"{base}_{n}"
+                return candidate
+            while True:
+                candidate = f"child_{next(per_render)}"
+                if candidate not in registry:
+                    return candidate
         return f"child_{next(_view_id_counter)}"
+
+    def _scope_child_ids_to_render(self) -> None:
+        """Make the auto-assigned child ids of the render about to run repeat.
+
+        Over the HTTP fallback every request builds the view afresh, so a child
+        stamped with the process-wide counter (``child_17`` on the page GET,
+        ``child_18`` on the POST that follows) can never be found again by the
+        ``view_id`` the browser echoes. With the ids named for the child
+        (``_child_identity``; a plain count from 1 only for a tag that gives
+        none), the same template yields the same ids on every request, and an
+        event carrying a child's ``view_id`` can be routed to that child (#3104).
+
+        Called by the HTTP request methods immediately before each render of a
+        legacy parent, never over a socket: there children live across renders
+        and the process-wide counter keeps their ids unique. A child of a
+        previous render of this request (an auto-numbered, non-sticky, legacy
+        one: a throwaway) is dropped from the registry so the next render
+        reuses its id; pinned, sticky and explicit children are left alone.
+        """
+        from .._exposure import uses_legacy_exposure
+
+        self.__dict__["_render_child_ids"] = itertools.count(1)
+        registry = getattr(self, "_child_views", None)
+        if type(registry) is not dict:
+            return
+        for view_id in [
+            vid
+            for vid, child in registry.items()
+            if _AUTO_VIEW_ID.fullmatch(vid)
+            and uses_legacy_exposure(child)
+            and getattr(child, "sticky", False) is not True
+        ]:
+            registry.pop(view_id, None)
 
     # ------------------------------------------------------------------
     # Registration

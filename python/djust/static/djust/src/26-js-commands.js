@@ -183,6 +183,7 @@
         }
         try {
             if (typeof window.djust.handleEvent === 'function') {
+                if (originEl && typeof window.djust._markSlotOf === 'function') window.djust._markSlotOf(params, originEl);
                 await window.djust.handleEvent(event, params);
             }
         } finally {

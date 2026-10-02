@@ -142,9 +142,11 @@ describe('structural pin: ONE page-container helper across src/ (#2632, #1646)',
         '46-state-snapshot.js': 1, // snapshot view-path fallback
     };
 
-    it('defines findPageViewContainer once, in 03-websocket.js, with BOTH exclusions', () => {
+    it('defines findPageViewContainer once, in 03-websocket.js, with every exclusion', () => {
+        // Sticky and embedded roots (#2632), and a view that hydrates beside the
+        // page view: `dj-lazy`, or mounted at a `data-djust-target` (#3252).
         expect(WS_MODULE).toContain(
-            "querySelector('[dj-view]:not([dj-sticky-root]):not([data-djust-embedded])')"
+            "'[dj-view]:not([dj-sticky-root]):not([data-djust-embedded]):not([dj-lazy]):not([data-djust-target])'"
         );
         const defs = MODULES.flatMap(([, src]) => src.match(/function findPageViewContainer\(\)/g) || []);
         expect(defs.length).toBe(1);

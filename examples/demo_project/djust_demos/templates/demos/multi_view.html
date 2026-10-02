@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+
+{% comment %}
+#3252 live surface (tests/playwright/test_multi_view.py): the page's own view,
+two lazy views of one class that hydrate together (one mount_batch), and a
+third that hydrates on its first click (one mount).
+{% endcomment %}
+
+{% block title %}Several LiveViews on one socket (djust){% endblock %}
+
+{% block extra_head %}
+<script>
+    // The hook the lazy widgets carry (a Phoenix-style registry, read when a hook is bound).
+    window.DjustHooks = {
+        MultiViewPing: {
+            mounted() { this.el.addEventListener("click", () => this.pushEvent("click", {})); },
+        },
+    };
+</script>
+{% endblock %}
+
+{% block content %}
+<div style="padding: 6rem 2rem 2rem; max-width: 720px; margin: 0 auto;">
+    <div id="page-view" dj-root dj-view="djust_demos.views.multi_view_demo.MultiViewPage">
+        <h1>Several LiveViews on one socket</h1>
+        <p>page clicks <b id="page-clicks">{{ clicks }}</b> pushes <b id="page-pushes">{{ pushes }}</b></p>
+        <button id="page-click" dj-click="click">page click</button>
+        <button id="push-widgets" dj-click="push_widgets">push to widgets</button>
+        <button id="push-late" dj-click="push_late">push to late widget</button>
+        <button id="push-page" dj-click="push_page">push to page</button>
+    </div>
+    <div id="widget-a" dj-view="djust_demos.views.multi_view_demo.MultiViewWidget" dj-lazy="idle"></div>
+    <div id="widget-b" dj-view="djust_demos.views.multi_view_demo.MultiViewWidget" dj-lazy="idle"></div>
+    <div id="uploader" dj-view="djust_demos.views.multi_view_demo.MultiViewUploader" dj-lazy="idle"></div>
+    <div id="late" dj-view="djust_demos.views.multi_view_demo.MultiViewLateWidget" dj-lazy="click">
+        <p id="late-placeholder" style="padding:1rem;border:1px dashed #999">click to load</p>
+    </div>
+</div>
+{% endblock %}

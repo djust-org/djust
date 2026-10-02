@@ -528,7 +528,23 @@ class SSESession:
                 return
             self._event_request = request
             try:
-                if data.get("type") == "live_redirect_mount":
+                if data.get("target_id") is not None:
+                    # A view mounted beside the page view (#3252) lives on a
+                    # WebSocket. This session hosts one view, and answering the
+                    # frame with it would run the event on the wrong view.
+                    fields: Dict[str, Any] = {"code": "view_unavailable"}
+                    ref = data.get("ref")
+                    if type(ref) is int or type(ref) is float:
+                        try:
+                            fields["ref"] = int(ref)
+                        except (ValueError, OverflowError):
+                            # A forged NaN/infinity ref is not echoed.
+                            pass
+                    await self.send_error(
+                        "A view mounted beside the page view needs the WebSocket transport.",
+                        **fields,
+                    )
+                elif data.get("type") == "live_redirect_mount":
                     if not self._rate_limiter.check("live_redirect_mount"):
                         await self.send_error("Navigation rate limit exceeded", code="rate_limited")
                         if self._rate_limiter.should_disconnect():

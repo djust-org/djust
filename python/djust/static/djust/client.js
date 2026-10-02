@@ -301,6 +301,8 @@ function reinitLiveViewForTurboNav() {
 
     // Reset client VDOM version
     clientVdomVersion = null;
+    // The views hydrated beside the old page view went with it (#3252).
+    clearSlots();
 
     // Clear lazy hydration state
     lazyHydrationManager.init();
@@ -412,7 +414,10 @@ function applyEmbeddedUpdate(data, transport) {
         if (globalThis.djustDebug) console.warn('[LiveView] Invalid embedded update');
         return false;
     }
-    const container = document.querySelector(`[data-djust-embedded="${CSS.escape(data.view_id)}"]`);
+    // An embedded view's id is unique per root view, not per page: a frame for a
+    // slot looks inside the slot's container (#3252).
+    const scope = (_activeSlot && _activeSlot.root) || document;
+    const container = scope.querySelector(`[data-djust-embedded="${CSS.escape(data.view_id)}"]`);
     if (!container) return false;
     const incoming = document.createElement('div');
     // codeql[js/xss] -- html is rendered by the trusted Django/Rust server template engine
@@ -453,6 +458,31 @@ async function handleEmbeddedResponse(data, transport) {
         await flushServerUpdates(transport);
     }
     return true;
+}
+
+/**
+ * Apply the side-channel commands an HTTP fallback response carries: the
+ * navigation the handler queued (live_patch / live_redirect, #3303; each entry
+ * is a WebSocket-shaped navigation frame, and unconnected a live_redirect
+ * becomes a full-page navigation), flash messages and page metadata. Shared by
+ * the page's own answers and an embedded child's (#3104): one path, not two.
+ */
+function applyHttpSideChannels(data) {
+    if (Array.isArray(data._navigation) && window.djust.navigation) {
+        data._navigation.forEach(function(frame) {
+            window.djust.navigation.handleNavigation(frame);
+        });
+    }
+    if (data._flash && window.djust.flash) {
+        data._flash.forEach(function(cmd) {
+            window.djust.flash.handleFlash(cmd);
+        });
+    }
+    if (data._page_metadata && window.djust.pageMetadata) {
+        data._page_metadata.forEach(function(cmd) {
+            window.djust.pageMetadata.handlePageMetadata(cmd);
+        });
+    }
 }
 
 /**
@@ -516,7 +546,7 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
 
                 // Request full HTML for recovery morph
                 if (isWSConnected()) {
-                    liveViewWS.sendMessage({ type: 'request_html' });
+                    liveViewWS.sendMessage({ type: 'request_html', ...slotFrameFields(_activeSlot && _activeSlot.id) });
                 } else {
                     window.location.reload();
                 }
@@ -590,7 +620,7 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
                 clientVdomVersion = data.version - 1;
 
                 if (isWSConnected()) {
-                    liveViewWS.sendMessage({ type: 'request_html' });
+                    liveViewWS.sendMessage({ type: 'request_html', ...slotFrameFields(_activeSlot && _activeSlot.id) });
                 } else {
                     // No WebSocket available — last resort page reload
                     window.location.reload();
@@ -646,30 +676,11 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
         // Handle form reset
         if (data.reset_form) {
             if (globalThis.djustDebug) console.log('[LiveView] Resetting form');
-            const form = document.querySelector('[dj-root] form');
+            const form = _activeSlot ? _activeSlot.root.querySelector('form') : document.querySelector('[dj-root] form');
             if (form) form.reset();
         }
 
-        // Navigation the handler queued over the HTTP fallback (live_patch /
-        // live_redirect, #3303): each entry is a WebSocket-shaped navigation
-        // frame. Unconnected, a live_redirect becomes a full-page navigation.
-        if (Array.isArray(data._navigation) && window.djust.navigation) {
-            data._navigation.forEach(function(frame) {
-                window.djust.navigation.handleNavigation(frame);
-            });
-        }
-
-        // Process side-channel commands from HTTP response (flash, page metadata)
-        if (data._flash && window.djust.flash) {
-            data._flash.forEach(function(cmd) {
-                window.djust.flash.handleFlash(cmd);
-            });
-        }
-        if (data._page_metadata && window.djust.pageMetadata) {
-            data._page_metadata.forEach(function(cmd) {
-                window.djust.pageMetadata.handlePageMetadata(cmd);
-            });
-        }
+        applyHttpSideChannels(data);
 
         // Forward debug info to debug panel (HTTP-only mode)
         if (data._debug && window.djustDebugPanel && typeof window.djustDebugPanel.processDebugInfo === 'function') {
@@ -904,7 +915,10 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
  * @returns {Element|null}
  */
 function findPageViewContainer() {
-    return document.querySelector('[dj-view]:not([dj-sticky-root]):not([data-djust-embedded])');
+    // Not a view that hydrates beside the page view (`dj-lazy`, or mounted at a
+    // `data-djust-target`, #3252): it is not the page.
+    return document.querySelector(
+        '[dj-view]:not([dj-sticky-root]):not([data-djust-embedded]):not([dj-lazy]):not([data-djust-target])');
 }
 
 /**
@@ -1526,20 +1540,35 @@ class LiveViewWebSocket {
         return next;
     }
 
-    async _handleMessageImpl(data) {
-        if (globalThis.djustDebug) console.log('[LiveView] Received: %s %o', String(data.type), data);
-        // #3036: a live navigation to a page with a different page shell is a
-        // full page load; the destination's root is not applied.
-        if (window.djust.fallBackToFullLoadOnShellChange?.(data)) return;
-        // ADR-038 D-n: compared before anything from this mount is cached.
-        if (window.djust._sw) window.djust._sw.applyMountMetadata(data);
-        storeSignedSnapshot(data, this.primaryViewPath);
+    async _handleMessageImpl(data, inSlot = false) {
+        // `inSlot`: the frame was already received; this is its application in
+        // the context of the slot it is addressed to (`_handleSlotFrame`).
+        if (!inSlot) {
+            if (globalThis.djustDebug) console.log('[LiveView] Received: %s %o', String(data.type), data);
+            // #3036: a live navigation to a page with a different page shell is a
+            // full page load; the destination's root is not applied.
+            if (window.djust.fallBackToFullLoadOnShellChange?.(data)) return;
+            // ADR-038 D-n: compared before anything from this mount is cached.
+            if (window.djust._sw) window.djust._sw.applyMountMetadata(data);
+            storeSignedSnapshot(data, this.primaryViewPath);
+
+            // A frame addressed to a view mounted beside the page view (#3252)
+            // is applied to that view's container, in its own context.
+            if (typeof data.target_id === 'string' && data.target_id &&
+                _SLOT_FRAME_TYPES.has(data.type)) {
+                await this._handleSlotFrame(data);
+                return;
+            }
+        }
 
         switch (data.type) {
             case 'connect':
                 this.sessionId = data.session_id;
                 if (globalThis.djustDebug) console.log('[LiveView] Session ID:', this.sessionId);
                 this.autoMount();
+                // The views hydrated beside the page view lived on the socket
+                // that closed: mount them on this one (#3252).
+                this.remountSlots();
                 break;
 
             case 'mount': {
@@ -1803,6 +1832,10 @@ class LiveViewWebSocket {
                         // eslint-disable-next-line security/detect-object-injection
                         window.djust._clientVdomVersions[targetId] = entry.version;
                     }
+                    // Each batched view is a view of its own on the socket
+                    // (#3252): it keeps its own VDOM cursor, and its events
+                    // and frames are addressed to it by this target.
+                    applySlotMount(this, entry, { html: 'none' });
                 }
                 for (const f of failed) {
                     if (globalThis.djustDebug) {
@@ -2287,6 +2320,32 @@ class LiveViewWebSocket {
     }
 
     /**
+     * Apply a frame the server addressed to a view mounted beside the page view
+     * (``target_id``, #3252). A ``mount`` reply fills the slot's container; any
+     * other frame is handled by the code that handles the page view's frames,
+     * run in the slot's context (``withSlot``), so it patches the slot's
+     * container against the slot's own VDOM version.
+     */
+    async _handleSlotFrame(data) {
+        if (data.type === 'mount') {
+            this.viewMounted = true;
+            const container = slotContainer(data.target_id);
+            const hadContent = !!container && container.innerHTML.trim().length > 0;
+            applySlotMount(this, data, { html: hadContent ? 'morph' : 'replace' });
+            document.querySelectorAll('[dj-cloak]').forEach(el => el.removeAttribute('dj-cloak'));
+            return;
+        }
+        const applied = await withSlot(data.target_id, () => this._handleMessageImpl(data, true));
+        if (applied === undefined) {
+            // The slot's container is gone (the page replaced it): its frames
+            // have nowhere to go, but an event reply must still settle its request.
+            const event = acknowledgeEventRequest(this, data);
+            if (event && event.eventName) globalLoadingManager.stopLoading(event.eventName, event.trigger);
+        }
+        return;
+    }
+
+    /**
      * Send a mount frame.
      *
      * @param {string} viewPath  Dotted view path.
@@ -2295,6 +2354,8 @@ class LiveViewWebSocket {
      *   (`autoMount`). #2721: everything else mounting on this socket — lazy
      *   hydration, `hydrateAll`, the `mount_batch` fallback — is an ADDITIONAL
      *   view whose mount reply must not reset the page view's client config.
+     *   ``{targetId}`` names the container such a view fills (#3252), and
+     *   ``{hasPrerendered}`` says whether it already holds server-rendered HTML.
      */
     /**
      * Send a ``live_redirect_mount`` — the client-initiated view REPLACEMENT
@@ -2326,6 +2387,10 @@ class LiveViewWebSocket {
      */
     liveRedirectMount(outgoing) {
         cancelPendingRateLimits();
+        // The server tears down every view on the socket (the views hydrated
+        // beside the page view too, #3252); the destination page's own lazy
+        // containers are not hydrated yet.
+        clearSlots();
         this.primaryViewPath = outgoing.view;
         this.sendMessage(outgoing);
     }
@@ -2351,9 +2416,13 @@ class LiveViewWebSocket {
             view: viewPath,
             params: params,
             url: window.location.pathname,
-            has_prerendered: this.skipMountHtml || false,  // Tell server we have pre-rendered content
+            has_prerendered: options.hasPrerendered ?? (this.skipMountHtml || false),  // Tell server we have pre-rendered content
             client_timezone: clientTimezone  // IANA timezone string (e.g. "America/New_York")
         };
+        // A view mounted beside the page view (lazy hydration, #3252) names the
+        // container it fills: the server adds it to the socket instead of
+        // replacing the page view, and addresses its frames with this id.
+        if (options.targetId) frame.target_id = options.targetId;
         // #2966: a reconnecting page view asks whether its tracked assets
         // are stale (dj-track-static). Shared with the SSE mount (#1646).
         const trackStatic = globalThis.djust.djTrackStatic;
@@ -2409,6 +2478,35 @@ class LiveViewWebSocket {
         }
     }
 
+    /**
+     * Mount again every view hydrated beside the page view, on a new socket
+     * (reconnect): the server holds no view for a connection that closed.
+     */
+    remountSlots() {
+        const urlParams = Object.fromEntries(new URLSearchParams(window.location.search));
+        for (const [targetId, slot] of Array.from(_mountedSlots.entries())) {
+            const container = slotContainer(targetId);
+            if (!container) {
+                forgetSlot(targetId);
+                continue;
+            }
+            _slotVersions.set(targetId, null);
+            this.mount(slot.viewPath, urlParams, { targetId: targetId, hasPrerendered: true });
+        }
+    }
+
+    /**
+     * Tell the server a view hydrated beside the page view is gone (its
+     * container was removed). The page view and the other views stay live.
+     */
+    unmountView(targetId) {
+        if (!_mountedSlots.has(targetId)) return false;
+        forgetSlot(targetId);
+        if (!this.enabled || !this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
+        this.sendMessage({ type: 'unmount', target_id: targetId });
+        return true;
+    }
+
     autoMount() {
         // The page-level container (#2632). The former
         // `[dj-root][dj-view]` fallback was dead code — `[dj-view]` is a
@@ -2441,7 +2539,7 @@ class LiveViewWebSocket {
         }
     }
 
-    sendEvent(eventName, params = {}, triggerElement = null) {
+    sendEvent(eventName, params = {}, triggerElement = null, slotId = null) {
         if (!this.enabled || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
             return false;
         }
@@ -2457,7 +2555,10 @@ class LiveViewWebSocket {
                 type: 'event',
                 event: eventName,
                 params: params,
-                ref: request.ref
+                ref: request.ref,
+                // An event from inside a view mounted beside the page view
+                // runs on that view (#3252).
+                ...slotFrameFields(slotId || slotIdFor(triggerElement))
             });
         } catch (error) {
             cancelEventRequests(this, request.ref);
@@ -3251,6 +3352,16 @@ window.djust.LiveViewSSE = LiveViewSSE;
 // eslint-disable-next-line prefer-const
 let clientVdomVersion = null;
 
+// Views mounted beside the page view (#3252; the logic is in 13b-view-slots.js).
+// The slot whose frame is being applied: {id, root, viewPath}, else null.
+// `let` (NOT const) — reassigned by withSlot() in 13b-view-slots.js (#1351).
+// eslint-disable-next-line prefer-const
+let _activeSlot = null;
+// target_id -> the client's VDOM version for that slot's container.
+const _slotVersions = new Map();
+// target_id -> {viewPath}: the slots the server has mounted for this socket.
+const _mountedSlots = new Map();
+
 // Event sequencing (#560): monotonic ref counter for matching event
 // responses to requests, and buffering server-initiated pushes during
 // pending events. Uses a Set to track multiple concurrent pending refs.
@@ -3297,7 +3408,12 @@ async function flushServerUpdates(transport) {
     while (!hasPendingEventRequests(transport)) {
         const [frame] = takeServerUpdates(transport, 1);
         if (!frame) return;
-        await handleServerResponse(frame, null, null, transport);
+        // A frame buffered for a slot is replayed in that slot's context (#3252).
+        if (typeof frame.target_id === 'string' && frame.target_id) {
+            await withSlot(frame.target_id, () => handleServerResponse(frame, null, null, transport));
+        } else {
+            await handleServerResponse(frame, null, null, transport);
+        }
         completeLegacyAsyncBatches(transport, frame);
     }
 }
@@ -4741,10 +4857,16 @@ function _recordParameterContractFrame(transport, data) {
     transport._parameterContractFrames.set(data, transport._parameterContractSequence);
 }
 
+// The mount whose contracts a render frame refreshes: the page view's, or the
+// slot's while a slot's frame is applied (#3252).
+function _contractScopePath(transport) {
+    return _activeSlot ? _activeSlot.viewPath : transport?.primaryViewPath;
+}
+
 // A failed/partial DOM application cannot keep advertising the last successful
 // strict snapshot. Invalidate only this transport's primary scope, never peers.
 function _invalidateRenderParameterContracts(transport, data) {
-    const path = transport?.primaryViewPath;
+    const path = _contractScopePath(transport);
     const mounts = transport?._parameterContracts;
     if (mounts?.has(path) && (mounts.get(path) !== null || Object.hasOwn(data, 'parameter_contracts'))) {
         mounts.set(path, false);
@@ -4763,20 +4885,21 @@ function _refreshRenderParameterContracts(transport, data) {
         return;
     }
     const order = transport._parameterContractFrames?.get(data);
-    const applied = transport._parameterContractApplied?.get(transport.primaryViewPath);
+    const scopePath = _contractScopePath(transport);
+    const applied = transport._parameterContractApplied?.get(scopePath);
     // A newer applied response already supplied a whole-tree snapshot. Replaying
     // an older buffered delta must not replace it, even with a missing snapshot.
     if (order !== undefined && applied !== undefined && order <= applied) return;
     if (!supplied) {
         _invalidateRenderParameterContracts(transport, data);
         if (order !== undefined && applied !== undefined) {
-            transport._parameterContractApplied.set(transport.primaryViewPath, order);
+            transport._parameterContractApplied.set(scopePath, order);
         }
         return;
     }
     const path = data.parameter_contract_view;
     const root = getLiveViewRoot();
-    if (order === undefined || typeof path !== 'string' || path !== transport.primaryViewPath ||
+    if (order === undefined || typeof path !== 'string' || path !== scopePath ||
         root.getAttribute('dj-view') !== path || !transport._parameterContracts?.has(path)) {
         _invalidateRenderParameterContracts(transport, data);
         if (globalThis.djustDebug) console.warn('[LiveView] Unknown render parameter contract mount');
@@ -5473,6 +5596,7 @@ function addEventContext(params, element) {
     if (componentId) params.component_id = componentId;
     const embeddedViewId = getEmbeddedViewId(element);
     if (embeddedViewId) params.view_id = embeddedViewId;
+    markSlotOf(params, element);
 }
 
 // WeakSet to track elements whose dj-mounted handler has already fired.
@@ -5851,7 +5975,7 @@ function _handleDjCopy(element, e) {
         // Optional server event for analytics
         const copyEvent = element.getAttribute('dj-copy-event');
         if (copyEvent) {
-            handleEvent(copyEvent, { text: textToCopy });
+            handleEvent(copyEvent, markSlotOf({ text: textToCopy }, element));
         }
     });
 }
@@ -6015,6 +6139,7 @@ async function _handleDjInput(element, e) {
     // _target: include triggering field's name (or id, or null); legacy only
     if (!strictParams) params._target = e.target.name || e.target.id || null;
 
+    markSlotOf(params, element);
     await handleEvent(parsedInput.name, params);
 }
 
@@ -6043,6 +6168,7 @@ async function _handleDjBlur(element, e) {
     if (!strictParams && parsedBlur.args.length > 0) {
         params._args = parsedBlur.args;
     }
+    markSlotOf(params, element);
     await handleEvent(parsedBlur.name, params);
 }
 
@@ -6071,6 +6197,7 @@ async function _handleDjFocus(element, e) {
     if (!strictParams && parsedFocus.args.length > 0) {
         params._args = parsedFocus.args;
     }
+    markSlotOf(params, element);
     await handleEvent(parsedFocus.name, params);
 }
 
@@ -6625,10 +6752,10 @@ function bindLiveViewEvents(scope) {
             const strictParams = _strictBinding(element, parsed.name, {}, [], element);
             if (strictParams === false) return;
             if (strictParams) {
-                handleEvent(parsed.name, Object.assign(strictParams, { _skipLoading: true }));
+                handleEvent(parsed.name, markSlotOf(Object.assign(strictParams, { _skipLoading: true }), element));
                 return;
             }
-            handleEvent(parsed.name, Object.assign(extractTypedParams(element), { _skipLoading: true }));
+            handleEvent(parsed.name, markSlotOf(Object.assign(extractTypedParams(element), { _skipLoading: true }), element));
         };
 
         const intervalId = setInterval(firePoll, interval);
@@ -7218,6 +7345,9 @@ function throttle(func, limit) {
 // targets are reached via the scoped applier in 45-child-view.js, NOT
 // via getLiveViewRoot().
 function getLiveViewRoot() {
+    // While a frame for a view mounted beside the page view is applied, that
+    // view's container is the root (#3252).
+    if (_activeSlot) return _activeSlot.root;
     return findPageViewContainer() || document.querySelector('[dj-root]') || document.body;
 }
 
@@ -7360,6 +7490,7 @@ function _processAutoRecover() {
             _data_attrs: dataAttrs
         };
 
+        markSlotOf(params, container);
         handleEvent(handlerName, params);
     });
 }
@@ -7488,7 +7619,7 @@ function _processFormRecovery() {
         const strictParams = _strictFormBinding(handlerString, field, domValue);
         if (strictParams === false) continue;
         if (strictParams) {
-            pendingEvents.push({ handlerName: handlerName, params: strictParams });
+            pendingEvents.push({ handlerName: handlerName, params: markSlotOf(strictParams, field) });
             continue;
         }
 
@@ -7505,7 +7636,7 @@ function _processFormRecovery() {
         // _target: include triggering field's name
         params._target = fieldName;
 
-        pendingEvents.push({ handlerName: handlerName, params: params });
+        pendingEvents.push({ handlerName: handlerName, params: markSlotOf(params, field) });
     }
 
     // Fire events sequentially to avoid server race conditions
@@ -8043,7 +8174,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     // Build clean server params (strip underscore-prefixed internal properties)
     const serverParams = {};
     for (const key of Object.keys(params)) {
-        if (key === '_targetElement' || key === '_optimisticUpdateId' || key === '_skipLoading' || key === '_djTargetSelector') {
+        if (key === '_targetElement' || key === '_slotId' || key === '_optimisticUpdateId' || key === '_skipLoading' || key === '_djTargetSelector') {
             continue;
         }
         // eslint-disable-next-line security/detect-object-injection
@@ -8158,9 +8289,24 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     // can run post-response logic (e.g. _setFormPending(false) in finally).
     const wsPromise = liveViewWS && (teardown
         ? (liveViewWS.sendTeardownEvent && liveViewWS.sendTeardownEvent(eventName, paramsToSend, triggerElement))
-        : liveViewWS.sendEvent(eventName, paramsToSend, triggerElement));
+        : liveViewWS.sendEvent(eventName, paramsToSend, triggerElement, params._slotId));
     if (wsPromise) {
         await wsPromise;
+        return;
+    }
+
+    // A view mounted beside the page view (lazy hydration, mount_batch, #3252)
+    // lives on the WebSocket only: the HTTP fallback posts to the page's own
+    // URL, where the page view would run the event. Refuse it rather than run
+    // it on the wrong view.
+    const slotId = teardown ? null : (params._slotId || slotIdFor(triggerElement));
+    if (slotId) {
+        if (!skipLoading) globalLoadingManager.stopLoading(eventName, triggerElement);
+        window.dispatchEvent(new CustomEvent('djust:error', {detail: {
+            error: `Event "${eventName}" was not sent: its view needs the WebSocket transport.`,
+            code: 'view_unavailable',
+            traceback: null,
+        }}));
         return;
     }
 
@@ -8274,7 +8420,14 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
         // handleServerResponse, so it needs its own call.
         stripClientOwnedFrameFlags(data);
         _recordParameterContractFrame(_localEventTransport, data);
-        await handleServerResponse(data, eventName, triggerElement, _localEventTransport);
+        if (data.type === 'embedded_update') {
+            // An embedded child's event: the server answers with the child's own
+            // HTML, as the socket transports do (#3104).
+            await handleEmbeddedResponse(data, _localEventTransport);
+            applyHttpSideChannels(data);
+        } else {
+            await handleServerResponse(data, eventName, triggerElement, _localEventTransport);
+        }
 
     } catch (error) {
         if (!httpController?.signal.aborted) console.error('[LiveView] HTTP fallback failed:', error);
@@ -11033,6 +11186,8 @@ async function applyPatches(patches, rootEl = null) {
     if (!patches || patches.length === 0) {
         return true;
     }
+    // A frame for a view mounted beside the page view patches its container (#3252).
+    if (!rootEl && _activeSlot) rootEl = _activeSlot.root;
 
     if (_shouldUseViewTransition()) {
         let innerResult = true;
@@ -11261,9 +11416,24 @@ const lazyHydrationManager = {
         }
     },
 
+    // The address a view hydrated into `element` has on the socket (#3252): the
+    // container's `data-djust-target`, else its id, else a generated one. The
+    // server addresses every frame of that view with it.
+    targetIdFor(element) {
+        let targetId = element.getAttribute('data-djust-target') || element.id;
+        if (!targetId) {
+            targetId = 'dj-target-' + Math.random().toString(36).slice(2, 10);
+        }
+        if (!element.getAttribute('data-djust-target')) {
+            element.setAttribute('data-djust-target', targetId);
+        }
+        return targetId;
+    },
+
     // Hydrate a single element
     hydrateElement(element) {
-        const elementId = element.id || element.getAttribute('dj-view');
+        // Two lazy views of one class are two views: key by the container.
+        const elementId = this.targetIdFor(element);
 
         // Prevent double hydration
         if (this.hydratedElements.has(elementId)) {
@@ -11329,12 +11499,9 @@ const lazyHydrationManager = {
             const viewEntries = [];
             const urlParams = Object.fromEntries(new URLSearchParams(window.location.search));
             mounts.forEach(({ element, viewPath }) => {
-                const targetId = element.getAttribute('data-djust-target')
-                    || element.id
-                    || ('dj-target-' + Math.random().toString(36).slice(2, 10));
-                if (!element.getAttribute('data-djust-target')) {
-                    element.setAttribute('data-djust-target', targetId);
-                }
+                const targetId = this.targetIdFor(element);
+                registerSlot(targetId, viewPath, null);
+                installSlotListeners(element);
                 const hasContent = element.innerHTML && element.innerHTML.trim().length > 0;
                 viewEntries.push({
                     view: viewPath,
@@ -11395,19 +11562,28 @@ const lazyHydrationManager = {
 
         if (hasContent) {
             if (globalThis.djustDebug) console.log('[LiveView:lazy] Using pre-rendered content');
-            liveViewWS.skipMountHtml = true;
         }
+
+        // The view is mounted beside the page view and every other hydrated
+        // view (#3252): it names its container, so the server adds it to the
+        // socket instead of replacing the page view, and addresses every frame
+        // of it with this id. Events from inside it are addressed the same way,
+        // from now on: before its mount reply arrives, the server refuses them
+        // instead of running them on the page view.
+        const targetId = this.targetIdFor(element);
+        registerSlot(targetId, viewPath, null);
 
         // Pass URL query params
         const urlParams = Object.fromEntries(new URLSearchParams(window.location.search));
-        liveViewWS.mount(viewPath, urlParams);
+        liveViewWS.mount(viewPath, urlParams, { targetId: targetId, hasPrerendered: !!hasContent });
 
         // Remove lazy attribute to indicate hydration complete
         element.removeAttribute('dj-lazy');
         element.setAttribute('data-live-hydrated', 'true');
 
         // Bind events and hooks to the newly hydrated content
-        reinitAfterDOMUpdate();
+        installSlotListeners(element);
+        reinitAfterDOMUpdate(element);
     },
 
     // Check if an element is lazily loaded
@@ -11425,6 +11601,255 @@ const lazyHydrationManager = {
 
 // Expose lazy hydration API
 window.djust.lazyHydration = lazyHydrationManager;
+
+// ============================================================================
+// Views mounted beside the page view (#3252)
+// ============================================================================
+//
+// A page can hold an eager LiveView, `dj-lazy` views that hydrate later, and
+// the views of a `mount_batch`. They share one socket. The page view keeps the
+// socket's own state: `clientVdomVersion`, `getLiveViewRoot()`, and every frame
+// that names no view. Every other view is a SLOT: the server addresses its
+// frames with the `target_id` of its container
+// (`[dj-view][data-djust-target="<id>"]`), the client addresses its events and
+// recovery requests the same way, and each slot keeps its own VDOM version.
+//
+// A frame for a slot is applied by the code that applies the page view's
+// frames, run in the slot's CONTEXT: `withSlot` points `getLiveViewRoot()` and
+// `applyPatches()` at the slot's container and swaps `clientVdomVersion` for
+// the slot's. Frames are handled one at a time (`handleMessage` serializes
+// them, and a buffered server push is replayed under the context of its own
+// frame), so no other frame observes the swap.
+
+// The state lives in 04-cache.js, beside `clientVdomVersion`, so every module
+// that reads it (getLiveViewRoot, applyPatches) is initialized after it:
+// `_activeSlot`, `_slotVersions`, `_mountedSlots`.
+
+// The frames the server addresses to a slot with ``target_id``. The others
+// (errors, upload progress, flash, ...) do not depend on a view's container.
+const _SLOT_FRAME_TYPES = new Set([
+    'mount', 'patch', 'html_update', 'html_recovery', 'embedded_update', 'child_update', 'sticky_update',
+]);
+
+function _slotSelector(targetId) {
+    const escaped = (typeof CSS !== 'undefined' && typeof CSS.escape === 'function')
+        ? CSS.escape(targetId)
+        : String(targetId).replace(/([^A-Za-z0-9_-])/g, '\\$1');
+    return '[dj-view][data-djust-target="' + escaped + '"]';
+}
+
+/** The container of the slot `targetId`, or null. */
+function slotContainer(targetId) {
+    if (typeof targetId !== 'string' || !targetId) return null;
+    return document.querySelector(_slotSelector(targetId));
+}
+
+/**
+ * The slot an element belongs to: the address of its nearest
+ * `[dj-view][data-djust-target]` ancestor, whether or not a view is mounted
+ * there now. Null for the page view. An event from inside a slot is addressed
+ * to it with this; if its view was unmounted, the server refuses the address,
+ * where leaving it off would run the event on the page view.
+ */
+function slotIdFor(element) {
+    if (!element || typeof element.closest !== 'function') return null;
+    const container = element.closest('[dj-view][data-djust-target]');
+    const id = container && container.getAttribute('data-djust-target');
+    return id || null;
+}
+
+/**
+ * Record on event `params` the slot `element` lives in, so `handleEvent` sends
+ * the event to that view (`_slotId`, stripped before it goes on the wire). The
+ * bindings that pass no `_targetElement` (input, blur, poll, model, ...) use
+ * this: without it the event would run on the page view. No-op for an element
+ * of the page view. Returns `params`.
+ */
+function markSlotOf(params, element) {
+    const id = slotIdFor(element);
+    if (id) params._slotId = id;
+    return params;
+}
+
+/** `{target_id}` while addressing a slot, else `{}`: spread into outbound frames. */
+function slotFrameFields(targetId) {
+    return targetId ? { target_id: targetId } : {};
+}
+
+function registerSlot(targetId, viewPath, version) {
+    _mountedSlots.set(targetId, { viewPath: viewPath });
+    _slotVersions.set(targetId, typeof version === 'number' ? version : null);
+    watchSlotContainers();
+}
+
+// A container that leaves the document takes its view with it: the server is
+// told, so the view's groups, presence, tick and uploads go (and its place in
+// the connection's cap is freed). A mistaken unmount is a dead view, so a
+// container is given time to come back first: a morph or a view transition can
+// detach a container and put it (or a fresh element with its address) back a
+// moment later. A container missing at one check is unmounted only if it is
+// still missing at the next, a grace period later.
+let _slotWatcher = null;
+let _slotSweepTimer = null;
+const SLOT_SWEEP_DELAY_MS = 100;
+const SLOT_UNMOUNT_GRACE_MS = 1000;
+
+function _missingSlots() {
+    return Array.from(_mountedSlots.keys()).filter((id) => !slotContainer(id));
+}
+
+function _sweepSlotContainers() {
+    _slotSweepTimer = null;
+    const missing = _missingSlots();
+    if (missing.length) {
+        _slotSweepTimer = setTimeout(() => _confirmSlotRemoval(missing), SLOT_UNMOUNT_GRACE_MS);
+        return;
+    }
+    _stopWatchingIfIdle();
+}
+
+function _confirmSlotRemoval(candidates) {
+    _slotSweepTimer = null;
+    const instance = window.djust && window.djust.liveViewInstance;
+    for (const id of candidates) {
+        if (!_mountedSlots.has(id) || slotContainer(id)) continue;
+        if (instance && typeof instance.unmountView === 'function') {
+            instance.unmountView(id);
+        } else {
+            forgetSlot(id);
+        }
+    }
+    _stopWatchingIfIdle();
+}
+
+function _stopWatchingIfIdle() {
+    if (_mountedSlots.size === 0 && _slotWatcher) {
+        _slotWatcher.disconnect();
+        _slotWatcher = null;
+    }
+}
+
+function watchSlotContainers() {
+    if (_slotWatcher || typeof MutationObserver !== 'function' || !document.documentElement) return;
+    _slotWatcher = new MutationObserver(() => {
+        if (_slotSweepTimer === null) _slotSweepTimer = setTimeout(_sweepSlotContainers, SLOT_SWEEP_DELAY_MS);
+    });
+    _slotWatcher.observe(document.documentElement, { childList: true, subtree: true });
+}
+
+function forgetSlot(targetId) {
+    _mountedSlots.delete(targetId);
+    _slotVersions.delete(targetId);
+}
+
+/** Forget every slot (the page is replaced, or the socket is gone). */
+function clearSlots() {
+    _mountedSlots.clear();
+    _slotVersions.clear();
+    _activeSlot = null;
+}
+
+/**
+ * Run `fn(root)` in the context of the slot `targetId`: `getLiveViewRoot()` and
+ * `applyPatches()` use its container and `clientVdomVersion` is the slot's.
+ * Resolves to `undefined` without running `fn` when the slot has no container
+ * (the page replaced it, or it was never hydrated).
+ */
+async function withSlot(targetId, fn) {
+    const root = slotContainer(targetId);
+    if (!root) return undefined;
+    const outerSlot = _activeSlot;
+    const outerVersion = clientVdomVersion;
+    _activeSlot = { id: targetId, root: root, viewPath: root.getAttribute('dj-view') };
+    clientVdomVersion = _slotVersions.has(targetId) ? _slotVersions.get(targetId) : null;
+    try {
+        return await fn(root);
+    } finally {
+        _slotVersions.set(targetId, clientVdomVersion);
+        _activeSlot = outerSlot;
+        clientVdomVersion = outerVersion;
+    }
+}
+
+/**
+ * Install the delegated event listeners on a slot's container, unless an
+ * enclosing view's already cover it (installing here too would send every
+ * event twice).
+ */
+function installSlotListeners(container) {
+    if (!container || typeof installDelegatedListeners !== 'function') return;
+    const outer = container.parentElement &&
+        container.parentElement.closest('[dj-view]:not([dj-sticky-root]):not([data-djust-embedded])');
+    if (outer) return;
+    installDelegatedListeners(container);
+}
+
+/**
+ * Apply a slot's `mount` reply, or one entry of a `mount_batch` reply.
+ *
+ * The slot's container takes the server's HTML (morphed against the
+ * pre-rendered content when it had some, so per-connection state reaches the
+ * page), the slot starts its own VDOM cursor at the mount's version, and its
+ * handler / cache / parameter configuration is added beside the page view's
+ * without resetting it.
+ *
+ * @param {Object} transport  The LiveViewWebSocket the frame arrived on.
+ * @param {Object} data       The mount frame, or a `mount_batch` entry.
+ * @param {Object} [options]  `{html}`: `'replace'` (default) sets the
+ *                            container's content, `'morph'` reconciles its
+ *                            existing content, `'none'` leaves it (the caller
+ *                            already applied it).
+ * @returns {boolean} whether the slot's container was found.
+ */
+function applySlotMount(transport, data, options = {}) {
+    const container = slotContainer(data.target_id);
+    if (!container) {
+        if (globalThis.djustDebug) {
+            console.warn('[LiveView] mount: target not found: %s', String(data.target_id));
+        }
+        return false;
+    }
+    registerSlot(data.target_id, data.view || container.getAttribute('dj-view'), data.version);
+    installAdditionalMountEventConfig(data);
+    if (typeof data.view === 'string' && data.view) {
+        // The page view keeps its own contracts: a slot adds its view's
+        // beside them (a reset here would drop the page view's).
+        _installParameterContracts(transport, data.parameter_contracts, data.view, false);
+        const order = transport._parameterContractFrames && transport._parameterContractFrames.get(data);
+        if (order !== undefined && transport._parameterContractApplied) {
+            transport._parameterContractApplied.set(data.view, order);
+        }
+    }
+    if (data.upload_configs && window.djust.uploads) {
+        window.djust.uploads.setConfigs(data.upload_configs);
+    }
+    const htmlMode = options.html || 'replace';
+    if (typeof data.html === 'string' && htmlMode !== 'none') {
+        if (htmlMode === 'morph' && data.has_ids === true) {
+            _morphPrerenderedMount(container, data.html);
+        } else {
+            // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
+            container.innerHTML = data.html;
+            _runInsertedScripts(container);
+            _warnDeadScripts(container);
+        }
+    }
+    installSlotListeners(container);
+    reinitAfterDOMUpdate(container);
+    window.djust._mountReady = true;
+    return true;
+}
+
+window.djust._markSlotOf = markSlotOf;
+window.djust.viewSlots = {
+    contextOf: () => _activeSlot,
+    container: slotContainer,
+    idFor: slotIdFor,
+    mounted: () => Array.from(_mountedSlots.keys()),
+    version: (targetId) => (_slotVersions.has(targetId) ? _slotVersions.get(targetId) : null),
+    withSlot: withSlot,
+    clear: clearSlots,
+};
 
 // ============================================================================
 // SSE Transport Fallback
@@ -11878,11 +12303,17 @@ if (document.readyState === 'loading') {
      *     uploaded chunks.
      *   - resumable — when true, the client persists a record to
      *     IndexedDB so it can resume after a tab reload.
+     *   - targetId — the container (`data-djust-target`) of the view the
+     *     upload input belongs to, when it is not the page view (#3252). Its
+     *     `upload_register` / `upload_resume` frames are addressed to that
+     *     view; the binary chunk, complete and cancel frames carry the upload's
+     *     ref, which the server resolves to the view that registered it.
      */
     async function uploadFile(ws, uploadName, file, config, opts) {
         opts = opts || {};
         const chunkSize = (config && config.chunk_size) || DEFAULT_CHUNK_SIZE;
         const isResumable = !!(opts.resumable || (config && config.resumable));
+        const slotFields = slotFrameFields(opts.targetId || null);
 
         let refBytes;
         let ref;
@@ -11901,7 +12332,7 @@ if (document.readyState === 'loading') {
 
         // Resumable path: try to resume first.
         if (opts.resumeRef) {
-            const resumePayload = await sendResumeAndWait(ws, ref);
+            const resumePayload = await sendResumeAndWait(ws, ref, slotFields);
             if (resumePayload && resumePayload.status === 'resumed') {
                 startOffset = Number(resumePayload.bytes_received || 0);
                 if (startOffset > file.size) startOffset = file.size;
@@ -11927,6 +12358,7 @@ if (document.readyState === 'loading') {
                 client_type: file.type,
                 client_size: file.size,
                 resumable: isResumable,
+                ...slotFields,
             });
         }
 
@@ -11938,6 +12370,7 @@ if (document.readyState === 'loading') {
                 clientName: file.name,
                 clientSize: file.size,
                 savedAt: Date.now(),
+                targetId: opts.targetId || null,
             });
         }
 
@@ -12010,7 +12443,7 @@ if (document.readyState === 'loading') {
      * server's `upload_resumed` payload. Times out after 5 s so a
      * silent server doesn't stall the upload forever.
      */
-    function sendResumeAndWait(ws, ref) {
+    function sendResumeAndWait(ws, ref, slotFields) {
         return new Promise((resolve) => {
             let done = false;
             const timer = setTimeout(() => {
@@ -12027,7 +12460,7 @@ if (document.readyState === 'loading') {
                 resolve(payload);
             });
             try {
-                ws.sendMessage({ type: 'upload_resume', ref });
+                ws.sendMessage({ type: 'upload_resume', ref, ...(slotFields || {}) });
             } catch (_err) {
                 if (!done) {
                     done = true;
@@ -12441,7 +12874,7 @@ if (document.readyState === 'loading') {
                 }
 
                 try {
-                    const result = await uploadFile(liveViewWS, uploadName, file, config);
+                    const result = await uploadFile(liveViewWS, uploadName, file, config, { targetId: slotIdFor(input) });
                     if (globalThis.djustDebug) console.log('[Upload] Complete: %s %o', String(file.name), result);
                 } catch (err) {
                     console.error('[Upload] Failed: %s %o', String(file.name), err);
@@ -12552,7 +12985,7 @@ if (document.readyState === 'loading') {
                         continue;
                     }
                     try {
-                        await uploadFile(liveViewWS, uploadName, file, config);
+                        await uploadFile(liveViewWS, uploadName, file, config, { targetId: slotIdFor(zone) });
                     } catch (err) {
                         console.error('[Upload] Drop upload failed: %s %o', String(file.name), err);
                     }
@@ -12602,7 +13035,7 @@ if (document.readyState === 'loading') {
                 continue;
             }
             try {
-                await uploadFile(liveViewWS, uploadName, file, config);
+                await uploadFile(liveViewWS, uploadName, file, config, { targetId: slotIdFor(element) });
             } catch (err) {
                 console.error('[Upload] Paste upload failed: %s %o', String(file.name), err);
             }
@@ -14094,6 +14527,9 @@ function _createHookInstance(hookDef, el) {
                 type: 'event',
                 event: event,
                 params: payload,
+                // A hook inside a view mounted beside the page view talks to
+                // that view, not the page view (#3252).
+                ...slotFrameFields(slotIdFor(el)),
             }));
         } else {
             console.warn(`[dj-hook] Cannot pushEvent "${event}" — no WebSocket connection`);
@@ -14490,14 +14926,15 @@ function _getElementValue(el) {
  * Tries direct WebSocket first (synchronous, no loading states needed for model
  * binding), then falls back to handleEvent for HTTP-only scenarios.
  */
-function _sendModelUpdate(field, value) {
+function _sendModelUpdate(field, value, el) {
     // Fast path: send directly via WebSocket (synchronous)
     const inst = window.djust.liveViewInstance;
-    if (inst && inst.sendEvent && inst.sendEvent('update_model', { field, value })) {
+    // The element addresses the event to the view it lives in (#3252).
+    if (inst && inst.sendEvent && inst.sendEvent('update_model', { field, value }, null, slotIdFor(el))) {
         return;
     }
     // Fallback: handleEvent (includes HTTP fallback, loading states)
-    handleEvent('update_model', { field, value });
+    handleEvent('update_model', markSlotOf({ field, value }, el));
 }
 
 /**
@@ -14538,11 +14975,11 @@ function _bindModel(el) {
                 clearTimeout(_modelDebounceTimers.get(timerKey));
             }
             _modelDebounceTimers.set(timerKey, setTimeout(() => {
-                _sendModelUpdate(field, value);
+                _sendModelUpdate(field, value, el);
                 _modelDebounceTimers.delete(timerKey);
             }, debounce));
         } else {
-            _sendModelUpdate(field, value);
+            _sendModelUpdate(field, value, el);
         }
     };
 
@@ -15222,6 +15659,7 @@ window.djust.bindModelElements = bindModelElements;
         }
         try {
             if (typeof window.djust.handleEvent === 'function') {
+                if (originEl && typeof window.djust._markSlotOf === 'function') window.djust._markSlotOf(params, originEl);
                 await window.djust.handleEvent(event, params);
             }
         } finally {
@@ -16956,7 +17394,11 @@ window.djust.bindModelElements = bindModelElements;
                 // ADR-036: `edge` is a generated value; a strict handler gets it
                 // only when declared (plus its dj-value-* arguments).
                 const strictParams = window.djust._strictBinding(container, eventName, { edge }, []);
-                if (strictParams !== false) window.djust.handleEvent(eventName, strictParams || { edge });
+                if (strictParams !== false) {
+                    const sent = strictParams || { edge };
+                    if (typeof window.djust._markSlotOf === 'function') window.djust._markSlotOf(sent, container);
+                    window.djust.handleEvent(eventName, sent);
+                }
             } catch (err) {
                 if (globalThis.djustDebug) {
                     console.warn(
@@ -18295,6 +18737,7 @@ function _installDjMutationFor(el) {
         // Route to the standard djust event pipeline so the server-side
         // handler named in dj-mutation="..." actually runs.
         if (globalThis.djust && typeof globalThis.djust.handleEvent === 'function') {
+            if (typeof globalThis.djust._markSlotOf === 'function') globalThis.djust._markSlotOf(payload, el);
             globalThis.djust.handleEvent(handlerName, payload);
         }
     }

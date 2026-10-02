@@ -551,7 +551,7 @@ def take_consumer_view_groups(consumer: Any) -> List[str]:
     attributes are reset, so they describe the next mounted view only, but no
     group is left: the caller either leaves them
     (:func:`leave_consumer_view_groups`) or keeps them on record for the view
-    they belong to (a ``mount_batch`` sibling, #3245).
+    they belong to.
     """
     groups: List[str] = []
     from .presence import presence_groups_of
@@ -575,6 +575,46 @@ def take_consumer_view_groups(consumer: Any) -> List[str]:
     return groups
 
 
+def view_groups_of(consumer: Any) -> set:
+    """The channel-layer groups the consumer's current view has joined, as names.
+
+    What :func:`take_consumer_view_groups` hands over, read without forgetting
+    it: a channel-layer message addressed to one of these groups is for this
+    view (#3252).
+    """
+    groups: set = set()
+    from .presence import presence_groups_of
+
+    groups.update(presence_groups_of(consumer))
+    for attr in ("_view_group", "_presence_scope_group"):
+        group = getattr(consumer, attr, None)
+        if isinstance(group, str) and group:
+            groups.add(group)
+    channels = getattr(consumer, "_db_notify_channels", None)
+    if isinstance(channels, set):
+        groups.update(f"djust_db_notify_{ch}" for ch in channels)
+    scoped = getattr(consumer, "_push_scope_groups", None)
+    if isinstance(scoped, dict):
+        groups.update(scoped.values())
+    return groups
+
+
+def _groups_of_other_views(consumer: Any) -> set:
+    """The groups the other mounted views of ``consumer``'s socket have joined."""
+    socket = getattr(consumer, "_slot_consumer", consumer)
+    view_consumers = getattr(socket, "_view_consumers", None)
+    if not callable(view_consumers):
+        return set()
+    others = view_consumers()
+    if not isinstance(others, list):
+        return set()
+    kept: set = set()
+    for other in others:
+        if other is not consumer:
+            kept |= view_groups_of(other)
+    return kept
+
+
 async def leave_consumer_view_groups(consumer: Any, groups: Any = None) -> None:
     """Leave every channel-layer group the consumer's current view joined.
 
@@ -592,7 +632,14 @@ async def leave_consumer_view_groups(consumer: Any, groups: Any = None) -> None:
     channel_layer = getattr(consumer, "channel_layer", None)
     if channel_layer is None:
         return
+    # Group membership belongs to the socket's channel, not to a view: two views
+    # of one class, on one db_notify channel or tracking one presence key joined
+    # the same group. Leaving it for one would silence the other, so a group a
+    # remaining view still names stays joined (#3252 review I1).
+    kept = _groups_of_other_views(consumer)
     for group in names:
+        if group in kept:
+            continue
         try:
             await channel_layer.group_discard(group, consumer.channel_name)
         except Exception as e:  # noqa: BLE001
@@ -1782,7 +1829,10 @@ class WSConsumerTransport:
         # (#1677). Reset in the finally below (websocket.py:3398-3400 / 4311).
         from djust import push as _djust_push
 
-        _origin_token = _djust_push.origin_channel.set(getattr(consumer, "channel_name", None))
+        _origin = getattr(consumer, "_origin_token", None)
+        _origin_token = _djust_push.origin_channel.set(
+            _origin() if callable(_origin) else getattr(consumer, "channel_name", None)
+        )
 
         # Observability: comprehensive performance tracking (websocket.py:3150-3154)
         # + per-handler SQL-query capture (websocket.py:3469-3475). Both are
@@ -2141,6 +2191,10 @@ class WSConsumerTransport:
         """
         consumer = self._consumer
         view._ws_consumer = consumer
+        # A view mounted beside the page view knows its slot (#3252).
+        slot_target = getattr(consumer, "target_id", None)
+        if isinstance(slot_target, str) and slot_target:
+            view._djust_slot_target = slot_target
         if hasattr(view, "_push_events_flush_callback"):
             view._push_events_flush_callback = consumer._flush_push_events
 
@@ -2366,6 +2420,14 @@ class WSConsumerTransport:
         # upstream (verdict frame sent + view_instance cleared).
         if not self.mounting_in_batch:
             await consumer.close(code=4403)
+
+    def hosts_other_views(self) -> bool:
+        """Whether this socket has hosted views besides one (#3252).
+
+        Sticky for the life of the socket: the teardown clears the registry
+        before it stores the views' last state, and that save must still read
+        what the others saved."""
+        return bool(getattr(self._consumer, "_hosted_several_views", False))
 
     @property
     def capture_document_title(self) -> bool:
@@ -5094,6 +5156,11 @@ class ViewRuntime:
             save_view_key = _session_view_key(target_view, save_path)
             if save_view_key is None:  # tenant view, no tenant resolved (#2973)
                 return
+            # The views beside this one saved into the same session (#3252).
+            if getattr(self.transport, "hosts_other_views", lambda: False)():
+                from ._tenant_state import refresh_other_views_state
+
+                refresh_other_views_state(save_session, save_view_key)
 
             # Save order mirrors HTTP path (mixins/request.py:593-609): private
             # attrs FIRST, then public via get_context_data().
@@ -5214,13 +5281,19 @@ class ViewRuntime:
             if guard is not None and expected_key != guard[0]:
                 raise LateSaveDropped("the session key changed since the state was rendered")
 
-            from ._tenant_state import scoped_path
-
-            parent_path = scoped_path(
-                parent, mount_request.path if mount_request is not None else "/"
+            from ._tenant_state import (
+                refresh_other_views_state,
+                scoped_path,
+                session_view_key,
             )
+
+            page_path = mount_request.path if mount_request is not None else "/"
+            parent_path = scoped_path(parent, page_path)
             if parent_path is None:  # tenant parent, no tenant resolved (#2973)
                 return
+            # The views beside this one saved into the same session (#3252).
+            if getattr(self.transport, "hosts_other_views", lambda: False)():
+                refresh_other_views_state(save_session, session_view_key(parent, page_path) or "")
 
             save_sticky_child_state_sync(target_view, save_session, parent_path)
             write_sticky_index_and_prune_sync(parent, save_session, parent_path)

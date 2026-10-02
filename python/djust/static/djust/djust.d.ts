@@ -282,6 +282,15 @@ declare class LiveViewWebSocket {
    * @param data - Message object (will be JSON-serialized).
    */
   sendMessage(data: Record<string, unknown>): void;
+
+  /**
+   * Tell the server that a view hydrated beside the page view (`dj-lazy`,
+   * `mount_batch`) is gone. The page view and the other views stay live.
+   *
+   * @param targetId - The view's address: its container's `data-djust-target`.
+   * @returns Whether an `unmount` frame was sent (false for a view that is not mounted).
+   */
+  unmountView(targetId: string): boolean;
 }
 
 /**

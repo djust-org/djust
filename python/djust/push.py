@@ -151,9 +151,13 @@ async def sync_push_scope_groups(consumer: Any, view: Any) -> None:
     if channel_layer is None or (not wanted and not joined):
         return
     current = dict(joined)
+    # A group another view of the socket still names stays joined: the channel
+    # is one member of it for every view (#3252).
+    kept = _groups_of_other_views(consumer)
     for key in sorted(set(current) - wanted):
         try:
-            await channel_layer.group_discard(current[key], consumer.channel_name)
+            if current[key] not in kept:
+                await channel_layer.group_discard(current[key], consumer.channel_name)
         except Exception:  # noqa: BLE001 - kept, so the next sync retries the leave
             logger.warning("Error leaving a scoped push group of %s", view_path)
             continue
@@ -167,6 +171,12 @@ async def sync_push_scope_groups(consumer: Any, view: Any) -> None:
             continue
         current[key] = group
     consumer._push_scope_groups = current
+
+
+def _groups_of_other_views(consumer: Any) -> set:
+    from .runtime import _groups_of_other_views as groups
+
+    return groups(consumer)
 
 
 def _presence_probe(view: Any, need_key: bool, need_count: bool) -> tuple:
@@ -246,7 +256,8 @@ async def _sync_presence_scope_group(
         return
     if current:
         try:
-            await channel_layer.group_discard(current, consumer.channel_name)
+            if current not in _groups_of_other_views(consumer):
+                await channel_layer.group_discard(current, consumer.channel_name)
         except Exception:  # noqa: BLE001 - kept, so the next sync retries the leave
             logger.warning("Error leaving the presence-scope group of %s", view_path)
             return
@@ -272,6 +283,7 @@ async def _sync_presence_scope_group(
                     "state": None,
                     "handler": "_on_presence_change",
                     "payload": {},
+                    "group": wanted,
                     "sender_channel": None,
                 },
             )
@@ -313,12 +325,16 @@ def _server_push_message(
     state: Optional[dict[str, Any]],
     handler: Optional[str],
     payload: Optional[dict[str, Any]],
+    group: Optional[str] = None,
 ) -> dict[str, Any]:
     return {
         "type": "server_push",
         "state": state,
         "handler": handler,
         "payload": payload,
+        # The group this push was sent to. A socket that hosts several views
+        # delivers the push to the views that joined it (#3252).
+        "group": group,
         # Originating session's channel (#1677), if pushed from within an event
         # handler — lets that session skip its redundant self-broadcast.
         "sender_channel": origin_channel.get(),
@@ -344,7 +360,9 @@ def push_to_presence_scope(
         )
     group = presence_scope_group_name(view_path, presence_key)
     channel_layer = get_channel_layer()
-    async_to_sync(channel_layer.group_send)(group, _server_push_message(None, handler, payload))
+    async_to_sync(channel_layer.group_send)(
+        group, _server_push_message(None, handler, payload, group)
+    )
 
 
 def push_to_view(
@@ -394,7 +412,7 @@ def push_to_view(
     """
     group = _push_group(view_path, scope)
     channel_layer = get_channel_layer()
-    message = _server_push_message(state, handler, payload)
+    message = _server_push_message(state, handler, payload, group)
     async_to_sync(channel_layer.group_send)(group, message)
 
 
@@ -419,5 +437,5 @@ async def apush_to_view(
     """
     group = _push_group(view_path, scope)
     channel_layer = get_channel_layer()
-    message = _server_push_message(state, handler, payload)
+    message = _server_push_message(state, handler, payload, group)
     await channel_layer.group_send(group, message)

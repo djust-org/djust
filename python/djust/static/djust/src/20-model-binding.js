@@ -79,14 +79,15 @@ function _getElementValue(el) {
  * Tries direct WebSocket first (synchronous, no loading states needed for model
  * binding), then falls back to handleEvent for HTTP-only scenarios.
  */
-function _sendModelUpdate(field, value) {
+function _sendModelUpdate(field, value, el) {
     // Fast path: send directly via WebSocket (synchronous)
     const inst = window.djust.liveViewInstance;
-    if (inst && inst.sendEvent && inst.sendEvent('update_model', { field, value })) {
+    // The element addresses the event to the view it lives in (#3252).
+    if (inst && inst.sendEvent && inst.sendEvent('update_model', { field, value }, null, slotIdFor(el))) {
         return;
     }
     // Fallback: handleEvent (includes HTTP fallback, loading states)
-    handleEvent('update_model', { field, value });
+    handleEvent('update_model', markSlotOf({ field, value }, el));
 }
 
 /**
@@ -127,11 +128,11 @@ function _bindModel(el) {
                 clearTimeout(_modelDebounceTimers.get(timerKey));
             }
             _modelDebounceTimers.set(timerKey, setTimeout(() => {
-                _sendModelUpdate(field, value);
+                _sendModelUpdate(field, value, el);
                 _modelDebounceTimers.delete(timerKey);
             }, debounce));
         } else {
-            _sendModelUpdate(field, value);
+            _sendModelUpdate(field, value, el);
         }
     };
 
