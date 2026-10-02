@@ -157,8 +157,9 @@ def theme_card(
     Each part is optional and each is dropped when absent, so a card with only
     a body is as valid as one with all three.
 
-    A card body is a string, not a block — this is a `simple_tag`, so it takes
-    no `{% end_theme_card %}` and cannot wrap other template tags.
+    A card body here is a string — this is a `simple_tag`, so it takes no
+    closing tag. For a body of other template tags use the block form,
+    `{% theme_card_block %}…{% end_theme_card_block %}` (#2894).
     """
     request = context.get("request")
     tmpl = resolve_component_template(request, "card")
@@ -239,6 +240,7 @@ def theme_alert(
         {% theme_alert "Error occurred" title="Error" variant="destructive" %}
         {% theme_alert "Viewing the record as of 2026-01-01" variant="info" %}
         {% theme_alert "Saved" variant="success" role="alert" %}
+        {% theme_alert_block variant="info" %}Rich <a href="/x">content</a>{% end_theme_alert_block %}
     """
     if role is None:
         role = "alert" if variant in _ASSERTIVE_ALERT_VARIANTS else "status"
@@ -402,6 +404,7 @@ def theme_modal(
 
     Usage:
         {% theme_modal id="confirm" title="Confirm Action" size="md" is_open=modal.is_open %}
+        {% theme_modal_block id="confirm" title="Confirm" is_open=modal.is_open %}…{% end_theme_modal_block %}
     """
     request = context.get("request")
     tmpl = resolve_component_template(request, "modal")
@@ -453,6 +456,7 @@ def theme_dropdown(
 
     Usage:
         {% theme_dropdown id="actions" label="Actions" align="right" is_open=menu.is_open %}
+        {% theme_dropdown_block id="actions" label="Actions" is_open=menu.is_open %}…{% end_theme_dropdown_block %}
     """
     request = context.get("request")
     tmpl = resolve_component_template(request, "dropdown")
@@ -1030,6 +1034,7 @@ def theme_tooltip(context: Context, text: str, position: str = "top", **attrs: A
 
     Usage:
         {% theme_tooltip "Help text" position="top" slot_content="<button>Hover me</button>" %}
+        {% theme_tooltip_block "Help text" position="top" %}<button>Hover me</button>{% end_theme_tooltip_block %}
     """
     slots, remaining_attrs = _extract_slots(attrs)
     request = context.get("request")
@@ -1178,6 +1183,7 @@ def theme_nav_group(
     Usage:
         {% theme_nav_group "Admin" items=admin_links %}
         {% theme_nav_group "Settings" items=settings_links expanded=False %}
+        {% theme_nav_group_block "Settings" %}{% theme_nav_item "Home" "/" %}{% end_theme_nav_group_block %}
     """
     slots, remaining_attrs = _extract_slots(attrs)
     request = context.get("request")
@@ -1251,3 +1257,178 @@ def theme_sidebar_nav(context: Context, sections: Any = None, **attrs: Any) -> S
         **slots,
     }
     return mark_safe(tmpl.render(ctx))
+
+
+# ---------------------------------------------------------------------------
+# Block forms (#2894, #3279)
+#
+# `{% theme_card %}` and its siblings are `simple_tag`s: their body is an
+# argument, so a body made of other template tags has to be pre-rendered in
+# Python and passed through a `|safe` slot. The block forms below are the same
+# components with the body written between an opening and a closing tag:
+#
+#     {% theme_card_block title="Welcome" %}
+#         {% theme_button "Save" variant="primary" %}
+#     {% end_theme_card_block %}
+#
+# Convention: block form = inline name + `_block`, closing tag
+# `end_<name>_block`. The inline tags are unchanged. A block form takes the
+# inline tag's arguments EXCEPT the one its body replaces, and it calls the
+# inline function with the rendered body, so the context, the (per-theme)
+# template and the escaping are the inline form's — there is one copy of each
+# component's markup.
+#
+# The body is rendered by Django's own nodelist in the caller's context, so
+# autoescaping applies to a variable inside it exactly as anywhere else in the
+# template, and the rendered result is already safe when it reaches the
+# component's `|safe` slot. These are raw `@register.tag` wrappers rather than
+# `simple_block_tag` (Django 5.2+) because djust supports Django 4.2; a wrapper
+# of this shape — one `parser.parse((end,))`, body rendered as-is — is bridged
+# to djust's Rust engine by `djust.template_libraries` (ADR-030).
+# ---------------------------------------------------------------------------
+
+
+class _ThemeBlockNode(template.Node):
+    """Render the body, then call the inline tag function with it."""
+
+    def __init__(
+        self,
+        inline: Any,
+        body_param: str,
+        names: list[str],
+        args: list[Any],
+        kwargs: dict[str, Any],
+        nodelist: Any,
+    ) -> None:
+        self.inline = inline
+        self.body_param = body_param
+        self.names = names
+        self.args = args
+        self.kwargs = kwargs
+        self.nodelist = nodelist
+
+    def render(self, context: Context) -> str:
+        # Strip the whitespace the tag's own line breaks add around the body:
+        # it is markup noise in a block-level card and visible spacing inside
+        # an inline wrapper such as the tooltip.
+        body = mark_safe(self.nodelist.render(context).strip())
+        call = {name: value.resolve(context) for name, value in zip(self.names, self.args)}
+        call.update({key: value.resolve(context) for key, value in self.kwargs.items()})
+        call[self.body_param] = body
+        return str(self.inline(context, **call))
+
+
+def _register_block_form(inline: Any, body_param: str, reserved: tuple[str, ...]) -> None:
+    """Register ``<inline>_block`` as the block form of ``inline``.
+
+    ``body_param`` is the keyword the rendered body is passed as; ``reserved``
+    are the names a caller may not also pass, because the body already fills
+    them (``body=`` and ``slot_body=`` on a card). Passing one is a
+    ``TemplateSyntaxError`` at compile time rather than a body that silently
+    wins or loses.
+    """
+    from inspect import getfullargspec, unwrap
+
+    from django.template import TemplateSyntaxError
+    from django.template.library import parse_bits
+
+    name = f"{inline.__name__}_block"
+    end_name = f"end_{name}"
+    spec = getfullargspec(unwrap(inline))
+    params = list(spec.args)
+    defaults = list(spec.defaults or ())
+    # Where the body parameter sat among the inline tag's positional arguments,
+    # when it was one (alert's `message` is the first). Positional arguments at
+    # or past that position would bind to different names than they do inline.
+    body_position = params[1:].index(body_param) if body_param in params else None
+    if body_param in params:
+        # A required body parameter (alert's `message`) is filled by the block,
+        # so it must not be asked for by the tag.
+        index = params.index(body_param)
+        first_default = len(params) - len(defaults)
+        del params[index]
+        if index >= first_default:
+            del defaults[index - first_default]
+    # `parse_bits` strips the leading `context` itself; the names positional
+    # arguments bind to are what follows it.
+    positional = params[1:]
+
+    def compile_block(parser: Any, token: Any) -> _ThemeBlockNode:
+        bits = token.split_contents()[1:]
+        if len(bits) >= 2 and bits[-2] == "as":
+            raise TemplateSyntaxError(
+                f"'{name}' does not support 'as <variable>'; it renders in place"
+            )
+        args, kwargs = parse_bits(
+            parser,
+            bits,
+            params,
+            spec.varargs,
+            spec.varkw,
+            tuple(defaults) or None,
+            spec.kwonlyargs,
+            spec.kwonlydefaults,
+            True,
+            name,
+        )
+        if body_position is not None and len(args) > body_position:
+            raise TemplateSyntaxError(
+                f"'{name}' takes its {body_param} from the block between the tags, so "
+                f"positional arguments would bind differently than in '{inline.__name__}': "
+                "pass them as keywords"
+            )
+        clash = sorted(set(kwargs) & set(reserved))
+        if clash:
+            raise TemplateSyntaxError(
+                f"'{name}' takes its {body_param} from the block between the tags, so it "
+                f"cannot also be given {', '.join(clash)}="
+            )
+        nodelist = parser.parse((end_name,))
+        parser.delete_first_token()
+        return _ThemeBlockNode(inline, body_param, positional, args, kwargs, nodelist)
+
+    register.tag(name, compile_block)
+
+
+# (inline tag, keyword the block's body fills, names it may not also be given)
+_register_block_form(theme_card, "body", ("body", "slot_body"))
+_register_block_form(theme_alert, "message", ("message", "slot_message"))
+_register_block_form(theme_modal, "slot_body", ("slot_body",))
+_register_block_form(theme_dropdown, "slot_menu", ("slot_menu",))
+_register_block_form(theme_tooltip, "slot_content", ("slot_content",))
+_register_block_form(theme_nav_group, "slot_items", ("slot_items", "items"))
+
+
+def _register_misspelt_end_tag(inline: Any) -> None:
+    """``{% end_<inline> %}`` is an error that says where the block form is.
+
+    ``{% theme_card %}…{% end_theme_card %}`` is the spelling the scaffold and
+    the old docs showed (#2894). The inline tags stay inline tags, so the
+    closing tag is NOT accepted; this only replaces Django's generic "Invalid
+    block tag" with a pointer to the block form.
+    """
+    from django.template import TemplateSyntaxError
+
+    end_name = f"end_{inline.__name__}"
+    block = f"{inline.__name__}_block"
+
+    def refuse(parser: Any, token: Any) -> Any:
+        raise TemplateSyntaxError(
+            f"'{end_name}' is not a closing tag: '{inline.__name__}' is an inline tag with "
+            f"no body. To put template tags in the body use "
+            f"{{% {block} %}}...{{% end_{block} %}}."
+        )
+
+    register.tag(end_name, refuse)
+
+
+for _inline in (
+    theme_card,
+    theme_alert,
+    theme_modal,
+    theme_dropdown,
+    theme_tooltip,
+    theme_nav_group,
+):
+    _register_misspelt_end_tag(_inline)
+del _inline

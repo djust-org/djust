@@ -255,8 +255,13 @@ def get_theme_manager(request: HttpRequest | None = None) -> "ThemeManager":
     multiple template tags / context processors within the same
     request reuse a single ThemeManager (same pattern Django uses
     for ``request.user``).
+
+    A falsy ``request`` is treated as no request. A tag rendered by the Rust
+    engine or by the ADR-030 bridge probe reads ``context.get("request")``,
+    which is ``""`` when the template context has none; ``""`` is not
+    something a manager can be cached on.
     """
-    if request is not None:
+    if request:
         manager: ThemeManager | None = getattr(request, "_djust_theme_manager", None)
         if manager is not None:
             return manager

@@ -501,15 +501,16 @@ class Command(BaseCommand):
         </div>
 
         {% comment %}
-            `theme_card` is a simple_tag: it takes its body as an argument and has
-            no closing tag, so it cannot wrap other template tags.
+            `theme_card` takes its body as an argument; `theme_card_block` takes it
+            between the tags, so it can hold other template tags.
         {% endcomment %}
-        {% theme_card title="Welcome" body="This is an example using djust-theming components." %}
-
-        <div class="mt-4 flex gap-2">
-            {% theme_button "Click me" variant="primary" %}
-            {% theme_button "Secondary" variant="secondary" %}
-        </div>
+        {% theme_card_block title="Welcome" %}
+            <p>This is an example using djust-theming components.</p>
+            <div class="mt-4 flex gap-2">
+                {% theme_button "Click me" variant="primary" %}
+                {% theme_button "Secondary" variant="secondary" %}
+            </div>
+        {% end_theme_card_block %}
 
         <div class="mt-4">
             {% theme_alert "This is a success message!" variant="success" dismissible=True %}

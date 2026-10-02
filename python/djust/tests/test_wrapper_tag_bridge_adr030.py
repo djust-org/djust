@@ -119,3 +119,95 @@ def test_probe_reasons_are_specific():
 
     assert tl._wrapper_refusal("okwrap", okwrap) is None
     assert "reads the token stream directly" in tl._wrapper_refusal("tokens", tokens)
+
+
+def test_a_wrapper_that_names_its_own_end_tag_is_probed_for_that_tag():
+    """`end_theme_card_block` is not `end` + the tag name (#2894). The probe must
+    hunt for the end tag the tag's closure names, as `LibraryBlockTagHandler`
+    does at render, or every such wrapper is refused as "more than one segment"."""
+    from django import template
+
+    lib = template.Library()
+
+    class Wrap(template.Node):
+        def __init__(self, nodelist):
+            self.nodelist = nodelist
+
+        def render(self, context):
+            return "(" + self.nodelist.render(context) + ")"
+
+    end_name = "end_my_wrapper_block"
+
+    def compile_wrapper(parser, token):
+        nodelist = parser.parse((end_name,))
+        parser.delete_first_token()
+        return Wrap(nodelist)
+
+    lib.tag("my_wrapper_block", compile_wrapper)
+
+    assert tl._end_name(compile_wrapper, "my_wrapper_block") == "end_my_wrapper_block"
+    assert tl._wrapper_refusal("my_wrapper_block", compile_wrapper) is None
+
+
+def _request_reading_wrapper(read):
+    """A raw wrapper whose node calls ``read(context)`` before rendering its body."""
+    from django import template
+
+    lib = template.Library()
+
+    class Wrap(template.Node):
+        def __init__(self, nodelist):
+            self.nodelist = nodelist
+
+        def render(self, context):
+            read(context)
+            return self.nodelist.render(context)
+
+    def compile_wrapper(parser, token):
+        nodelist = parser.parse(("endreqwrap",))
+        parser.delete_first_token()
+        return Wrap(nodelist)
+
+    lib.tag("reqwrap", compile_wrapper)
+    return compile_wrapper
+
+
+def test_a_wrapper_guarding_on_request_user_still_bridges():
+    """The probe context carries no request, so `request` reads as falsy and a
+    `if request and request.user...` guard is skipped. Handing the probe a real
+    `HttpRequest` (no `.user`) refused every such third-party wrapper."""
+
+    def read(context):
+        request = context.get("request")
+        if request and request.user.is_authenticated:
+            raise AssertionError("unreachable")
+
+    assert tl._wrapper_refusal("reqwrap", _request_reading_wrapper(read)) is None
+
+
+def test_a_wrapper_that_queries_when_there_is_a_request_does_not_query_at_load():
+    queried = []
+
+    def read(context):
+        if context.get("request"):
+            queried.append("User.objects.count()")
+
+    assert tl._wrapper_refusal("reqwrap", _request_reading_wrapper(read)) is None
+    assert queried == [], "a probe must not run request-guarded database code at {% load %}"
+
+
+def test_a_wrapper_reading_request_attributes_unconditionally_stays_refused():
+    def read(context):
+        return context["request"].path
+
+    reason = tl._wrapper_refusal("reqwrap", _request_reading_wrapper(read))
+    assert reason is not None and "raised while rendering a probe body" in reason
+
+
+def test_theme_manager_treats_a_falsy_request_as_no_request():
+    """What the probe, and a Rust render with no `request` in context, hand a
+    `theme_*` tag is the empty string; a manager cannot be cached on that."""
+    from djust.theming.manager import get_theme_manager
+
+    assert get_theme_manager("").get_state() is not None
+    assert get_theme_manager(None).get_state() is not None
