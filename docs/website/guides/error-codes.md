@@ -380,7 +380,7 @@ In development, pages render without Tailwind utilities until you compile the CS
 
 **What causes it**: A LiveView sets `enable_state_snapshot = True` and declares public class attributes or annotations whose names look sensitive (matching `password`, `token`, `secret`, `api_key`, `pii`, `ssn`, `credit_card`, `bearer`, `private_key`, `auth_header`, `sensitive` or `credential`). Message: "<view>: enable_state_snapshot=True with PII-like attribute names: ...". State snapshots are cached client-side by the service worker, so these values would be stored in browser cache storage.
 
-**Fix**: Make the attributes private (leading `_`), or turn off `enable_state_snapshot` for this view.
+**Fix**: Make the attributes private (leading `_`), or turn off `enable_state_snapshot` for this view. The check also covers subclasses of `PersistentLiveView`, which set the flag.
 
 ---
 
