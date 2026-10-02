@@ -25,6 +25,7 @@ from __future__ import annotations
 import inspect
 import itertools
 import logging
+import re
 from typing import Any, Dict, Optional
 
 from asgiref.sync import async_to_sync, sync_to_async
@@ -36,6 +37,9 @@ logger = logging.getLogger(__name__)
 # matters for WS event routing when two embeds of the same class live
 # under the same parent.
 _view_id_counter = itertools.count(1)
+
+# The shape of an auto-assigned child id (``child_<N>``).
+_AUTO_VIEW_ID = re.compile(r"child_[0-9]+")
 
 
 # ---------------------------------------------------------------------------
@@ -433,10 +437,53 @@ class StickyChildRegistry:
         parent, it is honored — otherwise a monotonic ``child_N`` stamp
         is generated. The auto-generated form is the default path used
         by ``{% live_render %}`` when the caller doesn't pin a stable id.
+
+        Over the HTTP fallback the stamp is numbered per render instead
+        (:meth:`_scope_child_ids_to_render`), so the same template yields the
+        same ids on every request (#3104).
         """
-        if preferred and preferred not in getattr(self, "_child_views", {}):
+        registry = getattr(self, "_child_views", {})
+        if preferred and preferred not in registry:
             return preferred
+        per_render = self.__dict__.get("_render_child_ids")
+        if per_render is not None:
+            while True:
+                candidate = f"child_{next(per_render)}"
+                if candidate not in registry:
+                    return candidate
         return f"child_{next(_view_id_counter)}"
+
+    def _scope_child_ids_to_render(self) -> None:
+        """Number the auto-assigned child ids from 1 for the render about to run.
+
+        Over the HTTP fallback every request builds the view afresh, so a child
+        stamped with the process-wide counter (``child_17`` on the page GET,
+        ``child_18`` on the POST that follows) can never be found again by the
+        ``view_id`` the browser echoes. With the ids numbered per render, the
+        same template yields the same ids on every request, and an event
+        carrying a child's ``view_id`` can be routed to that child (#3104).
+
+        Called by the HTTP request methods immediately before each render of a
+        legacy parent, never over a socket: there children live across renders
+        and the process-wide counter keeps their ids unique. A child of a
+        previous render of this request (an auto-numbered, non-sticky, legacy
+        one: a throwaway) is dropped from the registry so the next render
+        reuses its id; pinned, sticky and explicit children are left alone.
+        """
+        from .._exposure import uses_legacy_exposure
+
+        self.__dict__["_render_child_ids"] = itertools.count(1)
+        registry = getattr(self, "_child_views", None)
+        if type(registry) is not dict:
+            return
+        for view_id in [
+            vid
+            for vid, child in registry.items()
+            if _AUTO_VIEW_ID.fullmatch(vid)
+            and uses_legacy_exposure(child)
+            and getattr(child, "sticky", False) is not True
+        ]:
+            registry.pop(view_id, None)
 
     # ------------------------------------------------------------------
     # Registration

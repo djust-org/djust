@@ -389,6 +389,7 @@ class RequestMixin:
         t0 = time.perf_counter()
         from .._child_rendering import render_view_full_template, render_view_with_diff
 
+        self._prepare_child_ids()
         html = render_view_full_template(self, request, serialized_context=state_serializable)
         # ADR-036 R1: recovery targets come from what the server rendered.
         from ..validation import note_rendered_recovery_targets
@@ -399,6 +400,7 @@ class RequestMixin:
 
         # Establish VDOM baseline for subsequent PATCH responses.
         t0 = time.perf_counter()
+        self._prepare_child_ids()
         _, _, _ = render_view_with_diff(self, request)
         t_render_diff = (time.perf_counter() - t0) * 1000
 
@@ -737,6 +739,114 @@ class RequestMixin:
 
         return response
 
+    def _prepare_child_ids(self) -> None:
+        """Number this render's auto-assigned child ids from 1 (HTTP, #3104).
+
+        Every HTTP request builds the view afresh, so ids from the process-wide
+        counter never repeat between the page GET and the event POST that
+        follows; per-render numbering makes them repeat, which is what lets
+        an event be routed to the child it names. A page that does not use
+        legacy exposure keeps the counter: its children are not routed over
+        HTTP.
+        """
+        if uses_legacy_exposure(self) and hasattr(self, "_scope_child_ids_to_render"):
+            self._scope_child_ids_to_render()
+
+    def _http_embedded_child(self, request: "HttpRequest", view_id: Any) -> Optional[Any]:
+        """The embedded child an HTTP event's ``view_id`` names, or ``None`` (#3104).
+
+        Children register while the page renders, so the page is rendered once
+        here (its output is not sent: a child's event answers with the child's
+        own HTML). The child exists only if it passed what ``{% live_render %}``
+        checks at registration: its view-level auth and its object permission,
+        against this request. Only a legacy page's legacy child is routed over
+        HTTP: an explicit-exposure child's turn is authorized against the mount
+        binding the socket transports hold, which a stateless request has not.
+        Anything else is refused by the caller, as it was before routing.
+        """
+        if type(view_id) is not str or not view_id or not uses_legacy_exposure(self):
+            return None
+        self._prepare_child_ids()
+        with self._processor_context(request):
+            from .._child_rendering import render_view_with_diff
+
+            render_view_with_diff(self, request)
+        child = self._get_all_child_views().get(view_id)
+        if child is None or not uses_legacy_exposure(child):
+            return None
+        return child
+
+    def _http_child_response(
+        self,
+        request: "HttpRequest",
+        child: Any,
+        view_id: str,
+        event_name: str,
+        *,
+        cache_request_id: Any = None,
+    ) -> HttpResponse:
+        """Answer an event the child's handler has run (#3104).
+
+        The shape the socket transports use for a child's event: an
+        ``embedded_update`` carrying the child's own HTML, which the client
+        morphs into the child's container. The child's state is persisted as
+        the socket persists it (a sticky child that opted in, under its stable
+        key), its side channels (flash, page metadata, navigation) are the
+        child's, and nothing of the page is rendered or saved: the event could
+        not have changed it.
+        """
+        from ..websocket import render_embedded_child_html
+        from .sticky import (
+            save_sticky_child_state_sync,
+            sticky_child_should_persist,
+            warn_sticky_child_optin_skip,
+            write_sticky_index_and_prune_sync,
+        )
+
+        response: Dict[str, Any] = {"type": "embedded_update", "view_id": view_id}
+        navigation_frames: List[Dict[str, Any]] = []
+        if hasattr(child, "_drain_navigation"):
+            for command in child._drain_navigation():
+                navigation_frames.append(
+                    {
+                        "type": "navigation",
+                        "action": command.get("type"),
+                        **{k: v for k, v in command.items() if k != "type"},
+                    }
+                )
+        if navigation_frames:
+            response["_navigation"] = navigation_frames
+        if hasattr(child, "_drain_flash"):
+            flash_commands = child._drain_flash()
+            if flash_commands:
+                response["_flash"] = flash_commands
+        if hasattr(child, "_drain_page_metadata"):
+            meta_commands = child._drain_page_metadata()
+            if meta_commands:
+                response["_page_metadata"] = meta_commands
+        if any(frame["action"] == "live_redirect" for frame in navigation_frames):
+            # The event leaves the page: nothing is rendered or saved for it.
+            return JsonResponse(response)
+
+        if sticky_child_should_persist(child, self):
+            save_sticky_child_state_sync(child, request.session, request.path)
+            write_sticky_index_and_prune_sync(self, request.session, request.path)
+        else:
+            warn_sticky_child_optin_skip(child, self)
+
+        # The page tree's public parameter contracts travel with the update, as
+        # with every other render answer (ADR-036): the child's owners are part
+        # of that tree, and a reply without them would drop the page's scope.
+        contract_fields = _http_parameter_contract_fields(self, request)
+        if contract_fields is None:
+            return _contract_error_response()
+        response.update(contract_fields)
+        response["html"] = render_embedded_child_html(child)
+        response["event_name"] = event_name
+        if cache_request_id:
+            response["cache_request_id"] = cache_request_id
+        return JsonResponse(response)
+
     def post(self, request: "HttpRequest", *args: Any, **kwargs: Any) -> HttpResponse:
         """Handle POST requests - event handling"""
         from ..components.base import LiveComponent
@@ -920,26 +1030,48 @@ class RequestMixin:
             # does over WebSocket (#1646 — the HTTP fallback must not differ).
             owner: Any = self
             # #3104: an event carrying another view's ``view_id`` belongs to an
-            # embedded ``{% live_render %}`` child. This request has no child to
-            # route to (children register during the render, after dispatch,
-            # under fresh ids), so the event is refused, as the socket runtime
-            # refuses an unknown ``view_id``. Running it on the parent would
-            # silently change the wrong view's state.
-            # Same rule as ``ViewRuntime`` (pop, then refuse only a truthy id
+            # embedded ``{% live_render %}`` child. It is routed to that child,
+            # as the socket runtime routes it: the page renders once to register
+            # its children (the same ids on every request, ``_prepare_child_ids``),
+            # and the child's handler is then validated, authorized and run
+            # exactly as the page's own would be. An id that names no child of
+            # this page (forged, stale, an explicit-exposure child, which this
+            # transport does not route) is refused, not run on the parent.
+            # Same rule as ``ViewRuntime`` (pop, then route only a truthy id
             # other than this view's own), so the transports cannot disagree.
             view_id = None
             if isinstance(params, dict):
                 params = dict(params)
                 view_id = params.pop("view_id", None)
+            child_view = None
             if view_id and view_id != getattr(self, "_view_id", None):
-                logger.warning(
-                    "HTTP POST refused event '%s' for embedded view %s on %s",
-                    event_name,
-                    sanitize_for_log(str(view_id)),
-                    type(self).__name__,
-                )
-                return JsonResponse({"error": "Embedded view not found"}, status=400)
-            component_id = params.get("component_id") if isinstance(params, dict) else None
+                try:
+                    child_view = self._http_embedded_child(request, view_id)
+                except PermissionDenied:
+                    # A child the render registers checks its own auth and object
+                    # permission (``{% live_render %}``): refused, as the page's
+                    # own layers are.
+                    logger.warning(
+                        "Auth denied for %s: embedded child permission (HTTP POST)",
+                        type(self).__name__,
+                    )
+                    return JsonResponse(
+                        {"error": "Permission denied", "code": "permission_denied"}, status=403
+                    )
+                if child_view is None:
+                    logger.warning(
+                        "HTTP POST refused event '%s' for embedded view %s on %s",
+                        event_name,
+                        sanitize_for_log(str(view_id)),
+                        type(self).__name__,
+                    )
+                    return JsonResponse({"error": "Embedded view not found"}, status=400)
+                owner = child_view
+            component_id = (
+                params.get("component_id")
+                if isinstance(params, dict) and child_view is None
+                else None
+            )
             if component_id:
                 registry = getattr(self, "_components", None) or {}
                 owner = registry.get(component_id)
@@ -1031,6 +1163,15 @@ class RequestMixin:
                 else:
                     handler(*call_args, **call_kwargs)
                 t_handler_ms = (time.perf_counter() - t0_handler) * 1000
+
+            if child_view is not None:
+                return self._http_child_response(
+                    request,
+                    child_view,
+                    view_id,
+                    event_name,
+                    cache_request_id=params.get("_cacheRequestId"),
+                )
 
             # A queued ``live_redirect`` / ``live_patch`` goes out with this
             # answer, as the WebSocket flushes it at turn end. The HTTP
@@ -1157,6 +1298,7 @@ class RequestMixin:
                 from .._child_rendering import render_view_with_diff
 
                 t0_render = time.perf_counter()
+                self._prepare_child_ids()
                 html, patches_json, version = render_view_with_diff(self, request)
                 t_render_ms = (time.perf_counter() - t0_render) * 1000
 
