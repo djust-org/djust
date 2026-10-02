@@ -211,9 +211,18 @@ How it behaves:
 - **Once per change.** The new values are recorded after the hook returns, so it
   does not run again until they change again. Values that compare by identity
   (a `QuerySet`) look changed on every render, so keep the hook idempotent.
-- **Synchronous and cheap.** It runs while the parent renders. An exception
-  propagates as one from `mount()` would, and the hook runs again on the next
-  render. An `async def` hook is refused with a `TypeError`.
+- **Synchronous and cheap.** It runs while the parent renders. An `async def`
+  hook is refused with a `TypeError`.
+- **A failing hook fails the parent.** An exception propagates out of the tag, as
+  one from `mount()` would, and the new values are not recorded as applied. So the
+  parent keeps failing to render (every event on it) until the tag passes a value
+  the hook accepts, when the hook runs again and succeeds. Validate, and handle the
+  values you can recover from, inside the hook.
+- **Values are raw.** `changed` holds what the template engine handed the tag,
+  exactly as `mount()` kwargs are: scalars keep their type, but a list or other
+  non-scalar arrives as the string the template would print (`'[1, 2]'`). Treat
+  them as untrusted input (for example `q=request.GET.q`) and validate and convert
+  them in the hook as you would in `mount()`.
 - **Optional.** A child that does not define it behaves as before: the new values
   are ignored and djust logs one warning naming the changed kwargs.
 - **Not a client event.** The leading underscore keeps it out of event dispatch in

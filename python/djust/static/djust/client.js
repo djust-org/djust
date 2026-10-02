@@ -835,14 +835,19 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
     // into <meta name="djust-page-shell"> and sends the destination's on the
     // `mount` frame that answers a live_redirect_mount (dj-navigate,
     // live_redirect, back/forward). When the two differ the destination cannot
-    // render correctly in place, so we do a normal page load of the URL the
-    // address bar already holds (history.replaceState/pushState ran before the
-    // mount was requested), replacing that entry rather than adding another.
+    // render correctly in place, so we reload: history.pushState (or the
+    // popstate itself) already moved the address bar to the destination, so
+    // reloading the current document IS a full load of the destination.
+    //
+    // It must be reload(), not location.replace(location.href): the URL is
+    // already current, and replacing the document with a URL that differs from
+    // the current one only by a fragment is a same-document FRAGMENT
+    // navigation, not a load. With "/x/#sec" nothing would load and the reader
+    // would see the old page under the new URL.
     //
     // No loop: only a live_redirect_mount reply carries `page_shell`, and the
-    // full load that follows mounts normally. No open redirect: the target is
-    // never read from the frame; it is our own current URL, validated by the
-    // same guard as every other navigation sink.
+    // load that follows mounts normally. No open redirect: reload() takes no
+    // target, and nothing in the frame is read as one.
 
     function pageShellMismatch(frame) {
         if (!frame || typeof frame.page_shell !== 'string' || frame.page_shell === '') return false;
@@ -854,10 +859,10 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
         return current !== frame.page_shell;
     }
 
-    // The one place a shell mismatch leaves the page; a seam so tests can
+    // The one place a shell mismatch leaves the page; a seam so jsdom tests can
     // observe it (jsdom cannot navigate).
-    window.djust._fullPageLoad = function (url) {
-        window.location.replace(url); // codeql[js/xss] -- validated via safeNavigationTarget
+    window.djust._fullPageLoad = function () {
+        window.location.reload();
     };
 
     /**
@@ -867,14 +872,10 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
      */
     function fallBackToFullLoadOnShellChange(frame) {
         if (!frame || frame.type !== 'mount' || !pageShellMismatch(frame)) return false;
-        const safe = safeNavigationTarget(
-            window.location.pathname + window.location.search + window.location.hash
-        );
-        if (!safe) return false;
         if (globalThis.djustDebug) {
-            console.log('[djust] page shell differs from the destination, full page load: %s', safe);
+            console.log('[djust] page shell differs from the destination, full page load');
         }
-        window.djust._fullPageLoad(safe);
+        window.djust._fullPageLoad();
         return true;
     }
 

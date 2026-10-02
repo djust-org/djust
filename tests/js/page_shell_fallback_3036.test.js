@@ -41,7 +41,9 @@ async function load(startPath, { shell = CURRENT } = {}) {
     dom.window.eval(clientCode);
     await new Promise((resolve) => setTimeout(resolve, 50));
     const loads = [];
-    dom.window.djust._fullPageLoad = (url) => loads.push(url);
+    // The seam takes no target: it reloads the current document, whose URL
+    // is already the destination (a fragment-only replace() would not load).
+    dom.window.djust._fullPageLoad = (...args) => loads.push(args);
     dom.window.djust._routeMap = {
         '/items/': 'test.views.IndexView',
         '/items/detail/': 'test.views.DetailView',
@@ -80,8 +82,8 @@ describe('page shell fallback (#3036)', () => {
         const { dom, ws, loads } = await load('/items/');
         await navigate(dom, '/items/detail/');
         await ws.handleMessage(mountFrame({ page_shell: OTHER }));
-        // The address bar already holds the destination; that is what loads.
-        expect(loads).toEqual(['/items/detail/']);
+        // The address bar already holds the destination; reloading loads it.
+        expect(loads).toEqual([[]]);
         expect(rootHtml(dom)).toContain('id="old"');
         expect(rootHtml(dom)).not.toContain('id="new"');
     });
@@ -94,11 +96,15 @@ describe('page shell fallback (#3036)', () => {
         expect(rootHtml(dom)).toContain('id="new"');
     });
 
-    it('keeps the query string and hash of the destination in the full load', async () => {
+    it('reloads rather than replacing the URL, so a #fragment destination still loads', async () => {
+        // location.replace('/items/detail/#part') from a document already at
+        // that URL is a same-document fragment navigation and loads nothing
+        // (verified in tests/playwright/test_page_shell_fallback_3036.py).
         const { dom, ws, loads } = await load('/items/');
         await navigate(dom, '/items/detail/?tab=2#part');
+        expect(dom.window.location.href).toBe('http://localhost/items/detail/?tab=2#part');
         await ws.handleMessage(mountFrame({ page_shell: OTHER }));
-        expect(loads).toEqual(['/items/detail/?tab=2#part']);
+        expect(loads).toEqual([[]]);
     });
 
     it('back/forward onto a page with a different shell is a full load', async () => {
@@ -114,7 +120,7 @@ describe('page shell fallback (#3036)', () => {
         const sent = ws.ws.sent.map((raw) => JSON.parse(raw).type);
         expect(sent).toContain('live_redirect_mount');
         await ws.handleMessage(mountFrame({ view: 'test.views.IndexView', page_shell: OTHER }));
-        expect(loads).toEqual(['/items/']);
+        expect(loads).toEqual([[]]);
     });
 
     it('a mount without a fingerprint (initial / reconnect mount) is applied', async () => {
@@ -147,7 +153,7 @@ describe('page shell fallback (#3036)', () => {
             page_shell: OTHER,
             url: 'https://evil.example/', path: '//evil.example/', to: 'javascript:alert(1)',
         }));
-        expect(loads).toEqual(['/items/detail/']);
+        expect(loads).toEqual([[]]);
     });
 
     it('a full load does not loop: the replacement page mounts without a fingerprint', async () => {
@@ -175,6 +181,6 @@ describe('page shell fallback: SSE transport (#3036)', () => {
         // The SSE client calls this helper first thing in _handleMessageImpl.
         expect(dom.window.djust.fallBackToFullLoadOnShellChange(mountFrame({ page_shell: OTHER }))).toBe(true);
         expect(dom.window.djust.fallBackToFullLoadOnShellChange(mountFrame({ page_shell: CURRENT }))).toBe(false);
-        expect(loads).toEqual(['/items/']);
+        expect(loads).toEqual([[]]);
     });
 });

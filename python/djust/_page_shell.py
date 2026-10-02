@@ -27,8 +27,15 @@ What counts:
 * ``<style>`` in ``<head>``
 * ``{% include %}`` tags in ``<head>`` (the partial's contents are not read)
 
-``<meta>``, ``<title>`` and everything inside ``dj-root`` do not count; they
-have their own paths (``page_title``, the root swap).
+``<script>`` blocks that are data, not code (``application/ld+json``,
+``application/json``, ``text/template``, ...), ``<meta>``, ``<title>`` and
+everything inside ``dj-root`` do not count; they have their own paths
+(``page_title``, the root swap) or never load anything.
+
+Limits: the hash is of the template TEXT, so ``{{ block.super }}`` in an
+overriding block is not expanded (the Rust inheritance flattening drops the
+parent's content there), and a parent template that differs per tenant while
+the child's file does not is not told apart.
 """
 
 from __future__ import annotations
@@ -65,16 +72,48 @@ _VOID = frozenset(
 #: ``<link rel>`` values that load something the page needs.
 _ASSET_RELS = frozenset({"stylesheet", "modulepreload"})
 
-# Bounded and tag-free: it scans TEMPLATE text between elements, not markup.
-_INCLUDE_RE = re.compile(r"\{%-?\s*include\s[^%]{1,300}%\}")
+# Template syntax, not markup. Bounded, single-line (Django tags cannot span
+# lines), so a stray ``{%`` cannot make the scan quadratic.
+_TEMPLATE_COMMENT_RE = re.compile(r"\{#[^\n]{0,1000}?#\}")
+_TEMPLATE_TAG_RE = re.compile(r"\{%[^\n]{0,1000}?%\}|\{\{[^\n]{0,1000}?\}\}")
+_PLACEHOLDER_RE = re.compile(r"djtpl_([0-9a-f]+)_")
+_INCLUDE_TAG_RE = re.compile(r"\{%-?\s*include\s")
+
+#: ``<script type>`` values that run code or change how it loads. Anything
+#: else (``application/ld+json``, ``application/json``, ``text/template``,
+#: ``speculationrules``, ...) is data and never loads anything.
+_EXECUTABLE_SCRIPT_TYPES = frozenset({"", "module", "importmap"})
 
 #: Fingerprint length in hex digits (64 bits). A collision only means a
 #: missed fallback, the behaviour before this existed.
 _DIGEST_LEN = 16
 
-#: ``(template_name, wrapper_template) -> fingerprint``; see :func:`page_shell`.
-_CACHE: Dict[Tuple[Optional[str], Optional[str]], Optional[str]] = {}
+#: ``(template_name, wrapper_template, origins) -> fingerprint``; see
+#: :func:`page_shell`. ``_CONTENT_CACHE`` memoises :func:`shell_fingerprint` by
+#: the content of its sources, which is what makes inline ``template`` views
+#: cheap: their text is the key, so it can never be stale.
+_CACHE: Dict[Any, Optional[str]] = {}
+_CONTENT_CACHE: Dict[str, Optional[str]] = {}
 _CACHE_MAX = 256
+
+
+def _mask_template_syntax(source: str) -> str:
+    """Make template syntax safe to hand to an HTML parser, keeping its text.
+
+    ``href="{% static "a.css" %}"`` is valid Django, but an HTML parser ends the
+    attribute at the inner quote and would see two different stylesheets as the
+    same truncated value. Each ``{% ... %}`` / ``{{ ... }}`` becomes a
+    quote-free, space-free token carrying the hex of its text, so the text still
+    reaches the hash. ``{# ... #}`` comments render nothing and are dropped.
+    """
+    source = _TEMPLATE_COMMENT_RE.sub("", source)
+    return _TEMPLATE_TAG_RE.sub(
+        lambda m: "djtpl_" + m.group(0).encode("utf-8", "replace").hex() + "_", source
+    )
+
+
+def _unmask(text: str) -> str:
+    return _PLACEHOLDER_RE.sub(lambda m: bytes.fromhex(m.group(1)).decode("utf-8", "replace"), text)
 
 
 class _ShellCollector(HTMLParser):
@@ -96,6 +135,18 @@ class _ShellCollector(HTMLParser):
     @staticmethod
     def _attrs(raw: List[Tuple[str, Optional[str]]]) -> Dict[str, str]:
         return {name.lower(): (value or "") for name, value in raw}
+
+    @staticmethod
+    def _runs_code(script_type: str) -> bool:
+        """Whether a ``<script type>`` loads or runs code (see the set above).
+
+        A type that is itself template syntax is unknown, so it counts."""
+        return (
+            script_type in _EXECUTABLE_SCRIPT_TYPES
+            or "javascript" in script_type
+            or "ecmascript" in script_type
+            or "djtpl_" in script_type
+        )
 
     @property
     def _outside_root(self) -> bool:
@@ -133,8 +184,10 @@ class _ShellCollector(HTMLParser):
         if self._capture is not None:
             self._text.append(data)
         elif self._head_open and self._outside_root:
-            for found in _INCLUDE_RE.findall(data):
-                self.entries.append(["include", " ".join(found.split())])
+            for token in _PLACEHOLDER_RE.finditer(data):
+                tag = _unmask(token.group(0))
+                if _INCLUDE_TAG_RE.match(tag):
+                    self.entries.append(["include", " ".join(tag.split())])
 
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
@@ -144,7 +197,10 @@ class _ShellCollector(HTMLParser):
         if capture is not None and capture[0] == tag:
             text = " ".join("".join(self._text).split())
             attr = capture[1]
-            if tag == "script" and attr.get("src"):
+            script_type = attr.get("type", "").split(";")[0].strip().lower()
+            if tag == "script" and not self._runs_code(script_type):
+                pass
+            elif tag == "script" and attr.get("src"):
                 self.entries.append(["script", attr["src"], attr.get("type", "")])
             else:
                 digest = hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()[:_DIGEST_LEN]
@@ -163,6 +219,7 @@ class _ShellCollector(HTMLParser):
 
 def _entries(source: str) -> Optional[List[List[str]]]:
     """The page-shell entries of ``source``, or None when it has no root."""
+    source = _mask_template_syntax(source)
     for root_attr in ("dj-root", "dj-view"):
         collector = _ShellCollector(root_attr)
         collector.feed(source)
@@ -177,18 +234,36 @@ def shell_fingerprint(*sources: Optional[str]) -> Optional[str]:
 
     None when no source has a ``dj-root`` / ``dj-view`` element to define
     "outside the root"; the client then keeps the fast path, as before.
+    Memoised by the content of ``sources``.
     """
+    texts = [source for source in sources if source]
+    if not texts:
+        return None
+    key = hashlib.sha256("\0".join(texts).encode("utf-8", "replace")).hexdigest()
+    if key in _CONTENT_CACHE:
+        return _CONTENT_CACHE[key]
     parts: List[List[List[str]]] = []
-    for source in sources:
-        if not source:
-            continue
+    for source in texts:
         found = _entries(source)
         if found is not None:
             parts.append(found)
-    if not parts:
-        return None
-    blob = json.dumps(parts, separators=(",", ":"), sort_keys=True)
-    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:_DIGEST_LEN]
+    fingerprint: Optional[str] = None
+    if parts:
+        blob = json.dumps(parts, separators=(",", ":"), sort_keys=True)
+        fingerprint = hashlib.sha256(blob.encode("utf-8")).hexdigest()[:_DIGEST_LEN]
+    if len(_CONTENT_CACHE) >= _CACHE_MAX:
+        _CONTENT_CACHE.clear()
+    _CONTENT_CACHE[key] = fingerprint
+    return fingerprint
+
+
+def _origin(template_name: str) -> str:
+    """The file ``template_name`` currently resolves to."""
+    from django.template import loader
+
+    template = loader.get_template(template_name)
+    origin = getattr(getattr(template, "template", template), "origin", None)
+    return str(getattr(origin, "name", "") or "")
 
 
 def page_shell(view: Any) -> Optional[str]:
@@ -197,10 +272,12 @@ def page_shell(view: Any) -> Optional[str]:
     The HTTP load and a ``live_redirect`` mount both call this with the view
     instance, so the two sides are computed identically.
 
-    A view that names its template (``template_name``) is cached per name
-    outside ``DEBUG``, where templates do not change under a running process;
-    resolving the inheritance chain is the expensive part. An inline
-    ``template`` is parsed each time.
+    A view that names its template (``template_name``) is cached outside
+    ``DEBUG``, where templates do not change under a running process;
+    resolving the inheritance chain is the expensive part. The key is the name
+    plus the file each name resolves to, so a project whose loader serves a
+    different file per tenant gets one entry per file. An inline ``template``
+    is memoised by its content in :func:`shell_fingerprint`.
     """
     try:
         from django.conf import settings
@@ -208,10 +285,12 @@ def page_shell(view: Any) -> Optional[str]:
         inline = getattr(view, "template", None)
         name = None if inline else getattr(view, "template_name", None)
         wrapper = getattr(view, "wrapper_template", None) or None
-        key = (name, wrapper)
         cacheable = bool(name) and not settings.DEBUG
-        if cacheable and key in _CACHE:
-            return _CACHE[key]
+        key = None
+        if cacheable:
+            key = (name, wrapper, _origin(name), _origin(wrapper) if wrapper else None)
+            if key in _CACHE:
+                return _CACHE[key]
 
         from .runtime import _view_document_source, template_source
 

@@ -20,7 +20,8 @@ from django.test import RequestFactory, override_settings
 from django.urls import path
 
 from djust import LiveView
-from djust._page_shell import _CACHE, page_shell, shell_fingerprint
+from djust import _page_shell
+from djust._page_shell import _CACHE, _CONTENT_CACHE, page_shell, shell_fingerprint
 from djust.websocket import LiveViewConsumer
 
 from ._ws_frames import drain_extra, receive_until, types_of
@@ -31,8 +32,10 @@ SETTINGS = dict(DEBUG=False, DJUST_TENANTS=None, DJUST_CONFIG={})
 @pytest.fixture(autouse=True)
 def _fresh_cache():
     _CACHE.clear()
+    _CONTENT_CACHE.clear()
     yield
     _CACHE.clear()
+    _CONTENT_CACHE.clear()
 
 
 def _doc(head="", before="", body="<p>x</p>", after=""):
@@ -132,6 +135,152 @@ class TestFingerprint:
     def test_is_a_short_hex_hash_carrying_no_content(self):
         fp = shell_fingerprint(_doc(head='<link rel="stylesheet" href="/secret-name.css">'))
         assert re.fullmatch(r"[0-9a-f]{16}", fp)
+
+
+class TestTemplateSyntaxInAttributes:
+    """``href="{% static "a.css" %}"`` is valid Django; an HTML parser would end
+    the attribute at the inner quote and see every stylesheet as ``{% static``."""
+
+    @pytest.mark.parametrize(
+        "a, b",
+        [
+            (
+                '<link rel="stylesheet" href="{% static "a.css" %}">',
+                '<link rel="stylesheet" href="{% static "b.css" %}">',
+            ),
+            (
+                "<link rel='stylesheet' href='{% static 'a.css' %}'>",
+                "<link rel='stylesheet' href='{% static 'b.css' %}'>",
+            ),
+            (
+                '<link rel="stylesheet" href="{% static \'a.css\' %}">',
+                '<link rel="stylesheet" href="{% static \'b.css\' %}">',
+            ),
+            (
+                '<link rel="stylesheet" href={% static "a.css" %}>',
+                '<link rel="stylesheet" href={% static "b.css" %}>',
+            ),
+            (
+                '<script src="{% static "a.js" %}"></script>',
+                '<script src="{% static "b.js" %}"></script>',
+            ),
+            (
+                '<link rel="stylesheet" href="{{ cdn }}/a.css">',
+                '<link rel="stylesheet" href="{{ cdn }}/b.css">',
+            ),
+        ],
+    )
+    def test_different_files_differ(self, a, b):
+        assert shell_fingerprint(_doc(head=a)) != shell_fingerprint(_doc(head=b))
+
+    def test_a_commented_out_asset_is_not_an_asset(self):
+        base = shell_fingerprint(_doc())
+        assert shell_fingerprint(_doc(head='{# <script src="/old.js"></script> #}')) == base
+
+    def test_a_stray_open_brace_does_not_swallow_the_page(self):
+        html = _doc(head="{% unclosed", after='<script src="/t.js"></script>')
+        assert shell_fingerprint(html) != shell_fingerprint(_doc())
+
+
+class TestScriptTypes:
+    def _fp(self, script):
+        return shell_fingerprint(_doc(head=script))
+
+    @pytest.mark.parametrize(
+        "script",
+        [
+            '<script type="application/ld+json">{"name": "{{ p.name }}"}</script>',
+            '<script type="application/json" id="d">{"a": 1}</script>',
+            '<script type="text/template"><li>{{ x }}</li></script>',
+            '<script type="text/x-handlebars-template">{{x}}</script>',
+            '<script type="speculationrules">{"prefetch": []}</script>',
+        ],
+    )
+    def test_data_blocks_do_not_count(self, script):
+        assert self._fp(script) == shell_fingerprint(_doc())
+
+    def test_per_page_structured_data_keeps_the_fast_path(self):
+        a = self._fp('<script type="application/ld+json">{"name": "One"}</script>')
+        b = self._fp('<script type="application/ld+json">{"name": "Two"}</script>')
+        assert a == b
+
+    @pytest.mark.parametrize(
+        "script",
+        [
+            "<script>boot()</script>",
+            '<script type="text/javascript">boot()</script>',
+            '<script type="application/javascript; charset=utf-8">boot()</script>',
+            '<script type="module">import "/m.js"</script>',
+            '<script type="importmap">{"imports": {}}</script>',
+            '<script type="{{ kind }}">boot()</script>',
+            '<script src="/a.js"></script>',
+        ],
+    )
+    def test_code_counts(self, script):
+        assert self._fp(script) != shell_fingerprint(_doc())
+
+    def test_different_module_scripts_differ(self):
+        assert self._fp('<script type="module" src="/a.js"></script>') != self._fp(
+            '<script type="module" src="/b.js"></script>'
+        )
+
+    def test_a_data_block_with_a_src_loads_nothing(self):
+        assert self._fp('<script type="application/json" src="/a.json"></script>') == (
+            shell_fingerprint(_doc())
+        )
+
+
+class TestCaching:
+    def test_inline_template_is_parsed_once_per_content(self, monkeypatch):
+        calls = []
+        real = _page_shell._entries
+        monkeypatch.setattr(_page_shell, "_entries", lambda src: calls.append(1) or real(src))
+
+        class Inline(LiveView):
+            template = _doc(head='<link rel="stylesheet" href="/a.css">')
+
+        with override_settings(**SETTINGS):
+            first = page_shell(Inline())
+            second = page_shell(Inline())
+        assert first == second and first is not None
+        assert len(calls) == 1
+
+    def test_changed_inline_content_is_not_served_stale(self):
+        class One(LiveView):
+            template = _doc(head='<link rel="stylesheet" href="/a.css">')
+
+        class Two(LiveView):
+            template = _doc(head='<link rel="stylesheet" href="/b.css">')
+
+        with override_settings(**SETTINGS):
+            assert page_shell(One()) != page_shell(Two())
+
+    def test_the_same_template_name_resolving_to_another_file_is_a_new_entry(self, tmp_path):
+        """A loader that serves a different file per tenant must not hand the
+        first tenant's fingerprint to the rest."""
+        a_dir, b_dir = tmp_path / "a", tmp_path / "b"
+        for directory, css in ((a_dir, "/a.css"), (b_dir, "/b.css")):
+            directory.mkdir()
+            (directory / "t.html").write_text(_doc(head=f'<link rel="stylesheet" href="{css}">'))
+
+        def templates(directory):
+            return [
+                {
+                    "BACKEND": "django.template.backends.django.DjangoTemplates",
+                    "DIRS": [str(directory)],
+                    "APP_DIRS": False,
+                    "OPTIONS": {},
+                }
+            ]
+
+        class Named(LiveView):
+            template_name = "t.html"
+
+        with override_settings(TEMPLATES=templates(a_dir), **SETTINGS):
+            first = page_shell(Named())
+        with override_settings(TEMPLATES=templates(b_dir), **SETTINGS):
+            second = page_shell(Named())
+        assert first and second and first != second
 
 
 class SourcePage(LiveView):

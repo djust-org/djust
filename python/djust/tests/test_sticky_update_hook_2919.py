@@ -118,6 +118,24 @@ class RaisingParent(PlainParent):
     )
 
 
+class PickyChild(PlainChild):
+    """Validates its input, as a hook must: tag values are not trusted."""
+
+    sticky_id = "pickychild"
+
+    def _on_sticky_update(self, changed):
+        n = int(changed["n"])  # raw template values: strings, not numbers
+        if n < 0:
+            raise ValueError("n must not be negative")
+        self.n = n
+
+
+class PickyParent(PlainParent):
+    template = PlainParent.template.replace("PlainParent", "PickyParent").replace(
+        "PlainChild", "PickyChild"
+    )
+
+
 class AsyncChild(PlainChild):
     sticky_id = "asyncchild"
 
@@ -237,6 +255,46 @@ class TestUpdateHook:
         with pytest.raises(Exception):
             _render(view)
         assert RaisingChild.calls == 2  # not recorded as applied
+
+    def test_the_parent_fails_until_the_input_is_acceptable_then_recovers(self):
+        """The hook's failure is the parent's: every render fails while the tag
+        passes a value the hook rejects, and the next acceptable value applies."""
+        view = _parent(PickyParent)
+        assert "plain 1" in _render(view)
+        view.n = -5
+        for _ in range(3):
+            with pytest.raises(ValueError, match="negative"):
+                _render(view)
+        view.n = 7
+        assert "plain 7" in _render(view)
+        assert "plain 7" in _render(view)  # applied once, then quiet
+
+    def test_values_are_the_raw_template_values(self):
+        """What the tag passes is the template context's value, resolved by the
+        tag: a non-scalar arrives as the string the template would print."""
+        seen = []
+
+        class Sees(PlainChild):
+            sticky_id = "seeschild"
+
+            def _on_sticky_update(self, changed):
+                seen.append(changed["n"])
+
+        class SeesParent(PlainParent):
+            template = PlainParent.template.replace("PlainParent", "SeesParent").replace(
+                "PlainChild", "Sees"
+            )
+
+        # Sees lives in a function scope: register it under the module path.
+        globals()["Sees"] = Sees
+        try:
+            view = _parent(SeesParent)
+            _render(view)
+            view.n = [1, 2]
+            _render(view)
+        finally:
+            globals().pop("Sees", None)
+        assert seen and isinstance(seen[0], str)
 
     def test_an_async_hook_is_refused(self):
         view = _parent(AsyncParent)

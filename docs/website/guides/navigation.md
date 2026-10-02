@@ -223,21 +223,33 @@ The fingerprint is a hash of what the page template asks the browser to load,
 with template inheritance resolved:
 
 - `<link rel="stylesheet">` and `<link rel="modulepreload">` (`href`)
-- `<script>` outside `[dj-root]`, in `<head>` or in the body (`src`, `type`,
-  and the text of an inline script)
+- `<script>` outside `[dj-root]`, in `<head>` or in the body, when it runs code
+  (`src`, `type`, and the text of an inline script). Plain scripts, `module`,
+  `importmap` and JavaScript MIME types count.
 - `<style>` in `<head>`
 - `{% include %}` tags in `<head>` (the include's name, not its contents)
 
-`<meta>`, `<title>` and everything inside `[dj-root]` are not part of it. The
-order of assets is, because scripts run in order.
+`<meta>`, `<title>`, everything inside `[dj-root]`, and data blocks such as
+`<script type="application/ld+json">`, `application/json` and `text/template`
+are not part of it, so per-page structured data keeps the fast path. The order
+of assets is, because scripts run in order.
 
-Two limits to know about. The fingerprint comes from the **template text**, not
-from a rendered response: a value interpolated into an asset URL
-(`<script src="{{ cdn }}/app.js">`) counts as that text, so two pages that
-differ only in the value look alike. And a template djust cannot read or that
-has no `dj-root` / `dj-view` element has no fingerprint, so its navigations
-behave as they did before. The full load costs one extra page request; the
-view it mounted for the failed swap is discarded.
+Limits to know about. The fingerprint comes from the **template text**, not
+from a rendered response:
+
+- a value interpolated into an asset URL (`<script src="{{ cdn }}/app.js">`)
+  counts as that text, so two pages that differ only in the value look alike;
+- `{{ block.super }}` is not expanded (template inheritance is flattened
+  without the parent block's content there), so a block that adds a script
+  after `{{ block.super }}` fingerprints as just that script;
+- a parent template that differs per tenant while the child's file does not is
+  not told apart.
+
+A template djust cannot read, or that has no `dj-root` / `dj-view` element, has
+no fingerprint, so its navigations behave as they did before. The full load
+costs one extra page request; the view it mounted for the failed swap is
+discarded. The client reloads the current document, because the address bar
+already holds the destination (a `#fragment` included).
 
 You can still link to such a page with a plain `href`, which skips the failed
 attempt:
@@ -272,7 +284,7 @@ The title follows the destination in this order:
    `page_title` in those cases.
 
 Reconciling `<head>` assets and outside-root scripts in place, instead of
-loading the page, is not planned: a full load is the supported behaviour.
+loading the page, is deferred. A full load is the behaviour until then.
 
 > **Chart.js / map blank after `dj-navigate`?** Scripts in SPA-patched content
 > don't execute, so an inline `<script>` that inits a library renders on a hard

@@ -589,7 +589,13 @@ class StickyChildRegistry:
         Rules:
 
         * Synchronous, and called while the parent renders, so keep it cheap
-          and free of I/O. An exception propagates like one from ``mount()``.
+          and free of I/O. An exception propagates out of the tag like one from
+          ``mount()``, and the new values are not recorded as applied: the
+          parent keeps failing to render until the tag passes values the hook
+          accepts.
+        * ``changed`` holds the raw values the template engine handed the tag
+          (a non-scalar arrives as the string the template would print), so
+          validate and convert them as in ``mount()``.
         * Values that compare by identity (a ``QuerySet``) look changed on
           every render; the hook must be idempotent.
         * Private by name, so no client event can name it: it is reachable
