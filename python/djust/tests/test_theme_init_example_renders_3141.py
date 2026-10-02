@@ -31,3 +31,8 @@ def test_generated_example_template_renders(tmp_path, monkeypatch):
     assert "djust-theming Example" in html
     # The comment is a comment: none of its text reaches the page.
     assert "simple_tag" not in html
+    assert "theme_card_block" not in html
+    # The example card is the block form (#2894): the buttons are in its body.
+    card = html[html.index('class="card ') : html.index("alert")]
+    assert "Click me" in card and "Secondary" in card
+    assert "Click me" in html and "This is an example using djust-theming components." in html

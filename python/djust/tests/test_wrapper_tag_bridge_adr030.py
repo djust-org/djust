@@ -119,3 +119,31 @@ def test_probe_reasons_are_specific():
 
     assert tl._wrapper_refusal("okwrap", okwrap) is None
     assert "reads the token stream directly" in tl._wrapper_refusal("tokens", tokens)
+
+
+def test_a_wrapper_that_names_its_own_end_tag_is_probed_for_that_tag():
+    """`end_theme_card_block` is not `end` + the tag name (#2894). The probe must
+    hunt for the end tag the tag's closure names, as `LibraryBlockTagHandler`
+    does at render, or every such wrapper is refused as "more than one segment"."""
+    from django import template
+
+    lib = template.Library()
+
+    class Wrap(template.Node):
+        def __init__(self, nodelist):
+            self.nodelist = nodelist
+
+        def render(self, context):
+            return "(" + self.nodelist.render(context) + ")"
+
+    end_name = "end_my_wrapper_block"
+
+    def compile_wrapper(parser, token):
+        nodelist = parser.parse((end_name,))
+        parser.delete_first_token()
+        return Wrap(nodelist)
+
+    lib.tag("my_wrapper_block", compile_wrapper)
+
+    assert tl._end_name(compile_wrapper, "my_wrapper_block") == "end_my_wrapper_block"
+    assert tl._wrapper_refusal("my_wrapper_block", compile_wrapper) is None

@@ -1146,8 +1146,69 @@ binding instead (`theme_button` keeps its documented `onclick=`).
   `destructive`. `role=` is `alert` (assertive), `status` (polite) or `log`; it
   defaults to `alert` for `warning` and `destructive` and `status` for the rest.
 
-`{% theme_card %}` and `{% theme_alert %}` still take their body as a string;
-block-tag forms are not part of this.
+### Container components: inline and block forms
+
+A card, an alert, a modal, a dropdown, a tooltip and a nav group are containers.
+Each has two spellings, and both are supported:
+
+```html
+{% load theme_components %}
+
+{# Inline: the body is an argument, a plain string #}
+{% theme_card title="Welcome" body="Plain text only." %}
+
+{# Block: the body sits between the tags, so it can hold other template tags #}
+{% theme_card_block title="Welcome" %}
+    <p>{{ summary }}</p>
+    {% for action in actions %}
+        {% theme_button action.label dj_click=action.event %}
+    {% endfor %}
+{% end_theme_card_block %}
+
+{% theme_alert_block variant="warning" title="Heads up" %}
+    {{ count }} records need review. <a href="{{ url }}">Open them</a>.
+{% end_theme_alert_block %}
+```
+
+The convention is the same for every container: the block form is the inline
+tag's name plus `_block`, and it closes with `{% end_<name>_block %}`.
+
+| Inline tag | Block form | The block fills |
+| --- | --- | --- |
+| `theme_card` | `theme_card_block` … `end_theme_card_block` | the card body |
+| `theme_alert` | `theme_alert_block` … `end_theme_alert_block` | the message |
+| `theme_modal` | `theme_modal_block` … `end_theme_modal_block` | the modal body |
+| `theme_dropdown` | `theme_dropdown_block` … `end_theme_dropdown_block` | the menu |
+| `theme_tooltip` | `theme_tooltip_block` … `end_theme_tooltip_block` | the wrapped content |
+| `theme_nav_group` | `theme_nav_group_block` … `end_theme_nav_group_block` | the group's items |
+
+A block form takes the inline tag's arguments except the one the block fills
+(`{% theme_alert_block %}` has no `message`, `{% theme_card_block %}` no `body`).
+Passing that argument, or its `slot_*` spelling, as well is a
+`TemplateSyntaxError` rather than a body that silently wins or loses. The block
+form renders the same component template as the inline form, theme overrides
+included, so the two cannot drift apart.
+
+When to use which:
+
+- Use the **inline** form for a short string or a value from your view
+  (`{% theme_alert "Saved" variant="success" %}`).
+- Use the **block** form when the body holds markup or other template tags. The
+  body is rendered by Django's template engine in your template's context, so
+  `{{ variable }}` inside it is autoescaped like anywhere else. Prefer it to
+  building HTML in Python and passing it through `body=` or a `slot_*` argument:
+  those are inserted without escaping, which is why a value derived from user
+  data does not belong there.
+
+Both forms work in LiveView templates (the Rust engine) as well as in Django
+templates, inside `dj-root`, in `{% for %}` and `{% if %}`, and nested. Surrounding
+whitespace in a block body is trimmed. `{% theme_card %}…{% end_theme_card %}` is
+not valid: the inline tag has no closing tag, so use `theme_card_block`.
+
+Not covered: `theme_tabs` takes a list of `{label, content}` dicts and
+`theme_table`, `theme_nav` and `theme_sidebar_nav` take data, not a body, so a
+block form has nothing to wrap; `theme_toast`, `theme_badge` and `theme_button`
+take a short label rather than a container body.
 
 ### Limiting the preset picker
 

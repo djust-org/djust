@@ -158,6 +158,15 @@ _DJUST_TAGS_BRIDGED: Dict[str, frozenset] = {
 _PROBE_ARGS: Dict[Tuple[str, str], List[str]] = {
     ("djust.templatetags.live_tags", "dj_activity"): ['"probe"'],
     ("djust.templatetags.live_tags", "colocated_hook"): ['"Probe"'],
+    # The theming block forms (#2894). Their required positional arguments
+    # are the inline tags' own: an id, a label, the tooltip text.
+    ("djust.theming.templatetags.theme_components", "theme_modal_block"): ['id="probe"'],
+    ("djust.theming.templatetags.theme_components", "theme_dropdown_block"): [
+        'id="probe"',
+        'label="Probe"',
+    ],
+    ("djust.theming.templatetags.theme_components", "theme_tooltip_block"): ['"Probe"'],
+    ("djust.theming.templatetags.theme_components", "theme_nav_group_block"): ['"Probe"'],
 }
 
 #: module → (library, the subset of it that bridges). Cached so the SAME
@@ -1106,7 +1115,10 @@ def _wrapper_refusal(
     from django.template import Context
     from django.template.base import Token, TokenType
 
-    end_name = "end" + name
+    # The end tag the bridge will hunt for: a `simple_block_tag`'s `end_name`,
+    # or — for a raw tag that names its closing tag itself, as djust's own
+    # `end_theme_card_block` does — the `end_name` its closure carries (#2894).
+    end_name = _end_name(compile_func, name)
     calls: List[Tuple[str, ...]] = []
     parser = _parser([Token(TokenType.TEXT, _PROBE_BODY), Token(TokenType.BLOCK, end_name)])
     original_parse = parser.parse
@@ -1137,6 +1149,9 @@ def _wrapper_refusal(
     request = HttpRequest()
     request.path = request.path_info = "/"
     ctx.request = request  # type: ignore[attr-defined]
+    # A wrapper that reads `context["request"]` (the theming block forms do, to
+    # pick the active theme) must get the probe request, not the lenient "".
+    dict.__setitem__(ctx.dicts[-1], "request", request)
     string_if_invalid, debug = _render_engine_options()
     ctx.template = _stub_template_with(string_if_invalid, debug)
     try:
