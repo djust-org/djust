@@ -468,8 +468,17 @@ def _write(writer: Any) -> Optional[Callable[[], None]]:
 def _cache_write(writer: Any) -> None:
     try:
         writer._cache.set(writer.cache_key, writer._session, writer.get_expiry_age())
-    except Exception:  # noqa: BLE001 — as ``cached_db.save`` itself: the database has it
-        logger.exception("Error saving to cache (%s)", writer._cache)
+    except Exception as exc:  # noqa: BLE001 — as ``cached_db.save`` itself: the database has it
+        from ._exposure_diagnostics import log_failure
+
+        # A cache error can carry session values.
+        log_failure(
+            logger,
+            exc,
+            "State save: the session cache could not be written; the database has it",
+            level="error",
+            traceback=True,
+        )
 
 
 async def asave_merged(session: Any) -> None:
