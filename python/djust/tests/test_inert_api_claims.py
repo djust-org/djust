@@ -518,6 +518,18 @@ def test_dj_target_is_documented_as_inert_where_agents_read_it() -> None:
         "11-event-handler.js; re-check that the selector is still dropped before the "
         f"event is sent, then update dj-target's description. Found: {census}"
     )
+    # Second census, on the attribute itself: a new reader of `dj-target` that
+    # does not go through `_djTargetSelector` would be invisible to the first.
+    readers = {
+        path.name: len(re.findall(r"""['"]dj-target['"]""", _js_code(path)))
+        for path in sorted(CLIENT_SRC.glob("*.js"))
+    }
+    readers = {name: n for name, n in readers.items() if n}
+    assert readers == {"09-event-binding.js": 3}, (
+        "a new reader of the `dj-target` attribute appeared (or a binder stopped reading it). "
+        "Expected exactly the click, change and keyboard binders in 09-event-binding.js; "
+        f"re-check that the selector is still inert. Found: {readers}"
+    )
     binding = _js_code(CLIENT_SRC / "09-event-binding.js")
     assert len(re.findall(r"params\._djTargetSelector\s*=", binding)) == 3, (
         "dj-target's three writers (click, change, keyboard) changed shape"

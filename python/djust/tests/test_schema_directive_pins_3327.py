@@ -142,6 +142,7 @@ def test_dj_document_scroll_and_resize_are_documented_as_never_firing() -> None:
 
 
 def test_dj_prefetch_names_both_layers_and_the_client_honours_false_in_both() -> None:
+    assert "via the service worker when the user hovers" not in _text("dj-prefetch")
     _assert_phrases(
         "dj-prefetch",
         [
@@ -186,10 +187,13 @@ def test_dj_trigger_action_example_carries_the_id_the_text_names() -> None:
 
     polish = _js("34-form-polish.js")
     handler = _between(polish, "const handleTriggerAction = function", "form.submit();")
-    refusal = _between(handler, "hasAttribute('dj-trigger-action')", "return;")
-    assert _has(r"!\s*form\.hasAttribute\('dj-trigger-action'\)", handler) and refusal, (
-        "the client no longer refuses a form without dj-trigger-action; re-check the "
-        "description (and the SECURITY note in 34-form-polish.js)"
+    # The refusal must be the last thing before the native submit: the guard's
+    # block ends in `return;` with nothing between it and `form.submit()`.
+    assert _has(
+        r"!\s*form\.hasAttribute\('dj-trigger-action'\)\s*\)\s*\{.*?\breturn;\s*\}\s*$", handler
+    ), (
+        "the client no longer refuses a form without dj-trigger-action before submitting it; "
+        "re-check the description (and the SECURITY note in 34-form-polish.js)"
     )
     assert (ROOT / "python" / "djust" / "mixins" / "push_events.py").read_text(
         encoding="utf-8"
@@ -260,14 +264,14 @@ EMITTED_PHRASES = (
 )
 
 #: The pre-#3291 / pre-#3327 sentences, each of which taught something false.
+#: Only entries in emitted categories: the dj-prefetch and dj-key stale sentences
+#: are pinned absent from `DIRECTIVES` in their own tests above.
 STALE_PHRASES = (
     "e.target.reset()",
     "Scope the server re-render to a specific element",
     "in flight anywhere on the page",
     "equivalent to dj-loading.disable",
     "dj-patch/dj-navigate link",
-    "via the service worker when the user hovers",
-    "destroying and rebuilding",
     "when the server pushes a trigger-action",
 )
 
