@@ -434,6 +434,198 @@ def test_without_a_row_lock_there_is_no_transaction_of_ours():
     assert in_atomic == [False]
 
 
+@pytest.mark.parametrize("engine", ALL_BACKENDS)
+def test_a_write_made_while_a_save_is_in_flight_is_kept_for_the_next_save(engine, monkeypatch):
+    """A save that outruns its deadline overlaps the next event's handler. Its
+    write is newer than the save's snapshot: it stays in memory and recorded."""
+    save = _tracked(engine)
+    key = save.session_key
+    original = _store(engine).save
+    fired = []
+
+    def save_while_a_handler_writes(self, *args, **kwargs):
+        if not fired:
+            fired.append(1)
+            save["during"] = "x"  # the next handler, on another thread
+            save.pop("victim")
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(_store(engine), "save", save_while_a_handler_writes)
+    save["liveview_/x/"] = {"count": 1}
+    save_merged(save, key)
+
+    assert "during" not in _stored(engine, key), "the write is newer than this save"
+    assert save["during"] == "x", "the live session lost the in-flight write"
+    assert "victim" not in save
+    assert save._session_cache.written == {"during"} and save._session_cache.removed == {"victim"}
+
+    save_merged(save, key)
+    stored = _stored(engine, key)
+    assert stored["during"] == "x" and "victim" not in stored
+    assert stored["liveview_/x/"] == {"count": 1}
+
+
+def test_recording_and_snapshots_do_not_race_across_threads():
+    import threading
+
+    data = TrackedSessionData({})
+    stop = threading.Event()
+    errors = []
+
+    def writer():
+        i = 0
+        while not stop.is_set():
+            data["k%d" % (i % 50)] = i
+            if i % 3 == 0:
+                data.pop("k%d" % ((i + 7) % 50), None)
+            i += 1
+
+    thread = threading.Thread(target=writer)
+    thread.start()
+    try:
+        for _ in range(400):
+            try:
+                snap = data.snapshot()
+                data.reconcile(dict(snap.changed), snap)
+                data.settle(snap)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+                break
+    finally:
+        stop.set()
+        thread.join()
+    assert not errors, errors
+
+
+@pytest.mark.parametrize("engine", ALL_BACKENDS)
+def test_a_reference_held_across_saves_stays_attached(engine):
+    """``cart = session.setdefault("cart", [])`` in ``mount()``, ``cart.append``
+    in handlers, no reassignment: every event's change is saved."""
+    save = _tracked(engine, {"idle_ts": "OLD"})
+    key = save.session_key
+    cart = save.setdefault("cart", [])
+    stored_carts = []
+    for n in (1, 2, 3):
+        cart.append(n)
+        _elsewhere(engine, key, idle_ts="NEW%d" % n)
+        save["liveview_/x/"] = {"count": n}
+        save_merged(save, key)
+        stored = _stored(engine, key)
+        stored_carts.append(stored["cart"])
+        assert stored["idle_ts"] == "NEW%d" % n
+        # (``dict.__getitem__``: a tracked read would itself start watching the list)
+        held = dict.__getitem__(save._session_cache, "cart")
+        assert held is cart, "the session replaced the object the view holds"
+    assert stored_carts == [[1], [1, 2], [1, 2, 3]]
+
+
+@pytest.mark.parametrize("engine", ALL_BACKENDS)
+def test_a_held_value_another_request_changed_is_replaced_not_overwritten(engine):
+    save = _tracked(engine, {"prefs": {"theme": "dark"}})
+    key = save.session_key
+    held = save["prefs"]  # read, left alone
+    _elsewhere(engine, key, prefs={"theme": "light"})
+    save["liveview_/x/"] = {"count": 1}
+    save_merged(save, key)
+    assert _stored(engine, key)["prefs"] == {"theme": "light"}
+    assert save["prefs"] == {"theme": "light"} and held == {"theme": "dark"}
+
+
+@pytest.mark.parametrize("engine", ALL_BACKENDS)
+def test_a_whole_session_save_settles_what_it_wrote(engine):
+    """The fallback save (here: the key moved since the save began) writes
+    everything recorded, so the next merge must not apply it again."""
+    save = _tracked(engine, {"idle_ts": "OLD", "gone": 1})
+    key = save.session_key
+    save.pop("gone")
+    save["liveview_/x/"] = {"count": 1}
+    save_merged(save, "another-key")  # key != expected_key: the whole-session save
+    assert not save._session_cache.written and not save._session_cache.removed
+    assert is_tracked(save)
+
+    _elsewhere(engine, key, gone="back again")
+    save["liveview_/x/"] = {"count": 2}
+    save_merged(save, key)
+    stored = _stored(engine, key)
+    assert stored["gone"] == "back again", "an old removal was applied a second time"
+    assert stored["liveview_/x/"] == {"count": 2}
+
+
+@pytest.mark.parametrize("how", ["clear", "flush"])
+@pytest.mark.parametrize("engine", ALL_BACKENDS)
+def test_tracking_resumes_after_a_clear_or_flush_in_a_handler(engine, how):
+    save = _tracked(engine)
+    key = save.session_key
+    getattr(save, how)()
+    assert not is_tracked(save)
+    save["after"] = "y"
+    save_merged(save, save.session_key if how == "clear" else None)
+    assert is_tracked(save), "every later save of this connection would be whole"
+    new_key = save.session_key
+    _elsewhere(engine, new_key, idle_ts="NEW")
+    save["liveview_/x/"] = {"count": 1}
+    save_merged(save, new_key)
+    stored = _stored(engine, new_key)
+    assert stored["idle_ts"] == "NEW" and stored["after"] == "y"
+    if how == "flush":
+        assert not _store(engine)().exists(key)
+
+
+@pytest.mark.parametrize("engine", ALL_BACKENDS)
+def test_a_key_rotation_in_a_handler_is_saved_and_tracking_continues(engine):
+    save = _tracked(engine)
+    old_key = save.session_key
+    save.cycle_key()
+    new_key = save.session_key
+    save["liveview_/x/"] = {"count": 1}
+    save_merged(save, new_key)
+    assert is_tracked(save) and not _store(engine)().exists(old_key)
+    _elsewhere(engine, new_key, idle_ts="NEW")
+    save["liveview_/x/"] = {"count": 2}
+    save_merged(save, new_key)
+    stored = _stored(engine, new_key)
+    assert stored["idle_ts"] == "NEW" and stored["liveview_/x/"] == {"count": 2}
+
+
+def test_non_string_keys_are_tolerated():
+    """``PickleSerializer`` sessions can carry any key."""
+    data = TrackedSessionData({1: [1], "a": [2]})
+    assert data[1] == [1] and data.get(1) == [1]
+    data[1].append(2)
+    assert data.snapshot().changed == {}  # an int key is not watched; no error
+
+
+def test_cached_dbs_cache_write_runs_after_the_transaction(monkeypatch):
+    """A hung cache write must not hold the row lock: the cache is written once
+    the transaction that holds it is over."""
+    from django.conf import settings
+    from django.core.cache import caches
+
+    from djust import _session_merge
+
+    monkeypatch.setattr(_session_merge, "_supports_row_lock", lambda backend: True)
+    cache = caches[settings.SESSION_CACHE_ALIAS]
+    seen = []
+    original = cache.set
+
+    def spy(key, value, *args, **kwargs):
+        seen.append((connection.in_atomic_block, type(value)))
+        return original(key, value, *args, **kwargs)
+
+    save = _tracked(CACHED_DB)
+    key = save.session_key
+    monkeypatch.setattr(cache, "set", spy)
+    _elsewhere(CACHED_DB, key, idle_ts="NEW")
+    seen.clear()
+    save["liveview_/x/"] = {"count": 1}
+    save_merged(save, key)
+
+    assert seen and all(in_atomic is False for in_atomic, _ in seen), seen
+    assert all(kind is dict for _, kind in seen), "a tracker reached the cache"
+    cached = original(save.cache_key) if False else cache.get(save.cache_key_prefix + key)
+    assert cached["idle_ts"] == "NEW" and cached["liveview_/x/"] == {"count": 1}
+
+
 # --------------------------------------------------------------------------- #
 # End to end over a WebSocket (the issue's table)
 # --------------------------------------------------------------------------- #
@@ -490,6 +682,54 @@ class Explicit3347Page(LiveView):
     def through_the_request_session(self, **kwargs):
         self.request.session["from_handler"] = "kept"
         self.n += 1
+
+
+#: A test's slow save sets ``in_flight``; ``Handlers3347Page.stamp`` reports it.
+FLIGHT: dict = {}
+
+
+class Handlers3347Page(LiveView):
+    """Handlers that rotate, clear or flush the session, stamp it, or keep a
+    reference to a list that lives in it."""
+
+    exposure_policy = "legacy"
+    enable_state_snapshot = True
+    template = '<div dj-root dj-view="%s.Handlers3347Page" dj-id="0">n={{ n }}</div>' % _MOD
+
+    def mount(self, request, **kwargs):
+        self.n = 0
+        self._cart = request.session.setdefault("cart", [])
+
+    def get_context_data(self, **kwargs):
+        return {"n": self.n}
+
+    @event_handler()
+    def stamp(self, **kwargs):
+        self.n += 1
+        FLIGHT.setdefault("handled_while_in_flight", []).append(FLIGHT.get("in_flight", False))
+        self.request.session["w%d" % self.n] = 1
+
+    @event_handler()
+    def add_to_cart(self, **kwargs):
+        """Appends in place to the list ``mount()`` took from the session."""
+        self.n += 1
+        self._cart.append(self.n)
+
+    @event_handler()
+    def rotate(self, **kwargs):
+        self.n += 1
+        self.request.session.cycle_key()
+
+    @event_handler()
+    def wipe(self, **kwargs):
+        self.n += 1
+        self.request.session.clear()
+        self.request.session["after_clear"] = "y"
+
+    @event_handler()
+    def flush(self, **kwargs):
+        self.n += 1
+        self.request.session.flush()
 
 
 async def _connect(engine):
@@ -620,6 +860,7 @@ async def test_ws_explicit_handler_session_writes_still_reach_the_store(engine, 
 # --------------------------------------------------------------------------- #
 
 urlpatterns = [
+    path("sse-handlers-3347/", Handlers3347Page.as_view()),
     path("sse-legacy-3347/", Legacy3347Page.as_view()),
     path("sse-explicit-3347/", Explicit3347Page.as_view()),
 ]
@@ -681,3 +922,158 @@ async def test_sse_event_keeps_what_another_request_stored(engine, policy, stage
         assert any(k.startswith("_djust_explicit_") for k in stored), stored
     assert stored["idle_ts"] == "NEW", "idle_ts was rolled back to its connect-time value"
     assert "victim" not in stored, "a deleted key came back"
+
+
+# --------------------------------------------------------------------------- #
+# End to end: handlers, held references, a write while a save is in flight
+# --------------------------------------------------------------------------- #
+
+_HANDLERS = f"{_MOD}.Handlers3347Page"
+
+
+def _session_keys():
+    from django.contrib.sessions.models import Session
+
+    return set(Session.objects.values_list("session_key", flat=True))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("engine", SERVER_BACKENDS)
+async def test_ws_a_list_held_by_the_view_keeps_being_saved(engine):
+    url = "/handlers-cart-3347/"
+    carts = []
+    with override_settings(SESSION_ENGINE=engine):
+        communicator, key = await _connect(engine)
+        try:
+            await _mount(communicator, _HANDLERS, url)
+            for _ in range(3):
+                frame = await _event(communicator, "add_to_cart")
+                assert frame["type"] in ("patch", "html_update"), frame
+                carts.append((await sync_to_async(_stored)(engine, key))["cart"])
+        finally:
+            await _settled(communicator)
+    assert carts == [[1], [1, 2], [1, 2, 3]]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("engine", SERVER_BACKENDS)
+async def test_ws_a_handler_cycling_the_key_keeps_the_state_and_later_merges(engine):
+    url = "/handlers-rotate-3347/"
+    with override_settings(SESSION_ENGINE=engine):
+        communicator, key = await _connect(engine)
+        try:
+            await _mount(communicator, _HANDLERS, url)
+            frame = await _event(communicator, "rotate")
+            assert frame["type"] in ("patch", "html_update"), frame
+            assert not await sync_to_async(_store(engine)().exists)(key), "old key survived"
+            if engine == DB:
+                (new_key,) = await sync_to_async(_session_keys)()
+                await sync_to_async(_elsewhere)(engine, new_key, idle_ts="NEW")
+                frame = await _event(communicator, "stamp")
+                assert frame["type"] in ("patch", "html_update"), frame
+                stored = await sync_to_async(_stored)(engine, new_key)
+                assert stored[f"liveview_{url}"]["n"] == 2
+                assert stored["w2"] == 1 and stored["idle_ts"] == "NEW"
+        finally:
+            await _settled(communicator)
+
+
+@pytest.mark.asyncio
+async def test_ws_a_handler_clearing_the_session_does_not_end_merging():
+    url = "/handlers-wipe-3347/"
+    communicator, key = await _connect(DB)
+    try:
+        await _mount(communicator, _HANDLERS, url)
+        frame = await _event(communicator, "wipe")
+        assert frame["type"] in ("patch", "html_update"), frame
+        stored = await sync_to_async(_stored)(DB, key)
+        assert stored["after_clear"] == "y" and "victim" not in stored
+        assert stored[f"liveview_{url}"]["n"] == 1
+
+        await sync_to_async(_elsewhere)(DB, key, idle_ts="NEW")
+        frame = await _event(communicator, "stamp")
+        assert frame["type"] in ("patch", "html_update"), frame
+        stored = await sync_to_async(_stored)(DB, key)
+        assert stored["idle_ts"] == "NEW", "the session stayed untracked after clear()"
+        assert stored["w2"] == 1 and stored["after_clear"] == "y"
+    finally:
+        await _settled(communicator)
+
+
+@pytest.mark.asyncio
+async def test_ws_a_handler_flushing_the_session_is_not_resurrected():
+    url = "/handlers-flush-3347/"
+    communicator, key = await _connect(DB)
+    try:
+        await _mount(communicator, _HANDLERS, url)
+        frame = await _event(communicator, "flush")
+        assert frame["type"] in ("patch", "html_update"), frame
+    finally:
+        await _settled(communicator)
+    assert not await sync_to_async(_store(DB)().exists)(key)
+
+
+@pytest.mark.asyncio
+async def test_sse_a_handler_write_made_while_a_save_is_in_flight_is_kept(staged):
+    """A save past its deadline keeps running on the save pool while the next
+    event's handler runs. That handler's ``request.session`` write must reach
+    the store."""
+    import threading
+
+    url = "/sse-handlers-3347/"
+    release = threading.Event()
+    blocked = []
+    FLIGHT.clear()
+    original = _store(DB).save
+
+    def slow_first_pool_save(self, *args, **kwargs):
+        result = original(self, *args, **kwargs)
+        if not blocked and threading.current_thread().name.startswith("djust-state-save"):
+            # Stored and not yet finished: the window after the write.
+            blocked.append(1)
+            FLIGHT["in_flight"] = True
+            release.wait(timeout=10)
+            FLIGHT["in_flight"] = False
+        return result
+
+    with override_settings(
+        ROOT_URLCONF=_MOD, LIVEVIEW_ALLOWED_MODULES=[_MOD], DEBUG=False, SESSION_ENGINE=DB
+    ):
+        key = (await sync_to_async(_persisted)(DB)).session_key
+        sid = str(uuid.uuid4())
+        get = await sync_to_async(_request)(
+            DB, "GET", f"/djust/sse/{sid}/", {"view": _HANDLERS, "_djust_url": url}, key
+        )
+        try:
+            assert (await DjustSSEStreamView().get(get, session_id=sid)).status_code == 200
+            runtime = _sse_sessions[sid].runtime
+            _store(DB).save = slow_first_pool_save
+            try:
+                for _ in range(2):
+                    post = await sync_to_async(_request)(
+                        DB,
+                        "POST",
+                        f"/djust/sse/{sid}/message/",
+                        {"type": "event", "event": "stamp", "params": {}},
+                        key,
+                    )
+                    async with ThreadSensitiveContext():
+                        response = await DjustSSEMessageView().post(post, session_id=sid)
+                    assert response.status_code == 200
+                assert blocked, "the first save never blocked on the pool; vacuous"
+                assert FLIGHT["handled_while_in_flight"] == [False, True], (
+                    "the second handler must run while the first save is in flight; vacuous"
+                )
+            finally:
+                release.set()
+                _store(DB).save = original
+            await runtime.finish_state_saves()
+            pending = runtime._explicit_save_pending
+            if pending is not None:
+                await asyncio.wait_for(asyncio.shield(pending), 10)
+            stored = await sync_to_async(_stored)(DB, key)
+        finally:
+            _sse_sessions.clear()
+    assert stored.get("w1") == 1, stored
+    assert stored.get("w2") == 1, "the write made while the first save was in flight was lost"
+    assert stored[f"liveview_{url}"]["n"] == 2

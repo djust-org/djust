@@ -254,11 +254,15 @@ object the view holds:
   name), and the `_djust_explicit_*` envelopes of `persist="server"` fields;
 - a handler's or `check_permissions`' `request.session["key"] = ...`,
   `.pop(...)`, `del` or `.setdefault(...)`;
-- a mutable value (`dict`, `list`, `set`) your code **read** and then changed in
+- a mutable value (`dict`, `list`, `set`) your code **read** (`session[key]`,
+  `.get(key)`) or **stored** (an assignment, `setdefault`) and then changed in
   place, such as `request.session["cart"].append(item)`: it is compared with a
-  copy taken when it was read. A value that was only read is not written back.
-  A change reached some other way (through `.items()` or `.values()`, or just
-  `request.session.modified = True`) is not seen: assign the key.
+  copy taken at that point and again after every save, so a list you keep a
+  reference to (`self.cart = request.session.setdefault("cart", [])` in
+  `mount()`, `self.cart.append(item)` in handlers) keeps being saved. A value
+  that was only read is not written back. A change reached some other way
+  (through `.items()` or `.values()`, or just `request.session.modified = True`)
+  is not seen: assign the key.
 
 Right before it writes, the save reads the session as storage holds it **now**
 and applies those changes to that copy. When two writers change the same key,
@@ -278,13 +282,26 @@ Limits, so you know what this does and does not close:
   still land between the read and the write.
 - `signed_cookies` sessions cannot be merged: the browser holds the whole
   session, there is no stored copy, and the save behaves as it always did.
-- When the session cannot be merged, the save is the whole-session write of
+- When the session cannot be merged, that save is the whole-session write of
   earlier versions: the session was not tracked (no mount went through
-  djust), a handler's `logout()` replaced its data, or storage could not be read
-  (a warning is logged).
-- The session the view holds also takes the other writers' values after a save
-  (it is refreshed to the merged copy), so a later `request.session` read in the
-  same connection sees them.
+  djust), a handler's `logout()`, `flush()` or `clear()` replaced its data, the
+  session's key changed since the save began, or storage could not be read (a
+  warning is logged). Merging starts again with the next event.
+- A `cycle_key()` (a `login()` in a handler) copies the in-memory session to the
+  new key, as Django does, before djust saves. Values another request stored
+  earlier are therefore not carried over to the new key; later events merge as
+  usual.
+- On `cached_db` the cache is written after the database transaction ends, so a
+  slow cache never holds the row lock.
+- The session the view holds also takes the other writers' values after a save,
+  so a later `request.session` read in the same connection sees them. A key
+  whose stored value equals the in-memory one keeps its in-memory object, so
+  references you hold stay attached; a key another writer **changed** is replaced
+  by the stored value, and a reference taken to the old value is stale (the
+  stored value is the one that wins for a key you did not write).
+- A write made while a save is still running (a save past its 150 ms bound
+  overlaps the next event's handler) is not lost: it is newer than that save, so
+  the next save writes it.
 
 What is restored is **historical view state**, the page as it was when the user
 navigated away. It does not make the cached data authoritative: handlers still

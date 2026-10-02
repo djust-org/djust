@@ -327,10 +327,12 @@ def test_failed_prune_flush_restores_local_entries_and_modified_flag(rf, monkeyp
     page.render_full_template(request)
     request.session.modified = False
 
-    def failed_save():
+    def failed_save(self, *args, **kwargs):
         raise OSError("STORAGE_SECRET_SENTINEL")
 
-    monkeypatch.setattr(request.session, "save", failed_save)
+    # The store fails, whichever object writes (a merging save writes through
+    # a store object of its own, #3347).
+    monkeypatch.setattr(type(request.session), "save", failed_save)
     with pytest.raises(ExposureError, match="persistence unavailable"):
         save_child_states(page, request)
     assert dict(request.session.items()) == before
