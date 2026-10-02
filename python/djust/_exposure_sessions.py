@@ -387,13 +387,14 @@ class ServerStateSession:
         # stale session key. Do not bind data to a newly generated replacement.
         self.session.get(self.key)
         self._check_session()
-        # A pool save that outlived its request: is the session still there
-        # and still this user's? (#3247; a no-op off the save pool.)
-        from ._late_save import check_session
-
-        check_session(self.session, self.binding.session)
         self.session[self.key] = envelope
-        self.session.save()
+        # Merges this envelope (and any other write made through the session)
+        # into the stored session (#3347). A pool save that outlived its
+        # request first checks the session is still there and still this
+        # user's (#3247; a no-op off the save pool).
+        from ._session_merge import save_merged
+
+        save_merged(self.session, self.binding.session)
 
     async def asave(self, values: dict[str, Any]) -> None:
         """Async equivalent for WebSocket/actor dispatch adapters."""
@@ -401,7 +402,9 @@ class ServerStateSession:
         await self.session.aget(self.key)
         self._check_session()
         await self.session.aset(self.key, envelope)
-        await self.session.asave()
+        from ._session_merge import asave_merged
+
+        await asave_merged(self.session)
 
     def load(self) -> dict[str, Any] | None:
         """Return detached validated values; caller applies them after authorization."""

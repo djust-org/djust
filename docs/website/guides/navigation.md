@@ -238,6 +238,54 @@ leave the session older than the last render. djust therefore writes the
 - A save that keeps failing is retried once, then the latest state is kept and
   logged; the next event's save or the teardown tries again.
 
+#### What the save writes to the session
+
+A view loads its Django session once, when it mounts, and keeps that object for
+every later event. The save does **not** write that whole copy back: it writes
+only what the view's own code changed in it, so a value another tab, request or
+middleware stored in the meantime (an idle-activity timestamp, an invalidation
+marker) is not rolled back, and a key deleted elsewhere does not come back.
+
+What counts as a change is every write or removal made through the session
+object the view holds:
+
+- djust's own keys: `liveview_<path>` and its `__private`, `_components` and
+  `__sticky__…` siblings (tenant- and slot-scoped keys carry their scope in the
+  name), and the `_djust_explicit_*` envelopes of `persist="server"` fields;
+- a handler's or `check_permissions`' `request.session["key"] = ...`,
+  `.pop(...)`, `del` or `.setdefault(...)`;
+- a mutable value (`dict`, `list`, `set`) your code **read** and then changed in
+  place, such as `request.session["cart"].append(item)`: it is compared with a
+  copy taken when it was read. A value that was only read is not written back.
+  A change reached some other way (through `.items()` or `.values()`, or just
+  `request.session.modified = True`) is not seen: assign the key.
+
+Right before it writes, the save reads the session as storage holds it **now**
+and applies those changes to that copy. When two writers change the same key,
+the view's value wins. This costs one extra session read per save; on the `db`
+and `cached_db` backends that read takes the row lock (`SELECT ... FOR UPDATE`)
+inside the same transaction as the write, so two views saving into one session
+(two tabs, a page view and a sticky child) take turns rather than overwriting
+each other. SQLite, `cache` and `file` sessions have no row lock: for them the
+read and the write are separate steps.
+
+Limits, so you know what this does and does not close:
+
+- It narrows the race, it does not remove it. A writer that saves its **whole**
+  session from an older read (Django's `SessionMiddleware` does, at the end of a
+  request that modified the session) can still overwrite what the view saved,
+  and where there is no row lock (SQLite, `cache`, `file`) a second writer can
+  still land between the read and the write.
+- `signed_cookies` sessions cannot be merged: the browser holds the whole
+  session, there is no stored copy, and the save behaves as it always did.
+- When the session cannot be merged, the save is the whole-session write of
+  earlier versions: the session was not tracked (no mount went through
+  djust), a handler's `logout()` replaced its data, or storage could not be read
+  (a warning is logged).
+- The session the view holds also takes the other writers' values after a save
+  (it is refreshed to the merged copy), so a later `request.session` read in the
+  same connection sees them.
+
 What is restored is **historical view state**, the page as it was when the user
 navigated away. It does not make the cached data authoritative: handlers still
 check permissions against the current request, so a user whose permissions have

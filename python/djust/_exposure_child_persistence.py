@@ -12,6 +12,7 @@ from django.contrib.sessions.backends.base import SessionBase
 from ._child_state_index import prepare_child_batch, staged_updates
 from ._exposure import ExposureContract, ExposureError, clone_json_state
 from ._exposure_children import ChildStateSession, child_event_adapter
+from ._session_merge import asave_merged
 from .auth.core import check_view_auth, enforce_object_permission
 
 
@@ -100,15 +101,16 @@ def _capture_batch(root: Any, request: Any) -> tuple[SessionBase, dict[str, Any]
 
 def save_child_states(root: Any, request: Any) -> None:
     """Capture authorized descendants and flush their server envelopes once."""
-    from ._late_save import LateSaveDropped, check_session
+    from ._late_save import LateSaveDropped
+    from ._session_merge import save_merged
 
     batch = _capture_batch(root, request)
     if batch:
         try:
             with staged_updates(*batch) as session:
-                # A pool save that outlived its request (#3247).
-                check_session(session, session.session_key)
-                session.save()
+                # Checks a pool save that outlived its request (#3247) and
+                # merges into the stored session (#3347).
+                save_merged(session, session.session_key)
         except LateSaveDropped:
             raise  # already reported at debug; not a storage failure
         except Exception:  # noqa: BLE001 — HTTP errors must not expose backend details
@@ -121,6 +123,6 @@ async def asave_child_states(root: Any, request: Any) -> None:
     if batch:
         try:
             with staged_updates(*batch) as session:
-                await session.asave()
+                await asave_merged(session)
         except Exception:  # noqa: BLE001 — never expose private backend errors
             raise ExposureError("Child state persistence unavailable") from None

@@ -3348,6 +3348,14 @@ class ViewRuntime:
             view_instance._django_session_key = (
                 getattr(session_obj, "session_key", None) if session_obj is not None else None
             )
+            if session_obj is not None and getattr(view_instance, "enable_state_snapshot", False):
+                if uses_legacy_exposure(view_instance):
+                    # The post-event saves merge what this object changes into
+                    # the stored session instead of writing it whole (#3347).
+                    # After the key above is read: tracking loads the session.
+                    from ._session_merge import track_session
+
+                    await sync_to_async(track_session)(session_obj)
             if hasattr(view_instance, "_initialize_temporary_assigns"):
                 await sync_to_async(view_instance._initialize_temporary_assigns)()
         except Exception as exc:
@@ -5196,10 +5204,9 @@ class ViewRuntime:
             if mount_request is not None and hasattr(target_view, "_save_components_to_session"):
                 target_view._save_components_to_session(mount_request, save_context)
 
-            from ._late_save import check_session
+            from ._session_merge import save_merged
 
-            check_session(save_session, expected_key)
-            save_session.save()
+            save_merged(save_session, expected_key)
 
         try:
             await _run_explicit_save(self, _detached_when(trailing, _save), deadline=deadline)
@@ -5297,10 +5304,9 @@ class ViewRuntime:
 
             save_sticky_child_state_sync(target_view, save_session, parent_path)
             write_sticky_index_and_prune_sync(parent, save_session, parent_path)
-            from ._late_save import check_session
+            from ._session_merge import save_merged
 
-            check_session(save_session, expected_key)
-            save_session.save()
+            save_merged(save_session, expected_key)
 
         try:
             await _run_explicit_save(

@@ -123,6 +123,13 @@ page = state(1, persist="client", client=True)   # restorable on back-navigation
   that lands in the moment between that lookup and the write can still be
   overwritten, as with any two concurrent Django requests; `db`, `cached_db`
   and `file` sessions refuse that write themselves.
+- **A save writes only what the view changed.** The envelope, and any other
+  `request.session[...]` write made during the turn, are merged into the session
+  as storage holds it right before the write, so a value another request stored
+  during the turn (an idle-activity timestamp, say) is neither overwritten nor
+  rolled back. See [What the save writes to the
+  session](../guides/navigation.md#what-the-save-writes-to-the-session) for the
+  backends and the remaining race.
 - **Errors follow Django.** With `DEBUG = True`, an explicit view's failure
   shows its exception and traceback, as Django's development output does: the
   technical 500 page, detailed error frames and dev overlay, and full log lines.

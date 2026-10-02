@@ -134,7 +134,11 @@ def _stored_session(backend: type, key: str) -> Optional[Any]:
     return data
 
 
-def check_session(session: Any, expected_key: Optional[str]) -> None:
+#: ``check_session``'s ``stored`` when the caller has not read the session itself.
+_MISSING: Any = object()
+
+
+def check_session(session: Any, expected_key: Optional[str], *, stored: Any = _MISSING) -> None:
     """Raise :class:`LateSaveDropped` when a pool save's session is gone.
 
     ``expected_key`` is the key the save body started with, read before the
@@ -148,7 +152,9 @@ def check_session(session: Any, expected_key: Optional[str]) -> None:
     state, which expires unread; that predates this check.)
 
     One store lookup, only on the save pool. A lookup error lets the save go
-    ahead and is logged as a warning.
+    ahead and is logged as a warning. A caller that has read the stored session
+    already (the merging save, :mod:`djust._session_merge`) passes it as
+    ``stored`` (``None`` for a session that is gone) and no second lookup is made.
     """
     if not getattr(_state, "active", False) or not expected_key or session is None:
         return
@@ -158,7 +164,8 @@ def check_session(session: Any, expected_key: Optional[str]) -> None:
     if issubclass(backend, signed_cookies.SessionStore):
         return  # the browser holds the whole session; the server has nothing to flush
     try:
-        stored = _stored_session(backend, expected_key)
+        if stored is _MISSING:
+            stored = _stored_session(backend, expected_key)
     except Exception as exc:  # noqa: BLE001 — an unreadable store is not a logout
         from ._exposure_diagnostics import log_failure
 

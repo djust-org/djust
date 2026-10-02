@@ -438,7 +438,7 @@ def test_runtime_save_block_present_and_gated():
     assert "save_view_key = _session_view_key(target_view, save_path)" in body_collapsed
     # #3212: one sync Django-thread hop, so the sync session API.
     assert "save_session[save_view_key] = _normalize(" in body_collapsed
-    assert "save_session.save()" in body_collapsed
+    assert "save_merged(save_session, expected_key)" in body_collapsed  # #3347
     # Private + components paths (WS pin lines 305-308).
     assert "_get_private_state" in body_collapsed
     assert 'f"{save_view_key}__private"' in body_collapsed
@@ -618,7 +618,7 @@ def test_runtime_sticky_save_present_and_gated():
     # Helper body: the two ADR-018 sticky helpers + asave + 150ms bound.
     assert "save_sticky_child_state" in helper_src
     assert "write_sticky_index_and_prune" in helper_src
-    assert "save_session.save()" in helper_src
+    assert "save_merged(save_session, expected_key)" in helper_src  # #3347
     # #3212: one Django-thread hop through the shared bounded helper.
     helper_compact = helper_src.replace(" ", "")
     assert (

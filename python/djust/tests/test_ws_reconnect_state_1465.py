@@ -285,7 +285,7 @@ def test_save_block_present_in_handle_event_source():
     - Fall back to ``self.scope.get("session")`` when no mount_request
     - Build ``save_view_key = f"liveview_{save_path}"``
     - Filter LiveComponents out of the saved state
-    - Write ``save_session[...]`` then ``save_session.save()`` (one sync
+    - Write ``save_session[...]`` then ``save_merged(save_session, ...)`` (one sync
       Django-thread hop since #3212)
     - Wrap everything in try/except so saves never break event handling
     """
@@ -303,7 +303,7 @@ def test_save_block_present_in_handle_event_source():
     assert 'self.scope.get("session")' in source
     assert "save_view_key = _session_view_key(target_view, save_path)" in source
     assert "save_session[save_view_key] = _normalize(" in source_collapsed
-    assert "save_session.save()" in source
+    assert "save_merged(save_session, expected_key)" in source  # #3347
     # Private-state path:
     assert "_get_private_state" in source
     assert 'f"{save_view_key}__private"' in source
