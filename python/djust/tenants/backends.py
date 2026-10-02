@@ -527,6 +527,9 @@ class TenantPresenceManager:
         config = get_djust_config()
 
         backend_type = config.get("PRESENCE_BACKEND", "memory")
+        from ..backends.registry import check_presence_backend_type
+
+        check_presence_backend_type(backend_type)
 
         backend: PresenceBackend
         if backend_type in ("redis", "tenant_redis"):

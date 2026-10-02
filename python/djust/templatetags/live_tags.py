@@ -2589,11 +2589,16 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
             # looks under the wrong ``liveview_<path>__sticky__<id>`` key and
             # falls through to a fresh ``mount()``. Keep save and restore
             # path-derivation in lockstep.
-            restored = restore_sticky_child_state(
-                child,
-                parent,
-                getattr(request, "session", None),
-                getattr(request, "path", "/"),
+            from .._tenant_state import scoped_path
+
+            # The tenant scope is part of the key (#2973); None = skip.
+            sticky_path = scoped_path(parent, getattr(request, "path", "/"))
+            restored = (
+                restore_sticky_child_state(
+                    child, parent, getattr(request, "session", None), sticky_path
+                )
+                if sticky_path is not None
+                else False
             )
         except Exception:  # noqa: BLE001 — restore must never break render
             logger.exception(
