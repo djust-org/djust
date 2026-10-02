@@ -72,6 +72,7 @@ class ThemeCSSGenerator:
             ("accent-foreground", tokens.accent_foreground),
             ("destructive", tokens.destructive),
             ("destructive-foreground", tokens.destructive_foreground),
+            ("destructive-text", tokens.destructive_text),
             ("success", tokens.success),
             ("success-foreground", tokens.success_foreground),
             ("warning", tokens.warning),
@@ -341,7 +342,7 @@ html.theme-ready *::after {
 .text-secondary-foreground { color: hsl(var(--secondary-foreground)); }
 .text-muted-foreground { color: hsl(var(--muted-foreground)); }
 .text-accent-foreground { color: hsl(var(--accent-foreground)); }
-.text-destructive { color: hsl(var(--destructive)); }
+.text-destructive { color: hsl(var(--destructive-text)); }
 .text-destructive-foreground { color: hsl(var(--destructive-foreground)); }
 .text-success { color: hsl(var(--success)); }
 .text-success-foreground { color: hsl(var(--success-foreground)); }

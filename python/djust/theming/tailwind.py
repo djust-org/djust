@@ -93,6 +93,9 @@ def _generate_color_config(preset: ThemePreset, extend: bool = True) -> Dict[str
         "destructive": {
             "DEFAULT": "hsl(var(--destructive))",
             "foreground": "hsl(var(--destructive-foreground))",
+            # Error TEXT (#3320): ``text-destructive-text``. ``DEFAULT`` is the
+            # fill and can sit under 4.5:1 as text (dark ``default`` is 1.9:1).
+            "text": "hsl(var(--destructive-text))",
         },
         "muted": {
             "DEFAULT": "hsl(var(--muted))",
@@ -197,6 +200,7 @@ def export_preset_as_tailwind_colors(preset_name: str = "default") -> Dict[str, 
         "light-muted": light.muted.to_hsl_func(),
         "light-accent": light.accent.to_hsl_func(),
         "light-destructive": light.destructive.to_hsl_func(),
+        "light-destructive-text": light.destructive_text.to_hsl_func(),
         "light-border": light.border.to_hsl_func(),
         # Dark mode colors
         "dark-background": dark.background.to_hsl_func(),
@@ -207,6 +211,7 @@ def export_preset_as_tailwind_colors(preset_name: str = "default") -> Dict[str, 
         "dark-muted": dark.muted.to_hsl_func(),
         "dark-accent": dark.accent.to_hsl_func(),
         "dark-destructive": dark.destructive.to_hsl_func(),
+        "dark-destructive-text": dark.destructive_text.to_hsl_func(),
         "dark-border": dark.border.to_hsl_func(),
     }
 
@@ -275,7 +280,7 @@ def generate_tailwind_apply_examples() -> str:
 }
 
 .alert-destructive {
-  @apply bg-destructive/10 text-destructive border border-destructive/20;
+  @apply bg-destructive/10 text-destructive-text border border-destructive/20;
   @apply rounded-md p-4;
 }
 """
@@ -312,6 +317,7 @@ def _tokens_to_theme_vars(tokens: ThemeTokens, prefix: str = "") -> list[tuple[s
         ("accent-foreground", f"hsl({tokens.accent_foreground.to_hsl()})"),
         ("destructive", f"hsl({tokens.destructive.to_hsl()})"),
         ("destructive-foreground", f"hsl({tokens.destructive_foreground.to_hsl()})"),
+        ("destructive-text", f"hsl({tokens.destructive_text.to_hsl()})"),
         ("success", f"hsl({tokens.success.to_hsl()})"),
         ("success-foreground", f"hsl({tokens.success_foreground.to_hsl()})"),
         ("warning", f"hsl({tokens.warning.to_hsl()})"),

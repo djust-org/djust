@@ -29,8 +29,8 @@
 .dj-auth-code { text-transform: uppercase; font-size: 1.5rem; letter-spacing: .35em; text-align: center; font-variant-numeric: tabular-nums; }
 .dj-auth-help { font-size: .8rem; color: hsl(var(--muted-foreground)); margin: 0; }
 .dj-auth-help ul { margin: 4px 0 0; padding-left: 18px; }
-.dj-auth-error { font-size: .8rem; color: hsl(var(--destructive)); margin: 0; }
-.dj-auth-alert { border: 1px solid hsl(var(--destructive) / .4); background: hsl(var(--destructive) / .08); color: hsl(var(--destructive)); border-radius: var(--radius, 0.5rem); padding: 10px 12px; font-size: .9rem; }
+.dj-auth-error { font-size: .8rem; color: hsl(var(--destructive-text, var(--destructive))); margin: 0; }
+.dj-auth-alert { border: 1px solid hsl(var(--destructive) / .4); background: hsl(var(--destructive) / .08); color: hsl(var(--destructive-text, var(--destructive))); border-radius: var(--radius, 0.5rem); padding: 10px 12px; font-size: .9rem; }
 .dj-auth-alert p { margin: 0; }
 .dj-auth-flash { width: 100%; max-width: 420px; box-sizing: border-box; border: 1px solid hsl(var(--border)); background: hsl(var(--card)); border-radius: var(--radius, 0.5rem); padding: 10px 14px; font-size: .9rem; }
 .dj-auth-flash p { margin: 0; }

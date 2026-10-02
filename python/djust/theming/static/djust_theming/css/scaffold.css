@@ -591,7 +591,7 @@ a:hover {
 
 .badge-danger {
   background: hsl(var(--destructive) / 0.1);
-  color: hsl(var(--destructive));
+  color: hsl(var(--destructive-text, var(--destructive)));
 }
 
 .badge-success {
@@ -858,7 +858,7 @@ a:hover {
 
 .stat-card.stat-success .stat-value { color: hsl(var(--success)); }
 .stat-card.stat-warning .stat-value { color: hsl(var(--warning)); }
-.stat-card.stat-danger .stat-value { color: hsl(var(--destructive)); }
+.stat-card.stat-danger .stat-value { color: hsl(var(--destructive-text, var(--destructive))); }
 
 
 /* --- List Groups --- */
@@ -1011,7 +1011,7 @@ a:hover {
 .text-muted-foreground { color: hsl(var(--muted-foreground)); }
 .text-success { color: hsl(var(--success)); }
 .text-warning { color: hsl(var(--warning)); }
-.text-danger { color: hsl(var(--destructive)); }
+.text-danger { color: hsl(var(--destructive-text, var(--destructive))); }
 
 .font-medium { font-weight: var(--font-medium); }
 .font-semibold { font-weight: var(--font-semibold); }
@@ -1437,7 +1437,7 @@ p { margin-bottom: 0.75rem; }
 .message-error {
   background: hsl(var(--destructive) / 0.1);
   border-color: hsl(var(--destructive) / 0.3);
-  color: hsl(var(--destructive));
+  color: hsl(var(--destructive-text, var(--destructive)));
 }
 
 .flash-item-warning,

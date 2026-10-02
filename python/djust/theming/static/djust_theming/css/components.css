@@ -92,7 +92,7 @@
 
 .alert-destructive {
     background-color: hsl(var(--destructive) / 0.1);
-    color: hsl(var(--destructive));
+    color: hsl(var(--destructive-text, var(--destructive)));
     border-color: hsl(var(--destructive) / 0.2);
 }
 
@@ -962,7 +962,7 @@
 
 .toast-error {
     background-color: hsl(var(--destructive) / 0.1);
-    color: hsl(var(--destructive));
+    color: hsl(var(--destructive-text, var(--destructive)));
     border-color: hsl(var(--destructive) / 0.2);
 }
 
@@ -1186,7 +1186,7 @@
 /* Field errors */
 .theme-field-error {
     font-size: 0.75rem;
-    color: hsl(var(--destructive));
+    color: hsl(var(--destructive-text, var(--destructive)));
 }
 
 /* Form-level error list */
@@ -1449,8 +1449,8 @@
    Required Field Indicators
    ========================================================================== */
 
-.required { color: hsl(var(--destructive)); }
-label .text-danger, .form-label .text-danger { color: hsl(var(--destructive)); }
+.required { color: hsl(var(--destructive-text, var(--destructive))); }
+label .text-danger, .form-label .text-danger { color: hsl(var(--destructive-text, var(--destructive))); }
 
 
 /* ==========================================================================
@@ -1524,7 +1524,7 @@ label .text-danger, .form-label .text-danger { color: hsl(var(--destructive)); }
 .wizard-nav { display: flex; align-items: center; gap: 0.75rem; padding-top: 0.5rem; }
 .wizard-nav .btn-back { margin-right: auto; }
 
-.field-error { font-size: 0.8125rem; color: hsl(var(--destructive)); margin-top: 0.25rem; display: block; }
+.field-error { font-size: 0.8125rem; color: hsl(var(--destructive-text, var(--destructive))); margin-top: 0.25rem; display: block; }
 
 
 /* ==========================================================================
@@ -1638,7 +1638,7 @@ label .text-danger, .form-label .text-danger { color: hsl(var(--destructive)); }
 .textarea-error {
     font-size: 0.8125rem;
     line-height: 1.25rem;
-    color: hsl(var(--destructive));
+    color: hsl(var(--destructive-text, var(--destructive)));
 }
 
 /* Select */

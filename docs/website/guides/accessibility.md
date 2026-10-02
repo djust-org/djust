@@ -370,6 +370,43 @@ print(report.recommendations)     # how to fix them
 all_reports = validate_all_accessibility()
 ```
 
+### Error text uses `--destructive-text`, not `--destructive`
+
+`--destructive` is a **fill**: the background of `.btn-destructive` and
+`.badge-destructive`, under a `--destructive-foreground` label. Presets choose it
+for that job, so many are unreadable as text. In dark mode the `default`,
+`shadcn`, `blue` and `green` presets set it to `0 62% 30%`, which is 1.7:1 to 1.9:1
+on their page. In light mode the bright red of `slate` is 3.6:1 on a card.
+
+Every place djust paints destructive as **text** therefore reads a second,
+derived token, `--destructive-text`: error text in form fields (`.theme-field-error`,
+`.field-error`, `.form-error-message`, `.dj-field-error__message`,
+`.dj-form-errors__item`), `.text-destructive` and `.text-danger`, the text and icon
+of the destructive alert, toast, badge and tag variants, and destructive menu items.
+It is the preset's `destructive` hue and saturation with only the **lightness**
+moved, to the nearest value that reaches 4.5:1 on the page, on a card and on a
+destructive wash (the 10% to 15% tint behind an alert). A preset whose `destructive`
+already reads keeps it unchanged. No preset sets it and it needs no palette edit:
+`djust.theming` computes it for each mode and emits it with the other variables
+(`ThemeTokens.destructive_text` in Python, `--destructive-text` in CSS,
+`text-destructive-text` in Tailwind).
+
+**Custom CSS should do the same.** Use `hsl(var(--destructive-text))` for any
+text, icon or glyph that says "error", and keep `hsl(var(--destructive))` for
+fills, borders and dots:
+
+```css
+.my-field-error { color: hsl(var(--destructive-text, var(--destructive))); }
+.my-delete-button { background: hsl(var(--destructive)); color: hsl(var(--destructive-foreground)); }
+```
+
+The fallback in the first rule keeps the stylesheet working in a project that
+defines its own `--destructive` and does not use djust's theme generator.
+
+`W001` measures `destructive_text` against the background, the card and the
+destructive alert tint, and the all-presets test gate requires every shipped
+preset to pass all three in both modes with no exemption.
+
 This validation runs over *theme* color tokens — it does not look at your
 component markup, which is what the `Y` checks and the built-in component ARIA
 cover. The two are complementary: theming validation answers "is this theme's

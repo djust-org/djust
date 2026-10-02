@@ -301,6 +301,8 @@ djust components use the theme's CSS custom properties for styling. Color tokens
 }
 ```
 
+`--destructive` is a fill (it sits under `--destructive-foreground`). Anything that paints "error" as text or an icon reads `--destructive-text` instead, which the theme generator derives from `--destructive` so that it reaches 4.5:1 on the page in every preset and mode. Set it yourself only if you do not use the theme generator; the component stylesheet falls back to `--destructive` when it is absent. See [Accessibility](../guides/accessibility.md#error-text-uses---destructive-text-not---destructive).
+
 For the full component library and design system, install the extras:
 
 ```bash

@@ -20,6 +20,7 @@ Only stdlib imports are allowed so the dependency graph stays acyclic.
 """
 
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import FrozenSet, Tuple
 
 
@@ -113,11 +114,11 @@ class ColorScale:
         return ColorScale(self.h, new_saturation, self.lightness)
 
 
-def _luminance(rgb: Tuple[int, int, int]) -> float:
+def _luminance(rgb: Tuple[float, ...]) -> float:
     """WCAG relative luminance. Same formula as ``AccessibilityValidator``, which this
     module may not import (see the note at the top); a test pins that they agree."""
 
-    def lin(channel: int) -> float:
+    def lin(channel: float) -> float:
         c = channel / 255.0
         return c / 12.92 if c <= 0.03928 else float(((c + 0.055) / 1.055) ** 2.4)
 
@@ -128,6 +129,77 @@ def _luminance(rgb: Tuple[int, int, int]) -> float:
 def _contrast(a: "ColorScale", b: "ColorScale") -> float:
     hi, lo = sorted((_luminance(a.to_rgb()), _luminance(b.to_rgb())), reverse=True)
     return (hi + 0.05) / (lo + 0.05)
+
+
+#: WCAG AA for normal text. ``ThemeTokens.destructive_text`` is solved to this.
+DESTRUCTIVE_TEXT_MIN_CONTRAST = 4.5
+
+#: The destructive washes ``destructive_text`` must also read on: the 10% the
+#: alert/toast/badge variants paint, and the 15% of the strongest wash that sits
+#: under resting text (``.dj-announcement-bar--danger``, ``.dj-server-toast--error``).
+#: A hover wash behind a remove glyph goes to 20%; that is a glyph, not text.
+DESTRUCTIVE_WASH_ALPHAS: Tuple[float, ...] = (0.1, 0.15)
+
+
+def _washes(
+    base: Tuple[int, int, int], fg: Tuple[int, int, int], alpha: float
+) -> Tuple[Tuple[float, ...], Tuple[int, int, int]]:
+    """``fg`` at ``alpha`` over ``base``, two ways: exactly, as the browser paints
+    ``hsl(var(--x) / alpha)``, and round-tripped through ``ColorScale`` the way
+    ``ThemeTokens._tint`` (the contrast matrix's tint) does. The HSL integers move
+    a channel by a step or two, which is enough to turn 4.51:1 into 4.46:1, so the
+    text has to clear both."""
+    exact = tuple(alpha * f + (1 - alpha) * c for f, c in zip(fg, base, strict=True))
+    r, g, b = (round(v) for v in exact)
+    return exact, ColorScale.from_rgb(r, g, b).to_rgb()
+
+
+@lru_cache(maxsize=4096)
+def _solve_destructive_text(
+    destructive: Tuple[int, int, int],
+    background: Tuple[int, int, int],
+    card: Tuple[int, int, int],
+) -> Tuple[int, int, int]:
+    """Return ``(h, s, lightness)`` of the destructive colour, moved ONLY in
+    lightness, until it reads as text on the page, on a card, and on destructive
+    washes of both.
+
+    ``destructive`` is an ``(h, s, l)`` triple and ``background``/``card`` are
+    RGB triples, so the function is cacheable. A colour that already clears
+    the bar is returned unchanged, so presets that were fine render exactly as
+    before. Otherwise the nearest passing integer lightness wins, searching both
+    directions (the tie goes to the side with more contrast against the page).
+    If nothing in 0..100 passes (a mid-tone page that neither black nor white
+    clears), the lightness with the best worst-case contrast is returned.
+    """
+    h, s, lightness = destructive
+    fill_rgb = ColorScale(h, s, lightness).to_rgb()
+    surfaces: list = [background, card]
+    for alpha in DESTRUCTIVE_WASH_ALPHAS:
+        for base in (background, card):
+            surfaces.extend(_washes(base, fill_rgb, alpha))
+
+    def worst(light: int) -> float:
+        rgb = ColorScale(h, s, light).to_rgb()
+        lum = _luminance(rgb)
+        return min(
+            (max(lum, sl) + 0.05) / (min(lum, sl) + 0.05)
+            for sl in (_luminance(surface) for surface in surfaces)
+        )
+
+    if worst(lightness) >= DESTRUCTIVE_TEXT_MIN_CONTRAST:
+        return (h, s, lightness)
+    # Lighter first when the page is dark, darker first when it is light: the
+    # tie-break for two equally near lightnesses.
+    up_first = _luminance(background) < 0.18
+    directions = (1, -1) if up_first else (-1, 1)
+    for step in range(1, 101):
+        for sign in directions:
+            candidate = lightness + sign * step
+            if 0 <= candidate <= 100 and worst(candidate) >= DESTRUCTIVE_TEXT_MIN_CONTRAST:
+                return (h, s, candidate)
+    best = max(range(101), key=worst)
+    return (h, s, best)
 
 
 @dataclass
@@ -250,6 +322,25 @@ class ThemeTokens:
     @property
     def destructive_tint(self) -> ColorScale:
         return self._tint(self.destructive)
+
+    @property
+    def destructive_text(self) -> ColorScale:
+        """``destructive`` as TEXT (#3320). Emitted as ``--destructive-text``.
+
+        ``destructive`` is a FILL: many presets set it to a deep red under a
+        white label (``0 62% 30%`` in dark ``default``), which is unreadable as
+        text on the dark page, and the bright light-mode reds (``0 84% 60%``)
+        are 3.8:1 on white. This is the same hue and saturation at the
+        lightness that reaches 4.5:1 on the page, a card and the destructive
+        washes, so error text, ``.text-destructive`` and an alert's text use it
+        and ``destructive`` stays the fill. A preset whose ``destructive``
+        already passes keeps it exactly. Read-only: no preset sets it.
+        """
+        d = self.destructive
+        h, s, lightness = _solve_destructive_text(
+            (d.h, d.s, d.lightness), self.background.to_rgb(), self.card.to_rgb()
+        )
+        return ColorScale(h, s, lightness)
 
 
 VALID_SURFACE_TREATMENT_STYLES: "FrozenSet[str]" = frozenset({"glass", "gradient", "noise"})
