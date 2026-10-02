@@ -1096,7 +1096,12 @@ class ModelFormMixin(FormMixin, Generic[_ModelT]):
         return items
 
     def _djust_render_only_context_keys(self) -> FrozenSet[str]:
-        return frozenset(self._djust_render_only_context())
+        # Chain: a mixin after this one in the MRO (``TenantMixin``'s tenant
+        # key, #3328) declares render-only keys too, and would be hidden.
+        parent = getattr(super(), "_djust_render_only_context_keys", None)
+        keys = set(parent()) if callable(parent) else set()
+        keys.update(self._djust_render_only_context())
+        return frozenset(keys)
 
     # -- Django's single-object vocabulary -----------------------------------
 

@@ -3563,7 +3563,14 @@ class ViewRuntime:
 
                     signed_blob = state_snapshot.get("state_json", "")
                     session_key = getattr(view_instance, "_django_session_key", None)
-                    raw_state = unsign_snapshot(signed_blob, view_path, session_key)
+                    from ._tenant_state import snapshot_tenant_scope
+
+                    raw_state = unsign_snapshot(
+                        signed_blob,
+                        view_path,
+                        session_key,
+                        tenant_scope=snapshot_tenant_scope(view_instance),
+                    )
                     if raw_state is None:
                         # Rejected at the signature/identity/TTL gate.
                         # unsign_snapshot already logged the reason.
@@ -4038,6 +4045,7 @@ class ViewRuntime:
                     # LiveView._reject_orm_value_in_state_persistence.
                     public_state = await sync_to_async(snapshot_fn)(strict=True)
                     if isinstance(public_state, dict) and public_state:
+                        from ._tenant_state import snapshot_tenant_scope
                         from .security import sign_snapshot
 
                         # Canonical serialization so the signed bytes are stable
@@ -4045,8 +4053,14 @@ class ViewRuntime:
                         # after unsigning).
                         state_json = json.dumps(public_state, sort_keys=True, separators=(",", ":"))
                         session_key = getattr(view_instance, "_django_session_key", None)
-                        mount_msg["state_snapshot_signed"] = sign_snapshot(
-                            state_json, view_path, session_key
+                        # #3328: bound to the tenant. A tenant view with no
+                        # resolved tenant (None) mints nothing and revokes the
+                        # client's cached token.
+                        tenant_scope = snapshot_tenant_scope(view_instance)
+                        mount_msg["state_snapshot_signed"] = (
+                            None
+                            if tenant_scope is None
+                            else sign_snapshot(state_json, view_path, session_key, tenant_scope)
                         )
             elif state_master_on and not legacy_exposure:
                 from ._exposure_snapshots import snapshot_codec
