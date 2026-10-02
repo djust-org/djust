@@ -15040,6 +15040,11 @@ window.djust.bindModelElements = bindModelElements;
         if (link.hasAttribute('data-no-prefetch')) {
             return false;
         }
+        // dj-prefetch="false" opts a link out of every prefetch layer, not
+        // just the intent layer below.
+        if (link.getAttribute('dj-prefetch') === 'false') {
+            return false;
+        }
         // Must have href and be same-origin
         if (!link.href) {
             return false;
