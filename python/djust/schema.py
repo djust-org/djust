@@ -166,7 +166,8 @@ DIRECTIVES: List[Dict[str, Any]] = [
         "description": "INERT — the selector is read on dj-click, dj-change and key events but "
         "dropped before the event is sent, so it does not scope or change the server re-render.",
         "value": "CSS selector (e.g., #sidebar, .panel)",
-        "example": '<button dj-click="refresh_sidebar" dj-target="#sidebar">Refresh</button>',
+        "example": "<!-- INERT: dj-target is dropped before the event is sent --> "
+        '<button dj-click="refresh_sidebar" dj-target="#sidebar">Refresh</button>',
     },
     # --- Loading states ---
     {
@@ -430,7 +431,10 @@ DIRECTIVES: List[Dict[str, Any]] = [
         "category": "performance",
         "description": "Prefetch a same-origin link's page after a 65 ms hover (immediately on "
         'touchstart) by adding <link rel="prefetch">, or a low-priority fetch where that is '
-        "unsupported. Skipped when Save-Data is on. Value 'false' opts a link out.",
+        "unsupported. Skipped when Save-Data is on. Value 'false' opts a link out of both "
+        "prefetch layers: this intent prefetch and the older service-worker hover prefetch "
+        "(which otherwise warms any same-origin link under an active service worker; "
+        "data-no-prefetch also opts out of that one).",
         "value": "(no value needed) | 'false'",
         "example": '<a href="/reports/" dj-prefetch>View reports</a>',
     },
@@ -690,7 +694,7 @@ DIRECTIVES: List[Dict[str, Any]] = [
         "in a handler; a form without this attribute is refused. For flows that need a real "
         "HTTP redirect (e.g. payment providers).",
         "value": "(no value needed)",
-        "example": '<form action="/checkout/" method="post" dj-trigger-action>...</form>',
+        "example": '<form id="checkout-form" action="/checkout/" method="post" dj-trigger-action>...</form>',
     },
     {
         "name": "dj-patch-reload",

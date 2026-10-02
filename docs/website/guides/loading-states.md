@@ -40,13 +40,13 @@ Add `dj-loading.*` attributes to any element that has a `dj-click`, `dj-submit`,
 
 ### Scoping with `dj-loading.for`
 
-By default, loading modifiers are scoped to the event on the same element. Use `dj-loading.for` to tie any element's loading state to a specific event name, regardless of where that element is in the DOM.
+By default, loading modifiers are scoped to the event on the same element. Use `dj-loading.for` to tie any element's loading state to a specific event name, wherever that element sits inside the same LiveView or component as the trigger. The match is scoped: an element in a different embedded view or component does not follow an event fired in this one.
 
 ```html
 <!-- Button triggers the event -->
 <button dj-click="generate_report">Generate</button>
 
-<!-- Spinner anywhere in the page, tied to the same event -->
+<!-- Spinner anywhere in the same view, tied to the same event -->
 <div dj-loading.show dj-loading.for="generate_report" style="display:none">
     <span class="spinner"></span> Generating report...
 </div>
