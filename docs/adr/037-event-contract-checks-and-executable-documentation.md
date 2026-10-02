@@ -341,7 +341,7 @@ child through the stamped wrapper. It found two defects the list does not decide
   ("Embedded view not found"), as the socket runtime refuses an unknown
   `view_id`, and the test expected the refusal. Since #3104 the HTTP fallback
   routes the event to the child (the id repeats between requests because auto
-  ids are numbered per render over HTTP), and the test expects the child on
+  ids are named for the child over HTTP), and the test expects the child on
   all three transports.
 
 Row 13's output (N1): `find_handlers_for_template` keeps its JSON keys, computed
@@ -426,7 +426,7 @@ Two limits outside the checks, recorded at D2 and D3:
   view: an HTTP request registers its children only while it renders, after
   dispatch, and under new process-wide `child_N` ids, so no child the client
   addressed existed to route to. It now renders the page once to register its
-  children, under ids numbered per render, and runs the event on the child
+  children, under ids named for the child, and runs the event on the child
   (`docs/website/guides/http-only-mode.md`). An explicit-exposure child, and any
   child of an explicit-exposure page, is still refused over HTTP.
 

@@ -51,7 +51,11 @@
                 // ADR-036: `edge` is a generated value; a strict handler gets it
                 // only when declared (plus its dj-value-* arguments).
                 const strictParams = window.djust._strictBinding(container, eventName, { edge }, []);
-                if (strictParams !== false) window.djust.handleEvent(eventName, strictParams || { edge });
+                if (strictParams !== false) {
+                    const sent = strictParams || { edge };
+                    if (typeof window.djust._markSlotOf === 'function') window.djust._markSlotOf(sent, container);
+                    window.djust.handleEvent(eventName, sent);
+                }
             } catch (err) {
                 if (globalThis.djustDebug) {
                     console.warn(

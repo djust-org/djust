@@ -2539,7 +2539,7 @@ class LiveViewWebSocket {
         }
     }
 
-    sendEvent(eventName, params = {}, triggerElement = null) {
+    sendEvent(eventName, params = {}, triggerElement = null, slotId = null) {
         if (!this.enabled || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
             return false;
         }
@@ -2558,7 +2558,7 @@ class LiveViewWebSocket {
                 ref: request.ref,
                 // An event from inside a view mounted beside the page view
                 // runs on that view (#3252).
-                ...slotFrameFields(slotIdFor(triggerElement))
+                ...slotFrameFields(slotId || slotIdFor(triggerElement))
             });
         } catch (error) {
             cancelEventRequests(this, request.ref);
@@ -5596,6 +5596,7 @@ function addEventContext(params, element) {
     if (componentId) params.component_id = componentId;
     const embeddedViewId = getEmbeddedViewId(element);
     if (embeddedViewId) params.view_id = embeddedViewId;
+    markSlotOf(params, element);
 }
 
 // WeakSet to track elements whose dj-mounted handler has already fired.
@@ -5974,7 +5975,7 @@ function _handleDjCopy(element, e) {
         // Optional server event for analytics
         const copyEvent = element.getAttribute('dj-copy-event');
         if (copyEvent) {
-            handleEvent(copyEvent, { text: textToCopy });
+            handleEvent(copyEvent, markSlotOf({ text: textToCopy }, element));
         }
     });
 }
@@ -6138,6 +6139,7 @@ async function _handleDjInput(element, e) {
     // _target: include triggering field's name (or id, or null); legacy only
     if (!strictParams) params._target = e.target.name || e.target.id || null;
 
+    markSlotOf(params, element);
     await handleEvent(parsedInput.name, params);
 }
 
@@ -6166,6 +6168,7 @@ async function _handleDjBlur(element, e) {
     if (!strictParams && parsedBlur.args.length > 0) {
         params._args = parsedBlur.args;
     }
+    markSlotOf(params, element);
     await handleEvent(parsedBlur.name, params);
 }
 
@@ -6194,6 +6197,7 @@ async function _handleDjFocus(element, e) {
     if (!strictParams && parsedFocus.args.length > 0) {
         params._args = parsedFocus.args;
     }
+    markSlotOf(params, element);
     await handleEvent(parsedFocus.name, params);
 }
 
@@ -6748,10 +6752,10 @@ function bindLiveViewEvents(scope) {
             const strictParams = _strictBinding(element, parsed.name, {}, [], element);
             if (strictParams === false) return;
             if (strictParams) {
-                handleEvent(parsed.name, Object.assign(strictParams, { _skipLoading: true }));
+                handleEvent(parsed.name, markSlotOf(Object.assign(strictParams, { _skipLoading: true }), element));
                 return;
             }
-            handleEvent(parsed.name, Object.assign(extractTypedParams(element), { _skipLoading: true }));
+            handleEvent(parsed.name, markSlotOf(Object.assign(extractTypedParams(element), { _skipLoading: true }), element));
         };
 
         const intervalId = setInterval(firePoll, interval);
@@ -7486,6 +7490,7 @@ function _processAutoRecover() {
             _data_attrs: dataAttrs
         };
 
+        markSlotOf(params, container);
         handleEvent(handlerName, params);
     });
 }
@@ -7614,7 +7619,7 @@ function _processFormRecovery() {
         const strictParams = _strictFormBinding(handlerString, field, domValue);
         if (strictParams === false) continue;
         if (strictParams) {
-            pendingEvents.push({ handlerName: handlerName, params: strictParams });
+            pendingEvents.push({ handlerName: handlerName, params: markSlotOf(strictParams, field) });
             continue;
         }
 
@@ -7631,7 +7636,7 @@ function _processFormRecovery() {
         // _target: include triggering field's name
         params._target = fieldName;
 
-        pendingEvents.push({ handlerName: handlerName, params: params });
+        pendingEvents.push({ handlerName: handlerName, params: markSlotOf(params, field) });
     }
 
     // Fire events sequentially to avoid server race conditions
@@ -8169,7 +8174,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     // Build clean server params (strip underscore-prefixed internal properties)
     const serverParams = {};
     for (const key of Object.keys(params)) {
-        if (key === '_targetElement' || key === '_optimisticUpdateId' || key === '_skipLoading' || key === '_djTargetSelector') {
+        if (key === '_targetElement' || key === '_slotId' || key === '_optimisticUpdateId' || key === '_skipLoading' || key === '_djTargetSelector') {
             continue;
         }
         // eslint-disable-next-line security/detect-object-injection
@@ -8284,7 +8289,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     // can run post-response logic (e.g. _setFormPending(false) in finally).
     const wsPromise = liveViewWS && (teardown
         ? (liveViewWS.sendTeardownEvent && liveViewWS.sendTeardownEvent(eventName, paramsToSend, triggerElement))
-        : liveViewWS.sendEvent(eventName, paramsToSend, triggerElement));
+        : liveViewWS.sendEvent(eventName, paramsToSend, triggerElement, params._slotId));
     if (wsPromise) {
         await wsPromise;
         return;
@@ -8294,7 +8299,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     // lives on the WebSocket only: the HTTP fallback posts to the page's own
     // URL, where the page view would run the event. Refuse it rather than run
     // it on the wrong view.
-    const slotId = teardown ? null : slotIdFor(triggerElement);
+    const slotId = teardown ? null : (params._slotId || slotIdFor(triggerElement));
     if (slotId) {
         if (!skipLoading) globalLoadingManager.stopLoading(eventName, triggerElement);
         window.dispatchEvent(new CustomEvent('djust:error', {detail: {
@@ -11651,6 +11656,19 @@ function slotIdFor(element) {
     return id && _mountedSlots.has(id) ? id : null;
 }
 
+/**
+ * Record on event `params` the slot `element` lives in, so `handleEvent` sends
+ * the event to that view (`_slotId`, stripped before it goes on the wire). The
+ * bindings that pass no `_targetElement` (input, blur, poll, model, ...) use
+ * this: without it the event would run on the page view. No-op for an element
+ * of the page view. Returns `params`.
+ */
+function markSlotOf(params, element) {
+    const id = slotIdFor(element);
+    if (id) params._slotId = id;
+    return params;
+}
+
 /** `{target_id}` while addressing a slot, else `{}`: spread into outbound frames. */
 function slotFrameFields(targetId) {
     return targetId ? { target_id: targetId } : {};
@@ -11659,6 +11677,40 @@ function slotFrameFields(targetId) {
 function registerSlot(targetId, viewPath, version) {
     _mountedSlots.set(targetId, { viewPath: viewPath });
     _slotVersions.set(targetId, typeof version === 'number' ? version : null);
+    watchSlotContainers();
+}
+
+// A container that leaves the document takes its view with it: the server is
+// told, so the view's groups, presence, tick and uploads go (and its place in
+// the connection's cap is freed). Checked a moment after the DOM settles, so a
+// morph that moves a container is not taken for its removal.
+let _slotWatcher = null;
+let _slotSweepTimer = null;
+const SLOT_SWEEP_DELAY_MS = 100;
+
+function _sweepSlotContainers() {
+    _slotSweepTimer = null;
+    const instance = window.djust && window.djust.liveViewInstance;
+    for (const id of Array.from(_mountedSlots.keys())) {
+        if (slotContainer(id)) continue;
+        if (instance && typeof instance.unmountView === 'function') {
+            instance.unmountView(id);
+        } else {
+            forgetSlot(id);
+        }
+    }
+    if (_mountedSlots.size === 0 && _slotWatcher) {
+        _slotWatcher.disconnect();
+        _slotWatcher = null;
+    }
+}
+
+function watchSlotContainers() {
+    if (_slotWatcher || typeof MutationObserver !== 'function' || !document.documentElement) return;
+    _slotWatcher = new MutationObserver(() => {
+        if (_slotSweepTimer === null) _slotSweepTimer = setTimeout(_sweepSlotContainers, SLOT_SWEEP_DELAY_MS);
+    });
+    _slotWatcher.observe(document.documentElement, { childList: true, subtree: true });
 }
 
 function forgetSlot(targetId) {
@@ -11764,6 +11816,7 @@ function applySlotMount(transport, data, options = {}) {
     return true;
 }
 
+window.djust._markSlotOf = markSlotOf;
 window.djust.viewSlots = {
     contextOf: () => _activeSlot,
     container: slotContainer,
@@ -12226,11 +12279,17 @@ if (document.readyState === 'loading') {
      *     uploaded chunks.
      *   - resumable — when true, the client persists a record to
      *     IndexedDB so it can resume after a tab reload.
+     *   - targetId — the container (`data-djust-target`) of the view the
+     *     upload input belongs to, when it is not the page view (#3252). Its
+     *     `upload_register` / `upload_resume` frames are addressed to that
+     *     view; the binary chunk, complete and cancel frames carry the upload's
+     *     ref, which the server resolves to the view that registered it.
      */
     async function uploadFile(ws, uploadName, file, config, opts) {
         opts = opts || {};
         const chunkSize = (config && config.chunk_size) || DEFAULT_CHUNK_SIZE;
         const isResumable = !!(opts.resumable || (config && config.resumable));
+        const slotFields = slotFrameFields(opts.targetId || null);
 
         let refBytes;
         let ref;
@@ -12249,7 +12308,7 @@ if (document.readyState === 'loading') {
 
         // Resumable path: try to resume first.
         if (opts.resumeRef) {
-            const resumePayload = await sendResumeAndWait(ws, ref);
+            const resumePayload = await sendResumeAndWait(ws, ref, slotFields);
             if (resumePayload && resumePayload.status === 'resumed') {
                 startOffset = Number(resumePayload.bytes_received || 0);
                 if (startOffset > file.size) startOffset = file.size;
@@ -12275,6 +12334,7 @@ if (document.readyState === 'loading') {
                 client_type: file.type,
                 client_size: file.size,
                 resumable: isResumable,
+                ...slotFields,
             });
         }
 
@@ -12286,6 +12346,7 @@ if (document.readyState === 'loading') {
                 clientName: file.name,
                 clientSize: file.size,
                 savedAt: Date.now(),
+                targetId: opts.targetId || null,
             });
         }
 
@@ -12358,7 +12419,7 @@ if (document.readyState === 'loading') {
      * server's `upload_resumed` payload. Times out after 5 s so a
      * silent server doesn't stall the upload forever.
      */
-    function sendResumeAndWait(ws, ref) {
+    function sendResumeAndWait(ws, ref, slotFields) {
         return new Promise((resolve) => {
             let done = false;
             const timer = setTimeout(() => {
@@ -12375,7 +12436,7 @@ if (document.readyState === 'loading') {
                 resolve(payload);
             });
             try {
-                ws.sendMessage({ type: 'upload_resume', ref });
+                ws.sendMessage({ type: 'upload_resume', ref, ...(slotFields || {}) });
             } catch (_err) {
                 if (!done) {
                     done = true;
@@ -12789,7 +12850,7 @@ if (document.readyState === 'loading') {
                 }
 
                 try {
-                    const result = await uploadFile(liveViewWS, uploadName, file, config);
+                    const result = await uploadFile(liveViewWS, uploadName, file, config, { targetId: slotIdFor(input) });
                     if (globalThis.djustDebug) console.log('[Upload] Complete: %s %o', String(file.name), result);
                 } catch (err) {
                     console.error('[Upload] Failed: %s %o', String(file.name), err);
@@ -12900,7 +12961,7 @@ if (document.readyState === 'loading') {
                         continue;
                     }
                     try {
-                        await uploadFile(liveViewWS, uploadName, file, config);
+                        await uploadFile(liveViewWS, uploadName, file, config, { targetId: slotIdFor(zone) });
                     } catch (err) {
                         console.error('[Upload] Drop upload failed: %s %o', String(file.name), err);
                     }
@@ -12950,7 +13011,7 @@ if (document.readyState === 'loading') {
                 continue;
             }
             try {
-                await uploadFile(liveViewWS, uploadName, file, config);
+                await uploadFile(liveViewWS, uploadName, file, config, { targetId: slotIdFor(element) });
             } catch (err) {
                 console.error('[Upload] Paste upload failed: %s %o', String(file.name), err);
             }
@@ -14442,6 +14503,9 @@ function _createHookInstance(hookDef, el) {
                 type: 'event',
                 event: event,
                 params: payload,
+                // A hook inside a view mounted beside the page view talks to
+                // that view, not the page view (#3252).
+                ...slotFrameFields(slotIdFor(el)),
             }));
         } else {
             console.warn(`[dj-hook] Cannot pushEvent "${event}" — no WebSocket connection`);
@@ -14838,14 +14902,15 @@ function _getElementValue(el) {
  * Tries direct WebSocket first (synchronous, no loading states needed for model
  * binding), then falls back to handleEvent for HTTP-only scenarios.
  */
-function _sendModelUpdate(field, value) {
+function _sendModelUpdate(field, value, el) {
     // Fast path: send directly via WebSocket (synchronous)
     const inst = window.djust.liveViewInstance;
-    if (inst && inst.sendEvent && inst.sendEvent('update_model', { field, value })) {
+    // The element addresses the event to the view it lives in (#3252).
+    if (inst && inst.sendEvent && inst.sendEvent('update_model', { field, value }, null, slotIdFor(el))) {
         return;
     }
     // Fallback: handleEvent (includes HTTP fallback, loading states)
-    handleEvent('update_model', { field, value });
+    handleEvent('update_model', markSlotOf({ field, value }, el));
 }
 
 /**
@@ -14886,11 +14951,11 @@ function _bindModel(el) {
                 clearTimeout(_modelDebounceTimers.get(timerKey));
             }
             _modelDebounceTimers.set(timerKey, setTimeout(() => {
-                _sendModelUpdate(field, value);
+                _sendModelUpdate(field, value, el);
                 _modelDebounceTimers.delete(timerKey);
             }, debounce));
         } else {
-            _sendModelUpdate(field, value);
+            _sendModelUpdate(field, value, el);
         }
     };
 
@@ -15570,6 +15635,7 @@ window.djust.bindModelElements = bindModelElements;
         }
         try {
             if (typeof window.djust.handleEvent === 'function') {
+                if (originEl && typeof window.djust._markSlotOf === 'function') window.djust._markSlotOf(params, originEl);
                 await window.djust.handleEvent(event, params);
             }
         } finally {
@@ -17304,7 +17370,11 @@ window.djust.bindModelElements = bindModelElements;
                 // ADR-036: `edge` is a generated value; a strict handler gets it
                 // only when declared (plus its dj-value-* arguments).
                 const strictParams = window.djust._strictBinding(container, eventName, { edge }, []);
-                if (strictParams !== false) window.djust.handleEvent(eventName, strictParams || { edge });
+                if (strictParams !== false) {
+                    const sent = strictParams || { edge };
+                    if (typeof window.djust._markSlotOf === 'function') window.djust._markSlotOf(sent, container);
+                    window.djust.handleEvent(eventName, sent);
+                }
             } catch (err) {
                 if (globalThis.djustDebug) {
                     console.warn(
@@ -18643,6 +18713,7 @@ function _installDjMutationFor(el) {
         // Route to the standard djust event pipeline so the server-side
         // handler named in dj-mutation="..." actually runs.
         if (globalThis.djust && typeof globalThis.djust.handleEvent === 'function') {
+            if (typeof globalThis.djust._markSlotOf === 'function') globalThis.djust._markSlotOf(payload, el);
             globalThis.djust.handleEvent(handlerName, payload);
         }
     }

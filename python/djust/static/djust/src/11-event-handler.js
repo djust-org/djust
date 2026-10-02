@@ -233,7 +233,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     // Build clean server params (strip underscore-prefixed internal properties)
     const serverParams = {};
     for (const key of Object.keys(params)) {
-        if (key === '_targetElement' || key === '_optimisticUpdateId' || key === '_skipLoading' || key === '_djTargetSelector') {
+        if (key === '_targetElement' || key === '_slotId' || key === '_optimisticUpdateId' || key === '_skipLoading' || key === '_djTargetSelector') {
             continue;
         }
         // eslint-disable-next-line security/detect-object-injection
@@ -348,7 +348,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     // can run post-response logic (e.g. _setFormPending(false) in finally).
     const wsPromise = liveViewWS && (teardown
         ? (liveViewWS.sendTeardownEvent && liveViewWS.sendTeardownEvent(eventName, paramsToSend, triggerElement))
-        : liveViewWS.sendEvent(eventName, paramsToSend, triggerElement));
+        : liveViewWS.sendEvent(eventName, paramsToSend, triggerElement, params._slotId));
     if (wsPromise) {
         await wsPromise;
         return;
@@ -358,7 +358,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     // lives on the WebSocket only: the HTTP fallback posts to the page's own
     // URL, where the page view would run the event. Refuse it rather than run
     // it on the wrong view.
-    const slotId = teardown ? null : slotIdFor(triggerElement);
+    const slotId = teardown ? null : (params._slotId || slotIdFor(triggerElement));
     if (slotId) {
         if (!skipLoading) globalLoadingManager.stopLoading(eventName, triggerElement);
         window.dispatchEvent(new CustomEvent('djust:error', {detail: {

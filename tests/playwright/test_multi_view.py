@@ -15,6 +15,10 @@ view has hydrated
 * a click in each view runs on that view and changes only its counters;
 * a push sent by a handler of the page view reaches the views of the class it
   was sent to, and no other view (the page's own counter included);
+* a file chosen in a lazy view's input uploads to that view (its ``upload_register``
+  is addressed to it, and the entries it saves are its own), and a ``dj-hook`` inside
+  a lazy view pushes its event to that view, not to the page view, which has a
+  handler of the same name;
 * the page view still answers;
 * after the socket drops and reconnects, every view mounts again and answers.
 
@@ -153,6 +157,37 @@ async def run(browser, failures):
         "all views still live",
         failures,
     )
+
+    # A dj-hook inside a lazy view pushes its event to that view. The page view
+    # has a handler of the same name: it must not run there.
+    await page.click("#widget-a [data-role=hook-click]")
+    await settled(
+        page,
+        {"page": ("2", "0"), "a": ("3", "1"), "b": ("2", "1"), "late": ("1", "1")},
+        "hook in widget a",
+        failures,
+    )
+
+    # A file chosen in the lazy uploader's input uploads to that view. An
+    # unaddressed register would reach the page view, which has no upload slot
+    # ("No uploads configured for this view").
+    await page.wait_for_selector("#uploader [data-role=file]", timeout=15000)
+    await page.set_input_files(
+        "#uploader [data-role=file]",
+        files=[{"name": "note.txt", "mimeType": "text/plain", "buffer": b"hello"}],
+    )
+    saved = False
+    for _ in range(40):
+        await page.click("#uploader [data-role=save]")
+        if "note.txt (5 bytes)" in await text(page, "#uploader [data-role=saved]"):
+            saved = True
+            break
+        await page.wait_for_timeout(250)
+    if not saved:
+        failures.append(
+            "the upload did not reach the lazy view: saved=%r"
+            % (await text(page, "#uploader [data-role=saved]"),)
+        )
 
     # The socket drops and the client reconnects: the page view and every view
     # hydrated beside it mount again on the new socket, and each still answers.

@@ -93,6 +93,9 @@ function _createHookInstance(hookDef, el) {
                 type: 'event',
                 event: event,
                 params: payload,
+                // A hook inside a view mounted beside the page view talks to
+                // that view, not the page view (#3252).
+                ...slotFrameFields(slotIdFor(el)),
             }));
         } else {
             console.warn(`[dj-hook] Cannot pushEvent "${event}" — no WebSocket connection`);

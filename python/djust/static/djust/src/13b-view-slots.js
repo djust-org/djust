@@ -53,6 +53,19 @@ function slotIdFor(element) {
     return id && _mountedSlots.has(id) ? id : null;
 }
 
+/**
+ * Record on event `params` the slot `element` lives in, so `handleEvent` sends
+ * the event to that view (`_slotId`, stripped before it goes on the wire). The
+ * bindings that pass no `_targetElement` (input, blur, poll, model, ...) use
+ * this: without it the event would run on the page view. No-op for an element
+ * of the page view. Returns `params`.
+ */
+function markSlotOf(params, element) {
+    const id = slotIdFor(element);
+    if (id) params._slotId = id;
+    return params;
+}
+
 /** `{target_id}` while addressing a slot, else `{}`: spread into outbound frames. */
 function slotFrameFields(targetId) {
     return targetId ? { target_id: targetId } : {};
@@ -61,6 +74,40 @@ function slotFrameFields(targetId) {
 function registerSlot(targetId, viewPath, version) {
     _mountedSlots.set(targetId, { viewPath: viewPath });
     _slotVersions.set(targetId, typeof version === 'number' ? version : null);
+    watchSlotContainers();
+}
+
+// A container that leaves the document takes its view with it: the server is
+// told, so the view's groups, presence, tick and uploads go (and its place in
+// the connection's cap is freed). Checked a moment after the DOM settles, so a
+// morph that moves a container is not taken for its removal.
+let _slotWatcher = null;
+let _slotSweepTimer = null;
+const SLOT_SWEEP_DELAY_MS = 100;
+
+function _sweepSlotContainers() {
+    _slotSweepTimer = null;
+    const instance = window.djust && window.djust.liveViewInstance;
+    for (const id of Array.from(_mountedSlots.keys())) {
+        if (slotContainer(id)) continue;
+        if (instance && typeof instance.unmountView === 'function') {
+            instance.unmountView(id);
+        } else {
+            forgetSlot(id);
+        }
+    }
+    if (_mountedSlots.size === 0 && _slotWatcher) {
+        _slotWatcher.disconnect();
+        _slotWatcher = null;
+    }
+}
+
+function watchSlotContainers() {
+    if (_slotWatcher || typeof MutationObserver !== 'function' || !document.documentElement) return;
+    _slotWatcher = new MutationObserver(() => {
+        if (_slotSweepTimer === null) _slotSweepTimer = setTimeout(_sweepSlotContainers, SLOT_SWEEP_DELAY_MS);
+    });
+    _slotWatcher.observe(document.documentElement, { childList: true, subtree: true });
 }
 
 function forgetSlot(targetId) {
@@ -166,6 +213,7 @@ function applySlotMount(transport, data, options = {}) {
     return true;
 }
 
+window.djust._markSlotOf = markSlotOf;
 window.djust.viewSlots = {
     contextOf: () => _activeSlot,
     container: slotContainer,

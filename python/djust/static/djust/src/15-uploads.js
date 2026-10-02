@@ -255,11 +255,17 @@
      *     uploaded chunks.
      *   - resumable — when true, the client persists a record to
      *     IndexedDB so it can resume after a tab reload.
+     *   - targetId — the container (`data-djust-target`) of the view the
+     *     upload input belongs to, when it is not the page view (#3252). Its
+     *     `upload_register` / `upload_resume` frames are addressed to that
+     *     view; the binary chunk, complete and cancel frames carry the upload's
+     *     ref, which the server resolves to the view that registered it.
      */
     async function uploadFile(ws, uploadName, file, config, opts) {
         opts = opts || {};
         const chunkSize = (config && config.chunk_size) || DEFAULT_CHUNK_SIZE;
         const isResumable = !!(opts.resumable || (config && config.resumable));
+        const slotFields = slotFrameFields(opts.targetId || null);
 
         let refBytes;
         let ref;
@@ -278,7 +284,7 @@
 
         // Resumable path: try to resume first.
         if (opts.resumeRef) {
-            const resumePayload = await sendResumeAndWait(ws, ref);
+            const resumePayload = await sendResumeAndWait(ws, ref, slotFields);
             if (resumePayload && resumePayload.status === 'resumed') {
                 startOffset = Number(resumePayload.bytes_received || 0);
                 if (startOffset > file.size) startOffset = file.size;
@@ -304,6 +310,7 @@
                 client_type: file.type,
                 client_size: file.size,
                 resumable: isResumable,
+                ...slotFields,
             });
         }
 
@@ -315,6 +322,7 @@
                 clientName: file.name,
                 clientSize: file.size,
                 savedAt: Date.now(),
+                targetId: opts.targetId || null,
             });
         }
 
@@ -387,7 +395,7 @@
      * server's `upload_resumed` payload. Times out after 5 s so a
      * silent server doesn't stall the upload forever.
      */
-    function sendResumeAndWait(ws, ref) {
+    function sendResumeAndWait(ws, ref, slotFields) {
         return new Promise((resolve) => {
             let done = false;
             const timer = setTimeout(() => {
@@ -404,7 +412,7 @@
                 resolve(payload);
             });
             try {
-                ws.sendMessage({ type: 'upload_resume', ref });
+                ws.sendMessage({ type: 'upload_resume', ref, ...(slotFields || {}) });
             } catch (_err) {
                 if (!done) {
                     done = true;
@@ -818,7 +826,7 @@
                 }
 
                 try {
-                    const result = await uploadFile(liveViewWS, uploadName, file, config);
+                    const result = await uploadFile(liveViewWS, uploadName, file, config, { targetId: slotIdFor(input) });
                     if (globalThis.djustDebug) console.log('[Upload] Complete: %s %o', String(file.name), result);
                 } catch (err) {
                     console.error('[Upload] Failed: %s %o', String(file.name), err);
@@ -929,7 +937,7 @@
                         continue;
                     }
                     try {
-                        await uploadFile(liveViewWS, uploadName, file, config);
+                        await uploadFile(liveViewWS, uploadName, file, config, { targetId: slotIdFor(zone) });
                     } catch (err) {
                         console.error('[Upload] Drop upload failed: %s %o', String(file.name), err);
                     }
@@ -979,7 +987,7 @@
                 continue;
             }
             try {
-                await uploadFile(liveViewWS, uploadName, file, config);
+                await uploadFile(liveViewWS, uploadName, file, config, { targetId: slotIdFor(element) });
             } catch (err) {
                 console.error('[Upload] Paste upload failed: %s %o', String(file.name), err);
             }

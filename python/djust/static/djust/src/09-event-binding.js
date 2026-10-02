@@ -545,6 +545,7 @@ function addEventContext(params, element) {
     if (componentId) params.component_id = componentId;
     const embeddedViewId = getEmbeddedViewId(element);
     if (embeddedViewId) params.view_id = embeddedViewId;
+    markSlotOf(params, element);
 }
 
 // WeakSet to track elements whose dj-mounted handler has already fired.
@@ -923,7 +924,7 @@ function _handleDjCopy(element, e) {
         // Optional server event for analytics
         const copyEvent = element.getAttribute('dj-copy-event');
         if (copyEvent) {
-            handleEvent(copyEvent, { text: textToCopy });
+            handleEvent(copyEvent, markSlotOf({ text: textToCopy }, element));
         }
     });
 }
@@ -1087,6 +1088,7 @@ async function _handleDjInput(element, e) {
     // _target: include triggering field's name (or id, or null); legacy only
     if (!strictParams) params._target = e.target.name || e.target.id || null;
 
+    markSlotOf(params, element);
     await handleEvent(parsedInput.name, params);
 }
 
@@ -1115,6 +1117,7 @@ async function _handleDjBlur(element, e) {
     if (!strictParams && parsedBlur.args.length > 0) {
         params._args = parsedBlur.args;
     }
+    markSlotOf(params, element);
     await handleEvent(parsedBlur.name, params);
 }
 
@@ -1143,6 +1146,7 @@ async function _handleDjFocus(element, e) {
     if (!strictParams && parsedFocus.args.length > 0) {
         params._args = parsedFocus.args;
     }
+    markSlotOf(params, element);
     await handleEvent(parsedFocus.name, params);
 }
 
@@ -1697,10 +1701,10 @@ function bindLiveViewEvents(scope) {
             const strictParams = _strictBinding(element, parsed.name, {}, [], element);
             if (strictParams === false) return;
             if (strictParams) {
-                handleEvent(parsed.name, Object.assign(strictParams, { _skipLoading: true }));
+                handleEvent(parsed.name, markSlotOf(Object.assign(strictParams, { _skipLoading: true }), element));
                 return;
             }
-            handleEvent(parsed.name, Object.assign(extractTypedParams(element), { _skipLoading: true }));
+            handleEvent(parsed.name, markSlotOf(Object.assign(extractTypedParams(element), { _skipLoading: true }), element));
         };
 
         const intervalId = setInterval(firePoll, interval);
@@ -2435,6 +2439,7 @@ function _processAutoRecover() {
             _data_attrs: dataAttrs
         };
 
+        markSlotOf(params, container);
         handleEvent(handlerName, params);
     });
 }
@@ -2563,7 +2568,7 @@ function _processFormRecovery() {
         const strictParams = _strictFormBinding(handlerString, field, domValue);
         if (strictParams === false) continue;
         if (strictParams) {
-            pendingEvents.push({ handlerName: handlerName, params: strictParams });
+            pendingEvents.push({ handlerName: handlerName, params: markSlotOf(strictParams, field) });
             continue;
         }
 
@@ -2580,7 +2585,7 @@ function _processFormRecovery() {
         // _target: include triggering field's name
         params._target = fieldName;
 
-        pendingEvents.push({ handlerName: handlerName, params: params });
+        pendingEvents.push({ handlerName: handlerName, params: markSlotOf(params, field) });
     }
 
     // Fire events sequentially to avoid server race conditions

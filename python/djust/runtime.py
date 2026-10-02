@@ -599,6 +599,22 @@ def view_groups_of(consumer: Any) -> set:
     return groups
 
 
+def _groups_of_other_views(consumer: Any) -> set:
+    """The groups the other mounted views of ``consumer``'s socket have joined."""
+    socket = getattr(consumer, "_slot_consumer", consumer)
+    view_consumers = getattr(socket, "_view_consumers", None)
+    if not callable(view_consumers):
+        return set()
+    others = view_consumers()
+    if not isinstance(others, list):
+        return set()
+    kept: set = set()
+    for other in others:
+        if other is not consumer:
+            kept |= view_groups_of(other)
+    return kept
+
+
 async def leave_consumer_view_groups(consumer: Any, groups: Any = None) -> None:
     """Leave every channel-layer group the consumer's current view joined.
 
@@ -616,7 +632,14 @@ async def leave_consumer_view_groups(consumer: Any, groups: Any = None) -> None:
     channel_layer = getattr(consumer, "channel_layer", None)
     if channel_layer is None:
         return
+    # Group membership belongs to the socket's channel, not to a view: two views
+    # of one class, on one db_notify channel or tracking one presence key joined
+    # the same group. Leaving it for one would silence the other, so a group a
+    # remaining view still names stays joined (#3252 review I1).
+    kept = _groups_of_other_views(consumer)
     for group in names:
+        if group in kept:
+            continue
         try:
             await channel_layer.group_discard(group, consumer.channel_name)
         except Exception as e:  # noqa: BLE001

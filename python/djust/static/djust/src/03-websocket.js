@@ -1645,7 +1645,7 @@ class LiveViewWebSocket {
         }
     }
 
-    sendEvent(eventName, params = {}, triggerElement = null) {
+    sendEvent(eventName, params = {}, triggerElement = null, slotId = null) {
         if (!this.enabled || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
             return false;
         }
@@ -1664,7 +1664,7 @@ class LiveViewWebSocket {
                 ref: request.ref,
                 // An event from inside a view mounted beside the page view
                 // runs on that view (#3252).
-                ...slotFrameFields(slotIdFor(triggerElement))
+                ...slotFrameFields(slotId || slotIdFor(triggerElement))
             });
         } catch (error) {
             cancelEventRequests(this, request.ref);

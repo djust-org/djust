@@ -8,6 +8,17 @@ third that hydrates on its first click (one mount).
 
 {% block title %}Several LiveViews on one socket (djust){% endblock %}
 
+{% block extra_head %}
+<script>
+    // The hook the lazy widgets carry (a Phoenix-style registry, read when a hook is bound).
+    window.DjustHooks = {
+        MultiViewPing: {
+            mounted() { this.el.addEventListener("click", () => this.pushEvent("click", {})); },
+        },
+    };
+</script>
+{% endblock %}
+
 {% block content %}
 <div style="padding: 6rem 2rem 2rem; max-width: 720px; margin: 0 auto;">
     <div id="page-view" dj-root dj-view="djust_demos.views.multi_view_demo.MultiViewPage">
@@ -20,6 +31,7 @@ third that hydrates on its first click (one mount).
     </div>
     <div id="widget-a" dj-view="djust_demos.views.multi_view_demo.MultiViewWidget" dj-lazy="idle"></div>
     <div id="widget-b" dj-view="djust_demos.views.multi_view_demo.MultiViewWidget" dj-lazy="idle"></div>
+    <div id="uploader" dj-view="djust_demos.views.multi_view_demo.MultiViewUploader" dj-lazy="idle"></div>
     <div id="late" dj-view="djust_demos.views.multi_view_demo.MultiViewLateWidget" dj-lazy="click">
         <p id="late-placeholder" style="padding:1rem;border:1px dashed #999">click to load</p>
     </div>

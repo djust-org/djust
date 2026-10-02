@@ -8,8 +8,10 @@ run exactly as the page's own would be, and the answer is the child's own HTML
 in an ``embedded_update`` (the frame the socket transports send).
 
 This needs the child's id to be the same on the page GET and on the POST that
-follows. Auto-numbered ids (``child_<N>``) came from a process-wide counter and
-never repeated between requests; over HTTP they are now numbered per render.
+follows, and to name the same child even when the page changed in between.
+Auto-numbered ids (``child_<N>``) came from a process-wide counter and never
+repeated between requests; over HTTP they are now named for what the child is
+(its view and its tag's arguments), so a position in the render never decides.
 
 Every case drives the real view (``as_view()``) with a real session, as the
 browser's fallback does.
@@ -213,9 +215,12 @@ def user(db):
 def test_the_ids_a_page_renders_are_the_same_on_every_request(session):
     first = _page(session)
     second = _page(SessionStore(session.session_key))
-    # Two auto-numbered children, a pinned one and a sticky one, in order.
+    # Two auto-named children (one view, one set of arguments: the second is a
+    # repeat), a pinned one and a sticky one, in order.
     assert first == second
-    assert first[:3] == ["child_1", "child_2", "pinned"]
+    assert re.fullmatch(r"child_[0-9a-f]{12}", first[0])
+    assert first[1] == first[0] + "_2"
+    assert first[2] == "pinned"
     assert "dock" in first
 
 
@@ -373,7 +378,9 @@ def test_parameters_are_validated_against_the_childs_handler(session):
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("forged", ["child_999999", "__root", ["child_1"], 1, "dock "])
+@pytest.mark.parametrize(
+    "forged", ["child_999999", "__root", ["child_1"], 1, "dock ", "child_000000000000"]
+)
 def test_every_truthy_foreign_view_id_is_refused(session, forged):
     _page(session)
     response = _post(session, {"view_id": forged})
@@ -410,3 +417,108 @@ def test_nothing_is_routed_for_an_explicit_exposure_page(session):
     response = _post(session, {"view_id": "legacy-kid"}, view_class=ExplicitParentPage)
     assert response.status_code == 400
     assert json.loads(response.content) == {"error": "Embedded view not found"}
+
+
+# --------------------------------------------------------------------------- #
+# A page that changes between the GET and the POST (review of #3333, I3)
+# --------------------------------------------------------------------------- #
+
+
+class Row(LiveView):
+    exposure_policy = "legacy"
+    template = '<div><span id="row">row={{ item_id }}</span></div>'
+
+    def mount(self, request, item_id=None, **kwargs):
+        self.item_id = item_id
+
+    @event_handler
+    def remove(self, **kwargs):
+        self.removed = self.item_id
+
+
+class Unstable:
+    """A kwarg whose repr differs on every request (it carries an address)."""
+
+
+class ListPage(LiveView):
+    """A for-loop of rows; the list is the page's saved state."""
+
+    exposure_policy = "legacy"
+    enable_state_snapshot = True
+    template = (
+        "{% load live_tags %}"
+        '<div dj-root dj-view="' + MOD + '.ListPage">'
+        "{% for i in items %}"
+        '{% live_render "' + MOD + '.Row" item_id=i %}'
+        "{% endfor %}"
+        "</div>"
+    )
+
+    def mount(self, request, **kwargs):
+        self.items = [1, 2, 3]
+
+    @event_handler
+    def prepend(self, **kwargs):
+        self.items = [0] + list(self.items)
+
+    @event_handler
+    def drop_first(self, **kwargs):
+        self.items = list(self.items)[1:]
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["view"] = self
+        return context
+
+
+def _row_of(response):
+    return re.search(r"row=(\d+)", json.loads(response.content)["html"]).group(1)
+
+
+@pytest.mark.django_db
+def test_an_id_names_the_same_row_after_another_tab_prepends_one(session):
+    """The reviewer's repro: the third row's id, echoed after a row was added
+    in front of it, still reaches the third row (it ran on the second when the
+    id was the row's position)."""
+    ids = _page(session, ListPage)
+    assert len(set(ids)) == 3
+    response = _post(session, {}, event="prepend", view_class=ListPage)  # tab B
+    assert response.status_code == 200
+    response = _post(session, {"view_id": ids[2]}, event="remove", view_class=ListPage)
+    assert response.status_code == 200
+    assert _row_of(response) == "3"
+    response = _post(session, {"view_id": ids[0]}, event="remove", view_class=ListPage)
+    assert _row_of(response) == "1"
+
+
+@pytest.mark.django_db
+def test_an_id_whose_row_is_gone_is_refused_not_run_on_another(session):
+    ids = _page(session, ListPage)
+    _post(session, {}, event="drop_first", view_class=ListPage)  # row 1 leaves
+    response = _post(session, {"view_id": ids[0]}, event="remove", view_class=ListPage)
+    assert response.status_code == 400
+    assert json.loads(response.content) == {"error": "Embedded view not found"}
+    # The rows that remain are still reachable by their own ids.
+    response = _post(session, {"view_id": ids[1]}, event="remove", view_class=ListPage)
+    assert response.status_code == 200
+    assert _row_of(response) == "2"
+
+
+@pytest.mark.django_db
+def test_a_child_is_named_for_its_view_and_its_arguments():
+    from djust.mixins.sticky import _child_identity
+
+    same = _child_identity("a.B", {"x": 1, "y": [1, 2], "z": {"k": "v"}})
+    assert same == _child_identity("a.B", {"z": {"k": "v"}, "y": [1, 2], "x": 1})
+    assert same != _child_identity("a.C", {"x": 1, "y": [1, 2], "z": {"k": "v"}})
+    assert same != _child_identity("a.B", {"x": 2, "y": [1, 2], "z": {"k": "v"}})
+    # An object is told by its type, never by a repr that carries an address.
+    assert _child_identity("a.B", {"o": Unstable()}) == _child_identity("a.B", {"o": Unstable()})
+
+
+@pytest.mark.django_db
+def test_a_model_argument_names_the_row_not_the_python_object(user):
+    from djust.mixins.sticky import _child_identity
+
+    same_row = User.objects.get(pk=user.pk)
+    assert _child_identity("a.B", {"u": user}) == _child_identity("a.B", {"u": same_row})

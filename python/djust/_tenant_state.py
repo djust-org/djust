@@ -56,6 +56,23 @@ def session_view_key(view: Any, path: str) -> Optional[str]:
     return None if scoped is None else f"liveview_{scoped}"
 
 
+#: What a view stores beside its state key: its private state and its components.
+_OWN_KEY_SUFFIXES = ("", "__private", "_components")
+
+
+def _is_own(key: str, own_key: str) -> bool:
+    """Whether ``key`` is the state key ``own_key`` or one stored beside it.
+
+    Not a prefix test: a view at ``/app`` does not own ``liveview_/app/detail``.
+    A sticky child's entries and the sticky ledger live under the page's key.
+    """
+    if not own_key:
+        return False
+    if key.startswith(own_key + "__sticky_"):  # __sticky_ids and __sticky__<id>[__private]
+        return True
+    return any(key == own_key + suffix for suffix in _OWN_KEY_SUFFIXES)
+
+
 def refresh_other_views_state(session: Any, own_key: str) -> None:
     """Take the state other views saved from the stored session, before this one saves.
 
@@ -71,7 +88,7 @@ def refresh_other_views_state(session: Any, own_key: str) -> None:
     Best effort: a store that cannot be read keeps the save as it was.
     """
     key = getattr(session, "session_key", None)
-    if not key:
+    if not key or not own_key:
         return
     try:
         # A second store object reads it: ``load()`` on a session whose row is
@@ -81,8 +98,8 @@ def refresh_other_views_state(session: Any, own_key: str) -> None:
         cache = session._session
     except Exception:  # noqa: BLE001 - the save goes ahead with this copy
         return
-    for key in [k for k in cache if k.startswith("liveview_") and not k.startswith(own_key)]:
+    for key in [k for k in cache if k.startswith("liveview_") and not _is_own(k, own_key)]:
         del cache[key]
     for key, value in stored.items():
-        if key.startswith("liveview_") and not key.startswith(own_key):
+        if key.startswith("liveview_") and not _is_own(key, own_key):
             cache[key] = value

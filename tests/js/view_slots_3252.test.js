@@ -362,3 +362,136 @@ describe('unmounting', () => {
         expect(sentOf(socket, 'unmount').length).toBe(1);
     });
 });
+
+describe('every other frame a slot\'s elements send (review of #3333, I2)', () => {
+    async function withSlotWidgets(markup) {
+        const page = createPage({
+            extra: '<div id="w4" dj-view="app.Widget" dj-lazy="click"></div>',
+        });
+        const socket = await connected(page);
+        await serve(socket, mountFrame('app.Page', 1, '<p id="page-text" dj-id="1">page</p>'));
+        page.doc.getElementById('w4').click();
+        await tick();
+        await serve(socket, mountFrame('app.Widget', 4, markup, { target_id: 'w4' }));
+        return { ...page, socket };
+    }
+
+    it('an upload registers with the view whose input it is', async () => {
+        const { socket, win, doc } = await withSlotWidgets(
+            '<input id="file" type="file" dj-upload="doc" dj-id="1">');
+        const file = new win.File(['abc'], 'a.txt', { type: 'text/plain' });
+        win.djust.uploads.uploadFile(file, 'doc', { targetId: 'w4' });
+        await tick(40);
+        const register = sentOf(socket, 'upload_register');
+        expect(register.length).toBe(1);
+        expect(register[0].target_id).toBe('w4');
+        expect(register[0].upload_name).toBe('doc');
+    });
+
+    it('a file chosen in a slot\'s input registers with that slot', async () => {
+        const { socket, win, doc } = await withSlotWidgets(
+            '<input id="file" type="file" dj-upload="doc" dj-id="1">');
+        win.djust.uploads.setConfigs({ doc: { max_file_size: 1000000, chunk_size: 1024 } });
+        win.djust.uploads.bindHandlers();
+        const input = doc.getElementById('file');
+        Object.defineProperty(input, 'files', {
+            value: [new win.File(['abc'], 'a.txt', { type: 'text/plain' })],
+        });
+        input.dispatchEvent(new win.Event('change', { bubbles: true }));
+        await tick(60);
+        const register = sentOf(socket, 'upload_register');
+        expect(register.map((f) => f.target_id)).toEqual(['w4']);
+    });
+
+    it('a resume names the slot too', async () => {
+        const { socket, win } = await withSlotWidgets('<p dj-id="1">w</p>');
+        const file = new win.File(['abc'], 'a.txt', { type: 'text/plain' });
+        win.djust.uploads.uploadFile(file, 'doc', {
+            targetId: 'w4', resumeRef: '11111111-2222-3333-4444-555555555555',
+        });
+        await tick(40);
+        const resume = sentOf(socket, 'upload_resume');
+        expect(resume.length).toBe(1);
+        expect(resume[0].target_id).toBe('w4');
+    });
+
+    it('a page-view upload names no view', async () => {
+        const { socket, win } = await withSlotWidgets('<p dj-id="1">w</p>');
+        const file = new win.File(['abc'], 'a.txt', { type: 'text/plain' });
+        win.djust.uploads.uploadFile(file, 'doc', {});
+        await tick(40);
+        expect(sentOf(socket, 'upload_register')[0].target_id).toBeUndefined();
+    });
+
+    it('a dj-hook pushEvent runs on the view the hook is in', async () => {
+        const { socket, win, doc } = await withSlotWidgets(
+            '<div id="hooked" dj-hook="Chart" dj-id="1"></div>');
+        let pageHook;
+        win.djust.hooks = {
+            Chart: { mounted() { if (this.el.id === 'hooked') pageHook = this; } },
+        };
+        win.djust.updateHooks && win.djust.updateHooks();
+        // The page view's own hook element.
+        const pageEl = doc.createElement('div');
+        pageEl.id = 'page-hooked';
+        pageEl.setAttribute('dj-hook', 'Chart');
+        doc.getElementById('page').appendChild(pageEl);
+        win.djust.hooks.Chart.mounted = function () {
+            (this.el.id === 'hooked' ? (pageHook = this) : (win._pageHook = this));
+        };
+        win.djust.updateHooks && win.djust.updateHooks();
+        await tick(20);
+        expect(pageHook).toBeTruthy();
+        pageHook.pushEvent('save', { a: 1 });
+        win._pageHook && win._pageHook.pushEvent('save', { b: 2 });
+        const events = sentOf(socket, 'event').filter((e) => e.event === 'save');
+        expect(events[0].target_id).toBe('w4');
+        if (events[1]) expect(events[1].target_id).toBeUndefined();
+    });
+
+    it('a dj-model update goes to the view the input is in', async () => {
+        const { socket, doc, win } = await withSlotWidgets(
+            '<input id="m" dj-model="name" dj-id="1">');
+        win.djust.bindModelElements();
+        const input = doc.getElementById('m');
+        input.value = 'x';
+        input.dispatchEvent(new win.Event('input', { bubbles: true }));
+        input.dispatchEvent(new win.Event('change', { bubbles: true }));
+        await tick(400);
+        const updates = sentOf(socket, 'event').filter((e) => e.event === 'update_model');
+        expect(updates.length).toBeGreaterThan(0);
+        expect(updates.every((e) => e.target_id === 'w4')).toBe(true);
+    });
+
+    it('a dj-input in a slot is addressed to it', async () => {
+        const { socket, doc, win } = await withSlotWidgets(
+            '<input id="i" dj-input="typed" dj-id="1">');
+        const input = doc.getElementById('i');
+        input.value = 'x';
+        input.dispatchEvent(new win.Event('input', { bubbles: true }));
+        await tick(400);
+        const typed = sentOf(socket, 'event').filter((e) => e.event === 'typed');
+        expect(typed.length).toBeGreaterThan(0);
+        expect(typed.every((e) => e.target_id === 'w4')).toBe(true);
+        expect(typed[0]._slotId).toBeUndefined(); // the marker never goes on the wire
+    });
+
+    it('a dj-poll in a slot is addressed to it', async () => {
+        const { socket, win } = await withSlotWidgets(
+            '<div id="poller" dj-poll="refresh" dj-poll-interval="30" dj-id="1">p</div>');
+        await tick(150);
+        const polls = sentOf(socket, 'event').filter((e) => e.event === 'refresh');
+        expect(polls.length).toBeGreaterThan(0);
+        expect(polls.every((e) => e.target_id === 'w4')).toBe(true);
+    });
+});
+
+describe('a container that leaves the page', () => {
+    it('unmounts its view on the server, and only that one', async () => {
+        const { socket, doc, win } = await pageWithHydratedLazies();
+        doc.getElementById('w1').remove();
+        await tick(250);
+        expect(sentOf(socket, 'unmount')).toEqual([{ type: 'unmount', target_id: 'w1' }]);
+        expect(win.djust.viewSlots.mounted()).toEqual(['w2']);
+    });
+});

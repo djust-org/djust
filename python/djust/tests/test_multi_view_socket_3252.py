@@ -1103,3 +1103,269 @@ async def test_hydrating_a_container_again_does_not_make_the_user_leave_and_rejo
         assert [e[0] for e in EVENTS] == ["joined", "left"]
     finally:
         await _close(communicator)
+
+
+# --------------------------------------------------------------------------- #
+# Views that share a channel-layer group (review of #3333, I1)
+# --------------------------------------------------------------------------- #
+
+
+async def _wait_gone(communicator, target):
+    await communicator.send_json_to({"type": "unmount", "target_id": target})
+    await _until(lambda: target not in CONSUMERS[-1]._slot_map(), "the unmount of " + target)
+
+
+async def test_unmounting_a_same_class_view_leaves_the_sibling_its_push_group():
+    """Two views of one class join one view group; leaving it for the unmounted
+    view must not silence the view that remains."""
+    communicator = await _connect()
+    try:
+        await _mount_page(communicator, Lazy)
+        await _hydrate(communicator, Lazy, "again")
+        assert len(_members(_group(Lazy))) == 1  # one channel, two views
+        await _wait_gone(communicator, "again")
+        assert len(_members(_group(Lazy))) == 1
+        EVENTS.clear()
+        await apush_to_view(MOD + ".Lazy", handler="on_push")
+        frames = await _frames_until(communicator, "patch", "html_update")
+        assert "target_id" not in frames[-1]  # the page view answered
+        assert [e[0] for e in EVENTS] == ["pushed"]
+    finally:
+        await _close(communicator)
+    assert _members(_group(Lazy)) == []  # the last view's leave still leaves
+
+
+async def test_replacing_a_slot_with_another_class_keeps_the_page_view_live():
+    communicator = await _connect()
+    try:
+        await _mount_page(communicator, Lazy)
+        await _hydrate(communicator, Lazy, "again")
+        await _hydrate(communicator, Lazy2, "again")  # replaces only that slot
+        assert len(_members(_group(Lazy))) == 1
+        EVENTS.clear()
+        await apush_to_view(MOD + ".Lazy", handler="on_push")
+        await _frames_until(communicator, "patch", "html_update")
+        assert [e[0] for e in EVENTS] == ["pushed"]
+    finally:
+        await _close(communicator)
+
+
+async def test_views_listening_on_one_db_notify_channel_keep_it_until_the_last_leaves():
+    from channels.layers import get_channel_layer
+
+    communicator = await _connect()
+    try:
+        await _mount_page(communicator, Notified)
+        await _hydrate(communicator, Notified, "n2")
+        assert len(_members("djust_db_notify_mv3252")) == 1
+        await _wait_gone(communicator, "n2")
+        assert len(_members("djust_db_notify_mv3252")) == 1
+        EVENTS.clear()
+        await get_channel_layer().group_send(
+            "djust_db_notify_mv3252",
+            {"type": "db_notify", "channel": "mv3252", "payload": {"id": 1}},
+        )
+        frames = await _frames_until(communicator, "patch", "html_update")
+        assert "target_id" not in frames[-1]
+        assert [e[0] for e in EVENTS] == ["notified"]
+    finally:
+        await _close(communicator)
+    assert _members("djust_db_notify_mv3252") == []
+
+
+async def test_views_tracking_one_presence_key_keep_the_presence_group():
+    group = PresenceManager.presence_group_name("mv3252")
+    communicator = await _connect()
+    try:
+        await _mount_page(communicator, Present)
+        await _hydrate(communicator, Present, "p2")
+        assert len(_members(group)) == 1
+        await _wait_gone(communicator, "p2")
+        assert len(_members(group)) == 1  # the page view still tracks the key
+    finally:
+        await _close(communicator)
+    assert _members(group) == []
+
+
+# --------------------------------------------------------------------------- #
+# Uploads and hook events from a view beside the page view (review of #3333, I2)
+# --------------------------------------------------------------------------- #
+
+
+def _upload_view_classes():
+    from djust.uploads import UploadMixin
+
+    class UpLazy(UploadMixin, _Counted, LiveView):
+        template = '<div dj-root dj-view="' + MOD + '.UpLazy"><b>up {{ count }}</b></div>'
+
+        def mount(self, request, **kwargs):
+            self._tagged()
+            self.allow_upload("doc", accept=".txt")
+
+    return UpLazy
+
+
+UpLazy = _upload_view_classes()
+
+
+async def _register_upload(communicator, target_id=None, ref=None):
+    ref = ref or str(uuid.uuid4())
+    frame = {
+        "type": "upload_register",
+        "upload_name": "doc",
+        "ref": ref,
+        "client_name": "a.txt",
+        "client_type": "text/plain",
+        "client_size": 3,
+    }
+    if target_id is not None:
+        frame["target_id"] = target_id
+    await communicator.send_json_to(frame)
+    return ref, (await _frames_until(communicator, "upload_registered", "error"))[-1]
+
+
+async def test_a_lazy_view_with_an_upload_registers_and_receives_it():
+    """A file input inside a lazy view uploads to that view: its register frame
+    is addressed to it, and the binary chunks (which carry only the upload's
+    ref) reach the manager that registered the ref."""
+    from djust.uploads import FRAME_CHUNK, FRAME_COMPLETE
+    import struct
+
+    communicator = await _connect()
+    try:
+        await _mount_page(communicator)
+        await _hydrate(communicator, UpLazy, "up-1")
+        lazy = VIEWS[_one(UpLazy)]
+
+        ref, reply = await _register_upload(communicator, "up-1")
+        assert reply["type"] == "upload_registered", reply
+        assert reply["target_id"] == "up-1"
+        assert ref in lazy._upload_manager._entries
+
+        raw = uuid.UUID(ref).bytes
+        await communicator.send_to(
+            bytes_data=bytes([FRAME_CHUNK]) + raw + struct.pack(">I", 0) + b"abc"
+        )
+        await communicator.send_to(bytes_data=bytes([FRAME_COMPLETE]) + raw)
+        frames = await _frames_until(communicator, "upload_progress")
+        while frames[-1].get("status") != "complete":
+            frames += await _frames_until(communicator, "upload_progress")
+        assert frames[-1]["ref"] == ref
+        entry = lazy._upload_manager._entries[ref]
+        assert entry.complete
+    finally:
+        await _close(communicator)
+
+
+async def test_an_upload_register_with_no_address_goes_to_the_page_view():
+    """Pinned: the address is what picks the view. The page view has no upload
+    slot here, so an unaddressed register is refused rather than finding the
+    lazy view's (the stock client addresses every register from a slot)."""
+    communicator = await _connect()
+    try:
+        await _mount_page(communicator)
+        await _hydrate(communicator, UpLazy, "up-1")
+        _, reply = await _register_upload(communicator)
+        assert reply["type"] == "error"
+        assert "No uploads configured" in reply["error"]
+        assert "target_id" not in reply
+    finally:
+        await _close(communicator)
+
+
+async def test_an_upload_resume_is_routed_by_its_address():
+    communicator = await _connect()
+    try:
+        await _mount_page(communicator)
+        await _hydrate(communicator, UpLazy, "up-1")
+        await communicator.send_json_to(
+            {"type": "upload_resume", "ref": str(uuid.uuid4()), "target_id": "up-1"}
+        )
+        frame = (await _frames_until(communicator, "upload_resumed", "error"))[-1]
+        assert frame["type"] == "upload_resumed"
+        assert frame["status"] == "not_found"
+        assert frame["target_id"] == "up-1"
+    finally:
+        await _close(communicator)
+
+
+async def test_a_hook_event_runs_on_the_view_it_names_and_only_there():
+    """A ``dj-hook`` ``pushEvent`` is an ``event`` frame with no ``ref``: from a
+    lazy view it is addressed to it, and a handler the page view also has runs
+    on the lazy view."""
+    communicator = await _connect()
+    try:
+        await _mount_page(communicator)
+        await _hydrate(communicator, Lazy, "lazy-1")
+        page, lazy = _one(Page), _one(Lazy)
+        await communicator.send_json_to(
+            {"type": "event", "event": "click", "params": {}, "target_id": "lazy-1"}
+        )
+        frames = await _frames_until(communicator, "patch", "html_update", "noop", "error")
+        assert frames[-1]["target_id"] == "lazy-1"
+        assert EVENTS == [("clicked", lazy)]
+        await communicator.send_json_to({"type": "event", "event": "click", "params": {}})
+        await _frames_until(communicator, "patch", "html_update", "noop", "error")
+        assert EVENTS == [("clicked", lazy), ("clicked", page)]
+    finally:
+        await _close(communicator)
+
+
+# --------------------------------------------------------------------------- #
+# A slot under a tenant (review of #3333)
+# --------------------------------------------------------------------------- #
+
+#: The tenant ``TenantSlot`` resolves (``None``: none resolved).
+TENANT: list = [None]
+
+
+class TenantSlot(_Counted, LiveView):
+    enable_state_snapshot = True
+    template = '<div dj-root dj-view="' + MOD + '.TenantSlot"><b>t {{ count }}</b></div>'
+
+    def get_state_key_prefix(self):
+        return "tenant:" + TENANT[0] if TENANT[0] else ""
+
+
+def _saved_counts(key):
+    session = SessionStore(key)
+    return {
+        k: v["count"]
+        for k, v in session.items()
+        if k.startswith("liveview_") and isinstance(v, dict) and "count" in v
+    }
+
+
+async def test_a_slot_of_a_tenant_view_saves_under_the_tenant_and_the_slot():
+    TENANT[0] = "acme"
+    key = await sync_to_async(_fresh_key)()
+    communicator = await _connect(session=SessionStore(key))
+    try:
+        await _mount_page(communicator, SnapPage)
+        await _hydrate(communicator, TenantSlot, "t-1")
+        await _event(communicator, "click", target_id="t-1")
+        await _event(communicator, "click")
+    finally:
+        await _close(communicator)
+        TENANT[0] = None
+    saved = await sync_to_async(_saved_counts)(key)
+    assert saved == {
+        "liveview_/page/": 1,
+        "liveview_tenant:acme:slot:t-1:/page/": 1,
+    }
+
+
+async def test_a_slot_of_a_tenant_view_with_no_tenant_saves_nothing():
+    """Fail closed, as for the page view (#2973): no tenant, no saved state, and
+    no fallback to a key another tenant's view could read."""
+    TENANT[0] = None
+    key = await sync_to_async(_fresh_key)()
+    communicator = await _connect(session=SessionStore(key))
+    try:
+        await _mount_page(communicator, SnapPage)
+        await _hydrate(communicator, TenantSlot, "t-1")
+        await _event(communicator, "click", target_id="t-1")
+    finally:
+        await _close(communicator)
+    saved = await sync_to_async(_saved_counts)(key)
+    assert not any("slot:t-1" in k for k in saved), saved

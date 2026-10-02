@@ -10,9 +10,11 @@ click or push lands on another view.
 from djust import LiveView
 from djust.decorators import event_handler
 from djust.push import push_to_view
+from djust.uploads import UploadMixin
 
 WIDGET = "djust_demos.views.multi_view_demo.MultiViewWidget"
 LATE = "djust_demos.views.multi_view_demo.MultiViewLateWidget"
+UPLOADER = "djust_demos.views.multi_view_demo.MultiViewUploader"
 
 
 class MultiViewPage(LiveView):
@@ -54,7 +56,10 @@ class MultiViewWidget(LiveView):
     template = (
         '<div dj-root><p>clicks <b data-role="clicks">{{ clicks }}</b> '
         'pushes <b data-role="pushes">{{ pushes }}</b></p>'
-        '<button data-role="click" dj-click="click">click</button></div>'
+        '<button data-role="click" dj-click="click">click</button> '
+        # A hook inside the view: its pushEvent runs on this view, not the page's
+        # (which has a handler of the same name).
+        '<button data-role="hook-click" dj-hook="MultiViewPing">hook click</button></div>'
     )
 
     def mount(self, request, **kwargs):
@@ -72,3 +77,22 @@ class MultiViewWidget(LiveView):
 
 class MultiViewLateWidget(MultiViewWidget):
     """Hydrates alone, on the user's first click (a single ``mount``)."""
+
+
+class MultiViewUploader(UploadMixin, LiveView):
+    """A lazy view with a file input: the upload belongs to this view."""
+
+    template = (
+        '<div dj-root><input type="file" data-role="file" dj-upload="doc">'
+        '<button data-role="save" dj-click="save">save</button>'
+        '<ul data-role="saved">{% for name in saved %}<li>{{ name }}</li>{% endfor %}</ul></div>'
+    )
+
+    def mount(self, request, **kwargs):
+        self.saved = []
+        self.allow_upload("doc", accept=".txt", max_entries=2)
+
+    @event_handler
+    def save(self, **kwargs):
+        for entry in self.consume_uploaded_entries("doc"):
+            self.saved.append("%s (%d bytes)" % (entry.client_name, entry.client_size))
