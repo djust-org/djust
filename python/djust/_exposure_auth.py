@@ -10,6 +10,7 @@ from typing import Any
 
 from ._exposure import ExposureError
 from ._exposure_sessions import StateBinding, _SERVER_SESSION_TYPES, request_binding
+from ._session_merge import track_session
 
 
 def establish_mount_session(
@@ -117,6 +118,9 @@ def authorize_event(view: Any, request: Any, binding: StateBinding) -> Any:
     if type(session) not in _SERVER_SESSION_TYPES:
         raise ExposureError("Explicit events require a supported server session")
     session.get("_auth_user_id")
+    # The turn's saves merge what this session object changes into the stored
+    # session, so a write another request made meanwhile survives (#3347).
+    track_session(session)
     mounted = view._djust_mount_request
     request.path = mounted.path
     request.path_info = mounted.path_info

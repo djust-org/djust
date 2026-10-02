@@ -15,6 +15,7 @@ from django.contrib.sessions.backends.base import SessionBase
 
 from ._exposure import ExposureError, clone_json_state
 from ._exposure_sessions import _SERVER_SESSION_TYPES
+from ._session_merge import asave_merged, save_merged
 
 
 def _index_key(route: str) -> str:
@@ -102,7 +103,7 @@ def save_indexed_child(adapter: Any, values: dict[str, Any]) -> None:
     try:
         updates = _child_update(adapter, values)
         with staged_updates(adapter.session, updates, set()) as session:
-            session.save()
+            save_merged(session)
     except Exception:  # noqa: BLE001
         raise ExposureError("Child state persistence unavailable") from None
 
@@ -113,7 +114,7 @@ async def asave_indexed_child(adapter: Any, values: dict[str, Any]) -> None:
         updates = await sync_to_async(_child_update)(adapter, values)
         adapter._check_session()
         with staged_updates(adapter.session, updates, set()) as session:
-            await session.asave()
+            await asave_merged(session)
     except Exception:  # noqa: BLE001
         raise ExposureError("Child state persistence unavailable") from None
 

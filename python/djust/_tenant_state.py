@@ -90,6 +90,12 @@ def refresh_other_views_state(session: Any, own_key: str) -> None:
     key = getattr(session, "session_key", None)
     if not key or not own_key:
         return
+    from ._session_merge import is_tracked
+
+    if is_tracked(session):
+        # The save merges only what this copy changed into the stored session
+        # (#3347), so the other views' entries are never written back at all.
+        return
     try:
         # A second store object reads it: ``load()`` on a session whose row is
         # gone (or whose cache blipped) resets that object's key, which would

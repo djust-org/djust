@@ -218,13 +218,14 @@ def test_parent_save_captures_direct_and_nested_children_in_one_flush(rf, monkey
     nested = middle._get_child_view("counter")
     direct.count, nested.count = 12, 13
     saved = []
-    original_save = request.session.save
+    original_save = SessionStore.save
 
-    def save():
+    def save(self, *args, **kwargs):
         saved.append(True)
-        return original_save()
+        return original_save(self, *args, **kwargs)
 
-    monkeypatch.setattr(request.session, "save", save)
+    # Class level: a merging save writes through a store object of its own (#3347).
+    monkeypatch.setattr(SessionStore, "save", save)
     save_child_states(parent, request)
     assert saved == [True]
     fresh = make_request(rf, SessionStore(request.session.session_key))
