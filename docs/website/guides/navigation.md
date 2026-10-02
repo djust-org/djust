@@ -204,6 +204,39 @@ view and threw away exactly the state the patch path exists to preserve.
 A `live_redirect` still marks its own entries, so an explicit redirect to the
 same path re-mounts as you asked.
 
+#### Back restores the state the user left
+
+A view with `enable_state_snapshot = True` keeps its state across a re-mount:
+Back to a page you left comes back as you left it, not freshly mounted. Each
+event saves the view's state to the Django session, and Back restores that
+session copy (it wins over the signed token the browser holds).
+
+The save is best effort and bounded to 150 ms, so slow session storage cannot
+stall event handling. A save that misses the bound, cannot start because the
+previous one is still running (SSE and request-pool turns), or fails would
+leave the session older than the last render. djust therefore writes the
+**latest** state once more with a coalesced trailing save:
+
+- A burst of events ends in one trailing write of the final state, not one
+  write per event, and never an older state over a newer one: it waits for the
+  pending save and the runtime orders its saves.
+- Leaving the page (a `live_redirect`, a new mount, a disconnect, an SSE
+  close) waits for the trailing save, for at most a few seconds, before the
+  view is released. If storage is still not answering by then the latest state
+  is dropped with a warning and Back restores the last state storage holds.
+- Nothing is written into a session that was logged out or whose key changed
+  since the state was rendered (a login rotates the key, a logout flushes it).
+  A trailing save never resurrects a logged-out user's state and never writes
+  into the new session.
+- A save that keeps failing is retried once, then the latest state is kept and
+  logged; the next event's save or the teardown tries again.
+
+What is restored is **historical view state**, the page as it was when the user
+navigated away. It does not make the cached data authoritative: handlers still
+check permissions against the current request, so a user whose permissions have
+been revoked cannot act through restored state, and anything backed by a
+database should be re-read on the events that matter.
+
 #### When NOT to use `dj-navigate`
 
 `dj-navigate` swaps the contents of `[dj-root]`. Everything outside it — the

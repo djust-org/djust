@@ -291,8 +291,11 @@ def test_save_block_present_in_handle_event_source():
     """
     import djust.runtime as rt_mod
 
-    # The save BODY lives in the runtime's _persist_state_after_event (#1907).
-    source = inspect.getsource(rt_mod.ViewRuntime._persist_state_after_event)
+    # The save BODY lives in the runtime's _save_root_state (#1907), which
+    # _persist_state_after_event wraps (#3248: it records state a save missed).
+    source = inspect.getsource(rt_mod.ViewRuntime._persist_state_after_event) + (
+        inspect.getsource(rt_mod.ViewRuntime._save_root_state)
+    )
     source_collapsed = " ".join(source.split())
 
     assert '"_djust_mount_request"' in source
@@ -313,7 +316,9 @@ def test_save_block_present_in_handle_event_source():
     # can't recreate the snapshot-poisoning failure mode. Since #3212 the
     # bound is applied by the shared one-hop helper, counted from when the
     # save starts running.
-    assert "_run_explicit_save(self, _save, deadline=EVENT_STATE_SAVE_TIMEOUT_S)" in source
+    # #3248: the wrapper hands the bound to the save body, which passes it on.
+    assert "deadline=EVENT_STATE_SAVE_TIMEOUT_S" in source
+    assert "_run_explicit_save(" in source and "deadline=deadline" in source
     assert "asyncio.TimeoutError" in source
 
     # The GATE (top-level identity + enable_state_snapshot opt-in) lives at the

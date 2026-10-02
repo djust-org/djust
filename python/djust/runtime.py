@@ -145,7 +145,12 @@ class ExplicitSaveDeferred(Exception):
     are still on the view. If the save started, it keeps running in the Django
     thread (sync work cannot be cancelled) and usually lands; the next save of
     the same runtime waits for it first, so it can never overwrite a newer one.
+
+    ``work`` is that running save (``None`` when this save never started,
+    because the previous one was still running at the deadline).
     """
+
+    work: "Optional[asyncio.Future[None]]" = None
 
 
 def _log_unobserved_save_failure(work: "asyncio.Future[None]") -> None:
@@ -280,6 +285,19 @@ def _request_save_executor() -> ThreadPoolExecutor:
         return _save_executor
 
 
+def _detached_when(detach: bool, run: Callable[[], None]) -> Callable[[], None]:
+    """``run`` with the pool save's session re-check (#3247) when ``detach``.
+
+    A trailing save (#3248) has no turn waiting for it, even on a WebSocket
+    session's own thread, so another request may have logged the user out
+    while it queued: it re-checks its session like a pool save does."""
+    if not detach:
+        return run
+    from ._late_save import detached
+
+    return detached(run)
+
+
 def _spawn_save(run: Callable[[], None]) -> "asyncio.Future[None]":
     """Start ``run`` in a Django thread, outside any request's executors (#3212).
 
@@ -335,6 +353,25 @@ def _save_running_for(pending: "Optional[asyncio.Future[None]]") -> float:
 #: Consecutive deferred saves after which a deferral is reported as the terminal
 #: reload error, as before #3200: storage is not recovering (review I-a).
 _EXPLICIT_MAX_DEFERRALS = 3
+
+#: Legacy trailing save (#3248). A deferred or failed best-effort save leaves
+#: the session older than the last render, and Back restores the session copy
+#: (it wins over the client's token). The latest state is therefore written
+#: once more after the pending save settles. A trailing save is not
+#: interactive, so it gets the explicit save's 10 s cap rather than 150 ms.
+#:
+#: ``_TRAILING_SAVE_ATTEMPTS`` writes are tried, ``_TRAILING_RETRY_DELAY_S``
+#: apart; the state is then kept and one last attempt is made at teardown,
+#: which waits at most ``_TRAILING_FLUSH_TIMEOUT_S`` for the trailing save.
+_TRAILING_SAVE_ATTEMPTS = 2
+_TRAILING_RETRY_DELAY_S = 0.5
+_TRAILING_FLUSH_TIMEOUT_S = 3.0
+
+#: Outcomes of one legacy state save.
+_SAVED = "saved"  # written, or there is no session to write into
+_DROPPED = "dropped"  # its session was logged out or replaced: nothing written
+_UNSAVED = "unsaved"  # never started (the previous save was running), or failed
+_RUNNING = "running"  # outran its deadline but is still running: it stores the state itself
 
 
 async def _run_explicit_save(
@@ -414,7 +451,9 @@ async def _run_explicit_save(
         if work.done():
             raise  # the save's own TimeoutError (a backend timeout): a failure
         work.add_done_callback(_log_unobserved_save_failure)
-        raise ExplicitSaveDeferred("Explicit state save exceeded its storage deadline") from None
+        deferred = ExplicitSaveDeferred("Explicit state save exceeded its storage deadline")
+        deferred.work = work
+        raise deferred from None
     except asyncio.CancelledError:
         # The turn was cancelled (socket closed) while the save runs on.
         work.add_done_callback(_log_unobserved_save_failure)
@@ -2930,6 +2969,11 @@ class ViewRuntime:
         self._explicit_deferrals = 0
         self._explicit_catch_up: Optional["asyncio.Task[None]"] = None
         self._in_explicit_catch_up = False
+        # #3248: legacy state a best-effort save did not store, by save target
+        # ("root" or a sticky child), and the one trailing task that writes it.
+        self._unsaved_state: Dict[Any, Tuple[Any, Optional[str], Tuple[Optional[str]], bool]] = {}
+        self._released_views: "weakref.WeakSet[Any]" = weakref.WeakSet()
+        self._trailing_save: Optional["asyncio.Task[None]"] = None
         # #3201: vanished session key -> the replacement session this
         # connection created, so repeated mounts reuse one replacement.
         self._replacement_sessions: Dict[str, str] = {}
@@ -4925,6 +4969,11 @@ class ViewRuntime:
     async def _persist_state_after_event(self, target_view: Any, event_name: Optional[str]) -> bool:
         """Persist the top-level view's post-event state to the Django session.
 
+        The save itself is :meth:`_save_root_state`. State it could not store
+        (deferred past 150 ms, or failed) is not given up on: it is queued for
+        the trailing save (:meth:`_run_trailing_save`, #3248), so the session
+        ends up with the LATEST state, which is what Back restores.
+
         Caller MUST have already verified top-level view identity and legacy
         snapshot opt-in. Legacy views only: an explicit view is refused before
         any write and commits through :meth:`commit_explicit_turn` instead
@@ -4942,6 +4991,26 @@ class ViewRuntime:
         and True otherwise, including when there is no session to save into: a
         skip-render noop refreshes the client's token only then (#3246), since
         the token is then either backed by the session copy or the only source."""
+        outcome = await self._save_root_state(
+            target_view, event_name, deadline=EVENT_STATE_SAVE_TIMEOUT_S
+        )
+        self._settle_legacy_save("root", target_view, event_name, outcome, sticky=False)
+        return outcome == _SAVED
+
+    async def _save_root_state(
+        self,
+        target_view: Any,
+        event_name: Optional[str],
+        *,
+        deadline: float,
+        guard: Optional[Tuple[Optional[str]]] = None,
+        trailing: bool = False,
+    ) -> str:
+        """One save of the root's state: ``_SAVED``, ``_DROPPED`` or ``_UNSAVED``.
+
+        ``guard`` is the trailing save's logout safeguard (#3248): the session
+        key the state was rendered under. A save whose session now has another
+        key (logged out, rotated by a login) writes nothing."""
 
         def _save() -> None:
             # Discover the session the same way the WS save block does
@@ -4969,6 +5038,8 @@ class ViewRuntime:
                 return
             # Read before anything loads the session (#3247, see _late_save).
             expected_key = getattr(save_session, "session_key", None)
+            if guard is not None and expected_key != guard[0]:
+                raise LateSaveDropped("the session key changed since the state was rendered")
 
             from .serialization import normalize_django_value as _normalize
 
@@ -5015,17 +5086,20 @@ class ViewRuntime:
             save_session.save()
 
         try:
-            await _run_explicit_save(self, _save, deadline=EVENT_STATE_SAVE_TIMEOUT_S)
-        except (asyncio.TimeoutError, ExplicitSaveDeferred):
-            logger.warning(
-                "Runtime event state save exceeded 150ms for %r — session backend "
-                "backpressure; not waiting for it (it may still land). "
-                "Subsequent events will retry.",
-                sanitize_for_log(event_name or ""),
-            )
-            return False
+            await _run_explicit_save(self, _detached_when(trailing, _save), deadline=deadline)
+        except (asyncio.TimeoutError, ExplicitSaveDeferred) as exc:
+            if trailing:
+                logger.warning("Trailing LiveView state save exceeded its deadline")
+            else:
+                logger.warning(
+                    "Runtime event state save exceeded 150ms for %r — session backend "
+                    "backpressure; not waiting for it (it may still land). "
+                    "The latest state is saved once it settles.",
+                    sanitize_for_log(event_name or ""),
+                )
+            return self._deferred_outcome(exc, "root", target_view, event_name, sticky=False)
         except LateSaveDropped:
-            return False  # its session was logged out; reported at debug (#3247)
+            return _DROPPED  # its session was logged out; reported at debug (#3247)
         except Exception as exc:  # noqa: BLE001 — saves must never break event handling
             from ._exposure_diagnostics import log_failure
 
@@ -5037,8 +5111,8 @@ class ViewRuntime:
                 sanitize_for_log(event_name or ""),
                 traceback=True,
             )
-            return False
-        return True
+            return _UNSAVED
+        return _SAVED
 
     async def _persist_sticky_child_after_event(
         self, target_view: Any, event_name: Optional[str]
@@ -5051,7 +5125,25 @@ class ViewRuntime:
         key (Decision 1) gated on the both-opt-in predicate
         (:func:`sticky_child_should_persist`, Decision 5). Bounded by the same
         150ms, counted the same way: one Django-thread hop whose deadline starts
-        when it starts running (#3212). Caller MUST have verified the gate."""
+        when it starts running (#3212). Caller MUST have verified the gate.
+
+        Like the root's save, state it could not store is queued for the
+        trailing save (#3248)."""
+        outcome = await self._save_sticky_state(
+            target_view, event_name, deadline=EVENT_STATE_SAVE_TIMEOUT_S
+        )
+        self._settle_legacy_save(id(target_view), target_view, event_name, outcome, sticky=True)
+
+    async def _save_sticky_state(
+        self,
+        target_view: Any,
+        event_name: Optional[str],
+        *,
+        deadline: float,
+        guard: Optional[Tuple[Optional[str]]] = None,
+        trailing: bool = False,
+    ) -> str:
+        """One save of a sticky child's state: ``_SAVED``, ``_DROPPED`` or ``_UNSAVED``."""
 
         def _save_sticky() -> None:
             from .mixins.sticky import (
@@ -5070,6 +5162,8 @@ class ViewRuntime:
                 return
             # Read before anything loads the session (#3247, see _late_save).
             expected_key = getattr(save_session, "session_key", None)
+            if guard is not None and expected_key != guard[0]:
+                raise LateSaveDropped("the session key changed since the state was rendered")
 
             parent_path = mount_request.path if mount_request is not None else "/"
 
@@ -5081,16 +5175,24 @@ class ViewRuntime:
             save_session.save()
 
         try:
-            await _run_explicit_save(self, _save_sticky, deadline=EVENT_STATE_SAVE_TIMEOUT_S)
-        except (asyncio.TimeoutError, ExplicitSaveDeferred):
-            logger.warning(
-                "Runtime event sticky-child state save exceeded 150ms for %r — "
-                "session backend backpressure; not waiting for it (it may still "
-                "land). Subsequent events will retry.",
-                sanitize_for_log(event_name or ""),
+            await _run_explicit_save(
+                self, _detached_when(trailing, _save_sticky), deadline=deadline
+            )
+        except (asyncio.TimeoutError, ExplicitSaveDeferred) as exc:
+            if trailing:
+                logger.warning("Trailing sticky-child state save exceeded its deadline")
+            else:
+                logger.warning(
+                    "Runtime event sticky-child state save exceeded 150ms for %r — "
+                    "session backend backpressure; not waiting for it (it may still "
+                    "land). The latest state is saved once it settles.",
+                    sanitize_for_log(event_name or ""),
+                )
+            return self._deferred_outcome(
+                exc, id(target_view), target_view, event_name, sticky=True
             )
         except LateSaveDropped:
-            pass  # its session was logged out; reported at debug (#3247)
+            return _DROPPED  # its session was logged out; reported at debug (#3247)
         except Exception as exc:  # noqa: BLE001 — saves must never break event handling
             from ._exposure_diagnostics import log_failure
 
@@ -5102,6 +5204,172 @@ class ViewRuntime:
                 sanitize_for_log(event_name or ""),
                 traceback=True,
             )
+            return _UNSAVED
+        return _SAVED
+
+    # ------------------------------------------------------------------ #
+    # Trailing save (#3248): Back restores the LATEST rendered state.
+    #
+    # A legacy save is best effort and bounded by 150 ms, and the runtime has
+    # at most one save in flight (ordering, #3212). Under slow storage the
+    # first save of a burst runs on, every later one is deferred (nothing is
+    # written), and the session keeps the state the running save read when it
+    # started. Back restores the SESSION copy in preference to the client's
+    # token, so the page came back older than the one the user left.
+    #
+    # So a save that did not store its state records it (``_unsaved_state``,
+    # latest wins per target) and one coalesced task writes it once the
+    # pending save settles. It is strictly AFTER every earlier save (the
+    # runtime's save ordering, with the 10 s cap as its deadline), and what it
+    # writes is the view's state when it runs, so it can never put an older
+    # state over a newer one. Teardown (:meth:`finish_state_saves`) waits for
+    # it, so a navigation or disconnect leaves the latest state stored.
+    #
+    # Logout safeguards: the trailing save carries the session key the state
+    # was rendered under and writes nothing if the session's key is now
+    # another (a login rotated it, a logout flushed it); a session another
+    # request logged out is dropped by ``_late_save.check_session`` as every
+    # pool save is. The restored state is historical view state, not
+    # authority: handlers still check the current request.
+    # ------------------------------------------------------------------ #
+
+    def _deferred_outcome(
+        self, exc: BaseException, slot: Any, view: Any, event_name: Optional[str], *, sticky: bool
+    ) -> str:
+        """Classify a save that missed its deadline.
+
+        One that never started (the previous save was still running) wrote
+        nothing: ``_UNSAVED``. One that started keeps running and stores the
+        state it reads, which is at least what this event rendered: it is
+        ``_RUNNING``, and watched, so a failure of it is queued like any other.
+        """
+        work = getattr(exc, "work", None)
+        if work is None:
+            return _UNSAVED
+
+        def settled(done: "asyncio.Future[None]") -> None:
+            if done.cancelled():
+                return
+            failure = done.exception()
+            if failure is None or isinstance(failure, LateSaveDropped):
+                return
+            self._settle_legacy_save(slot, view, event_name, _UNSAVED, sticky=sticky)
+
+        work.add_done_callback(settled)
+        return _RUNNING
+
+    def _legacy_save_guard(self, view: Any, *, sticky: bool) -> Tuple[Optional[str]]:
+        """The session key a save of ``view``'s state would write into, now."""
+        mount_request = getattr(view, "_djust_mount_request", None)
+        if sticky:
+            mount_request = getattr(self.view_instance, "_djust_mount_request", None)
+        session = getattr(mount_request, "session", None) or (
+            self.scope.get("session") if self.scope else None
+        )
+        return (getattr(session, "session_key", None),)
+
+    def _settle_legacy_save(
+        self, slot: Any, view: Any, event_name: Optional[str], outcome: str, *, sticky: bool
+    ) -> None:
+        """Record or clear ``slot``'s unsaved state after one save."""
+        if outcome != _UNSAVED:
+            # Stored (and it read the view's current state), dropped with its
+            # session, or still running and about to store it: nothing is left
+            # to write. A running save that then FAILS comes back here.
+            self._unsaved_state.pop(slot, None)
+            return
+        if view in self._released_views:
+            return  # torn down: no save may run after it
+        self._unsaved_state[slot] = (
+            view,
+            event_name,
+            self._legacy_save_guard(view, sticky=sticky),
+            sticky,
+        )
+        self._ensure_trailing_save()
+
+    def _ensure_trailing_save(self) -> None:
+        task = self._trailing_save
+        if task is None or task.done():
+            self._trailing_save = asyncio.ensure_future(self._run_trailing_save())
+
+    async def _run_trailing_save(self) -> None:
+        """Write the unsaved legacy state once the pending save has settled."""
+        from ._exposure_sessions import MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S
+
+        _detach_from_finished_request()
+        failures = 0
+        while self._unsaved_state:
+            pending = self._explicit_save_pending
+            if pending is not None and not pending.done():
+                # Without raising: a failed pending save logs through its callback.
+                await asyncio.wait({pending}, timeout=MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S)
+            failed = False
+            for slot in list(self._unsaved_state):
+                entry = self._unsaved_state.pop(slot, None)
+                if entry is None:
+                    continue
+                view, event_name, guard, sticky = entry
+                if not sticky and view is not self.view_instance:
+                    logger.debug("Trailing state save skipped: its view was replaced")
+                    continue
+                save = self._save_sticky_state if sticky else self._save_root_state
+                outcome = await save(
+                    view,
+                    event_name,
+                    deadline=MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S,
+                    guard=guard,
+                    trailing=True,
+                )
+                if outcome == _UNSAVED:
+                    # Keep it, unless a newer event recorded a fresher entry.
+                    self._unsaved_state.setdefault(slot, entry)
+                    failed = True
+            if not failed:
+                failures = 0
+                continue
+            failures += 1
+            if failures >= _TRAILING_SAVE_ATTEMPTS:
+                logger.warning(
+                    "The latest LiveView state could not be saved after %d attempts; it is "
+                    "kept and written by the next event's save or at teardown",
+                    failures,
+                )
+                return
+            await asyncio.sleep(_TRAILING_RETRY_DELAY_S)
+
+    async def finish_state_saves(self) -> None:
+        """Teardown: store the latest state before the view goes (#3248).
+
+        Called before a view is released (disconnect, ``live_redirect``, a
+        replacing mount, SSE close), so a Back or reconnect finds the state the
+        user left. Waits at most ``_TRAILING_FLUSH_TIMEOUT_S``, and only when
+        some state is unsaved: a save that is merely still running is not
+        waited for (the next runtime's saves are ordered after it, and storage
+        that hangs must not hold a navigation, #3212). One last attempt is
+        made even when the trailing task already gave up. Whatever is still
+        unsaved then is dropped with a warning: no save may run after the
+        view's teardown.
+        """
+        task = self._trailing_save
+        if self._unsaved_state and (task is None or task.done()):
+            self._ensure_trailing_save()
+            task = self._trailing_save
+        if task is not None and not task.done():
+            await asyncio.wait({task}, timeout=_TRAILING_FLUSH_TIMEOUT_S)
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+        if self._unsaved_state:
+            logger.warning(
+                "The latest LiveView state was not saved before teardown; Back "
+                "restores the last state storage holds"
+            )
+        self._released_views.update(entry[0] for entry in self._unsaved_state.values())
+        if self.view_instance is not None:
+            self._released_views.add(self.view_instance)
+        self._unsaved_state.clear()
+        self._trailing_save = None
 
     # ------------------------------------------------------------------ #
     # Embedded-child routing (ADR-022 Iter 2 Phase 2.1)
