@@ -3,6 +3,7 @@ WebSocket consumer for LiveView real-time updates
 """
 
 import asyncio
+import contextlib
 import inspect
 import json
 import logging
@@ -3140,38 +3141,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # declares login_required/permission_required, re-resolve the user from
         # the session and re-run the view's auth check; on failure, redirect +
         # close the socket (mirroring the mount-time gate). Costs one session
-        # read per event — hence default-OFF. Fail-safe: any error here (e.g. no
-        # session in scope) skips the re-check rather than breaking the event.
-        if djust_config.get("reauth_on_event") and (
-            getattr(self.view_instance, "login_required", None)
-            or getattr(self.view_instance, "permission_required", None)
-        ):
-            try:
-                from channels.auth import get_user
-
-                from .auth.core import check_view_auth_lightweight
-
-                fresh_user = await get_user(self.scope)
-                # The mount request is stored on the view (see handle_mount:
-                # ``self.view_instance.request = request``), not on the consumer.
-                request = getattr(self.view_instance, "request", None)
-                if request is not None:
-                    request.user = fresh_user  # reflect current auth for the check + handler
-                    authorized = await sync_to_async(check_view_auth_lightweight)(
-                        self.view_instance, request
-                    )
-                    if not authorized:
-                        from django.conf import settings as _dj_settings
-
-                        login_url = getattr(self.view_instance, "login_url", None) or getattr(
-                            _dj_settings, "LOGIN_URL", "/accounts/login/"
-                        )
-                        await self.send_json({"type": "navigate", "to": login_url})
-                        await self.close(code=4403)
-                        self.view_instance = None
-                        return
-            except Exception:  # noqa: BLE001 — re-auth is defense-in-depth; never break events
-                logger.debug("reauth_on_event re-check skipped (non-fatal)", exc_info=True)
+        # read per event — hence default-OFF. Fail CLOSED: if the re-check itself
+        # raises, the event is denied exactly as for a failed check.
+        if self._reauth_applies(self.view_instance):
+            if not await self._reauth_recheck(self.view_instance):
+                self.view_instance = None
+                return
 
         # Route to embedded child view if view_id is specified.
         # The registry is provided by StickyChildRegistry (composed into
@@ -5594,6 +5569,60 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         await self.send_json(
             self._build_time_travel_state(self.view_instance, buffer, new_cursor, "after")
         )
+
+    def _reauth_applies(self, view: Any) -> bool:
+        """Whether the ``reauth_on_event`` re-check is enabled for ``view``."""
+        return bool(
+            djust_config.get("reauth_on_event")
+            and (
+                getattr(view, "login_required", None) or getattr(view, "permission_required", None)
+            )
+        )
+
+    async def _reauth_recheck(self, view: Any) -> bool:
+        """Fresh-principal authorization re-check (``reauth_on_event``).
+
+        Re-resolves the user from the scope session, reflects it onto the mount
+        request stored on the view, and re-runs the view's auth check. Returns
+        ``True`` when the caller may proceed. On a failed check, or when the
+        check itself raises (fail CLOSED), sends navigate-to-login, closes the
+        socket with 4403 and returns ``False``; the refusal frames are best
+        effort so a dead peer cannot turn the denial back into an allow. A
+        raised check logs one WARNING with the exception type and view class
+        only (never the message, traceback or request data).
+        """
+        try:
+            from channels.auth import get_user
+
+            from .auth.core import check_view_auth_lightweight
+
+            fresh_user = await get_user(self.scope)
+            # The mount request is stored on the view (see handle_mount:
+            # ``self.view_instance.request = request``), not on the consumer.
+            request = getattr(view, "request", None)
+            if request is None:
+                return True
+            request.user = fresh_user  # reflect current auth for the check + handler
+            authorized = await sync_to_async(check_view_auth_lightweight)(view, request)
+        except Exception as exc:  # noqa: BLE001 — fail CLOSED: an unverifiable check denies
+            logger.warning(
+                "reauth_on_event re-check raised %s on view %s; denying the event",
+                type(exc).__name__,
+                type(view).__name__,
+            )
+            authorized = False
+        if authorized:
+            return True
+        from django.conf import settings as _dj_settings
+
+        login_url = getattr(view, "login_url", None) or getattr(
+            _dj_settings, "LOGIN_URL", "/accounts/login/"
+        )
+        with contextlib.suppress(Exception):
+            await self.send_json({"type": "navigate", "to": login_url})
+        with contextlib.suppress(Exception):
+            await self.close(code=4403)
+        return False
 
     async def presence_event(self, event):
         """
