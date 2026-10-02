@@ -168,6 +168,11 @@ class LiveViewConfig:
         # failure. Default OFF: it costs one session read per event — opt in for
         # high-security apps that want mid-session deauth enforced on the live path.
         "reauth_on_event": False,
+        # Seconds a passed reauth_on_event check also covers server-originated
+        # turns (tick, server_push, db_notify, presence, async results) on one
+        # socket, so ticking views do not read the session store every tick.
+        # 0 re-checks every turn. Only used when reauth_on_event is on.
+        "reauth_server_turn_interval": 5.0,
         # Hot Reload (Development)
         "hot_reload": True,  # Enable hot reload in development (requires DEBUG=True)
         "hot_reload_watch_dirs": None,  # Directories to watch (None = auto-detect BASE_DIR)
