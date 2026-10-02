@@ -308,10 +308,13 @@ the session transport, each profile error case and the clean case, and
 4. **Idle semantics.** What counts as activity for `idle_timeout` (a client
    event only, or also a heartbeat)? A server-originated re-check must never
    extend the idle clock.
-5. **Concurrent session writes.** An application reported that a post-event
-   state save can write back a session copy that undoes a concurrent update
-   to the session (for example an idle-clock touch). Not yet reproduced; it
-   bears on `protect_session_state` and on `idle_timeout`.
+5. **Concurrent session writes (#3347).** The post-event state save writes the
+   whole session dict, so a concurrent change to another key can be lost and a
+   deleted key can come back (reproduced for legacy views; for explicit views
+   only when a writer other than the turn's own request object changes the
+   session). `idle_timeout` and `protect_session_state` must not depend on the
+   session carrying their clock or marker until that is fixed; a fix that
+   saves only djust's own keys on a fresh load is the likely route.
 6. **Standards mapping.** The profile table names control families
    generically. Whether to publish a mapping to specific CJIS Security Policy
    and HIPAA Security Rule sections needs review by someone qualified to make
