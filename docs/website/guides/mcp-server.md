@@ -338,3 +338,7 @@ The introspection tools discover classes by walking Python subclasses at runtime
 - Make sure your app is in `INSTALLED_APPS`
 - Make sure the module containing your views is importable (no import errors)
 - Framework-internal classes are filtered out — only your project's classes are returned
+
+## See also
+
+- [AI Guardrails](ai-guardrails.md): how the MCP tools fit with the system checks, the audit command and the assistant context files, and what none of them cover

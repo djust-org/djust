@@ -733,6 +733,16 @@ V008 is broader than V006 and will flag any custom class instantiation, not just
 
 ---
 
+### V020: Interactive component on an actor view
+
+**Severity**: Error
+
+**What causes it**: A view with `use_actors = True` declares an interactive component (from `djust.components.interactive`). Actor views do not support them: the actor path has its own dispatch and render baseline, which the component registry does not use. Message: "<view> sets use_actors = True and declares interactive component(s) <names>, which actor views do not support."
+
+**Fix**: Remove `use_actors = True` from the view, or move the interactive component to a view that does not use actors.
+
+---
+
 ## Security Errors (S0xx)
 
 ### S001: mark_safe() with f-string
@@ -927,6 +937,16 @@ not trigger it.
 **What causes it**: A LiveView gates auth with `@method_decorator(..., name="dispatch")`, or overrides `dispatch()` with auth logic. Either is enforced only on the HTTP GET, not on the WebSocket. Message: "<file>:<line> -- LiveView '<View>' gates auth via @method_decorator(..., name='dispatch'); this is NOT enforced over WebSocket (only on the HTTP GET)." (or "... overrides dispatch() with auth logic; ...").
 
 **Fix**: Use djust's `login_required` / `permission_required` class attributes, a `check_permissions()` method, or a Django auth mixin (`LoginRequiredMixin`, `PermissionRequiredMixin`, `UserPassesTestMixin`). These are honored on every transport. See [Authentication](authentication.md).
+
+---
+
+### S013: Edit view lets any user edit any row
+
+**Severity**: Warning
+
+**What causes it**: A `ModelFormMixin` view overrides neither `get_queryset()` nor `has_object_permission()`. Every user who passes the view-level checks can then edit any row of the model by changing the id in the URL. The default stays permissive, as Django's `UpdateView` is, and this check says so. Message: "<view> lets any user who can open the view edit any <model> by its id." Nothing is constructed, mounted or queried.
+
+**Fix**: Override `get_queryset()` to limit the rows the user may edit, or `has_object_permission(self, request, obj)` to authorize each object (see [Authorization](authorization.md)). Suppress one view with `# noqa: S013` on its class line, or all of them with `DJUST_CONFIG = {"suppress_checks": ["S013"]}`.
 
 ---
 
@@ -1339,6 +1359,16 @@ if (globalThis.djustDebug) {
     console.log("Connected to", url);
 }
 ```
+
+---
+
+### Q004: Interactive and legacy DropdownMenu imported in one module
+
+**Severity**: Warning
+
+**What causes it**: One module imports `DropdownMenu` from both `djust.components.interactive` (the interactive component) and `djust.components.components` (the legacy plain one). The two share a name, so it is easy to use the wrong one. Message: "<file>:<line> -- imports both the interactive DropdownMenu (djust.components.interactive) and the legacy plain DropdownMenu."
+
+**Fix**: Import one `DropdownMenu` per module. Add `# noqa: Q004` if both are intended.
 
 ---
 
@@ -1943,6 +1973,16 @@ The processor is optional. `{% theme_head %}`, `{% theme_switcher %}` and `{% th
 **What causes it**: 'css_prefix "<prefix>" does not end with "-". Component classes will render as ".<prefix>btn" instead of ".<prefix>-btn".'
 
 **Fix**: Add a trailing `-`, e.g. `"dj-"` instead of `"dj"`.
+
+---
+
+### djust_theming.W003: Invalid or unknown selectable_presets
+
+**Severity**: Warning
+
+**What causes it**: `LIVEVIEW_CONFIG["theme"]["selectable_presets"]` is not a list of preset names, or names a preset that is not registered. Messages: 'LIVEVIEW_CONFIG["theme"]["selectable_presets"] is invalid: <reason>' and 'LIVEVIEW_CONFIG["theme"]["selectable_presets"] names unknown preset(s) <names>, which are ignored.' At render time such a value is logged and ignored, so this check is where the mistake is reported.
+
+**Fix**: Use a list of registered preset names, such as `["default", "legal"]`. `python manage.py djust_theme list-presets` prints the registered names.
 
 ---
 
