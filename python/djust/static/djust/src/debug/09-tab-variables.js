@@ -34,7 +34,7 @@
                             </div>
                             <div class="summary-stat">
                                 <div class="stat-label">Largest Variable</div>
-                                <div class="stat-value">${sortedEntries[0] ? sortedEntries[0][0] : 'N/A'}</div>
+                                <div class="stat-value">${sortedEntries[0] ? this.escapeHtml(sortedEntries[0][0]) : 'N/A'}</div>
                             </div>
                         </div>
                     </div>
@@ -48,8 +48,8 @@
                                 <div class="variable-item expandable" data-index="${index}">
                                     <div class="variable-header" onclick="window.djustDebugPanel.toggleExpand(this)">
                                         <span class="expand-icon">▶</span>
-                                        <span class="variable-name">${name}</span>
-                                        <span class="variable-type">${info.type}</span>
+                                        <span class="variable-name">${this.escapeHtml(name)}</span>
+                                        <span class="variable-type">${this.escapeHtml(info.type)}</span>
                                         <span class="variable-size">${this.formatBytes(sizeBytes)}</span>
                                         <span class="variable-percentage">${percentage.toFixed(1)}%</span>
                                     </div>
@@ -59,12 +59,12 @@
                                     <div class="variable-details" style="display: none;">
                                         <div class="variable-section">
                                             <div class="variable-section-title">Value Preview</div>
-                                            <pre class="variable-value">${info.value}</pre>
+                                            <pre class="variable-value">${this.escapeHtml(info.value)}</pre>
                                         </div>
                                         <div class="variable-section">
                                             <div class="variable-section-title">Stats</div>
                                             <div class="variable-stats">
-                                                <div class="variable-stat">Type: <strong>${info.type}</strong></div>
+                                                <div class="variable-stat">Type: <strong>${this.escapeHtml(info.type)}</strong></div>
                                                 <div class="variable-stat">Size: <strong>${this.formatBytes(sizeBytes)}</strong></div>
                                                 <div class="variable-stat">% of Total: <strong>${percentage.toFixed(2)}%</strong></div>
                                             </div>
