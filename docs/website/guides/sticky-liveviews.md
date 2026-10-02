@@ -174,12 +174,66 @@ The tag:
 6. Stamps `data-djust-embedded` onto every dj-event-bearing tag inside.
 
 Any `kwargs` after `sticky=True` pass through to the child's `mount()`.
-They are **mount-time only**: a sticky child keeps its live instance across
-parent re-renders and navigations, so later renders of the tag don't pass
-new values to it. When they differ from the ones the child was mounted
-with, djust logs a warning naming the changed kwargs. Send changing data to
-the child another way, for example with a push. (Re-applying changed kwargs
-is planned for 1.3, #2919.)
+
+### Changed kwargs: the `_on_sticky_update` hook
+
+A sticky child keeps its live instance across parent re-renders, so its
+`mount()` runs once and the tag's kwargs reach it once. When the parent renders
+the tag again with different values (`{% live_render "..." sticky=True
+section=section %}` after `section` changed), a child that defines
+`_on_sticky_update(self, changed)` receives them:
+
+```python
+class Sidebar(LiveView):
+    sticky = True
+    sticky_id = "sidebar"
+
+    def mount(self, request, section="home", **kwargs):
+        self.section = section
+        self.collapsed = False
+
+    def _on_sticky_update(self, changed):
+        if "section" in changed:
+            self.section = changed["section"]
+```
+
+How it behaves:
+
+- **When.** On the parent render that sees a different value, after the child's
+  authorization is re-checked and before the child renders, so that same render
+  already shows the new input.
+- **What it gets.** `changed` is a dict of the kwargs that are new or whose value
+  differs from the ones the child was last given, mapped to their **new** values.
+  Unchanged kwargs are absent; the old values are whatever the child holds in its
+  own state. A kwarg dropped from the tag is not reported.
+- **No remount, no reset.** `mount()` does not run again and the child keeps its
+  state (here, `collapsed`). The hook decides what to change.
+- **Once per change.** The new values are recorded after the hook returns, so it
+  does not run again until they change again. Values that compare by identity
+  (a `QuerySet`) look changed on every render, so keep the hook idempotent.
+- **Synchronous and cheap.** It runs while the parent renders. An `async def`
+  hook is refused with a `TypeError`.
+- **A failing hook fails the parent.** An exception propagates out of the tag, as
+  one from `mount()` would, and the new values are not recorded as applied. So the
+  parent keeps failing to render (every event on it) until the tag passes a value
+  the hook accepts, when the hook runs again and succeeds. Validate, and handle the
+  values you can recover from, inside the hook.
+- **Values are raw.** `changed` holds what the template engine handed the tag,
+  exactly as `mount()` kwargs are: scalars keep their type, but a list or other
+  non-scalar arrives as the string the template would print (`'[1, 2]'`). Treat
+  them as untrusted input (for example `q=request.GET.q`) and validate and convert
+  them in the hook as you would in `mount()`.
+- **Optional.** A child that does not define it behaves as before: the new values
+  are ignored and djust logs one warning naming the changed kwargs.
+- **Not a client event.** The leading underscore keeps it out of event dispatch in
+  every `event_security` mode; only the tag calls it. Do not decorate it with
+  `@event_handler`.
+- **Preserved children.** A sticky preserved across a `live_redirect` is not
+  rendered again (the browser keeps its DOM), so the hook does not run and a
+  changed kwarg logs the warning. Push changing data to such a child instead.
+- **Explicit exposure.** A child with `exposure_policy = "explicit"` is remounted
+  when its inputs change (they are part of its reuse identity), so it never
+  reaches the hook.
 
 ### Allowlist mismatch
 

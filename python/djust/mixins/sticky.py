@@ -560,6 +560,58 @@ class StickyChildRegistry:
                     logger.error("Explicit sticky async cleanup failed")
         return None
 
+    def _on_sticky_update(self, changed: Dict[str, Any]) -> None:
+        """Apply changed ``{% live_render %}`` inputs to a REUSED sticky child (#2919).
+
+        A sticky child keeps its live instance across parent re-renders, so
+        the tag's keyword arguments reach ``mount()`` only once. Override this
+        to take the later ones. djust calls it on the reused child, before the
+        child renders, when the tag's arguments differ from the ones last
+        applied (at mount, or at the previous call)::
+
+            class Sidebar(LiveView):
+                sticky = True
+                sticky_id = "sidebar"
+
+                def mount(self, request, section="home", **kwargs):
+                    self.section = section
+
+                def _on_sticky_update(self, changed):
+                    if "section" in changed:
+                        self.section = changed["section"]
+
+        ``changed`` maps each argument that is new or whose value differs to
+        its NEW value; arguments that did not change are absent, and the old
+        values are whatever the child holds in its own state. The child is not
+        remounted and its state is not reset; the hook decides what to touch.
+        Arguments dropped from the tag are not reported.
+
+        Rules:
+
+        * Synchronous, and called while the parent renders, so keep it cheap
+          and free of I/O. An exception propagates out of the tag like one from
+          ``mount()``, and the new values are not recorded as applied: the
+          parent keeps failing to render until the tag passes values the hook
+          accepts.
+        * ``changed`` holds the raw values the template engine handed the tag
+          (a non-scalar arrives as the string the template would print), so
+          validate and convert them as in ``mount()``.
+        * Values that compare by identity (a ``QuerySet``) look changed on
+          every render; the hook must be idempotent.
+        * Private by name, so no client event can name it: it is reachable
+          only from the ``{% live_render %}`` tag, never over the socket.
+        * Not called for a sticky preserved across ``live_redirect``: that
+          child is not rendered again, the browser keeps its DOM.
+        * A child that does not override it keeps today's behaviour: the new
+          values are ignored and djust logs a warning naming them.
+        * A child with ``exposure_policy = "explicit"`` is remounted when its
+          inputs change (they are part of its reuse identity), so this is
+          never reached for one.
+
+        The default does nothing.
+        """
+        return None
+
     def _preserve_sticky_children(self, new_request: Any) -> Dict[str, Any]:
         """Stage sticky children for preservation across a live_redirect.
 

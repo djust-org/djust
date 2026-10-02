@@ -824,6 +824,62 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
     }
 
     window.djust.safeNavigationTarget = safeNavigationTarget;
+
+    // ------------------------------------------------------------------
+    // Page-shell fallback (#3036)
+    // ------------------------------------------------------------------
+    //
+    // A live navigation swaps only the dj-root, so the document around it (the
+    // <head> stylesheets and scripts, scripts outside the root) stays the
+    // PREVIOUS page's. The server renders the current page's shell fingerprint
+    // into <meta name="djust-page-shell"> and sends the destination's on the
+    // `mount` frame that answers a live_redirect_mount (dj-navigate,
+    // live_redirect, back/forward). When the two differ the destination cannot
+    // render correctly in place, so we reload: history.pushState (or the
+    // popstate itself) already moved the address bar to the destination, so
+    // reloading the current document IS a full load of the destination.
+    //
+    // It must be reload(), not location.replace(location.href): the URL is
+    // already current, and replacing the document with a URL that differs from
+    // the current one only by a fragment is a same-document FRAGMENT
+    // navigation, not a load. With "/x/#sec" nothing would load and the reader
+    // would see the old page under the new URL.
+    //
+    // No loop: only a live_redirect_mount reply carries `page_shell`, and the
+    // load that follows mounts normally. No open redirect: reload() takes no
+    // target, and nothing in the frame is read as one.
+
+    function pageShellMismatch(frame) {
+        if (!frame || typeof frame.page_shell !== 'string' || frame.page_shell === '') return false;
+        const meta = document.querySelector('meta[name="djust-page-shell"]');
+        const current = meta ? meta.getAttribute('content') : null;
+        // A page without a fingerprint (not rendered by djust, or no <head>)
+        // keeps the in-place swap, exactly as before.
+        if (!current) return false;
+        return current !== frame.page_shell;
+    }
+
+    // The one place a shell mismatch leaves the page; a seam so jsdom tests can
+    // observe it (jsdom cannot navigate).
+    window.djust._fullPageLoad = function () {
+        window.location.reload();
+    };
+
+    /**
+     * Returns true (and starts a full page load) when ``frame`` is a mount
+     * reply whose page shell differs from the document's. The caller must
+     * then drop the frame instead of applying it.
+     */
+    function fallBackToFullLoadOnShellChange(frame) {
+        if (!frame || frame.type !== 'mount' || !pageShellMismatch(frame)) return false;
+        if (globalThis.djustDebug) {
+            console.log('[djust] page shell differs from the destination, full page load');
+        }
+        window.djust._fullPageLoad();
+        return true;
+    }
+
+    window.djust.fallBackToFullLoadOnShellChange = fallBackToFullLoadOnShellChange;
 })();
 
 // ============================================================================
@@ -1472,6 +1528,9 @@ class LiveViewWebSocket {
 
     async _handleMessageImpl(data) {
         if (globalThis.djustDebug) console.log('[LiveView] Received: %s %o', String(data.type), data);
+        // #3036: a live navigation to a page with a different page shell is a
+        // full page load; the destination's root is not applied.
+        if (window.djust.fallBackToFullLoadOnShellChange?.(data)) return;
         // ADR-038 D-n: compared before anything from this mount is cached.
         if (window.djust._sw) window.djust._sw.applyMountMetadata(data);
         storeSignedSnapshot(data, this.primaryViewPath);
@@ -2814,6 +2873,9 @@ class LiveViewSSE {
      */
     async _handleMessageImpl(data) {
         if (globalThis.djustDebug) console.log('[SSE] Received:', data.type, data);
+        // #3036: a live navigation to a page with a different page shell is a
+        // full page load; the destination's root is not applied.
+        if (window.djust.fallBackToFullLoadOnShellChange?.(data)) return;
         // ADR-038 D-n: compared before anything from this mount is cached.
         if (window.djust._sw) window.djust._sw.applyMountMetadata(data);
         storeSignedSnapshot(data, this.primaryViewPath);

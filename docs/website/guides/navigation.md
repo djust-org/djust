@@ -244,37 +244,73 @@ check permissions against the current request, so a user whose permissions have
 been revoked cannot act through restored state, and anything backed by a
 database should be re-read on the events that matter.
 
-#### When NOT to use `dj-navigate`
+#### When the destination has a different page shell
 
-`dj-navigate` swaps the contents of `[dj-root]`. Everything outside it — the
-`<head>` above all — belongs to the document the reader already has. So a
-target page that needs its own stylesheet or script in `<head>` arrives as
-*unstyled markup*: the HTML is right, the CSS that makes it a page was never
-loaded, and nothing errors.
+`dj-navigate` swaps the contents of `[dj-root]`. Everything outside it, the
+`<head>` above all, belongs to the document the reader already has. So a
+destination that needs its own stylesheet or script outside `[dj-root]` could
+only arrive as *unstyled markup*, with its scripts never run.
 
-Link to such a page with a plain `href`, so the browser fetches the whole
-document:
+djust now catches this. Every page carries a short fingerprint of its **page
+shell** in `<meta name="djust-page-shell">`, and the server sends the
+destination's fingerprint with the reply to a live navigation. When the two
+differ, the client does a normal page load of the destination instead of
+swapping the root. The same check covers `dj-navigate` links, `auto_navigate`,
+`live_redirect()` from a handler, and back/forward onto a page with a different
+shell. Pages with the same shell keep the in-place swap.
+
+The fingerprint is a hash of what the page template asks the browser to load,
+with template inheritance resolved:
+
+- `<link rel="stylesheet">` and `<link rel="modulepreload">` (`href`)
+- `<script>` outside `[dj-root]`, in `<head>` or in the body, when it runs code
+  (`src`, `type`, and the text of an inline script). Plain scripts, `module`,
+  `importmap` and JavaScript MIME types count.
+- `<style>` in `<head>`
+- `{% include %}` tags in `<head>` (the include's name, not its contents)
+
+`<meta>`, `<title>`, everything inside `[dj-root]`, and data blocks such as
+`<script type="application/ld+json">`, `application/json` and `text/template`
+are not part of it, so per-page structured data keeps the fast path. The order
+of assets is, because scripts run in order.
+
+Limits to know about. The fingerprint comes from the **template text**, not
+from a rendered response:
+
+- a value interpolated into an asset URL (`<script src="{{ cdn }}/app.js">`)
+  counts as that text, so two pages that differ only in the value look alike;
+- `{{ block.super }}` is not expanded (template inheritance is flattened
+  without the parent block's content there), so a block that adds a script
+  after `{{ block.super }}` fingerprints as just that script;
+- a parent template that differs per tenant while the child's file does not is
+  not told apart.
+
+A template djust cannot read, or that has no `dj-root` / `dj-view` element, has
+no fingerprint, so its navigations behave as they did before. The full load
+costs one extra page request; the view it mounted for the failed swap is
+discarded. The client reloads the current document, because the address bar
+already holds the destination (a `#fragment` included).
+
+You can still link to such a page with a plain `href`, which skips the failed
+attempt:
 
 ```html
 {# Same application, same base template: SPA navigation is right. #}
 <a dj-navigate="/dashboard/">Dashboard</a>
 
-{# A page that brings its own head assets — another app's LiveViews, a
-   section with its own stylesheet. A real navigation, deliberately. #}
+{# A page that brings its own head assets. djust would fall back to a full
+   load on its own; a plain href just skips the round trip. #}
 <a href="/components/">Components</a>
 ```
-
-The symptom that names this mistake: the destination renders with no styling,
-and nothing errors.
 
 #### What live navigation updates, and what it keeps
 
 | Part of the destination page | On `dj-navigate` / `live_redirect` |
 |---|---|
 | Everything inside `[dj-root]` | Replaced |
-| `<title>` | Updated (since 1.2.1, see below) |
-| `<head>` stylesheets, scripts, `<meta>` | **Kept from the previous page** |
-| Scripts outside `[dj-root]` (an `{% block extra_scripts %}`) | **Kept from the previous page**; the destination's never run |
+| `<title>` | Updated (see below) |
+| `<head>` stylesheets, scripts, and scripts outside `[dj-root]` | Same shell as the current page: kept. **Different shell: full page load** (see above) |
+| `<meta>` tags | **Kept from the previous page** (use [`page_title` and meta helpers](document-metadata.md)) |
 | Inline `<script>` inside `[dj-root]` | Inserted, never executed |
 
 The title follows the destination in this order:
@@ -287,10 +323,8 @@ The title follows the destination in this order:
    does not hold (a context-processor value such as `site_name`); set
    `page_title` in those cases.
 
-Anything else that differs per page outside `[dj-root]` (a page-specific
-stylesheet, an `extra_scripts` block) needs a full load: link to that page
-with a plain `href`. Diffing `<head>` assets on live navigation is planned for
-1.3 (#3036).
+Reconciling `<head>` assets and outside-root scripts in place, instead of
+loading the page, is deferred. A full load is the behaviour until then.
 
 > **Chart.js / map blank after `dj-navigate`?** Scripts in SPA-patched content
 > don't execute, so an inline `<script>` that inits a library renders on a hard
