@@ -245,21 +245,21 @@ def test_the_clone_reader_has_exactly_the_known_call_sites() -> None:
 
 def test_initialize_rust_view_is_the_only_consumer_of_a_backend_clone() -> None:
     """The only framework reads of a backend entry are the two
-    ``backend.get(self._cache_key)`` lookups in ``_initialize_rust_view``,
+    ``backend.get(cache_key)`` lookups in ``_initialize_rust_view``,
     and both sit behind ``if self._rust_view is None`` — a clone is only ever
     attached to a view that has no Rust view (and so no sync baseline) yet."""
     from djust.mixins import rust_bridge
 
     consumers = {
-        rel: len(re.findall(r"backend\.get\(self\._cache_key\)", src))
+        rel: len(re.findall(r"backend\.get\(cache_key\)", src))
         for rel, src in _framework_sources()
-        if "backend.get(self._cache_key)" in src
+        if "backend.get(cache_key)" in src
     }
     assert consumers == {"mixins/rust_bridge.py": 2}, f"drifted: {consumers!r}"
 
     src = inspect.getsource(rust_bridge.RustBridgeMixin._initialize_rust_view)
     guard = src.index("if self._rust_view is None:")
-    assert guard < src.index("backend.get(self._cache_key)"), (
+    assert guard < src.index("backend.get(cache_key)"), (
         "the cache lookup must be behind the `_rust_view is None` guard"
     )
     assert "self._rust_view = cached_view" in src
