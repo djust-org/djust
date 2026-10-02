@@ -90,6 +90,12 @@ class TrackedSessionData(dict):
     def __reduce_ex__(self, protocol: int) -> Tuple[Any, ...]:
         return (dict, (dict(self),))
 
+    def __eq__(self, other: object) -> bool:
+        # Equal by content: what was written is bookkeeping, not value.
+        return dict.__eq__(self, other)
+
+    __hash__ = None  # type: ignore[assignment]  # a mutable mapping, as dict
+
     # -- writes ------------------------------------------------------------
 
     def _wrote(self, key: str) -> None:
