@@ -218,6 +218,136 @@ describe('model_binding', () => {
         });
     });
 
+    // #3334: bindModelElements() ran only at init. A dj-model input inserted
+    // afterwards (a patch, a live_redirect morph, a lazily hydrated view) was
+    // never bound and sent nothing.
+    describe('after init (reinitAfterDOMUpdate)', () => {
+        const type = (window, input, value) => {
+            input.value = value;
+            input.dispatchEvent(new window.Event('input', { bubbles: true }));
+        };
+
+        // Let djustInit (queued as a microtask by client.js) run, then put the
+        // capturing instance back: init installs a real one.
+        async function initialized(bodyHtml) {
+            const env = createEnv(bodyHtml);
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            env.window.djust.liveViewInstance = {
+                sendEvent: vi.fn((eventName, params) => {
+                    if (eventName === 'update_model') {
+                        env.modelUpdates.push({ field: params.field, value: params.value });
+                    }
+                    return true;
+                }),
+            };
+            return env;
+        }
+
+        it('binds a dj-model input inserted after init', async () => {
+            const { window, document, modelUpdates } = await initialized('<p id="slot"></p>');
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.setAttribute('dj-model', 'late');
+            document.getElementById('slot').appendChild(input);
+
+            window.djust.reinitAfterDOMUpdate();
+
+            type(window, input, 'hello');
+            expect(modelUpdates).toEqual([{ field: 'late', value: 'hello' }]);
+        });
+
+        it('binds modifier forms (.lazy, .debounce-N) inserted after init', async () => {
+            const { window, document, modelUpdates } = await initialized('<p id="slot"></p>');
+            document.getElementById('slot').innerHTML =
+                '<input id="lz" type="text" dj-model.lazy="lazy_field">' +
+                '<input id="db" type="text" dj-model.debounce-30="deb_field">';
+
+            window.djust.reinitAfterDOMUpdate();
+
+            const lazy = document.getElementById('lz');
+            type(window, lazy, 'x');
+            expect(modelUpdates).toEqual([]); // lazy waits for change
+            lazy.dispatchEvent(new window.Event('change', { bubbles: true }));
+            expect(modelUpdates).toEqual([{ field: 'lazy_field', value: 'x' }]);
+
+            type(window, document.getElementById('db'), 'y');
+            await new Promise((resolve) => setTimeout(resolve, 80));
+            expect(modelUpdates).toContainEqual({ field: 'deb_field', value: 'y' });
+        });
+
+        it('binds inside the scope it is given (a lazily hydrated view)', async () => {
+            const { window, document, modelUpdates } = await initialized(
+                '<div id="lazy" dj-view="app.W"></div>');
+            const lazy = document.getElementById('lazy');
+            lazy.innerHTML = '<input id="in" type="text" dj-model="scoped">';
+
+            window.djust.reinitAfterDOMUpdate(lazy);
+
+            type(window, document.getElementById('in'), 'v');
+            expect(modelUpdates).toEqual([{ field: 'scoped', value: 'v' }]);
+        });
+
+        it('binds each input once however many times it re-initializes', async () => {
+            const { window, document, modelUpdates } = await initialized(
+                '<input id="a" type="text" dj-model="a">' +
+                '<input id="b" type="checkbox" dj-model="b">');
+            const late = document.createElement('input');
+            late.id = 'c';
+            late.setAttribute('dj-model', 'c');
+            document.body.appendChild(late);
+
+            for (let i = 0; i < 5; i++) window.djust.reinitAfterDOMUpdate();
+
+            // One listener per input: the input event fires one update, not five.
+            type(window, document.getElementById('a'), '1');
+            type(window, late, '2');
+            const checkbox = document.getElementById('b');
+            checkbox.checked = true;
+            checkbox.dispatchEvent(new window.Event('change', { bubbles: true }));
+            expect(modelUpdates.map((u) => u.field)).toEqual(['a', 'c', 'b']);
+        });
+
+        it('keeps the guard off the DOM, so a morph that strips attributes cannot double-bind', async () => {
+            const { window, document, modelUpdates } = await initialized(
+                '<input id="a" type="text" dj-model="a" data-x="1">');
+            const input = document.getElementById('a');
+            window.djust.reinitAfterDOMUpdate();
+            // A morph rewrites the element's attributes to the server's markup.
+            for (const attr of Array.from(input.attributes)) {
+                if (attr.name !== 'dj-model' && attr.name !== 'id' && attr.name !== 'type') {
+                    input.removeAttribute(attr.name);
+                }
+            }
+            expect(Array.from(input.attributes).some((a) => /bound/i.test(a.name))).toBe(false);
+            window.djust.reinitAfterDOMUpdate();
+            type(window, input, 'once');
+            expect(modelUpdates).toEqual([{ field: 'a', value: 'once' }]);
+        });
+
+        it('rebinds when a patch changes the field of a surviving input', async () => {
+            const { window, document, modelUpdates } = await initialized(
+                '<input id="a" type="text" dj-model="old_field">');
+            const input = document.getElementById('a');
+            input.setAttribute('dj-model', 'new_field');
+
+            window.djust.reinitAfterDOMUpdate();
+
+            type(window, input, 'z');
+            expect(modelUpdates).toEqual([{ field: 'new_field', value: 'z' }]);
+        });
+
+        it('sends nothing when a server patch only sets the value', async () => {
+            const { window, document, modelUpdates } = await initialized(
+                '<input id="a" type="text" dj-model="a" value="">');
+            const input = document.getElementById('a');
+            input.value = 'from the server'; // a patch writes the value; no input event
+            window.djust.reinitAfterDOMUpdate();
+            window.djust.reinitAfterDOMUpdate();
+            expect(modelUpdates).toEqual([]);
+            expect(input.value).toBe('from the server');
+        });
+    });
+
     describe('exports', () => {
         it('exposes bindModelElements', () => {
             const { window } = createEnv();

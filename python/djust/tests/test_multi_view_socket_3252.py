@@ -1395,3 +1395,46 @@ async def test_a_view_leaving_a_push_scope_leaves_the_other_view_in_it():
         assert [e[0] for e in EVENTS] == ["pushed"]
     finally:
         await _close(communicator)
+
+
+class RoomWatcher(_Counted, PresenceMixin, LiveView):
+    """Watches a room's presence without tracking its own: the scoped
+    presence group is the only group it joins for the room."""
+
+    presence_key = "mv3335:{room}"
+    template = '<div dj-root dj-view="' + MOD + '.RoomWatcher"><b>w {{ count }}</b></div>'
+
+    def mount(self, request, **kwargs):
+        self._tagged()
+        self.room = "r1"  # get_presence_key() formats from instance attributes
+        self.push_scope = "r1"
+        self.online_count = 0
+
+    @event_handler()
+    def go_r2(self, **kwargs):
+        self.room = "r2"
+        self.push_scope = "r2"
+
+
+async def test_a_view_leaving_a_presence_scope_leaves_the_other_view_in_it():
+    """The presence-scope group is the channel's, shared by every view whose
+    presence key it is, like the push-scope group above (#3335): one view moving
+    to another room must not drop it for the view that stays."""
+    from djust.push import presence_scope_group_name
+
+    path = MOD + ".RoomWatcher"
+    r1 = presence_scope_group_name(path, "mv3335:r1")
+    r2 = presence_scope_group_name(path, "mv3335:r2")
+    communicator = await _connect()
+    try:
+        await _mount_page(communicator, RoomWatcher)
+        await _hydrate(communicator, RoomWatcher, "rw2")
+        assert len(_members(r1)) == 1  # one channel, two views
+        await _event(communicator, "go_r2")  # the page view moves; the slot stays in r1
+        await _until(lambda: len(_members(r2)) == 1, "the page view joining r2")
+        assert len(_members(r1)) == 1  # the slot is still in r1
+    finally:
+        await _close(communicator)
+    assert _members(r1) == []
+    assert _members(r2) == []
+    CONSUMERS.clear()

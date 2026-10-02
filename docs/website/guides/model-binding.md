@@ -79,6 +79,10 @@ Every time an input changes, djust sends an `update_model` event and sets the at
 
 To re-render on each change (live search, validation as you type), use an event directive instead of `dj-model`: `dj-input="handler"` (with `dj-debounce="N"`) or `dj-change="handler"`, and have the handler set the attribute. The examples below show both patterns.
 
+### Inputs that appear later
+
+An input with `dj-model` is bound when it enters the page, not only at load: one a patch inserts (an `{% if %}` that turns true, a row added to a list), one inside a `dj-lazy` view that hydrates later, and one the destination of a `live_redirect` adds all send `update_model` from their first edit. Changing the `dj-model` attributes of an input that stays on the page (`dj-model="a"` to `dj-model="b"`, or adding `.lazy`) rebinds it to the new field.
+
 ## Modifiers
 
 ### `dj-model.lazy`
