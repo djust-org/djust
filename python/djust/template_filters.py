@@ -166,6 +166,15 @@ def _ensure_custom_filters_bridged() -> None:
     if _CUSTOM_FILTERS_BRIDGED:
         _restore_missing_bridged_filters()
         return
+    if next(iter(_iter_django_libraries()), None) is None:
+        # No Django engine to walk yet (``TEMPLATES`` holding only the djust
+        # backend, or a render before the engines exist). Setting the one-shot
+        # flag now would record an empty bridge that nothing could ever
+        # restore from, and every later render would fail with "Invalid
+        # filter" for the rest of the process. Stay armed: the next render
+        # with an engine bootstraps for real. One cheap engine walk per
+        # render until then.
+        return
     recorded: dict = {}
     try:
         with _global_registry_namespace():
