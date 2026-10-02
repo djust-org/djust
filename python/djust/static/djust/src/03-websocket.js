@@ -647,7 +647,7 @@ class LiveViewWebSocket {
         if (globalThis.djustDebug) console.log('[LiveView] Received: %s %o', String(data.type), data);
         // #3036: a live navigation to a page with a different page shell is a
         // full page load; the destination's root is not applied.
-        if (window.djust.fallBackToFullLoadOnShellChange(data)) return;
+        if (window.djust.fallBackToFullLoadOnShellChange?.(data)) return;
         // ADR-038 D-n: compared before anything from this mount is cached.
         if (window.djust._sw) window.djust._sw.applyMountMetadata(data);
         storeSignedSnapshot(data, this.primaryViewPath);

@@ -224,8 +224,17 @@ def page_shell(view: Any) -> Optional[str]:
                 _CACHE.clear()
             _CACHE[key] = fingerprint
         return fingerprint
-    except Exception:  # noqa: BLE001 — a fingerprint must never break a page or a mount
-        logger.debug(
-            "page shell fingerprint unavailable for %s", type(view).__name__, exc_info=True
+    except Exception as exc:  # noqa: BLE001 — a fingerprint must never break a page or a mount
+        from ._exposure_diagnostics import log_failure_for
+
+        # Template loading can raise errors that carry view values (ADR-038).
+        log_failure_for(
+            logger,
+            (view,),
+            exc,
+            "page shell fingerprint unavailable for %s",
+            type(view).__name__,
+            level="debug",
+            traceback=True,
         )
         return None
