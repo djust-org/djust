@@ -312,15 +312,31 @@ and `'memory'`; **any other value, including a dotted path to a class, silently
 falls back to the in-process memory backend**. Don't point it at the classes in
 `djust.tenants.backends`: those are *presence* backends, not state backends.
 
-View state is keyed by the user's session and the page path, not by tenant, so
-two users never share view state, whichever tenant they belong to. The keys
-don't include the tenant id, though. If one session can reach several tenants
-on the **same URL** (a header or session resolver, or `set_tenant()`), don't
-rely on the state cache to separate them: include the tenant in the URL, or
-re-derive tenant data in the event handler. `TenantMixin.get_state_key_prefix()`
-returns `tenant:<id>`, but no built-in state backend calls it at this release;
-it is a hook for your own storage (see
-[#2973](https://github.com/djust-org/djust/issues/2973)).
+Saved view state is keyed by the user's session, the page path and, for a view
+that uses `TenantMixin`, the tenant. Both places that hold it are scoped by
+`TenantMixin.get_state_key_prefix()` (`tenant:<id>`, the id percent-encoded):
+
+- **The state backend** (`memory` or `redis`), under
+  `tenant:<id>:<session>_<page>...`.
+- **The Django session**, under `liveview_tenant:<id>:<path>` (plus the
+  `__private`, `_components` and `__sticky__` siblings): the saved public and
+  private state that the HTTP fallback POST restores, and that a WebSocket or
+  SSE reconnect restores when the view sets `enable_state_snapshot = True`.
+
+A session that reaches two tenants on the same URL (a header or session
+resolver, a cookie shared across `*.example.com`, or `set_tenant()`) therefore
+holds separate entries per tenant. The signed `state_snapshot` token is bound to
+the tenant as well; a mount under another tenant ignores it and mounts fresh.
+
+- **A view without `TenantMixin`** is keyed exactly as before.
+- **A tenant view whose tenant is unresolved** (for example
+  `tenant_required = False` on a page with no tenant yet) saves and loads no
+  state and mints no token. It never falls back to the shared, unprefixed key.
+- **Upgrading:** the keys for tenant views changed, so the saved state those
+  views held under the old keys is not found: a **one-time reset**. The first
+  reconnect or HTTP fallback POST re-runs `mount()`, the first Back navigation
+  mounts fresh, and the next mount ships a new token. Views that do not use
+  `TenantMixin` are not affected.
 
 ## Tenant-Aware Presence
 

@@ -384,15 +384,15 @@ class RustBridgeMixin:
                 from ..state_backend import get_backend
 
                 backend = get_backend()
-                self._cache_key = f"{session_key}_{view_key}{template_hash_slot}"
+                self._cache_key = self._saved_state_key(session_key, view_key, template_hash_slot)
                 # codeql[py/log-injection] — cache_key may contain request.path; sanitize
                 logger.debug(
                     "[LiveView] Cache lookup (WebSocket): cache_key=%s",
                     sanitize_for_log(self._cache_key),
                 )
 
-                cached = backend.get(self._cache_key)
-                if cached:
+                cached = backend.get(self._cache_key) if self._cache_key is not None else None
+                if cached and self._cache_key is not None:
                     cached_view, timestamp = cached
                     self._rust_view = cached_view
                     # template_dirs are not serialized; restore them after cache hit
@@ -421,15 +421,15 @@ class RustBridgeMixin:
                 from ..state_backend import get_backend
 
                 backend = get_backend()
-                self._cache_key = f"{session_key}_{view_key}{template_hash_slot}"
+                self._cache_key = self._saved_state_key(session_key, view_key, template_hash_slot)
                 # codeql[py/log-injection] — cache_key may contain request.path; sanitize
                 logger.debug(
                     "[LiveView] Cache lookup (HTTP): cache_key=%s",
                     sanitize_for_log(self._cache_key),
                 )
 
-                cached = backend.get(self._cache_key)
-                if cached:
+                cached = backend.get(self._cache_key) if self._cache_key is not None else None
+                if cached and self._cache_key is not None:
                     cached_view, timestamp = cached
                     self._rust_view = cached_view
                     # template_dirs are not serialized; restore them after cache hit
@@ -471,6 +471,28 @@ class RustBridgeMixin:
 
                 backend = get_backend()
                 backend.set(self._cache_key, self._rust_view)
+
+    def _saved_state_key(
+        self, session_key: str, view_key: str, template_hash_slot: str
+    ) -> Optional[str]:
+        """Return the state-backend key for this view's saved state, or ``None``.
+
+        A view with a ``get_state_key_prefix()`` hook (``TenantMixin``) keys its
+        saved state by tenant: ``tenant:<id>:<session>_<view>_t<hash>``. Views
+        without the hook keep the unprefixed key. A tenant view whose tenant is
+        unresolved gets ``None`` and nothing is read from or written to the
+        backend (never the namespace non-tenant views share).
+        """
+        from .._tenant_state import state_scope
+
+        tenant_scope = state_scope(self)
+        if tenant_scope is None:
+            logger.debug(
+                "[LiveView] %s has no tenant; saved view state is not used",
+                type(self).__name__,
+            )
+            return None
+        return f"{tenant_scope}{session_key}_{view_key}{template_hash_slot}"
 
     def _get_cached_template_hash_slot(self) -> str:
         """Return the ``_t<8hex>`` cache-key slot for this view's template.

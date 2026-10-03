@@ -219,6 +219,10 @@ async def test_consumer_cancel_path_sends_the_settle_frame_only_for_an_event():
         consumer.send_json = send_json
         view = MagicMock()
         view._async_cancelled = {"job"}
+        # A MagicMock view reads as login-protected; keep the turn out of any
+        # reauth_on_event setting another test left cached.
+        view.login_required = False
+        view.permission_required = None
         view.render_with_diff = MagicMock(return_value=("<div dj-root>x</div>", "[]", 2))
         for drain in ("push_events", "navigation", "accessibility", "i18n", "flash"):
             setattr(view, f"_drain_{drain}", MagicMock(return_value=[]))
