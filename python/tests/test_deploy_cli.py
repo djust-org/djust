@@ -1439,6 +1439,15 @@ class TestCreateTarballGitignore:
     user forgot to ignore them.
     """
 
+    @pytest.fixture(autouse=True)
+    def _scrub_host_git_state(self, monkeypatch):
+        """Keep the fixture repos off the host repo's index (pre-commit exports
+        ``GIT_INDEX_FILE`` to hooks; see ``tests/git_env.py``)."""
+        from tests.git_env import HOST_GIT_STATE_VARS
+
+        for name in HOST_GIT_STATE_VARS:
+            monkeypatch.delenv(name, raising=False)
+
     def _git_repo(self, tmp_path, layout, gitignore=""):
         """Create a git repo (no commit needed) with files + a .gitignore.
 
