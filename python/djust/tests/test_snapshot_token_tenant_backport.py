@@ -215,11 +215,12 @@ class TestEnvelope:
     def test_a_token_issued_before_the_binding_still_serves_an_unscoped_view(self):
         """No tenant field in the envelope means unscoped: in-flight tokens of
         views without ``TenantMixin`` survive the upgrade; tenant views fall
-        back to one fresh mount."""
+        back to one fresh mount. (The envelope carries the keyed session digest;
+        tokens that still carry the raw session key are refused outright.)"""
         from djust.security import state_snapshot as mod
 
         envelope = json.dumps(
-            {"slug": "m.V", "sid": "sess", "state": "{}"},
+            {"slug": "m.V", "sid": mod._session_digest("sess"), "state": "{}"},
             sort_keys=True,
             separators=(",", ":"),
         )

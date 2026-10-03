@@ -31,11 +31,15 @@ out of context:
 
 - ``slug`` — the view path the snapshot was captured for. A snapshot signed
   for view A cannot be replayed onto view B.
-- ``sid`` — the Django session key at capture time (empty string for an
-  anonymous session). A snapshot captured under session S1 cannot be replayed
-  onto session S2. When there is no session key on either side (anonymous),
-  ``sid`` is ``""`` on both, so the binding degrades to slug-only — but the
-  HMAC signature still closes forgery for anonymous users too.
+- ``sid`` — a keyed digest of the Django session key at capture time
+  (:func:`_session_digest`; empty string for an anonymous session). The
+  envelope is signed, not encrypted, so it never carries the session key
+  itself, only an HMAC of it that cannot be turned back into the key. A
+  snapshot captured under session S1 cannot be replayed onto session S2.
+  When there is no session key on either side (anonymous), ``sid`` is ``""``
+  on both, so the binding degrades to slug-only — but the HMAC signature
+  still closes forgery for anonymous users too. Blobs issued before the
+  digest was introduced no longer match and fall back to a normal mount.
 - ``tenant`` — the tenant scope of the view that captured the snapshot
   (``"tenant:<id>"`` for a ``TenantMixin`` view, ``""`` for a view that is not
   tenant-scoped). A snapshot is accepted only by a mount under the tenant that
@@ -54,11 +58,11 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Optional
+from typing import Optional, cast
 
 from django.conf import settings
 from django.core import signing
-from django.utils.crypto import constant_time_compare
+from django.utils.crypto import constant_time_compare, salted_hmac
 
 from .log_sanitizer import sanitize_for_log
 
@@ -102,6 +106,22 @@ def get_max_age() -> int:
     return value
 
 
+# Salt for the keyed digest of the session key stored in the ``sid`` field.
+SESSION_DIGEST_SALT = "djust.state_snapshot.sid"
+
+
+def _session_digest(session_key: Optional[str]) -> str:
+    """Return the value stored in the envelope's ``sid`` field.
+
+    ``""`` for an anonymous session; otherwise an HMAC (keyed on
+    ``SECRET_KEY``) of the session key, so the client-held blob identifies the
+    session without containing its key.
+    """
+    if not session_key:
+        return ""
+    return cast(str, salted_hmac(SESSION_DIGEST_SALT, session_key, algorithm="sha256").hexdigest())
+
+
 def _signer() -> signing.TimestampSigner:
     # TimestampSigner is keyed on SECRET_KEY by default; the salt namespaces it.
     return signing.TimestampSigner(salt=SNAPSHOT_SALT)
@@ -120,6 +140,7 @@ def sign_snapshot(
             (already serialized by ``_capture_snapshot_state`` + ``json.dumps``).
         view_slug: The dotted view path the snapshot was captured for.
         session_key: The Django session key, or ``None``/empty for anonymous.
+            Only a keyed digest of it is placed in the envelope.
         tenant_scope: The view's tenant scope (``""`` for a view that is not
             tenant-scoped, ``"tenant:<id>"`` otherwise). A caller whose scope
             is ``None`` (a tenant view with no resolved tenant) must not sign.
@@ -132,7 +153,7 @@ def sign_snapshot(
     envelope = json.dumps(
         {
             "slug": view_slug,
-            "sid": session_key or "",
+            "sid": _session_digest(session_key),
             "state": state_json,
             "tenant": tenant_scope,
         },
@@ -221,7 +242,10 @@ def unsign_snapshot(
 
     # Identity binding — reject cross-session replay. Anonymous (no session
     # key) is "" on both sides, so it stays consistent.
-    if envelope.get("sid", "") != (session_key or ""):
+    signed_sid = envelope.get("sid", "")
+    if not isinstance(signed_sid, str) or not constant_time_compare(
+        signed_sid, _session_digest(session_key)
+    ):
         logger.warning(
             "state_snapshot: session mismatch for %s; rejecting cross-session replay",
             sanitize_for_log(view_slug),
