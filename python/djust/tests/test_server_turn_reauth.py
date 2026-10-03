@@ -58,14 +58,6 @@ class PushView(LiveView):
         self.secret = SECRET
 
 
-class CountingTickView(PushView):
-    """Ticks with a new value every time, so every tick renders a frame."""
-
-    def handle_tick(self):
-        self._ticks = getattr(self, "_ticks", 0) + 1
-        self.secret = f"{SECRET}-{self._ticks}"
-
-
 class OpenView(PushView):
     login_required = False
 
@@ -115,21 +107,19 @@ async def _drain(comm, wait=0.4):
             return outs
 
 
-async def _collect_for(comm, seconds):
-    """Every frame that arrives in the next ``seconds`` (does not wait for silence)."""
+async def _until(comm, done, timeout=10.0):
+    """Frames until ``done(frames)`` holds, a close arrives, or ``timeout`` s pass."""
     outs = []
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + seconds
-    while True:
-        remaining = deadline - loop.time()
-        if remaining <= 0:
-            return outs
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
         try:
-            outs.append(await asyncio.wait_for(comm.output_queue.get(), remaining))
+            outs.append(await asyncio.wait_for(comm.output_queue.get(), 0.5))
         except asyncio.TimeoutError:
-            return outs
-        if outs[-1]["type"] == "websocket.close":
-            return outs
+            continue
+        if outs[-1]["type"] == "websocket.close" or done(outs):
+            break
+    return outs
 
 
 async def _open(view_name, *, reauth=True, interval=None):
@@ -141,7 +131,18 @@ async def _open(view_name, *, reauth=True, interval=None):
     ctx = override_settings(LIVEVIEW_ALLOWED_MODULES=[MOD], LIVEVIEW_CONFIG=cfg)
     ctx.enable()
     config.reset()
+    # Ticks are driven by hand (``_send_turn``): a real timer is a wall-clock race
+    # (#2124). The patched loop only records the consumer and returns.
+    consumers = []
+
+    async def _record_consumer(self, interval_ms):
+        consumers.append(self)
+
+    patcher = patch.object(LiveViewConsumer, "_run_tick", _record_consumer)
+    patcher.start()
     comm = WebsocketCommunicator(_mw(LiveViewConsumer.as_asgi()), "/ws/")
+    comm._djust_patcher = patcher
+    comm._djust_consumers = consumers
     ok, _ = await comm.connect()
     assert ok
     try:
@@ -151,6 +152,12 @@ async def _open(view_name, *, reauth=True, interval=None):
     await comm.send_json_to({"type": "mount", "view": f"{MOD}.{view_name}"})
     first = await comm.receive_json_from(timeout=3)
     assert first.get("type") in ("mount", "html_update", "patch"), first
+    if view_name in ("PushView", "OpenView"):  # the views that tick
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 10
+        while not consumers and loop.time() < deadline:
+            await asyncio.sleep(0.01)
+        assert consumers, "the tick task was never started"
     return comm, ctx
 
 
@@ -159,6 +166,7 @@ async def _close(comm, ctx):
         await comm.disconnect()
     except Exception:  # noqa: BLE001
         pass
+    getattr(comm, "_djust_patcher", None) and comm._djust_patcher.stop()
     ctx.disable()
     config.reset()
 
@@ -188,7 +196,8 @@ async def _send_turn(comm, kind):
         await comm.send_input(PUSH)
     elif kind == "db_notify":
         await comm.send_input(NOTIFY)
-    # tick fires on its own timer
+    elif kind == "tick":
+        await comm._djust_consumers[0]._tick_once()
 
 
 KINDS = [("server_push", "QuietView"), ("db_notify", "QuietView"), ("tick", "PushView")]
@@ -202,7 +211,7 @@ async def test_revoked_user_gets_no_frame_and_is_closed(kind, view):
         try:
             principal.user = AnonymousUser()  # logged out after mount
             await _send_turn(comm, kind)
-            frames = await _drain(comm, 0.6)
+            frames = await _until(comm, lambda o: bool(_closed_4403(o)))
             assert not _pushed(frames)
             assert _closed_4403(frames)
             assert _navigates(frames)
@@ -217,7 +226,7 @@ async def test_authorized_user_still_receives_push(kind, view):
         comm, ctx = await _open(view)
         try:
             await _send_turn(comm, kind)
-            frames = await _drain(comm, 0.6)
+            frames = await _until(comm, _pushed)
             assert _pushed(frames)
             assert not _closed_4403(frames)
             assert principal.calls >= 1
@@ -233,7 +242,7 @@ async def test_setting_off_pushes_unchanged(kind, view):
         try:
             principal.user = AnonymousUser()
             await _send_turn(comm, kind)
-            frames = await _drain(comm, 0.6)
+            frames = await _until(comm, _pushed)
             assert _pushed(frames)
             assert not _closed_4403(frames)
             assert principal.calls == 0  # no session read at all
@@ -266,7 +275,7 @@ async def test_raising_check_denies_and_logs_type_and_view_only(kind, view, capl
         try:
             principal.user = RuntimeError(f"db password hunter2 {SECRET}")
             await _send_turn(comm, kind)
-            frames = await _drain(comm, 0.6)
+            frames = await _until(comm, lambda o: bool(_closed_4403(o)))
         finally:
             await _close(comm, ctx)
     assert not _pushed(frames)
@@ -288,9 +297,11 @@ async def test_raising_check_denies_and_logs_type_and_view_only(kind, view, capl
 async def test_rapid_ticks_cause_at_most_one_lookup_per_interval():
     principal = _Principal()
     with patch("channels.auth.get_user", principal.get_user):
-        comm, ctx = await _open("CountingTickView", interval=3600)
+        comm, ctx = await _open("PushView", interval=3600)
         try:
-            frames = await _collect_for(comm, 1.0)  # ~30 ticks at 30 ms
+            for _ in range(15):
+                await comm._djust_consumers[0]._tick_once()
+            frames = await _until(comm, _pushed)
             assert _pushed(frames)
             assert principal.calls == 1
         finally:
