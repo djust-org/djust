@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Pick the pytest files (and cargo packages) a pushed range can affect (#2526).
 
-The pre-push hook used to run the whole Python suite — 20,000 tests, ~8.5
-minutes — on every push, and a PR pushes three or four times. The
+The pre-push hook used to run the whole Python suite on every push. The
 authoritative run is CI; the hook's job is to catch what the PUSHER's change
 breaks, before the round-trip. That is a property of the diff, so select
 from it.
@@ -22,6 +21,8 @@ Selection, from ``git diff --name-only <from>...<to>``:
     package roots (``python/djust/__init__.py`` / ``apps.py``), anything
     under ``crates/djust_core/src/`` (the Value/Context core, whose blast
     radius is the whole engine), when the selection would be empty, or when
+    any changed path cannot be classified, a test source is unreadable, a
+    production module imports a changed module (transitive impact), or
     the branch name matches ``flip|routing|convergence`` (the routing-flip
     rule in CLAUDE.md: those PRs must run every test root).
 
@@ -46,6 +47,7 @@ the caller falls back to the full suite when this script cannot run.
 from __future__ import annotations
 
 import argparse
+import ast
 import os
 import re
 import subprocess
@@ -77,6 +79,19 @@ FULL_SUITE_FILES = frozenset(
         "scripts/select-tests.py",
         "python/djust/__init__.py",
         "python/djust/apps.py",
+        "python/djust/live_view.py",
+        "python/djust/websocket.py",
+        "uv.lock",
+        "Cargo.toml",
+        "Cargo.lock",
+        ".python-version",
+        "Makefile",
+        "scripts/run-with-venv-python.sh",
+        "scripts/pre-push-cargo-test.sh",
+        "scripts/embeddable-python.sh",
+        ".test_collected_floor",
+        ".test_durations",
+        "examples/demo_project/demo_project/settings.py",
     }
 )
 # The whole engine: a change under any of these is exercised by every test that
@@ -86,6 +101,8 @@ FULL_SUITE_PREFIXES = (
     "crates/djust_core/src/",
     "crates/djust_templates/src/",
     "crates/djust_vdom/src/",
+    ".github/workflows/",
+    "python/djust/state_backends/",
 )
 FULL_SUITE_BRANCH_RE = re.compile(r"flip|routing|convergence", re.IGNORECASE)
 
@@ -147,9 +164,42 @@ def full_suite_trigger(changed: Iterable[str], branch: str | None) -> str | None
             return "%s changed" % path
         if PurePosixPath(path).name == "conftest.py":
             return "%s changed" % path
+        name = PurePosixPath(path).name
+        if name == "Cargo.toml" or (name.startswith("requirements") and name.endswith(".txt")):
+            return "%s changed (shared dependencies)" % path
+        if path.endswith("/__init__.py") or (
+            path.startswith(TEST_ROOTS) and path.endswith(".py") and not is_test_file(path)
+        ):
+            return "%s changed (shared package/test support)" % path
         if path.startswith(FULL_SUITE_PREFIXES):
-            return "%s changed (djust_core: whole-engine blast radius)" % path
+            return "%s changed (shared runtime/engine/harness)" % path
     return None
+
+
+def imported_modules(path: str, text: str) -> set[str]:
+    """Static import targets, including relative imports and from-package names.
+
+    Include imports inside functions and TYPE_CHECKING blocks conservatively.
+    Dynamic imports cannot establish isolation; the shared-runtime triggers and
+    authoritative full CI remain necessary even for a classified leaf change.
+    """
+    _, dotted = module_names(path)
+    package = (dotted or "").split(".")
+    if PurePosixPath(path).name != "__init__.py":
+        package = package[:-1]
+    targets: set[str] = set()
+    for node in ast.walk(ast.parse(text, filename=path)):
+        if isinstance(node, ast.Import):
+            targets.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            parts = node.module.split(".") if node.module else []
+            if node.level:
+                parts = package[: len(package) - node.level + 1] + parts
+            base = ".".join(parts)
+            if base:
+                targets.add(base)
+                targets.update(base + "." + alias.name for alias in node.names)
+    return targets
 
 
 def select_tests(
@@ -157,8 +207,15 @@ def select_tests(
     all_tests: Iterable[str],
     read_text: Callable[[str], str],
     branch: str | None = None,
+    *,
+    all_modules: Iterable[str] = (),
 ) -> Selection:
-    """The pure selection. ``all_tests`` is every EXISTING test file."""
+    """Select files only when every change maps to an existing test.
+
+    The CLI supplies all production modules for the transitive-impact guard.
+    If another production module imports a changed one, full coverage is safer
+    than trying to infer all indirect test consumers from names/source pins.
+    """
     changed = sorted(set(changed))
     all_tests = sorted(set(all_tests))
     trigger = full_suite_trigger(changed, branch)
@@ -167,13 +224,37 @@ def select_tests(
     if not changed:
         return Selection(True, "no changed files in the range")
 
+    changed_modules = {
+        dotted
+        for path in changed
+        if path.endswith(".py") and not is_test_file(path)
+        for _, dotted in [module_names(path)]
+        if dotted
+    }
+    if changed_modules:
+        for module in sorted(set(all_modules)):
+            try:
+                imports = imported_modules(module, read_text(module))
+            except (OSError, SyntaxError, UnicodeError) as exc:
+                return Selection(True, "%s: import graph unavailable (%s)" % (module, exc))
+            _, own_name = module_names(module)
+            for changed_name in sorted(changed_modules):
+                if own_name != changed_name and any(
+                    name == changed_name or name.startswith(changed_name + ".") for name in imports
+                ):
+                    return Selection(
+                        True, "%s imports %s (transitive impact)" % (module, changed_name)
+                    )
+
     chosen: dict[str, str] = {}
     existing = set(all_tests)
+    classified: set[str] = set()
 
     # (a) changed test files.
     for path in changed:
         if is_test_file(path) and path in existing:
             chosen.setdefault(path, "changed test")
+            classified.add(path)
 
     # (b) modules: name contains the stem, or text imports it.
     # (c) every file: text mentions its basename.
@@ -181,11 +262,15 @@ def select_tests(
 
     def text_of(t: str) -> str:
         if t not in texts:
-            try:
-                texts[t] = read_text(t)
-            except OSError:
-                texts[t] = ""
+            texts[t] = read_text(t)
         return texts[t]
+
+    # A read failure may hide another consumer, even when a filename matched.
+    for test in all_tests:
+        try:
+            text_of(test)
+        except (OSError, UnicodeError) as exc:
+            return Selection(True, "%s: unreadable test source (%s)" % (test, exc))
 
     for path in changed:
         base = PurePosixPath(path).name
@@ -194,21 +279,25 @@ def select_tests(
         stem, dotted = module_names(path) if is_module else (None, None)
         import_res = _import_patterns(dotted) if dotted else []
         for t in all_tests:
-            if t in chosen:
-                continue
             tname = PurePosixPath(t).name
             if stem and len(stem) >= 3 and stem in tname:
                 chosen[t] = "name contains %r (%s)" % (stem, path)
+                classified.add(path)
                 continue
             text = text_of(t)
             if base_re.search(text):
                 chosen[t] = "mentions %s" % base
+                classified.add(path)
                 continue
             if any(r.search(text) for r in import_res):
                 chosen[t] = "imports %s" % dotted
+                classified.add(path)
 
     if not chosen:
         return Selection(True, "selection is empty for %d changed file(s)" % len(changed))
+    unclassified = sorted(set(changed) - classified)
+    if unclassified:
+        return Selection(True, "unclassified changed file(s): " + ", ".join(unclassified))
     tests = sorted(chosen)
     reason = "%d test file(s) selected for %d changed file(s)" % (len(tests), len(changed))
     return Selection(False, reason, tests)
@@ -347,7 +436,15 @@ def main(argv: list[str] | None = None) -> int:
         except subprocess.CalledProcessError:
             branch = ""
     sel = select_tests(
-        changed, _all_test_files(root), lambda p: (root / p).read_text(errors="replace"), branch
+        changed,
+        _all_test_files(root),
+        lambda p: (root / p).read_text(),
+        branch,
+        all_modules=[
+            str(path.relative_to(root).as_posix())
+            for path in (root / "python/djust").rglob("*.py")
+            if not path.relative_to(root).as_posix().startswith("python/djust/tests/")
+        ],
     )
     if sel.full:
         print("select-tests: FULL suite — %s" % sel.reason, file=sys.stderr)

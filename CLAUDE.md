@@ -20,7 +20,9 @@ make install-quick    # Python-only install (skip Rust rebuild)
 make build            # Build Rust extensions (release)
 make dev-build        # Build Rust extensions (dev, faster)
 
-make test             # Run all tests (Python + Rust)
+make test-selected    # Affected Python checks; conservative full fallback
+make test-integration # Full Python + JavaScript + Rust integration gate
+make test             # Same full integration gate (unchanged coverage)
 make test-python      # Python tests only
 make test-rust        # Rust tests only
 
@@ -36,9 +38,10 @@ make stop             # Stop background server
 ### Running specific tests
 
 ```bash
-pytest python/                        # All Python tests
-pytest python/djust/tests/test_foo.py # Single file
-pytest -k "test_name"                 # By name pattern
+bash scripts/run-with-venv-python.sh -m pytest tests/unit/test_select_tests.py -q
+make test-selected FROM=origin/main TO=HEAD
+# Full Python coverage includes ALL three roots:
+bash scripts/run-with-venv-python.sh -m pytest tests/ python/tests/ python/djust/tests/
 cargo test                            # All Rust tests
 cargo test -p djust_vdom              # Single crate
 ```
@@ -131,9 +134,9 @@ These are **hard requirements** — violations are auto-rejected in PR review:
 ## Workflow Expectations
 
 - **Conventional commits**: `fix:`, `feat:`, `docs:`, `refactor:`, `security:`, `test:`, `chore:`
-- **Always run tests** before pushing (`make test`)
+- **Run focused checks while editing**, then let the scoped pre-push hooks run. Do not redundantly run `make test` before every incremental push.
 - **Pre-commit hooks** run automatically: ruff, ruff-format, bandit, detect-secrets
-- **Pre-push hooks** run the full test suite (~900 tests, ~40s)
+- **Pre-push hooks** select affected Python tests and Rust crates; unknown/shared changes fall back to full coverage. See [test strategy](docs/testing-strategy.md).
 - **Review against** `docs/PULL_REQUEST_CHECKLIST.md` before marking PRs ready
 - After completing a set of related changes, commit with a descriptive conventional commit message
 
@@ -142,7 +145,9 @@ These are **hard requirements** — violations are auto-rejected in PR review:
 - All new code needs tests (unit and/or integration)
 - New JS feature files in `static/djust/src/` need corresponding tests in `tests/js/`
 - Bug fixes require regression tests
-- Run the full suite before push; let pre-push hooks run
+- Use [stage-specific checks](docs/testing-strategy.md): focused edit checks, selected pre-push checks, then `make test-integration` on the final integration commit. Full CI and release gates remain authoritative.
+- Do not treat a selected pass as full-suite evidence. If any changed path is unclassified, dependencies/configuration change, or code has shared/transitive impact, run the full applicable checks.
+- This staging policy supersedes older “full suite before every push” wording in local agent guides; a pipeline full-suite integration stage and release gates still apply.
 - Tests must be deterministic — no flaky tests
 - Test imports must match actual module paths (a common rejection reason)
 - `feat:` and `fix:` PRs must add a changelog fragment: `changelog.d/<issue-or-slug>.<section>.md` (section ∈ added/changed/fixed/security/documentation/removed/deprecated; body = the bullet). Do NOT edit `CHANGELOG.md`'s `[Unreleased]` directly — pre-commit refuses it; the release cut compiles the fragments (`changelog.d/README.md`)

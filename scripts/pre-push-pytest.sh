@@ -36,8 +36,9 @@ WT="$(bash scripts/run-with-venv-python.sh --worktree-pythonpath 2>/dev/null || 
 export PYTHONPATH="${WT:+$WT:}."
 
 # Scope the run to what the pushed range can affect (#2526). The full suite
-# is 20,000 tests in ~8.5 minutes and a PR pushes three or four times; CI is
-# the authoritative full run. scripts/select-tests.py picks the test files
+# has tens of thousands of parametrized cases; counts and costs change. CI is
+# the authoritative full run. Use this wrapper via `make test-selected` while
+# iterating instead of redundantly invoking the full integration target. scripts/select-tests.py picks the test files
 # from the diff (changed tests; tests named after / importing a changed
 # module; tests whose text mentions a changed file's basename — the source-pin
 # tests that read renderer.rs etc.) and answers FULL for anything with
