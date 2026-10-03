@@ -87,7 +87,9 @@ def test_a_deleted_test_file_is_not_selected():
     # A path in the diff that no longer exists (a removed test) must not be
     # handed to pytest, which would abort the whole session on it.
     sel = _select(["tests/unit/test_gone.py", "tests/unit/test_forms.py"])
-    assert sel.tests == ["tests/unit/test_forms.py"]
+    assert sel.full
+    assert "tests/unit/test_gone.py" in sel.reason
+    assert "tests/unit/test_gone.py" not in sel.tests
 
 
 @pytest.mark.parametrize(
@@ -274,12 +276,12 @@ def test_selection_is_sorted_and_deduplicated():
     assert sel.tests == sorted(set(sel.tests))
 
 
-def test_reader_errors_are_treated_as_no_text():
+def test_reader_errors_require_full():
     def boom(_p):
         raise OSError("unreadable")
 
     sel = st.select_tests(["crates/djust_components/src/renderer.rs"], TESTS, boom, "x")
-    assert sel.full and "empty" in sel.reason
+    assert sel.full and "unreadable" in sel.reason
 
 
 # --------------------------------------------------------------------------
@@ -346,3 +348,122 @@ def test_cli_cargo_prints_workspace_for_an_empty_range():
     # No crate files changed -> an empty package list; the hook then runs the
     # workspace. (`--workspace` is printed only for the Cargo.*/djust_core case.)
     assert r.stdout.strip() == ""
+
+
+# Safety: a nonempty union is insufficient evidence for the whole diff.
+@pytest.mark.parametrize(
+    "unknown", ["docs/new-contract.md", "python/djust/new_helper.py", "tests/unit/test_gone.py"]
+)
+def test_mixed_mapped_and_unmapped_changes_require_full(unknown):
+    sel = _select(["tests/unit/test_forms.py", unknown])
+    assert sel.full
+    assert unknown in sel.reason
+
+
+def test_each_change_can_map_to_the_same_test():
+    test = "tests/unit/test_contract.py"
+    sel = _select(
+        ["scripts/first.py", "scripts/second.py"],
+        tests=[test],
+        texts={test: 'read("first.py"); read("second.py")'},
+    )
+    assert not sel.full
+    assert sel.tests == [test]
+
+
+def test_unreadable_test_requires_full_even_when_another_test_matches():
+    def read(path):
+        if path == "python/tests/test_renderer_pins.py":
+            raise OSError("unreadable")
+        return TEXTS[path]
+
+    sel = st.select_tests(["python/djust/forms.py"], TESTS, read)
+    assert sel.full
+    assert "unreadable" in sel.reason
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "uv.lock",
+        "Cargo.lock",
+        ".python-version",
+        "Makefile",
+        ".github/workflows/test.yml",
+        "scripts/run-with-venv-python.sh",
+        "tests/corpus_shards.py",
+        "python/tests/differential_corpus_2723.py",
+        "python/djust/live_view.py",
+        "python/djust/websocket.py",
+        "python/djust/state_backends/base.py",
+        "python/djust/mixins/__init__.py",
+    ],
+)
+def test_shared_harness_and_runtime_require_full_even_with_a_matching_pin(path):
+    test = "tests/unit/test_pin.py"
+    sel = _select([path], tests=[test], texts={test: repr(path)})
+    assert sel.full
+    assert path in sel.reason
+
+
+@pytest.mark.parametrize(
+    "consumer",
+    [
+        "from djust.forms import FormMixin",
+        "from .forms import FormMixin",
+        "from djust import forms",
+        "import djust.forms",
+    ],
+)
+def test_production_importer_requires_full_for_transitive_impact(consumer):
+    texts = {**TEXTS, "python/djust/consumer.py": consumer}
+    sel = st.select_tests(
+        ["python/djust/forms.py"],
+        TESTS,
+        texts.__getitem__,
+        all_modules=["python/djust/consumer.py"],
+    )
+    assert sel.full
+    assert "consumer.py" in sel.reason
+
+
+def test_leaf_module_without_production_importers_keeps_focused_selection():
+    texts = {**TEXTS, "python/djust/consumer.py": "from djust.other import Other"}
+    sel = st.select_tests(
+        ["python/djust/forms.py"],
+        TESTS,
+        texts.__getitem__,
+        all_modules=["python/djust/consumer.py"],
+    )
+    assert not sel.full
+    assert sel.tests == ["tests/unit/test_forms.py"]
+
+
+def test_unparseable_production_import_graph_requires_full():
+    texts = {**TEXTS, "python/djust/consumer.py": "def broken("}
+    sel = st.select_tests(
+        ["python/djust/forms.py"],
+        TESTS,
+        texts.__getitem__,
+        all_modules=["python/djust/consumer.py"],
+    )
+    assert sel.full
+    assert "consumer.py" in sel.reason
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "examples/demo_project/demo_project/settings.py",
+        "requirements-dev.txt",
+        "crates/djust_components/Cargo.toml",
+        ".test_collected_floor",
+        ".test_durations",
+        "scripts/pre-push-cargo-test.sh",
+    ],
+)
+def test_shared_dependency_and_demo_settings_require_full_even_with_a_pin(path):
+    test = "tests/unit/test_pin.py"
+    sel = _select([path], tests=[test], texts={test: repr(path)})
+    assert sel.full
+    assert path in sel.reason
