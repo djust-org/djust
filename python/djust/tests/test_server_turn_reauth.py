@@ -58,6 +58,14 @@ class PushView(LiveView):
         self.secret = SECRET
 
 
+class CountingTickView(PushView):
+    """Ticks with a new value every time, so every tick renders a frame."""
+
+    def handle_tick(self):
+        self._ticks = getattr(self, "_ticks", 0) + 1
+        self.secret = f"{SECRET}-{self._ticks}"
+
+
 class OpenView(PushView):
     login_required = False
 
@@ -101,6 +109,23 @@ async def _drain(comm, wait=0.4):
     while True:
         try:
             outs.append(await asyncio.wait_for(comm.output_queue.get(), wait))
+        except asyncio.TimeoutError:
+            return outs
+        if outs[-1]["type"] == "websocket.close":
+            return outs
+
+
+async def _collect_for(comm, seconds):
+    """Every frame that arrives in the next ``seconds`` (does not wait for silence)."""
+    outs = []
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + seconds
+    while True:
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            return outs
+        try:
+            outs.append(await asyncio.wait_for(comm.output_queue.get(), remaining))
         except asyncio.TimeoutError:
             return outs
         if outs[-1]["type"] == "websocket.close":
@@ -263,9 +288,9 @@ async def test_raising_check_denies_and_logs_type_and_view_only(kind, view, capl
 async def test_rapid_ticks_cause_at_most_one_lookup_per_interval():
     principal = _Principal()
     with patch("channels.auth.get_user", principal.get_user):
-        comm, ctx = await _open("PushView", interval=3600)
+        comm, ctx = await _open("CountingTickView", interval=3600)
         try:
-            frames = await _drain(comm, 0.5)  # ~15 ticks at 30 ms
+            frames = await _collect_for(comm, 1.0)  # ~30 ticks at 30 ms
             assert _pushed(frames)
             assert principal.calls == 1
         finally:
@@ -409,3 +434,13 @@ async def test_async_result_turn_is_gated(revoked):
     consumer._reauth_legacy_server_turn.assert_awaited()
     assert (view.secret == SECRET) is (not revoked)
     assert (consumer._send_update.await_count == 0) is revoked
+
+
+@pytest.fixture(autouse=True)
+def _reset_config_after_each_test():
+    """Drop the config cached under this test's settings (``reauth_on_event``
+    on), so a later test in the same worker does not inherit it."""
+    yield
+    from djust.config import config as _config
+
+    _config.reset()
