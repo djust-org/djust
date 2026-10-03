@@ -52,6 +52,9 @@ class _User:
         return True
 
 
+TICKS = {"n": 0}  # tick iterations run by the current test
+
+
 class PushView(LiveView):
     login_required = True
     tick_interval = 30
@@ -64,6 +67,7 @@ class PushView(LiveView):
         self.secret = SECRET
 
     def handle_tick(self):
+        TICKS["n"] += 1  # test-side counter: view state would render a frame per tick
         self.secret = SECRET
 
     def handle_info(self, message):
@@ -119,6 +123,21 @@ async def _drain(comm, wait=0.4):
             return outs
 
 
+async def _until(comm, done, timeout=10.0):
+    """Frames until ``done(frames)`` holds, a close arrives, or ``timeout`` s pass."""
+    outs = []
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        try:
+            outs.append(await asyncio.wait_for(comm.output_queue.get(), 0.5))
+        except asyncio.TimeoutError:
+            continue
+        if outs[-1]["type"] == "websocket.close" or done(outs):
+            break
+    return outs
+
+
 async def _open(view_name, *, reauth=True, interval=None):
     from channels.testing import WebsocketCommunicator
 
@@ -128,7 +147,24 @@ async def _open(view_name, *, reauth=True, interval=None):
     ctx = override_settings(LIVEVIEW_ALLOWED_MODULES=[MOD], LIVEVIEW_CONFIG=cfg)
     ctx.enable()
     config.reset()
+    TICKS["n"] = 0
+    # The tick loop does not start with the mount: ``_send_turn`` starts the real
+    # loop on demand, after the test has set the scene, so no tick can fire
+    # before the principal changes (a wall-clock race, #2124). The patched loop
+    # only records the consumer and returns.
+    consumers = []
+
+    async def _record_consumer(self, interval_ms):
+        consumers.append(self)
+
+    original_run_tick = LiveViewConsumer._run_tick
+    patcher = patch.object(LiveViewConsumer, "_run_tick", _record_consumer)
+    patcher.start()
     comm = WebsocketCommunicator(_mw(LiveViewConsumer.as_asgi()), "/ws/")
+    comm._djust_patcher = patcher
+    comm._djust_consumers = consumers
+    comm._djust_run_tick = original_run_tick
+    comm._djust_tick_tasks = []
     try:
         ok, _ = await comm.connect()
         assert ok
@@ -139,6 +175,12 @@ async def _open(view_name, *, reauth=True, interval=None):
         await comm.send_json_to({"type": "mount", "view": f"{MOD}.{view_name}"})
         first = await comm.receive_json_from(timeout=3)
         assert first.get("type") in ("mount", "html_update", "patch"), first
+        if view_name in ("PushView", "OpenView"):  # the views that tick
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + 10
+            while not consumers and loop.time() < deadline:
+                await asyncio.sleep(0.01)
+            assert consumers, "the tick task was never started"
     except BaseException:
         # Never leave the settings override enabled for the next test in
         # this worker (reauth_on_event would leak into unrelated tests).
@@ -148,11 +190,18 @@ async def _open(view_name, *, reauth=True, interval=None):
 
 
 async def _close(comm, ctx):
+    for task in getattr(comm, "_djust_tick_tasks", []):
+        task.cancel()
+        try:
+            await task
+        except (Exception, asyncio.CancelledError):  # noqa: BLE001
+            pass
     try:
         await comm.disconnect()
     except (Exception, asyncio.CancelledError):  # noqa: BLE001
         pass
     finally:
+        getattr(comm, "_djust_patcher", None) and comm._djust_patcher.stop()
         ctx.disable()
         config.reset()
 
@@ -182,7 +231,9 @@ async def _send_turn(comm, kind):
         await comm.send_input(PUSH)
     elif kind == "db_notify":
         await comm.send_input(NOTIFY)
-    # tick fires on its own timer
+    elif kind == "tick":
+        consumer = comm._djust_consumers[0]
+        comm._djust_tick_tasks.append(asyncio.ensure_future(comm._djust_run_tick(consumer, 5)))
 
 
 KINDS = [("server_push", "QuietView"), ("db_notify", "QuietView"), ("tick", "PushView")]
@@ -196,7 +247,7 @@ async def test_revoked_user_gets_no_frame_and_is_closed(kind, view):
         try:
             principal.user = AnonymousUser()  # logged out after mount
             await _send_turn(comm, kind)
-            frames = await _drain(comm, 0.6)
+            frames = await _until(comm, lambda o: bool(_closed_4403(o)))
             assert not _pushed(frames)
             assert _closed_4403(frames)
             assert _navigates(frames)
@@ -211,7 +262,7 @@ async def test_authorized_user_still_receives_push(kind, view):
         comm, ctx = await _open(view)
         try:
             await _send_turn(comm, kind)
-            frames = await _drain(comm, 0.6)
+            frames = await _until(comm, _pushed)
             assert _pushed(frames)
             assert not _closed_4403(frames)
             assert principal.calls >= 1
@@ -227,7 +278,7 @@ async def test_setting_off_pushes_unchanged(kind, view):
         try:
             principal.user = AnonymousUser()
             await _send_turn(comm, kind)
-            frames = await _drain(comm, 0.6)
+            frames = await _until(comm, _pushed)
             assert _pushed(frames)
             assert not _closed_4403(frames)
             assert principal.calls == 0  # no session read at all
@@ -260,7 +311,7 @@ async def test_raising_check_denies_and_logs_type_and_view_only(kind, view, capl
         try:
             principal.user = RuntimeError(f"db password hunter2 {SECRET}")
             await _send_turn(comm, kind)
-            frames = await _drain(comm, 1.5)
+            frames = await _until(comm, lambda o: bool(_closed_4403(o)))
         finally:
             await _close(comm, ctx)
     assert not _pushed(frames)
@@ -284,9 +335,15 @@ async def test_rapid_ticks_cause_at_most_one_lookup_per_interval():
     with patch("channels.auth.get_user", principal.get_user):
         comm, ctx = await _open("PushView", interval=3600)
         try:
-            frames = await _drain(comm, 1.5)  # ~50 ticks at 30 ms
+            await _send_turn(comm, "tick")
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + 10
+            while TICKS["n"] < 10 and loop.time() < deadline:
+                await asyncio.sleep(0.01)
+            assert TICKS["n"] >= 10  # many ticks ran
+            frames = await _until(comm, _pushed)
             assert _pushed(frames)
-            assert principal.calls == 1
+            assert principal.calls == 1  # ...and only one session lookup
         finally:
             await _close(comm, ctx)
 

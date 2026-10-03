@@ -114,6 +114,9 @@ def _reset_state():
     _STATE.update(ran=False, exc=None)
     yield
     _STATE.update(ran=False, exc=None)
+    # Drop the config cached under this test's settings (reauth_on_event on), so
+    # a later test in the same worker does not inherit it.
+    config.reset()
 
 
 def _cfg(on=True):
