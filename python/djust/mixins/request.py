@@ -247,7 +247,11 @@ class RequestMixin:
         # Save state to session after GET so the WebSocket mount can restore it
         # instead of re-running mount() (which doubles page load cost).
         # Also used by HTTP-only POST path to restore state before event handling.
-        view_key = f"liveview_{request.path}"
+        from .._tenant_state import render_only_keys, session_view_key
+
+        # None = a tenant view with no resolved tenant: nothing is saved.
+        view_key = session_view_key(self, request.path)
+        _render_only = render_only_keys(self)
         # Use _cached_context (pre-context-processor copy) to avoid
         # non-serializable processor objects (PermWrapper, csrf, etc.)
         _cached = self._cached_context or {}
@@ -265,18 +269,22 @@ class RequestMixin:
         # per GET, and streams exist precisely to keep large collections OUT of
         # state.
         _session_state = {
-            k: v for k, v in _cached.items() if not isinstance(v, LiveComponent) and k != "streams"
+            k: v
+            for k, v in _cached.items()
+            if not isinstance(v, LiveComponent) and k != "streams" and k not in _render_only
         }
-        request.session[view_key] = normalize_django_value(_session_state)
+        t_save_components = 0.0
+        if view_key is not None:
+            request.session[view_key] = normalize_django_value(_session_state)
 
-        # Persist user-defined _private attributes so they survive reconnects
-        private_state = self._get_private_state()
-        if private_state:
-            request.session[f"{view_key}__private"] = normalize_django_value(private_state)
+            # Persist user-defined _private attributes so they survive reconnects
+            private_state = self._get_private_state()
+            if private_state:
+                request.session[f"{view_key}__private"] = normalize_django_value(private_state)
 
-        t0_sc = time.perf_counter()
-        self._save_components_to_session(request, _cached)
-        t_save_components = (time.perf_counter() - t0_sc) * 1000
+            t0_sc = time.perf_counter()
+            self._save_components_to_session(request, _cached)
+            t_save_components = (time.perf_counter() - t0_sc) * 1000
 
         # IMPORTANT: Always call get_template() on GET requests to set _full_template
         t0 = time.perf_counter()
@@ -662,15 +670,20 @@ class RequestMixin:
                 return JsonResponse({"error": "Invalid event name"}, status=400)
 
             # Restore state from session
-            view_key = f"liveview_{request.path}"
-            saved_state = request.session.get(view_key, {})
+            from .._tenant_state import render_only_keys, session_view_key
+
+            # None = tenant view with no resolved tenant: restore and save nothing.
+            view_key = session_view_key(self, request.path)
+            saved_state = request.session.get(view_key, {}) if view_key is not None else {}
 
             for key, value in saved_state.items():
                 if not key.startswith("_") and not callable(value):
                     safe_setattr(self, key, value, allow_private=False)
 
             # Restore user-defined _private attributes
-            private_state = request.session.get(f"{view_key}__private", {})
+            private_state = (
+                request.session.get(f"{view_key}__private", {}) if view_key is not None else {}
+            )
             if private_state:
                 self._restore_private_state(private_state)
 
@@ -690,7 +703,9 @@ class RequestMixin:
             self._assign_component_ids()
 
             # Restore component state
-            component_state = request.session.get(f"{view_key}_components", {})
+            component_state = (
+                request.session.get(f"{view_key}_components", {}) if view_key is not None else {}
+            )
             for key, state in component_state.items():
                 component = getattr(self, key, None)
                 if component and isinstance(component, (Component, LiveComponent)):
@@ -777,20 +792,27 @@ class RequestMixin:
             # Persist user-defined _private attributes BEFORE get_context_data()
             # because get_context_data() sets render-cycle internals that we
             # don't want to accidentally capture.
-            private_state = self._get_private_state()
-            if private_state:
-                request.session[f"{view_key}__private"] = normalize_django_value(private_state)
-            else:
-                # Clean up if no private attrs remain
-                request.session.pop(f"{view_key}__private", None)
+            if view_key is not None:
+                private_state = self._get_private_state()
+                if private_state:
+                    request.session[f"{view_key}__private"] = normalize_django_value(private_state)
+                else:
+                    # Clean up if no private attrs remain
+                    request.session.pop(f"{view_key}__private", None)
 
             # Save updated state back to session
             updated_context = self.get_context_data()
-            state = {k: v for k, v in updated_context.items() if not isinstance(v, LiveComponent)}
-            state_serializable = normalize_django_value(state)
-            request.session[view_key] = state_serializable
+            if view_key is not None:
+                render_only = render_only_keys(self)
+                state = {
+                    k: v
+                    for k, v in updated_context.items()
+                    if not isinstance(v, LiveComponent) and k not in render_only
+                }
+                state_serializable = normalize_django_value(state)
+                request.session[view_key] = state_serializable
 
-            self._save_components_to_session(request, updated_context)
+                self._save_components_to_session(request, updated_context)
 
             # Apply context processors so the render includes auth context
             # (user, perms, messages, etc.). Without this, template conditionals
@@ -841,10 +863,15 @@ class RequestMixin:
             # stale ledger exists (so a parent whose last sticky child was
             # removed still gets its orphans pruned). A parent that never had
             # sticky children pays zero cost — no ledger key, empty sweep.
-            if _sticky_to_save or _sticky_index_key(request.path) in request.session:
+            from .._tenant_state import scoped_path
+
+            _sticky_path = scoped_path(self, request.path)
+            if _sticky_path is not None and (
+                _sticky_to_save or _sticky_index_key(_sticky_path) in request.session
+            ):
                 for _child in _sticky_to_save:
-                    save_sticky_child_state_sync(_child, request.session, request.path)
-                write_sticky_index_and_prune_sync(self, request.session, request.path)
+                    save_sticky_child_state_sync(_child, request.session, _sticky_path)
+                write_sticky_index_and_prune_sync(self, request.session, _sticky_path)
 
             import json as json_module
 

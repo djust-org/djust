@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.6] - 2026-10-03
+
+A 1.1 patch release that includes security fixes; upgrading from 1.1.5 is recommended.
+
+### Security
+
+- **The service worker's state cache now expires entries and is cleared on
+  logout or a change of user (#2948).** With `enable_state_snapshot = True`, the
+  opt-in worker kept each view's snapshot in CacheStorage with no age limit,
+  and nothing ever cleared it. After logout, the previous user's snapshot stayed
+  readable in that browser profile. The worker now drops and deletes a state
+  entry older than `DJUST_STATE_SNAPSHOT_MAX_AGE` (default 3600s) on lookup.
+  Each mount frame carries `sw_identity`, an HMAC digest of the session key and
+  user id keyed on `SECRET_KEY` (never the raw values). When it changes or
+  disappears, the client clears the state, VDOM and shell caches.
+- **The PWA sync endpoint no longer returns exception text to the client
+  (#2950).** `sync_endpoint_view` returns `SyncResult.errors` in its JSON
+  response, and the batch loop and the create/update/delete helpers put
+  `str(e)` there. A handler or database exception can quote application data
+  (an `IntegrityError` can quote other rows' values). The errors now carry the
+  exception class only, such as `Create failed for action a1: ValueError`, and
+  the detail is logged on the server.
+- **A legacy component's view-level event alias now resolves only its own
+  component type (#3078).** Descriptor components (`Dropdown`, `Modal`, `Tabs`
+  and the others) register a view-level alias for their `Meta.event`, such as
+  `toggle_dropdown`. The alias looked up the client-supplied `component_id` with
+  `getattr` on the view, so an event for one component type could drive a
+  component of another type, and could read any view attribute first. It now
+  accepts only the view class's declared descriptors of its own type, and
+  ignores any other id.
+- **`LiveViewTestClient.send_event` now enforces handler authorization (#3094).**
+  It called the handler directly, so a test that sent an event to a
+  `@permission_required` handler as an unprivileged user passed whether the
+  decorator was there or not. It now runs the consumer's gates first:
+  `@permission_required` (denied when the view has no request), then the
+  per-event `has_object_permission` re-check for a view that overrides
+  `get_object`, failing closed. A refused event does not run the handler and
+  returns `success=False` with `code="permission_denied"`. A test that relied on
+  the bypass must mount as a user who holds the permission.
+- **Debug panel and `client-dev.js` now escape interpolated values.** The in-browser debug panel (loaded only when `settings.DEBUG` is true) built its Events, Network, Patches, Components, Handlers, Variables and Warnings tabs, the element badge, and the hot-reload error toast as HTML strings without escaping, so text from application data (for example another user's input in a shared view) was parsed as markup in the developer's browser. Every interpolated value is now escaped (including attribute positions, via a quote-escaping `escapeHtml`), warning `docs_url` links are limited to http(s)/relative URLs, and the toast uses `textContent`. Production pages (`DEBUG = False`) never load the panel and were not affected.
+- **`reauth_on_event` now also covers frames the server sends on its own.**
+  With `LIVEVIEW_CONFIG["reauth_on_event"]` on, a WebSocket whose user was
+  logged out or lost a permission was refused on its next client event but kept
+  receiving `server_push` / `push_to_view`, `db_notify`, `tick`, presence and
+  async-result frames for a view with `login_required` or
+  `permission_required`. Each such turn
+  now runs the same fresh-principal check as an event,
+  under the render lock and before the hook runs; on failure the socket gets
+  navigate-to-login and close 4403 and nothing is rendered or sent. A passed
+  check covers the socket for `LIVEVIEW_CONFIG["reauth_server_turn_interval"]`
+  seconds (default 5; 0 re-checks every turn), so ticking views do not read the
+  session store on every tick. A check that raises denies and logs only the
+  exception type and view class at WARNING. Off by default; behaviour with
+  `reauth_on_event` off is unchanged. Tests in
+  `python/djust/tests/test_server_turn_reauth.py`.
+- **The `reauth_on_event` re-check now denies when it raises instead of allowing
+  the event.** With `LIVEVIEW_CONFIG["reauth_on_event"]` on, an exception other
+  than `PermissionDenied` from the per-event authorization check (for example
+  `Http404` or `DoesNotExist` from `check_permissions()`, or a failing session or
+  authentication backend) was logged at DEBUG and the event ran anyway. The
+  WebSocket and SSE transports now log the exception type and view class at
+  WARNING (never the message) and take the normal refusal path: navigate to
+  login and close 4403 on WebSocket, an auth-error frame and end of stream on
+  SSE. Clean allow and deny results are unchanged, and `reauth_on_event` stays
+  off by default. Regression cases in
+  `python/djust/tests/test_reauth_fail_closed.py`.
+- **Saved view state and the signed `state_snapshot` token of a `TenantMixin` view are bound to the tenant.** The state backend entry, the Django-session entry (`liveview_<path>` and its `__private`, `_components` and `__sticky__` siblings) and the back-navigation token are keyed by `tenant:<id>`, so one session that reaches two tenants on the same URL keeps separate state and a mount under another tenant mounts fresh. A tenant view with no resolved tenant saves, restores and mints nothing. The `tenant` context key is render-only, so a restored `self.tenant` is no longer a serialized string. Views without `TenantMixin` are unchanged. State and tokens that tenant views saved before the upgrade are not found once (one fresh mount).
+
 ## [1.1.5] - 2026-09-24
 
 A security release for the 1.1 line.
