@@ -333,6 +333,11 @@ tenant B saved.
   `tenant_required = False` on a page with no tenant yet) saves and loads no
   state in either place. It never falls back to the shared, unprefixed key. On
   a reconnect it mounts fresh, and an HTTP fallback POST re-runs `mount()`.
+  The same holds for a view with `tenant_required = False` that assigns its
+  tenant inside `mount()` instead of resolving it from the request: a restore
+  runs before `mount()`, finds no tenant, and fails closed, so that view can
+  never restore saved state or a snapshot token. Resolve the tenant from the
+  request (subdomain, path, header) if the view should restore.
 - **Your own tenant-aware views:** a view that defines its own
   `get_state_key_prefix()` is keyed by what it returns, and returning an empty
   string means "no saved state", not "shared state".
@@ -345,8 +350,17 @@ tenant B saved.
   not from `self.tenant`, so a tenant you change in-process with
   `set_tenant()` is not part of it; resolve the tenant from the request
   (subdomain, path, header) for views that persist server fields.
-- **The signed `state_snapshot` token** the client holds is bound to the view
-  and the session, not the tenant.
+- **The signed `state_snapshot` token** the client holds (`enable_state_snapshot
+  = True`) is bound to the view, the session and the tenant. A token a
+  `TenantMixin` view minted under one tenant is refused by a mount under
+  another, even with the same session and the same view path, and that mount
+  runs `mount()` fresh. A tenant view that has resolved no tenant mints no token
+  and accepts none. A view without `TenantMixin` is not tenant-scoped; its
+  tokens are unchanged. An explicit-policy `persist="client"` envelope was
+  already bound to the request's tenant. The token is bound to the tenant that
+  is current when it is minted, so after `set_tenant()` the next token carries
+  the new tenant, while state the view loaded before the call carries over to
+  it.
 
 **Upgrading to 1.3:** the keys for tenant views changed, so the saved view
 state those views held under the old keys is no longer found: a **one-time
@@ -360,6 +374,11 @@ reset** of the saved view state of tenant views.
   and re-runs `mount()`, so in-page state (a counter, a half-filled form) is
   lost once. The orphaned `liveview_<path>` entries stay in the session until
   it expires or is cleared.
+- Signed snapshot tokens: a token a tenant view minted before the upgrade has no
+  tenant in it and is refused, so the first Back navigation to such a page
+  after the deploy mounts fresh instead of restoring (the same one-time reset;
+  tokens expire after `DJUST_STATE_SNAPSHOT_MAX_AGE`, one hour by default). The
+  next mount ships a new token.
 
 Nothing needs migrating. Views that do not use `TenantMixin` are not affected.
 

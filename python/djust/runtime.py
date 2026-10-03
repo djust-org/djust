@@ -2109,7 +2109,8 @@ class WSConsumerTransport:
         Re-resolves the user from the scope session, reflects it onto
         ``view.request.user`` (the mount request stored on the view), and re-runs
         the view's auth check. On failure: navigate to the login url + ``close(4403)``
-        and return ``False``. On success or any error (fail-safe): return ``True``.
+        and return ``False``. On success return ``True``; on any error in the re-check,
+        deny (fail closed).
 
         Gated on ``reauth_on_event`` + ``login_required``/``permission_required``
         so default views never pay the session read. Live since Phase 2.3b
@@ -2146,19 +2147,29 @@ class WSConsumerTransport:
                 return True
             request.user = fresh_user  # reflect current auth for the check + handler
             authorized = await sync_to_async(check_view_auth_lightweight)(view, request)
-            if not authorized:
-                from django.conf import settings as _dj_settings
+        except Exception as exc:  # noqa: BLE001 — fail CLOSED: an unverifiable check denies
+            # Only the exception TYPE and view class are logged — never the
+            # message, traceback or request data (log-exposure pin).
+            exc_type = type(exc).__name__
+            logger.warning(
+                "reauth_on_event re-check raised %s on view %s (WS); denying the event",
+                exc_type,
+                type(view).__name__,
+            )
+            authorized = False
+        if not authorized:
+            from django.conf import settings as _dj_settings
 
-                login_url = getattr(view, "login_url", None) or getattr(
-                    _dj_settings, "LOGIN_URL", "/accounts/login/"
-                )
+            login_url = getattr(view, "login_url", None) or getattr(
+                _dj_settings, "LOGIN_URL", "/accounts/login/"
+            )
+            # Best-effort refusal frames: the event is denied even if the peer is gone.
+            with contextlib.suppress(Exception):
                 await consumer.send_json({"type": "navigate", "to": login_url})
+            with contextlib.suppress(Exception):
                 await consumer.close(code=4403)
-                return False
-            return True
-        except Exception:  # noqa: BLE001 — re-auth is defense-in-depth; never break events
-            logger.debug("reauth_on_event re-check skipped (non-fatal, WS)", exc_info=True)
-            return True
+            return False
+        return True
 
     async def explicit_event_request(self, view: Any) -> Any:
         """Supply freshly loaded session authentication for explicit events."""
@@ -2663,7 +2674,7 @@ class SSESessionTransport:
         by the SSE endpoint just before ``dispatch_event`` — the live POSTer's
         ``request.user``, NOT the stale mount request that ``build_request``
         returns). On failure: send an auth-error frame + end the stream and return
-        ``False``. Fail-safe: any error skips the re-check and returns ``True``.
+        ``False``. Fail closed: any error in the re-check denies and returns ``False``.
 
         LIVE for SSE today: SSE events route through ``dispatch_event`` →
         ``_dispatch_event_inner`` since Iter 1 (#1887), so this hook fires on the
@@ -2692,17 +2703,27 @@ class SSESessionTransport:
             if request is None:
                 return True
             authorized = await sync_to_async(check_view_auth_lightweight)(view, request)
-            if not authorized:
+        except Exception as exc:  # noqa: BLE001 — fail CLOSED: an unverifiable check denies
+            # Only the exception TYPE and view class are logged — never the
+            # message, traceback or request data (log-exposure pin).
+            exc_type = type(exc).__name__
+            logger.warning(
+                "reauth_on_event re-check raised %s on view %s (SSE); denying the event",
+                exc_type,
+                type(view).__name__,
+            )
+            authorized = False
+        if not authorized:
+            # Best-effort refusal frames: the event is denied even if the stream is gone.
+            with contextlib.suppress(Exception):
                 await session.send_error(
                     "Session is no longer authorized. Please reload the page.",
                     code="permission_denied",
                 )
+            with contextlib.suppress(Exception):
                 await session.close(code=4403)
-                return False
-            return True
-        except Exception:  # noqa: BLE001 — re-auth is defense-in-depth; never break events
-            logger.debug("reauth_on_event re-check skipped (non-fatal, SSE)", exc_info=True)
-            return True
+            return False
+        return True
 
     async def explicit_event_request(self, view: Any) -> Any:
         """Use the current owner-checked POST; never fall back to mount auth."""
@@ -3542,7 +3563,14 @@ class ViewRuntime:
 
                     signed_blob = state_snapshot.get("state_json", "")
                     session_key = getattr(view_instance, "_django_session_key", None)
-                    raw_state = unsign_snapshot(signed_blob, view_path, session_key)
+                    from ._tenant_state import snapshot_tenant_scope
+
+                    raw_state = unsign_snapshot(
+                        signed_blob,
+                        view_path,
+                        session_key,
+                        tenant_scope=snapshot_tenant_scope(view_instance),
+                    )
                     if raw_state is None:
                         # Rejected at the signature/identity/TTL gate.
                         # unsign_snapshot already logged the reason.
@@ -4017,6 +4045,7 @@ class ViewRuntime:
                     # LiveView._reject_orm_value_in_state_persistence.
                     public_state = await sync_to_async(snapshot_fn)(strict=True)
                     if isinstance(public_state, dict) and public_state:
+                        from ._tenant_state import snapshot_tenant_scope
                         from .security import sign_snapshot
 
                         # Canonical serialization so the signed bytes are stable
@@ -4024,8 +4053,14 @@ class ViewRuntime:
                         # after unsigning).
                         state_json = json.dumps(public_state, sort_keys=True, separators=(",", ":"))
                         session_key = getattr(view_instance, "_django_session_key", None)
-                        mount_msg["state_snapshot_signed"] = sign_snapshot(
-                            state_json, view_path, session_key
+                        # #3328: bound to the tenant. A tenant view with no
+                        # resolved tenant (None) mints nothing and revokes the
+                        # client's cached token.
+                        tenant_scope = snapshot_tenant_scope(view_instance)
+                        mount_msg["state_snapshot_signed"] = (
+                            None
+                            if tenant_scope is None
+                            else sign_snapshot(state_json, view_path, session_key, tenant_scope)
                         )
             elif state_master_on and not legacy_exposure:
                 from ._exposure_snapshots import snapshot_codec

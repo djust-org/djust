@@ -96,6 +96,10 @@ PER_VIEW_ATTRS: Dict[str, Callable[[], Any]] = {
     "_mounting_in_batch": lambda: False,
     "_current_event_name": lambda: None,
     "_current_event_ref": lambda: None,
+    # When a ``reauth_on_event`` re-check of a server-originated turn last
+    # passed FOR THIS VIEW: each view re-checks its own authority, so one view's
+    # pass must never cover a sibling with different permissions.
+    "_server_turn_reauth_at": lambda: None,
 }
 
 #: Frames whose effect is the page's, not one container's: the client acts on

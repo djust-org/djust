@@ -4,6 +4,7 @@ WebSocket consumer for LiveView real-time updates
 
 import asyncio
 import collections
+import contextlib
 import inspect
 import json
 import logging
@@ -340,6 +341,10 @@ def validated_host_from_scope(
 # (#1646). ``_validate_mount_url`` is kept as a module-level alias because
 # existing tests and call sites reference it by this name.
 from .security.mount import validate_mount_url as _validate_mount_url  # noqa: E402
+
+#: Fallback for ``LIVEVIEW_CONFIG["reauth_server_turn_interval"]``: seconds a
+#: passed ``reauth_on_event`` check covers server-originated turns on one socket.
+_SERVER_TURN_REAUTH_INTERVAL_S = 5.0
 
 
 def _should_expose_timing() -> bool:
@@ -763,6 +768,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # cannot concurrently access view_instance state or increment the
         # VDOM version. This prevents the version mismatch race in #560.
         self._render_lock = asyncio.Lock()
+        # Monotonic time of the last server-originated-turn auth re-check that
+        # passed (``reauth_on_event``); ``None`` until the first one, so the
+        # first turn after mount or a long gap always re-checks.
+        self._server_turn_reauth_at: Optional[float] = None
         # Track whether a user event is currently being processed so ticks
         # can yield priority to user interactions.
         self._processing_user_event = False
@@ -2029,7 +2038,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         from ._exposure import uses_legacy_exposure
 
         if uses_legacy_exposure(view):
-            return True
+            return await self._reauth_legacy_server_turn(view)
         runtime = getattr(self, "_runtime", None)
         try:
             if runtime is None:
@@ -2048,6 +2057,72 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             await self.close(code=4403)
             self._release_revoked_view(revoked)
             return False
+
+    async def _reauth_legacy_server_turn(self, view: Any) -> bool:
+        """``reauth_on_event`` re-check for a server-originated turn on a legacy view.
+
+        ``reauth_on_event`` re-checks the principal before every client event;
+        tick, server_push / push_to_view, db_notify, presence and async-result
+        turns carry no event, so a socket whose user was logged out or lost a
+        permission kept receiving frames. This runs the SAME fresh-principal
+        check as the event path (``WSConsumerTransport.recheck_event_auth``)
+        at the top of such a turn. The caller holds ``_render_lock``.
+
+        Gated like the event path (setting on AND the view sets
+        ``login_required`` / ``permission_required``), so default views pay
+        nothing. A pass is remembered for ``reauth_server_turn_interval``
+        seconds (default 5) so a ticking view does not read the session store
+        every tick; the first turn after a longer gap always re-checks. On
+        failure the transport has already sent navigate-to-login and closed
+        4403 (fail closed on any exception); the view is dropped and released
+        and the turn does not run. Explicit-policy roots never reach this:
+        :meth:`_authorize_explicit_consumer_turn` authorizes them itself.
+        """
+        if not (
+            djust_config.get("reauth_on_event")
+            and (
+                getattr(view, "login_required", None) or getattr(view, "permission_required", None)
+            )
+        ):
+            return True
+        import time
+
+        try:
+            interval = float(djust_config.get("reauth_server_turn_interval") or 0)
+        except (TypeError, ValueError):
+            interval = _SERVER_TURN_REAUTH_INTERVAL_S
+        last = self._server_turn_reauth_at
+        now = time.monotonic()
+        if last is not None and interval > 0 and 0 <= now - last < interval:
+            return True
+        from .runtime import WSConsumerTransport
+
+        runtime = getattr(self, "_runtime", None)
+        transport = getattr(runtime, "transport", None) or WSConsumerTransport(self)
+        try:
+            allowed = await transport.recheck_event_auth(view)
+        except Exception as exc:  # noqa: BLE001 — fail CLOSED; type + view class only
+            # Type and view class only: never the message or traceback.
+            exc_type = type(exc).__name__
+            logger.warning(
+                "reauth_on_event server-turn re-check raised %s on view %s; denying the turn",
+                exc_type,
+                type(view).__name__,
+            )
+            allowed = False
+            with contextlib.suppress(Exception):
+                await self.close(code=4403)
+        if allowed:
+            self._server_turn_reauth_at = time.monotonic()
+            return True
+        self._server_turn_reauth_at = None
+        if runtime is not None and runtime.view_instance is view:
+            runtime.view_instance = None
+        revoked = None
+        if self.view_instance is view:
+            revoked, self.view_instance = view, None
+        self._release_revoked_view(revoked)
+        return False
 
     @staticmethod
     def _release_revoked_view(view: Any) -> None:
@@ -5389,7 +5464,24 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         mount was refused or never happened) the event is dropped. With several
         views mounted, it is forwarded for each that joined the group (#3252).
         """
+        from ._exposure import uses_legacy_exposure
+
         for consumer in self._channel_targets(event):
+            view = consumer.view_instance
+            if (
+                view is not None
+                and uses_legacy_exposure(view)
+                and djust_config.get("reauth_on_event")
+            ):
+                # The presence payload is data the viewer may no longer be
+                # entitled to: same re-check as a server-originated render
+                # turn, run for THE VIEW THAT RECEIVES THE FRAME (the page
+                # view or a slot's stand-in), under the render lock.
+                async with self._render_lock:
+                    if consumer.view_instance is not view:
+                        continue
+                    if not await consumer._reauth_legacy_server_turn(view):
+                        continue
             await consumer.send_json(
                 {
                     "type": "presence_event",
@@ -5625,6 +5717,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             dispatch_work = False
             try:
                 if self.view_instance is not view:
+                    return
+                # Legacy root: same fresh-principal check as the stock turn
+                # (``reauth_on_event``; a no-op unless enabled).
+                if not await self._reauth_legacy_server_turn(view):
                     return
                 runtime = getattr(self, "_runtime", None)
                 tenant = getattr(view, "_tenant", None)

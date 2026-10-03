@@ -26,7 +26,7 @@ the server verifies the HMAC signature, the TTL, and the identity binding
 expired, or cross-view/cross-session snapshot is rejected and the view falls
 back to a normal ``mount()``.
 
-The signed payload binds three things so a valid signature cannot be replayed
+The signed payload binds four things so a valid signature cannot be replayed
 out of context:
 
 - ``slug`` — the view path the snapshot was captured for. A snapshot signed
@@ -40,6 +40,15 @@ out of context:
   on both, so the binding degrades to slug-only — but the HMAC signature
   still closes forgery for anonymous users too. Blobs issued before the
   digest was introduced no longer match and fall back to a normal mount.
+- ``tenant`` — the tenant scope of the view that captured the snapshot
+  (``"tenant:<id>"`` for a ``TenantMixin`` view, ``""`` for a view that is not
+  tenant-scoped; see :func:`djust._tenant_state.snapshot_tenant_scope`). A
+  snapshot is accepted only by a mount under the tenant that captured it,
+  even with the same session and view path. A tenant view
+  that has resolved no tenant neither mints nor accepts a token. A blob
+  issued before this field existed has no ``tenant`` and counts as ``""``, so
+  it still serves a view that is not tenant-scoped and is refused by a tenant
+  view (one fresh mount, then a new token).
 - ``state`` — the serialized public-state JSON itself.
 
 Both halves (emit + restore) go through this single module so the envelope
@@ -119,8 +128,13 @@ def _signer() -> signing.TimestampSigner:
     return signing.TimestampSigner(salt=SNAPSHOT_SALT)
 
 
-def sign_snapshot(state_json: str, view_slug: str, session_key: Optional[str]) -> str:
-    """Sign a serialized public-state snapshot, binding it to slug + session.
+def sign_snapshot(
+    state_json: str,
+    view_slug: str,
+    session_key: Optional[str],
+    tenant_scope: str = "",
+) -> str:
+    """Sign a serialized public-state snapshot, binding it to slug + session + tenant.
 
     Args:
         state_json: The ``json.dumps`` string of the view's public state
@@ -128,6 +142,11 @@ def sign_snapshot(state_json: str, view_slug: str, session_key: Optional[str]) -
         view_slug: The dotted view path the snapshot was captured for.
         session_key: The Django session key, or ``None``/empty for anonymous.
             Only a keyed digest of it is placed in the envelope.
+        tenant_scope: The view's tenant scope
+            (:func:`djust._tenant_state.snapshot_tenant_scope`): ``""`` for a
+            view that is not tenant-scoped, ``"tenant:<id>"`` otherwise.
+            A caller whose scope is ``None`` (a tenant view with no resolved
+            tenant) must not sign at all.
 
     Returns:
         An opaque signed string the client stores verbatim and echoes back.
@@ -139,6 +158,7 @@ def sign_snapshot(state_json: str, view_slug: str, session_key: Optional[str]) -
             "slug": view_slug,
             "sid": _session_digest(session_key),
             "state": state_json,
+            "tenant": tenant_scope,
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -153,13 +173,14 @@ def unsign_snapshot(
     view_slug: str,
     session_key: Optional[str],
     max_age: Optional[int] = None,
+    tenant_scope: Optional[str] = "",
 ) -> Optional[str]:
     """Verify a signed snapshot and return its inner ``state_json`` string.
 
     Returns ``None`` (and logs at WARNING/INFO) on ANY failure: a bad or
     missing signature, an expired snapshot, a tampered/garbage blob, a
     non-string input, a slug mismatch (cross-view replay), or a session
-    mismatch (cross-session replay). A ``None`` return means the caller MUST
+    mismatch (cross-session replay), or a tenant mismatch. A ``None`` return means the caller MUST
     drop the snapshot and fall back to a normal ``mount()``.
 
     This function is the ONLY place a snapshot becomes trusted. Unsigned input
@@ -171,6 +192,9 @@ def unsign_snapshot(
         view_slug: The view path being mounted (must match the signed slug).
         session_key: The current Django session key (must match signed sid).
         max_age: TTL override in seconds; defaults to :func:`get_max_age`.
+        tenant_scope: The mounting view's tenant scope (must match the signed
+            one). ``None`` (a tenant view with no resolved tenant) rejects
+            every token.
 
     Returns:
         The verified inner ``state_json`` string, or ``None`` if rejected.
@@ -236,6 +260,21 @@ def unsign_snapshot(
         )
         return None
 
+    # Identity binding — the tenant must match. A blob without the
+    # field predates the binding and is unscoped (""). ``None`` is a tenant
+    # view that resolved no tenant: it accepts nothing.
+    signed_tenant = envelope.get("tenant", "")
+    if (
+        tenant_scope is None
+        or not isinstance(signed_tenant, str)
+        or not constant_time_compare(signed_tenant, tenant_scope)
+    ):
+        logger.warning(
+            "state_snapshot: tenant mismatch for %s; rejecting",
+            sanitize_for_log(view_slug),
+        )
+        return None
+
     state_json = envelope.get("state")
     if not isinstance(state_json, str):
         logger.warning(
@@ -252,6 +291,7 @@ def legacy_snapshot_fields(
 ) -> Dict[str, Any]:
     """Capture a legacy opt-in token, or explicitly revoke an uncapturable one."""
     from .._exposure import uses_legacy_exposure
+    from .._tenant_state import snapshot_tenant_scope
 
     if not uses_legacy_exposure(view) or not getattr(
         settings, "DJUST_STATE_SNAPSHOT_ENABLED", True
@@ -267,7 +307,11 @@ def legacy_snapshot_fields(
         public_state = snapshot_fn(strict=True)
         if isinstance(public_state, dict) and public_state:
             state_json = json.dumps(public_state, sort_keys=True, separators=(",", ":"))
-            fields["state_snapshot_signed"] = sign_snapshot(state_json, view_path, session_key)
+            scope = snapshot_tenant_scope(view)
+            if scope is not None:  # None: tenant view, no tenant; revoke, never mint
+                fields["state_snapshot_signed"] = sign_snapshot(
+                    state_json, view_path, session_key, scope
+                )
     except Exception:  # noqa: BLE001 — invalidate a stale token without breaking the event
         logger.warning(
             "Legacy event snapshot unavailable for %s; cached snapshot invalidated",

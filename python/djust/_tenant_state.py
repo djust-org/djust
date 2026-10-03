@@ -36,6 +36,21 @@ def state_scope(view: Any) -> Optional[str]:
     return f"{prefix}:{slot_scope}"
 
 
+def snapshot_tenant_scope(view: Any) -> Optional[str]:
+    """The tenant a signed state-snapshot token is bound to (#3328).
+
+    ``""`` for a view that is not tenant-scoped, ``"tenant:<id>"`` for a tenant
+    view with a resolved tenant, ``None`` for a tenant view with none: it
+    neither mints a token nor accepts one. Only the tenant, not a slot scope:
+    the token is also bound to the view path.
+    """
+    hook = getattr(view, "get_state_key_prefix", None)
+    if not callable(hook):
+        return ""
+    prefix = hook()
+    return prefix if prefix else None
+
+
 def scoped_path(view: Any, path: str) -> Optional[str]:
     """``path`` with the tenant scope in front, or ``None`` to skip saved state."""
     scope = state_scope(view)
