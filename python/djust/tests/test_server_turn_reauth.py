@@ -409,3 +409,13 @@ async def test_async_result_turn_is_gated(revoked):
     consumer._reauth_legacy_server_turn.assert_awaited()
     assert (view.secret == SECRET) is (not revoked)
     assert (consumer._send_update.await_count == 0) is revoked
+
+
+@pytest.fixture(autouse=True)
+def _reset_config_after_each_test():
+    """Drop the config cached under this test's settings (``reauth_on_event``
+    on), so a later test in the same worker does not inherit it."""
+    yield
+    from djust.config import config as _config
+
+    _config.reset()
