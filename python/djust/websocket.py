@@ -3,10 +3,12 @@ WebSocket consumer for LiveView real-time updates
 """
 
 import asyncio
+import contextlib
 import inspect
 import json
 import logging
 import msgpack
+import time
 from typing import Any, Dict, Optional
 from asgiref.sync import sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
@@ -268,6 +270,11 @@ def validated_host_from_scope(
 # (#1646). ``_validate_mount_url`` is kept as a module-level alias because
 # existing tests and call sites reference it by this name.
 from .security.mount import validate_mount_url as _validate_mount_url  # noqa: E402
+
+
+#: Fallback for ``LIVEVIEW_CONFIG["reauth_server_turn_interval"]``: seconds a
+#: passed ``reauth_on_event`` check covers server-originated turns on one socket.
+_SERVER_TURN_REAUTH_INTERVAL_S = 5.0
 
 
 def _should_expose_timing() -> bool:
@@ -569,6 +576,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # cannot concurrently access view_instance state or increment the
         # VDOM version. This prevents the version mismatch race in #560.
         self._render_lock = asyncio.Lock()
+        # Monotonic time of the last server-originated-turn auth re-check that
+        # passed (``reauth_on_event``); ``None`` until the first one, so the
+        # first turn after mount or a long gap always re-checks. The latch is
+        # set once a re-check refuses: every later turn is refused unchecked.
+        self._server_turn_reauth_at: Optional[float] = None
+        self._server_turn_revoked = False
         # Track whether a user event is currently being processed so ticks
         # can yield priority to user interactions.
         self._processing_user_event = False
@@ -1086,6 +1099,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     logger.debug("Async task %s was cancelled, skipping re-render", task_name)
                     return
 
+            # reauth_on_event: a start_async result is a server-originated
+            # turn; re-check the principal before the hook runs or anything renders.
+            if not await self._async_turn_allowed(self.view_instance):
+                return
+
             # Call handle_async_result if defined (success path)
             if hasattr(self.view_instance, "handle_async_result"):
                 await sync_to_async(self.view_instance.handle_async_result)(
@@ -1147,6 +1165,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 task_name,
                 self.view_instance.__class__.__name__ if self.view_instance else "?",
             )
+
+            if not await self._async_turn_allowed(self.view_instance):
+                return
 
             # Call handle_async_result if defined (error path)
             if hasattr(self.view_instance, "handle_async_result"):
@@ -2371,10 +2392,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # preserving #1466's reconnect-resume capability for opt-in
             # views (``enable_state_snapshot = True``).
             mounted = False
-            view_key = f"liveview_{page_url}"
+            from ._tenant_state import session_view_key
+
+            # None = tenant view with no resolved tenant: restore nothing.
+            view_key = session_view_key(self.view_instance, page_url)
             saved_state = (
                 await request.session.aget(view_key, {})
-                if request.session and getattr(self.view_instance, "enable_state_snapshot", False)
+                if request.session
+                and view_key is not None
+                and getattr(self.view_instance, "enable_state_snapshot", False)
                 else {}
             )
             if has_prerendered or saved_state:
@@ -2468,7 +2494,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
                         signed_blob = state_snapshot.get("state_json", "")
                         session_key = getattr(self.view_instance, "_django_session_key", None)
-                        raw_state = unsign_snapshot(signed_blob, view_path, session_key)
+                        from ._tenant_state import snapshot_tenant_scope
+
+                        raw_state = unsign_snapshot(
+                            signed_blob,
+                            view_path,
+                            session_key,
+                            tenant_scope=snapshot_tenant_scope(self.view_instance),
+                        )
                         if raw_state is None:
                             # Rejected at the signature/identity/TTL gate.
                             # unsign_snapshot already logged the reason.
@@ -2724,6 +2757,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 if callable(snapshot_fn):
                     public_state = await sync_to_async(snapshot_fn)()
                     if isinstance(public_state, dict) and public_state:
+                        from ._tenant_state import snapshot_tenant_scope
                         from .security import sign_snapshot
 
                         # Canonical serialization so the signed bytes are
@@ -2731,9 +2765,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         # json.loads-es after unsigning).
                         state_json = json.dumps(public_state, sort_keys=True, separators=(",", ":"))
                         session_key = getattr(self.view_instance, "_django_session_key", None)
-                        response["state_snapshot_signed"] = sign_snapshot(
-                            state_json, view_path, session_key
-                        )
+                        # Bound to the tenant. A tenant view with no
+                        # resolved tenant (None) mints nothing.
+                        tenant_scope = snapshot_tenant_scope(self.view_instance)
+                        if tenant_scope is not None:
+                            response["state_snapshot_signed"] = sign_snapshot(
+                                state_json, view_path, session_key, tenant_scope
+                            )
         except Exception:  # noqa: BLE001 — snapshot emission must never break mount
             logger.exception(
                 "Failed to emit state_snapshot_signed for %s; proceeding without snapshot",
@@ -3140,38 +3178,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # declares login_required/permission_required, re-resolve the user from
         # the session and re-run the view's auth check; on failure, redirect +
         # close the socket (mirroring the mount-time gate). Costs one session
-        # read per event — hence default-OFF. Fail-safe: any error here (e.g. no
-        # session in scope) skips the re-check rather than breaking the event.
-        if djust_config.get("reauth_on_event") and (
-            getattr(self.view_instance, "login_required", None)
-            or getattr(self.view_instance, "permission_required", None)
-        ):
-            try:
-                from channels.auth import get_user
-
-                from .auth.core import check_view_auth_lightweight
-
-                fresh_user = await get_user(self.scope)
-                # The mount request is stored on the view (see handle_mount:
-                # ``self.view_instance.request = request``), not on the consumer.
-                request = getattr(self.view_instance, "request", None)
-                if request is not None:
-                    request.user = fresh_user  # reflect current auth for the check + handler
-                    authorized = await sync_to_async(check_view_auth_lightweight)(
-                        self.view_instance, request
-                    )
-                    if not authorized:
-                        from django.conf import settings as _dj_settings
-
-                        login_url = getattr(self.view_instance, "login_url", None) or getattr(
-                            _dj_settings, "LOGIN_URL", "/accounts/login/"
-                        )
-                        await self.send_json({"type": "navigate", "to": login_url})
-                        await self.close(code=4403)
-                        self.view_instance = None
-                        return
-            except Exception:  # noqa: BLE001 — re-auth is defense-in-depth; never break events
-                logger.debug("reauth_on_event re-check skipped (non-fatal)", exc_info=True)
+        # read per event — hence default-OFF. Fail CLOSED: if the re-check itself
+        # raises, the event is denied exactly as for a failed check.
+        if self._reauth_applies(self.view_instance):
+            if not await self._reauth_recheck(self.view_instance):
+                self.view_instance = None
+                return
 
         # Route to embedded child view if view_id is specified.
         # The registry is provided by StickyChildRegistry (composed into
@@ -3677,7 +3689,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                 )
 
                                 save_path = mount_request.path if mount_request is not None else "/"
-                                save_view_key = f"liveview_{save_path}"
+                                from ._tenant_state import (
+                                    render_only_keys,
+                                    session_view_key as _session_view_key,
+                                )
+
+                                save_view_key = _session_view_key(target_view, save_path)
+                                if save_view_key is None:  # tenant view, no tenant resolved
+                                    return
 
                                 # Save order mirrors HTTP path
                                 # (mixins/request.py:593-609):
@@ -3717,8 +3736,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                 else:
                                     save_context = await sync_to_async(_gcd_save)()
 
+                                _render_only = render_only_keys(target_view)
                                 save_state = {
-                                    k: v for k, v in save_context.items() if not isinstance(v, _LC)
+                                    k: v
+                                    for k, v in save_context.items()
+                                    if not isinstance(v, _LC) and k not in _render_only
                                 }
                                 await save_session.aset(save_view_key, _normalize(save_state))
 
@@ -3800,9 +3822,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                 if save_session is None:
                                     return
 
-                                parent_path = (
-                                    mount_request.path if mount_request is not None else "/"
+                                from ._tenant_state import scoped_path
+
+                                parent_path = scoped_path(
+                                    parent, mount_request.path if mount_request is not None else "/"
                                 )
+                                if parent_path is None:  # tenant parent, no tenant resolved
+                                    return
 
                                 await save_sticky_child_state(
                                     target_view, save_session, parent_path
@@ -5595,12 +5621,134 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             self._build_time_travel_state(self.view_instance, buffer, new_cursor, "after")
         )
 
+    def _reauth_applies(self, view: Any) -> bool:
+        """Whether the ``reauth_on_event`` re-check is enabled for ``view``."""
+        return bool(
+            djust_config.get("reauth_on_event")
+            and (
+                getattr(view, "login_required", None) or getattr(view, "permission_required", None)
+            )
+        )
+
+    async def _reauth_recheck(self, view: Any) -> bool:
+        """Fresh-principal authorization re-check (``reauth_on_event``).
+
+        Re-resolves the user from the scope session, reflects it onto the mount
+        request stored on the view, and re-runs the view's auth check. Returns
+        ``True`` when the caller may proceed. On a failed check, or when the
+        check itself raises (fail CLOSED), sends navigate-to-login, closes the
+        socket with 4403 and returns ``False``; the refusal frames are best
+        effort so a dead peer cannot turn the denial back into an allow. A
+        raised check logs one WARNING with the exception type and view class
+        only (never the message, traceback or request data).
+        """
+        try:
+            from channels.auth import get_user
+
+            from .auth.core import check_view_auth_lightweight
+
+            fresh_user = await get_user(self.scope)
+            # The mount request is stored on the view (see handle_mount:
+            # ``self.view_instance.request = request``), not on the consumer.
+            request = getattr(view, "request", None)
+            if request is None:
+                return True
+            request.user = fresh_user  # reflect current auth for the check + handler
+            authorized = await sync_to_async(check_view_auth_lightweight)(view, request)
+        except Exception as exc:  # noqa: BLE001 — fail CLOSED: an unverifiable check denies
+            logger.warning(
+                "reauth_on_event re-check raised %s on view %s; denying the event",
+                type(exc).__name__,
+                type(view).__name__,
+            )
+            authorized = False
+        if authorized:
+            return True
+        from django.conf import settings as _dj_settings
+
+        login_url = getattr(view, "login_url", None) or getattr(
+            _dj_settings, "LOGIN_URL", "/accounts/login/"
+        )
+        with contextlib.suppress(Exception):
+            await self.send_json({"type": "navigate", "to": login_url})
+        with contextlib.suppress(Exception):
+            await self.close(code=4403)
+        return False
+
+    async def _reauth_legacy_server_turn(self, view: Any) -> bool:
+        """``reauth_on_event`` re-check for a server-originated turn.
+
+        Tick, ``server_push`` / ``push_to_view``, ``db_notify``, presence and
+        async-result turns carry no client event, so without this a socket whose
+        user was logged out or lost a permission kept receiving frames. Runs the
+        same check as the event path (``_reauth_recheck``) at the top of such a
+        turn; callers hold ``_render_lock``. Gated like the event path, so
+        default views pay nothing. A pass is remembered for
+        ``reauth_server_turn_interval`` seconds (default 5; 0 = every turn) so a
+        ticking view does not read the session store every tick. On failure the
+        socket has been told to navigate and closed 4403, the connection is
+        latched as revoked (later turns are refused without another session
+        read) and the turn must not run. The view stays attached so
+        ``disconnect`` tears it down as usual.
+        """
+        if not self._reauth_applies(view):
+            return True
+        if getattr(self, "_server_turn_revoked", False):
+            return False
+        try:
+            interval = float(djust_config.get("reauth_server_turn_interval") or 0)
+        except (TypeError, ValueError):
+            interval = _SERVER_TURN_REAUTH_INTERVAL_S
+        last = getattr(self, "_server_turn_reauth_at", None)
+        now = time.monotonic()
+        if last is not None and interval > 0 and 0 <= now - last < interval:
+            return True
+        try:
+            allowed = await self._reauth_recheck(view)
+        except Exception as exc:  # noqa: BLE001 — fail CLOSED; type + view class only
+            logger.warning(
+                "reauth_on_event server-turn re-check raised %s on view %s; denying the turn",
+                type(exc).__name__,
+                type(view).__name__,
+            )
+            allowed = False
+            with contextlib.suppress(Exception):
+                await self.close(code=4403)
+        if allowed:
+            self._server_turn_reauth_at = time.monotonic()
+            return True
+        self._server_turn_reauth_at = None
+        self._server_turn_revoked = True
+        return False
+
+    async def _async_turn_allowed(self, view: Any) -> bool:
+        """``reauth_on_event`` gate for a ``start_async`` result turn.
+
+        The lock is taken here only for the (usually cached) re-check; a no-op,
+        with no lock traffic, unless ``reauth_on_event`` is on.
+        """
+        if not djust_config.get("reauth_on_event"):
+            return True
+        async with self._render_lock:
+            if self.view_instance is not view:
+                return False
+            return await self._reauth_legacy_server_turn(view)
+
     async def presence_event(self, event):
         """
         Handle presence-related events from the channel layer.
 
         These events are broadcasted to all users in a presence group.
         """
+        view = self.view_instance
+        if view is not None and djust_config.get("reauth_on_event"):
+            # The presence payload is data the viewer may no longer be entitled
+            # to: same re-check as a server-originated render turn.
+            async with self._render_lock:
+                if self.view_instance is not view:
+                    return
+                if not await self._reauth_legacy_server_turn(view):
+                    return
         await self.send_json(
             {
                 "type": "presence_event",
@@ -5665,6 +5813,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 return
 
             try:
+                # Same fresh-principal check as a client event, before the
+                # push touches the view (a no-op unless ``reauth_on_event`` is on).
+                if not await self._reauth_legacy_server_turn(self.view_instance):
+                    return
                 # Apply state updates before handler call so the handler can read
                 # the new values. _sync_state_to_rust runs after both to push the
                 # final Python state to Rust for rendering.
@@ -5810,6 +5962,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 return
 
             try:
+                if not await self._reauth_legacy_server_turn(self.view_instance):
+                    return
                 handler = getattr(self.view_instance, "handle_info", None)
                 if handler and callable(handler):
                     try:
@@ -5908,6 +6062,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         continue
 
                     try:
+                        # reauth_on_event: a revoked principal ends the tick loop
+                        # (the socket is closed 4403) instead of rendering for it.
+                        if not await self._reauth_legacy_server_turn(self.view_instance):
+                            return
                         # Snapshot state before tick to detect changes
                         pre_assigns = _snapshot_assigns(self.view_instance)
 

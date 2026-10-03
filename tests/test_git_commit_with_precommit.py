@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.git_env import scrub_host_git_state
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WRAPPER = REPO_ROOT / "scripts" / "git-commit-with-precommit.sh"
 
@@ -24,6 +26,14 @@ WRAPPER = REPO_ROOT / "scripts" / "git-commit-with-precommit.sh"
 def _git(
     cwd: Path, *args: str, env: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess[str]:
+    # `env=None` means INHERIT — and the process environment carries the host
+    # repo's git state when this runs under pre-commit (which exports
+    # GIT_INDEX_FILE for its stash). The fixture's own `init`/`config`/`commit`
+    # calls take this path, so without a scrubbed default they operate on the
+    # real repo's index: the `commit` fails outright under the hook, and the
+    # adds write the FIXTURE's paths there. See tests/git_env.py.
+    if env is None:
+        env = scrub_host_git_state(os.environ.copy())
     return subprocess.run(
         ["git", *args],
         cwd=cwd,
@@ -45,6 +55,7 @@ def _make_repo(tmp: Path) -> dict[str, str]:
     env = os.environ.copy()
     # Don't let the host user's global pre-commit/hooks config leak in.
     env["GIT_CONFIG_GLOBAL"] = "/dev/null"
+    scrub_host_git_state(env)
     return env
 
 
@@ -254,6 +265,7 @@ def test_wrapper_outside_git_repo(tmp_path: Path) -> None:
     """Invocation outside a git repo gives a clean exit-1 instead of git's raw usage."""
     env = os.environ.copy()
     env["GIT_CONFIG_GLOBAL"] = "/dev/null"
+    scrub_host_git_state(env)
     bare = tmp_path / "not-a-repo"
     bare.mkdir()
     result = subprocess.run(

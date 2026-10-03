@@ -127,7 +127,7 @@ def test_load_gate_loosened_fires_on_saved_state_without_has_prerendered():
     # find the LAST occurrence of each fragment (the actual code) rather
     # than the first. Both must be present and view_key must precede the
     # executable gate line.
-    new_shape_idx = source.rfind('view_key = f"liveview_{page_url}"')
+    new_shape_idx = source.rfind("view_key = session_view_key(self.view_instance, page_url)")
     gate_idx = source.rfind("if has_prerendered or saved_state:")
     assert new_shape_idx != -1 and gate_idx != -1
     assert new_shape_idx < gate_idx, (
@@ -298,7 +298,7 @@ def test_save_block_present_in_handle_event_source():
     assert '"_djust_mount_request"' in source
     assert "getattr(" in source and "_djust_mount_request" in source
     assert 'self.scope.get("session")' in source
-    assert 'save_view_key = f"liveview_{save_path}"' in source
+    assert "save_view_key = _session_view_key(target_view, save_path)" in source
     assert "await save_session.aset(save_view_key" in source_collapsed
     assert "await save_session.asave()" in source
     # Private-state path:

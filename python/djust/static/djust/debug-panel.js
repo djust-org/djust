@@ -1798,7 +1798,7 @@
                             <div class="event-item ${event.error ? 'error' : ''} ${hasDetails ? 'expandable' : ''}" data-index="${index}">
                                 <div class="event-header" ${hasDetails ? 'onclick="window.djustDebugPanel.toggleExpand(this)"' : ''}>
                                     ${hasDetails ? '<span class="expand-icon">▶</span>' : ''}
-                                    <span class="event-name">${event.handler || event.name || 'unknown'}</span>
+                                    <span class="event-name">${this.escapeHtml(event.handler || event.name || 'unknown')}</span>
                                     ${event.element ? this.renderElementBadge(event.element) : ''}
                                     ${event.duration ? `<span class="event-duration">${event.duration.toFixed(1)}ms</span>` : ''}
                                     ${paramCount > 0 ? `<span class="event-param-count">${paramCount} param${paramCount === 1 ? '' : 's'}</span>` : ''}
@@ -1812,13 +1812,13 @@
                                             <div class="event-section">
                                                 <div class="event-section-title">Element:</div>
                                                 <div class="element-info">
-                                                    <div><strong>&lt;${event.element.tagName}&gt;</strong></div>
-                                                    ${event.element.id ? `<div>ID: ${event.element.id}</div>` : ''}
-                                                    ${event.element.className ? `<div>Class: ${event.element.className}</div>` : ''}
-                                                    ${event.element.text ? `<div>Text: "${event.element.text}"</div>` : ''}
-                                                    ${Object.keys(event.element.attributes).length > 0 ? `
-                                                        <div>Attributes: ${Object.entries(event.element.attributes)
-                                                            .map(([key, val]) => `${key}="${val}"`)
+                                                    <div><strong>&lt;${this.escapeHtml(event.element.tagName)}&gt;</strong></div>
+                                                    ${event.element.id ? `<div>ID: ${this.escapeHtml(event.element.id)}</div>` : ''}
+                                                    ${event.element.className ? `<div>Class: ${this.escapeHtml(event.element.className)}</div>` : ''}
+                                                    ${event.element.text ? `<div>Text: "${this.escapeHtml(event.element.text)}"</div>` : ''}
+                                                    ${Object.keys(event.element.attributes || {}).length > 0 ? `
+                                                        <div>Attributes: ${Object.entries(event.element.attributes || {})
+                                                            .map(([key, val]) => `${this.escapeHtml(key)}="${this.escapeHtml(val)}"`)
                                                             .join(', ')}</div>
                                                     ` : ''}
                                                 </div>
@@ -1827,19 +1827,19 @@
                                         ${event.params ? `
                                             <div class="event-section">
                                                 <div class="event-section-title">Parameters:</div>
-                                                <pre>${JSON.stringify(event.params, null, 2)}</pre>
+                                                <pre>${this.escapeHtml(JSON.stringify(event.params, null, 2))}</pre>
                                             </div>
                                         ` : ''}
                                         ${event.result ? `
                                             <div class="event-section">
                                                 <div class="event-section-title">Result:</div>
-                                                <pre>${JSON.stringify(event.result, null, 2)}</pre>
+                                                <pre>${this.escapeHtml(JSON.stringify(event.result, null, 2))}</pre>
                                             </div>
                                         ` : ''}
                                         ${event.error ? `
                                             <div class="event-section error">
                                                 <div class="event-section-title">Error:</div>
-                                                <div class="event-error-message">${event.error}</div>
+                                                <div class="event-error-message">${this.escapeHtml(event.error)}</div>
                                             </div>
                                         ` : ''}
                                     </div>
@@ -1992,14 +1992,14 @@
                         const hasDebugInfo = msg.payload && msg.payload._debug;
                         const payload = msg.data || msg.payload;
                         const type = msg.type || (payload ? (payload.type || payload.event || 'data') : 'unknown');
-                        const payloadJson = hasPayload ? JSON.stringify(payload, null, 2) : '';
+                        const payloadJson = hasPayload ? this.escapeHtml(JSON.stringify(payload, null, 2)) : '';
 
                         return `
-                            <div class="network-item ${msg.direction} ${hasPayload ? 'expandable' : ''}" data-index="${index}">
+                            <div class="network-item ${this.escapeHtml(msg.direction)} ${hasPayload ? 'expandable' : ''}" data-index="${index}">
                                 <div class="network-header" ${hasPayload ? 'onclick="window.djustDebugPanel.toggleExpand(this)"' : ''}>
                                     ${hasPayload ? '<span class="expand-icon">▶</span>' : ''}
-                                    <span class="network-direction ${msg.direction}">${msg.direction === 'sent' ? '↑' : '↓'}</span>
-                                    <span class="network-type">${type}</span>
+                                    <span class="network-direction ${this.escapeHtml(msg.direction)}">${msg.direction === 'sent' ? '↑' : '↓'}</span>
+                                    <span class="network-type">${this.escapeHtml(type)}</span>
                                     ${hasDebugInfo ? '<span class="network-debug">🐛</span>' : ''}
                                     <span class="network-size">${this.formatBytes(msg.size)}</span>
                                     <span class="network-time">${this.formatTime(msg.timestamp)}</span>
@@ -2072,8 +2072,8 @@
                             <div class="patch-item ${hasDetails ? 'expandable' : ''}" data-index="${index}">
                                 <div class="patch-header" ${hasDetails ? 'onclick="window.djustDebugPanel.toggleExpand(this)"' : ''}>
                                     ${hasDetails ? '<span class="expand-icon">▶</span>' : ''}
-                                    <span class="patch-count">${entry.count} patch${entry.count === 1 ? '' : 'es'}</span>
-                                    <span class="patch-types">[${patchTypes.join(', ')}]</span>
+                                    <span class="patch-count">${this.escapeHtml(entry.count)} patch${entry.count === 1 ? '' : 'es'}</span>
+                                    <span class="patch-types">[${this.escapeHtml(patchTypes.join(', '))}]</span>
                                     ${this.renderTimingBadges(entry.timing)}
                                     <span class="patch-time">${this.formatTime(entry.timestamp)}</span>
                                 </div>
@@ -2083,13 +2083,13 @@
                                         ${entry.patches.map((patch, pIdx) => `
                                             <div class="patch-op">
                                                 <span class="patch-index">#${pIdx + 1}</span>
-                                                <span class="patch-type">${patch.type || patch.op || 'unknown'}</span>
-                                                ${patch.path ? `<span class="patch-path">${patch.path}</span>` : ''}
+                                                <span class="patch-type">${this.escapeHtml(patch.type || patch.op || 'unknown')}</span>
+                                                ${patch.path ? `<span class="patch-path">${this.escapeHtml(patch.path)}</span>` : ''}
                                                 ${patch.value ? `
                                                     <div class="patch-value">
-                                                        <pre>${typeof patch.value === 'string' ?
+                                                        <pre>${this.escapeHtml(typeof patch.value === 'string' ?
                                                             (patch.value.length > 200 ? patch.value.substring(0, 200) + '...' : patch.value) :
-                                                            JSON.stringify(patch.value, null, 2)}</pre>
+                                                            JSON.stringify(patch.value, null, 2))}</pre>
                                                     </div>
                                                 ` : ''}
                                             </div>
@@ -2121,12 +2121,12 @@
             return `
                 <div class="component-node" style="padding-left: ${level * 20}px">
                     <div class="component-header">
-                        <span class="component-name">${component.name || 'Unknown'}</span>
-                        <span class="component-type">${component.type || 'Component'}</span>
+                        <span class="component-name">${this.escapeHtml(component.name || 'Unknown')}</span>
+                        <span class="component-type">${this.escapeHtml(component.type || 'Component')}</span>
                     </div>
                     ${component.state ? `
                         <div class="component-state" style="padding-left: ${(level + 1) * 20}px">
-                            <pre>${JSON.stringify(component.state, null, 2)}</pre>
+                            <pre>${this.escapeHtml(JSON.stringify(component.state, null, 2))}</pre>
                         </div>
                     ` : ''}
                     ${component.children ? component.children.map(child =>
@@ -2140,8 +2140,8 @@
             return components.map(comp => `
                 <div class="component-node" style="padding-left: ${level * 20}px">
                     <div class="component-header">
-                        <span class="component-name">${comp.name}</span>
-                        <span class="component-type">${comp.type}</span>
+                        <span class="component-name">${this.escapeHtml(comp.name)}</span>
+                        <span class="component-type">${this.escapeHtml(comp.type)}</span>
                     </div>
                     ${comp.children ? this.renderComponentTree(comp.children, level + 1) : ''}
                 </div>
@@ -2475,26 +2475,26 @@
                     ${handlers.map(handler => `
                         <div class="handler-item">
                             <div class="handler-header">
-                                <div class="handler-name">${handler.name}</div>
+                                <div class="handler-name">${this.escapeHtml(handler.name)}</div>
                                 ${handler.decorators && handler.decorators.length > 0 ? `
                                     <div class="handler-decorators">
-                                        ${handler.decorators.map(d => `<span class="decorator">@${d}</span>`).join(' ')}
+                                        ${handler.decorators.map(d => `<span class="decorator">@${this.escapeHtml(d)}</span>`).join(' ')}
                                     </div>
                                 ` : ''}
                             </div>
-                            <div class="handler-description">${handler.description || 'No description'}</div>
+                            <div class="handler-description">${this.escapeHtml(handler.description || 'No description')}</div>
                             <div class="handler-params">
                                 ${handler.parameters && handler.parameters.length > 0 ?
                                     handler.parameters.map(param =>
                                         `<span class="param ${param.required ? 'required' : 'optional'}">
-                                            ${param.name}: ${param.type}
-                                            ${param.default !== null && param.default !== undefined ? ` = ${param.default}` : ''}
+                                            ${this.escapeHtml(param.name)}: ${this.escapeHtml(param.type)}
+                                            ${param.default !== null && param.default !== undefined ? ` = ${this.escapeHtml(param.default)}` : ''}
                                         </span>`
                                     ).join(', ') : 'No parameters'}
                             </div>
                             ${handler.source_file ? `
                                 <div class="handler-source">
-                                    ${handler.source_file}:${handler.source_line || 0}
+                                    ${this.escapeHtml(handler.source_file)}:${this.escapeHtml(handler.source_line || 0)}
                                 </div>
                             ` : ''}
                         </div>
@@ -2538,7 +2538,7 @@
                             </div>
                             <div class="summary-stat">
                                 <div class="stat-label">Largest Variable</div>
-                                <div class="stat-value">${sortedEntries[0] ? sortedEntries[0][0] : 'N/A'}</div>
+                                <div class="stat-value">${sortedEntries[0] ? this.escapeHtml(sortedEntries[0][0]) : 'N/A'}</div>
                             </div>
                         </div>
                     </div>
@@ -2552,8 +2552,8 @@
                                 <div class="variable-item expandable" data-index="${index}">
                                     <div class="variable-header" onclick="window.djustDebugPanel.toggleExpand(this)">
                                         <span class="expand-icon">▶</span>
-                                        <span class="variable-name">${name}</span>
-                                        <span class="variable-type">${info.type}</span>
+                                        <span class="variable-name">${this.escapeHtml(name)}</span>
+                                        <span class="variable-type">${this.escapeHtml(info.type)}</span>
                                         <span class="variable-size">${this.formatBytes(sizeBytes)}</span>
                                         <span class="variable-percentage">${percentage.toFixed(1)}%</span>
                                     </div>
@@ -2563,12 +2563,12 @@
                                     <div class="variable-details" style="display: none;">
                                         <div class="variable-section">
                                             <div class="variable-section-title">Value Preview</div>
-                                            <pre class="variable-value">${info.value}</pre>
+                                            <pre class="variable-value">${this.escapeHtml(info.value)}</pre>
                                         </div>
                                         <div class="variable-section">
                                             <div class="variable-section-title">Stats</div>
                                             <div class="variable-stats">
-                                                <div class="variable-stat">Type: <strong>${info.type}</strong></div>
+                                                <div class="variable-stat">Type: <strong>${this.escapeHtml(info.type)}</strong></div>
                                                 <div class="variable-stat">Size: <strong>${this.formatBytes(sizeBytes)}</strong></div>
                                                 <div class="variable-stat">% of Total: <strong>${percentage.toFixed(2)}%</strong></div>
                                             </div>
@@ -3680,8 +3680,8 @@
                                 </div>
                                 ${items.slice(0, 3).map(warning => `
                                     <div class="warning-item ${this.getWarningSeverity(type)}">
-                                        <div class="warning-message">${warning.message}</div>
-                                        ${warning.node ? `<div class="warning-source">in ${warning.node}</div>` : ''}
+                                        <div class="warning-message">${this.escapeHtml(warning.message)}</div>
+                                        ${warning.node ? `<div class="warning-source">in ${this.escapeHtml(warning.node)}</div>` : ''}
                                         ${this.renderWarningDetails(warning)}
                                     </div>
                                 `).join('')}
@@ -3719,8 +3719,9 @@
                 'memory_usage': 'Memory Issues',
                 'missing_limit': 'Missing LIMIT Clauses'
             };
+            // Returns HTML-safe text (callers interpolate it into markup).
             // eslint-disable-next-line security/detect-object-injection
-            return names[type] || type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+            return this.escapeHtml(names[type] || String(type).replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()));
         }
 
         getWarningSeverity(type) {
@@ -3741,20 +3742,20 @@
             const details = [];
 
             if (warning.query_count) {
-                details.push(`<span class="warning-detail">Queries: ${warning.query_count}</span>`);
+                details.push(`<span class="warning-detail">Queries: ${this.escapeHtml(warning.query_count)}</span>`);
             }
 
             if (warning.patch_count) {
-                details.push(`<span class="warning-detail">Patches: ${warning.patch_count}</span>`);
+                details.push(`<span class="warning-detail">Patches: ${this.escapeHtml(warning.patch_count)}</span>`);
             }
 
             if (warning.threshold) {
-                details.push(`<span class="warning-detail">Threshold: ${warning.threshold}ms</span>`);
+                details.push(`<span class="warning-detail">Threshold: ${this.escapeHtml(warning.threshold)}ms</span>`);
             }
 
             // Handle legacy single recommendation
             if (warning.recommendation) {
-                details.push(`<span class="warning-recommendation">💡 ${warning.recommendation}</span>`);
+                details.push(`<span class="warning-recommendation">💡 ${this.escapeHtml(warning.recommendation)}</span>`);
             }
 
             // Handle new recommendations array with detailed info
@@ -3764,7 +3765,7 @@
 
             // Add docs link if available
             if (warning.docs_url) {
-                details.push(`<a href="${warning.docs_url}" target="_blank" class="warning-docs-link">📖 View documentation</a>`);
+                details.push(`<a href="${this.safeHref(warning.docs_url)}" target="_blank" rel="noopener noreferrer" class="warning-docs-link">📖 View documentation</a>`);
             }
 
             return details.length > 0 ? `<div class="warning-details">${details.join('')}</div>` : '';
@@ -3784,12 +3785,12 @@
             html += '<div class="recommendations-header">💡 Recommendations:</div>';
 
             sortedRecs.forEach((rec, idx) => {
-                const priorityClass = `priority-${rec.priority || 'medium'}`;
+                const priorityClass = `priority-${this.escapeHtml(rec.priority || 'medium')}`;
                 html += `<div class="recommendation-item ${priorityClass}">`;
-                html += `<div class="recommendation-title">${idx + 1}. ${rec.title || 'Suggestion'}</div>`;
+                html += `<div class="recommendation-title">${idx + 1}. ${this.escapeHtml(rec.title || 'Suggestion')}</div>`;
 
                 if (rec.description) {
-                    html += `<div class="recommendation-description">${rec.description}</div>`;
+                    html += `<div class="recommendation-description">${this.escapeHtml(rec.description)}</div>`;
                 }
 
                 if (rec.code_example) {
@@ -3801,12 +3802,6 @@
 
             html += '</div>';
             return html;
-        }
-
-        escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
         }
 
         renderPerformanceTree(performance) {
@@ -3823,7 +3818,7 @@
                 // Node header with timing
                 html += '<div class="timing-node-header">';
                 html += '<span class="timing-node-prefix">' + prefix + '</span>';
-                html += '<span class="timing-node-name">' + node.name + '</span>';
+                html += '<span class="timing-node-name">' + this.escapeHtml(node.name) + '</span>';
 
                 if (node.duration_ms) {
                     let colorClass = 'timing-fast';
@@ -3846,16 +3841,16 @@
                     html += '<div class="timing-warnings-details">';
                     node.warnings.forEach(warning => {
                         const severityClass = this.getWarningSeverity(warning.type || 'unknown');
-                        html += '<div class="timing-warning-item ' + severityClass + '">';
+                        html += '<div class="timing-warning-item ' + this.escapeHtml(severityClass) + '">';
                         html += '<div class="timing-warning-header">';
                         html += '<span class="timing-warning-type">' + this.getWarningIcon(warning.type) + ' ';
                         html += this.formatWarningType(warning.type) + '</span>';
                         html += '</div>';
-                        html += '<div class="timing-warning-message">' + warning.message + '</div>';
+                        html += '<div class="timing-warning-message">' + this.escapeHtml(warning.message) + '</div>';
 
                         // Handle legacy single recommendation
                         if (warning.recommendation) {
-                            html += '<div class="timing-warning-recommendation">💡 ' + warning.recommendation + '</div>';
+                            html += '<div class="timing-warning-recommendation">💡 ' + this.escapeHtml(warning.recommendation) + '</div>';
                         }
 
                         // Handle new recommendations array with detailed info
@@ -3865,7 +3860,7 @@
 
                         // Add docs link if available
                         if (warning.docs_url) {
-                            html += '<a href="' + warning.docs_url + '" target="_blank" class="timing-warning-docs-link">📖 View documentation</a>';
+                            html += '<a href="' + this.safeHref(warning.docs_url) + '" target="_blank" rel="noopener noreferrer" class="timing-warning-docs-link">📖 View documentation</a>';
                         }
 
                         html += '</div>';
@@ -3878,7 +3873,7 @@
                     if (node.metadata.query_count) {
                         html += '<div class="timing-metadata">';
                         html += '<span class="metadata-label">Queries:</span> ';
-                        html += '<span class="metadata-value">' + node.metadata.query_count + '</span>';
+                        html += '<span class="metadata-value">' + this.escapeHtml(node.metadata.query_count) + '</span>';
                         html += ' <span class="metadata-detail">(' +
                                 (node.metadata.query_time_ms || 0).toFixed(1) + 'ms)</span>';
                         html += '</div>';
@@ -3888,7 +3883,7 @@
                         const mem = node.metadata.memory;
                         html += '<div class="timing-metadata">';
                         html += '<span class="metadata-label">Memory:</span> ';
-                        html += '<span class="metadata-value">+' + mem.delta_mb + 'MB</span>';
+                        html += '<span class="metadata-value">+' + this.escapeHtml(mem.delta_mb) + 'MB</span>';
                         html += '</div>';
                     }
                 }
@@ -3922,10 +3917,23 @@
 
         escapeHtml(str) {
             if (str === null || str === undefined) return '';
-            const text = String(str);
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
+            // Escapes & < > " ' so the result is safe in both text and
+            // quoted-attribute positions. Always pass RAW values: escaping an
+            // already-escaped string would double-escape it.
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        // Escaped URL for an href attribute; anything that is not http(s) or a
+        // relative URL (e.g. javascript:) is replaced with '#'.
+        safeHref(url) {
+            const u = String(url == null ? '' : url).trim();
+            if (/^(https?:\/\/|\/|#|\.)/i.test(u)) return this.escapeHtml(u);
+            return '#';
         }
 
         renderElementBadge(element) {
@@ -3936,7 +3944,7 @@
                 label = `#${element.id}`;
             } else if (element.className) {
                 // Get first class name
-                const firstClass = element.className.split(' ')[0];
+                const firstClass = String(element.className).split(' ')[0];
                 label = `.${firstClass}`;
             }
 
@@ -3944,9 +3952,10 @@
             tooltip.push(`<${element.tagName}>`);
             if (element.id) tooltip.push(`id="${element.id}"`);
             if (element.className) tooltip.push(`class="${element.className}"`);
-            if (element.text) tooltip.push(`text="${element.text.substring(0, 30)}..."`);
+            if (element.text) tooltip.push(`text="${String(element.text).substring(0, 30)}..."`);
 
-            return `<span class="element-badge" title="${tooltip.join(' ')}">${label}</span>`;
+            // Values above are raw; escape once, at the sink (title is an attribute).
+            return `<span class="element-badge" title="${this.escapeHtml(tooltip.join(' '))}">${this.escapeHtml(label)}</span>`;
         }
 
         renderTimingBadges(timing) {
