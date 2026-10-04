@@ -428,20 +428,45 @@ fn find_body(handle: &Handle) -> Option<Handle> {
     None
 }
 
-/// Recursively search for an element with `dj-root` or `dj-view` attribute.
-/// Returns the first match (depth-first).
+/// Find the element that is the LiveView root: the one rule shared with the
+/// Python locator (`mixins/template.py::_search_dj_root_open`) and the byte
+/// scanner (`djust_live::find_dj_root_content_range`) (#3031).
+///
+/// * OWNERSHIP: a root belongs to the view that rendered it. An embedded
+///   `{% live_render %}` child's wrapper (`dj-view` + `data-djust-embedded`,
+///   sticky or not) and everything inside it belong to the child, so no
+///   `dj-root` / `dj-view` there is ever the parent's root.
+/// * PRECEDENCE: the first `dj-root` in document order, else the first
+///   `dj-view`. (`dj-root` is what the client mounts on; `dj-view` alone is
+///   the auto-inferred root.)
+///
+/// Depth-first, document order, and only inside `<body>` (the caller starts
+/// there, so a root on `<html>`/`<head>`/`<body>` is never a candidate).
 fn find_liveview_root(handle: &Handle) -> Option<Handle> {
+    find_root_with_attr(handle, "dj-root").or_else(|| find_root_with_attr(handle, "dj-view"))
+}
+
+/// An embedded-child wrapper: `dj-view` and `data-djust-embedded` on one
+/// element (what `{% live_render %}` emits, sticky or not).
+fn is_embedded_child_wrapper(attrs: &[html5ever::Attribute]) -> bool {
+    let has = |wanted: &str| attrs.iter().any(|a| a.name.local.as_ref() == wanted);
+    has("dj-view") && has("data-djust-embedded")
+}
+
+/// First element in `handle`'s subtree (document order) carrying `attr`,
+/// never entering an embedded child's wrapper.
+fn find_root_with_attr(handle: &Handle, attr: &str) -> Option<Handle> {
     for child in handle.children.borrow().iter() {
         if let NodeData::Element { ref attrs, .. } = child.data {
-            let has_liveview_attr = attrs.borrow().iter().any(|a| {
-                let name = a.name.local.as_ref();
-                name == "dj-root" || name == "dj-view"
-            });
-            if has_liveview_attr {
+            let attrs = attrs.borrow();
+            if is_embedded_child_wrapper(&attrs) {
+                continue;
+            }
+            if attrs.iter().any(|a| a.name.local.as_ref() == attr) {
                 return Some(child.clone());
             }
-            // Recurse into children
-            if let Some(found) = find_liveview_root(child) {
+            drop(attrs);
+            if let Some(found) = find_root_with_attr(child, attr) {
                 return Some(found);
             }
         }

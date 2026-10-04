@@ -1,0 +1,304 @@
+{
+ "_comment": "Shared corpus for #3031: every locator must pick the element carrying data-expect-root (or none). Read by python/tests/test_root_selection_3031.py and crates/djust_live (dj_root_selection_3031).",
+ "cases": [
+  {
+   "name": "single_dj_root",
+   "why": "baseline",
+   "html": "<div dj-root data-expect-root><p>a</p></div>",
+   "root": true
+  },
+  {
+   "name": "dj_view_only",
+   "why": "dj-view is the auto-inferred root",
+   "html": "<div dj-view=\"a.B\" data-expect-root><p>a</p></div>",
+   "root": true
+  },
+  {
+   "name": "dj_root_on_section",
+   "why": "any element can be the root (#2892)",
+   "html": "<section dj-root data-expect-root><p>a</p></section>",
+   "root": true
+  },
+  {
+   "name": "full_page_dj_root",
+   "why": "page shell around the root",
+   "html": "<!DOCTYPE html><html><head><title>t</title></head><body><nav>n</nav><div dj-root data-expect-root><p>a</p></div><footer>f</footer></body></html>",
+   "root": true
+  },
+  {
+   "name": "view_before_root_picks_root",
+   "why": "#3031 repro: dj-root wins over an earlier dj-view",
+   "html": "<nav dj-view=\"a.B\"><a>n</a></nav><main dj-root data-expect-root><p>m</p></main>",
+   "root": true
+  },
+  {
+   "name": "root_before_view_picks_root",
+   "why": "dj-root first in order and in precedence",
+   "html": "<main dj-root data-expect-root><p>m</p></main><nav dj-view=\"a.B\"><a>n</a></nav>",
+   "root": true
+  },
+  {
+   "name": "view_wrapping_root_picks_inner_root",
+   "why": "dj-root anywhere beats dj-view, even nested inside it",
+   "html": "<div dj-view=\"a.B\"><div dj-root data-expect-root><p>m</p></div></div>",
+   "root": true
+  },
+  {
+   "name": "both_attrs_on_one_element",
+   "why": "stamped root carries both",
+   "html": "<div dj-root dj-view=\"a.B\" data-expect-root><p>m</p></div>",
+   "root": true
+  },
+  {
+   "name": "two_dj_root_first_wins",
+   "why": "multiple roots: first in document order",
+   "html": "<div dj-root data-expect-root>a</div><div dj-root>b</div>",
+   "root": true
+  },
+  {
+   "name": "two_dj_view_first_wins",
+   "why": "multiple dj-view: first in document order",
+   "html": "<div dj-view=\"a.A\" data-expect-root>a</div><div dj-view=\"b.B\">b</div>",
+   "root": true
+  },
+  {
+   "name": "parent_view_embeds_child_with_root",
+   "why": "#3031/#3053 repro: the child's own dj-root is not the parent's root",
+   "html": "<div dj-view=\"p.P\" data-expect-root><p>x</p><div dj-view data-djust-embedded=\"c1\"><div dj-root><i>c</i></div></div></div>",
+   "root": true
+  },
+  {
+   "name": "parent_root_embeds_child_with_root",
+   "why": "parent dj-root wins over the child's",
+   "html": "<div dj-root data-expect-root><p>x</p><div dj-view data-djust-embedded=\"c1\"><div dj-root><i>c</i></div></div></div>",
+   "root": true
+  },
+  {
+   "name": "child_before_parent_root_in_order",
+   "why": "a child earlier in the document does not claim the root",
+   "html": "<div dj-view data-djust-embedded=\"c1\"><div dj-root><i>c</i></div></div><div dj-root data-expect-root><p>x</p></div>",
+   "root": true
+  },
+  {
+   "name": "child_before_parent_view_in_order",
+   "why": "same, dj-view parent",
+   "html": "<div dj-view data-djust-embedded=\"c1\"><div dj-root><i>c</i></div></div><div dj-view=\"p.P\" data-expect-root><p>x</p></div>",
+   "root": true
+  },
+  {
+   "name": "page_without_root_embeds_child",
+   "why": "#3155: no root of the page's own; the child's wrapper is not it",
+   "html": "<header>h</header><div dj-view data-djust-embedded=\"c1\"><div dj-root><i>c</i></div></div><footer>f</footer>",
+   "root": null,
+   "vdom_fallback_tag": "header"
+  },
+  {
+   "name": "page_without_root_embeds_plain_child",
+   "why": "child without its own dj-root",
+   "html": "<header>h</header><div dj-view data-djust-embedded=\"c1\"><i>c</i></div>",
+   "root": null,
+   "vdom_fallback_tag": "header"
+  },
+  {
+   "name": "sibling_children",
+   "why": "two sibling children",
+   "html": "<div dj-view=\"p.P\" data-expect-root><div dj-view data-djust-embedded=\"a\"><div dj-root><i>1</i></div></div><div dj-view data-djust-embedded=\"b\"><div dj-root><i>2</i></div></div></div>",
+   "root": true
+  },
+  {
+   "name": "sibling_children_no_parent_root",
+   "why": "only children, no root of the page's own",
+   "html": "<div dj-view data-djust-embedded=\"a\"><div dj-root><i>1</i></div></div><div dj-view data-djust-embedded=\"b\"><div dj-root><i>2</i></div></div>",
+   "root": null,
+   "vdom_fallback_tag": "div"
+  },
+  {
+   "name": "nested_children",
+   "why": "a child's child is still not the parent's",
+   "html": "<div dj-view=\"p.P\" data-expect-root><div dj-view data-djust-embedded=\"c\"><div dj-view=\"c.C\"><div dj-view data-djust-embedded=\"g\"><div dj-root>g</div></div></div></div></div>",
+   "root": true
+  },
+  {
+   "name": "sticky_child",
+   "why": "sticky wrapper carries dj-view + dj-sticky-root + data-djust-embedded",
+   "html": "<div dj-view=\"p.P\" data-expect-root><p>x</p><div dj-view dj-sticky-view=\"w\" dj-sticky-root data-djust-embedded=\"s1\"><div dj-root><i>s</i></div></div></div>",
+   "root": true
+  },
+  {
+   "name": "sticky_child_no_parent_root",
+   "why": "sticky child on a page with no root",
+   "html": "<p>x</p><div dj-view dj-sticky-view=\"w\" dj-sticky-root data-djust-embedded=\"s1\"><div dj-root><i>s</i></div></div>",
+   "root": null,
+   "vdom_fallback_tag": "p"
+  },
+  {
+   "name": "root_after_embedded_siblings",
+   "why": "the parent root after several children",
+   "html": "<div dj-view data-djust-embedded=\"a\"><div dj-root>1</div></div><div dj-view data-djust-embedded=\"b\"><div dj-view=\"c.C\">2</div></div><main dj-root data-expect-root>m</main>",
+   "root": true
+  },
+  {
+   "name": "embedded_wrapper_uppercase_attrs",
+   "why": "attribute names are case-insensitive (tag names stay lowercase: a capitalised tag is a component in the template engine)",
+   "html": "<div DJ-VIEW=\"p.P\" data-expect-root><div DJ-VIEW DATA-DJUST-EMBEDDED=\"c\"><div DJ-ROOT>c</div></div></div>",
+   "root": true
+  },
+  {
+   "name": "embedded_wrapper_unclosed_runs_to_end",
+   "why": "an unclosed wrapper claims the rest of the document, not the parent's root before it",
+   "html": "<div dj-view=\"p.P\" data-expect-root><p>x</p><div dj-view data-djust-embedded=\"c\"><div dj-root>c</div>",
+   "root": true
+  },
+  {
+   "name": "embedded_marker_alone_is_not_a_wrapper",
+   "why": "data-djust-embedded without dj-view marks no child boundary",
+   "html": "<div data-djust-embedded=\"c\"><div dj-root data-expect-root>m</div></div>",
+   "root": true
+  },
+  {
+   "name": "dj_view_without_embedded_is_not_a_wrapper",
+   "why": "a nested dj-view that is not embedded owns nothing",
+   "html": "<div dj-view=\"p.P\"><div dj-view=\"q.Q\"><div dj-root data-expect-root>m</div></div></div>",
+   "root": true
+  },
+  {
+   "name": "embedded_marker_in_attribute_value",
+   "why": "the marker inside a value is text",
+   "html": "<div dj-view=\"p.P\" title=\"data-djust-embedded\" data-expect-root><p>x</p></div>",
+   "root": true
+  },
+  {
+   "name": "embedded_marker_lookalike_name",
+   "why": "data-djust-embedded-x is a different attribute",
+   "html": "<div dj-view=\"p.P\" data-djust-embedded-x=\"1\" data-expect-root><p>x</p></div>",
+   "root": true
+  },
+  {
+   "name": "lookalike_in_attribute_value",
+   "why": "#3030 quoted value",
+   "html": "<div data-h=\"<section dj-root>\"><main dj-root data-expect-root>m</main></div>",
+   "root": true
+  },
+  {
+   "name": "lookalike_in_text",
+   "why": "escaped markup in text",
+   "html": "<p>write &lt;div dj-root&gt; in your template</p><div dj-root data-expect-root>m</div>",
+   "root": true
+  },
+  {
+   "name": "lookalike_in_comment",
+   "why": "#2663 comment",
+   "html": "<!-- <div dj-root> --><div dj-root data-expect-root>m</div>",
+   "root": true
+  },
+  {
+   "name": "lookalike_in_script",
+   "why": "#2663 script body",
+   "html": "<script>var s = \"<div dj-root>\";</script><div dj-root data-expect-root>m</div>",
+   "root": true
+  },
+  {
+   "name": "lookalike_in_style",
+   "why": "#2663 style body",
+   "html": "<style>/* <div dj-root> */</style><div dj-view=\"a.B\" data-expect-root>m</div>",
+   "root": true
+  },
+  {
+   "name": "lookalike_in_comment_only",
+   "why": "a lookalike in a comment is not a root",
+   "html": "<!-- <div dj-root> --><p>x</p>",
+   "root": null,
+   "vdom_fallback_tag": "p"
+  },
+  {
+   "name": "lookalike_in_script_only",
+   "why": "a lookalike in a script is not a root",
+   "html": "<script>var s = \"<div dj-view>\";</script><p>x</p>",
+   "root": null,
+   "vdom_fallback_tag": "p"
+  },
+  {
+   "name": "embedded_wrapper_lookalike_in_comment",
+   "why": "a commented wrapper opens no boundary",
+   "html": "<!-- <div dj-view data-djust-embedded=\"c\"> --><div dj-root data-expect-root>m</div>",
+   "root": true
+  },
+  {
+   "name": "embedded_wrapper_lookalike_in_script",
+   "why": "a scripted wrapper opens no boundary",
+   "html": "<div dj-root data-expect-root>m<script>var s = '<div dj-view data-djust-embedded=\"c\">';</script></div>",
+   "root": true
+  },
+  {
+   "name": "hyphenated_lookalike_attributes",
+   "why": "dj-view-transitions / dj-viewport-* / dj-root-x are not roots",
+   "html": "<body dj-view-transitions><div dj-viewport-top=\"1\"><div dj-root-x=\"1\"><div dj-view data-expect-root>m</div></div></div></body>",
+   "root": true
+  },
+  {
+   "name": "data_prefixed_legacy_names",
+   "why": "legacy data- spellings are not roots here",
+   "html": "<div data-dj-root=\"1\" data-djust-root=\"1\"><div dj-root data-expect-root>m</div></div>",
+   "root": true
+  },
+  {
+   "name": "no_root_single_element",
+   "why": "plain fragment",
+   "html": "<div><p>a</p></div>",
+   "root": null,
+   "vdom_fallback_tag": "div"
+  },
+  {
+   "name": "no_root_several_top_level",
+   "why": "#3302: several top-level elements, no root",
+   "html": "<header>H</header><main>M</main>",
+   "root": null,
+   "vdom_fallback_tag": "header"
+  },
+  {
+   "name": "html_dj_view_two_body_children",
+   "why": "#3302: a root on <html> is not a root",
+   "html": "<html dj-view=\"x.V\"><body><header>H</header><main>M</main></body></html>",
+   "root": null,
+   "vdom_fallback_tag": "header"
+  },
+  {
+   "name": "body_dj_root",
+   "why": "#3302: a root on <body> is not a root",
+   "html": "<html><head></head><body dj-root><header>H</header><main>M</main></body></html>",
+   "root": null,
+   "vdom_fallback_tag": "header"
+  },
+  {
+   "name": "head_dj_view",
+   "why": "a root on <head> is not a root",
+   "html": "<html><head dj-view=\"x.V\"><title>t</title></head><body><main>M</main></body></html>",
+   "root": null,
+   "vdom_fallback_tag": "main"
+  },
+  {
+   "name": "html_root_with_inner_root",
+   "why": "an inner dj-root is still found under a document-element dj-view",
+   "html": "<html dj-view=\"x.V\"><body><header>H</header><main dj-root data-expect-root>M</main></body></html>",
+   "root": true
+  },
+  {
+   "name": "empty_input",
+   "why": "nothing at all",
+   "html": "",
+   "root": null
+  },
+  {
+   "name": "quote_in_unquoted_value",
+   "why": "tokenizer error recovery (#3054)",
+   "html": "<div title=a\"b><div dj-root data-expect-root>m</div></div>",
+   "root": true
+  },
+  {
+   "name": "lt_before_non_tag_char",
+   "why": "'<' not followed by a letter, '/' or '!' is text (#3030)",
+   "html": "<p>a < b</p><div dj-root data-expect-root>m</div>",
+   "root": true
+  }
+ ]
+}
