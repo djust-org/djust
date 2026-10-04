@@ -37,6 +37,8 @@ except ImportError:  # pragma: no cover
 pytestmark = pytest.mark.theming
 
 PROCESSOR = "djust.theming.context_processors.theme_context"
+# The pre-#3028 processor, verbatim: the oracle every parity test compares against.
+OLD_PROCESSOR = "djust.tests._eager_theme_context_3028.theme_context"
 TAGS = ("theme_head", "theme_panel", "theme_mode_toggle", "theme_preset_selector")
 CHUNK_KEYS = (
     "theme_head",
@@ -216,10 +218,39 @@ class TestLazyHTMLObject:
         chunk = LazyThemeHTML(lambda: pytest.fail("rendered by a private-name probe"))
         with pytest.raises(AttributeError):
             chunk._nope
-        import copy as copy_module
-
-        copy_module.copy(chunk)
         assert not chunk.evaluated
+
+    def test_copy_and_deepcopy_share_the_chunk_without_rendering_it(self):
+        chunk = LazyThemeHTML(lambda: pytest.fail("rendered by a copy"))
+        assert copy.copy(chunk) is chunk
+        assert copy.deepcopy({"k": chunk})["k"] is chunk
+        assert not chunk.evaluated
+
+    def test_pickling_an_unevaluated_chunk_gives_its_text_as_a_safe_string(self):
+        import pickle
+
+        from django.utils.safestring import SafeString
+
+        chunk = LazyThemeHTML(lambda: "<i>x</i>")
+        restored = pickle.loads(pickle.dumps(chunk))
+        assert restored == "<i>x</i>" and type(restored) is SafeString
+
+    def test_the_documented_str_only_operations_raise_type_error(self):
+        """The guide lists these; this pins that they stay loud, not silent."""
+        import os
+
+        chunk = LazyThemeHTML(lambda: "<i>x</i>")
+        for operation in (
+            lambda: "".join([chunk, chunk]),
+            lambda: sorted([chunk, LazyThemeHTML(lambda: "a")]),
+            lambda: chunk * 2,
+            lambda: os.fspath(chunk),
+            lambda: "x".startswith(chunk),
+            lambda: json.dumps(chunk),
+        ):
+            with pytest.raises(TypeError):
+                operation()
+        assert not isinstance(chunk, str) and str(chunk) == "<i>x</i>"
 
 
 class TestRendersTheSameText:
@@ -584,9 +615,8 @@ class TestRustPath:
         assert second_html != first_html
 
     def test_rust_output_matches_an_eager_processor(self, page_dir):
-        """The same page, once through the lazy processor and once through a
-        processor that hands Rust the already-rendered SafeStrings (what
-        ``theme_context`` returned before #3028)."""
+        """The same page, once through the lazy processor and once through the
+        pre-#3028 processor itself (``_eager_theme_context_3028``, a verbatim copy)."""
         _clear_template_caches()
         request_args = dict(preset=_two_presets()[0], nonce="eq-nonce")
 
@@ -594,10 +624,9 @@ class TestRustPath:
             request = _request(**request_args)
             lazy_html = _mounted(_view_class("_3028_used.html"), request).render(request=request)
 
-        eager_path = f"{__name__}._eager_processor"
         templates = _rust_templates(page_dir)
         processors = templates[0]["OPTIONS"]["context_processors"]
-        processors[processors.index(PROCESSOR)] = eager_path
+        processors[processors.index(PROCESSOR)] = OLD_PROCESSOR
         _clear_template_caches()
         with override_settings(TEMPLATES=templates):
             request = _request(**request_args)
@@ -622,16 +651,6 @@ RUST_CONSTRUCTS = {
     "safe_slice": "{{ theme_mode_toggle|safe|slice:':12' }}",
     "head_length": "{{ theme_head|length }}",
 }
-
-
-def _eager_processor(request):
-    """``theme_context`` as it behaved before #3028: every chunk rendered now."""
-    from django.utils.safestring import mark_safe
-
-    ctx = cp.theme_context(request)
-    for key in CHUNK_KEYS:
-        ctx[key] = mark_safe(str(ctx[key]))
-    return ctx
 
 
 @needs_rust
@@ -659,7 +678,7 @@ class TestRustPathMatchesTheEagerProcessor:
             with open(os.path.join(tmp, name), "w") as handle:
                 handle.write("<div dj-root>[" + RUST_CONSTRUCTS[construct] + "]</div>")
             lazy = self._render(tmp, PROCESSOR, name)
-            eager = self._render(tmp, f"{__name__}._eager_processor", name)
+            eager = self._render(tmp, OLD_PROCESSOR, name)
         assert lazy == eager, (construct, lazy[:160], eager[:160])
         # A real value reached the template, not an empty render of both.
         assert construct in ("eq_literal", "not_in") or "[]" not in lazy.split("</div>")[0]
@@ -689,7 +708,7 @@ class TestRollingDeployState:
         with tempfile.TemporaryDirectory() as tmp:
             page = self._pages(tmp)
             # The old build renders and persists its state under this session.
-            with self._with_processor(tmp, f"{__name__}._eager_processor"):
+            with self._with_processor(tmp, OLD_PROCESSOR):
                 request = _request(preset=first_preset)
                 request.session = session
                 old = _mounted(_view_class(page), request)
@@ -715,9 +734,12 @@ class TestRollingDeployState:
         with tempfile.TemporaryDirectory() as tmp:
             page = self._pages(tmp)
             request = _request()
-            with self._with_processor(tmp, f"{__name__}._eager_processor"):
+            with self._with_processor(tmp, OLD_PROCESSOR):
                 view = _mounted(_view_class(page), request)
                 view.render(request=request)
+            # A deploy restarts the process, so the old processor's per-request memo
+            # (a different shape) never meets the new one; drop it to model that.
+            del request._djust_theme_ctx_cache
             with self._with_processor(tmp, PROCESSOR):
                 view._sync_state_to_rust()
                 html = view.render(request=request)

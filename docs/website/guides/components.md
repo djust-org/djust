@@ -1111,6 +1111,27 @@ The HTML variables are not `str` instances: they are lazy trusted-HTML objects
 on that request, so a CSP nonce or a user's preset never reaches another
 request.
 
+What a chunk is not, because it is not a `str`:
+
+- Python that needs a real `str` raises `TypeError` on it: `"".join(...)`,
+  `sorted(...)` / `<`, `chunk * 2`, `re.search(...)`, `"x".startswith(chunk)`,
+  `"x".replace(chunk, ...)`, `os.fspath(...)`, `textwrap.dedent(...)` and plain
+  `json.dumps(...)`. Call `str(chunk)` first. Django's own JSON encoder
+  (`|json_script`, `JsonResponse`) accepts it.
+- The `|pluralize`, `|divisibleby` and `|get_digit` filters see a non-`str`
+  value and answer differently from a string; no template should apply them to
+  theme HTML. `mark_safe(chunk)`, `escape(chunk)` and `strip_tags(chunk)` return
+  lazy proxies with the same text.
+- Reading any attribute that does not start with an underscore (`hasattr`,
+  `.strip()`, a debug toolbar listing the context) renders the chunk.
+- `copy.copy` and `copy.deepcopy` return the same chunk. Pickling an
+  unevaluated chunk renders it and stores the text as a plain `SafeString`.
+- The `theme_panel`, `theme_mode_toggle` and `theme_preset_selector` chunks
+  keep the old trust rule: if the tag returns a plain `str` (a tag you
+  shadowed), it is escaped when the chunk renders, so `|safe` and
+  `{% autoescape off %}` cannot un-escape it. `theme_head` and `theme_switcher`
+  were always trusted.
+
 ### Component tags: bindings, attributes, selects and alerts
 
 The component tags in `{% load theme_components %}` pass extra keyword arguments

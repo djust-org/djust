@@ -120,6 +120,20 @@ class LazyThemeHTML(Promise, SafeData):
     def __format__(self, spec: str) -> str:
         return format(self._render(), spec)
 
+    # --- copying and pickling --------------------------------------------
+    # The factory is a closure over the request, so the default copy/pickle
+    # protocol would copy the request or fail. A chunk is immutable once
+    # rendered and its factory is pure, so a copy IS the same chunk, and a
+    # pickle is the rendered text (a plain SafeString on the other side).
+    def __copy__(self) -> LazyThemeHTML:
+        return self
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> LazyThemeHTML:
+        return self
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        return (cast(Any, mark_safe), (self._render(),))
+
     def __repr__(self) -> str:
         # Never renders: a debugger or a log line must not pay for the chunk.
         return f"<LazyThemeHTML evaluated={self.evaluated}>"
