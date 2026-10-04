@@ -242,6 +242,107 @@
    "root": true
   },
   {
+   "name": "lookalike_in_textarea",
+   "why": "html5ever (and a browser) read this element's content as text; the Python mask and the text scanner only mask script/style/comments, so they see the lookalike (predates #3031)",
+   "html": "<textarea><div dj-root></textarea><div dj-root data-expect-root>m</div>",
+   "root": true,
+   "diverges": [
+    "python",
+    "scanner"
+   ]
+  },
+  {
+   "name": "lookalike_in_title",
+   "why": "html5ever (and a browser) read this element's content as text; the Python mask and the text scanner only mask script/style/comments, so they see the lookalike (predates #3031)",
+   "html": "<title><div dj-root></title><div dj-root data-expect-root>m</div>",
+   "root": true,
+   "diverges": [
+    "python",
+    "scanner"
+   ]
+  },
+  {
+   "name": "lookalike_in_template_element",
+   "why": "template content is a separate fragment in html5ever; Python and the scanner read it as markup (predates #3031)",
+   "html": "<template><div dj-root></div></template><div dj-root data-expect-root>m</div>",
+   "root": true,
+   "diverges": [
+    "python",
+    "scanner"
+   ]
+  },
+  {
+   "name": "lookalike_in_noscript",
+   "why": "html5ever (and a browser) read this element's content as text; the Python mask and the text scanner only mask script/style/comments, so they see the lookalike (predates #3031)",
+   "html": "<noscript><div dj-root></noscript><div dj-root data-expect-root>m</div>",
+   "root": true,
+   "diverges": [
+    "python",
+    "scanner"
+   ]
+  },
+  {
+   "name": "lookalike_in_iframe",
+   "why": "html5ever (and a browser) read this element's content as text; the Python mask and the text scanner only mask script/style/comments, so they see the lookalike (predates #3031)",
+   "html": "<iframe><div dj-root></iframe><div dj-root data-expect-root>m</div>",
+   "root": true,
+   "diverges": [
+    "python",
+    "scanner"
+   ]
+  },
+  {
+   "name": "lookalike_in_xmp",
+   "why": "html5ever (and a browser) read this element's content as text; the Python mask and the text scanner only mask script/style/comments, so they see the lookalike (predates #3031)",
+   "html": "<xmp><div dj-root></xmp><div dj-root data-expect-root>m</div>",
+   "root": true,
+   "diverges": [
+    "python",
+    "scanner"
+   ]
+  },
+  {
+   "name": "lookalike_in_cdata_section",
+   "why": "in HTML a CDATA section is a bogus comment up to the first '>'; all three agree",
+   "html": "<![CDATA[ <div dj-root> ]]><div dj-root data-expect-root>m</div>",
+   "root": true
+  },
+  {
+   "name": "svg_element_as_root",
+   "why": "foreign-content elements can carry the root attribute",
+   "html": "<svg dj-root data-expect-root><circle/></svg>",
+   "root": true
+  },
+  {
+   "name": "svg_dj_root_beats_enclosing_dj_view",
+   "why": "dj-root anywhere beats dj-view, SVG included",
+   "html": "<div dj-view=\"a.B\"><svg><a dj-root data-expect-root></a></svg></div>",
+   "root": true
+  },
+  {
+   "name": "void_wrapper_after_the_root",
+   "why": "a void element carrying both attributes after the root: the root is already chosen",
+   "html": "<div dj-view=\"p.P\" data-expect-root><br dj-view data-djust-embedded=\"c\"><p>x</p></div>",
+   "root": true
+  },
+  {
+   "name": "void_wrapper_before_the_root",
+   "why": "a void element has no content: the VDOM reads it as a leaf, Python and the scanner treat it as an unclosed wrapper that claims the rest of the page. live_render never emits one (predates #3031 in kind: an unclosed wrapper claims the rest)",
+   "html": "<br dj-view data-djust-embedded=\"c\"><div dj-root data-expect-root>m</div>",
+   "root": true,
+   "diverges": [
+    "python",
+    "scanner"
+   ]
+  },
+  {
+   "name": "self_closing_div_wrapper",
+   "why": "a self-closing flag on a div is ignored by HTML: the wrapper stays open and holds the rest, so there is no root on every side",
+   "html": "<div dj-view data-djust-embedded=\"c\"/><div dj-root data-expect-root>m</div>",
+   "root": null,
+   "vdom_fallback_tag": "div"
+  },
+  {
    "name": "no_root_single_element",
    "why": "plain fragment",
    "html": "<div><p>a</p></div>",

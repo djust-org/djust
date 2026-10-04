@@ -5688,6 +5688,13 @@ mod dj_root_selection_3031 {
         doc["cases"].as_array().expect("cases").clone()
     }
 
+    /// Locators the corpus marks as known NOT to reach the expected root on a page.
+    fn diverges(case: &Value, locator: &str) -> bool {
+        case["diverges"]
+            .as_array()
+            .is_some_and(|l| l.iter().any(|v| v == locator))
+    }
+
     /// The open tag that ends just before byte `open_end`.
     fn open_tag_before(html: &str, open_end: usize) -> &str {
         let start = html[..open_end].rfind('<').expect("an open tag");
@@ -5700,12 +5707,17 @@ mod dj_root_selection_3031 {
             let name = case["name"].as_str().unwrap();
             let html = case["html"].as_str().unwrap();
             let picked = find_root_open(html.as_bytes()).map(|(end, _)| open_tag_before(html, end));
-            if case["root"].as_bool().unwrap_or(false) {
-                let tag = picked.unwrap_or_else(|| panic!("{name}: expected a root"));
-                assert!(tag.contains(MARK), "{name}: picked {tag:?}");
+            let expects_root = case["root"].as_bool().unwrap_or(false);
+            let got_expected = if expects_root {
+                picked.is_some_and(|tag| tag.contains(MARK))
             } else {
-                assert_eq!(picked, None, "{name}");
-                assert_eq!(find_dj_root_content_range(html), None, "{name}");
+                picked.is_none() && find_dj_root_content_range(html).is_none()
+            };
+            if diverges(&case, "scanner") {
+                // A known leftover that predates #3031, pinned so a change is noticed.
+                assert!(!got_expected, "{name}: now agrees, drop it from `diverges`");
+            } else {
+                assert!(got_expected, "{name}: picked {picked:?}");
             }
         }
     }
