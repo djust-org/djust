@@ -60,7 +60,7 @@ DIRECTIVES: List[Dict[str, Any]] = [
         "password, textarea) are debounced 300ms by default, so a burst of typing sends one event; "
         "range and color are throttled 150ms, number 100ms; checkbox, radio and select send "
         "immediately. Any other input type (date, time, datetime-local, month, week, file, "
-        "contenteditable, custom elements) falls back to a 300ms debounce. "
+        "custom elements) falls back to a 300ms debounce. "
         'dj-debounce / dj-throttle override the default, and dj-debounce="0" '
         "sends an event for every keystroke.",
         "value": "handler_name",

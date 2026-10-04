@@ -324,7 +324,7 @@ def test_dj_input_is_documented_as_debounced_and_the_client_debounces() -> None:
             "range and color are throttled 150ms, number 100ms",
             "checkbox, radio and select send immediately",
             "any other input type",
-            "date, time, datetime-local, month, week, file, contenteditable, custom elements",
+            "date, time, datetime-local, month, week, file, custom elements",
             "falls back to a 300ms debounce",
             "dj-debounce",
             'dj-debounce="0"',
