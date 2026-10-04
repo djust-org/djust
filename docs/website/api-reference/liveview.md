@@ -129,9 +129,58 @@ def handle_info(self, message):
 
 ---
 
+#### `connected()` and `disconnected()`
+
+Server-side hooks for a view's live connection. They are unrelated to the `connected()` / `disconnected()` callbacks of a client-side `dj-hook` object.
+
+```python
+def connected(self):
+    self.seat = Seat.claim(self.user)  # only on the live connection, never on the HTTP render
+
+def disconnected(self):
+    Seat.release(self.seat)
+```
+
+Both take no arguments, are optional, and run on a worker thread, so they can use the ORM like `mount()`. A view that defines neither pays nothing.
+
+##### Lifecycle contract
+
+What happens, in order, when a view goes live (WebSocket or SSE):
+
+1. The view's auth checks, then its `on_mount` hooks. A view that is refused here gets none of the hooks below.
+2. `mount()`, or a state restore that replaces it (see [Scaling djust](../guides/scaling.md)).
+3. The object-permission check, then `handle_params(params, uri)`.
+4. `connected()`. The first render comes after it, so state it sets is in the first frame.
+5. Events, `handle_info()`, ticks and background work, until the view's live mount ends.
+6. `disconnected()`, then the framework's own cleanup (below).
+
+The HTTP render (`GET`) and the HTTP POST fallback have no live connection, so neither hook is called on them. `mount()` runs again for the live connection.
+
+**What djust guarantees.**
+
+- `connected()` runs once per live mount, after `mount()` (or the restore) and `handle_params()` and before the first render, whether or not the state was restored. A view that gets a restore does not run `mount()` again, but still runs `connected()`.
+- If `connected()` raises, the mount fails as it does when `mount()` raises: the client gets the error frame and the view is never rendered.
+- `disconnected()` runs at most once for a view, and only for a view that reached step 4 (a view the mount refused, or whose `mount()` or `handle_params()` raised, never did; one whose `connected()` raised did, so it can undo what it claimed). It runs whether or not the view defines `connected()`.
+- It runs whenever that view's live mount ends, over WebSocket or SSE: the socket or stream closes (the user left, the network dropped, a rate-limit or authorization close); a `live_redirect` or a second `mount` frame replaces the view (the old view's `disconnected()` runs before the new view's `connected()`); an `unmount` frame removes a view mounted beside the page view; or the view's authorization is revoked. A reconnect is a new live mount: the old view's `disconnected()` ran, and the new view gets `connected()` (and `mount()`, unless its state is restored).
+- Every view the socket holds gets its own pair of calls: the page view and each view mounted with a `target_id` (lazy hydration, `mount_batch`).
+- An exception in `disconnected()` is logged and does not stop the rest of the teardown, or the teardown of the socket's other views.
+- `disconnected()` runs under the tenant the view mounted with, as its event handlers do.
+
+**What djust does not guarantee.**
+
+- That `disconnected()` runs. It is not called when the server process is killed, crashes or loses power, or when the event loop stops before it finishes (a deploy, a worker restart). Anything that must be released even then needs an expiry of its own, such as a timeout or a periodic sweep.
+- That the framework's cleanup has not started. Over WebSocket `disconnected()` runs just before the view is released, after the view left its channel groups, its presence was untracked, its tick stopped and its latest state saved. Over an SSE close it runs on a worker thread beside the release (as the presence untrack does). Do not rely on `start_async` tasks, `wait_for_event` waiters, uploads, child views or live handles still being in place.
+- That anything `disconnected()` does reaches the client or the saved state. The view is already being dropped: do not rely on events or pushes it queues being sent, or on a change it makes to `self` being rendered or saved.
+- A time limit. A `disconnected()` that blocks holds up the release of that view, so keep it short.
+- Hooks for views a template embeds with `{% live_render %}`, sticky or not: only the views the transport mounts get them. The framework tears an embedded child down with its parent.
+- A hook for a navigation as such. `live_redirect` ends the old view's live mount, so `disconnected()` runs for it although the socket stays open; there is no separate "unmount" hook and no argument that says why the view went.
+- Exclusive access to the view. Background work started with `start_async` may still be running while `disconnected()` runs.
+
+Existing views are unaffected unless they already define a callable `connected` or `disconnected`: those are now called. A state attribute of that name (`self.connected = False`) is not callable and is ignored.
+
 #### Disconnect cleanup
 
-LiveView has no user-level connect or disconnect hook in 1.2: a `connected()`, `disconnected()`, `disconnect()` or `unmount()` method you define on the view is never called. (The `connected()` / `disconnected()` callbacks that do exist belong to client-side `dj-hook` objects.) The framework itself cleans up on disconnect: `start_async` tasks are cancelled, presence is untracked, child views are released, and uploads are aborted (an incomplete `ResumableUploadWriter` upload is suspended so the client can resume it after reconnecting). Release any other resources you open in `mount()` by other means (for example, a timeout or a periodic sweep). Server-side hooks are planned for 1.3 (#3007).
+The framework cleans up on disconnect by itself: `start_async` tasks are cancelled, presence is untracked, child views are released, and uploads are aborted (an incomplete `ResumableUploadWriter` upload is suspended so the client can resume it after reconnecting). `disconnect()` and `unmount()` methods you define on the view are not called; use `disconnected()` above, and release what it cannot reach (a process that dies runs nothing) with a timeout or a periodic sweep.
 
 **Telling the live mount from the HTTP render.** `mount()` runs twice for a page: once for the HTTP response and again when the WebSocket (or SSE) connection mounts the view. On the live mount the framework sets `self._websocket_session_id` before `mount()` runs; on the HTTP render it is absent. This is the check djust's own presence tracking uses:
 
