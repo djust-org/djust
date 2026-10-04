@@ -9316,6 +9316,7 @@ class SortableListNode(template.Node):
             if not isinstance(item, dict):
                 continue
             item_id = conditional_escape(str(item.get("id", "")))
+            key_attr = f' data-key="{item_id}"' if item_id else ""
             label = conditional_escape(str(item.get("label", "")))
             handle_html = (
                 '<span class="dj-sortable-list__handle" aria-hidden="true">&#x2630;</span> '
@@ -9324,7 +9325,7 @@ class SortableListNode(template.Node):
             )
             drag_attr = ' draggable="true"' if not disabled else ""
             items_html.append(
-                f'<li class="dj-sortable-list__item" data-id="{item_id}"{drag_attr} '
+                f'<li class="dj-sortable-list__item" data-id="{item_id}"{key_attr}{drag_attr} '
                 f'role="listitem">'
                 f"{handle_html}"
                 f'<span class="dj-sortable-list__label">{label}</span></li>'
@@ -9388,6 +9389,7 @@ class SortableGridNode(template.Node):
             if not isinstance(item, dict):
                 continue
             item_id = conditional_escape(str(item.get("id", "")))
+            key_attr = f' data-key="{item_id}"' if item_id else ""
             label = conditional_escape(str(item.get("label", "")))
             thumbnail = item.get("thumbnail", "")
             thumb_html = ""
@@ -9399,7 +9401,7 @@ class SortableGridNode(template.Node):
                 )
             drag_attr = ' draggable="true"' if not disabled else ""
             items_html.append(
-                f'<div class="dj-sortable-grid__item" data-id="{item_id}"{drag_attr}>'
+                f'<div class="dj-sortable-grid__item" data-id="{item_id}"{key_attr}{drag_attr}>'
                 f"{thumb_html}"
                 f'<span class="dj-sortable-grid__label">{label}</span></div>'
             )

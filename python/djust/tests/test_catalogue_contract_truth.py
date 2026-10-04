@@ -261,8 +261,8 @@ class TestClientNeedsAreStated:
     def test_a_hook_nothing_ships_is_reported_as_such(self):
         from djust.theming.gallery.component_registry import component_client
 
-        client = component_client("sortable_list")
-        assert client["hook"] == "SortableList"
+        client = component_client("signature_pad")
+        assert client["hook"] == "SignaturePad"
         assert client["script"] == "" and client["hook_shipped"] is False
 
     def test_the_hook_is_found_even_when_no_example_renders_it(self):

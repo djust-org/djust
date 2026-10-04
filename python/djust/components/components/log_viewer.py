@@ -11,7 +11,13 @@ class LogViewer(Component):
     """Monospace streaming log display with level coloring.
 
     Renders log lines with automatic level detection (INFO, WARN, ERROR, DEBUG)
-    and color coding. Supports streaming via ``dj-hook``.
+    and color coding. Supports streaming via ``dj-hook``; the page must
+    include ``djust_components/log-viewer.js``. The log follows its newest line
+    until the reader scrolls up. With ``stream_event`` it appends the lines the
+    view pushes (``self.push_event("new_logs", {"lines": [...]})``), honouring
+    ``max_lines``, ``show_line_numbers`` and ``filter_level``; stream them or
+    re-render ``lines``, not both for one log. An app's own ``LogViewer`` hook,
+    in ``window.djust.hooks`` or ``window.DjustHooks``, replaces the shipped one.
 
     Usage in a LiveView::
 
@@ -136,10 +142,18 @@ class LogViewer(Component):
             stream_attr = f' data-stream-event="{e_stream}"'
 
         scroll_attr = ' data-auto-scroll="true"' if self.auto_scroll else ""
+        # What the LogViewer hook needs to append streamed lines like these.
+        hook_attrs = ""
+        if self.show_line_numbers:
+            hook_attrs += ' data-line-numbers="true"'
+        if self.max_lines and self.max_lines > 0:
+            hook_attrs += f' data-max-lines="{int(self.max_lines)}"'
+        if self.filter_level:
+            hook_attrs += f' data-filter-level="{html.escape(self.filter_level.lower())}"'
 
         return (
             f'<div class="{class_str}" dj-hook="LogViewer"'
-            f'{stream_attr}{scroll_attr} role="log" aria-live="polite">'
+            f'{stream_attr}{scroll_attr}{hook_attrs} role="log" aria-live="polite">'
             f'<div class="dj-log-viewer__body">{"".join(lines_html)}</div>'
             f"</div>"
         )

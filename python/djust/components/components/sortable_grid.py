@@ -10,8 +10,13 @@ from djust import Component
 class SortableGrid(Component):
     """2D drag-and-drop grid layout.
 
-    Uses ``dj-hook="SortableGrid"`` for client-side drag interactions.
-    Fires a server event with the new order on drop.
+    Uses ``dj-hook="SortableGrid"`` for client-side drag interactions; the
+    page must include ``djust_components/sortable-grid.js``. Tiles reorder by
+    mouse drag, or by keyboard (Space grabs the focused tile, the arrow keys
+    move it, Up/Down by a row of ``columns``, Enter drops it, Escape cancels).
+    Fires ``move_event`` with ``order`` (the item ids in their new order) on
+    drop. An app's own ``SortableGrid`` hook, in ``window.djust.hooks`` or
+    ``window.DjustHooks``, replaces the shipped one.
 
     Usage in a LiveView::
 
@@ -79,6 +84,7 @@ class SortableGrid(Component):
             if not isinstance(item, dict):
                 continue
             item_id = html.escape(str(item.get("id", "")))
+            key_attr = f' data-key="{item_id}"' if item_id else ""
             label = html.escape(str(item.get("label", "")))
             thumbnail = item.get("thumbnail", "")
             thumb_html = ""
@@ -90,7 +96,7 @@ class SortableGrid(Component):
                 )
             drag_attr = ' draggable="true"' if not self.disabled else ""
             items_html.append(
-                f'<div class="dj-sortable-grid__item" data-id="{item_id}"{drag_attr}>'
+                f'<div class="dj-sortable-grid__item" data-id="{item_id}"{key_attr}{drag_attr}>'
                 f"{thumb_html}"
                 f'<span class="dj-sortable-grid__label">{label}</span></div>'
             )

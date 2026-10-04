@@ -9,8 +9,13 @@ from djust import Component
 class SortableList(Component):
     """Drag-and-drop reorderable list.
 
-    Uses ``dj-hook="SortableList"`` for client-side drag interactions.
-    Fires a server event with the new order on drop.
+    Uses ``dj-hook="SortableList"`` for client-side drag interactions; the
+    page must include ``djust_components/sortable-list.js``. Items reorder by
+    mouse drag, or by keyboard (Space grabs the focused item, the arrow keys
+    move it, Enter drops it, Escape cancels). Fires ``move_event`` with
+    ``order`` (the item ids in their new order) on drop. An app's own
+    ``SortableList`` hook, in ``window.djust.hooks`` or ``window.DjustHooks``,
+    replaces the shipped one.
 
     Usage in a LiveView::
 
@@ -78,6 +83,7 @@ class SortableList(Component):
             if not isinstance(item, dict):
                 continue
             item_id = html.escape(str(item.get("id", "")))
+            key_attr = f' data-key="{item_id}"' if item_id else ""
             label = html.escape(str(item.get("label", "")))
             handle_html = (
                 '<span class="dj-sortable-list__handle" aria-hidden="true">&#x2630;</span> '
@@ -86,7 +92,7 @@ class SortableList(Component):
             )
             drag_attr = ' draggable="true"' if not self.disabled else ""
             items_html.append(
-                f'<li class="dj-sortable-list__item" data-id="{item_id}"{drag_attr} '
+                f'<li class="dj-sortable-list__item" data-id="{item_id}"{key_attr}{drag_attr} '
                 f'role="listitem">'
                 f"{handle_html}"
                 f'<span class="dj-sortable-list__label">{label}</span></li>'
