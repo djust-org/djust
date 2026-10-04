@@ -183,7 +183,7 @@ def check_liveviews(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
     from django.conf import settings
     from djust._component_subscriptions import is_component_subscription
-    from djust.decorators import is_event_handler, is_push_handler
+    from djust.decorators import is_event_handler, is_push_only
 
     # Discover LiveViews from BOTH __subclasses__() (imported classes) AND the
     # root URLconf (URL-routed views, whose module may not be imported anywhere
@@ -371,7 +371,7 @@ def check_liveviews(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
             # ``@push_handler`` marks a method only server push may call; V004's
             # fix (``@event_handler``) would make it a browser event target
             # (#3002). Any name, not just ``handle_*``.
-            if is_push_handler(method):
+            if is_push_only(cls, name, method):
                 continue
             # ``handle_*`` is also the server-push namespace: ``server_push``
             # calls an undecorated ``handle_*`` method by design, and leaving it
@@ -1665,3 +1665,70 @@ def check_interactive_actor_views(app_configs: Any, **kwargs: Any) -> list[Check
             )
         )
     return errors
+
+
+@register("djust")
+def check_push_handler_overrides(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    """V021: a subclass overrides a ``@push_handler`` method without the marker.
+
+    The marker is inherited by method name: dispatch refuses a browser event
+    for any name that a class in the MRO defines with ``@push_handler``, so an
+    unmarked override is still push-only (Info: protected, but surprising). An
+    override that adds ``@event_handler`` is a contradiction (Warning): the
+    decorator cannot make the name browser-callable, so the event handler is
+    dead code (#3002).
+    """
+    messages: list[CheckMessage] = []
+    if _is_check_suppressed("djust.V021"):
+        return messages
+    try:
+        from djust.decorators import is_event_handler, is_push_handler
+        from djust.live_view import LiveView
+    except ImportError:
+        return messages
+
+    candidates = set(_routed_liveview_classes()) | set(_walk_subclasses(LiveView))
+    for cls in sorted(candidates, key=lambda c: (c.__module__, c.__qualname__)):
+        if _is_framework_internal_class(cls):
+            continue
+        label = "%s.%s" % (cls.__module__, cls.__qualname__)
+        for name, member in cls.__dict__.copy().items():
+            function = getattr(member, "__func__", member)
+            if not callable(function) or is_push_handler(function):
+                continue
+            if not any(is_push_handler(base.__dict__.get(name)) for base in cls.__mro__[1:]):
+                continue
+            try:
+                file_path = inspect.getsourcefile(function) or ""
+                line_number: Optional[int] = inspect.getsourcelines(function)[1]
+            except (OSError, TypeError):
+                file_path, line_number = "", None
+            if is_event_handler(function):
+                messages.append(
+                    DjustWarning(
+                        "%s.%s() is an @event_handler but overrides a @push_handler method; "
+                        "browsers are still refused (the marker is inherited by name)."
+                        % (label, name),
+                        hint=(
+                            "Remove @event_handler to keep it push-only, or rename the "
+                            "method if a browser should be able to call it."
+                        ),
+                        id="djust.V021",
+                        fix_hint="Remove `@event_handler` from `%s.%s`." % (cls.__qualname__, name),
+                        file_path=file_path,
+                        line_number=line_number,
+                    )
+                )
+            else:
+                messages.append(
+                    DjustInfo(
+                        "%s.%s() overrides a @push_handler method without the marker; "
+                        "it is still push-only (the marker is inherited by name)." % (label, name),
+                        hint="Add @push_handler to the override to say so.",
+                        id="djust.V021",
+                        fix_hint="Add `@push_handler` above `%s.%s`." % (cls.__qualname__, name),
+                        file_path=file_path,
+                        line_number=line_number,
+                    )
+                )
+    return messages

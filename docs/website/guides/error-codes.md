@@ -743,6 +743,16 @@ V008 is broader than V006 and will flag any custom class instantiation, not just
 
 ---
 
+### V021: Override of a `@push_handler` method
+
+**Severity**: Info; Warning when the override carries `@event_handler`
+
+**What causes it**: A subclass (or a class that shadows a mixin's method) defines a method whose name a base defines with `@push_handler`, without re-applying the marker. The marker is inherited by method name, so the override is still refused to browsers in every `event_security` mode and server push still reaches it. Message: "<view>.<name>() overrides a @push_handler method without the marker; it is still push-only (the marker is inherited by name)." If the override has `@event_handler` the message says browsers are still refused: the decorator cannot make the name browser-callable.
+
+**Fix**: Add `@push_handler` to the override. For the `@event_handler` case, remove the decorator, or rename the method if a browser should be able to call it.
+
+---
+
 ## Security Errors (S0xx)
 
 ### S001: mark_safe() with f-string

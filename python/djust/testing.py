@@ -274,6 +274,12 @@ class LiveViewTestClient:
 
         # Get the handler
         handler = getattr(self.view_instance, event_name, None)
+        from .decorators import is_push_only
+
+        if is_push_only(self.view_instance, event_name, handler):
+            # A @push_handler method is refused to a browser as if it did not
+            # exist (#3002); use send_push() to exercise it.
+            handler = None
         if not handler or not callable(handler):
             from .websocket_utils import _format_handler_not_found_error
 
@@ -354,6 +360,64 @@ class LiveViewTestClient:
         }
         self.events.append(event_record)
 
+        return {
+            "success": error is None,
+            "error": error,
+            "state_before": state_before,
+            "state_after": state_after,
+            "duration_ms": duration_ms,
+        }
+
+    def send_push(
+        self,
+        handler: Optional[str] = None,
+        *,
+        state: Optional[Dict[str, Any]] = None,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Deliver a server push to the mounted view, as ``push_to_view`` does.
+
+        Applies ``state`` and calls ``handler`` through the consumer's own
+        allowlist (``handle_*``, ``@event_handler`` or ``@push_handler``), so a
+        name the consumer would block fails here too. Like production, it runs
+        no permission or rate-limit check. This is how to test a
+        ``@push_handler`` method: :meth:`send_event` refuses it, as a browser
+        is refused.
+
+        Returns the same envelope as :meth:`send_event`. ``success`` is False
+        with an ``error`` when the handler is blocked or raises.
+        """
+        if not self._mounted or not self.view_instance:
+            raise RuntimeError("View not mounted. Call client.mount() first.")
+
+        from .websocket import LiveViewConsumer
+
+        state_before = self.get_state()
+        error: Optional[str] = None
+        start_time = time.perf_counter()
+        try:
+            hook = LiveViewConsumer._prepare_server_push(
+                self.view_instance, {"state": state, "handler": handler, "payload": payload}
+            )
+            if handler and hook is None:
+                error = "Push handler %r is not callable by server push" % handler
+            elif hook is not None:
+                handler_fn, kwargs = hook
+                handler_fn(**kwargs)
+        except Exception as e:
+            error = str(e)
+        duration_ms = (time.perf_counter() - start_time) * 1000
+        state_after = self.get_state()
+        self.events.append(
+            {
+                "type": "push",
+                "name": handler,
+                "params": payload or {},
+                "timestamp": time.time(),
+                "duration_ms": duration_ms,
+                "error": error,
+            }
+        )
         return {
             "success": error is None,
             "error": error,
@@ -1082,7 +1146,9 @@ class LiveComponentTestClient:
         component = self._require_mounted()
 
         handler = getattr(component, event_name, None)
-        if handler is None or not callable(handler):
+        from .decorators import is_push_only
+
+        if handler is None or not callable(handler) or is_push_only(component, event_name, handler):
             raise NoHandlerFoundError(f"{type(component).__name__} has no handler {event_name!r}")
 
         state_before = self.get_state()
@@ -1541,7 +1607,7 @@ def _unfuzzed_reachable_methods(cls: Type[Any]) -> List[str]:
     where dispatch refuses them.
     """
     from djust.config import config
-    from djust.decorators import is_event_handler
+    from djust.decorators import is_event_handler, is_push_only
     from djust.live_view import LiveView
 
     if config.get("event_security", "strict") == "strict" or not isinstance(cls, type):
@@ -1565,6 +1631,8 @@ def _unfuzzed_reachable_methods(cls: Type[Any]) -> List[str]:
             )
             if not inspect.isfunction(function) or is_event_handler(function):
                 continue
+            if is_push_only(cls, name, function):
+                continue  # refused to a client in every mode (#3002)
             if name not in names:
                 names.append(name)
     return sorted(names)

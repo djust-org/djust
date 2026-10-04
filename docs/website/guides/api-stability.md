@@ -40,7 +40,7 @@ The public API — the surface SemVer covers — is:
 - Everything exported from the top-level `djust` package
   (`from djust import X`).
 - The documented decorators in `djust.decorators` — `@event_handler`,
-  `@server_function`, `@permission_required`, `@rate_limit`, `@reactive`,
+  `@server_function`, `@push_handler`, `@permission_required`, `@rate_limit`, `@reactive`,
   `@computed`, `@debounce`, `@throttle`, `@optimistic`, `@cache`,
   `@client_state`, `@background`, `@on_mount`, plus the `state()`
   descriptor (`count = state(default=0)`). `@optimistic` and

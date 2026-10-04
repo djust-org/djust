@@ -16,7 +16,7 @@ from django.core.exceptions import PermissionDenied
 
 from ._class_snapshot import attribute_names
 from .config import config as djust_config
-from .decorators import is_event_handler, is_push_handler
+from .decorators import is_event_handler, is_push_only
 from .rate_limit import (
     ConnectionRateLimiter,
     caller_key,
@@ -68,7 +68,7 @@ def _format_handler_not_found_error(owner_instance: object, event_name: str) -> 
         for name in attribute_names(owner_instance)  # dir() races class writes (#3151)
         if not name.startswith("_")
         and callable(getattr(owner_instance, name, None))
-        and not is_push_handler(getattr(owner_instance, name, None))
+        and not is_push_only(owner_instance, name, getattr(owner_instance, name, None))
     ]
     close = difflib.get_close_matches(event_name, public_methods, n=3, cutoff=0.6)
     if close:
@@ -77,7 +77,7 @@ def _format_handler_not_found_error(owner_instance: object, event_name: str) -> 
     # 2. Private-method collision — method exists with underscore prefix
     if hasattr(owner_instance, f"_{event_name}"):
         method = getattr(owner_instance, f"_{event_name}")
-        if callable(method) and not is_push_handler(method):
+        if callable(method) and not is_push_only(owner_instance, f"_{event_name}", method):
             hints.append(
                 f"  Found '_{event_name}' (private). "
                 "Rename it to remove the leading underscore so it can be called as an event."
@@ -131,7 +131,7 @@ def _check_event_security(
     # Server-push only, in EVERY event_security mode (strict/warn/open).
     # _validate_event_security already treats such a handler as missing; this
     # keeps the gate closed for a caller that reaches the check directly.
-    if is_push_handler(handler):
+    if is_push_only(owner_instance, event_name, handler):
         return "Server push handlers cannot be invoked as client events"
     if isinstance(owner_instance, ComponentDeclaration) and not is_event_handler(handler):
         return "Interactive components accept only declared event actions"
@@ -202,8 +202,8 @@ async def _validate_event_security(
         return None
 
     handler: Optional[Callable[..., Any]] = getattr(owner_instance, event_name, None)
-    if handler is not None and is_push_handler(handler):
-        # A @push_handler method is callable by server push only (#3002). To a
+    if is_push_only(owner_instance, event_name, handler):
+        # A @push_handler method (or an override of one, which stays push-only) is callable by server push only (#3002). To a
         # browser it must be indistinguishable from a method that does not
         # exist: same refusal, same log line, no hint that it is there.
         handler = None

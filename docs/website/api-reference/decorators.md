@@ -444,7 +444,11 @@ def refresh_room(self, room: str = "", **kwargs):
     self.rooms = load_rooms(room)
 ```
 
-It is not an event handler, and it cannot be combined with `@event_handler` or `@server_function` (`TypeError` at decoration time). Put it outermost. See [Server Push](../advanced/server-push.md#handlers-only-the-server-may-call-push_handler).
+It is not an event handler. It cannot be combined with `@event_handler` or `@server_function`, nor with `@permission_required`, `@rate_limit`, `@debounce`, `@throttle`, `@cache`, `@optimistic` or `@client_state` (`TypeError` at decoration time): server push enforces none of those, so on a push handler they would do nothing and look like protection. Check authorization inside the handler. `@background` is allowed.
+
+**The marker is inherited by overrides.** If any class in the MRO defines the name with `@push_handler`, an override or a shadowing method without the marker is still push-only, so forgetting it fails closed. `djust.V021` reports the override; re-apply `@push_handler` to silence it. Adding `@event_handler` to such an override does not make it browser-callable (V021 warns).
+
+It may sit above or below `@staticmethod` / `@classmethod`. Put it topmost among ordinary decorators: a third-party wrapper that skips `functools.wraps` and sits above it hides the marker on the wrapper (the name-level rule above still covers the name when another class in the MRO marks it). See [Server Push](../advanced/server-push.md#handlers-only-the-server-may-call-push_handler).
 
 ---
 

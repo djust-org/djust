@@ -48,8 +48,10 @@ push_to_view("games.views.RoomView", handler="refresh_room", payload={"room": "a
 - The name does not need the `handle_` prefix.
 - A browser event naming it is refused on the WebSocket, SSE and HTTP POST transports with the same response as a method that does not exist. It is not suggested in debug-mode "did you mean" hints, and the HTTP API answers `unknown_handler`.
 - It is not an event handler: it does not appear in the view schema, `djust_audit` or the HTTP API, and `djust.V004` does not suggest decorating it. A template binding to it is reported by `djust.T019` in every mode.
-- `@event_handler` or `@server_function` on the same method is a `TypeError` at decoration time.
-- Put `@push_handler` outermost. The marker is per function, so a subclass that overrides the method must mark the override too.
+- `@event_handler` or `@server_function` on the same method is a `TypeError` at decoration time. So are `@permission_required`, `@rate_limit`, `@debounce`, `@throttle`, `@cache`, `@optimistic` and `@client_state`: server push enforces none of them, so they would be inert and look like protection. Check authorization inside the handler. `@background` is allowed.
+- **The marker is inherited by overrides.** If any class in the MRO (a base, a mixin) defines the name with `@push_handler`, an override without the marker is still push-only, and server push still reaches it. `djust.V021` reports the override; re-apply the marker to silence it. Adding `@event_handler` to the override does not make it browser-callable (V021 warns).
+- It may sit above or below `@staticmethod` / `@classmethod`. Put it topmost among ordinary decorators.
+- To test one, use `LiveViewTestClient.send_push("name", payload={...})`. `send_event` refuses it, as a browser is refused.
 - Existing `handle_*` handlers keep working exactly as before; the marker is opt-in.
 
 ## Push from Celery Tasks

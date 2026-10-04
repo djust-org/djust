@@ -241,9 +241,9 @@ class _OwnerContext:
                 "The component calls it when it emits the output. Bind the browser "
                 "control to the component's own action instead.",
             )
-        from djust.decorators import is_push_handler
+        from djust.decorators import is_push_only
 
-        if callable(function) and is_push_handler(function):
+        if callable(function) and is_push_only(self.cls, name, function):
             # Refused in every event_security mode, so unlike the undecorated
             # case below this is reported under "warn" and "open" too (#3002).
             return Finding(

@@ -5900,12 +5900,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if handler_name:
             handler_fn = getattr(view, handler_name, None)
             if handler_fn and callable(handler_fn):
-                from .decorators import is_event_handler, is_push_handler
+                from .decorators import is_event_handler, is_push_only
 
                 if not (
                     handler_name.startswith("handle_")
                     or is_event_handler(handler_fn)
-                    or is_push_handler(handler_fn)
+                    or is_push_only(view, handler_name, handler_fn)
                 ):
                     logger.warning(
                         "server_push: blocked handler %r — must be handle_*, "

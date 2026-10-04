@@ -47,6 +47,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V018 | LiveView | Warning | `@event_handler(params=[...])` disagrees with a strict handler's signature |
 | V019 | LiveView | Warning | A `dj-auto-recover` handler declares `parameter_policy="strict"`; recovery always runs under legacy policy |
 | V020 | LiveView | Error | A `use_actors = True` view declares an interactive component (`djust.components.interactive`); actor views do not support them |
+| V021 | LiveView | Info / Warning | A subclass overrides a `@push_handler` method without the marker (Info; still push-only), or gives the override `@event_handler` (Warning; browsers are still refused) |
 | S001 | Security | Error | mark_safe() with f-string (XSS risk) |
 | S002 | Security | Warning | @csrf_exempt without justification comment |
 | S003 | Security | Warning | Bare except: pass swallows all exceptions |
@@ -300,7 +301,10 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
   - `abstract = True` class attribute on an abstract base
   - `DJUST_CONFIG = {"suppress_checks": ["V004"]}` — global (fixed in #1607)
   - `SILENCED_SYSTEM_CHECKS = ["djust.V004"]`
-- **Not flagged**: methods marked `@push_handler` (any name): the marker means only server push calls the method, and V004's fix would make it a browser event target. `handle_*` methods. `server_push` may call an undecorated `handle_*` method, and leaving it undecorated is how a handler is made callable by server push but not by browsers — adding `@event_handler` or a `_` prefix would break it (#3002). The framework's own lifecycle names (`mount`, `handle_params`, `handle_info`, `handle_tick`, …) were already exempt.
+- **Not flagged**:
+  - Methods marked `@push_handler`, under any name, including an unmarked override of a marked method. The marker means only server push calls the method, and V004's fix would make it a browser event target.
+  - `handle_*` methods. `server_push` may call an undecorated `handle_*` method, and leaving it undecorated keeps it unreachable from browsers under the default `strict` mode. Adding `@event_handler` or a `_` prefix would break that (#3002).
+  - The framework's own lifecycle names (`mount`, `handle_params`, `handle_info`, `handle_tick`, …).
 
 ### V005 — Module not in LIVEVIEW_ALLOWED_MODULES
 - **Severity**: Warning
@@ -410,6 +414,13 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Fix**: remove `use_actors = True` from the view, or move the component to
   a view that does not use actors.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V020"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V020"]`
+
+### V021 — Override of a `@push_handler` method
+- **Severity**: Info; Warning when the override carries `@event_handler`
+- **Method**: Runtime (class inspection; nothing is constructed or mounted)
+- **What it detects**: a LiveView subclass that defines a method whose name a base class (or mixin) defines with `@push_handler`, without re-applying the marker. The marker is inherited by method name, so the override is still refused to browsers in every `event_security` mode; the check makes that visible. With `@event_handler` on the override it is a Warning: the decorator cannot make the name browser-callable, so the event handler is dead code.
+- **Fix**: add `@push_handler` to the override. For the Warning, remove `@event_handler`, or rename the method if a browser should call it.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V021"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V021"]`
 
 ---
 

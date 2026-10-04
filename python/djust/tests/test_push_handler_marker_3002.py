@@ -40,11 +40,13 @@ from djust.decorators import (
     event_handler,
     is_event_handler,
     is_push_handler,
+    is_push_only,
     is_server_function,
     permission_required,
     push_handler,
     rate_limit,
     server_function,
+    throttle,
 )
 from djust.push import view_group_name
 from djust.security import is_safe_event_name
@@ -93,7 +95,57 @@ class RoomView(LiveView):
         RAN.append(("ping",))
 
 
+class MarkedMixin:
+    @push_handler
+    def mixin_refresh(self, **kwargs):
+        RAN.append(("mixin_refresh",))
+
+
+class OverrideView(MarkedMixin, RoomView):
+    """Every override below forgets the marker (or adds @event_handler)."""
+
+    def refresh_room(self, room="", **kwargs):
+        RAN.append(("override_refresh", room))
+
+    def mixin_refresh(self, **kwargs):  # shadows the mixin's marked method
+        RAN.append(("shadow_refresh",))
+
+    @event_handler
+    def called_form(self, **kwargs):
+        RAN.append(("override_event_handler",))
+
+
+class DeepView(OverrideView):
+    """A third level, unmarked again."""
+
+    def refresh_room(self, room="", **kwargs):
+        RAN.append(("deep_refresh", room))
+
+
+class StaticView(LiveView):
+    template = "<div dj-root></div>"
+    login_required = False
+
+    @push_handler
+    @staticmethod
+    def above_static(**kwargs): ...
+
+    @staticmethod
+    @push_handler
+    def below_static(**kwargs): ...
+
+    @push_handler
+    @classmethod
+    def above_class(cls, **kwargs): ...
+
+    @classmethod
+    @push_handler
+    def below_class(cls, **kwargs): ...
+
+
 VIEW = __name__ + ".RoomView"
+OVERRIDE_VIEW = __name__ + ".OverrideView"
+OVERRIDES = ("refresh_room", "mixin_refresh", "called_form")
 
 
 @pytest.fixture(autouse=True)
@@ -119,12 +171,12 @@ def _session():
     return session
 
 
-async def _mounted():
+async def _mounted(view=VIEW):
     socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     socket.scope.update(session=await sync_to_async(_session)(), user=AnonymousUser(), tenant=None)
     assert (await socket.connect())[0]
     await socket.receive_json_from(timeout=3)
-    await socket.send_json_to({"type": "mount", "view": VIEW, "url": "/r/"})
+    await socket.send_json_to({"type": "mount", "view": view, "url": "/r/"})
     assert (await socket.receive_json_from(timeout=3))["type"] == "mount"
     return socket
 
@@ -170,29 +222,58 @@ def test_a_test_double_is_not_mistaken_for_a_marked_handler():
     assert not is_push_handler(None)
 
 
-def test_marker_survives_stacking_with_other_decorators_in_either_order():
+def test_marker_survives_stacking_with_background_in_either_order():
     class Stacked:
         @push_handler
-        @permission_required("app.change_thing")
+        @background
         def outer(self, **kwargs): ...
 
-        @rate_limit(rate=5, burst=2)
+        @background
         @push_handler
         def inner(self, **kwargs): ...
 
-        @push_handler
-        @background
-        def backgrounded(self, **kwargs): ...
-
-        @debounce(0.2)
-        @push_handler
-        def debounced(self, **kwargs): ...
-
-    for name in ("outer", "inner", "backgrounded", "debounced"):
+    for name in ("outer", "inner"):
         assert is_push_handler(getattr(Stacked(), name)), name
-    # The other decorators' metadata is still there.
-    assert Stacked.outer._djust_decorators["permission_required"] == "app.change_thing"
-    assert Stacked.inner._djust_decorators["rate_limit"]["rate"] == 5
+
+
+@pytest.mark.parametrize(
+    "inert",
+    [
+        lambda: permission_required("app.change_thing"),
+        lambda: rate_limit(rate=5, burst=2),
+        lambda: debounce(0.2),
+        lambda: throttle(0.2),
+    ],
+    ids=["permission_required", "rate_limit", "debounce", "throttle"],
+)
+def test_decorators_server_push_does_not_enforce_are_refused_in_both_orders(inert):
+    def one(self, **kwargs): ...
+
+    with pytest.raises(TypeError, match="would have no effect"):
+        push_handler(inert()(one))
+
+    def two(self, **kwargs): ...
+
+    with pytest.raises(TypeError, match="cannot be combined with @"):
+        inert()(push_handler(two))
+
+
+@pytest.mark.parametrize("order", ["marker_above", "marker_below"])
+@pytest.mark.parametrize("kind", ["staticmethod", "classmethod"])
+def test_marker_works_with_staticmethod_and_classmethod_in_either_order(kind, order):
+    name = ("above_" if order == "marker_above" else "below_") + kind[:-6]
+    # What dispatch resolves (getattr on the instance) carries the marker.
+    resolved = getattr(StaticView(), name)
+    assert is_push_handler(resolved), name
+    assert is_push_only(StaticView(), name, resolved)
+    assert not is_event_handler(resolved)
+
+
+def test_marker_above_staticmethod_conflicts_with_event_handler():
+    def one(**kwargs): ...
+
+    with pytest.raises(TypeError, match="cannot be combined with @event_handler"):
+        push_handler(staticmethod(event_handler(one)))
 
 
 @pytest.mark.parametrize("first", ["event_handler", "server_function"])
@@ -337,6 +418,132 @@ async def test_server_push_reaches_marked_handlers_under_any_name(mode):
     assert sorted(RAN) == sorted(
         [("refresh_room", "a"), ("handle_marked",), ("called_form",), ("handle_plain",)]
     )
+
+
+# --- the marker is inherited by overrides ---------------------------------------
+
+
+def test_is_push_only_follows_the_mro_not_just_the_resolved_function():
+    for cls in (OverrideView, DeepView):
+        view = cls()
+        for name in OVERRIDES:
+            resolved = getattr(view, name)
+            assert not is_push_handler(resolved), (cls, name)  # the override itself is unmarked
+            assert is_push_only(view, name, resolved), (cls, name)
+        assert is_push_only(cls, "refresh_room")  # a class works as owner too
+        assert not is_push_only(view, "ping", view.ping)
+        assert not is_push_only(view, "handle_plain", view.handle_plain)
+        assert not is_push_only(view, "nothing_here")
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", MODES)
+async def test_ws_unmarked_override_of_a_marked_method_is_still_refused(mode):
+    with _mode(mode):
+        socket = await _mounted(OVERRIDE_VIEW)
+        try:
+            missing = _errors(await _event(socket, "no_such_event"))
+            assert [e["error"] for e in missing] == ["Event rejected"]
+            for name in OVERRIDES:
+                assert _errors(await _event(socket, name)) == missing, (mode, name)
+            assert RAN == []
+        finally:
+            await socket.disconnect()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_server_push_reaches_unmarked_overrides_under_any_name():
+    with _mode("open"):
+        socket = await _mounted(OVERRIDE_VIEW)
+        try:
+            layer = get_channel_layer()
+            group = view_group_name(OVERRIDE_VIEW)
+            for handler in ("refresh_room", "mixin_refresh"):
+                await layer.group_send(
+                    group, {"type": "server_push", "handler": handler, "payload": {}}
+                )
+            await wait_until(lambda: len(RAN) >= 2, what="the two overridden push handlers")
+            await drain_extra(socket)
+        finally:
+            await socket.disconnect()
+    assert sorted(RAN) == [("override_refresh", ""), ("shadow_refresh",)]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("mode", MODES)
+def test_http_fallback_refuses_an_unmarked_override_like_a_missing_method(mode):
+    with _mode(mode):
+        config.reset()
+        missing = _post(OverrideView, "no_such_event")
+        for name in OVERRIDES:
+            response = _post(OverrideView, name)
+            assert (response.status_code, response.content) == (
+                missing.status_code,
+                missing.content,
+            ), (mode, name)
+        assert RAN == []
+
+
+def _v021(*classes):
+    from djust.checks.components import check_push_handler_overrides
+
+    labels = {"%s.%s" % (c.__module__, c.__qualname__): c for c in classes}
+    return [
+        m
+        for m in check_push_handler_overrides(None)
+        if any(m.msg.startswith(label + ".") for label in labels)
+    ]
+
+
+def test_v021_reports_overrides_that_drop_the_marker_or_add_event_handler():
+    by_name = {m.msg.split("() ")[0].rsplit(".", 1)[-1]: m for m in _v021(OverrideView)}
+    assert set(by_name) == {"refresh_room", "mixin_refresh", "called_form"}, by_name
+    assert by_name["refresh_room"].level < 30  # Info: still protected
+    assert by_name["mixin_refresh"].level < 30
+    assert by_name["called_form"].level == 30  # Warning: the @event_handler is dead
+    assert "@event_handler" in by_name["called_form"].msg
+    assert all(m.id == "djust.V021" for m in by_name.values())
+
+    # A re-marked override, and the marked base itself, are not reported.
+    class Remarked(RoomView):
+        @push_handler
+        def refresh_room(self, room="", **kwargs): ...
+
+    assert _v021(Remarked, RoomView) == []
+    # DeepView overrides only refresh_room (marked two levels up).
+    assert {m.msg.split("() ")[0].rsplit(".", 1)[-1] for m in _v021(DeepView)} == {"refresh_room"}
+
+
+def test_v021_can_be_suppressed():
+    with override_settings(DJUST_CONFIG={"suppress_checks": ["V021"]}):
+        config.reset()
+        assert _v021(OverrideView) == []
+    config.reset()
+
+
+def test_v004_does_not_flag_an_unmarked_override_of_a_marked_method():
+    from djust.checks.components import check_liveviews
+
+    class Base(LiveView):
+        template = "<div dj-root></div>"
+        login_required = False
+
+        def mount(self, request, **kwargs): ...
+
+        @push_handler
+        def on_remote_update(self, **kwargs): ...
+
+    class Child(Base):
+        def on_remote_update(self, **kwargs): ...
+
+        def on_plain(self, **kwargs): ...
+
+    label = "%s.%s" % (Child.__module__, Child.__qualname__)
+    messages = [m.msg for m in check_liveviews(None) if m.id == "djust.V004" and label in m.msg]
+    assert any("on_plain" in m for m in messages), messages
+    assert not any("on_remote_update" in m for m in messages), messages
 
 
 # --- SSE ----------------------------------------------------------------------
@@ -530,3 +737,88 @@ def test_t019_reports_a_binding_to_a_push_handler_in_every_mode(binding_module, 
     # The undecorated helper is reported only under strict, as before.
     assert bool([m for m in found if m.startswith("'helper'")]) == (mode == "strict"), found
     assert not [m for m in found if m.startswith("'ping'")], found
+
+
+# --- tooling: test client, smoke test, eval_handler -------------------------------
+
+
+def _client(view_cls=RoomView):
+    from djust.testing import LiveViewTestClient
+
+    client = LiveViewTestClient(view_cls)
+    client.mount()
+    return client
+
+
+def test_test_client_send_event_refuses_a_marked_handler_like_a_missing_one():
+    from djust.testing import NoHandlerFoundError
+
+    for view_cls in (RoomView, OverrideView):
+        client = _client(view_cls)
+        for name in MARKED if view_cls is RoomView else OVERRIDES:
+            with pytest.raises(NoHandlerFoundError):
+                client.send_event(name)
+            assert client.send_event(name, raise_on_missing=False)["success"] is False
+    assert RAN == []
+    assert _client().send_event("ping")["success"] is True
+
+
+def test_test_client_send_push_reaches_push_handlers_and_the_consumer_allowlist():
+    client = _client()
+    assert client.send_push("refresh_room", payload={"room": "a"})["success"] is True
+    assert client.send_push("handle_marked")["success"] is True
+    assert client.send_push("handle_plain")["success"] is True
+    blocked = client.send_push("plain_helper")
+    assert blocked["success"] is False and "not callable by server push" in blocked["error"]
+    assert client.send_push(state={"n": 5})["state_after"]["n"] == 5
+    assert RAN == [("refresh_room", "a"), ("handle_marked",), ("handle_plain",)]
+
+
+def test_smoke_test_does_not_report_a_push_handler_as_reachable_but_unfuzzed(monkeypatch):
+    from djust.testing import _unfuzzed_reachable_methods
+
+    real = config.get
+    monkeypatch.setattr(
+        config,
+        "get",
+        lambda key, default=None: "warn" if key == "event_security" else real(key, default),
+    )
+    # ``handle_plain`` and ``plain_helper`` really are reachable under warn.
+    assert _unfuzzed_reachable_methods(RoomView) == ["handle_plain", "plain_helper"]
+    assert _unfuzzed_reachable_methods(OverrideView) == ["handle_plain", "plain_helper"]
+
+
+def test_eval_handler_answers_a_marked_handler_like_a_missing_one():
+    from djust.observability.registry import _clear_registry, register_view
+    from djust.observability.views import eval_handler
+
+    from .conftest import observability_request_factory
+
+    def call(name):
+        request = observability_request_factory().post(
+            "/?session_id=s",
+            data=json.dumps({"handler_name": name}),
+            content_type="application/json",
+        )
+        return eval_handler(request)
+
+    _clear_registry()
+    try:
+        with override_settings(DEBUG=True):
+            room = RoomView()  # the registry holds views weakly
+            register_view("s", room)
+            for name in ("refresh_room", "handle_marked"):
+                marked = call(name)
+                missing = call("nope_" + name)
+                assert marked.status_code == missing.status_code == 404
+                assert "has no callable" in json.loads(missing.content)["error"]
+                strip = lambda r, n: json.loads(r.content)["error"].replace(n, "X")  # noqa: E731
+                assert strip(marked, name) == strip(missing, "nope_" + name)
+            override = OverrideView()
+            register_view("s", override)
+            assert call("refresh_room").status_code == 404
+            # Control: an ordinary undecorated method is the 403 it always was.
+            assert call("plain_helper").status_code == 403
+    finally:
+        _clear_registry()
+    assert RAN == []

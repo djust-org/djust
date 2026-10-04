@@ -203,7 +203,7 @@ Each check has an ID such as `djust.V004`: a family letter and a number. The the
 | `S` | Security | S013 |
 | `T` | Templates | T019 to T022; T023 to T025 (main) |
 | `U` | Update notice | none |
-| `V` | Validation of LiveView classes and handlers | V016 to V020 |
+| `V` | Validation of LiveView classes and handlers | V016 to V021 |
 | `Y` | Accessibility | none |
 
 ### Checks that matter for generated code
