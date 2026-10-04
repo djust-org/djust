@@ -66,17 +66,13 @@
       this._bindScroll();
       this._enhance();
       this._follow();
+      this._lastTop = scroller(this.el).scrollTop;
       var eventName = this.el.getAttribute("data-stream-event");
       if (eventName) {
         this.handleEvent(eventName, function (payload) {
           self._append(linesFrom(payload));
         });
       }
-    },
-
-    // Remember whether the reader is at the newest line before the patch.
-    beforeUpdate: function () {
-      this._pinned = atBottom(scroller(this.el));
     },
 
     destroyed: function () {
@@ -93,7 +89,10 @@
       // A re-render redraws the rendered lines; count again from them.
       this._count = undefined;
       this._enhance();
-      if (this._pinned) this._follow();
+      if (this._pinned !== false) this._follow();
+      // A patch can shrink the log and clamp scrollTop; that is not the reader
+      // scrolling up, so take the position as it now is (once per patch).
+      this._lastTop = scroller(this.el).scrollTop;
     },
 
     // Whether the reader is at the newest line is tracked from scroll events,
@@ -103,8 +102,16 @@
       var self = this;
       var root = this.el;
       this._scrollEl = root;
+      // Scroll events arrive a frame late, after more lines may have been
+      // appended, so the hook's own scroll to the bottom can be reported when
+      // the bottom has already moved on. Only the reader moving UP leaves the
+      // bottom; reaching it again (within a pixel or two) re-pins.
       this._onScroll = function (e) {
-        if (e.target === scroller(root)) self._pinned = atBottom(e.target);
+        if (e.target !== scroller(root)) return;
+        var top = e.target.scrollTop;
+        if (atBottom(e.target)) self._pinned = true;
+        else if (top < (self._lastTop === undefined ? top : self._lastTop) - 1) self._pinned = false;
+        self._lastTop = top;
       };
       // scroll does not bubble; capture it on the root.
       root.addEventListener("scroll", this._onScroll, true);
@@ -128,7 +135,9 @@
       if (this._raf) return;
       this._raf = window.requestAnimationFrame(function () {
         self._raf = 0;
-        self._follow();
+        // The reader may have scrolled up since the line arrived; that scroll
+        // event is delivered before this callback.
+        if (self._pinned !== false) self._follow();
       });
     },
 
@@ -147,6 +156,9 @@
     _enhance: function () {
       var body = scroller(this.el);
       if (!body.hasAttribute("tabindex")) body.setAttribute("tabindex", "0");
+      // Trimming old rows must not make the browser nudge scrollTop (which
+      // would read as the reader scrolling up); we follow the bottom ourselves.
+      if (this._autoScroll()) body.style.overflowAnchor = "none";
     },
 
     // O(lines pushed), not O(rows held): a stream of single-line events onto a

@@ -52,6 +52,19 @@
     return ((l || el).textContent || "").trim();
   }
 
+  // The server's re-render moves the nodes the client moved only when the
+  // diff can key them (data-key). Without keys it patches positions in place
+  // over the client's order and the two disagree, so such a list stays inert.
+  function isKeyed(root) {
+    var list = items(root);
+    return (
+      list.length > 0 &&
+      list.every(function (el) {
+        return el.hasAttribute("data-key");
+      })
+    );
+  }
+
   function isDisabled(root) {
     return root.getAttribute("data-disabled") === "true";
   }
@@ -126,6 +139,16 @@
     _enhance: function () {
       var root = this.el;
       var list = items(root);
+      if (list.length && !isKeyed(root)) {
+        list.forEach(function (el) {
+          el.removeAttribute("tabindex");
+        });
+        if (!this._warned) {
+          this._warned = true;
+          console.warn("[dj-hook] SortableList reordering is off: every item needs a distinct, non-empty id.");
+        }
+        return;
+      }
       var disabled = isDisabled(root);
       var activeId = this._activeId;
       var hasActive = list.some(function (el) {
@@ -270,6 +293,10 @@
           if (isDisabled(root)) return;
           var item = itemOf(root, e.target);
           if (!item) return;
+          if (!isKeyed(root)) {
+            e.preventDefault();
+            return;
+          }
           self._drag = item;
           self._before = items(root);
           self._dirty = false;
@@ -343,7 +370,7 @@
         },
 
         keydown: function (e) {
-          if (isDisabled(root) || e.altKey || e.ctrlKey || e.metaKey) return;
+          if (isDisabled(root) || !isKeyed(root) || e.altKey || e.ctrlKey || e.metaKey) return;
           var item = itemOf(root, e.target);
           if (!item || e.target !== item) return;
           var list = items(root);

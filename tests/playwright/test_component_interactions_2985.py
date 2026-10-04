@@ -114,6 +114,7 @@ PROJECT = {
           <button id="drop-one" dj-click="drop_one">drop one</button>
           <button id="stream" dj-click="stream">stream</button>
           <button id="grow" dj-click="grow">grow</button>
+          <button id="burst" dj-click="stream_many">burst</button>
         </div>
         """
 
@@ -169,6 +170,11 @@ PROJECT = {
             def stream(self, **kwargs):
                 self.n += 1
                 self.push_event("new_logs", {"lines": [f"2026-10-04 ERROR streamed {self.n}"]})
+
+            @event_handler()
+            def stream_many(self, **kwargs):
+                for i in range(2000):
+                    self.push_event("new_logs3", {"line": f"2026-10-04 INFO burst {i}"})
 
             @event_handler()
             def grow(self, **kwargs):
@@ -615,6 +621,59 @@ def main() -> int:
                 page.locator("#log-box").screenshot(path=str(shots / "04-log-viewer-streamed.png"))
                 page.locator("#log2-box").screenshot(
                     path=str(shots / "04b-log-viewer-rerendered.png")
+                )
+
+                # ---------------- LogViewer under a fast server stream ----------------
+                load("/")
+                body3 = "#log3-box .dj-log-viewer__body"
+                gap = "b => b.scrollHeight - b.clientHeight - b.scrollTop"
+                page.evaluate("() => document.getElementById('burst').click()")
+                page.wait_for_function(
+                    "s => document.querySelector(s).querySelectorAll('.dj-log-viewer__line').length >= 39 + 2000",
+                    arg=body3,
+                    timeout=20000,
+                )
+                page.wait_for_timeout(300)
+                check(
+                    page.eval_on_selector(body3, gap) <= 1,
+                    f"log: 2,000 single events from the server keep following (gap {page.eval_on_selector(body3, gap):.0f}px)",
+                )
+                page.evaluate("() => document.getElementById('burst').click()")
+                page.wait_for_function(
+                    "s => document.querySelector(s).querySelectorAll('.dj-log-viewer__line').length >= 39 + 4000",
+                    arg=body3,
+                    timeout=20000,
+                )
+                page.wait_for_timeout(300)
+                check(
+                    page.eval_on_selector(body3, gap) <= 1,
+                    "log: and a second burst follows too (pinning never lapsed)",
+                )
+                page.eval_on_selector(body3, "b => { b.scrollTop = 200; }")
+                page.wait_for_timeout(200)
+                page.evaluate("() => document.getElementById('burst').click()")
+                page.wait_for_function(
+                    "s => document.querySelector(s).querySelectorAll('.dj-log-viewer__line').length >= 39 + 6000",
+                    arg=body3,
+                    timeout=20000,
+                )
+                page.wait_for_timeout(300)
+                check(
+                    page.eval_on_selector(body3, "b => b.scrollTop") == 200,
+                    "log: a reader who scrolled up stays up while 2,000 events stream",
+                )
+                page.eval_on_selector(body3, "b => { b.scrollTop = b.scrollHeight; }")
+                page.wait_for_timeout(200)
+                page.evaluate("() => document.getElementById('burst').click()")
+                page.wait_for_function(
+                    "s => document.querySelector(s).querySelectorAll('.dj-log-viewer__line').length >= 39 + 8000",
+                    arg=body3,
+                    timeout=20000,
+                )
+                page.wait_for_timeout(300)
+                check(
+                    page.eval_on_selector(body3, gap) <= 1,
+                    "log: scrolling back to the bottom resumes following",
                 )
 
                 # ---------------- app hooks win ----------------

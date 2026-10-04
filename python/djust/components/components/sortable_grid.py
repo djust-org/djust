@@ -33,8 +33,11 @@ class SortableGrid(Component):
             self.items = [by_id[str(key)] for key in order]
 
     Use one ``move_event`` per list: the payload does not say which list sent
-    it. Items need distinct, non-empty ``id`` values; otherwise they are not
-    keyed for the diff (a re-render then patches them in place).
+    it. Items need distinct, non-empty ``id`` values: the server's re-render
+    can only follow the client's reorder when it can key the items, so a list
+    where any ``id`` is empty, missing or repeated renders without ``data-key``
+    and the hook leaves it inert (no drag, no keyboard reorder), logging one
+    console warning.
 
     Usage in a LiveView::
 
