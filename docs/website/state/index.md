@@ -164,6 +164,20 @@ The template opts in: mark a container with `data-draft-enabled` and
 The draft is restored when the user returns to the page. Drafts have no
 expiry; call `self.clear_draft()` after a successful save to remove it.
 
+### Fields that appear later
+
+A field is saved and restored from the moment it enters the page, not only the
+ones present at load: a field a patch inserts (an `{% if %}` that turns true, a
+wizard step), a field the server replaces with a new element, and a draft root
+inside a `dj-lazy` view that hydrates later. A field that shows up after load
+is given its saved value once, when it first appears. It is never given one
+while the user is typing in it (focused, or already edited), and a later patch
+does not put the saved value back after the user clears it.
+
+Each draft root saves only the fields inside it, under its own `data-draft-key`.
+A field is saved as the draft is when any `data-draft="true"` field in the same
+root changes, so a field that has left the page is not in the next save.
+
 ## Debugging Decorators
 
 Enable client-side logging to see decorator behavior:
