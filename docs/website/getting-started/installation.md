@@ -260,7 +260,8 @@ installed packages' included. `DjangoTemplates` second only serves templates
 that live in no app or `DIRS` directory. If djust's engine cannot render a
 template it finds, the page fails; Django's engine is not tried.
 
-Known differences from Django's engine, which also affect projects made by
+Known differences from Django's engine. They exist independently of `djust init`
+(they reproduce on released djust 1.2.3) and also affect projects made by
 `djust new --with-db`:
 
 - **Raw block tags.** A custom `@register.tag` block tag that does not keep its
@@ -280,11 +281,17 @@ Known differences from Django's engine, which also affect projects made by
   gets a `data-dj-src` attribute on its first element, including HTML emails.
 
 Check your own pages, the admin and any third-party app templates before
-enabling it. If you use a settings module that overrides
-`TEMPLATES[0]["OPTIONS"]`, such as the production caching idiom with `loaders`,
-note that `TEMPLATES[0]` is now the djust entry: put that override on the
-`DjangoTemplates` entry (`TEMPLATES[1]`) instead; djust's backend ignores
-`loaders` and logs a warning.
+enabling it.
+
+Once the djust entry is first, `TEMPLATES[0]` is the djust entry, and its index
+is no longer a safe way to reach the Django one (with Jinja2 listed first, Django
+is `TEMPLATES[2]`). A later settings module that edits `TEMPLATES[0]["OPTIONS"]`,
+such as the production caching idiom, therefore edits the djust entry. Find the
+`DjangoTemplates` entry by its `BACKEND` instead. `loaders` and `file_charset`
+belong on that Django entry: the djust backend ignores `loaders` and logs a
+warning. The keys the djust backend implements (`context_processors`, `debug`,
+`autoescape`, `builtins`, `libraries`, `string_if_invalid`) are copied into the
+djust entry when it is added, so set them on the djust entry, or on both.
 
 If the project uses the Django admin, keep the `request`, `auth` and `messages`
 context processors below: djust's engine renders the admin's templates, and

@@ -313,9 +313,9 @@ def plan_templates(
         note = (
             "%s TEMPLATES was not changed: %s. LiveViews render with djust's engine whatever "
             "TEMPLATES says. To render your other templates with djust's engine too, put the "
-            "djust entry first (read the notes in the installation guide on what djust's "
-            "engine does not render like Django's):\n\n%s"
-            % (settings_name, why, T.TEMPLATES_ENTRY_SNIPPET)
+            "djust entry first (read what djust's engine does not render like Django's in "
+            'the installation guide, section "Rendering your other templates with '
+            'djust": %s):\n\n%s' % (settings_name, why, INSTALLATION_URL, T.TEMPLATES_ENTRY_SNIPPET)
         )
     return None, Step(name, ATTENTION if opt_in else SKIPPED, detail), note
 
@@ -394,6 +394,7 @@ _INCLUDE_RE = re.compile(r"^\s*(?:-r|--requirement)[\s=]+(\S+)")
 _ALREADY_DECLARED = "djust, channels and uvicorn already declared in pyproject.toml"
 _NOTHING_FOR_UV = "nothing for uv to add (see the pyproject.toml step)"
 FIRST_LIVEVIEW_URL = "https://docs.djust.org/getting-started/first-liveview/"
+INSTALLATION_URL = "https://docs.djust.org/getting-started/installation/"
 
 
 def requirements() -> List[str]:

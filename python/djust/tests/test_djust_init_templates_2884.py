@@ -481,6 +481,10 @@ def test_the_guide_does_not_claim_a_django_fallback_for_templates_djust_finds():
     text = guide.read_text()
     assert "still render" not in text  # the claim was false: djust renders what it finds
     assert "TEMPLATES[0]" in text  # the override hazard is documented
+    # The Django entry is found by BACKEND: its index depends on what comes first.
+    assert "(`TEMPLATES[1]`)" not in text
+    assert "by its `BACKEND`" in text
+    assert "`loaders` and `file_charset`" in text
 
 
 # --- a real startproject: check, admin, a plain Django view and a LiveView ------------
@@ -765,3 +769,23 @@ def test_the_parser_defaults_templates_off(tmp_path, monkeypatch, capsys):
     with pytest.raises(SystemExit):
         cli.main()
     assert "would change  add DjustTemplateBackend first" in capsys.readouterr().out
+
+
+def test_a_namespace_without_the_templates_attribute_still_works(tmp_path, monkeypatch):
+    """Callers built before ``--templates`` pass a Namespace that lacks it."""
+    import argparse
+
+    from djust import cli
+
+    make_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    args = argparse.Namespace(settings=None, dry_run=True, no_install=True, force=False)
+    assert not hasattr(args, "templates")
+    assert cli.cmd_init(args) == 0
+
+
+def test_the_default_note_points_at_the_installation_guide(tmp_path):
+    _project(tmp_path, CUSTOM_DIRS)
+    result = _run_init(tmp_path, templates=False)
+    note = next(n for n in result.notes if "TEMPLATES was not changed" in n)
+    assert init.INSTALLATION_URL in note
