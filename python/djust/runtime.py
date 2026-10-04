@@ -3833,9 +3833,11 @@ class ViewRuntime:
         # state the hook sets is in the first frame. A failure fails the mount
         # like one from mount(); the view still gets its disconnected().
         try:
-            from ._child_lifecycle import run_view_connected
+            from ._child_lifecycle import begin_live_connection
 
-            await sync_to_async(run_view_connected)(view_instance)
+            connected_hook = begin_live_connection(view_instance)
+            if connected_hook is not None:
+                await sync_to_async(connected_hook)()
         except Exception as exc:
             response = handle_exception(
                 exc,
@@ -6906,8 +6908,10 @@ class ViewRuntime:
         )
         await self.transport.close(code=4403)
         if view is not None:
-            await fire_view_disconnected(view)
-            release_root_view(view, navigation=False, reason="view_disconnect")
+            try:
+                await fire_view_disconnected(view)
+            finally:
+                release_root_view(view, navigation=False, reason="view_disconnect")
 
     def _save_explicit_root(self, view: Any, request: Any) -> None:
         """Sync body of the root save: the binding check, projection and write.

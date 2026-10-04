@@ -617,21 +617,22 @@ class SSESession:
                     else:
                         await self._untrack_replaced_presence(old_view)
                 if old_view is not None:
-                    from ._child_lifecycle import fire_view_disconnected
-
-                    # The old page's ``disconnected()`` hook (#3007): its live
-                    # mount ends here, as on a WebSocket ``live_redirect``.
-                    await fire_view_disconnected(old_view)
                     try:
-                        from ._child_lifecycle import release_root_view
+                        from ._child_lifecycle import fire_view_disconnected, release_root_view
 
                         # The teardown the WebSocket live_redirect shares
                         # (#3244); SSE keeps no sticky children, so every
                         # child goes with the page. Its presence is untracked
-                        # below, after the new page has mounted (#3254).
-                        await sync_to_async(release_root_view)(
-                            old_view, navigation=True, reason="view_navigation"
-                        )
+                        # below, after the new page has mounted (#3254). The old
+                        # page's ``disconnected()`` hook (#3007) runs first, as
+                        # on a ``live_redirect``; the release follows it even if
+                        # the hook is cancelled.
+                        try:
+                            await fire_view_disconnected(old_view)
+                        finally:
+                            await sync_to_async(release_root_view)(
+                                old_view, navigation=True, reason="view_navigation"
+                            )
                     except Exception:
                         logger.warning("SSE old view cleanup failed during navigation")
                 try:

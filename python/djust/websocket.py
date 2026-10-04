@@ -2134,8 +2134,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             return
         from ._child_lifecycle import fire_view_disconnected, release_root_view
 
-        await fire_view_disconnected(view)
-        release_root_view(view, navigation=False, reason="view_disconnect")
+        try:
+            await fire_view_disconnected(view)
+        finally:
+            release_root_view(view, navigation=False, reason="view_disconnect")
 
     @staticmethod
     def _end_explicit_turn(view: Any) -> None:
@@ -2595,9 +2597,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # keeps running), and its embedded children unregistered, their own
         # waiters closed too. Either way its Rust live handles are dropped.
         for view in mounted_views:
-            # The view's ``disconnected()`` hook (#3007), before its release.
-            await fire_view_disconnected(view)
-            release_root_view(view, navigation=False, reason="view_disconnect")
+            # The view's ``disconnected()`` hook (#3007), before its release;
+            # a cancellation during the hook still releases the view.
+            try:
+                await fire_view_disconnected(view)
+            finally:
+                release_root_view(view, navigation=False, reason="view_disconnect")
 
         # Sticky LiveViews (Phase C Fix F2): drain any sticky children that
         # were staged on the consumer during a live_redirect but for which
@@ -4385,8 +4390,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             break
             # The view's ``disconnected()`` hook (#3007): its live mount ends
             # here whether the socket closes or the view is replaced.
-            await fire_view_disconnected(view)
-            release_root_view(view, navigation=navigation, reason=reason)
+            try:
+                await fire_view_disconnected(view)
+            finally:
+                release_root_view(view, navigation=navigation, reason=reason)
 
         consumer.view_instance = None
         # (#1919, Finding A) Null the shared runtime's view too BEFORE the

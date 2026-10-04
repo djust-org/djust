@@ -183,14 +183,90 @@ class Parent(_Hooked, LiveView):
         return {"view": self}
 
 
-class AsyncConnected(LiveView):
-    """``async def`` hooks are refused: nothing would await the coroutine."""
-
+class _Plain(LiveView):
     exposure_policy = "legacy"
-    template = '<div dj-root dj-view="' + MOD + '.AsyncConnected"><b>x</b></div>'
+
+    def mount(self, request, **kwargs):
+        self._tag = type(self).__name__
+        VIEWS[self._tag] = self
+
+
+class AsyncBoth(_Plain):
+    """Dead code before #3007: an ``async def`` hook is warned about and skipped."""
+
+    template = '<div dj-root dj-view="' + MOD + '.AsyncBoth"><b>x</b></div>'
 
     async def connected(self):
-        EVENTS.append(("connected", "AsyncConnected"))
+        EVENTS.append(("connected", "AsyncBoth"))
+
+    async def disconnected(self):
+        EVENTS.append(("disconnected", "AsyncBoth"))
+
+
+class ExtraArgs(_Plain):
+    """A method of that name that needs arguments is some other helper."""
+
+    template = '<div dj-root dj-view="' + MOD + '.ExtraArgs"><b>x</b></div>'
+
+    def connected(self, user):
+        EVENTS.append(("connected", "ExtraArgs"))
+
+    def disconnected(self, why):
+        EVENTS.append(("disconnected", "ExtraArgs"))
+
+
+class RaisingProperty(_Plain):
+    """A property of that name is never evaluated."""
+
+    template = '<div dj-root dj-view="' + MOD + '.RaisingProperty"><b>x</b></div>'
+
+    @property
+    def connected(self):
+        raise RuntimeError("SECRET-connected")
+
+    @property
+    def disconnected(self):
+        raise RuntimeError("SECRET-disconnected")
+
+
+class NestedClass(_Plain):
+    """A nested class is callable but is not a method: not instantiated."""
+
+    template = '<div dj-root dj-view="' + MOD + '.NestedClass"><b>x</b></div>'
+
+    class connected:
+        def __init__(self):
+            EVENTS.append(("connected", "NestedClass"))
+
+
+class StaticHooks(_Plain):
+    """Static and class methods that bind with no argument are hooks."""
+
+    template = '<div dj-root dj-view="' + MOD + '.StaticHooks"><b>x</b></div>'
+
+    @staticmethod
+    def connected():
+        EVENTS.append(("connected", "StaticHooks"))
+
+    @classmethod
+    def disconnected(cls):
+        EVENTS.append(("disconnected", "StaticHooks"))
+
+
+class NeitherHook(_Plain):
+    template = '<div dj-root dj-view="' + MOD + '.NeitherHook"><b>x</b></div>'
+
+
+class Blocking(_Hooked, LiveView):
+    """Its ``disconnected()`` blocks until the test lets it go."""
+
+    template = '<div dj-root dj-view="' + MOD + '.Blocking"><b>{{ status }}</b></div>'
+    started = threading.Event()
+    gate = threading.Event()
+
+    def disconnected(self):
+        type(self).started.set()
+        type(self).gate.wait(10)
 
 
 class Tenanted(_Hooked, LiveView):
@@ -414,13 +490,74 @@ async def test_connected_runs_when_the_state_is_restored_and_mount_is_skipped():
         await _close(second)
 
 
-async def test_an_async_connected_fails_the_mount_instead_of_never_running():
+@pytest.mark.parametrize("cls", [AsyncBoth, ExtraArgs, RaisingProperty, NestedClass, StateNamed])
+async def test_a_member_that_is_not_a_hook_is_skipped_with_one_warning_per_class(cls, caplog):
+    """Code that carried these names before the contract keeps working: the
+    mount succeeds, the member is not run, and the class is warned about once
+    per hook name (value-free), not once per mount."""
+    with caplog.at_level(logging.WARNING, logger="djust._child_lifecycle"):
+        for _ in range(2):
+            communicator = await _ws_connect()
+            frame = await _ws_mount(communicator, cls)
+            assert frame["type"] == "mount", frame
+            await communicator.disconnect()
+    assert [k for (k, t) in EVENTS if t == cls.__name__] == []
+    skipped = [r.getMessage() for r in caplog.records if cls.__qualname__ in r.getMessage()]
+    expected = {"AsyncBoth": 2, "ExtraArgs": 2, "RaisingProperty": 2, "NestedClass": 1}
+    # StateNamed sets both names as instance attributes in mount().
+    assert len(skipped) == expected.get(cls.__name__, 2), skipped
+    assert all("SECRET" not in m for m in skipped)
+    for name in ("connected", "disconnected"):
+        assert sum(1 for m in skipped if f".{name} " in m) <= 1, skipped
+
+
+async def test_static_and_class_method_hooks_run():
     communicator = await _ws_connect()
     try:
-        frame = await _ws_mount(communicator, AsyncConnected)
-        assert frame["type"] == "error", frame
-        assert _calls("connected") == []
+        await _ws_mount(communicator, StaticHooks)
+        assert _calls("connected") == ["StaticHooks"]
     finally:
+        await _close(communicator)
+    assert _calls("disconnected") == ["StaticHooks"]
+
+
+async def test_a_view_with_neither_hook_is_not_marked_and_pays_no_thread_hop(monkeypatch):
+    from djust import _child_lifecycle
+
+    hops = []
+    real = _child_lifecycle.sync_to_async
+
+    def counting(func, *args, **kwargs):
+        hops.append(getattr(func, "__name__", func))
+        return real(func, *args, **kwargs)
+
+    monkeypatch.setattr(_child_lifecycle, "sync_to_async", counting)
+    communicator = await _ws_connect()
+    try:
+        frame = await _ws_mount(communicator, NeitherHook)
+        assert frame["type"] == "mount", frame
+        assert "_djust_connected_phase" not in VIEWS["NeitherHook"].__dict__
+    finally:
+        await communicator.disconnect()
+    assert hops == []
+
+
+async def test_cancelling_the_disconnect_during_the_hook_still_releases_the_view():
+    Blocking.started.clear()
+    Blocking.gate.clear()
+    communicator = await _ws_connect()
+    try:
+        await _ws_mount(communicator, Blocking)
+        view = VIEWS[_one(Blocking)]
+        consumer = CONSUMERS[-1]
+        task = asyncio.ensure_future(consumer.disconnect(1000))
+        await _until(Blocking.started.is_set, "the hook to start")
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert view._djust_waiters_closed is True, "the view was never released"
+    finally:
+        Blocking.gate.set()
         await _close(communicator)
 
 
