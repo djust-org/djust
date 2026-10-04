@@ -920,10 +920,17 @@ def test_the_event_save_is_still_bounded():
         )
     ]
     assert len(waits) == 1, "the save waiter must bound its wait by its timeout"
+    # Names that could smuggle the shield back in: the bare names, and any
+    # alias of them imported from asyncio (``from asyncio import shield as s``).
+    banned = {"shield", "wait_for"}
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] == "asyncio":
+            banned |= {alias.asname or alias.name for alias in node.names if alias.name in banned}
     assert not [
         node
         for node in ast.walk(waiter)
-        if isinstance(node, ast.Attribute) and node.attr in {"shield", "wait_for"}
+        if (isinstance(node, ast.Attribute) and node.attr in {"shield", "wait_for"})
+        or (isinstance(node, ast.Name) and node.id in banned)
     ], "the save waiter must not shield the save (3.14 logs its late exception)"
     explicit_callers = {
         method.name

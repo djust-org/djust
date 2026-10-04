@@ -387,7 +387,7 @@ class TestTitleExhaustive:
       15.x), so the 52 codepoints Unicode 16.0 made cased
       (`_CASED_NEW_IN_UNICODE_16`) are unknown to them. CPython 3.14 ships
       16.0 and knows them, so the sweep diverges there for exactly those
-      codepoints (#3300). That is the residual #2330 documents — a codepoint
+      codepoints (CI run 37169161029). That is the residual #2330 documents — a codepoint
       assigned after the table's Unicode version — and it is pinned rather
       than waved through: only the listed codepoints, only on an interpreter
       whose Unicode data is 16.0 or later. The next Unicode release adds

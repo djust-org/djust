@@ -41,7 +41,7 @@
 //! arrived in 3.13.10 and 3.14.1, so every later 3.13 / 3.14 patch release has
 //! it. 3.13.15 and 3.14.7 add eight more values: an abruptly closed empty
 //! comment (`<!-->`, `<!--->`) now ends at its first `>`, where every earlier
-//! release searched on for a later `-->` (#3300). djust keeps the earlier
+//! release searched on for a later `-->` (CI run 37169161029). djust keeps the earlier
 //! comment rule.
 //!
 //! **This is djust's own pinned behaviour on every host, not a claim about the

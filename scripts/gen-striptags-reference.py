@@ -29,7 +29,7 @@ support matrix, and split:
                  CI. djust must still behave like *one of* them.
 
 A CPython PATCH release can move it too: 3.13.15 and 3.14.7 changed how an
-abruptly closed empty comment (`<!-->`, `<!--->`) is closed (#3300), so six
+abruptly closed empty comment (`<!-->`, `<!--->`) is closed (CI run 37169161029), so six
 values left `stable`. Capture EVERY interpreter the CI matrix runs, at the patch
 release it currently runs -- not one per minor version -- and regenerate when a
 CI interpreter is newer than the newest one in the fixture's `versions`. The

@@ -56,7 +56,7 @@ on every run.
 `html.parser` also moves inside a minor line. The `&` / `&#` end-of-input change
 that the table above attributes to "3.14" first shipped in **3.13.10** and
 **3.14.1** (3.13.7-3.13.9 and 3.14.0 still behave like 3.12.13), and the patch
-releases **3.13.15** and **3.14.7** moved eight more values (#3300). Their
+releases **3.13.15** and **3.14.7** moved eight more values (CI run 37169161029). Their
 `parse_comment` now lets an *abruptly closed empty comment* -- `<!-->` or
 `<!--->` right after the opener, which HTML5 ends at the first `>` -- win over a
 later `-->`; before, the whole span up to that later `-->` was one comment:
@@ -78,12 +78,13 @@ then decide whether the port follows.
 Port target
 -----------
 djust implements the **3.12.10+ / 3.13** tokenizer (the pre-3.13.15 comment
-close, see above). The 3.14 delta is confined
-to `&`/`&#` at end of input and is tracked separately; on the corpus djust
-matches 3.13 on 1149 of the 1316 unstable values and 3.14 on 934, the remainder
-being shared-tokenizer changes (comment close, `locatetagend`, the widened
-CDATA element set) that also affect the truncators and are deliberately not in
-this PR's scope.
+close, see above). The `&`/`&#` end-of-input change (3.13.10+ / 3.14.1+) is not
+ported. Measured over the 1289 `unstable` values in the fixture, djust's answer
+equals the recorded answer for 3.12.13 and 3.13.7 on all 1289, for 3.14.6 on
+1058, for 3.13.15 and 3.14.7 on 1050 and for 3.12.9 on 213. The remainder are
+shared-tokenizer changes (comment close, `locatetagend`, the widened CDATA
+element set, the end-of-input handling) that also affect the truncators and are
+deliberately not in this PR's scope.
 
 One chain divergence that remains is NOT `striptags`: `|escape|striptags`
 (#2281). It is pinned in `TestKnownRemainingDivergences` together with a proof
@@ -597,7 +598,7 @@ def _python_version(version: str) -> tuple[int, ...]:
 
 
 def _closes_empty_comment_abruptly(version: tuple[int, ...]) -> bool:
-    """Does this CPython end `<!-->` / `<!--->` at the first `>` (#3300)?
+    """Does this CPython end `<!-->` / `<!--->` at the first `>` (CI run 37169161029)?
 
     Introduced in 3.13.15 and 3.14.7; 3.12 and every earlier 3.13 / 3.14 patch
     release keep the older "search for a later `-->`" rule.
