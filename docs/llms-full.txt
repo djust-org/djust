@@ -121,7 +121,7 @@ def on_scroll(self, position: int = 0, **kwargs):
 <!-- Click with data params -->
 <button dj-click="delete" data-item-id="{{ item.id }}">Delete</button>
 
-<!-- Text input (fires on every keystroke) -->
+<!-- Text input (input event, debounced 300 ms by default) -->
 <input type="text" dj-input="search" value="{{ query }}" />
 
 <!-- Change (fires on blur/select change) -->

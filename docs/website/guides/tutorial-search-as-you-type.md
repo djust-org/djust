@@ -11,8 +11,8 @@ description: "Build a debounced live search box that calls the server, shows a s
 
 By the end of this tutorial you'll have a working search box that:
 
-- Fires on every keystroke, **debounced to 300 ms** so you don't hammer
-  the server.
+- Reacts to typing, **debounced to 300 ms** so you don't hammer the
+  server: a burst of keystrokes sends one event.
 - Shows an inline **"Searching…" spinner** while the request is in
   flight.
 - Renders matching results immediately when the server responds.
@@ -128,7 +128,7 @@ What each djust attribute does:
 
 | Attribute | Effect |
 |---|---|
-| `dj-input="search"` | Every input change fires the `search` event on the server, sending the input's current text as the `value` kwarg (and its `name`, `q`, as `field`). |
+| `dj-input="search"` | Each input change (after the 300 ms text-field debounce below) fires the `search` event on the server, sending the input's current text as the `value` kwarg (and its `name`, `q`, as `field`). |
 | `dj-debounce="300"` | Wait 300 ms after the last keystroke before firing. Subsequent keystrokes within that window cancel and restart the timer. Text inputs are already debounced 300 ms by default, so this attribute only makes the timing explicit; change the number to tune it. |
 | `dj-loading.show dj-loading.for="search"` | Show this `<p>` element only while the `search` event is in flight. djust hides it when the page binds and sets `display: block` while the event runs (`dj-loading.show="flex"` picks another display value). |
 

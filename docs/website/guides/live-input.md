@@ -95,7 +95,7 @@ class NotesView(LiveView):
 
 | Type | Default event | Notes |
 |------|---------------|-------|
-| `text` | `dj-input` | Per-keystroke. Pair with `debounce=` for search. |
+| `text` | `dj-input` | Debounced 300 ms by default; set `debounce=` to change it (`debounce="0"` sends every keystroke). |
 | `textarea` | `dj-input` | Multi-line text. Supports `rows=` / `cols=`. |
 | `password` | `dj-input` | |
 | `email` | `dj-input` | Browser enforces email format. |

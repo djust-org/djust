@@ -289,7 +289,7 @@ Use `data-*` attributes. Kebab-case converts to snake_case automatically:
 ### Template event binding reference
 
 ```html
-<!-- Text input (fires on every keystroke) -->
+<!-- Text input (input event, debounced 300 ms by default) -->
 <input type="text" dj-input="search" value="{{ search_query }}">
 
 <!-- Select/dropdown (fires on selection change) -->
@@ -1240,7 +1240,7 @@ python manage.py collectstatic --noinput
 
 ### Search Without Debouncing
 
-**Problem:** Search input triggers API calls on every keystroke.
+**Problem:** Search input triggers API calls on every keystroke. `dj-input` already debounces text fields by 300 ms, so this bites when that default is turned off (`dj-debounce="0"`) or when 300 ms is too short for the work each event does.
 
 **Why it's wrong:**
 - Excessive server load: typing "django" = 6 requests (d, dj, dja, djan, djang, django)

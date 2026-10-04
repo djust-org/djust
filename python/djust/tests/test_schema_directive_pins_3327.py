@@ -268,12 +268,15 @@ EMITTED_PHRASES = (
     "'false' opts a link out of both prefetch layers",
     "positional diffing",
     "stay with the position instead of following the item",
+    # event: dj-input (#3356)
+    "debounced 300ms by default",
 )
 
-#: The pre-#3291 / pre-#3327 sentences, each of which taught something false.
+#: The pre-#3291 / pre-#3327 / pre-#3356 sentences, each of which taught something false.
 STALE_PHRASES = (
     "via the service worker when the user hovers",
     "destroying and rebuilding",
+    "Send event on every keystroke",
     "e.target.reset()",
     "Scope the server re-render to a specific element",
     "in flight anywhere on the page",
@@ -295,3 +298,81 @@ def test_generated_ai_context_carries_the_corrected_wording_and_none_of_the_old(
         assert phrase in content, f"{fmt} context lost corrected wording: {phrase!r}"
     for stale in STALE_PHRASES:
         assert stale not in content, f"{fmt} context still teaches: {stale!r}"
+
+
+def test_dj_input_is_documented_as_debounced_and_the_client_debounces() -> None:
+    """#3356: the cheatsheet said 'Every keystroke'; text fields wait 300 ms by default."""
+    _assert_phrases(
+        "dj-input",
+        [
+            "input event",
+            "text, search, email, url, tel, password, textarea",
+            "debounced 300ms by default",
+            "range and color are throttled 150ms, number 100ms",
+            "checkbox, radio and select send immediately",
+            "dj-debounce",
+            'dj-debounce="0"',
+        ],
+    )
+    assert "on every keystroke" not in _text("dj-input")
+
+    parsing = _js("08-event-parsing.js")
+    limits = _between(parsing, "const DEFAULT_RATE_LIMITS = {", "};")
+
+    def rate(kind: str) -> str:
+        m = re.search(r"'%s':\s*\{([^}]*)\}" % re.escape(kind), limits)
+        assert m, f"DEFAULT_RATE_LIMITS lost its {kind!r} entry; re-check dj-input's description"
+        return " ".join(m.group(1).split())
+
+    for kind in ("text", "search", "email", "url", "tel", "password", "textarea"):
+        assert rate(kind) == "type: 'debounce', ms: 300", (kind, rate(kind))
+    assert rate("range") == "type: 'throttle', ms: 150"
+    assert rate("color") == "type: 'throttle', ms: 150"
+    assert rate("number") == "type: 'throttle', ms: 100"
+    for kind in ("radio", "checkbox", "select-one", "select-multiple"):
+        assert rate(kind) == "type: 'passthrough'", (kind, rate(kind))
+
+    binding = _js("09-event-binding.js")
+    handler = _between(binding, "on('input', function(e) {", "on('keydown'")
+    # An input type the table does not list is debounced 300 ms too, and the
+    # element-level attributes override the default, 0 included.
+    assert _has(r"\{\s*type:\s*'debounce',\s*ms:\s*300\s*\}", handler)
+    assert _has(r"hasAttribute\('dj-debounce'\).*?hasAttribute\('dj-throttle'\)", handler)
+    assert _has(r"rateLimit\.ms\s*=\s*parseInt\(djVal,\s*10\)", handler), (
+        'dj-debounce="0" is no longer read as a 0 ms delay; re-check dj-input\'s description'
+    )
+
+
+#: (file under docs/, sentence that said dj-input fires per keystroke). #3356.
+DJ_INPUT_STALE_DOC_SENTENCES = (
+    ("website/guides/template-cheatsheet.md", "| Every keystroke |"),
+    ("website/guides/dj-paste.md", "`dj-input`** fires on every keystroke"),
+    ("website/guides/live-input.md", "Per-keystroke. Pair with `debounce=`"),
+    ("website/guides/BEST_PRACTICES.md", "Text input (fires on every keystroke)"),
+    ("llms-full.txt", "Text input (fires on every keystroke)"),
+    ("ai/templates.md", "Text input (fires on every keystroke)"),
+    ("ai/templates.md", "to handler on each keystroke"),
+)
+
+#: Docs that state the dj-input default and must keep saying 300 ms.
+DJ_INPUT_DEBOUNCE_DOCS = (
+    "website/guides/template-cheatsheet.md",
+    "website/getting-started/core-concepts.md",
+    "website/core-concepts/events.md",
+    "ai/templates.md",
+    "llms-full.txt",
+)
+
+
+@pytest.mark.parametrize(("name", "stale"), DJ_INPUT_STALE_DOC_SENTENCES)
+def test_docs_do_not_say_dj_input_fires_on_every_keystroke(name: str, stale: str) -> None:
+    text = " ".join((ROOT / "docs" / name).read_text(encoding="utf-8").split())
+    assert stale not in text, f"docs/{name} again says dj-input fires per keystroke: {stale!r}"
+
+
+@pytest.mark.parametrize("name", DJ_INPUT_DEBOUNCE_DOCS)
+def test_docs_state_the_dj_input_debounce(name: str) -> None:
+    text = " ".join((ROOT / "docs" / name).read_text(encoding="utf-8").split())
+    assert re.search(r"dj-input[^\n]{0,200}300 ?ms|300 ?ms[^\n]{0,200}dj-input", text), (
+        f"docs/{name} no longer says text fields are debounced 300 ms on dj-input"
+    )
