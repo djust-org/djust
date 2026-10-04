@@ -153,6 +153,29 @@ class ExplicitSaveDeferred(Exception):
     work: "Optional[asyncio.Future[None]]" = None
 
 
+async def _await_save(work: "asyncio.Future[None]", timeout: float) -> None:
+    """Wait up to ``timeout`` for ``work`` without cancelling it.
+
+    Raises ``asyncio.TimeoutError`` when it is still running at the deadline
+    and re-raises whatever it raised when it finished in time.
+
+    This is the ``wait_for(shield(work))`` shape minus ``shield``. Since
+    Python 3.14 a shield whose waiter has gone adds a done callback to the
+    inner future that hands its exception to the loop's exception handler, and
+    the ``asyncio`` logger then writes that exception's message and traceback
+    at ERROR (``OSError exception in shielded future``). A save that outruns
+    its deadline and then fails is exactly that case, and a storage exception
+    can carry server-only values: this module reports the failure without them
+    (:func:`_log_unobserved_save_failure`) and must be the only reporter.
+    ``asyncio.wait`` leaves ``work`` alone on timeout and on cancellation, so
+    the save keeps running and nothing else observes its failure.
+    """
+    done, _pending = await asyncio.wait({work}, timeout=timeout)
+    if not done:
+        raise asyncio.TimeoutError
+    work.result()
+
+
 def _log_unobserved_save_failure(work: "asyncio.Future[None]") -> None:
     """Report a save failure nobody is waiting for any more (value-free)."""
     if work.cancelled() or work.exception() is None:
@@ -420,7 +443,7 @@ async def _run_explicit_save(
     previous = getattr(owner, "_explicit_save_pending", None)
     if previous is not None and not previous.done():
         try:
-            await asyncio.wait_for(asyncio.shield(previous), timeout=deadline)
+            await _await_save(previous, deadline)
         except asyncio.TimeoutError:
             if not previous.done():
                 raise ExplicitSaveDeferred("Previous explicit save still running") from None
@@ -457,7 +480,7 @@ async def _run_explicit_save(
         )
         if not started.done() and not work.done():
             raise asyncio.TimeoutError
-        await asyncio.wait_for(asyncio.shield(work), timeout=deadline)
+        await _await_save(work, deadline)
     except asyncio.TimeoutError:
         if work.done():
             raise  # the save's own TimeoutError (a backend timeout): a failure

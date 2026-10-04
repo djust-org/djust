@@ -886,20 +886,45 @@ def test_the_event_save_is_still_bounded():
     ]
     assert len(deadline_reads) == 1, "the explicit helper must read its configured deadline"
     # ... and bounds both waits: the previous (ordered) save, then this one.
+    # Each wait is ``_await_save(save, deadline)``, which is bounded by its
+    # ``timeout`` through ``asyncio.wait``. It is not ``wait_for(shield(...))``:
+    # on Python 3.14 a shield whose waiter timed out makes asyncio log the
+    # save's late exception, message and traceback included.
     helper_bounds = [
         node
         for node in ast.walk(helper)
         if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_await_save"
+        and len(node.args) == 2
+        and isinstance(node.args[1], ast.Name)
+        and node.args[1].id == "deadline"
+    ]
+    assert len(helper_bounds) == 2, "the explicit save helper must keep its deadlines"
+    waiter = next(
+        node
+        for node in ast.parse(src).body
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "_await_save"
+    )
+    waits = [
+        node
+        for node in ast.walk(waiter)
+        if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "wait_for"
+        and node.func.attr == "wait"
         and any(
             keyword.arg == "timeout"
             and isinstance(keyword.value, ast.Name)
-            and keyword.value.id == "deadline"
+            and keyword.value.id == "timeout"
             for keyword in node.keywords
         )
     ]
-    assert len(helper_bounds) == 2, "the explicit save helper must keep its deadlines"
+    assert len(waits) == 1, "the save waiter must bound its wait by its timeout"
+    assert not [
+        node
+        for node in ast.walk(waiter)
+        if isinstance(node, ast.Attribute) and node.attr in {"shield", "wait_for"}
+    ], "the save waiter must not shield the save (3.14 logs its late exception)"
     explicit_callers = {
         method.name
         for method in runtime_class.body
