@@ -17,25 +17,25 @@ between three sites):
    preset warned on every run and the ``djust new`` scaffold silenced the
    check outright).
 
-Scope discipline (#1079): the 63 legacy palettes listed here are NOT
-redesigned. Every (preset, mode, fg_token, bg_token) pair that failed AA
-when its gate was introduced is documented here rather than silently left
-ungated or force-fixed — recolouring brand palettes (dracula, catppuccin,
-nord, solarized, ...) to satisfy a ratio would erase their identity. The
-``default``/``blue``/``shadcn``/``slate`` status-label fixes (#2874) are
-the exception that proves the rule: those palettes were fixed, and their
-now-stale entries removed. So was ``djust`` (#2996), because djust owns that
-identity: its labels on the bright fills became dark ink, and its 17 entries
-went. 134 of the entries imported at the #2874 W001
-reconciliation are catastrophic (<3.0) — tracked in the branded-palette
-remediation follow-up.
+Scope discipline (#1079): the legacy palettes listed here are NOT
+redesigned. Every (preset, mode, fg_token, bg_token) pair that failed AA when
+its gate was introduced is documented here rather than silently left ungated
+or force-fixed — recolouring brand palettes (dracula, catppuccin, nord,
+solarized, ...) to satisfy a ratio would erase their identity. The
+``default``/``blue``/``shadcn``/``slate`` status-label fixes (#2874) are the
+exception that proves the rule: those palettes were fixed, and their now-stale
+entries removed. So was ``djust`` (#2996), because djust owns that identity:
+its labels on the bright fills became dark ink, and its 17 entries went.
+``scripts/report_theme_contrast.py`` prints the catastrophic (<3.0) ones that
+remain; the branded-palette remediation issue (#2885) owns every entry below.
 
-#2885 moved the text colours first: ``scripts/fix_theme_text_contrast.py``
-solves each failing ``*_foreground`` label and ``link`` in lightness only (hue
-and saturation kept) and writes the small, same-side moves; the entries that
-remain for those tokens are polarity flips and large moves that wait for the
-owner's review (``--proposals`` lists them), and ``--check`` fails while a
-small move is still pending.
+#2885 moved the text TOKENS first: ``scripts/fix_theme_text_contrast.py``
+solves each failing ``*_foreground`` label, ``link`` and ``link_hover`` in
+lightness only (hue and saturation kept) and writes the small, same-side
+moves, which removed their rows. The entries that remain for those tokens are
+polarity flips, large moves and tokens whose source documents an exact hex,
+all of which wait for the owner's review (``--proposals`` lists them), and
+``--check`` fails while a small move is still pending.
 
 Entries were auto-generated from ``scripts/report_theme_contrast.py
 --python-dict`` (2026-07, #2060; 2026-09, #2874) — do not hand-edit
@@ -1473,6 +1473,12 @@ A11Y_EXEMPTIONS: dict[tuple[str, str, str, str], str] = {
     ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 2.56",
     (
         "github",
+        "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 4.46",
+    (
+        "github",
         "dark",
         "success_foreground",
         "success",
@@ -2224,6 +2230,12 @@ A11Y_EXEMPTIONS: dict[tuple[str, str, str, str], str] = {
     (
         "stripe",
         "light",
+        "muted_foreground",
+        "muted",
+    ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 3.81",
+    (
+        "stripe",
+        "light",
         "success_foreground",
         "success",
     ): "grandfathered at W001 matrix reconciliation (2026-09, #2874); ratio 1.87",
@@ -2679,12 +2691,15 @@ _PAIR_DEBT_2885: dict[tuple[str, str, str, str], float] = {
     ("mission_control", "dark", "input", "background"): 1.37,
     ("mono", "light", "input", "background"): 1.53,
     ("mono", "dark", "input", "background"): 1.48,
+    ("monokai", "light", "link", "background"): 2.78,
+    ("monokai", "light", "link", "card"): 2.88,
     ("monokai", "light", "primary", "background"): 3.67,
     ("monokai", "light", "primary", "card"): 3.80,
     ("monokai", "light", "info", "info_tint"): 1.53,
     ("monokai", "light", "success", "success_tint"): 1.42,
     ("monokai", "light", "warning", "warning_tint"): 1.33,
     ("monokai", "light", "input", "background"): 1.14,
+    ("monokai", "dark", "link", "card"): 4.36,
     ("monokai", "dark", "primary", "background"): 3.86,
     ("monokai", "dark", "primary", "card"): 3.31,
     ("monokai", "dark", "input", "background"): 1.54,
@@ -2866,6 +2881,7 @@ _PAIR_DEBT_2885: dict[tuple[str, str, str, str], float] = {
     ("solarpunk", "light", "warning", "warning_tint"): 1.86,
     ("solarpunk", "light", "input", "background"): 1.49,
     ("solarpunk", "dark", "input", "background"): 1.61,
+    ("stripe", "light", "link", "background"): 4.44,
     ("stripe", "light", "primary", "background"): 4.42,
     ("stripe", "light", "info", "info_tint"): 3.89,
     ("stripe", "light", "success", "success_tint"): 1.66,
@@ -2874,6 +2890,8 @@ _PAIR_DEBT_2885: dict[tuple[str, str, str, str], float] = {
     ("stripe", "dark", "primary", "card"): 4.09,
     ("stripe", "dark", "info", "info_tint"): 3.54,
     ("stripe", "dark", "input", "background"): 1.60,
+    ("sunrise", "light", "link", "background"): 3.73,
+    ("sunrise", "light", "link", "card"): 3.89,
     ("sunrise", "light", "primary", "background"): 3.05,
     ("sunrise", "light", "primary", "card"): 3.18,
     ("sunrise", "light", "info", "info_tint"): 3.08,

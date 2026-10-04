@@ -2,22 +2,28 @@
 
 ``test_theming_contrast_all_presets_2060.py`` already gates every pair and
 fails on a stale exemption. This file adds the guarantees specific to the
-#2885 remediation, which moved text colours (the ``*_foreground`` labels and
-``link``) in lightness only, and left the rest to the owner:
+#2885 remediation, which moved text TOKENS (the ``*_foreground`` labels,
+``link`` and ``link_hover``) in lightness only, and left the rest to the owner:
 
 1. No text pair that a small, same-side lightness move can fix is left failing
    or exempted. If a palette edit pushes a label below its minimum, the
    message names the command that proposes the fix.
-2. The number of exempted text pairs may only go down. What remains are the
-   polarity flips and large moves that visibly restyle a button or badge, which
-   ``scripts/fix_theme_text_contrast.py --proposals`` lists and which wait for
-   the owner's review.
-3. The solver and the source rewriter agree with the measured contrast.
+2. The number of exempted text pairs is pinned EXACTLY: a fix must lower the
+   pin in the same change (so slack cannot be re-spent on a regression), and
+   an added exemption fails. What remains are the polarity flips, large moves
+   and documented-hex tokens, which ``scripts/fix_theme_text_contrast.py
+   --proposals`` lists and which wait for the owner's review.
+3. ``link_hover`` is not in ``CONTRAST_PAIRS`` (that would change W001 for
+   user presets) but it must not regress: it keeps the side of the resting link
+   it started on, and a hover that is moved is moved together with its link.
+4. The solver and the source rewriter do what they say, on a temporary copy.
 """
 
 import importlib.util
 import os
+import shutil
 import sys
+from dataclasses import replace
 
 import pytest
 
@@ -35,8 +41,8 @@ sys.modules[_spec.name] = fix  # @dataclass resolves its module through sys.modu
 _spec.loader.exec_module(fix)
 
 #: Exempted text pairs (``*_foreground`` labels and ``link``) at the #2885
-#: remediation. Lower it when a pair is fixed; raising it hides a regression.
-PENDING_TEXT_PAIR_EXEMPTIONS = 401
+#: remediation. EXACT: lower it when a pair is fixed.
+PENDING_TEXT_PAIR_EXEMPTIONS = 409
 
 _validator = AccessibilityValidator()
 
@@ -63,16 +69,17 @@ class TestTextContrastStaysFixed:
             )
         )
 
-    def test_exempted_text_pairs_only_go_down(self):
+    def test_exempted_text_pairs_are_pinned_exactly(self):
         exempt = [key for key in A11Y_EXEMPTIONS if key[2] in fix.LABEL_TOKENS]
-        assert len(exempt) <= PENDING_TEXT_PAIR_EXEMPTIONS, (
-            f"{len(exempt)} exempted text pairs, up from {PENDING_TEXT_PAIR_EXEMPTIONS}: fix the "
-            f"text colour instead of adding an exemption (#2885)"
+        assert len(exempt) == PENDING_TEXT_PAIR_EXEMPTIONS, (
+            f"{len(exempt)} exempted text pairs, pinned at {PENDING_TEXT_PAIR_EXEMPTIONS}: fix "
+            f"the text colour instead of adding an exemption, and lower the pin when a pair is "
+            f"fixed (#2885)"
         )
 
     def test_every_failing_text_pair_is_a_documented_pending_move(self):
-        """A failing text pair must be a flip or large move the script proposes AND
-        carry an exemption; a pair that fails silently cannot appear."""
+        """A failing text pair must be a move the script proposes AND carry an
+        exemption; a pair that fails silently cannot appear."""
         proposed = {(m.preset, m.mode, m.token) for m in fix.collect_moves()}
         for name, mode, fg, bg, minimum in _text_pair_rows():
             tokens = getattr(THEME_PRESETS[name], mode)
@@ -84,15 +91,57 @@ class TestTextContrastStaysFixed:
                 )
 
 
+class TestLinkHover:
+    def test_no_nudgeable_hover_is_left_failing(self):
+        pending = [
+            m
+            for m in fix.collect_moves()
+            if m.token == fix.HOVER_TOKEN and m.is_nudge(fix.DEFAULT_MAX_DELTA)
+        ]
+        assert not pending
+
+    def test_a_link_that_moves_takes_its_hover_along_on_the_same_side(self):
+        # amber light: link L45 fails, hover L35 started darker than the link.
+        tokens = THEME_PRESETS["amber"].light
+        tokens = replace(
+            tokens,
+            link=fix.ColorScale(tokens.link.h, tokens.link.s, 45),
+            link_hover=fix.ColorScale(tokens.link_hover.h, tokens.link_hover.s, 35),
+        )
+        assert tokens.link_hover.lightness < tokens.link.lightness
+        moves = {m.token: m for m in fix.moves_for_mode("amber", "light", tokens, lambda _t: "")}
+        assert "link" in moves and "link_hover" in moves
+        link_after, hover_after = moves["link"].after, moves["link_hover"].after
+        assert hover_after.lightness < link_after.lightness  # still darkens the link
+        for surface in (tokens.background, tokens.card):
+            assert _validator.calculate_contrast_ratio(link_after, surface) >= 4.5
+            assert _validator.calculate_contrast_ratio(hover_after, surface) >= 4.5
+
+    def test_a_pair_is_held_together_when_the_hover_is_not_a_nudge(self):
+        tokens = THEME_PRESETS["sunrise"].light
+        moves = {m.token: m for m in fix.moves_for_mode("sunrise", "light", tokens, lambda _t: "")}
+        assert not moves["link_hover"].is_nudge(fix.DEFAULT_MAX_DELTA)
+        assert moves["link"].delta <= fix.DEFAULT_MAX_DELTA and not moves["link"].flip
+        assert moves["link"].hold  # a small link move, held because its hover is not a nudge
+        assert not moves["link"].is_nudge(fix.DEFAULT_MAX_DELTA)
+
+    def test_a_documented_hex_is_never_a_nudge(self):
+        tokens = THEME_PRESETS["monokai"].light
+        moves = {
+            m.token: m
+            for m in fix.moves_for_mode("monokai", "light", tokens, lambda _t: "  # Purple #ae81ff")
+        }
+        assert moves["link"].hold == "documented hex"
+        assert not moves["link"].is_nudge(fix.DEFAULT_MAX_DELTA)
+
+
 class TestSolver:
-    def test_solved_lightness_passes_every_surface(self):
+    def test_every_proposed_move_passes_its_surfaces(self):
         for move in fix.collect_moves():
             tokens = getattr(THEME_PRESETS[move.preset], move.mode)
             for bg, minimum in fix.pairs_for(move.token):
                 ratio = _validator.calculate_contrast_ratio(move.after, getattr(tokens, bg))
-                assert ratio >= minimum, (
-                    f"{move.preset}/{move.mode} {move.token} on {bg}: {ratio:.2f}"
-                )
+                assert ratio >= minimum, f"{move.preset}/{move.mode} {move.token} on {bg}"
 
     def test_a_move_keeps_hue_and_saturation(self):
         for move in fix.collect_moves():
@@ -100,16 +149,16 @@ class TestSolver:
 
     def test_a_passing_colour_is_never_moved(self):
         tokens = THEME_PRESETS["default"].light
-        surfaces = [(tokens.background, 4.5)]
-        assert fix.solve_lightness(tokens.foreground, surfaces) is None
+        assert fix.solve_lightness(tokens.foreground, [(tokens.background, 4.5)]) is None
 
-    def test_solves_to_the_nearest_lightness(self):
+    def test_solves_to_the_nearest_lightness_with_margin(self):
         tokens = THEME_PRESETS["default"].light
         grey = fix.ColorScale(0, 0, 60)
-        light = fix.solve_lightness(grey, [(tokens.background, 4.5)])
+        surfaces = [(tokens.background, 4.5)]
+        light = fix.solve_lightness(grey, surfaces)
         assert light is not None and light < 60
-        assert fix.margin(fix.ColorScale(0, 0, light), [(tokens.background, 4.5)]) >= 0
-        assert fix.margin(fix.ColorScale(0, 0, light + 1), [(tokens.background, 4.5)]) < 0
+        assert fix.margin(fix.ColorScale(0, 0, light), surfaces) >= fix.SOLVE_MARGIN
+        assert fix.margin(fix.ColorScale(0, 0, light + 1), surfaces) < fix.SOLVE_MARGIN
 
     def test_polarity_flip_is_not_a_nudge(self):
         before = fix.ColorScale(0, 0, 100)
@@ -121,8 +170,65 @@ class TestSolver:
         assert not far.is_nudge(15)
 
 
+class TestApplyAndPruneOnACopy:
+    @pytest.fixture
+    def sandbox(self, monkeypatch, tmp_path):
+        themes = tmp_path / "themes"
+        shutil.copytree(fix.THEMES_DIR, themes, ignore=shutil.ignore_patterns("__pycache__"))
+        exemptions = tmp_path / "a11y_exemptions.py"
+        shutil.copy(fix.EXEMPTIONS_PATH, exemptions)
+        monkeypatch.setattr(fix, "THEMES_DIR", str(themes))
+        monkeypatch.setattr(fix, "EXEMPTIONS_PATH", str(exemptions))
+        return themes, exemptions
+
+    def test_apply_rewrites_the_literal_line_and_leaves_no_temp_file(self, sandbox):
+        themes, _ = sandbox
+        dracula = themes / "dracula.py"
+        before = dracula.read_text()
+        tokens = THEME_PRESETS["dracula"].light
+        move = fix.Move("dracula", "light", "muted_foreground", tokens.muted_foreground, 30, False)
+        assert fix.apply_moves([move]) == 1
+        after = dracula.read_text()
+        assert "muted_foreground=ColorScale(0, 0, 40)," in before
+        assert "muted_foreground=ColorScale(0, 0, 30)," in after
+        assert before.count("\n") == after.count("\n")
+        assert not [p for p in themes.iterdir() if ".tmp" in p.name]
+
+    def test_apply_refreshes_a_hex_quoted_in_the_comment(self, sandbox):
+        themes, _ = sandbox
+        stripe = themes / "stripe.py"
+        tokens = THEME_PRESETS["stripe"].light
+        move = fix.Move("stripe", "light", "link", tokens.link, 67, False, "documented hex")
+        fix.apply_moves([move])
+        line = next(ln for ln in stripe.read_text().splitlines() if "Blurple links" in ln)
+        assert "ColorScale(243, 100, 67)" in line
+        assert "#5F57FF" in line and "#635BFF" not in line
+
+    def test_apply_refuses_a_source_that_disagrees_and_edits_nothing(self, sandbox):
+        themes, _ = sandbox
+        dracula = themes / "dracula.py"
+        before = dracula.read_text()
+        move = fix.Move("dracula", "light", "muted_foreground", fix.ColorScale(1, 2, 3), 30, False)
+        with pytest.raises(SystemExit):
+            fix.apply_moves([move])
+        assert dracula.read_text() == before
+
+    def test_prune_drops_exactly_the_stale_rows(self, sandbox):
+        _, exemptions = sandbox
+        text = exemptions.read_text()
+        marker = "A11Y_EXEMPTIONS: dict[tuple[str, str, str, str], str] = {\n"
+        stale_row = (
+            '    (\n        "default",\n        "light",\n        "foreground",\n'
+            '        "background",\n    ): "stale test row",\n'
+        )
+        head, tail = text.split(marker, 1)
+        exemptions.write_text(head + marker + stale_row + tail)
+        assert fix.prune_exemptions() == 1
+        assert exemptions.read_text() == text
+        assert fix.prune_exemptions() == 0
+
+
 class TestCheckModeIsWired:
-    @pytest.mark.parametrize("flag", ["--check"])
-    def test_check_exits_zero_when_nothing_is_pending(self, flag, monkeypatch):
-        monkeypatch.setattr("sys.argv", ["fix_theme_text_contrast.py", flag])
+    def test_check_exits_zero_when_nothing_is_pending(self, monkeypatch):
+        monkeypatch.setattr("sys.argv", ["fix_theme_text_contrast.py", "--check"])
         assert fix.main() == 0

@@ -3,20 +3,34 @@
 
 ``scripts/report_theme_contrast.py`` lists every (preset, mode, pair) of the
 canonical matrix (``a11y_exemptions.CONTRAST_PAIRS``) that misses its WCAG
-minimum. This script acts on the ones a TEXT-COLOUR move can fix, before any
-surface (fill, background, border) is touched:
+minimum. This script acts on the ones a TEXT-COLOUR TOKEN move can fix, before
+any fill, background or border TOKEN is touched:
 
-* ``label`` tokens: the ``*_foreground`` labels, plus ``link``. Each is solved
-  ONLY in lightness (hue and saturation are kept), to the nearest integer
-  lightness that clears its minimum on every surface it is checked against
-  (``muted_foreground`` on both ``muted`` and ``background``; ``link`` on both
-  ``background`` and ``card``). A pair that already passes is never moved.
-* A solved move is a NUDGE when the label stays on the same side of its
-  surface (no light-on-dark <-> dark-on-light polarity flip) and moves by at
-  most ``--max-delta`` lightness points (default 15). Nudges are what
-  ``--apply`` writes. Polarity flips and large moves visibly restyle a button
-  or a badge, so they are listed as proposals (``--proposals``,
-  ``--html``) and applied only with ``--include-substantial``.
+* Text tokens: the ``*_foreground`` labels, ``link`` and ``link_hover``. Each is
+  solved ONLY in lightness (hue and saturation are kept), to the nearest
+  integer lightness that clears its minimum, with a small safety margin, on
+  every surface it is checked against (``muted_foreground`` on ``muted`` and
+  ``background``; ``link`` and ``link_hover`` on ``background`` and ``card``).
+  A pair that already passes is never moved. ``link_hover`` is not in
+  ``CONTRAST_PAIRS`` (adding it would change ``djust_theming.W001`` for
+  user-authored presets, an owner decision); the script checks it itself.
+* ``link`` and ``link_hover`` move together. ``link_hover`` keeps the side of
+  ``link`` it started on (a hover that darkened the link still darkens it, and
+  never equals it); if the pair cannot be moved as nudges, neither is.
+* A solved move is a NUDGE when the colour stays on the same side of its
+  surface (no light-on-dark <-> dark-on-light polarity flip), moves by at most
+  ``--max-delta`` lightness points (default 15), is not held back (below), and
+  its ``link``/``link_hover`` partner is a nudge too. Nudges are what
+  ``--apply`` writes. Everything else is listed (``--proposals``, ``--html``)
+  and written only with ``--include-substantial``.
+* Held back: a token whose source line documents an exact hex colour (for
+  example ``# Purple #ae81ff``) is a stated brand value, so any move of it is
+  an identity decision for the owner, never a nudge.
+
+"Text token" is about the token, not about every place the CSS paints it:
+``--muted-foreground`` is also the fill or stroke of status dots, switch
+tracks, scrollbar thumbs, spinners and skeletons (components.css), so a moved
+``muted_foreground`` shifts those by the same step, always away from the page.
 
 The remaining failures are NOT text-colour fixes and are reported, never
 applied: ``primary`` and the status colours read AS text on a page or a tint
@@ -40,7 +54,8 @@ import os
 import re
 import subprocess
 import sys
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 
 import django
 from django.conf import settings
@@ -52,7 +67,7 @@ django.setup()
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 sys.path.insert(0, os.path.join(ROOT, "python"))
 
-from djust.theming._types import ColorScale  # noqa: E402
+from djust.theming._types import ColorScale, ThemeTokens  # noqa: E402
 from djust.theming.a11y_exemptions import CONTRAST_PAIRS  # noqa: E402
 from djust.theming.accessibility import AccessibilityValidator  # noqa: E402
 from djust.theming.presets import THEME_PRESETS  # noqa: E402
@@ -66,7 +81,8 @@ DEFAULT_MAX_DELTA = 15
 
 _validator = AccessibilityValidator()
 
-# Foreground tokens whose colour IS text, so a lightness move restyles text only.
+# Foreground tokens whose colour IS text, so a lightness move restyles text only
+# (``link_hover`` is checked here, not in ``CONTRAST_PAIRS``; see the docstring).
 LABEL_TOKENS = frozenset(
     {
         "foreground",
@@ -85,6 +101,17 @@ LABEL_TOKENS = frozenset(
         "link",
     }
 )
+HOVER_TOKEN = "link_hover"
+TEXT_TOKENS = LABEL_TOKENS | {HOVER_TOKEN}
+HOVER_PAIRS: list[tuple[str, str, float, str]] = [
+    (HOVER_TOKEN, "background", 4.5, "link hover on background"),
+    (HOVER_TOKEN, "card", 4.5, "link hover on card"),
+]
+
+#: A move aims this far above the minimum, so a one-step rounding of the HSL
+#: integers cannot put a fixed pair back under it. A pair is only MOVED when it
+#: is below the bare minimum.
+SOLVE_MARGIN = 0.05
 
 
 def _ratio(fg: ColorScale, bg: ColorScale) -> float:
@@ -92,8 +119,8 @@ def _ratio(fg: ColorScale, bg: ColorScale) -> float:
 
 
 def pairs_for(token: str) -> list[tuple[str, float]]:
-    """``[(surface token, minimum)]`` the matrix checks ``token`` against."""
-    return [(bg, mn) for fg, bg, mn, _label in CONTRAST_PAIRS if fg == token]
+    """``[(surface token, minimum)]`` the matrix (plus the hover pairs) checks ``token`` against."""
+    return [(bg, mn) for fg, bg, mn, _label in CONTRAST_PAIRS + HOVER_PAIRS if fg == token]
 
 
 def margin(colour: ColorScale, surfaces: list[tuple[ColorScale, float]]) -> float:
@@ -101,20 +128,26 @@ def margin(colour: ColorScale, surfaces: list[tuple[ColorScale, float]]) -> floa
     return min(_ratio(colour, surface) - mn for surface, mn in surfaces)
 
 
-def solve_lightness(colour: ColorScale, surfaces: list[tuple[ColorScale, float]]) -> int | None:
+def solve_lightness(
+    colour: ColorScale,
+    surfaces: list[tuple[ColorScale, float]],
+    accept: Callable[[int], bool] | None = None,
+) -> int | None:
     """Nearest integer lightness (hue and saturation kept) that passes every
-    surface, ``None`` when ``colour`` already passes, ``-1`` when no lightness
-    in 0..100 does. The tie between two equally near lightnesses goes to the
-    one with more margin."""
-    if margin(colour, surfaces) >= 0:
+    surface by ``SOLVE_MARGIN``, ``None`` when ``colour`` already passes (and
+    ``accept`` allows its lightness), ``-1`` when no lightness in 0..100 does.
+    ``accept`` is an extra constraint on the lightness. The tie between two
+    equally near lightnesses goes to the one with more margin."""
+    allowed = accept or (lambda _light: True)
+    if margin(colour, surfaces) >= 0 and allowed(colour.lightness):
         return None
     for step in range(1, 101):
         found = []
         for sign in (1, -1):
             cand = colour.lightness + sign * step
-            if 0 <= cand <= 100:
+            if 0 <= cand <= 100 and allowed(cand):
                 m = margin(ColorScale(colour.h, colour.s, cand), surfaces)
-                if m >= 0:
+                if m >= SOLVE_MARGIN:
                     found.append((m, cand))
         if found:
             return max(found)[1]
@@ -129,6 +162,8 @@ class Move:
     before: ColorScale
     after_lightness: int
     flip: bool
+    #: Why this move is never a nudge ("" when it can be one).
+    hold: str = ""
 
     @property
     def delta(self) -> int:
@@ -139,26 +174,92 @@ class Move:
         return ColorScale(self.before.h, self.before.s, self.after_lightness)
 
     def is_nudge(self, max_delta: int) -> bool:
-        return not self.flip and self.delta <= max_delta
+        return not self.flip and not self.hold and self.delta <= max_delta
+
+    def kind(self, max_delta: int = DEFAULT_MAX_DELTA) -> str:
+        if self.hold:
+            return self.hold
+        if self.flip:
+            return "polarity flip"
+        return "nudge" if self.delta <= max_delta else f"large move ({self.delta} pts)"
 
 
-def collect_moves() -> list[Move]:
+def _single_move(
+    name: str,
+    mode: str,
+    token: str,
+    colour: ColorScale,
+    surfaces: list[tuple[ColorScale, float]],
+    comment: str,
+    accept: Callable[[int], bool] | None = None,
+) -> Move | None:
+    light = solve_lightness(colour, surfaces, accept)
+    if light is None:
+        return None
+    if light == -1:
+        raise SystemExit(f"{name}/{mode}: no lightness fixes {token}")
+    mean = sum(s.lightness for s, _ in surfaces) / len(surfaces)
+    flip = (colour.lightness >= mean) != (light >= mean)
+    hold = "documented hex" if _HEX.search(comment) else ""
+    return Move(name, mode, token, colour, light, flip, hold)
+
+
+def moves_for_mode(
+    name: str,
+    mode: str,
+    tokens: ThemeTokens,
+    comments: Callable[[str], str] | None = None,
+    max_delta: int = DEFAULT_MAX_DELTA,
+) -> list[Move]:
+    """Every solved move for one preset mode. ``comments(token)`` returns the
+    trailing source comment of a token's line (default: read the theme file)."""
+    note = comments or (lambda token: source_comment(name, mode, token))
+
+    def surfaces_of(token: str) -> list[tuple[ColorScale, float]]:
+        return [(getattr(tokens, bg), mn) for bg, mn in pairs_for(token)]
+
+    moves: list[Move] = []
+    for token in sorted(LABEL_TOKENS - {"link"}):
+        move = _single_move(
+            name, mode, token, getattr(tokens, token), surfaces_of(token), note(token)
+        )
+        if move:
+            moves.append(move)
+
+    link = tokens.link
+    link_move = _single_move(name, mode, "link", link, surfaces_of("link"), note("link"))
+    link_after = link_move.after if link_move else link
+    hover = tokens.link_hover
+    # The hover keeps the side of the resting link it started on, and never
+    # equals it: a hover that darkened a link must still darken it.
+    side = (hover.lightness > link.lightness) - (hover.lightness < link.lightness)
+
+    def keeps_side(light: int) -> bool:
+        return side == 0 or (light > link_after.lightness) - (light < link_after.lightness) == side
+
+    hover_move = _single_move(
+        name, mode, HOVER_TOKEN, hover, surfaces_of(HOVER_TOKEN), note(HOVER_TOKEN), keeps_side
+    )
+    pair = [m for m in (link_move, hover_move) if m]
+    if link_move and not all(m.is_nudge(max_delta) for m in pair):
+        # They move together or not at all: a nudge whose partner is not one is held.
+        pair = [
+            replace(m, hold="paired with a held link/link_hover move")
+            if m.is_nudge(max_delta)
+            else m
+            for m in pair
+        ]
+    moves.extend(pair)
+    return moves
+
+
+def collect_moves(max_delta: int = DEFAULT_MAX_DELTA) -> list[Move]:
     moves: list[Move] = []
     for name in sorted(THEME_PRESETS):
         for mode in MODES:
-            tokens = getattr(THEME_PRESETS[name], mode)
-            for token in sorted(LABEL_TOKENS):
-                surf_names = pairs_for(token)
-                surfaces = [(getattr(tokens, bg), mn) for bg, mn in surf_names]
-                colour = getattr(tokens, token)
-                light = solve_lightness(colour, surfaces)
-                if light is None:
-                    continue
-                if light == -1:
-                    raise SystemExit(f"{name}/{mode}: no lightness fixes {token}")
-                mean = sum(s.lightness for s, _ in surfaces) / len(surfaces)
-                flip = (colour.lightness >= mean) != (light >= mean)
-                moves.append(Move(name, mode, token, colour, light, flip))
+            moves.extend(
+                moves_for_mode(name, mode, getattr(THEME_PRESETS[name], mode), max_delta=max_delta)
+            )
     return moves
 
 
@@ -180,10 +281,32 @@ def _block_span(text: str, mode: str) -> tuple[int, int]:
     return start.end(), start.end() + end.start()
 
 
+def source_comment(preset: str, mode: str, token: str) -> str:
+    """The trailing comment of ``token``'s line in the preset's theme file ("" when
+    the file or a literal line is missing)."""
+    path = os.path.join(THEMES_DIR, f"{preset}.py")
+    if not os.path.exists(path):
+        return ""
+    with open(path) as fh:
+        text = fh.read()
+    lo, hi = _block_span(text, mode)
+    hit = re.compile(_LINE.format(token=token), re.M).search(text[lo:hi])
+    return (hit.group(6) or "") if hit else ""
+
+
+def _write_atomic(path: str, text: str) -> None:
+    tmp = f"{path}.tmp{os.getpid()}"
+    with open(tmp, "w") as fh:
+        fh.write(text)
+    os.replace(tmp, path)
+
+
 def apply_moves(moves: list[Move]) -> int:
     """Rewrite the literal ``token=ColorScale(h, s, l)`` lines of each theme file.
-    All edits are computed first and written last, so a failure edits nothing. A
-    trailing comment that quotes the old hex is refreshed to the new colour."""
+    All edits are computed first and the files written last (each replaced
+    atomically), so a refused edit changes no file. A trailing comment that
+    quotes a hex is refreshed to the new colour (held moves never reach here
+    unless ``--include-substantial`` was passed)."""
     by_file: dict[str, list[Move]] = {}
     for m in moves:
         path = os.path.join(THEMES_DIR, f"{m.preset}.py")
@@ -213,25 +336,34 @@ def apply_moves(moves: list[Move]) -> int:
             text = text[:lo] + pattern.sub(rewrite, block, count=1) + text[hi:]
         edited[path] = text
     for path, text in edited.items():
-        with open(path, "w") as fh:
-            fh.write(text)
+        _write_atomic(path, text)
     return len(edited)
 
 
-def prune_exemptions() -> int:
-    """Delete A11Y_EXEMPTIONS rows whose pair now passes (the stale-exemption gate
-    fails on them). Measures the theme sources as loaded, so ``--apply`` runs it
-    in a fresh interpreter (``--prune``) after editing them."""
-    from djust.theming.a11y_exemptions import A11Y_EXEMPTIONS
+def _exemption_keys(text: str) -> list[tuple[str, str, str, str]]:
+    """The (preset, mode, fg, bg) of every row in the exemptions file, in both
+    shapes it uses: the literal blocks and the ``_PAIR_DEBT_2885`` lines."""
+    block = re.compile(
+        r'^    \(\n        "([^"]+)",\n        "([^"]+)",\n        "([^"]+)",\n        "([^"]+)",\n    \): "',
+        re.M,
+    )
+    row = re.compile(r'^    \("([^"]+)", "([^"]+)", "([^"]+)", "([^"]+)"\): [\d.]+,$', re.M)
+    return [m.groups() for m in block.finditer(text)] + [m.groups() for m in row.finditer(text)]
 
+
+def prune_exemptions() -> int:
+    """Delete exemption rows whose pair now passes (the stale-exemption gate fails
+    on them). Reads the rows from ``EXEMPTIONS_PATH`` and measures the theme
+    sources as loaded, so ``--apply`` runs it in a fresh interpreter (``--prune``)
+    after editing them."""
+    with open(EXEMPTIONS_PATH) as fh:
+        text = fh.read()
     stale = []
-    for (preset, mode, fg, bg), _reason in A11Y_EXEMPTIONS.items():
+    for preset, mode, fg, bg in _exemption_keys(text):
         minimum = next(m for f, b, m, _ in CONTRAST_PAIRS if f == fg and b == bg)
         tokens = getattr(THEME_PRESETS[preset], mode)
         if _ratio(getattr(tokens, fg), getattr(tokens, bg)) >= minimum:
             stale.append((preset, mode, fg, bg))
-    with open(EXEMPTIONS_PATH) as fh:
-        text = fh.read()
     removed = 0
     for preset, mode, fg, bg in stale:
         block = re.compile(
@@ -246,8 +378,7 @@ def prune_exemptions() -> int:
                 f"could not locate exactly one exemption row for {(preset, mode, fg, bg)}"
             )
         removed += 1
-    with open(EXEMPTIONS_PATH, "w") as fh:
-        fh.write(text)
+    _write_atomic(EXEMPTIONS_PATH, text)
     return removed
 
 
@@ -297,7 +428,7 @@ def write_html(path: str, moves: list[Move], max_delta: int) -> None:
                     f'<span class="pair"><em>on {bg}</em>{_chip(m.before, surface)}'
                     f"{_chip(m.after, surface)}</span>"
                 )
-            kind = "polarity flip" if m.flip else f"lightness {m.delta} pts"
+            kind = m.kind(max_delta)
             out.append(
                 f"<tr><td>{m.preset}</td><td>{m.mode}</td><td><code>{m.token}</code></td>"
                 f"<td>{''.join(cells)}</td><td>{m.before.lightness} &rarr; {m.after_lightness}"
@@ -339,11 +470,11 @@ h2 {{ margin-top: 2.5rem; }}
 </style></head><body>
 <h1>Theme text contrast (#2885): before / after</h1>
 <p>Each pair of chips is the token as it ships (left) and as solved (right); the number is the WCAG ratio.
-Only the label (text) colour moves, in lightness, hue and saturation kept.</p>
+Only text tokens move, in lightness, hue and saturation kept.</p>
 <h2>1. Applied: text nudges ({len(applied)}), no polarity flip, at most {max_delta} lightness points</h2>
 <table><tr><th>preset</th><th>mode</th><th>token</th><th>before / after</th><th>L</th></tr>
 {rows(applied)}</table>
-<h2>2. SUBSTANTIAL, not applied: polarity flips or larger moves ({len(substantial)})</h2>
+<h2>2. SUBSTANTIAL, not applied: polarity flips, larger moves, documented-hex and paired moves ({len(substantial)})</h2>
 <table><tr><th>preset</th><th>mode</th><th>token</th><th>before / after</th><th>L</th></tr>
 {rows(substantial)}</table>
 <h2>3. SUBSTANTIAL, not applied: input border, 3:1 non-text ({len(groups["border"])})</h2>
@@ -357,14 +488,16 @@ Only the label (text) colour moves, in lightness, hue and saturation kept.</p>
 def summary(moves: list[Move], max_delta: int) -> None:
     nudges = [m for m in moves if m.is_nudge(max_delta)]
     flips = [m for m in moves if m.flip]
-    big = [m for m in moves if not m.flip and m.delta > max_delta]
+    held = [m for m in moves if m.hold and not m.flip]
+    big = [m for m in moves if not m.flip and not m.hold and m.delta > max_delta]
     groups = unfixable_by_text()
-    print(f"label/link pairs failing, fixable by a lightness move: {len(moves)} token moves")
+    print(f"text pairs failing, fixable by a lightness move: {len(moves)} token moves")
     print(f"  nudges (no flip, <= {max_delta} pts): {len(nudges)}")
     print(f"  SUBSTANTIAL polarity flips: {len(flips)}")
     print(f"  SUBSTANTIAL same-side moves > {max_delta} pts: {len(big)}")
-    print(f"not a label move: as-text (primary, status): {len(groups['as-text'])} pairs")
-    print(f"not a label move: input border (3:1): {len(groups['border'])} pairs")
+    print(f"  SUBSTANTIAL held back (documented hex / link pair): {len(held)}")
+    print(f"not a text move: as-text (primary, status): {len(groups['as-text'])} pairs")
+    print(f"not a text move: input border (3:1): {len(groups['border'])} pairs")
 
 
 def main() -> int:
@@ -387,16 +520,15 @@ def main() -> int:
     if args.prune:
         print(f"pruned {prune_exemptions()} now-stale A11Y_EXEMPTIONS rows")
         return 0
-    moves = collect_moves()
+    moves = collect_moves(args.max_delta)
     if args.html:
         write_html(args.html, moves, args.max_delta)
         print(f"wrote {args.html}")
     if args.proposals:
         for m in moves:
-            kind = "NUDGE" if m.is_nudge(args.max_delta) else ("FLIP" if m.flip else "LARGE")
             print(
-                f"{kind:5} {m.preset}/{m.mode} {m.token}: L {m.before.lightness} -> "
-                f"{m.after_lightness} ({m.delta} pts)"
+                f"{m.kind(args.max_delta).upper():14} {m.preset}/{m.mode} {m.token}: "
+                f"L {m.before.lightness} -> {m.after_lightness} ({m.delta} pts)"
             )
     if args.check:
         pending = [m for m in moves if m.is_nudge(args.max_delta)]
