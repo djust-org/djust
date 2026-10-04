@@ -571,9 +571,19 @@ def replay_event(
     # acceptance criteria — see ``websocket.py`` server_push handler
     # validation around line 4389).
     try:
-        from djust.decorators import is_event_handler
+        from djust.decorators import is_event_handler, is_push_only
     except ImportError:  # pragma: no cover — decorators is in-tree
         is_event_handler = None  # type: ignore[assignment]
+        is_push_only = None  # type: ignore[assignment]
+    # A push-only name is never a browser event, even when an override of it
+    # carries @event_handler (#3002).
+    if is_push_only is not None and is_push_only(view, snapshot.event_name, handler):
+        logger.warning(
+            "time_travel: replay_event refused push-only method %r on %s",
+            snapshot.event_name,
+            type(view).__name__,
+        )
+        return None
     if is_event_handler is not None and not is_event_handler(handler):
         logger.warning(
             "time_travel: replay_event refused unregistered method %r on %s "

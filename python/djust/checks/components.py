@@ -1692,29 +1692,45 @@ def check_push_handler_overrides(app_configs: Any, **kwargs: Any) -> list[CheckM
         if _is_framework_internal_class(cls):
             continue
         label = "%s.%s" % (cls.__module__, cls.__qualname__)
-        for name, member in cls.__dict__.copy().items():
-            function = getattr(member, "__func__", member)
+        # Names some class in the MRO defines with the marker; the effective
+        # definition of each is the first one in MRO order, which may live on a
+        # different base than the marker (``class V(A, B)`` with A.foo
+        # unmarked and B.foo marked).
+        marked: dict[str, list[type]] = {}
+        for klass in cls.__mro__:
+            for name, member in klass.__dict__.copy().items():
+                if is_push_handler(member):
+                    marked.setdefault(name, []).append(klass)
+        for name, markers in sorted(marked.items()):
+            owner = next(k for k in cls.__mro__ if name in k.__dict__)
+            function = getattr(owner.__dict__[name], "__func__", owner.__dict__[name])
             if not callable(function) or is_push_handler(function):
                 continue
-            if not any(is_push_handler(base.__dict__.get(name)) for base in cls.__mro__[1:]):
+            # An own override, or one on a class that is not itself checked
+            # (a plain mixin). A LiveView base that carries the override reports
+            # it on its own.
+            reported_by_owner = owner is not cls and owner in candidates
+            if reported_by_owner and any(m in owner.__mro__ for m in markers):
                 continue
             try:
                 file_path = inspect.getsourcefile(function) or ""
                 line_number: Optional[int] = inspect.getsourcelines(function)[1]
             except (OSError, TypeError):
                 file_path, line_number = "", None
+            where = "" if owner is cls else " (inherited from %s)" % owner.__qualname__
             if is_event_handler(function):
                 messages.append(
                     DjustWarning(
-                        "%s.%s() is an @event_handler but overrides a @push_handler method; "
+                        "%s.%s()%s is an @event_handler but overrides a @push_handler method; "
                         "browsers are still refused (the marker is inherited by name)."
-                        % (label, name),
+                        % (label, name, where),
                         hint=(
                             "Remove @event_handler to keep it push-only, or rename the "
                             "method if a browser should be able to call it."
                         ),
                         id="djust.V021",
-                        fix_hint="Remove `@event_handler` from `%s.%s`." % (cls.__qualname__, name),
+                        fix_hint="Remove `@event_handler` from `%s.%s`."
+                        % (owner.__qualname__, name),
                         file_path=file_path,
                         line_number=line_number,
                     )
@@ -1722,11 +1738,12 @@ def check_push_handler_overrides(app_configs: Any, **kwargs: Any) -> list[CheckM
             else:
                 messages.append(
                     DjustInfo(
-                        "%s.%s() overrides a @push_handler method without the marker; "
-                        "it is still push-only (the marker is inherited by name)." % (label, name),
+                        "%s.%s()%s overrides a @push_handler method without the marker; "
+                        "it is still push-only (the marker is inherited by name)."
+                        % (label, name, where),
                         hint="Add @push_handler to the override to say so.",
                         id="djust.V021",
-                        fix_hint="Add `@push_handler` above `%s.%s`." % (cls.__qualname__, name),
+                        fix_hint="Add `@push_handler` above `%s.%s`." % (owner.__qualname__, name),
                         file_path=file_path,
                         line_number=line_number,
                     )

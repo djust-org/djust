@@ -418,7 +418,7 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 ### V021 — Override of a `@push_handler` method
 - **Severity**: Info; Warning when the override carries `@event_handler`
 - **Method**: Runtime (class inspection; nothing is constructed or mounted)
-- **What it detects**: a LiveView subclass that defines a method whose name a base class (or mixin) defines with `@push_handler`, without re-applying the marker. The marker is inherited by method name, so the override is still refused to browsers in every `event_security` mode; the check makes that visible. With `@event_handler` on the override it is a Warning: the decorator cannot make the name browser-callable, so the event handler is dead code.
+- **What it detects**: a LiveView class whose effective definition of a method name is not marked, while another class in its MRO (a base or mixin) defines the same name with `@push_handler`. That covers an override and the multiple-inheritance case where one base's unmarked or `@event_handler` method comes first in the MRO and another base's marked method comes later. The marker is inherited by method name, so the override is still refused to browsers in every `event_security` mode; the check makes that visible. With `@event_handler` on the override it is a Warning: the decorator cannot make the name browser-callable, so the event handler is dead code.
 - **Fix**: add `@push_handler` to the override. For the Warning, remove `@event_handler`, or rename the method if a browser should call it.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V021"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V021"]`
 

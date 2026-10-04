@@ -705,6 +705,21 @@ class Bound(LiveView):
     @event_handler
     def ping(self, **kwargs):
         pass
+
+
+class BoundChild(Bound):
+    template = """<div dj-root><button dj-click="refresh_room">a</button></div>"""
+
+    def refresh_room(self, **kwargs):  # unmarked override
+        pass
+
+
+class BoundEventHandler(Bound):
+    template = """<div dj-root><button dj-click="refresh_room">a</button></div>"""
+
+    @event_handler
+    def refresh_room(self, **kwargs):  # override that adds @event_handler
+        pass
 '''
 
 
@@ -720,7 +735,8 @@ def binding_module(tmp_path):
         yield module
     finally:
         sys.modules.pop(BINDING_MODULE, None)
-        module.Bound.abstract = True
+        for name in ("Bound", "BoundChild", "BoundEventHandler"):
+            getattr(module, name).abstract = True
         gc.collect()
 
 
@@ -822,3 +838,201 @@ def test_eval_handler_answers_a_marked_handler_like_a_missing_one():
     finally:
         _clear_registry()
     assert RAN == []
+
+
+def _t019(owner):
+    from djust.checks.bindings import _messages, binding_reports
+
+    reports = [
+        r
+        for r in binding_reports()
+        if r.owner.__module__ == BINDING_MODULE and r.owner.__qualname__ == owner
+    ]
+    return [m.msg.split(": ", 1)[1] for m in _messages(reports)]
+
+
+@pytest.mark.parametrize("owner", ["BoundChild", "BoundEventHandler"])
+@pytest.mark.parametrize("mode", MODES)
+def test_t019_follows_the_marker_through_overrides(binding_module, mode, owner):
+    with override_settings(LIVEVIEW_CONFIG={"event_security": mode}):
+        config.reset()
+        found = _t019(owner)
+    assert len(found) == 1 and "server push handler" in found[0], found
+
+
+# --- every gate, on an override (so a per-method check would not pass) ---------------
+
+
+def test_declared_handlers_and_client_metadata_drop_push_only_names():
+    from djust._parameter_metadata import _event_methods, declared_handlers
+
+    names = {h.name for h in declared_handlers(OverrideView)}
+    assert "ping" in names and not names & set(OVERRIDES), names
+    methods = _event_methods(OverrideView())
+    assert "ping" in methods and not set(methods) & set(OVERRIDES), set(methods)
+
+
+def test_check_event_security_refuses_an_override_in_every_mode():
+    view = OverrideView()
+    for mode in MODES:
+        with override_settings(LIVEVIEW_CONFIG={"event_security": mode}):
+            config.reset()
+            for name in OVERRIDES:
+                assert "push" in _check_event_security(getattr(view, name), view, name), name
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_ws_override_is_refused_as_not_found_not_as_a_security_failure(caplog):
+    # The not-found gate and the security gate give the same production frame, so
+    # the DEBUG text and the log line tell them apart.
+    import logging
+
+    with _mode("open", DEBUG=True), caplog.at_level(logging.WARNING):
+        socket = await _mounted(OVERRIDE_VIEW)
+        try:
+            frames = _errors(await _event(socket, "refresh_room"))
+        finally:
+            await socket.disconnect()
+    assert frames[0]["error"].startswith("No handler found for event: refresh_room"), frames
+    assert "Handler not found: refresh_room" in caplog.text
+    assert RAN == []
+
+
+def test_debug_hints_skip_overrides_of_push_handlers():
+    class Base(LiveView):
+        @push_handler
+        def _secret(self, **kwargs): ...
+
+    class Child(Base):
+        def _secret(self, **kwargs): ...
+
+    with override_settings(DEBUG=True):
+        view = OverrideView()
+        # Typo suggestions: the unmarked override of refresh_room is not offered.
+        message = _format_handler_not_found_error(view, "refresh_rooms")
+        assert "refresh_room" not in message.partition("\n")[2], message
+        # "Available handlers": the @event_handler override of a push-only name
+        # is not listed; a real handler still is.
+        message = _format_handler_not_found_error(view, "zzz_unknown")
+        assert "ping" in message and "called_form" not in message, message
+        # The private twin of an overridden push handler is not hinted at.
+        assert "private" not in _format_handler_not_found_error(Child(), "secret")
+
+
+@pytest.mark.django_db
+def test_http_api_refuses_an_unmarked_override_like_an_unknown_handler():
+    from djust.api.dispatch import dispatch_api, reset_rate_buckets
+    from djust.api.registry import register_api_view, reset_registry
+
+    class ApiBase(LiveView):
+        api_name = "push.base"
+        login_required = False
+
+        @push_handler
+        def refresh_room(self, **kwargs): ...
+
+    class ApiChild(ApiBase):
+        api_name = "push.child"
+
+        @event_handler(expose_api=True)  # exposed, yet still push-only by name
+        def refresh_room(self, **kwargs):
+            RAN.append(("api_child",))
+
+    reset_registry()
+    reset_rate_buckets()
+    register_api_view("push.child", ApiChild)
+    try:
+        request = RequestFactory().post(
+            "/djust/api/x/y/", data=b"{}", content_type="application/json"
+        )
+        SessionMiddleware(lambda r: None).process_request(request)
+        request.session.save()
+        request.user = get_user_model().objects.create_user(username="pusher2", password="pw")
+        request._dont_enforce_csrf_checks = True
+        response = dispatch_api(request, "push.child", "refresh_room")
+    finally:
+        reset_registry()
+        reset_rate_buckets()
+    assert response.status_code == 404
+    assert json.loads(response.content)["error"] == "unknown_handler"
+    assert RAN == []
+
+
+def test_component_test_client_refuses_marked_and_overridden_handlers():
+    from djust.components.base import LiveComponent
+    from djust.testing import LiveComponentTestClient, NoHandlerFoundError
+
+    class Marked(LiveComponent):
+        def mount(self, **kwargs) -> None: ...
+
+        @push_handler
+        def refresh(self, **kwargs):
+            RAN.append(("component_refresh",))
+
+        def plain(self, **kwargs):
+            RAN.append(("component_plain",))
+
+    class Overridden(Marked):
+        def refresh(self, **kwargs):
+            RAN.append(("component_override",))
+
+    for cls in (Marked, Overridden):
+        with pytest.raises(NoHandlerFoundError):
+            LiveComponentTestClient(cls).mount().send_event("refresh")
+    assert RAN == []
+    LiveComponentTestClient(Marked).mount().send_event("plain")
+    assert RAN == [("component_plain",)]
+
+
+def test_is_push_handler_unwraps_descriptors_on_its_own():
+    # What a class body holds for each of these is the descriptor, not the function.
+    for name in ("above_static", "below_static", "above_class", "below_class"):
+        assert is_push_handler(StaticView.__dict__[name]), name
+    assert not is_push_handler(staticmethod(lambda: None))
+    assert not is_push_handler(classmethod(lambda cls: None))
+
+
+@pytest.mark.asyncio
+async def test_time_travel_replay_refuses_an_event_handler_override_of_a_push_name():
+    from djust.time_travel import EventSnapshot, replay_event
+
+    def snapshot(name):
+        return EventSnapshot(event_name=name, params={}, ref=None, ts=0.0, state_before={})
+
+    view = OverrideView()
+    view.mount(RequestFactory().get("/"))
+    for name in ("called_form", "refresh_room", "mixin_refresh"):
+        assert await sync_to_async(replay_event)(view, snapshot(name), record_replay=False) is None
+    assert RAN == []
+    # Control: a real @event_handler still replays.
+    await sync_to_async(replay_event)(view, snapshot("ping"), record_replay=False)
+    assert RAN == [("ping",)]
+
+
+def test_v021_sees_an_unmarked_definition_on_another_base_than_the_marker():
+    class Marker(LiveView):
+        template = "<div dj-root></div>"
+
+        @push_handler
+        def foo(self, **kwargs): ...
+
+        @push_handler
+        def bar(self, **kwargs): ...
+
+    class Eh(LiveView):
+        @event_handler
+        def foo(self, **kwargs): ...
+
+    class Plain:  # a mixin: never checked on its own
+        def bar(self, **kwargs): ...
+
+    class Combined(Eh, Plain, Marker):
+        pass
+
+    found = {m.msg.split("() ")[0].rsplit(".", 1)[-1]: m for m in _v021(Combined)}
+    assert set(found) == {"foo", "bar"}, found
+    assert found["foo"].level == 30 and ".Eh)" in found["foo"].msg
+    assert found["bar"].level < 30 and ".Plain)" in found["bar"].msg
+    # Eh and Plain do not mark anything themselves, so only Combined is reported.
+    assert _v021(Eh) == []

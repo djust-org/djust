@@ -90,6 +90,7 @@ def _format_handler_not_found_error(owner_instance: object, event_name: str) -> 
         if not name.startswith("_")
         and callable(getattr(owner_instance, name, None))
         and is_event_handler(getattr(owner_instance, name))
+        and not is_push_only(owner_instance, name, getattr(owner_instance, name))
     ]
     if handlers:
         hints.append(f"  Available handlers on {cls.__name__}: {', '.join(sorted(handlers))}")
