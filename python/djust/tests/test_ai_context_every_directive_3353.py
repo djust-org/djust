@@ -121,6 +121,23 @@ def test_a_category_added_to_the_schema_is_emitted_without_editing_the_command()
     assert text.index("### Other") < text.index("### Zz-Future")
 
 
+@pytest.mark.parametrize("category", [None, 3, ["event"], "", object()])
+def test_a_missing_or_non_string_category_is_emitted_under_other(category) -> None:
+    """Such entries were skipped before; sorting them with the strings raised TypeError."""
+    framework = {
+        "directives": [
+            {"name": "dj-odd-cat", "category": category, "description": "d", "value": "v"},
+            {"name": "dj-plain", "category": "event", "description": "d", "value": "v"},
+            {"name": "dj-extra", "category": "animation", "description": "d", "value": "v"},
+        ]
+    }
+    text = _section_directives(framework)
+    assert _bullet("dj-odd-cat") in text
+    assert "### Other" in text
+    assert text.index("### Event") < text.index("### Animation") < text.index("### Other")
+    assert _category_order({"event", "animation", "other"}) == ["event", "animation", "other"]
+
+
 def test_extra_categories_are_compact_and_full_ones_unchanged() -> None:
     text = _section_directives(get_framework_schema())
     # Full format: a fenced example under the directive.

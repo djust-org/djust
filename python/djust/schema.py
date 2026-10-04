@@ -59,7 +59,9 @@ DIRECTIVES: List[Dict[str, Any]] = [
         "description": "Send event on the input event. Text-like fields (text, search, email, url, tel, "
         "password, textarea) are debounced 300ms by default, so a burst of typing sends one event; "
         "range and color are throttled 150ms, number 100ms; checkbox, radio and select send "
-        'immediately. dj-debounce / dj-throttle override the default, and dj-debounce="0" '
+        "immediately. Any other input type (date, time, datetime-local, month, week, file, "
+        "contenteditable, custom elements) falls back to a 300ms debounce. "
+        'dj-debounce / dj-throttle override the default, and dj-debounce="0" '
         "sends an event for every keystroke.",
         "value": "handler_name",
         "dom_event": "input",
@@ -1492,11 +1494,11 @@ BEST_PRACTICES = {
             "id": 6,
             "problem": "Search input without debouncing",
             "why": (
-                "With no delay, every keystroke sends a WebSocket message and triggers a full "
-                "re-render. dj-input already debounces text fields 300ms by default, so this "
-                'bites when that is turned off (dj-debounce="0") or when 300ms is too short '
-                "for the work each event does. It floods the server and causes poor UX with "
-                "flickering."
+                "dj-input already debounces text fields 300ms by default, so a plain search box "
+                "sends one event per typing pause. The problem shows when that is turned off "
+                '(dj-debounce="0") or when each event is expensive enough that 300ms is too '
+                "short: every keystroke or short pause then sends a WebSocket message and a "
+                "full re-render, which floods the server and causes poor UX with flickering."
             ),
             "solution": (
                 "Apply @debounce(wait=0.5) to the handler: the client collapses "

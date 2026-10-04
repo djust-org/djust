@@ -55,6 +55,19 @@ def _between(text: str, start: str, end: str) -> str:
     return text[i : text.index(end, i + len(start))]
 
 
+def _slice_or_fail(text: str, start: str, end: str, guidance: str) -> str:
+    """`_between`, but a refactor of the client fails with guidance, not a ValueError."""
+    try:
+        return _between(text, start, end)
+    except ValueError:
+        pytest.fail(f"could not find {start!r} ... {end!r} in the client source: {guidance}")
+
+
+def _doc(name: str) -> Path:
+    """`name` under docs/, or the repo root for the few root-level markdown files."""
+    return ROOT / name if name.endswith("PROPOSAL.md") else ROOT / "docs" / name
+
+
 def _has(pattern: str, text: str) -> bool:
     return re.search(pattern, text, re.S) is not None
 
@@ -310,6 +323,9 @@ def test_dj_input_is_documented_as_debounced_and_the_client_debounces() -> None:
             "debounced 300ms by default",
             "range and color are throttled 150ms, number 100ms",
             "checkbox, radio and select send immediately",
+            "any other input type",
+            "date, time, datetime-local, month, week, file, contenteditable, custom elements",
+            "falls back to a 300ms debounce",
             "dj-debounce",
             'dj-debounce="0"',
         ],
@@ -317,7 +333,13 @@ def test_dj_input_is_documented_as_debounced_and_the_client_debounces() -> None:
     assert "on every keystroke" not in _text("dj-input")
 
     parsing = _js("08-event-parsing.js")
-    limits = _between(parsing, "const DEFAULT_RATE_LIMITS = {", "};")
+    limits = _slice_or_fail(
+        parsing,
+        "const DEFAULT_RATE_LIMITS = {",
+        "};",
+        "the client's DEFAULT_RATE_LIMITS table moved or was wrapped (e.g. Object.freeze); "
+        "point this pin at its new shape",
+    )
 
     def rate(kind: str) -> str:
         m = re.search(r"'%s':\s*\{([^}]*)\}" % re.escape(kind), limits)
@@ -333,7 +355,12 @@ def test_dj_input_is_documented_as_debounced_and_the_client_debounces() -> None:
         assert rate(kind) == "type: 'passthrough'", (kind, rate(kind))
 
     binding = _js("09-event-binding.js")
-    handler = _between(binding, "on('input', function(e) {", "on('keydown'")
+    handler = _slice_or_fail(
+        binding,
+        "on('input', function(e) {",
+        "on('keydown'",
+        "the dj-input listener in 09-event-binding.js moved or was reshaped; point this pin at it",
+    )
     # An input type the table does not list is debounced 300 ms too, and the
     # element-level attributes override the default, 0 included.
     assert _has(r"\{\s*type:\s*'debounce',\s*ms:\s*300\s*\}", handler)
@@ -349,6 +376,9 @@ DJ_INPUT_STALE_DOC_SENTENCES = (
     ("website/guides/dj-paste.md", "`dj-input`** fires on every keystroke"),
     ("website/guides/live-input.md", "Per-keystroke. Pair with `debounce=`"),
     ("website/guides/BEST_PRACTICES.md", "Text input (fires on every keystroke)"),
+    ("website/guides/BEST_PRACTICES.md", "Fires on EVERY keystroke"),
+    ("website/guides/BEST_PRACTICES.md", "Database query every keystroke!"),
+    ("NAMING_CONVENTION_PROPOSAL.md", "Input events (every keystroke)"),
     ("llms-full.txt", "Text input (fires on every keystroke)"),
     ("ai/templates.md", "Text input (fires on every keystroke)"),
     ("ai/templates.md", "to handler on each keystroke"),
@@ -366,13 +396,13 @@ DJ_INPUT_DEBOUNCE_DOCS = (
 
 @pytest.mark.parametrize(("name", "stale"), DJ_INPUT_STALE_DOC_SENTENCES)
 def test_docs_do_not_say_dj_input_fires_on_every_keystroke(name: str, stale: str) -> None:
-    text = " ".join((ROOT / "docs" / name).read_text(encoding="utf-8").split())
+    text = " ".join(_doc(name).read_text(encoding="utf-8").split())
     assert stale not in text, f"docs/{name} again says dj-input fires per keystroke: {stale!r}"
 
 
 @pytest.mark.parametrize("name", DJ_INPUT_DEBOUNCE_DOCS)
 def test_docs_state_the_dj_input_debounce(name: str) -> None:
-    text = " ".join((ROOT / "docs" / name).read_text(encoding="utf-8").split())
+    text = " ".join(_doc(name).read_text(encoding="utf-8").split())
     assert re.search(r"dj-input[^\n]{0,200}300 ?ms|300 ?ms[^\n]{0,200}dj-input", text), (
         f"docs/{name} no longer says text fields are debounced 300 ms on dj-input"
     )

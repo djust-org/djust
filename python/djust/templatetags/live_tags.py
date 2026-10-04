@@ -561,7 +561,7 @@ def has_errors(view: Any, field_name: str) -> bool:
 
 
 # Default dj-* event per field type. Callers can override via ``event=``.
-# text-like fields default to per-keystroke dj-input; select/radio/checkbox
+# text-like fields default to dj-input (the client debounces it 300 ms); select/radio/checkbox
 # default to dj-change; hidden has no interactive event.
 _DEFAULT_EVENT_BY_TYPE: Dict[str, Optional[str]] = {
     "text": "dj-input",

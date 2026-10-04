@@ -247,7 +247,9 @@ def _section_directives(framework: dict) -> str:
 
     by_category: dict[str, list[Any]] = {}
     for d in framework.get("directives", []):
-        cat = d.get("category", "other")
+        cat = d.get("category")
+        if not isinstance(cat, str) or not cat:
+            cat = "other"
         by_category.setdefault(cat, []).append(d)
 
     for cat in _category_order(by_category):

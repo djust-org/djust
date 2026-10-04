@@ -115,7 +115,7 @@ class ProjectForm(forms.Form):
 ```
 
 Field validators are regular Django `clean_<field>` methods. **The
-same code runs on per-keystroke validation, on blur, and on full-form
+same code runs on as-you-type validation (debounced per input), on blur, and on full-form
 submit.** Per-field validation runs the field's own checks and its
 `clean_<field>()`; the form-wide `clean()` — the date-range rule —
 runs on submit, because it needs more than one field. That's the
