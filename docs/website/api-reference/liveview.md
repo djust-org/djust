@@ -141,7 +141,7 @@ def disconnected(self):
     Seat.release(self.seat)
 ```
 
-Both take no arguments, are optional, and run on a worker thread, so they can use the ORM like `mount()`. A view that defines neither pays nothing.
+Both take no arguments, are optional, and are regular methods (an `async def` hook fails the mount, or is logged for `disconnected()`). They run on a worker thread, so they can use the ORM like `mount()`. A view that defines neither pays nothing.
 
 ##### Lifecycle contract
 

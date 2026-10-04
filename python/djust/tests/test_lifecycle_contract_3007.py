@@ -183,6 +183,16 @@ class Parent(_Hooked, LiveView):
         return {"view": self}
 
 
+class AsyncConnected(LiveView):
+    """``async def`` hooks are refused: nothing would await the coroutine."""
+
+    exposure_policy = "legacy"
+    template = '<div dj-root dj-view="' + MOD + '.AsyncConnected"><b>x</b></div>'
+
+    async def connected(self):
+        EVENTS.append(("connected", "AsyncConnected"))
+
+
 class Tenanted(_Hooked, LiveView):
     template = '<div dj-root dj-view="' + MOD + '.Tenanted"><b>{{ status }}</b></div>'
 
@@ -402,6 +412,16 @@ async def test_connected_runs_when_the_state_is_restored_and_mount_is_skipped():
         assert _order(tag) == ["handle_params", "connected"]
     finally:
         await _close(second)
+
+
+async def test_an_async_connected_fails_the_mount_instead_of_never_running():
+    communicator = await _ws_connect()
+    try:
+        frame = await _ws_mount(communicator, AsyncConnected)
+        assert frame["type"] == "error", frame
+        assert _calls("connected") == []
+    finally:
+        await _close(communicator)
 
 
 async def test_views_with_state_named_connected_or_disconnected_still_mount_and_close():

@@ -1,5 +1,6 @@
 """Owned-subtree disposal for the gated explicit lifecycle."""
 
+import inspect
 import logging
 from typing import Any
 
@@ -193,6 +194,12 @@ def untrack_view_presence(view: Any) -> None:
         )
 
 
+def _require_sync(hook: Any, name: str) -> None:
+    """Refuse an ``async def`` hook: it would return a coroutine nobody awaits."""
+    if inspect.iscoroutinefunction(hook):
+        raise TypeError(f"{name}() must be a regular method, not async def")
+
+
 def awaiting_disconnected(view: Any) -> bool:
     """Whether ``view`` reached the connected phase and has not run ``disconnected()``."""
     return bool(view is not None and view.__dict__.get(_CONNECTED_FLAG, False))
@@ -214,6 +221,7 @@ def run_view_connected(view: Any) -> None:
     view.__dict__[_CONNECTED_FLAG] = True
     hook = getattr(view, "connected", None)
     if callable(hook):
+        _require_sync(hook, "connected")
         hook()
 
 
@@ -236,6 +244,7 @@ def run_view_disconnected(view: Any) -> None:
     from .runtime import _tenant_context
 
     try:
+        _require_sync(hook, "disconnected")
         with _tenant_context(getattr(view, "_tenant", None)):
             hook()
     except Exception as exc:  # noqa: BLE001 — application hook; teardown must go on
