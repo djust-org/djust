@@ -28,10 +28,17 @@ support matrix, and split:
                  disagreement is visible in the repo rather than discovered in
                  CI. djust must still behave like *one of* them.
 
+A CPython PATCH release can move it too: 3.13.15 and 3.14.7 changed how an
+abruptly closed empty comment (`<!-->`, `<!--->`) is closed (#3300), so six
+values left `stable`. Capture EVERY interpreter the CI matrix runs, at the patch
+release it currently runs -- not one per minor version -- and regenerate when a
+CI interpreter is newer than the newest one in the fixture's `versions`. The
+fixture was last captured on 3.12.9, 3.12.13, 3.13.7, 3.13.15, 3.14.6, 3.14.7.
+
 Usage
 -----
     python scripts/gen-striptags-reference.py \\
-        /path/to/python3.12 /path/to/python3.13 /path/to/python3.14
+        /path/to/python3.12 /path/to/python3.13 /path/to/python3.14 ...
 
 Each interpreter needs only the standard library. The Django half of
 `strip_tags` (the `MAX_STRIP_TAGS_DEPTH` guards and the re-strip loop) is
