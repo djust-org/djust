@@ -352,7 +352,7 @@ def snake_beat(tick: ClockTick):
     """One beat for one room. Runs in a worker thread and never overlaps itself
     for the same key. Returns True to publish a doorbell, a falsy value to stay
     quiet, or Stop(reason) to end the clock."""
-    game = peek_game(tick.key)
+    game = peek_game(tick.scope)     # state is looked up by the tenant-scoped key
     if game is None:
         return Stop("room reaped")
     before = game.version
@@ -364,7 +364,8 @@ snake_clock = RoomClock(
     interval=0.1,                    # seconds
     step=snake_beat,                 # sync (worker pool) or async def (on the loop)
     on_overrun="skip",               # "skip" | "catch_up" (bounded by max_catch_up)
-    alive=lambda key: bool(roster(key)),   # polled about once a second, not per beat
+    alive=lambda scope: bool(roster(scope)),  # gets the scope; polled about once a second,
+                                              # in the worker pool, not per beat
     idle_stop=5.0,                   # seconds not alive, and not ensured, before stopping
     trailing=1.0,                    # one more doorbell this long after the last change
     publish=Publish("snake_arena.views.SnakeGameView", handler="handle_refresh_room"),
@@ -373,13 +374,16 @@ snake_clock = RoomClock(
 )
 
 # SnakeGameView.mount, WebSocket branch only, after the seat is authorised.
-# The scope is the tenant-scoped key; the view and the clock must use the same one.
-self.push_scope = snake_clock.scope(self, room)
+# The scope is the tenant-scoped key; the view, the app's room registry and the
+# clock must all use the same one.
+scope = snake_clock.scope(self, room)
+self.push_scope = scope
+game = get_game(scope)
 snake_clock.ensure(self, room)       # idempotent; starts the clock if needed
 
 # Async code uses `await snake_clock.aensure(self, room)`.
 # ClockTick: key, scope, seq, run_id, dt, skipped, fence, scheduled_at, started_at.
-# snake_clock.running(room), snake_clock.stop(room), snake_clock.stats()
+# snake_clock.running(scope), snake_clock.stop(scope), snake_clock.stats()
 ```
 
 Contract of the engine:
@@ -397,18 +401,50 @@ Contract of the engine:
   `aensure`. From a plain thread (a Celery task, a management command, a test)
   `async_to_sync` would run a temporary loop and a task created there dies when
   it closes, so the engine **refuses** (raises) when it is not on a serving loop.
+  **A serving loop is one the engine can recognise**: inside `async_to_sync` from
+  a plain thread, `get_running_loop()` returns the temporary loop, so it cannot
+  tell. Phase 1 therefore adds a small registry of serving loops (each consumer
+  registers the loop it runs on at connect, held weakly; an entry counts only
+  while its loop is running and not closed). The alternative, asgiref's private
+  thread-local for the main loop, is rejected as private API (open question 17).
   Other loops and threads see the running task in the registry and do nothing.
   `stop` from another thread or loop goes to the owner with
-  `call_soon_threadsafe` (rule 3). If the owning loop is gone, `task.done()` is
-  seen at the next `ensure` and the clock restarts on the caller's loop.
+  `call_soon_threadsafe` (rule 3). A registered task whose owner loop is stopped
+  or closed is **not** `done()`, so the registry treats a task as dead when
+  `task.done()` **or** `task.get_loop().is_closed()` (or the loop is no longer
+  running), and the next `ensure` restarts the clock on the caller's loop. That
+  also keeps per-test loops from leaving stale entries behind.
   Jitter is the owning loop's lag, which is the loop that serves sessions; see
   the dedicated-loop alternative below.
-- **Clean context.** The task is created with a fresh `contextvars.Context()`
-  (`create_task(..., context=...)`, available since Python 3.11, the project's
-  floor). Without it, a clock started from an event handler inherits
-  `push.origin_channel` and every doorbell is dropped as that session's own
-  self-broadcast (`websocket.py:5534`). It also inherits no request, user or
-  tenant context; the step looks state up by `tick.scope`.
+- **Clean context, created in a way no task factory can undo.** The task is
+  created with `contextvars.Context().run(loop.create_task, coro)`. The
+  `create_task(..., context=)` keyword (Python 3.11, the project's floor) is not
+  enough: it depends on the loop's task factory honouring it, and a factory that
+  ignores the keyword silently gives the task the caller's context while one that
+  does not accept it raises `TypeError`; djust already knows custom factories
+  exist (`runtime.py`, the `_djust_tick_view` comment in `maybe_start_tick_task`).
+  Running `create_task` inside a fresh context works on every version and
+  factory. Without a clean context, a clock started from an event handler
+  inherits `push.origin_channel` and every doorbell is dropped as that session's
+  own self-broadcast (`websocket.py:5534`).
+- **What the fresh context drops, and what the engine puts back.** It carries no
+  request, user, tenant or diagnostics state, so:
+  - **Tenant.** `ensure(view, key)` captures the view's resolved tenant and the
+    engine sets it as the current tenant (`get_current_tenant()`,
+    `tenants/middleware.py:28`) inside the fresh context, for the step and for
+    `alive`. A clock is one tenant for its whole life, because the tenant is part
+    of the scope. A view with no tenant sets nothing. Without this, tenant-aware
+    ORM code in a step sees no tenant. Whether the engine sets it, or steps must
+    filter by `tick.scope` explicitly, is open question 15.
+  - **Failure logging.** The diagnostics gate defaults to "details allowed" in a
+    fresh context (`_exposure_diagnostics.py:20`), and a function-of-key step has
+    no owning view to restrict it. The engine does not rely on the default:
+    **step and `alive` failures are logged value-free**, with the exception type
+    and the clock's own message only, no exception text and no traceback, inside
+    a diagnostics scope the engine opens and restricts itself. A clock built with
+    `log_details=True` opts in to the full exception for apps that want it
+    (open question 16).
+  - The step looks state up by `tick.scope`, not by anything ambient.
 - **Server-only start, from any lifecycle point.** `ensure` is a server-side
   call. No event parameter, decorator or client field starts a clock. Calling it
   from an event handler is allowed, because the context is clean and the
@@ -454,7 +490,12 @@ Contract of the engine:
 - **Sync steps run in a shared worker pool**, one pool per process (not per
   loop), so a slow step cannot block the loop and thread count does not multiply
   with `--loops N`. **Async steps** (`async def`) run on the owning loop, for the
-  async ORM and async clients, and can be cancelled on timeout.
+  async ORM and async clients, and can be cancelled on timeout. `alive` is a sync
+  callable that reads presence or a database, so it **also runs in the pool**,
+  never on the loop (an `async def alive` runs on the loop). Pool calls are
+  wrapped in `close_old_connections()` before and after, as djust's own worker
+  path does (`websocket.py:5729-5731`), so a long-lived pool thread does not hold
+  a stale database connection.
 - **One step at a time per key.** A step that outlives its interval is not
   overlapped; the next beat follows the late-beat policy. A sync step in a thread
   **cannot be cancelled**, so `step_timeout` for a sync step means only "report
@@ -483,7 +524,10 @@ Contract of the engine:
   snapshot read takes: Snake's `_load` reads under `game.lock`).
 - **A trailing doorbell** (`trailing`, proposed 1 s) is sent once, that long
   after the last beat that published, so a doorbell lost at the end of activity
-  heals without periodic noise. It generalises Snake's final-frame resend.
+  heals without periodic noise. It generalises Snake's final-frame resend. On
+  `Stop(reason)` and on an idle stop it is **flushed at once**, if any beat
+  published since the last doorbell, so members re-read the final state without
+  waiting; a cancellation (shutdown) does not flush (open question 6).
 - The publish scope is `clock.scope(view, key)`, the same string the view sets
   as its `push_scope`.
 
@@ -492,8 +536,8 @@ tenant-scoped through the same helpers as presence keys (#2973, #3324). The exac
 wiring is in the sketch: `clock.scope(view, key)` applies the tenant helper to
 the key, `ensure(view, key)` uses the scope as the registry key, and the view
 assigns the same string to `push_scope`. The per-tenant sub-cap and the isolation
-tests below follow from this. Tenant scoping of push groups for clocks must be
-specified and tested before Phase 1 is accepted.
+tests below follow from this. Tenant scoping of clock keys and publish scopes
+must be specified and tested before Phase 1 is accepted.
 
 **Alternative loop ownership: a dedicated clock thread and loop.** The engine
 owns one thread running its own loop, and every clock runs there. Valid from any
@@ -635,21 +679,23 @@ Not recommended for the first release. Sketch of what it would need:
   queue) at the limit: `max_clocks` per process for a clock, and
   `max_clocks_per_tenant` per tenant scope prefix, so one tenant cannot exhaust
   the process cap for the others. The pool is fair by construction: at most one
-  in-flight step per key, due keys are dispatched in due-time order, and one clock
-  may hold at most half of the pool at once, so one slow room occupies one thread
-  and cannot starve the rest. The interval has a floor. Proposed defaults:
-  `max_clocks` 256, `max_clocks_per_tenant` 64, interval floor 0.02 s, pool 8
-  threads. A step that never returns holds its thread until it does; the
+  in-flight step per key, so one slow room occupies one thread; due keys are
+  dispatched in due-time order; and one clock may hold at most three quarters of
+  the pool, so another clock's steps still find a thread. The interval has a
+  floor. Proposed defaults: `max_clocks` 256, `max_clocks_per_tenant` 64,
+  interval floor 0.02 s, pool 10 threads (Snake's measured pool, which reached
+  its cap at 384 clients without a demonstrated problem, `docs/deploy-k8s.md`;
+  the size is a setting). A step that never returns holds its thread until it does; the
   per-clock cap and the stuck report bound the damage but cannot free it. Open
   question 8 asks the owner to approve these.
 - **Tenant isolation.** See "Tenant scoping (requirement)" above: scoped keys,
   scoped publish, a per-tenant cap, and a test with two tenants sharing a room
   name.
-- **Who may receive.** Joining a scope is the session assigning
-  `self.push_scope`; nothing checks that the session may be in that room. A
-  clock does not change that, and its doorbell carries no room state, so the
-  worst a wrong member sees is a wake-up. The state a wrong member could read is
-  whatever the app's `mount` shows, as today.
+- **Who may receive.** A clock does not authorise membership: the app authorises
+  a session for a room before its view assigns `push_scope`. The doorbell carries
+  no room state, so a member learns only that something changed; the state it
+  then reads is whatever the app's snapshot returns for that member. Tenant
+  scoping of clock keys and publish scopes must be specified and tested.
 - **Rate.** A clock is server-driven and bypasses the per-connection event rate
   limit by design. Because the doorbell is beat-invariant, a fast clock cannot
   grow a slow session's queue beyond one entry per key.
@@ -829,6 +875,22 @@ repo. No presence binding, no view attribute, no `SharedPoll`, no Redis.
 9. **Snake Arena.** With the engine in place, `clock.py` contains no lock, task
    registry, executor or schedule arithmetic, and the behaviours in the migration
    table above pass against the engine. This does not depend on `SharedPoll`.
+10. **Context and tenant.** With a task factory that ignores `context=` and one
+    that rejects it, a clock started from inside an event handler still has a
+    clean context (no `origin_channel`, so its doorbells reach the starter); a
+    step and an `alive` call see the tenant that `ensure` captured and no other;
+    two tenants with the same room name never see each other's state through
+    `tick.scope`.
+11. **Logging.** A step that raises with room state in its message leaves only the
+    exception type and the clock's message in the log records (no message text,
+    no traceback) by default, and the full exception with `log_details=True`.
+12. **Serving loop and tests.** `ensure` from a plain thread raises; a registry
+    entry whose loop was closed is treated as dead and the next `ensure` restarts
+    the clock; with the testing no-op helper active, `ensure` does nothing and a
+    `LiveViewTestClient` mount works.
+13. **Pool calls.** Steps and `alive` run with `close_old_connections()` around
+    them; `alive` never runs on the loop; `Stop` and an idle stop flush the
+    trailing doorbell once, and a cancellation does not.
 
 **B. Benchmarks (reported, non-gating)**
 
@@ -903,7 +965,12 @@ release, token monotonicity) against a real Redis when one is available.
   handler.
 - **Gate-off.** Each criterion's test is run once with its fix removed
   (per-session ticking, sleep-after-work, no lock, varying payload, inherited
-  context, unscoped push) and must fail.
+  context, `create_task(context=)` instead of `Context().run`, ambient tenant,
+  details-allowed logging, unscoped push) and must fail.
+- **Testing helpers.** `djust.testing` provides the manual clock, the
+  deterministic executor, and a no-op switch for `ensure` (the generalisation of
+  Snake's `AUTOSTART`), so `LiveViewTestClient` mounts, which run outside a
+  serving loop, do not start clocks or raise.
 - **Phase 4.** Lease scripts against a real Redis (skipped when absent), a
   simulated pause by withholding renewals, and the lab timings (not in CI).
 - **Pins, not promises.** Source-text pins for the one-task-per-key rule and the
@@ -935,12 +1002,13 @@ Each is for the maintainer. None is decided here.
    should it offer a per-run seed so replays and tests are reproducible?
 6. **Liveness defaults.** The `alive` cadence (proposed 1 s), the default
    `idle_stop`, and whether an unreadable `alive` stops the clock (proposed, as
-   Snake does).
+   Snake does), and whether `Stop` and an idle stop flush the trailing doorbell
+   at once (proposed) or wait out its delay.
 7. **Async steps and the pool.** Whether `async def` steps are in Phase 1, and
    the pool's relationship to `LIVEVIEW_CONFIG["worker_threads"]` (a separate
    framework pool is proposed) and to free-threaded and GIL builds.
 8. **Limits and breaker policy.** Approval of the proposed defaults (256 clocks,
-   64 per tenant, 0.02 s floor, 8 pool threads, 10 errors then backoff to 30 s),
+   64 per tenant, 0.02 s floor, 10 pool threads, 10 errors then backoff to 30 s),
    whether a clock that fails forever ever stops (after how long), and whether a
    stuck sync step should stop the clock.
 9. **Multi-process scope.** Is Phase 4 in scope at all? If yes, which ownership
@@ -954,10 +1022,10 @@ Each is for the maintainer. None is decided here.
     (fail stopped, proposed) or continue on the last owner? Which lease source
     (Redis, Postgres advisory lock, Kubernetes Lease) and which TTL, given the
     trade between takeover time and flapping.
-11. **Tenant scoping of push groups for clocks** must be specified and tested
-    (requirement above). Open: the exact helper wiring in the API, and whether the
-    same scoping applies to every tenant view's `push_scope` or only to scopes a
-    clock publishes to.
+11. **Tenant scoping of clock keys and publish scopes** must be specified and
+    tested (requirement above). Open: the exact helper wiring in the API (sketched
+    with `clock.scope(view, key)`), and whether `clock.scope` is the only way to
+    name a scope that a clock publishes to.
 12. **Pause.** Does pausing live in the framework clock (membership and liveness
     continue, no step) or stay in app state (Snake's flag, with the clock still
     ticking to reap rooms)?
@@ -967,3 +1035,12 @@ Each is for the maintainer. None is decided here.
     `tick_interval`.
 14. **Release train.** Land Phases 1 and 2 in 1.3.x (opt-in, additive) or wait
     for the next minor.
+15. **Tenant context for steps.** The engine sets the captured tenant as the
+    current tenant inside the clock's context (proposed), or steps must filter by
+    `tick.scope` explicitly and see no ambient tenant.
+16. **Logging for ownerless steps.** Value-free by default, with a
+    `log_details=True` opt-in per clock (proposed); whether the opt-in should
+    exist at all.
+17. **Serving-loop detection.** A djust registry of loops that consumers register
+    (proposed), asgiref's private main-loop state, or accepting any running loop
+    and documenting the risk.
