@@ -863,6 +863,19 @@ DECORATORS: List[Dict[str, Any]] = [
         ],
     },
     {
+        "name": "@push_handler",
+        "import": "from djust.decorators import push_handler",
+        "description": "Mark a method that ONLY server push may call "
+        "(push_to_view(..., handler='name'), server_push). A browser event "
+        "naming it is refused in every event_security mode, as if the method "
+        "did not exist. Not an event handler: do not combine with @event_handler "
+        "or @server_function (TypeError). Put it outermost.",
+        "params": {},
+        "usage": [
+            "@push_handler\ndef refresh_room(self, room: str = '', **kwargs):",
+        ],
+    },
+    {
         "name": "@debounce",
         "import": "from djust.decorators import debounce",
         "description": (
@@ -1110,7 +1123,9 @@ CONVENTIONS = {
         "Use @event_handler decorator for validation and metadata. Methods named "
         "on_*, toggle_*, update_*, etc. without @event_handler trigger "
         "a system check warning (djust.V004). Undecorated handle_* methods are "
-        "not flagged: server push may call them, browsers cannot.",
+        "not flagged: server push may call them, and under the default strict "
+        "event_security browsers cannot. For a handler only server push may call, "
+        "in every event_security mode, use @push_handler.",
     },
 }
 

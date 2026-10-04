@@ -5892,18 +5892,24 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             for key, value in state.items():
                 safe_setattr(view, key, value, allow_private=False)
 
-        # Call handler if specified — restricted to handle_* prefixed or
-        # @event_handler-decorated methods to prevent arbitrary method calls
-        # if an attacker gains access to the channel layer backend.
+        # Call handler if specified — restricted to handle_* prefixed,
+        # @event_handler-decorated or @push_handler-marked methods to prevent
+        # arbitrary method calls if an attacker gains access to the channel
+        # layer backend.
         handler_name = event.get("handler")
         if handler_name:
             handler_fn = getattr(view, handler_name, None)
             if handler_fn and callable(handler_fn):
-                from .decorators import is_event_handler
+                from .decorators import is_event_handler, is_push_handler
 
-                if not (handler_name.startswith("handle_") or is_event_handler(handler_fn)):
+                if not (
+                    handler_name.startswith("handle_")
+                    or is_event_handler(handler_fn)
+                    or is_push_handler(handler_fn)
+                ):
                     logger.warning(
-                        "server_push: blocked handler %r — must be handle_* or @event_handler",
+                        "server_push: blocked handler %r — must be handle_*, "
+                        "@event_handler or @push_handler",
                         handler_name,
                     )
                 else:

@@ -279,7 +279,7 @@ WARNINGS:
 
 INFOS:
 ?: (djust.V004) shop.views.ShopView.toggle_cart() looks like an event handler but is missing @event_handler.
-	HINT: Add @event_handler decorator or prefix with _ if it is private.
+	HINT: Add @event_handler decorator, mark it @push_handler if only server push calls it, or prefix with _ if it is private.
 
 System check identified 6 issues (0 silenced).
 ```

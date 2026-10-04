@@ -300,7 +300,7 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
   - `abstract = True` class attribute on an abstract base
   - `DJUST_CONFIG = {"suppress_checks": ["V004"]}` — global (fixed in #1607)
   - `SILENCED_SYSTEM_CHECKS = ["djust.V004"]`
-- **Not flagged**: `handle_*` methods. `server_push` may call an undecorated `handle_*` method, and leaving it undecorated is how a handler is made callable by server push but not by browsers — adding `@event_handler` or a `_` prefix would break it (#3002). The framework's own lifecycle names (`mount`, `handle_params`, `handle_info`, `handle_tick`, …) were already exempt.
+- **Not flagged**: methods marked `@push_handler` (any name): the marker means only server push calls the method, and V004's fix would make it a browser event target. `handle_*` methods. `server_push` may call an undecorated `handle_*` method, and leaving it undecorated is how a handler is made callable by server push but not by browsers — adding `@event_handler` or a `_` prefix would break it (#3002). The framework's own lifecycle names (`mount`, `handle_params`, `handle_info`, `handle_tick`, …) were already exempt.
 
 ### V005 — Module not in LIVEVIEW_ALLOWED_MODULES
 - **Severity**: Warning
@@ -813,7 +813,7 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **What each detects**:
   - `T019`: the name resolves to no browser-callable handler on the owner. This
     covers a missing method, one without `@event_handler` (under the default
-    strict `event_security`), and an output-subscription callback. It also
+    strict `event_security`), an output-subscription callback, and a `@push_handler` method (in every `event_security` mode). It also
     covers an action or output of a declared interactive component, which a
     view-owned binding never reaches. The last cases are an invalid event name,
     and arguments on a directive that sends its value verbatim (`dj-submit`,

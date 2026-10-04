@@ -183,7 +183,7 @@ def check_liveviews(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
     from django.conf import settings
     from djust._component_subscriptions import is_component_subscription
-    from djust.decorators import is_event_handler
+    from djust.decorators import is_event_handler, is_push_handler
 
     # Discover LiveViews from BOTH __subclasses__() (imported classes) AND the
     # root URLconf (URL-routed views, whose module may not be imported anywhere
@@ -368,6 +368,11 @@ def check_liveviews(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
             # ``@event_handler`` V004 would suggest (ADR-034; #3134).
             if is_component_subscription(method):
                 continue
+            # ``@push_handler`` marks a method only server push may call; V004's
+            # fix (``@event_handler``) would make it a browser event target
+            # (#3002). Any name, not just ``handle_*``.
+            if is_push_handler(method):
+                continue
             # ``handle_*`` is also the server-push namespace: ``server_push``
             # calls an undecorated ``handle_*`` method by design, and leaving it
             # undecorated is the only way to make a handler push can call but a
@@ -388,7 +393,10 @@ def check_liveviews(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                     DjustInfo(
                         "%s.%s() looks like an event handler but is missing @event_handler."
                         % (cls_label, name),
-                        hint="Add @event_handler decorator or prefix with _ if it is private.",
+                        hint=(
+                            "Add @event_handler decorator, mark it @push_handler if only "
+                            "server push calls it, or prefix with _ if it is private."
+                        ),
                         id="djust.V004",
                         fix_hint=(
                             "Add `@event_handler()` decorator above the method `%s` in `%s`."

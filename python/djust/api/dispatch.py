@@ -37,6 +37,7 @@ from djust.api.auth import resolve_auth_classes
 from djust.api.errors import api_error
 from djust.api.registry import resolve_api_view
 from djust.auth.core import check_handler_permission, check_view_auth
+from djust.decorators import is_push_handler
 from djust.rate_limit import (
     caller_key,
     get_rate_limit_settings,
@@ -358,7 +359,9 @@ def dispatch_api(request: HttpRequest, view_slug: str, handler_name: str) -> Htt
 
     # 7. Look up handler + verify opt-in.
     handler = getattr(view, handler_name, None)
-    if handler is None or not callable(handler):
+    # A @push_handler method is server-push only (#3002): it must not answer
+    # differently from a method that does not exist.
+    if handler is None or not callable(handler) or is_push_handler(handler):
         return api_error(404, "unknown_handler", f"No handler named {handler_name!r}")
     if not _is_exposed(handler):
         return api_error(

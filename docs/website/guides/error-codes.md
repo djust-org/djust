@@ -492,7 +492,7 @@ def mount(self, request, **kwargs):
 
 **Severity**: Info
 
-**What causes it**: A public method name matches event handler naming patterns (e.g., `on_*`, `toggle_*`, `select_*`, `update_*`, `delete_*`, `create_*`, `add_*`, `remove_*`, `save_*`, `cancel_*`, `submit_*`, `close_*`, `open_*`) but is not decorated with `@event_handler`. `handle_*` methods are not flagged: an undecorated `handle_*` method is the way to write a handler that server push can call and browsers cannot.
+**What causes it**: A public method name matches event handler naming patterns (e.g., `on_*`, `toggle_*`, `select_*`, `update_*`, `delete_*`, `create_*`, `add_*`, `remove_*`, `save_*`, `cancel_*`, `submit_*`, `close_*`, `open_*`) but is not decorated with `@event_handler`. `handle_*` methods and methods marked `@push_handler` are not flagged: an undecorated `handle_*` method is a push target that browsers cannot call under the default `strict` mode, and `@push_handler` marks a method that only server push may call in every `event_security` mode.
 
 Without the decorator, the method cannot be called from templates via `dj-click` or other directives.
 
@@ -1185,7 +1185,7 @@ The directives covered are every server-event directive the client binds (`dj-cl
 
 **What causes it**: A `dj-*` event binding names something its owner cannot
 receive from the browser. That might be a missing method, a method without
-`@event_handler`, or an output callback. It might be an action or output of an
+`@event_handler`, an output callback, or a `@push_handler` method that only server push may call. It might be an action or output of an
 interactive component the view declares, which a view-owned binding never
 reaches. It might also be an invalid event name, or arguments on `dj-submit` /
 `dj-keydown` / `dj-keyup` / `dj-click-away`, which send their value verbatim.

@@ -241,6 +241,17 @@ class _OwnerContext:
                 "The component calls it when it emits the output. Bind the browser "
                 "control to the component's own action instead.",
             )
+        from djust.decorators import is_push_handler
+
+        if callable(function) and is_push_handler(function):
+            # Refused in every event_security mode, so unlike the undecorated
+            # case below this is reported under "warn" and "open" too (#3002).
+            return Finding(
+                "T019",
+                "%r on %s is a server push handler, which the browser cannot call." % (name, where),
+                "Only server push (push_to_view) reaches it. Bind the browser control "
+                "to an @event_handler method instead.",
+            )
         if callable(function):
             from djust.config import config as djust_config
 

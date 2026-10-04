@@ -23,6 +23,7 @@ from djust.decorators import (
     rate_limit,
     background,
     server_function,
+    push_handler,
 )
 ```
 
@@ -430,6 +431,20 @@ Mark a method as a same-origin browser RPC target. The client calls it with `awa
 def search(self, q: str = "", **kwargs) -> list[dict]:
     return [{"id": p.id, "name": p.name} for p in Product.objects.filter(name__icontains=q)[:10]]
 ```
+
+---
+
+## `@push_handler`
+
+Mark a method that only server push may call. `push_to_view(..., handler="name")` reaches it under any name, and a browser event naming it is refused in every `event_security` mode (`strict`, `warn` and `open`) on every transport, with the same response as a method that does not exist.
+
+```python
+@push_handler
+def refresh_room(self, room: str = "", **kwargs):
+    self.rooms = load_rooms(room)
+```
+
+It is not an event handler, and it cannot be combined with `@event_handler` or `@server_function` (`TypeError` at decoration time). Put it outermost. See [Server Push](../advanced/server-push.md#handlers-only-the-server-may-call-push_handler).
 
 ---
 

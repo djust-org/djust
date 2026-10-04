@@ -41,7 +41,7 @@ from ..validation import (
 )
 from ..security import safe_setattr, sanitize_for_log
 from ..security.event_guard import is_safe_event_name
-from ..decorators import is_event_handler
+from ..decorators import is_event_handler, is_push_handler
 from ..hooks import run_on_mount_hooks
 from .._exposure import uses_legacy_exposure
 
@@ -1098,6 +1098,10 @@ class RequestMixin:
                     return JsonResponse({"error": "Component not found"}, status=400)
                 params = {k: v for k, v in params.items() if k != "component_id"}
             handler = getattr(owner, event_name, None)
+            if handler is not None and is_push_handler(handler):
+                # Server-push only (#3002): to a browser it is a method that
+                # does not exist, as on the WebSocket and SSE paths.
+                handler = None
             if handler is None and owner is not self:
                 logger.warning(
                     "HTTP POST handler '%s' not found on component %s",
