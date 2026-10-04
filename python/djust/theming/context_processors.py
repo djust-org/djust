@@ -208,7 +208,7 @@ def theme_context(request: HttpRequest) -> dict:
 
         # The head was always marked safe; the other tag bodies were passed
         # through as returned, so a plain str from one is still escaped.
-        return LazyThemeHTML(_render, trust_plain_str=tag_name == "theme_head")
+        return LazyThemeHTML(_render, name=tag_name, trust_plain_str=tag_name == "theme_head")
 
     # Request-scoped memoization of the chunks (#1727).
     #
@@ -249,7 +249,7 @@ def theme_context(request: HttpRequest) -> dict:
             _tag_chunk("theme_panel"),
             _tag_chunk("theme_mode_toggle"),
             _tag_chunk("theme_preset_selector"),
-            LazyThemeHTML(_render_switcher),
+            LazyThemeHTML(_render_switcher, name="theme_switcher"),
         )
         # Store on the request. Some request objects can't hold arbitrary
         # attributes (e.g. a `__slots__` object in tests / exotic callers); in

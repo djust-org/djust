@@ -14,6 +14,8 @@ import copy
 import json
 import os
 import tempfile
+import threading
+import uuid
 from contextlib import ExitStack
 from unittest.mock import patch
 
@@ -50,7 +52,12 @@ ALL_THEME_VARS = (
 
 
 class _Session(dict):
-    session_key = "lazy-3028"
+    """A session with its own key: LiveView state is kept per session key, so a
+    shared key would hand one test the Rust state another test left behind."""
+
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.session_key = f"lazy-3028-{uuid.uuid4().hex}"
 
 
 def _request(preset=None, mode="light", nonce=None):
@@ -158,6 +165,53 @@ class TestLazyHTMLObject:
         assert str(chunk) == "" and not chunk and str(chunk) == ""
         assert calls == [1]
 
+    def test_a_slow_first_render_cannot_replace_a_value_a_second_reader_stored(self):
+        """Reader A stalls inside the factory; reader B renders and stores; A
+        finishes last. Both must return B's value (first stored result wins),
+        and neither may be left with an empty one."""
+        a_inside = threading.Event()
+        release_a = threading.Event()
+        calls = []
+
+        def factory():
+            calls.append(1)
+            if len(calls) == 1:
+                a_inside.set()
+                assert release_a.wait(10)
+                return "<i>slow</i>"
+            return "<i>fast</i>"
+
+        chunk = LazyThemeHTML(factory)
+        results = {}
+        reader_a = threading.Thread(target=lambda: results.setdefault("a", str(chunk)))
+        reader_a.start()
+        assert a_inside.wait(10)
+        results["b"] = str(chunk)
+        release_a.set()
+        reader_a.join(10)
+        assert results == {"a": "<i>fast</i>", "b": "<i>fast</i>"}
+        assert str(chunk) == "<i>fast</i>"
+
+    def test_a_reader_never_finds_neither_value_nor_factory(self):
+        """The old check-then-clear order: B read ``_value`` (empty), A stored
+        and dropped the factory, B then found no factory and stored ``""``."""
+        chunk = LazyThemeHTML(lambda: "<i>x</i>")
+        assert str(chunk) == "<i>x</i>"
+        # A second reader after the first finished still gets the text.
+        assert chunk._factory is not None
+        assert str(chunk) == "<i>x</i>"
+        assert chunk.__djust_serialize__() == "<i>x</i>"
+
+    def test_a_failing_chunk_is_logged_under_its_name(self, caplog):
+        def boom():
+            raise RuntimeError("manifest")
+
+        with caplog.at_level("WARNING", logger="djust.theming._lazy_html"):
+            assert str(LazyThemeHTML(boom, name="theme_switcher")) == ""
+        records = [r for r in caplog.records if r.name == "djust.theming._lazy_html"]
+        assert len(records) == 1 and records[0].levelname == "WARNING"
+        assert "theme_switcher" in records[0].getMessage()
+
     def test_private_names_never_render_it(self):
         chunk = LazyThemeHTML(lambda: pytest.fail("rendered by a private-name probe"))
         with pytest.raises(AttributeError):
@@ -243,6 +297,17 @@ class TestRendersTheSameText:
         with patch.object(theme_tags, "theme_panel", return_value="<script>x</script>"):
             html = _template("{{ theme_panel }}").render({}, _request())
         assert html == "&lt;script&gt;x&lt;/script&gt;"
+
+    def test_a_failing_switcher_renders_empty_and_is_logged(self, caplog):
+        request = _request()
+        with (
+            patch.object(cp, "_render_theme_outputs", side_effect=RuntimeError("boom")),
+            caplog.at_level("WARNING", logger="djust.theming._lazy_html"),
+        ):
+            ctx = cp.theme_context(request)
+            assert str(ctx["theme_switcher"]) == ""
+            assert "<style" in str(ctx["theme_head"])
+        assert any("theme_switcher" in r.getMessage() for r in caplog.records)
 
     def test_one_broken_tag_blanks_only_itself(self):
         from djust.theming.templatetags import theme_tags
@@ -542,6 +607,23 @@ class TestRustPath:
         assert "eq-nonce" in lazy_html
 
 
+RUST_CONSTRUCTS = {
+    "plain": "{{ theme_mode_toggle }}",
+    "in": "{% if 'button' in theme_mode_toggle %}Y{% else %}N{% endif %}",
+    "not_in": "{% if 'zzzz-absent' not in theme_mode_toggle %}Y{% else %}N{% endif %}",
+    "eq_self": "{% if theme_mode_toggle == theme_mode_toggle %}Y{% else %}N{% endif %}",
+    "eq_literal": "{% if theme_mode_toggle == 'x' %}Y{% else %}N{% endif %}",
+    "slice": "{{ theme_mode_toggle|slice:':12' }}",
+    "default_slice": "{{ theme_mode_toggle|default:'d'|slice:':12' }}",
+    "add_length": "{{ theme_mode_toggle|add:'x'|length }}",
+    "length": "{{ theme_mode_toggle|length }}",
+    "truthy": "{% if theme_mode_toggle %}Y{% else %}N{% endif %}",
+    "truncate": "{{ theme_mode_toggle|truncatechars:20 }}",
+    "safe_slice": "{{ theme_mode_toggle|safe|slice:':12' }}",
+    "head_length": "{{ theme_head|length }}",
+}
+
+
 def _eager_processor(request):
     """``theme_context`` as it behaved before #3028: every chunk rendered now."""
     from django.utils.safestring import mark_safe
@@ -550,6 +632,96 @@ def _eager_processor(request):
     for key in CHUNK_KEYS:
         ctx[key] = mark_safe(str(ctx[key]))
     return ctx
+
+
+@needs_rust
+class TestRustPathMatchesTheEagerProcessor:
+    """What a template can DO with a chunk on the Rust renderer is what it could
+    do with the rendered string the processor used to hand over (#3028 review)."""
+
+    @staticmethod
+    def _render(tmp, processor, name, session=None):
+        templates = _rust_templates(tmp)
+        processors = templates[0]["OPTIONS"]["context_processors"]
+        processors[processors.index(PROCESSOR)] = processor
+        _clear_template_caches()
+        with override_settings(TEMPLATES=templates):
+            request = _request()
+            if session is not None:
+                request.session = session
+            view = _mounted(_view_class(name), request)
+            return view.render(request=request)
+
+    @pytest.mark.parametrize("construct", sorted(RUST_CONSTRUCTS))
+    def test_the_construct_renders_the_same_text(self, construct):
+        with tempfile.TemporaryDirectory() as tmp:
+            name = f"_3028_{construct}.html"
+            with open(os.path.join(tmp, name), "w") as handle:
+                handle.write("<div dj-root>[" + RUST_CONSTRUCTS[construct] + "]</div>")
+            lazy = self._render(tmp, PROCESSOR, name)
+            eager = self._render(tmp, f"{__name__}._eager_processor", name)
+        assert lazy == eager, (construct, lazy[:160], eager[:160])
+        # A real value reached the template, not an empty render of both.
+        assert construct in ("eq_literal", "not_in") or "[]" not in lazy.split("</div>")[0]
+
+
+@needs_rust
+class TestRollingDeployState:
+    """State persisted by a build whose processor stored the RENDERED string
+    must not outlive the upgrade: the Rust state entry used to win over the
+    sidecar and was never re-marked safe, so the head rendered escaped."""
+
+    def _pages(self, tmp):
+        with open(os.path.join(tmp, "_3028_roll.html"), "w") as handle:
+            handle.write("<div dj-root>[{{ theme_head }}]|[{{ theme_switcher }}]|{{ count }}</div>")
+        return "_3028_roll.html"
+
+    def _with_processor(self, tmp, processor):
+        templates = _rust_templates(tmp)
+        lst = templates[0]["OPTIONS"]["context_processors"]
+        lst[lst.index(PROCESSOR)] = processor
+        _clear_template_caches()
+        return override_settings(TEMPLATES=templates)
+
+    def test_a_view_restored_from_old_state_renders_the_head_unescaped(self):
+        first_preset, last_preset = _two_presets()
+        session = _request().session
+        with tempfile.TemporaryDirectory() as tmp:
+            page = self._pages(tmp)
+            # The old build renders and persists its state under this session.
+            with self._with_processor(tmp, f"{__name__}._eager_processor"):
+                request = _request(preset=first_preset)
+                request.session = session
+                old = _mounted(_view_class(page), request)
+                old_html = old.render(request=request)
+            assert "<style" in old_html
+            # The new build serves the same session (restored Rust state).
+            with self._with_processor(tmp, PROCESSOR):
+                request = _request(preset=last_preset)
+                request.session = session
+                new = _mounted(_view_class(page), request)
+                new_html = new.render(request=request)
+            # And a pristine lazy render of the same page for comparison.
+            with self._with_processor(tmp, PROCESSOR):
+                request = _request(preset=last_preset)
+                request.session = _request().session
+                pristine = _mounted(_view_class(page), request).render(request=request)
+        assert "&lt;style" not in new_html
+        assert f'value="{last_preset}" selected' in new_html
+        assert f'value="{first_preset}" selected' not in new_html
+        assert new_html == pristine
+
+    def test_the_same_view_object_picks_up_the_new_processor_too(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            page = self._pages(tmp)
+            request = _request()
+            with self._with_processor(tmp, f"{__name__}._eager_processor"):
+                view = _mounted(_view_class(page), request)
+                view.render(request=request)
+            with self._with_processor(tmp, PROCESSOR):
+                view._sync_state_to_rust()
+                html = view.render(request=request)
+        assert "<style" in html and "&lt;style" not in html
 
 
 # --- the checks -------------------------------------------------------------

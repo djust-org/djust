@@ -25,11 +25,16 @@ that merely carries the object does.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Callable, Iterator, cast
 
 from django.utils.functional import Promise
 from django.utils.html import conditional_escape
 from django.utils.safestring import SafeData, mark_safe
+
+from .._exposure_diagnostics import log_failure
+
+logger = logging.getLogger(__name__)
 
 
 class LazyThemeHTML(Promise, SafeData):
@@ -37,9 +42,9 @@ class LazyThemeHTML(Promise, SafeData):
 
     It is a :class:`~django.utils.safestring.SafeData`, so Django's
     autoescape and its ``is_safe`` filters treat it exactly like the
-    ``SafeString`` it stands for. The factory is called at most once per
-    object; a factory that raises renders as ``""`` (the per-tag fail-soft the
-    eager processor had: one broken tag must not blank its siblings), and that
+    ``SafeString`` it stands for. A factory that raises renders as ``""`` (the
+    per-tag fail-soft the eager processor had: one broken tag must not blank
+    its siblings), is logged at WARNING under the chunk's ``name``, and that
     empty result is memoised too.
 
     ``trust_plain_str`` says what a plain ``str`` result means. ``True`` (the
@@ -49,46 +54,67 @@ class LazyThemeHTML(Promise, SafeData):
     ``SafeString`` stays safe and a plain ``str`` (a downstream-shadowed tag)
     is escaped, so laziness never promotes untrusted text to trusted HTML.
 
-    Evaluation is not locked. Two threads reading the same object at the same
-    instant each run the factory and store equal strings; the factories here
-    are pure functions of the request, so the only cost is the duplicate work.
+    Evaluation is not locked and the factory may run more than once. Threads
+    reading the same object at the same instant can each run it; the first
+    stored result wins (an atomic ``dict.setdefault``) and every reader returns
+    that one, so a reader never sees a value that another reader has already
+    replaced. The factories here are pure functions of the request, so the
+    only cost of the race is the duplicate work. The factory is kept for the
+    life of the object rather than dropped after the first render: dropping it
+    is what let a second reader find neither a value nor a factory.
     """
 
-    __slots__ = ("_factory", "_trust_plain_str", "_value")
+    __slots__ = ("_cell", "_factory", "_name", "_trust_plain_str")
 
-    def __init__(self, factory: Callable[[], Any], *, trust_plain_str: bool = True) -> None:
-        self._factory: Callable[[], Any] | None = factory
+    def __init__(
+        self,
+        factory: Callable[[], Any],
+        *,
+        name: str = "theme",
+        trust_plain_str: bool = True,
+    ) -> None:
+        self._factory = factory
+        self._name = name
         self._trust_plain_str = trust_plain_str
-        self._value: str | None = None
+        # Empty until the first render stores its result under "v".
+        self._cell: dict[str, str] = {}
 
     @property
     def evaluated(self) -> bool:
         """Whether the chunk has been rendered yet. Reading it never renders."""
-        return self._value is not None
+        return "v" in self._cell
 
     def _render(self) -> str:
-        value = self._value
-        if value is None:
-            factory = self._factory
-            try:
-                rendered = factory() if factory is not None else ""
-            except Exception:  # noqa: BLE001 - fail-soft per chunk, as the eager processor was
-                rendered = ""
-            rendered = rendered or ""
-            if self._trust_plain_str:
-                value = cast(str, mark_safe(rendered))
-            else:
-                # ``conditional_escape`` leaves a SafeString/``__html__`` value alone.
-                value = cast(str, mark_safe(conditional_escape(rendered)))
-            self._value = value
-            self._factory = None
-        return value
+        cell = self._cell
+        value = cell.get("v")
+        if value is not None:
+            return value
+        try:
+            rendered = self._factory() or ""
+        except Exception as exc:  # noqa: BLE001 - fail-soft per chunk, as the eager processor was
+            log_failure(
+                logger, exc, "theme_context chunk %s failed to render", self._name, level="warning"
+            )
+            rendered = ""
+        if self._trust_plain_str:
+            value = cast(str, mark_safe(rendered))
+        else:
+            # ``conditional_escape`` leaves a SafeString/``__html__`` value alone.
+            value = cast(str, mark_safe(conditional_escape(rendered)))
+        return cell.setdefault("v", value)
 
     # --- the string face every reader uses -------------------------------
     def __str__(self) -> str:
         return self._render()
 
     def __html__(self) -> str:
+        return self._render()
+
+    def __djust_serialize__(self) -> str:
+        # The Rust renderer converts a sidecar object through this hook, when
+        # the template reads it, so it sees the rendered text as a plain
+        # string and ``in`` / ``==`` / ``|add`` / ``|slice`` behave as they did
+        # on the string the processor used to return. Never called otherwise.
         return self._render()
 
     def __format__(self, spec: str) -> str:
