@@ -3827,6 +3827,28 @@ class ViewRuntime:
             await self._on_mount_failed(view_instance)
             return
 
+        # ---- connected() view hook (#3007) ----
+        # The live mount only: the view is admitted, set up (mount() or a
+        # restore) and its URL state applied, and has not rendered yet, so
+        # state the hook sets is in the first frame. A failure fails the mount
+        # like one from mount(); the view still gets its disconnected().
+        try:
+            from ._child_lifecycle import run_view_connected
+
+            await sync_to_async(run_view_connected)(view_instance)
+        except Exception as exc:
+            response = handle_exception(
+                exc,
+                error_type="mount",
+                view_class=view_path,
+                logger=logger,
+                log_message=f"Error in {sanitize_for_log(view_path)}.connected()",
+                expose_details=_diagnostics_policy_allows(view_instance),
+            )
+            await self.transport.send(response)
+            await self._on_mount_failed(view_instance)
+            return
+
         # ---- Initial render ----
         # ADR-022 Iter 3 Phase 3.3a (#1917, Finding D): a WS ``use_actors`` view
         # renders through the actor system instead of the Rust render path, exactly
@@ -6874,7 +6896,7 @@ class ViewRuntime:
         closed (#3250 review L1): nulling it alone left its background work,
         waiters and live handles to a disconnect that no longer saw it.
         """
-        from ._child_lifecycle import release_root_view
+        from ._child_lifecycle import fire_view_disconnected, release_root_view
 
         view = self.view_instance
         self.view_instance = None
@@ -6884,6 +6906,7 @@ class ViewRuntime:
         )
         await self.transport.close(code=4403)
         if view is not None:
+            await fire_view_disconnected(view)
             release_root_view(view, navigation=False, reason="view_disconnect")
 
     def _save_explicit_root(self, view: Any, request: Any) -> None:

@@ -3,10 +3,16 @@
 import logging
 from typing import Any
 
+from asgiref.sync import sync_to_async
+
 from .mixins.async_work import AsyncWorkMixin
 from .mixins.waiters import WaiterMixin
 
 logger = logging.getLogger(__name__)
+
+#: Set on a root view when it reaches the connected phase of its live mount;
+#: popped by whoever runs ``disconnected()``, so the hook runs at most once.
+_CONNECTED_FLAG = "_djust_connected_phase"
 
 
 def dispose_child_subtree(child: Any, *, navigation: bool = False) -> None:
@@ -185,6 +191,68 @@ def untrack_view_presence(view: Any) -> None:
         log_failure_for(
             logger, (view,), exc, "Error cleaning up presence: %s", exc, level="warning"
         )
+
+
+def awaiting_disconnected(view: Any) -> bool:
+    """Whether ``view`` reached the connected phase and has not run ``disconnected()``."""
+    return bool(view is not None and view.__dict__.get(_CONNECTED_FLAG, False))
+
+
+def run_view_connected(view: Any) -> None:
+    """The ``connected()`` view hook (#3007), sync: call it on a worker thread.
+
+    Called by ``ViewRuntime.dispatch_mount`` once the view is admitted and set
+    up (auth, ``on_mount`` hooks, ``mount()`` or a state restore, the
+    object-permission check, ``handle_params()``) and before its first render,
+    so state it sets is in the mount frame. Only the live mount reaches it: the
+    HTTP render and the HTTP POST fallback never do. Marks the view so that
+    :func:`run_view_disconnected` runs for it, whether or not it defines the
+    hook. An exception is the caller's: it fails the mount, as one from
+    ``mount()`` does. A ``connected`` that is not callable (a state attribute
+    of that name) is skipped.
+    """
+    view.__dict__[_CONNECTED_FLAG] = True
+    hook = getattr(view, "connected", None)
+    if callable(hook):
+        hook()
+
+
+def run_view_disconnected(view: Any) -> None:
+    """The ``disconnected()`` view hook (#3007), sync: call it on a worker thread.
+
+    Runs for a view that reached the connected phase, once, when its live mount
+    ends: its socket (or SSE stream) closed, or a navigation, a second mount, an
+    ``unmount`` frame or a revoked authorization released it. A view the mount
+    refused earlier never runs it. Best effort: the tenant the view mounted
+    under is bound, as for its events; an exception is logged without its value
+    and never stops the teardown. A ``disconnected`` that is not callable is
+    skipped.
+    """
+    if not view.__dict__.pop(_CONNECTED_FLAG, False):
+        return
+    hook = getattr(view, "disconnected", None)
+    if not callable(hook):
+        return
+    from .runtime import _tenant_context
+
+    try:
+        with _tenant_context(getattr(view, "_tenant", None)):
+            hook()
+    except Exception as exc:  # noqa: BLE001 — application hook; teardown must go on
+        from ._exposure_diagnostics import log_failure_for
+
+        log_failure_for(logger, (view,), exc, "Error in disconnected(): %s", exc, level="warning")
+
+
+async def fire_view_disconnected(view: Any) -> None:
+    """:func:`run_view_disconnected` for an async caller, before the view's release.
+
+    The hook runs on a worker thread, so it may use the ORM. A view that never
+    reached the connected phase costs no thread hop.
+    """
+    if not awaiting_disconnected(view):
+        return
+    await sync_to_async(run_view_disconnected)(view)
 
 
 def release_root_view(view: Any, *, navigation: bool, reason: str) -> None:

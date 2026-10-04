@@ -2019,7 +2019,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 "Event authorization failed. Please reload the page.", code="permission_denied"
             )
             await self.close(code=4403)
-            self._release_revoked_view(revoked)
+            await self._release_revoked_view(revoked)
             return False
         target_view._djust_event_request = authorized
         return True
@@ -2055,7 +2055,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 "Event authorization failed. Please reload the page.", code="permission_denied"
             )
             await self.close(code=4403)
-            self._release_revoked_view(revoked)
+            await self._release_revoked_view(revoked)
             return False
 
     async def _reauth_legacy_server_turn(self, view: Any) -> bool:
@@ -2121,19 +2121,20 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         revoked = None
         if self.view_instance is view:
             revoked, self.view_instance = view, None
-        self._release_revoked_view(revoked)
+        await self._release_revoked_view(revoked)
         return False
 
     @staticmethod
-    def _release_revoked_view(view: Any) -> None:
+    async def _release_revoked_view(view: Any) -> None:
         """Tear down a root whose authority was revoked, once its socket is
         closed (#3250 review L1). The view was dropped from the consumer before
         the close, so the disconnect no longer sees it: without this its
         background work, waiters and live handles outlived the connection."""
         if view is None:
             return
-        from ._child_lifecycle import release_root_view
+        from ._child_lifecycle import fire_view_disconnected, release_root_view
 
+        await fire_view_disconnected(view)
         release_root_view(view, navigation=False, reason="view_disconnect")
 
     @staticmethod
@@ -2512,7 +2513,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
     async def disconnect(self, close_code: int) -> None:
         """Handle WebSocket disconnection"""
-        from ._child_lifecycle import discard_sticky_child, release_root_view
+        from ._child_lifecycle import (
+            discard_sticky_child,
+            fire_view_disconnected,
+            release_root_view,
+        )
 
         self._disconnect_entered = True
         # The socket is gone — any frame a handler still tries to send from
@@ -2590,6 +2595,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # keeps running), and its embedded children unregistered, their own
         # waiters closed too. Either way its Rust live handles are dropped.
         for view in mounted_views:
+            # The view's ``disconnected()`` hook (#3007), before its release.
+            await fire_view_disconnected(view)
             release_root_view(view, navigation=False, reason="view_disconnect")
 
         # Sticky LiveViews (Phase C Fix F2): drain any sticky children that
@@ -4326,7 +4333,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         ``_defer_presence_untrack``). A view that goes with nothing replacing it
         (an unmount, a refusal) is untracked at once.
         """
-        from ._child_lifecycle import release_root_view
+        from ._child_lifecycle import fire_view_disconnected, release_root_view
         from .presence import PresenceManager
         from .runtime import leave_consumer_view_groups
 
@@ -4376,6 +4383,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         if c is sticky_child:
                             registry.pop(vid, None)
                             break
+            # The view's ``disconnected()`` hook (#3007): its live mount ends
+            # here whether the socket closes or the view is replaced.
+            await fire_view_disconnected(view)
             release_root_view(view, navigation=navigation, reason=reason)
 
         consumer.view_instance = None
