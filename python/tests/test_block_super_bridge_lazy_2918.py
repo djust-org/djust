@@ -28,10 +28,14 @@ the rendered output AND the number of times each probe ran.
 
 from __future__ import annotations
 
+import copy
+import gc
+import pickle
 import re
 import sys
 import tempfile
 import types
+import weakref
 from pathlib import Path
 
 import pytest
@@ -117,14 +121,25 @@ def probe_super_twice(context, label):
 
 
 @register.simple_tag(takes_context=True)
-def probe_mapping(context, label):
-    """The pre-fix ``block`` was a dict, so a handler may use mapping access."""
+def probe_methods(context, label):
+    """``get``, ``super()`` and membership — the shapes that exist."""
     _tick(label)
     block = context["block"]
-    got = block["super"]
+    got = block.get("super")
     return mark_safe(
-        f"{got}|{block.get('super')}|{'super' in block}|{'nope' in block}|{isinstance(got, SafeString)}"
+        f"{got}|{block.super()}|{'super' in block}|{'nope' in block}|{isinstance(got, SafeString)}"
     )
+
+
+@register.simple_tag(takes_context=True)
+def probe_subscript(context, label):
+    """Django's ``BlockNode`` is not subscriptable, and neither is this."""
+    _tick(label)
+    try:
+        context["block"]["super"]
+    except TypeError:
+        return "TypeError"
+    return "subscriptable"
 
 
 @register.simple_tag(takes_context=True)
@@ -163,6 +178,64 @@ def boom(label):
     raise ValueError("parent exploded")
 
 
+#: The five classes ``Variable._resolve_lookup`` catches around its mapping
+#: access (``TypeError, AttributeError, KeyError, ValueError, IndexError``).
+RAISED = {
+    "ValueError": ValueError,
+    "KeyError": KeyError,
+    "AttributeError": AttributeError,
+    "TypeError": TypeError,
+    "IndexError": IndexError,
+    "RuntimeError": RuntimeError,
+}
+
+
+@register.simple_tag
+def boom_kind(label, kind):
+    _tick(label)
+    raise RAISED[kind]("parent exploded")
+
+
+@register.simple_tag(takes_context=True)
+def catch_super(context, label):
+    """A tag with its own ``except``: which CLASS does the parent's error have?"""
+    _tick(label)
+    try:
+        return dj_template.Variable("block.super").resolve(context)
+    except Exception as exc:  # noqa: BLE001 - the class IS the answer
+        return f"caught-{type(exc).__name__}"
+
+
+@register.simple_tag(takes_context=True)
+def show_block(context):
+    """What ``block`` is, as a tag sees it."""
+    return f"(block={context['block']})"
+
+
+@register.simple_tag(takes_context=True)
+def keep_context(context):
+    """A tag that keeps the context it received — a cache, a debug panel."""
+    context["holder"].ctx = context
+    return ""
+
+
+@register.simple_tag(takes_context=True)
+def keep_block(context):
+    context["holder"].block = context["block"]
+    return ""
+
+
+@register.simple_tag(takes_context=True)
+def probe_copy(context):
+    block = context["block"]
+    try:
+        pickle.dumps(block)
+        pickled = "pickled"
+    except TypeError:
+        pickled = "TypeError"
+    return f"{copy.copy(block) is block}|{copy.deepcopy(block) is block}|{pickled}"
+
+
 _lib_module = types.ModuleType(LIB_NAME)
 _lib_module.register = register
 sys.modules[LIB_NAME] = _lib_module
@@ -181,6 +254,11 @@ PARENTS = {
     "cyc.html": "{% block body %}{% cycle 'a' 'b' %}{% endblock %}",
     "amp.html": "{% block body %}<b>&</b>{% endblock %}",
     "boom.html": LOAD + "{% block body %}{% boom 'parent' %}{% endblock %}",
+    **{
+        f"boom_{kind}.html": LOAD
+        + f"{{% block body %}}{{% boom_kind 'parent' '{kind}' %}}{{% endblock %}}"
+        for kind in RAISED
+    },
     "inc.html": LOAD
     + "{% block body %}{% include \"frag.html\" %}{% probe 'parent' %}{% endblock %}",
     "frag.html": LOAD + "{% probe 'frag' %}F",
@@ -318,6 +396,33 @@ CASES: dict[str, str] = {
         "boom.html", "{% if show %}{{ block.super }}{% endif %}{% probe 'child' %}ok"
     ),
     "boom_read_by_bridged_tag": _child("boom.html", ARM + "{% probe_super 'child' %}"),
+    # ---- the parent's OWN exception class must reach the tag unchanged -------
+    # Django's resolver catches five classes around its mapping access; a
+    # `block` that evaluated the parent there would have the error swallowed
+    # (and the parent re-run), or would have to re-wrap it.
+    **{
+        f"{how}_over_{kind}": _child(
+            f"boom_{kind}.html",
+            ARM + body,
+            LOAD_I18N,
+        )
+        for kind in RAISED
+        for how, body in (
+            ("tag_uncaught", "{% probe_super 'child' %}"),
+            ("tag_catches", "{% catch_super 'child' %}"),
+            (
+                "blocktranslate",
+                "{% blocktranslate with s=block.super %}v={{ s }}{% endblocktranslate %}",
+            ),
+        )
+    },
+    # ---- a user variable named `block` is not ours to replace ---------------
+    "user_block_loop_var": _child(
+        "tick.html", ARM + "{% for block in three %}{% show_block %}{% endfor %}"
+    ),
+    "user_block_with": _child(
+        "tick.html", ARM + "{% with block='mine' %}{% show_block %}{% endwith %}"
+    ),
     # ---- the safety grant ---------------------------------------------------
     "autoescape_markup": _child("amp.html", ARM + "[{% probe_super 'child' %}]"),
     "parent_escapes_user_data": _child("raw.html", ARM + "[{% probe_super 'child' %}]"),
@@ -377,7 +482,7 @@ class TestDifferentialAgainstDjango:
         assert djust_answer == django_answer, case
 
     def test_the_corpus_is_not_silently_shrunk(self):
-        assert len(CASES) == 37
+        assert len(CASES) == 57
 
 
 class TestTheCountsAreNotVacuous:
@@ -455,22 +560,102 @@ class TestTheMechanism:
         assert "Value::String(parent_html)" not in helper
 
 
-class TestTheHandlersBlockStaysMappingLike:
-    """Before the fix ``context['block']`` was a ``dict``; a handler written
-    against that must keep working (Django's own value is a ``BlockNode``, so
-    this cannot be a differential)."""
+class TestTheShapeOfTheBlockAHandlerReceives:
+    """Django's own ``BlockNode`` shape: ``super()`` is a method, the object is
+    not subscriptable, and asking about it never evaluates it. (The ``dict``
+    this replaced allowed ``block["super"]``; keeping that is what made a
+    parent's ``ValueError`` arrive as a different class, so it is gone. Nothing
+    in djust, djust.org, djustlive, djust-docs, docs.djust.org or sklful uses
+    it.)"""
 
-    def test_item_get_and_contains_answer_without_a_second_render(self, template_dir):
-        source = _child("amp.html", ARM + "{% probe_mapping 'child' %}")
+    def test_get_super_and_membership_answer_the_parent_once_per_read(self, template_dir):
+        source = _child("amp.html", ARM + "{% probe_methods 'child' %}")
         rendered, calls = _answer("djust", template_dir, source)
         assert rendered == "<b>&</b>|<b>&</b>|True|False|True"
         assert calls == {"child": 1}
+
+    def test_it_is_not_subscriptable_exactly_as_djangos_block_is_not(self, template_dir):
+        source = _child("amp.html", ARM + "{% probe_subscript 'child' %}")
+        assert _answer("djust", template_dir, source) == _answer("django", template_dir, source)
+        assert _answer("djust", template_dir, source)[0] == "TypeError"
 
     def test_containment_and_keys_do_not_render_the_parent(self, template_dir):
         source = _child("tick.html", ARM + "{% probe_membership 'child' %}")
         rendered, calls = _answer("djust", template_dir, source)
         assert rendered == "True|False|['super']|1"
         assert calls == {"child": 1}, "asking whether `super` exists must not evaluate it"
+
+    def test_copy_and_deepcopy_return_the_handle_and_pickle_refuses(self, template_dir):
+        source = _child("tick.html", ARM + "{% probe_copy %}")
+        assert _answer("djust", template_dir, source)[0] == "True|True|TypeError"
+
+
+class TestTheParentsOwnExceptionReachesTheTag:
+    """The class of the parent's error is what a tag's ``except`` and a
+    ``{% blocktranslate %}`` see, on both engines."""
+
+    @pytest.mark.parametrize("kind", sorted(RAISED))
+    def test_a_tag_with_its_own_except_catches_the_parents_class(self, kind, template_dir):
+        rendered, calls = _answer("djust", template_dir, CASES[f"tag_catches_over_{kind}"])
+        assert rendered == f"caught-{kind}"
+        assert calls == {"child": 1, "parent": 1}, "the parent runs once, not once per lookup step"
+
+    @pytest.mark.parametrize("kind", sorted(RAISED))
+    def test_blocktranslate_over_a_raising_parent_raises_the_parents_error(
+        self, kind, template_dir
+    ):
+        rendered, calls = _answer("djust", template_dir, CASES[f"blocktranslate_over_{kind}"])
+        assert rendered.startswith("<<") and "parent exploded" in rendered
+        assert calls == {"parent": 1}
+
+
+class TestTheLazyBlockDoesNotOutliveTheCall:
+    """It holds strong references to the render context's Python objects and
+    has no ``tp_traverse``, so a tag that keeps the context it received used to
+    close a cycle the collector could not see (every block of every extending
+    template is armed, so every bridged call there was exposed)."""
+
+    @staticmethod
+    def _render(template_dir, body):
+        class Holder:
+            ctx = None
+            block = None
+
+        holder = Holder()
+        backend = DjustTemplateBackend(
+            {
+                "NAME": "t2918gc",
+                "DIRS": [template_dir],
+                "APP_DIRS": False,
+                "OPTIONS": {"libraries": {LIB_NAME: LIB_NAME}},
+            }
+        )
+        source = _child("tick.html", ARM + body)
+        backend.from_string(source).render({"holder": holder, "show": False})
+        return holder
+
+    def test_a_holder_that_keeps_the_context_is_collectable(self, template_dir):
+        holder = self._render(template_dir, "{% keep_context %}")
+        assert holder.ctx is not None, "the tag kept the context"
+        ref = weakref.ref(holder)
+        del holder
+        gc.collect()
+        assert ref() is None, "the holder survived gc: an uncollectable cycle through LazyBlock"
+
+    def test_a_block_kept_past_the_render_answers_empty_and_runs_nothing(self, template_dir):
+        CALLS.clear()
+        holder = self._render(template_dir, "{% keep_block %}")
+        CALLS.clear()
+        assert str(holder.block.super()) == ""
+        assert holder.block.get("super") is not None and str(holder.block.get("super")) == ""
+        assert CALLS == {}, "a retained handle re-ran the parent's tags after the render"
+
+    def test_a_holder_that_keeps_the_block_is_collectable(self, template_dir):
+        holder = self._render(template_dir, "{% keep_block %}")
+        ref = weakref.ref(holder)
+        del holder
+        gc.collect()
+        assert ref() is None
 
 
 class TestAnImplicitReaderNeedsTheScopeArmed:

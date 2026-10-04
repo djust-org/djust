@@ -2437,14 +2437,40 @@ impl djust_core::context::BlockSuperSource for DeferredBlockSuper {
 /// The ONE statement of that rule, read by every `to_hashmap()` caller,
 /// because a second copy is #1646 and the sites are seven
 /// (`the_python_bridge_has_exactly_the_callers_it_claims` pins the SET, not
-/// a floor). Costs nothing when nothing is armed, which is every render that
-/// is not inside an overriding `{% block %}`.
-fn bridged_context_map(context: &Context) -> Result<std::collections::HashMap<String, Value>> {
+/// a floor). Costs nothing when nothing is armed. Armed is wider than "inside
+/// a block that names `block.super`": every inherited block of an extending
+/// template is wrapped in a (possibly empty-parent) scope, so a bridged call
+/// anywhere inside `{% extends %}` pays for one `LazyBlock`.
+///
+/// A user binding named `block` (a `{% for block in … %}` variable) is left
+/// alone: the lazy object replaces only the scope's own, EMPTY `block`.
+fn bridged_context_map(context: &Context) -> Result<BridgedContextMap> {
     let mut map = context.to_hashmap();
-    if let Some(lazy_block) = context.lazy_block_value()? {
-        map.insert("block".to_string(), lazy_block);
+    let mut guard = None;
+    if let Some((lazy_block, lazy_guard)) = context.lazy_block_value()? {
+        let scope_block =
+            matches!(map.get("block"), Some(Value::Object(fields)) if fields.is_empty());
+        if scope_block {
+            map.insert("block".to_string(), lazy_block);
+            guard = Some(lazy_guard);
+        }
     }
-    Ok(map)
+    Ok(BridgedContextMap { map, _guard: guard })
+}
+
+/// The flat map a bridged tag is called with, plus the [`LazyBlockGuard`] that
+/// ends the lazy `block`'s snapshot when this drops — after the call, on every
+/// path. Derefs to the map, so the seven callers pass `&context_map` as before.
+struct BridgedContextMap {
+    map: std::collections::HashMap<String, Value>,
+    _guard: Option<djust_core::LazyBlockGuard>,
+}
+
+impl std::ops::Deref for BridgedContextMap {
+    type Target = std::collections::HashMap<String, Value>;
+    fn deref(&self) -> &Self::Target {
+        &self.map
+    }
 }
 
 pub fn render_node_with_loader_mut<L: TemplateLoader>(
