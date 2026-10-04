@@ -36,7 +36,8 @@
         "clip:rect(0 0 0 0);white-space:nowrap";
       document.body.appendChild(live);
     }
-    live.textContent = message;
+    // Identical text twice in a row is not announced again by most screen readers.
+    live.textContent = live.textContent === message ? message + "\u00a0" : message;
   }
 
   function setCollapsed(node, collapsed) {

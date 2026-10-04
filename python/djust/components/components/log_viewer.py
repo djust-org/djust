@@ -16,8 +16,13 @@ class LogViewer(Component):
     until the reader scrolls up. With ``stream_event`` it appends the lines the
     view pushes (``self.push_event("new_logs", {"lines": [...]})``), honouring
     ``max_lines``, ``show_line_numbers`` and ``filter_level``; stream them or
-    re-render ``lines``, not both for one log. An app's own ``LogViewer`` hook,
-    in ``window.djust.hooks`` or ``window.DjustHooks``, replaces the shipped one.
+    re-render ``lines``, not both for one log. Set ``max_lines`` for a log that
+    streams: without it every line stays in the page. Streamed rows keep
+    counting from the last line number, whereas a server render numbers the
+    kept window from 1. An app's own ``LogViewer`` hook, in
+    ``window.djust.hooks`` or ``window.DjustHooks``, replaces the shipped one
+    (a hook assigned with ``window.DjustHooks = {...}`` after the script also
+    drops it; merge with ``Object.assign`` instead).
 
     Usage in a LiveView::
 

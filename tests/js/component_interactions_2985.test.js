@@ -750,29 +750,62 @@ describe('LogViewer', () => {
         expect(rows.slice(2).map((r) => r.querySelector('.dj-log-viewer__text').textContent)).toEqual(['ERROR b', 'ERROR c']);
     });
 
-    it('stays pinned to the bottom while the reader is at the bottom', () => {
+    // The reader's position is tracked from scroll events (never measured per
+    // streamed line), and the follow is one scroll per animation frame.
+    const frame = (env) => new Promise((resolve) => env.window.requestAnimationFrame(() => resolve()));
+    const scrolled = (env, body, top) => {
+        body.scrollTop = top;
+        body.dispatchEvent(new env.window.Event('scroll'));
+    };
+
+    it('stays pinned to the bottom while the reader is at the bottom', async () => {
         const env = createEnv(LOG_VIEWER());
         const body = env.window.document.querySelector('.dj-log-viewer__body');
         scrollable(body, { scrollTop: 900 }); // 900 + 100 >= 1000: at the bottom
         env.window.eval(read('log-viewer.js'));
         env.window.djust.mountHooks();
-        body.scrollTop = 900;
+        scrolled(env, body, 900);
         env.window.djust.dispatchPushEventToHooks('new_logs', { lines: ['INFO more'] });
+        await frame(env);
         expect(body.scrollTop).toBe(1000);
     });
 
-    it('stops following once the reader scrolls up, and resumes at the bottom', () => {
+    it('stops following once the reader scrolls up, and resumes at the bottom', async () => {
         const env = createEnv(LOG_VIEWER());
         const body = env.window.document.querySelector('.dj-log-viewer__body');
         scrollable(body);
         env.window.eval(read('log-viewer.js'));
         env.window.djust.mountHooks();
-        body.scrollTop = 200; // reading history
+        scrolled(env, body, 200); // reading history
         env.window.djust.dispatchPushEventToHooks('new_logs', { lines: ['INFO more'] });
+        await frame(env);
         expect(body.scrollTop).toBe(200);
-        body.scrollTop = 900; // back at the bottom
+        scrolled(env, body, 900); // back at the bottom
         env.window.djust.dispatchPushEventToHooks('new_logs', { lines: ['INFO more'] });
+        await frame(env);
         expect(body.scrollTop).toBe(1000);
+    });
+
+    it('scrolls once per frame however many events arrived in it, and never measures per event', async () => {
+        const env = createEnv(LOG_VIEWER());
+        const body = env.window.document.querySelector('.dj-log-viewer__body');
+        scrollable(body, { scrollTop: 900 });
+        env.window.eval(read('log-viewer.js'));
+        env.window.djust.mountHooks();
+        scrolled(env, body, 900);
+        let reads = 0;
+        let writes = 0;
+        let top = 900;
+        Object.defineProperty(body, 'scrollHeight', { get: () => { reads += 1; return 1000; }, configurable: true });
+        Object.defineProperty(body, 'scrollTop', { get: () => top, set: (v) => { writes += 1; top = v; }, configurable: true });
+        for (let i = 0; i < 50; i++) {
+            env.window.djust.dispatchPushEventToHooks('new_logs', { line: 'INFO ' + i });
+        }
+        expect(reads).toBe(0);
+        expect(writes).toBe(0);
+        await frame(env);
+        expect(writes).toBe(1);
+        expect(top).toBe(1000);
     });
 
     it('follows a server re-render the same way (beforeUpdate then updated)', () => {
@@ -807,5 +840,173 @@ describe('LogViewer', () => {
         const env = boot(LOG_VIEWER(' data-auto-scroll="true"'), 'log-viewer.js');
         env.window.djust.dispatchPushEventToHooks('new_logs', { lines: ['INFO a'] });
         expect(env.$$('.dj-log-viewer__line')).toHaveLength(2);
+    });
+});
+
+// A server patch, as the client applies it: beforeUpdate hooks, DOM change, updated hooks.
+function serverPatch(env, mutate) {
+    env.window.djust.beforeUpdateHooks();
+    mutate();
+    env.window.djust.updateHooks();
+}
+
+const SHAPES = [
+    { name: 'SortableList', file: 'sortable-list.js', markup: () => SORTABLE_LIST(), root: 'ul', item: 'li', ids: ['a', 'b', 'c'] },
+    { name: 'SortableGrid', file: 'sortable-grid.js', markup: () => SORTABLE_GRID(), root: '.dj-sortable-grid', item: '.dj-sortable-grid__item', ids: ['a', 'b', 'c', 'd', 'e'] },
+];
+
+for (const shape of SHAPES) {
+    describe(`${shape.name}: a server patch during a keyboard grab (review I1)`, () => {
+        const grabFirstAndMove = (env) => {
+            const first = env.$$(shape.item)[0];
+            first.focus();
+            key(env.window, first, ' ');
+            key(env.window, first, 'ArrowRight');
+            if (shape.name === 'SortableList') key(env.window, first, 'ArrowDown');
+            return first;
+        };
+        const orderNow = (env) => ids(env, shape.item);
+
+        it('Escape after the server removed an item does not bring it back', () => {
+            const env = boot(shape.markup(), shape.file);
+            const first = grabFirstAndMove(env);
+            const victim = env.$$(shape.item).find((el) => el !== first);
+            serverPatch(env, () => victim.remove());
+            const expected = orderNow(env);
+            expect(expected).not.toContain(victim.getAttribute('data-id'));
+            key(env.window, first, 'Escape');
+            expect(orderNow(env)).toEqual(expected);
+            expect(env.sent).toEqual([]);
+            expect(env.live()).toMatch(/^Reorder cancelled, the list was updated/);
+        });
+
+        it('Escape after the server reshuffled leaves the list as the server has it', () => {
+            const env = boot(shape.markup(), shape.file);
+            const first = grabFirstAndMove(env);
+            serverPatch(env, () => {
+                const root = env.$(shape.root);
+                const nodes = env.$$(shape.item);
+                nodes.reverse().forEach((n) => root.appendChild(n));
+            });
+            const reshuffled = orderNow(env);
+            key(env.window, first, 'Escape');
+            expect(orderNow(env)).toEqual(reshuffled);
+            expect(env.sent).toEqual([]);
+        });
+
+        it('dropping without moving after a server reshuffle sends nothing', () => {
+            const env = boot(shape.markup(), shape.file);
+            const first = env.$$(shape.item)[0];
+            first.focus();
+            key(env.window, first, ' ');
+            serverPatch(env, () => {
+                const root = env.$(shape.root);
+                env.$$(shape.item).reverse().forEach((n) => root.appendChild(n));
+            });
+            key(env.window, first, 'Enter');
+            expect(env.sent).toEqual([]);
+        });
+
+        it('moving after the server added an item sends the order of the list as it now is', () => {
+            const env = boot(shape.markup(), shape.file);
+            const first = env.$$(shape.item)[0];
+            first.focus();
+            key(env.window, first, ' ');
+            serverPatch(env, () => {
+                const extra = first.parentNode.lastElementChild.cloneNode(true);
+                extra.setAttribute('data-id', 'new');
+                extra.setAttribute('data-key', 'new');
+                first.parentNode.appendChild(extra);
+            });
+            key(env.window, first, 'End');
+            key(env.window, first, 'Enter');
+            expect(env.sent).toHaveLength(1);
+            const order = env.sent[0].params.order;
+            expect(order).toEqual(orderNow(env));
+            expect(order).toContain('new');
+            expect(order[order.length - 1]).toBe('a');
+        });
+
+        it('an unrelated patch (the list unchanged) keeps the grab restorable', () => {
+            const env = boot(shape.markup(), shape.file);
+            const first = grabFirstAndMove(env);
+            serverPatch(env, () => {});
+            key(env.window, first, 'Escape');
+            expect(orderNow(env)).toEqual(shape.ids);
+            expect(env.live()).toMatch(/is back at its original position/);
+        });
+
+        it('the held item being removed ends the grab and later keys do nothing', () => {
+            const env = boot(shape.markup(), shape.file);
+            const first = env.$$(shape.item)[0];
+            first.focus();
+            key(env.window, first, ' ');
+            serverPatch(env, () => first.remove());
+            expect(env.live()).toBe('The list changed, so the reorder ended');
+            const next = env.$$(shape.item)[0];
+            next.focus();
+            key(env.window, next, 'End');
+            expect(env.sent).toEqual([]);
+            expect(orderNow(env)).toEqual(shape.ids.slice(1));
+        });
+
+        it('a drag whose item the server removed does not re-insert it on drop', () => {
+            const env = boot(shape.markup(), shape.file);
+            const [first, , third] = env.$$(shape.item);
+            rect(third, { top: 0, height: 40, left: 0, width: 40 });
+            dragEvent(env.window, 'dragstart', { target: first });
+            serverPatch(env, () => first.remove());
+            dragEvent(env.window, 'drop', { target: third, clientX: 30, clientY: 30 });
+            expect(orderNow(env)).toEqual(shape.ids.slice(1));
+            expect(env.sent).toEqual([]);
+        });
+    });
+}
+
+describe('a repeated announcement is still announced', () => {
+    it('alternates a no-break space so the live region changes', async () => {
+        const env = boot(JSON_VIEWER(), 'json-viewer.js');
+        Object.defineProperty(env.window.navigator, 'clipboard', {
+            value: { writeText: () => Promise.resolve() }, configurable: true,
+        });
+        const seen = [];
+        for (let i = 0; i < 3; i++) {
+            env.$('.dj-json-viewer__copy').click();
+            await Promise.resolve(); await Promise.resolve();
+            seen.push(env.live());
+        }
+        expect(seen.map((m) => m.trim())).toEqual(Array(3).fill('JSON copied to the clipboard'));
+        expect(seen[1]).not.toBe(seen[0]);
+        expect(seen[2]).not.toBe(seen[1]);
+    });
+});
+
+describe('LogViewer: streaming does not rescan the rows it holds (review I2)', () => {
+    it('1,000 single-line events cost no per-event row query', () => {
+        const env = boot(LOG_VIEWER(' data-stream-event="new_logs" data-line-numbers="true"'), 'log-viewer.js');
+        const body = env.$('.dj-log-viewer__body');
+        let queries = 0;
+        const real = body.querySelectorAll.bind(body);
+        body.querySelectorAll = (...a) => { queries += 1; return real(...a); };
+        for (let i = 0; i < 1000; i++) {
+            env.window.djust.dispatchPushEventToHooks('new_logs', { line: 'INFO event ' + i });
+        }
+        expect(queries).toBe(0);
+        expect(env.$$('.dj-log-viewer__line')).toHaveLength(1002);
+        expect(env.$$('.dj-log-viewer__num').pop().textContent).toBe('1002');
+    });
+
+    it('max_lines trims from the front without querying, and the row count stays right', () => {
+        const env = boot(LOG_VIEWER(' data-stream-event="new_logs" data-max-lines="50"'), 'log-viewer.js');
+        const body = env.$('.dj-log-viewer__body');
+        let queries = 0;
+        const real = body.querySelectorAll.bind(body);
+        body.querySelectorAll = (...a) => { queries += 1; return real(...a); };
+        for (let i = 0; i < 400; i++) {
+            env.window.djust.dispatchPushEventToHooks('new_logs', { lines: ['INFO a ' + i, 'INFO b ' + i] });
+        }
+        expect(queries).toBe(0);
+        expect(env.$$('.dj-log-viewer__line')).toHaveLength(50);
+        expect(env.$$('.dj-log-viewer__text').pop().textContent).toBe('INFO b 399');
     });
 });

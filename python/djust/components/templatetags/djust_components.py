@@ -23,7 +23,7 @@ from django.utils.html import conditional_escape, escapejs
 from django.utils.safestring import SafeString
 
 from ._registry import safe_url
-from djust.components.utils import rich_html, url_attr
+from djust.components.utils import rich_html, unique_ids as _unique_ids, url_attr
 from django.utils.safestring import mark_safe
 
 
@@ -9311,12 +9311,13 @@ class SortableListNode(template.Node):
         if not isinstance(items, list):
             items = []
 
+        keyed = _unique_ids(items)
         items_html = []
         for item in items:
             if not isinstance(item, dict):
                 continue
             item_id = conditional_escape(str(item.get("id", "")))
-            key_attr = f' data-key="{item_id}"' if item_id else ""
+            key_attr = f' data-key="{item_id}"' if keyed else ""
             label = conditional_escape(str(item.get("label", "")))
             handle_html = (
                 '<span class="dj-sortable-list__handle" aria-hidden="true">&#x2630;</span> '
@@ -9384,12 +9385,13 @@ class SortableGridNode(template.Node):
         except (ValueError, TypeError):
             cols = 3
 
+        keyed = _unique_ids(items)
         items_html = []
         for item in items:
             if not isinstance(item, dict):
                 continue
             item_id = conditional_escape(str(item.get("id", "")))
-            key_attr = f' data-key="{item_id}"' if item_id else ""
+            key_attr = f' data-key="{item_id}"' if keyed else ""
             label = conditional_escape(str(item.get("label", "")))
             thumbnail = item.get("thumbnail", "")
             thumb_html = ""

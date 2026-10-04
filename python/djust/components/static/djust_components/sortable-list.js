@@ -68,7 +68,8 @@
         "clip:rect(0 0 0 0);white-space:nowrap";
       document.body.appendChild(live);
     }
-    live.textContent = message;
+    // Identical text twice in a row is not announced again by most screen readers.
+    live.textContent = live.textContent === message ? message + "\u00a0" : message;
   }
 
   // Same public entry point dj-click and dj-viewport use, so the event works
@@ -97,10 +98,13 @@
       this._enhance();
     },
 
-    // A patch that moves a focused node can blur it; note which item had focus.
+    // A patch that moves a focused node can blur it; note which item had
+    // focus, and what the list held, to tell afterwards whether the server
+    // changed it under a reorder in progress.
     beforeUpdate: function () {
       var focused = itemOf(this.el, document.activeElement);
       this._focusedId = focused ? focused.getAttribute("data-id") : null;
+      this._seen = items(this.el);
     },
 
     updated: function () {
@@ -109,6 +113,7 @@
         this._bind();
       }
       this._enhance();
+      this._reconcile();
       this._refocus();
     },
 
@@ -151,17 +156,53 @@
       if (match) this._focus(match);
     },
 
+    // The server changed the list while a drag or grab was in progress: what
+    // was recorded at its start no longer describes the list, so it must not
+    // be restored or compared against, and a held item the patch removed
+    // ends the reorder.
+    _reconcile: function () {
+      var held = this._grab || this._drag;
+      if (!held) return;
+      var was = this._seen || [];
+      var now = items(this.el);
+      var changed =
+        was.length !== now.length ||
+        was.some(function (el, i) {
+          return el !== now[i];
+        });
+      if (!changed) return;
+      this._dirty = true;
+      this._moved = false;
+      if (held.parentNode !== this.el) {
+        held.classList.remove(DRAGGING);
+        this._grab = null;
+        this._drag = null;
+        this._before = null;
+        this._dirty = false;
+        announce("The list changed, so the reorder ended");
+      }
+    },
+
+    // Send the order only if the reader moved something since the list last
+    // changed; against the list as it was when the reorder began, unless the
+    // server changed it meanwhile.
     _commit: function () {
       var before = this._before;
+      var moved = this._moved;
+      var dirty = this._dirty;
       this._before = null;
-      if (!before) return;
-      var now = items(this.el);
-      var same =
-        before.length === now.length &&
-        before.every(function (el, i) {
-          return el === now[i];
-        });
-      if (same) return;
+      this._moved = false;
+      this._dirty = false;
+      if (!moved) return;
+      if (!dirty && before) {
+        var now = items(this.el);
+        var same =
+          before.length === now.length &&
+          before.every(function (el, i) {
+            return el === now[i];
+          });
+        if (same) return;
+      }
       var ids = order(this.el);
       this.el.dispatchEvent(
         new CustomEvent("dj-reorder", {
@@ -176,11 +217,15 @@
     _restore: function () {
       var root = this.el;
       this._moving = true;
-      (this._before || []).forEach(function (el) {
-        root.appendChild(el);
-      });
+      if (!this._dirty) {
+        (this._before || []).forEach(function (el) {
+          if (el.isConnected) root.appendChild(el);
+        });
+      }
       this._moving = false;
       this._before = null;
+      this._dirty = false;
+      this._moved = false;
     },
 
     _clearOver: function () {
@@ -190,6 +235,7 @@
     },
 
     _place: function (item, target, after) {
+      this._moved = true;
       this.el.insertBefore(item, after ? target.nextSibling : target);
     },
 
@@ -226,6 +272,8 @@
           if (!item) return;
           self._drag = item;
           self._before = items(root);
+          self._dirty = false;
+          self._moved = false;
           item.classList.add(DRAGGING);
           if (e.dataTransfer) {
             e.dataTransfer.effectAllowed = "move";
@@ -260,7 +308,7 @@
           // A moved node may never get its dragend (Firefox), so finish here.
           item.classList.remove(DRAGGING);
           self._drag = null;
-          if (target && target !== item) {
+          if (target && target !== item && item.parentNode === root) {
             self._place(item, target, isAfter(target, e));
             self._commit();
             announce(
@@ -354,6 +402,8 @@
     _startGrab: function (item) {
       this._grab = item;
       this._before = items(this.el);
+      this._dirty = false;
+      this._moved = false;
       item.classList.add(DRAGGING);
       var list = this._before;
       announce(
@@ -377,9 +427,14 @@
       this._grab = null;
       if (!item) return;
       item.classList.remove(DRAGGING);
+      var changed = this._dirty;
       this._restore();
       this._focus(item);
-      announce("Reorder cancelled, " + labelOf(item) + " is back at its original position");
+      announce(
+        changed
+          ? "Reorder cancelled, the list was updated"
+          : "Reorder cancelled, " + labelOf(item) + " is back at its original position"
+      );
     },
   };
 

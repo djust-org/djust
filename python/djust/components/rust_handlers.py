@@ -35,6 +35,7 @@ from djust.components.utils import (
     format_cell as _format_cell_util,
     interpolate_color,
     interpolate_color_gradient,
+    unique_ids as _unique_ids,
     url_attr,
 )
 
@@ -7170,12 +7171,13 @@ class SortableListHandler:
         if not isinstance(items, list):
             items = []
 
+        keyed = _unique_ids(items)
         items_html = []
         for item in items:
             if not isinstance(item, dict):
                 continue
             item_id = conditional_escape(str(item.get("id", "")))
-            key_attr = f' data-key="{item_id}"' if item_id else ""
+            key_attr = f' data-key="{item_id}"' if keyed else ""
             label = conditional_escape(str(item.get("label", "")))
             handle_html = (
                 '<span class="dj-sortable-list__handle" aria-hidden="true">&#x2630;</span> '
@@ -7228,12 +7230,13 @@ class SortableGridHandler:
         except (ValueError, TypeError):
             cols = 3
 
+        keyed = _unique_ids(items)
         items_html = []
         for item in items:
             if not isinstance(item, dict):
                 continue
             item_id = conditional_escape(str(item.get("id", "")))
-            key_attr = f' data-key="{item_id}"' if item_id else ""
+            key_attr = f' data-key="{item_id}"' if keyed else ""
             label = conditional_escape(str(item.get("label", "")))
             thumbnail = item.get("thumbnail", "")
             thumb_html = ""

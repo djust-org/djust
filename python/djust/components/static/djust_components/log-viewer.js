@@ -16,6 +16,9 @@
  *   It honours data-max-lines (oldest lines drop off), data-line-numbers and
  *   data-filter-level. Streamed lines live on the client: a view should
  *   either stream them or re-render ``lines``, not both for the same log.
+ *   Without max_lines every streamed line stays in the page, so set it for a
+ *   stream. Streamed rows keep counting from the last line number; a server
+ *   render numbers the window it keeps from 1.
  * - Keyboard: the scrolling body is focusable, so the arrow, Page and Home/End
  *   keys scroll it.
  *
@@ -60,6 +63,7 @@
     mounted: function () {
       var self = this;
       this._pinned = true;
+      this._bindScroll();
       this._enhance();
       this._follow();
       var eventName = this.el.getAttribute("data-stream-event");
@@ -75,11 +79,57 @@
       this._pinned = atBottom(scroller(this.el));
     },
 
+    destroyed: function () {
+      this._unbindScroll();
+      if (this._raf && window.cancelAnimationFrame) window.cancelAnimationFrame(this._raf);
+      this._raf = 0;
+    },
+
     updated: function () {
+      if (this._scrollEl !== this.el) {
+        this._unbindScroll();
+        this._bindScroll();
+      }
       // A re-render redraws the rendered lines; count again from them.
       this._count = undefined;
       this._enhance();
       if (this._pinned) this._follow();
+    },
+
+    // Whether the reader is at the newest line is tracked from scroll events,
+    // not measured per streamed line: reading scrollHeight after every append
+    // forces a layout of every row, which made a long stream quadratic.
+    _bindScroll: function () {
+      var self = this;
+      var root = this.el;
+      this._scrollEl = root;
+      this._onScroll = function (e) {
+        if (e.target === scroller(root)) self._pinned = atBottom(e.target);
+      };
+      // scroll does not bubble; capture it on the root.
+      root.addEventListener("scroll", this._onScroll, true);
+    },
+
+    _unbindScroll: function () {
+      if (this._scrollEl && this._onScroll) {
+        this._scrollEl.removeEventListener("scroll", this._onScroll, true);
+      }
+      this._scrollEl = null;
+      this._onScroll = null;
+    },
+
+    // One scroll per frame however many lines arrived in it.
+    _followSoon: function () {
+      var self = this;
+      if (!window.requestAnimationFrame) {
+        this._follow();
+        return;
+      }
+      if (this._raf) return;
+      this._raf = window.requestAnimationFrame(function () {
+        self._raf = 0;
+        self._follow();
+      });
     },
 
     _autoScroll: function () {
@@ -99,21 +149,24 @@
       if (!body.hasAttribute("tabindex")) body.setAttribute("tabindex", "0");
     },
 
+    // O(lines pushed), not O(rows held): a stream of single-line events onto a
+    // long log must not re-scan every row each time.
     _append: function (lines) {
       if (!lines.length) return;
       var root = this.el;
       var body = scroller(root);
-      var pinned = atBottom(body);
+      var pinned = this._pinned !== false;
       var filter = (root.getAttribute("data-filter-level") || "").toLowerCase();
       var showNumbers = root.getAttribute("data-line-numbers") === "true";
       var max = parseInt(root.getAttribute("data-max-lines"), 10) || 0;
-      var rendered = body.querySelectorAll(".dj-log-viewer__line");
       if (this._count === undefined) {
-        var last = rendered.length ? rendered[rendered.length - 1] : null;
+        var last = body.lastElementChild;
         var num = last ? last.querySelector(".dj-log-viewer__num") : null;
-        this._count = (num && parseInt(num.textContent, 10)) || rendered.length;
+        this._rows = body.childElementCount;
+        this._count = (num && parseInt(num.textContent, 10)) || this._rows;
       }
 
+      var added = document.createDocumentFragment();
       for (var i = 0; i < lines.length; i++) {
         var text = String(lines[i]);
         var level = detectLevel(text);
@@ -132,14 +185,18 @@
         t.className = "dj-log-viewer__text";
         t.textContent = text;
         row.appendChild(t);
-        body.appendChild(row);
+        added.appendChild(row);
+        this._rows += 1;
       }
+      body.appendChild(added);
 
       if (max > 0) {
-        var all = body.querySelectorAll(".dj-log-viewer__line");
-        for (var j = 0; j < all.length - max; j++) body.removeChild(all[j]);
+        while (this._rows > max && body.firstElementChild) {
+          body.removeChild(body.firstElementChild);
+          this._rows -= 1;
+        }
       }
-      if (pinned) this._follow();
+      if (pinned) this._followSoon();
     },
   };
 

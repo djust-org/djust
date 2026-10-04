@@ -15,7 +15,8 @@ class JsonViewer(Component):
     copy; the page must include ``djust_components/json-viewer.js``. A node
     toggles on click, Enter, Space or the arrow keys. An app's own
     ``JsonViewer`` hook, in ``window.djust.hooks`` or ``window.DjustHooks``,
-    replaces the shipped one.
+    replaces the shipped one (a hook assigned with ``window.DjustHooks = {...}``
+    after the script also drops it; merge with ``Object.assign`` instead).
 
     Usage in a LiveView::
 

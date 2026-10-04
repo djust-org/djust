@@ -27,15 +27,22 @@ STATIC = Path(rh.__file__).resolve().parent / "static" / "djust_components"
 ITEMS = [
     {"id": "a", "label": "Alpha"},
     {"id": "b", "label": "Beta"},
-    {"id": "", "label": "No id"},
+    {"id": "c", "label": "Gamma"},
 ]
+# The VDOM diff cannot key these: it falls back to positional diffing and warns
+# (DJE-050 for keyed + unkeyed siblings, DJE-051 for a repeated key).
+UNKEYABLE = {
+    "empty id": [{"id": "a", "label": "A"}, {"id": "", "label": "No id"}],
+    "missing id": [{"id": "a", "label": "A"}, {"label": "No id"}],
+    "duplicate id": [{"id": "a", "label": "A"}, {"id": "a", "label": "Again"}],
+}
 
 
 def _tag(source: str, **context) -> str:
     return Template("{% load djust_components %}" + source).render(Context(context))
 
 
-def _sortable_list_paths() -> dict[str, str]:
+def _sortable_list_paths(ITEMS=ITEMS) -> dict[str, str]:
     return {
         "class": SortableList(items=ITEMS, move_event="reorder", custom_class="mine").render(),
         "tag": _tag(
@@ -49,7 +56,7 @@ def _sortable_list_paths() -> dict[str, str]:
     }
 
 
-def _sortable_grid_paths() -> dict[str, str]:
+def _sortable_grid_paths(ITEMS=ITEMS) -> dict[str, str]:
     return {
         "class": SortableGrid(items=ITEMS, columns=4, custom_class="mine").render(),
         "tag": _tag('{% sortable_grid items=items columns=4 class="mine" %}', items=ITEMS),
@@ -70,10 +77,13 @@ class TestSortableMarkup:
             assert 'data-id="a" data-key="a"' in html, path
             assert 'data-id="b" data-key="b"' in html, path
 
-    def test_an_item_without_an_id_gets_no_key(self, make):
-        for path, html in make().items():
-            assert 'data-id="" data-key' not in html, path
-            assert 'data-id=""' in html, path
+    @pytest.mark.parametrize("case", sorted(UNKEYABLE))
+    def test_items_that_cannot_all_be_keyed_get_no_key_at_all(self, make, case):
+        """Keyed and unkeyed siblings, or a repeated key, make the differ warn on
+        every render; so no item is keyed unless all can be."""
+        for path, html in make(UNKEYABLE[case]).items():
+            assert "data-key" not in html, (path, case)
+            assert "data-id=" in html, (path, case)
 
     def test_markup_an_app_hook_reads_is_unchanged(self, make):
         """An app's own hook of this name reads these attributes; they stay."""
@@ -88,7 +98,7 @@ class TestSortableMarkup:
         assert paths["class"] == paths["tag"] == paths["handler"]
 
 
-def test_a_disabled_list_keeps_its_markers_and_gains_no_key_dependency():
+def test_a_disabled_list_keeps_its_markers():
     html = SortableList(items=ITEMS, disabled=True).render()
     assert 'data-disabled="true"' in html
     assert "draggable" not in html
