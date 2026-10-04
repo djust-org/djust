@@ -130,7 +130,7 @@ To see the changes first without writing anything, add `--dry-run`.
 
 | Part | What `djust init` does |
 | --- | --- |
-| `settings.py` | Appends a marked block that adds `channels` and `djust` to `INSTALLED_APPS` (unless already listed, by name or AppConfig path), sets `ASGI_APPLICATION`, and sets an in-memory `CHANNEL_LAYERS` unless you already configure one. `TEMPLATES` is left alone: LiveViews render their templates with djust's engine regardless, and everything else keeps rendering as before. Running `init` again leaves the file unchanged. |
+| `settings.py` | Appends a marked block that adds `channels` and `djust` to `INSTALLED_APPS` (unless already listed, by name or AppConfig path), sets `ASGI_APPLICATION`, and sets an in-memory `CHANNEL_LAYERS` unless you already configure one. A second marked block puts `DjustTemplateBackend` first in `TEMPLATES` and keeps your own entries after it, unchanged, as the fallback: the djust entry reuses the first `DjangoTemplates` entry's `DIRS` and its `context_processors`, `builtins`, `libraries`, `string_if_invalid`, `debug` and `autoescape`, so the admin and your other templates keep rendering. A `TEMPLATES` that already lists the djust backend is left alone; one `init` cannot read with certainty (built by a function, changed after its assignment, no `DjangoTemplates` entry) is not edited, and `init` prints the entry to add yourself. Running `init` again leaves the file unchanged. |
 | `asgi.py` | Replaces Django's default file with one that routes LiveView WebSockets and serves static files under Uvicorn. A customized `asgi.py`, or a default one pointing at a different settings module, is left alone; `init` prints the code to merge instead. |
 | Packages | Adds `djust`, `channels`, and `uvicorn[standard]`: with `uv add` in a uv project, or by adding missing lines to `requirements.txt` and installing into the project's `.venv`. For Poetry, or a project with neither, it prints the command to run. |
 | Check | Runs `manage.py check` once the packages are installed. |
@@ -243,23 +243,25 @@ CHANNEL_LAYERS = {
 }
 ```
 
-Optionally, render your other templates with djust's engine too by
-registering its backend **before** the existing Django backend. LiveViews do
-not need this step: they render with djust's engine either way, and
-`djust init` skips it. If the project uses the Django admin, keep the three
-context processors below: with this order djust's engine renders the admin's
-templates, and without the auth processor the admin index fails with
-`KeyError: 'user'`. The `djust.C016` system check flags a djust entry that
-lacks them ([#2883](https://github.com/djust-org/djust/issues/2883)).
+Then render your templates with djust's engine by registering its backend
+**before** the existing Django backend; Django tries engines in order, and
+keeping `DjangoTemplates` second means templates djust does not find, such as
+the admin's, still render. `djust init` adds this entry for you. If the project
+uses the Django admin, keep the `request`, `auth` and `messages` context
+processors below: with this order
+djust's engine renders the admin's templates, and without the auth processor
+the admin index fails with `KeyError: 'user'`. The `djust.C016` system check
+flags a djust entry that lacks them
+([#2883](https://github.com/djust-org/djust/issues/2883)).
 
 ```python
 TEMPLATES.insert(0, {
-    "NAME": "djust",
     "BACKEND": "djust.template_backend.DjustTemplateBackend",
     "DIRS": [BASE_DIR / "templates"],
     "APP_DIRS": True,
     "OPTIONS": {
         "context_processors": [
+            "django.template.context_processors.debug",
             "django.template.context_processors.request",
             "django.contrib.auth.context_processors.auth",
             "django.contrib.messages.context_processors.messages",
