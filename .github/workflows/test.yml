@@ -1,6 +1,7 @@
 name: Tests
 
 on:
+  workflow_dispatch:
   push:
     branches: [ main, '1.*' ]
     paths-ignore:
@@ -132,7 +133,7 @@ jobs:
   # Matrix-on-PR is the project's #1 minute sink (3 cells × ~10 min each).
   # On PR we run only the canonical interpreter (3.12); on push to main
   # we run the full matrix (3.12/3.13/3.14, plus 3.15 allowed to fail). 3.13 / 3.14 regressions are
-  # caught on the merge commit instead of at PR time — one merge later,
+  # caught on push or manual dispatch instead of at PR time — one merge later,
   # not "never". Historical evidence the matrix has value: PRs #450 / #452
   # shipped real 3.14-support fixes. Tradeoff accepted because the absolute
   # cost (~8 min/PR × dependabot volume) outweighed the latency.
@@ -172,7 +173,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ${{ github.event_name == 'push' && fromJSON('["3.12","3.13","3.14","3.15"]') || fromJSON('["3.12"]') }}
+        python-version: ${{ github.event_name != 'pull_request' && fromJSON('["3.12","3.13","3.14","3.15"]') || fromJSON('["3.12"]') }}
         group: [1, 2, 3, 4]
     name: python-tests (py${{ matrix.python-version }}, shard ${{ matrix.group }}/4)
     # NOT given rust-tests' CARGO_PROFILE_* override — measured, and it is a
@@ -208,6 +209,7 @@ jobs:
           save-if: ${{ matrix.group == 1 }}
 
       - name: Set up Python ${{ matrix.python-version }}
+        id: python
         uses: actions/setup-python@v7
         with:
           python-version: '${{ matrix.python-version }}'
@@ -216,21 +218,18 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v7
 
-      - name: Cache Python dependencies
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cache/uv
-            .venv
-          key: ${{ runner.os }}-python-${{ hashFiles('**/pyproject.toml', '**/uv.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-python-
-
+      # Cache downloads only: virtualenvs contain interpreter-specific binaries.
+      # setup-uv caches the active UV_CACHE_DIR, unlike the old ~/.cache/uv path.
       - name: Install Python dependencies and build extension
+        env:
+          UV_PYTHON: ${{ steps.python.outputs.python-path }}
+          EXPECTED_PYTHON: ${{ matrix.python-version }}
         run: |
-          # Install dependencies without building the project through uv's
-          # PEP 517 backend, then build the native extension exactly once.
-          uv sync --frozen --extra dev --no-install-project
+          uv sync --frozen --extra dev --no-install-project --python "$UV_PYTHON"
+          .venv/bin/python scripts/check-ci-python.py "$EXPECTED_PYTHON"
+          # maturin also invokes uv pip: target the verified venv, not the base.
+          export UV_PYTHON="$PWD/.venv/bin/python"
+          echo "UV_PYTHON=$UV_PYTHON" >> "$GITHUB_ENV"
           uv run --no-sync maturin develop --release
 
       # pytest-split is also in the [dev] extra; installing it here as well
@@ -238,7 +237,7 @@ jobs:
       # cannot leave a shard without the plugin (pytest would then reject
       # `--splits` as an unknown option and the shard would fail loudly).
       - name: Install test tools
-        run: uv pip install pytest-xdist pytest-split mypy
+        run: uv pip install --python .venv/bin/python pytest-xdist pytest-split mypy
 
       # Freshness gate for the client-faithful VDOM diff fixtures (#1979): the
       # committed JSON must equal a fresh regen, or the harness pins stale patch
