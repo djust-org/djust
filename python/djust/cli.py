@@ -442,7 +442,7 @@ def cmd_init(args: argparse.Namespace) -> int:
             dry_run=args.dry_run,
             install=not args.no_install,
             force=args.force,
-            templates=args.templates,
+            templates=getattr(args, "templates", False),
         )
     except InitError as e:
         print("Error: %s" % e)
