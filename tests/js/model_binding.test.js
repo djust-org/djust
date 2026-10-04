@@ -348,6 +348,214 @@ describe('model_binding', () => {
         });
     });
 
+    // #3355 follow-ups to #3334.
+    describe('views and elements dj-model had missed (#3355)', () => {
+        // Same capture as createEnv, but each update also records the view the
+        // element addressed (sendEvent's fourth argument).
+        function slotEnv(bodyHtml) {
+            const env = createEnv(bodyHtml);
+            const sent = [];
+            env.window.djust.liveViewInstance = {
+                sendEvent: vi.fn((eventName, params, _target, slotId) => {
+                    if (eventName === 'update_model') {
+                        sent.push({ field: params.field, value: params.value, slot: slotId });
+                    }
+                    return true;
+                }),
+            };
+            return { ...env, sent };
+        }
+        const typeInto = (window, el, value) => {
+            el.value = value;
+            el.dispatchEvent(new window.Event('input', { bubbles: true }));
+        };
+
+        it('keeps a debounced update per view when two views bind the same field name', () => {
+            const { window, document, sent } = slotEnv(
+                '<div dj-view="app.A" data-djust-target="w1"><input id="a" dj-model.debounce-100="q"></div>' +
+                '<div dj-view="app.B" data-djust-target="w2"><input id="b" dj-model.debounce-100="q"></div>');
+            vi.useFakeTimers();
+            try {
+                window.djust.bindModelElements(document);
+                typeInto(window, document.getElementById('a'), 'one');
+                typeInto(window, document.getElementById('b'), 'two');
+                vi.advanceTimersByTime(150);
+            } finally {
+                vi.useRealTimers();
+            }
+            expect(sent).toEqual([
+                { field: 'q', value: 'one', slot: 'w1' },
+                { field: 'q', value: 'two', slot: 'w2' },
+            ]);
+        });
+
+        it('still collapses rapid edits of one field in one view into the last', () => {
+            const { window, document, sent } = slotEnv(
+                '<div dj-view="app.A" data-djust-target="w1"><input id="a" dj-model.debounce-100="q"></div>');
+            vi.useFakeTimers();
+            try {
+                window.djust.bindModelElements(document);
+                const a = document.getElementById('a');
+                typeInto(window, a, 'o');
+                typeInto(window, a, 'on');
+                typeInto(window, a, 'one');
+                vi.advanceTimersByTime(150);
+            } finally {
+                vi.useRealTimers();
+            }
+            expect(sent).toEqual([{ field: 'q', value: 'one', slot: 'w1' }]);
+        });
+
+        it('sends the text of a contenteditable element', () => {
+            const { window, document, modelUpdates } = createEnv(
+                '<div id="ed" contenteditable="true" dj-model="body"></div>');
+            window.djust.bindModelElements(document);
+            const ed = document.getElementById('ed');
+            ed.textContent = 'hello world';
+            ed.dispatchEvent(new window.Event('input', { bubbles: true }));
+            expect(modelUpdates).toEqual([{ field: 'body', value: 'hello world' }]);
+        });
+
+        it('treats a bare contenteditable attribute as editable, and contenteditable="false" as not', () => {
+            const { window, document, modelUpdates } = createEnv(
+                '<div id="yes" contenteditable dj-model="y"></div>' +
+                '<div id="no" contenteditable="false" dj-model="n"></div>');
+            window.djust.bindModelElements(document);
+            document.getElementById('yes').textContent = 'Y';
+            document.getElementById('yes').dispatchEvent(new window.Event('input', { bubbles: true }));
+            document.getElementById('no').textContent = 'N';
+            document.getElementById('no').dispatchEvent(new window.Event('input', { bubbles: true }));
+            expect(modelUpdates[0]).toEqual({ field: 'y', value: 'Y' });
+            // not editable: not a text value (no contenteditable read)
+            expect(modelUpdates[1].value).toBeUndefined();
+        });
+
+        it('syncs a .lazy contenteditable element when it loses focus', () => {
+            const { window, document, modelUpdates } = createEnv(
+                '<div id="ed" contenteditable="true" dj-model.lazy="body"></div>');
+            window.djust.bindModelElements(document);
+            const ed = document.getElementById('ed');
+            ed.textContent = 'draft';
+            ed.dispatchEvent(new window.Event('input', { bubbles: true }));
+            expect(modelUpdates).toEqual([]);
+            ed.dispatchEvent(new window.Event('focusout', { bubbles: true }));
+            expect(modelUpdates).toEqual([{ field: 'body', value: 'draft' }]);
+        });
+
+        it('binds dj-model.debounce-N on a contenteditable element', () => {
+            const { window, document, modelUpdates } = createEnv(
+                '<div id="ed" contenteditable="true" dj-model.debounce-50="note"></div>');
+            vi.useFakeTimers();
+            try {
+                window.djust.bindModelElements(document);
+                const ed = document.getElementById('ed');
+                ed.textContent = 'noted';
+                ed.dispatchEvent(new window.Event('input', { bubbles: true }));
+                expect(modelUpdates).toEqual([]);
+                vi.advanceTimersByTime(80);
+            } finally {
+                vi.useRealTimers();
+            }
+            expect(modelUpdates).toEqual([{ field: 'note', value: 'noted' }]);
+        });
+
+        it('rebinds when a patch turns dj-model into dj-model.debounce-N', async () => {
+            const { window, document, modelUpdates } = createEnv(
+                '<input id="a" type="text" dj-model="q">');
+            window.djust.bindModelElements(document);
+            const input = document.getElementById('a');
+            input.removeAttribute('dj-model');
+            input.setAttribute('dj-model.debounce-50', 'q');
+            window.djust.bindModelElements(document);
+
+            typeInto(window, input, 'x');
+            expect(modelUpdates).toEqual([]); // now debounced
+            await new Promise((resolve) => setTimeout(resolve, 120));
+            expect(modelUpdates).toEqual([{ field: 'q', value: 'x' }]);
+        });
+
+        it('rebinds when a patch changes the debounce of a surviving input', async () => {
+            const { window, document, modelUpdates } = createEnv(
+                '<input id="a" type="text" dj-model.debounce-5000="q">');
+            window.djust.bindModelElements(document);
+            const input = document.getElementById('a');
+            input.removeAttribute('dj-model.debounce-5000');
+            input.setAttribute('dj-model.debounce-20', 'q');
+            window.djust.bindModelElements(document);
+
+            typeInto(window, input, 'y');
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            expect(modelUpdates).toEqual([{ field: 'q', value: 'y' }]);
+        });
+
+        it('rebinds when an unrelated attribute change comes with a new modifier', () => {
+            const { window, document, modelUpdates } = createEnv(
+                '<input id="a" type="text" dj-model="q" class="x">');
+            window.djust.bindModelElements(document);
+            const input = document.getElementById('a');
+            input.setAttribute('dj-model.lazy', 'q'); // an attribute was added
+            window.djust.bindModelElements(document);
+
+            typeInto(window, input, 'z');
+            expect(modelUpdates).toEqual([]); // lazy now waits for change
+            input.dispatchEvent(new window.Event('change', { bubbles: true }));
+            expect(modelUpdates).toEqual([{ field: 'q', value: 'z' }]);
+        });
+
+        it('binds a numbered-debounce input that gains the attribute on a surviving element', async () => {
+            const { window, document, modelUpdates } = createEnv('<input id="a" type="text">');
+            window.djust.bindModelElements(document);
+            const input = document.getElementById('a');
+            input.setAttribute('dj-model.debounce-20', 'late');
+            window.djust.bindModelElements(document);
+
+            typeInto(window, input, 'v');
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            expect(modelUpdates).toEqual([{ field: 'late', value: 'v' }]);
+        });
+
+        // The scan runs after every DOM update. A bound element whose binding
+        // attribute is unchanged is skipped on that attribute alone; only an
+        // element nothing has claimed is searched by attribute name. (The cost
+        // itself is measured by scripts, not here: a timing assertion is flaky.)
+        it('does not search a bound element for attribute names again', () => {
+            const inputs = [];
+            for (let i = 0; i < 40; i++) inputs.push(`<input id="i${i}" type="text" dj-model="f${i}" class="c">`);
+            const { window, document } = createEnv(inputs.join(''));
+            window.djust.bindModelElements(document);
+
+            const real = window.Element.prototype.getAttributeNames;
+            let searched = 0;
+            window.Element.prototype.getAttributeNames = function () {
+                // jsdom's selector engine calls it too; count the bundle's own calls.
+                if (!new Error().stack.includes('node_modules')) searched++;
+                return real.call(this);
+            };
+            try {
+                window.djust.bindModelElements(document);
+                window.djust.bindModelElements(document);
+            } finally {
+                window.Element.prototype.getAttributeNames = real;
+            }
+            expect(searched).toBe(0);
+        });
+
+        it('skips nothing it should bind: many inputs, one changed', () => {
+            const html = [];
+            for (let i = 0; i < 30; i++) html.push(`<input id="i${i}" type="text" dj-model="f${i}">`);
+            const { window, document, modelUpdates } = createEnv(html.join(''));
+            window.djust.bindModelElements(document);
+            document.getElementById('i7').setAttribute('dj-model', 'renamed');
+            window.djust.bindModelElements(document);
+            typeInto(window, document.getElementById('i7'), 'q');
+            typeInto(window, document.getElementById('i8'), 'r');
+            expect(modelUpdates).toEqual([
+                { field: 'renamed', value: 'q' },
+                { field: 'f8', value: 'r' },
+            ]);
+        });
+    });
+
     describe('exports', () => {
         it('exposes bindModelElements', () => {
             const { window } = createEnv();

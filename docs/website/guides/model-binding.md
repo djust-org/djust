@@ -83,6 +83,12 @@ To re-render on each change (live search, validation as you type), use an event 
 
 An input with `dj-model` is bound when it enters the page, not only at load: one a patch inserts (an `{% if %}` that turns true, a row added to a list), one inside a `dj-lazy` view that hydrates later, and one the destination of a `live_redirect` adds all send `update_model` from their first edit. Changing the `dj-model` attributes of an input that stays on the page (`dj-model="a"` to `dj-model="b"`, or adding `.lazy`) rebinds it to the new field.
 
+### Which elements bind
+
+`dj-model` binds a form control (`input`, `textarea`, `select`) or a `contenteditable` element, whose text is the value it sends. A `contenteditable` element sends on every `input` event; with `.lazy` it sends when it loses focus (it fires no `change`). The `.debounce-N` form is found on those same elements. On any other element (a custom element that fires `input`) use `dj-model`, `dj-model.lazy` or the unnumbered `dj-model.debounce` (300 ms).
+
+A debounced update waits per field *and per view*: two `dj-lazy` views that bind the same field name each keep their own pending update.
+
 ## Modifiers
 
 ### `dj-model.lazy`

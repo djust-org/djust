@@ -15,6 +15,11 @@
 //   dj-model.lazy="field_name"         — sync on 'change' event (blur)
 //   dj-model.debounce-300="field_name" — debounce by 300ms
 //
+// The bound element is a form control (input, textarea, select) or a
+// contenteditable element, whose text is the value. Any other element is bound
+// by the plain and unnumbered forms only (dj-model, dj-model.lazy,
+// dj-model.debounce).
+//
 // The server-side ModelBindingMixin handles the 'update_model' event
 // and sets the attribute on the view instance.
 //
@@ -31,6 +36,7 @@ function _parseModelAttr(el) {
     // Check for dj-model.lazy and dj-model.debounce-N
     const attrs = el.attributes;
     let field = null;
+    let source = null;
     let lazy = false;
     let debounce = 0;
 
@@ -40,25 +46,38 @@ function _parseModelAttr(el) {
         if (name === 'dj-model') {
             // eslint-disable-next-line security/detect-object-injection
             field = attrs[i].value;
+            source = name;
         } else if (name === 'dj-model.lazy') {
             // eslint-disable-next-line security/detect-object-injection
             field = attrs[i].value;
+            source = name;
             lazy = true;
         } else if (name.startsWith('dj-model.debounce')) {
             // eslint-disable-next-line security/detect-object-injection
             field = attrs[i].value;
+            source = name;
             const match = name.match(/debounce-?(\d+)/);
             debounce = match ? parseInt(match[1], 10) : 300;
         }
     }
 
-    return { field, lazy, debounce };
+    return { field, lazy, debounce, source };
 }
 
 /**
  * Get the current value from a form element.
  */
+function _isContentEditable(el) {
+    if (el.isContentEditable === true) return true;
+    const attr = el.getAttribute('contenteditable');
+    return attr !== null && attr.toLowerCase() !== 'false';
+}
+
 function _getElementValue(el) {
+    if (_isContentEditable(el)) {
+        // innerText keeps the line breaks the user typed; jsdom has none.
+        return typeof el.innerText === 'string' ? el.innerText : el.textContent;
+    }
     if (el.type === 'checkbox') {
         return el.checked;
     }
@@ -91,10 +110,25 @@ function _sendModelUpdate(field, value, el) {
 }
 
 /**
+ * True when `el` is bound and its dj-model attribute is as it was at bind time,
+ * so re-parsing it would change nothing. Two property reads and one attribute
+ * lookup instead of the attribute walk _bindModel does; anything that does not
+ * match (a changed value, a renamed or removed attribute, an attribute added)
+ * falls through to _bindModel, which rebuilds the handler (#2858).
+ */
+function _modelUnchanged(el) {
+    const source = el._djustModelSource;
+    return el._djustModelBound === true
+        && typeof source === 'string'
+        && el.attributes.length === el._djustModelAttrCount
+        && el.getAttribute(source) === el._djustModelSourceValue;
+}
+
+/**
  * Bind dj-model to a single element.
  */
 function _bindModel(el) {
-    const { field, lazy, debounce } = _parseModelAttr(el);
+    const { field, lazy, debounce, source } = _parseModelAttr(el);
 
     // #2858 — the handler closure captures field / lazy / debounce parsed
     // from the attribute NAME + VALUE at bind time, and an element that
@@ -105,7 +139,11 @@ function _bindModel(el) {
     // attrs otherwise. Re-mark unconditionally after the eviction branch.
     const boundKey = (field || '') + '\u0000' + (lazy ? 'lazy' : '') + '\u0000' + debounce;
     if (el._djustModelBound) {
-        if (el._djustModelBoundKey === boundKey) return;
+        if (el._djustModelBoundKey === boundKey) {
+            // Same binding; an unrelated attribute came or went.
+            el._djustModelAttrCount = el.attributes.length;
+            return;
+        }
         if (el._djustModelHandler) {
             const staleTypes = el._djustModelEventTypes || [];
             for (const t of staleTypes) {
@@ -115,15 +153,24 @@ function _bindModel(el) {
     }
     el._djustModelBound = true;
     el._djustModelBoundKey = boundKey;
+    // What _modelUnchanged() compares against.
+    el._djustModelSource = source;
+    el._djustModelSourceValue = field;
+    el._djustModelAttrCount = el.attributes.length;
     if (!field) return;
 
-    const eventType = lazy ? 'change' : 'input';
+    // A contenteditable element fires `input` as it is typed in but no
+    // `change`; leaving it is its commit point.
+    const eventType = lazy ? (_isContentEditable(el) ? 'focusout' : 'change') : 'input';
 
     const handler = () => {
         const value = _getElementValue(el);
 
         if (debounce > 0) {
-            const timerKey = `model:${field}`;
+            // Keyed by the view the element lives in as well as the field: two
+            // views binding the same field name must not drop each other's
+            // pending update (#3355).
+            const timerKey = `model:${slotIdFor(el) || ''}:${field}`;
             if (_modelDebounceTimers.has(timerKey)) {
                 clearTimeout(_modelDebounceTimers.get(timerKey));
             }
@@ -147,23 +194,42 @@ function _bindModel(el) {
     }
 }
 
+// The spellings a selector can name outright. Queried one selector at a time:
+// a comma group is several times slower than its parts in some selector engines
+// (jsdom's), and this runs after every DOM update.
+const _MODEL_EXACT = ['[dj-model]', '[dj-model\\.lazy]', '[dj-model\\.debounce]'];
+// `dj-model.debounce-N` carries its N in the attribute NAME, which no selector
+// can match, so these elements are searched by attribute name instead.
+const _MODEL_NUMBERED_CANDIDATES = ['input', 'textarea', 'select', '[contenteditable]'];
+
 /**
  * Scan and bind all dj-model elements.
+ *
+ * Runs after every DOM update (#3334), so the common case must be cheap: a page
+ * of already-bound inputs costs the native selector matches and a few property
+ * reads per element, not an attribute walk (#3355).
  */
 function bindModelElements(root) {
     root = root || document;
-    const elements = root.querySelectorAll('[dj-model], [dj-model\\.lazy], [dj-model\\.debounce]');
-    elements.forEach(_bindModel);
+    _MODEL_EXACT.forEach(selector => {
+        root.querySelectorAll(selector).forEach(el => {
+            if (!_modelUnchanged(el)) _bindModel(el);
+        });
+    });
 
-    // Also check for dj-model with modifiers via attribute prefix
-    root.querySelectorAll('input, textarea, select').forEach(el => {
-        for (let i = 0; i < el.attributes.length; i++) {
-            // eslint-disable-next-line security/detect-object-injection
-            if (el.attributes[i].name.startsWith('dj-model')) {
-                _bindModel(el);
-                break;
+    // dj-model.debounce-N on a control (or contenteditable element)
+    _MODEL_NUMBERED_CANDIDATES.forEach(selector => {
+        root.querySelectorAll(selector).forEach(el => {
+            if (_modelUnchanged(el)) return;
+            const names = el.getAttributeNames();
+            for (let i = 0; i < names.length; i++) {
+                // eslint-disable-next-line security/detect-object-injection
+                if (names[i].startsWith('dj-model')) {
+                    _bindModel(el);
+                    break;
+                }
             }
-        }
+        });
     });
 }
 
