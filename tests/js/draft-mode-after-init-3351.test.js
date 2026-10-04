@@ -411,6 +411,49 @@ describe('draft mode: a mount of another container leaves the page alone (#3351)
     });
 });
 
+describe('draft mode: a slot restores its draft on its first mount only (#3351)', () => {
+    const inner = FORM('slotk', '<input type="text" name="sf" id="sf" data-draft="true" value="">');
+    const frame = (html) => ({
+        type: 'mount', view: 'test.W', target_id: 'w1', version: 1, html, has_ids: true,
+    });
+
+    async function booted() {
+        const dom = new JSDOM(
+            `<div dj-root dj-view="test.Editor"><p>page</p></div>` +
+            `<div id="w1" dj-view="test.W" data-djust-target="w1">${inner}</div>`,
+            { runScripts: 'dangerously', url: 'http://localhost/' });
+        const w = dom.window;
+        w.DJUST_USE_WEBSOCKET = false;
+        w.WebSocket = class { constructor() { this.readyState = 0; } send() {} close() {} };
+        w.localStorage.setItem('djust_draft_slotk', JSON.stringify({ data: { sf: 'olddraft' }, timestamp: 1 }));
+        w.eval(clientCode);
+        w.document.dispatchEvent(new w.Event('DOMContentLoaded'));
+        await initialized(w);
+        const socket = new w.djust.LiveViewWebSocket();
+        socket.primaryViewPath = 'test.Editor';
+        return { dom, w, socket };
+    }
+    const settle = async (w) => {
+        for (let i = 0; i < 10; i++) await new Promise((resolve) => w.setTimeout(resolve, 0));
+    };
+
+    it('restores on the first mount, keeps the server value on a later one (the flag is already clear)', async () => {
+        const { dom, w, socket } = await booted();
+        try {
+            const sf = () => w.document.querySelector('#sf');
+            await socket.handleMessage(frame(inner));
+            await settle(w);
+            expect(sf().value).toBe('olddraft'); // first mount: the draft wins
+
+            sf().value = 'SERVER'; // a handler of the slot's view set it
+            expect(w.djust._isReconnect).toBe(false); // _processAutoRecover has cleared it
+            await socket.handleMessage(frame(inner.replace('value=""', 'value="SERVER"'))); // re-mount after a reconnect
+            await settle(w);
+            expect(sf().value).toBe('SERVER');
+        } finally { dom.window.close(); }
+    });
+});
+
 describe('draft mode: a draft keeps the fields the page no longer holds (#3351)', () => {
     const step1 = text('s1');
     const step2 = text('s2');
@@ -460,6 +503,30 @@ describe('draft mode: a draft keeps the fields the page no longer holds (#3351)'
 
         expect(field.value).toBe('one');
         expect(env.stored('k')).toEqual({ s1: 'one', s2: 'two' });
+    });
+
+    it('survives a rename round trip with edits under both names', async () => {
+        const env = await boot(FORM('k', text('a')));
+        const field = env.document.querySelector('[name="a"]');
+        env.type(field, 'x'); // edited under a
+        env.flush();
+
+        field.name = 'b'; // the morph reuses the element for b
+        field.value = '';
+        env.window.djust.reinitAfterDOMUpdate();
+        env.type(field, 'y'); // edited under b
+        env.flush();
+
+        field.name = 'a'; // and back: a is a new field again, its saved value returns
+        field.value = '';
+        env.window.djust.reinitAfterDOMUpdate();
+        expect(field.value).toBe('x');
+
+        field.name = 'b';
+        field.value = '';
+        env.window.djust.reinitAfterDOMUpdate();
+        expect(field.value).toBe('y');
+        expect(env.stored('k')).toEqual({ a: 'x', b: 'y' });
     });
 
     it('merges with an unwritten save as well as with storage', async () => {

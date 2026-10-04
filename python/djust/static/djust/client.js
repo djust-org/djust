@@ -1129,16 +1129,21 @@ function storeSignedSnapshot(data, primaryViewPath) {
 // mount-context state (per-connection values, and ADR-034's per-instance
 // component identities) reaches the page. Shared by the WebSocket and SSE
 // mount paths (#1646: one path, not two).
-function _morphPrerenderedMount(container, html, formRecoverySnapshot) {
+function _morphPrerenderedMount(container, html, formRecoverySnapshot, restoreDraft) {
     const temp = document.createElement('div');
     // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
     temp.innerHTML = html;
     morphChildren(container, temp);
     // The morph resets form fields to the server's values; put a saved draft
     // back into this container before form recovery, which restores what the
-    // user had typed (#3351). A reconnect is not a page load: its mount keeps
-    // the server's values, and recovery brings back what was typed.
-    if (!window.djust._isReconnect) restoreDraftFields(container);
+    // user had typed (#3351). Only a FIRST mount does: a reconnect's mount
+    // keeps the server's values, and recovery brings back what was typed.
+    // `restoreDraft` is the caller's answer for this mount (a view slot knows
+    // whether it mounted before); without one, the page view's own flag, which
+    // is set for exactly the page mount a reconnect makes.
+    if (restoreDraft === undefined ? !window.djust._isReconnect : restoreDraft) {
+        restoreDraftFields(container);
+    }
     if (formRecoverySnapshot) window.djust._restoreFormRecovery(formRecoverySnapshot);
     // #1813 (a): embedded-view wrappers carry NO `id`, so morphChildren can
     // only align them positionally. Reconcile them by the stable
@@ -4165,7 +4170,7 @@ const globalDraftManager = new DraftManager();
 //   step reusing the input), which makes it a new field: a new name restores
 //   again.
 // _draftEdited: field -> the name the user typed it under. A restore never
-//   overwrites an edited field.
+//   overwrites an edited field. A rename forgets it (a new field).
 const _draftRestored = new WeakMap();
 const _draftEdited = new WeakMap();
 
@@ -4262,6 +4267,9 @@ function syncDraftFields(atInit) {
     const savedByKey = new Map();
     document.querySelectorAll('[data-draft="true"]').forEach(field => {
         if (_draftRestored.get(field) === field.name) return;
+        // Renamed since it was last seen: a new field, so what the user typed
+        // under the old name says nothing about this one.
+        if (_draftRestored.has(field)) _draftEdited.delete(field);
         _draftRestored.set(field, field.name);
         const place = _draftTargetFor(field);
         const draftKey = place && place.root.getAttribute('data-draft-key');
@@ -11766,6 +11774,10 @@ const _SLOT_FRAME_TYPES = new Set([
     'mount', 'patch', 'html_update', 'html_recovery', 'embedded_update', 'child_update', 'sticky_update',
 ]);
 
+// Slots that have had a mount in this document, kept across reconnects (the
+// map of mounted slots is cleared when the socket drops).
+const _slotsMountedBefore = new Set();
+
 function _slotSelector(targetId) {
     const escaped = (typeof CSS !== 'undefined' && typeof CSS.escape === 'function')
         ? CSS.escape(targetId)
@@ -11952,6 +11964,10 @@ function applySlotMount(transport, data, options = {}) {
         }
         return false;
     }
+    // A slot's draft is restored by its first mount only: a later one (the
+    // server re-mounting every view after a reconnect) keeps the server's values.
+    const mountedBefore = _slotsMountedBefore.has(data.target_id);
+    _slotsMountedBefore.add(data.target_id);
     registerSlot(data.target_id, data.view || container.getAttribute('dj-view'), data.version);
     installAdditionalMountEventConfig(data);
     if (typeof data.view === 'string' && data.view) {
@@ -11969,7 +11985,7 @@ function applySlotMount(transport, data, options = {}) {
     const htmlMode = options.html || 'replace';
     if (typeof data.html === 'string' && htmlMode !== 'none') {
         if (htmlMode === 'morph' && data.has_ids === true) {
-            _morphPrerenderedMount(container, data.html);
+            _morphPrerenderedMount(container, data.html, undefined, !mountedBefore);
         } else {
             // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
             container.innerHTML = data.html;

@@ -177,15 +177,21 @@ for a field present at load. After that the draft is never put back: not over a
 field the user is typing in (focused, or already edited), not after the user
 clears it, and not when an unrelated view mounts or the connection reconnects, so
 a value the server sets later is kept. A morph that reuses one input under a new
-`name` (a wizard step) counts as a new field.
+`name` (a wizard step) counts as a new field. A `dj-lazy` view restores its draft
+when it first mounts; its re-mount after a reconnect keeps the server's values.
 
 ### What a draft holds
 
 Each draft root saves the fields inside it under its own `data-draft-key`. A save
 is the fields on the page now merged over what is already stored for the key, so
 a field that is not on the page at the moment, such as an earlier wizard step,
-keeps its saved value and is restored when that step shows again. Those values
-stay until `self.clear_draft()` (a successful submit) removes the whole draft.
+keeps its saved value and is restored when that step shows again. Those values,
+and the keys of fields you later remove from the template, stay until
+`self.clear_draft()` (a successful submit) removes the whole draft. **Nothing
+else clears a draft: not logging out, not signing in as someone else, not
+leaving the page.** On a shared browser the next user sees the previous user's
+draft unless you call `clear_draft()` or key the draft per user
+(`draft_key`).
 
 - Two roots with the same `data-draft-key` write the same draft and overwrite
   each other's fields of the same name. Give each root its own key.

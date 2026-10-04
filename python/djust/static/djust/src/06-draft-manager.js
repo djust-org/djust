@@ -114,7 +114,7 @@ const globalDraftManager = new DraftManager();
 //   step reusing the input), which makes it a new field: a new name restores
 //   again.
 // _draftEdited: field -> the name the user typed it under. A restore never
-//   overwrites an edited field.
+//   overwrites an edited field. A rename forgets it (a new field).
 const _draftRestored = new WeakMap();
 const _draftEdited = new WeakMap();
 
@@ -211,6 +211,9 @@ function syncDraftFields(atInit) {
     const savedByKey = new Map();
     document.querySelectorAll('[data-draft="true"]').forEach(field => {
         if (_draftRestored.get(field) === field.name) return;
+        // Renamed since it was last seen: a new field, so what the user typed
+        // under the old name says nothing about this one.
+        if (_draftRestored.has(field)) _draftEdited.delete(field);
         _draftRestored.set(field, field.name);
         const place = _draftTargetFor(field);
         const draftKey = place && place.root.getAttribute('data-draft-key');
