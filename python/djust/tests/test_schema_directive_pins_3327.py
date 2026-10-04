@@ -250,9 +250,11 @@ def test_dj_key_description_matches_the_parser_and_the_differ() -> None:
     assert "DJE-051" in (GUIDES / "error-codes.md").read_text(encoding="utf-8")
 
 
-#: Categories `djust_ai_context._section_directives` actually emits. dj-prefetch
-#: and dj-key are in "performance", which it does not list, so they never reach
-#: the generated files (reported on #3327); their pins above read `DIRECTIVES`.
+#: `djust_ai_context._section_directives` emits every category in `DIRECTIVES`
+#: (#3353; it used to skip performance, animation and recovery, so the corrected
+#: dj-prefetch / dj-key text never reached the generated files). Phrases from
+#: those categories are pinned here beside the others, in the three generated
+#: formats.
 EMITTED_PHRASES = (
     "It does not disable anything.",
     "within the same LiveView or component",
@@ -261,12 +263,17 @@ EMITTED_PHRASES = (
     "dj-navigate ignores it",
     '<form id="checkout-form"',
     "INERT: dj-target is dropped before the event is sent",
+    # performance (omitted from the generated files before #3353)
+    "65 ms",
+    "'false' opts a link out of both prefetch layers",
+    "positional diffing",
+    "stay with the position instead of following the item",
 )
 
 #: The pre-#3291 / pre-#3327 sentences, each of which taught something false.
-#: Only entries in emitted categories: the dj-prefetch and dj-key stale sentences
-#: are pinned absent from `DIRECTIVES` in their own tests above.
 STALE_PHRASES = (
+    "via the service worker when the user hovers",
+    "destroying and rebuilding",
     "e.target.reset()",
     "Scope the server re-render to a specific element",
     "in flight anywhere on the page",

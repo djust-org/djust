@@ -212,8 +212,37 @@ def _generate_content(framework: dict, project: dict, fmt: str) -> str:
     return "\n".join(sections)
 
 
+#: Categories rendered in full (description, modifiers, fenced example), in this
+#: order. Any other category in `DIRECTIVES` is emitted after them (see
+#: `_category_order`) in a compact two-line form, so a directive added to the
+#: schema reaches the generated files without anyone editing this list (#3353).
+_FULL_CATEGORIES = (
+    "event",
+    "binding",
+    "dom",
+    "loading",
+    "client",
+    "modifier",
+    "hooks",
+    "navigation",
+    "streaming",
+    "upload",
+)
+
+
+def _category_order(categories: Any) -> list[str]:
+    """`_FULL_CATEGORIES` that are present, then every other category by name."""
+    present = set(categories)
+    full = [c for c in _FULL_CATEGORIES if c in present]
+    return full + sorted(present.difference(_FULL_CATEGORIES))
+
+
 def _section_directives(framework: dict) -> str:
-    """Generate the template directives reference section."""
+    """Generate the template directives reference section.
+
+    Every category present in the schema is emitted: the full-format ones in
+    `_FULL_CATEGORIES` order, the rest compactly, alphabetically.
+    """
     lines = ["## Template Directives\n"]
 
     by_category: dict[str, list[Any]] = {}
@@ -221,31 +250,22 @@ def _section_directives(framework: dict) -> str:
         cat = d.get("category", "other")
         by_category.setdefault(cat, []).append(d)
 
-    category_order = [
-        "event",
-        "binding",
-        "dom",
-        "loading",
-        "client",
-        "modifier",
-        "hooks",
-        "navigation",
-        "streaming",
-        "upload",
-    ]
-
-    for cat in category_order:
-        directives = by_category.get(cat, [])
-        if not directives:
-            continue
+    for cat in _category_order(by_category):
         lines.append("### %s\n" % cat.title())
-        for d in directives:
+        compact = cat not in _FULL_CATEGORIES
+        for d in by_category[cat]:
             lines.append("- **`%s`** = `%s`" % (d["name"], d.get("value", "")))
             lines.append("  %s" % d.get("description", ""))
             if d.get("modifiers"):
                 lines.append("  Modifiers: %s" % ", ".join(".%s" % m for m in d["modifiers"]))
             if d.get("example"):
-                lines.append("  ```html\n  %s\n  ```" % d["example"])
+                if compact and not {"`", "\n"} & set(d["example"]):
+                    lines.append("  Example: `%s`" % d["example"])
+                else:
+                    lines.append("  ```html\n  %s\n  ```" % d["example"])
+            if not compact:
+                lines.append("")
+        if compact:
             lines.append("")
 
     # Data attribute types
