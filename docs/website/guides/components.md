@@ -1091,10 +1091,25 @@ and djust's Rust engine (the one that renders LiveView templates). They are
 also available as context-string variables (`{{ theme_head }}`,
 `{{ theme_switcher }}`, `{{ theme_panel }}`, `{{ theme_mode_toggle }}`,
 `{{ theme_preset_selector }}`) for the default-args case. Prefer the
-`{{ ... }}` form when a tag appears multiple times on a page (it pre-renders
+`{{ ... }}` form when a tag appears multiple times on a page (it renders
 once per request); use the `{% theme_X %}` tag form when you need
 customization-with-args, e.g. `{% theme_panel show_packs=False %}` or
 `{% theme_preset_selector layout="grid" %}`.
+
+The processor is cheap on a page that does not use them. The five HTML
+variables render **on first read**, so a JSON view, a redirect, the admin or a
+page that uses only the `{% theme_X %}` tags pays for none of them. The settings
+variables (`theme_preset`, `theme_mode`, `theme_resolved_mode`, `theme_pack`,
+`theme_presets`, `components_gallery_url`) are plain values computed up front.
+A template that reads an HTML variable gets the same text it always did.
+
+The HTML variables are not `str` instances: they are lazy trusted-HTML objects
+(`isinstance(theme_head, str)` is `False`). `{{ ... }}`, `|safe`, `|length`,
+`|default`, `|slice`, `{% if theme_head %}`, `==` against a string and
+`str(...)` all work, and each of them renders the chunk. Code that needs a real
+`str` should call `str(...)`. Each chunk is built for its own request and held
+on that request, so a CSP nonce or a user's preset never reaches another
+request.
 
 ### Component tags: bindings, attributes, selects and alerts
 

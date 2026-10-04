@@ -6,12 +6,12 @@ Adds theme CSS and state to template context.
 
 import logging
 from functools import lru_cache
-from typing import Any, Callable
+from typing import Any
 
 from django.contrib.staticfiles.storage import staticfiles_storage
 from django.http import HttpRequest
-from django.utils.safestring import mark_safe
 
+from ._lazy_html import LazyThemeHTML
 from .manager import (
     ThemeMode,
     ThemeState,
@@ -155,73 +155,82 @@ def theme_context(request: HttpRequest) -> dict:
     presets = manager.get_available_presets()
     presets_key = _presets_to_cache_key(presets)
 
-    # `theme_switcher` is the simple state-only render — keep it cached.
-    # `theme_head` MUST go through the existing simple_tag (#1452): the
-    # classic-tag template emits a strict superset of what
-    # `_render_theme_outputs` was building (component-CSS link,
-    # print.css link, components.js script, deferred-CSS preload, RTL
-    # direction, cookie-namespace JS prefix). A hand-built string drops
-    # silently — production saw unstyled theme panels because the
-    # `<link>` to `djust_theming/css/components.css` was missing.
-    # Pin `{{ theme_head }}` ≡ `{% theme_head %}` for the default args.
-    _theme_head_only_unused, theme_switcher = _render_theme_outputs(
-        state.theme,
-        state.preset,
-        state.pack,
-        state.mode,
-        state.resolved_mode,
-        state.layout,
-        presets_key,
-    )
-
-    # Pre-render every tag's output by calling the existing simple_tag
-    # bodies once. The work runs once per request instead of once per
-    # `{% theme_X %}` invocation in the template — a meaningful savings
-    # when the same tag appears multiple times on a page.
-    # Customization-with-args (`{% theme_panel show_packs=False %}`)
-    # remains available via the existing template tags.
+    # Lazy HTML, eager settings (#3028). The five HTML chunks below cost
+    # ~1-3 ms each to render (~23 ms with a large pack) and most requests that
+    # build a RequestContext never print them: JSON views, redirects, admin,
+    # pages that use only the ``{% theme_X %}`` tags. Each chunk is therefore a
+    # `LazyThemeHTML` that renders on the first read and is then fixed. The
+    # cheap settings values below (preset, mode, pack, the preset list) stay
+    # eager, because templates and checks read them as plain values.
     #
-    # Per-tag fail-soft: a broken manifest in ONE tag (e.g.,
-    # theme_panel) must not blank the OTHER pre-renders. Each tag is
-    # independently wrapped so a failure leaves only that string empty;
-    # the template falls back to `{% theme_X %}` for that one.
-    from .templatetags.theme_tags import (
-        theme_head as _theme_head_tag,
-        theme_mode_toggle as _theme_mode_toggle_tag,
-        theme_panel as _theme_panel_tag,
-        theme_preset_selector as _theme_preset_selector_tag,
-    )
+    # Every chunk's factory closes over THIS request, so a lazy chunk renders
+    # for the request it was built for however late it is read, and nothing is
+    # shared across requests: no module-level store holds a chunk, only the
+    # request does (below). `request.csp_nonce` is read when the chunk renders,
+    # so a page that never prints the head never forces django-csp to mint a
+    # nonce for the response either.
+    #
+    # `theme_switcher` is the simple state-only render, still served from the
+    # per-process `_render_theme_outputs` cache. `theme_head` MUST go through
+    # the existing simple_tag (#1452): the classic-tag template emits a strict
+    # superset of what `_render_theme_outputs` was building (component-CSS
+    # link, print.css link, components.js script, deferred-CSS preload, RTL
+    # direction, cookie-namespace JS prefix). A hand-built string drops
+    # silently, and production saw unstyled theme panels because the `<link>`
+    # to `djust_theming/css/components.css` was missing. Pin
+    # `{{ theme_head }}` == `{% theme_head %}` for the default args.
+    def _render_switcher() -> str:
+        return _render_theme_outputs(
+            state.theme,
+            state.preset,
+            state.pack,
+            state.mode,
+            state.resolved_mode,
+            state.layout,
+            presets_key,
+        )[1]
 
-    tag_context = {"request": request}
+    # Each tag body is rendered by calling the existing simple_tag, once per
+    # request instead of once per `{% theme_X %}` invocation in the template
+    # (a meaningful saving when the same tag appears several times on a page).
+    # Customization-with-args (`{% theme_panel show_packs=False %}`) remains
+    # available through the tags.
+    #
+    # Per-tag fail-soft: a broken manifest in ONE tag (e.g. theme_panel) must
+    # not blank the OTHER pre-renders. Each chunk is independently wrapped, so
+    # a failure leaves only that string empty; the template falls back to
+    # `{% theme_X %}` for that one.
+    def _tag_chunk(tag_name: str) -> LazyThemeHTML:
+        def _render() -> Any:
+            from .templatetags import theme_tags
 
-    def _safe_render(fn: Callable[..., Any]) -> str:
-        try:
-            return fn(tag_context) or ""
-        except Exception:
-            return ""
+            return getattr(theme_tags, tag_name)({"request": request}) or ""
 
-    # Request-scoped memoization of the four tag bodies (#1727).
+        # The head was always marked safe; the other tag bodies were passed
+        # through as returned, so a plain str from one is still escaped.
+        return LazyThemeHTML(_render, trust_plain_str=tag_name == "theme_head")
+
+    # Request-scoped memoization of the chunks (#1727).
     #
     # `_apply_context_processors` runs `theme_context` on EVERY WebSocket
-    # event (rust_bridge.py — completes #1722). Without memoization the
-    # four `_safe_render` calls below re-render four uncached tag bodies
-    # per event (`_render_theme_outputs` is already `@lru_cache`'d; these
-    # were not). We cache the four outputs ON THE REQUEST, keyed on the
-    # resolved theme-state tuple (the same shape `_render_theme_outputs`
-    # keys on). When theme state is unchanged across events the cache
-    # serves the four strings; when state changes (a live theme/mode/
-    # preset switch) the key differs and they recompute, so dynamic
-    # switching is preserved — we do NOT first-sync-gate (CLAUDE.md v1.0.2
-    # canon: per-event work feeding change-detection must be memoized, not
-    # skipped on later syncs).
+    # event (rust_bridge.py, completes #1722). Without memoization each event
+    # would build fresh chunks and re-render the four uncached tag bodies
+    # (`_render_theme_outputs` is already `@lru_cache`'d; these were not). The
+    # chunks are cached ON THE REQUEST, keyed on the resolved theme-state tuple
+    # (the same shape `_render_theme_outputs` keys on). When theme state is
+    # unchanged across events the same chunk objects, rendered once, are
+    # served; when state changes (a live theme/mode/preset switch) the key
+    # differs and fresh chunks are built, so dynamic switching is preserved. We
+    # do NOT first-sync-gate (CLAUDE.md v1.0.2 canon: per-event work feeding
+    # change-detection must be memoized, not skipped on later syncs).
     #
     # Scope is request-level (not a cross-request module cache) by design:
     # `theme_head` embeds a per-request CSP nonce (`request.csp_nonce`, #3284),
     # and a request-scoped cache cannot leak that value across requests. (A
-    # cross-request cache would have to key on the nonce, or drop it.) On the WS path `request` is a
-    # long-lived instance attr set once in `handle_connect`, so the cache
-    # naturally spans all events of a connection and is invalidated by the
-    # state key changing on a theme switch.
+    # cross-request cache would have to key on the nonce, or drop it.) On the WS
+    # path `request` is a long-lived instance attr set once in
+    # `handle_connect`, so the cache naturally spans all events of a connection
+    # and is invalidated by the state key changing on a theme switch.
     state_key = (
         state.theme,
         state.preset,
@@ -233,44 +242,39 @@ def theme_context(request: HttpRequest) -> dict:
     )
     cached = getattr(request, "_djust_theme_ctx_cache", None)
     if cached is not None and cached[0] == state_key:
-        (
-            theme_head_html,
-            theme_panel_html,
-            theme_mode_toggle_html,
-            theme_preset_selector_html,
-        ) = cached[1]
+        chunks = cached[1]
     else:
-        theme_head_html = _safe_render(_theme_head_tag)
-        theme_panel_html = _safe_render(_theme_panel_tag)
-        theme_mode_toggle_html = _safe_render(_theme_mode_toggle_tag)
-        theme_preset_selector_html = _safe_render(_theme_preset_selector_tag)
+        chunks = (
+            _tag_chunk("theme_head"),
+            _tag_chunk("theme_panel"),
+            _tag_chunk("theme_mode_toggle"),
+            _tag_chunk("theme_preset_selector"),
+            LazyThemeHTML(_render_switcher),
+        )
         # Store on the request. Some request objects can't hold arbitrary
-        # attributes (e.g. a `__slots__` object in tests / exotic callers);
-        # in that case skip caching — correctness over the micro-optimization.
+        # attributes (e.g. a `__slots__` object in tests / exotic callers); in
+        # that case skip caching: correctness over the micro-optimization.
         try:
-            request._djust_theme_ctx_cache = (
-                state_key,
-                (
-                    theme_head_html,
-                    theme_panel_html,
-                    theme_mode_toggle_html,
-                    theme_preset_selector_html,
-                ),
-            )
+            request._djust_theme_ctx_cache = (state_key, chunks)
         except (AttributeError, TypeError) as exc:
-            # Some request objects can't hold arbitrary attributes
-            # (a `__slots__` object in tests / exotic callers). Caching is a
-            # micro-optimization, so we skip it — but log at debug so the
-            # swallowed write is observable rather than silently dropped.
+            # Caching is a micro-optimization, so we skip it, but log at debug
+            # so the swallowed write is observable rather than silently dropped.
             logger.debug(
                 "skipping theme-context cache write on %s request: %s",
                 type(request).__name__,
                 exc,
             )
+    (
+        theme_head_html,
+        theme_panel_html,
+        theme_mode_toggle_html,
+        theme_preset_selector_html,
+        theme_switcher_html,
+    ) = chunks
 
     return {
-        "theme_head": mark_safe(theme_head_html) if theme_head_html else "",
-        "theme_switcher": mark_safe(theme_switcher),
+        "theme_head": theme_head_html,
+        "theme_switcher": theme_switcher_html,
         "theme_panel": theme_panel_html,
         "theme_mode_toggle": theme_mode_toggle_html,
         "theme_preset_selector": theme_preset_selector_html,
