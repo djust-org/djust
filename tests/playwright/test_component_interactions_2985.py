@@ -104,10 +104,14 @@ PROJECT = {
           <section id="log-box">
             {%% log_viewer lines=lines stream_event="new_logs" max_lines=40 %%}
           </section>
+          <section id="log3-box">
+            {%% log_viewer lines=lines2 stream_event="new_logs3" %%}
+          </section>
           <section id="log2-box">
             {%% log_viewer lines=lines2 %%}
           </section>
           <button id="shuffle" dj-click="shuffle">shuffle</button>
+          <button id="drop-one" dj-click="drop_one">drop one</button>
           <button id="stream" dj-click="stream">stream</button>
           <button id="grow" dj-click="grow">grow</button>
         </div>
@@ -133,17 +137,28 @@ PROJECT = {
                 self.n = 0
                 self.g = 0
 
+            # `order` comes from the browser: accept it only as a permutation
+            # of the ids rendered, ignore anything else.
             @event_handler()
             def reorder_list(self, order=None, **kwargs):
                 by_id = {i["id"]: i for i in self.items}
-                self.items = [by_id[k] for k in (order or []) if k in by_id]
+                if not isinstance(order, list) or sorted(map(str, order)) != sorted(by_id):
+                    return
+                self.items = [by_id[str(k)] for k in order]
                 self.list_csv = ",".join(i["id"] for i in self.items)
 
             @event_handler()
             def reorder_grid(self, order=None, **kwargs):
                 by_id = {c["id"]: c for c in self.cells}
-                self.cells = [by_id[k] for k in (order or []) if k in by_id]
+                if not isinstance(order, list) or sorted(map(str, order)) != sorted(by_id):
+                    return
+                self.cells = [by_id[str(k)] for k in order]
                 self.grid_csv = ",".join(c["id"] for c in self.cells)
+
+            @event_handler()
+            def drop_one(self, **kwargs):
+                self.items = [i for i in self.items if i["id"] != "beta"]
+                self.list_csv = ",".join(i["id"] for i in self.items)
 
             @event_handler()
             def shuffle(self, **kwargs):
@@ -264,6 +279,25 @@ def main() -> int:
                         failures.append(what)
                     print(("ok   " if ok else "FAIL ") + what)
 
+                def drag(source, target, x, y):
+                    """Press on `source`, move in steps, release over (`x`, `y`) of `target`.
+
+                    Several intermediate moves: Chromium starts an HTML5 drag only
+                    after the pointer travels with the button down, and one jump
+                    sometimes starts nothing."""
+                    sb = page.locator(source).bounding_box()
+                    tb = page.locator(target).bounding_box()
+                    sx, sy = sb["x"] + sb["width"] / 2, sb["y"] + sb["height"] / 2
+                    # A click on empty page first: after the long keyboard section
+                    # headless Chromium started no drag on the first press (any click
+                    # elsewhere cleared it; fresh pages never showed it).
+                    page.mouse.click(2, 2)
+                    page.mouse.move(sx, sy)
+                    page.mouse.down()
+                    page.mouse.move(sx + 12, sy + 6, steps=4)
+                    page.mouse.move(tb["x"] + x, tb["y"] + y, steps=12)
+                    page.mouse.up()
+
                 def load(path):
                     page.goto(base + path)
                     page.wait_for_function(
@@ -314,9 +348,11 @@ def main() -> int:
                     "list has one tab stop (roving tabindex)",
                 )
                 box = page.locator(f"{li}[data-id=delta]").bounding_box()
-                page.locator(f"{li}[data-id=alpha]").drag_to(
-                    page.locator(f"{li}[data-id=delta]"),
-                    target_position={"x": box["width"] / 2, "y": box["height"] - 3},
+                drag(
+                    f"{li}[data-id=alpha]",
+                    f"{li}[data-id=delta]",
+                    box["width"] / 2,
+                    box["height"] - 3,
                 )
                 wait_text(
                     "#list-order",
@@ -330,10 +366,7 @@ def main() -> int:
                 page.locator("#list-box").screenshot(path=str(shots / "01-list-after-drag.png"))
 
                 box = page.locator(f"{li}[data-id=beta]").bounding_box()
-                page.locator(f"{li}[data-id=alpha]").drag_to(
-                    page.locator(f"{li}[data-id=beta]"),
-                    target_position={"x": box["width"] / 2, "y": 3},
-                )
+                drag(f"{li}[data-id=alpha]", f"{li}[data-id=beta]", box["width"] / 2, 3)
                 wait_text(
                     "#list-order",
                     "alpha,beta,gamma,delta",
@@ -386,13 +419,52 @@ def main() -> int:
                     "server-initiated reorder lands on screen in order",
                 )
 
+                # a server patch lands while an item is grabbed
+                page.locator(f"{li}[data-id=delta]").focus()
+                page.keyboard.press("Space")
+                page.keyboard.press("ArrowUp")
+                # a programmatic click: a real one would move focus and end the grab
+                page.evaluate("() => document.getElementById('drop-one').click()")
+                wait_text(
+                    "#list-order",
+                    "delta,alpha,gamma",
+                    "server removal during a grab reaches the page",
+                )
+                check(
+                    "beta" not in ids(li) and ids(li) == ["delta", "alpha", "gamma"],
+                    "patch during a grab: the removed item is gone from the page",
+                )
+                page.keyboard.press("Escape")
+                check(
+                    ids(li) == ["delta", "alpha", "gamma"]
+                    and csv("#list-order") == "delta,alpha,gamma",
+                    "patch during a grab: Escape does not bring the removed item back",
+                )
+                page.locator(f"{li}[data-id=delta]").focus()
+                page.keyboard.press("Space")
+                page.keyboard.press("ArrowDown")
+                page.evaluate("() => document.getElementById('shuffle').click()")
+                page.wait_for_function(
+                    "() => document.querySelector('#list-order').textContent.trim() === 'gamma,alpha,delta'",
+                    timeout=6000,
+                )
+                page.locator(f"{li}[data-id=gamma]").focus()
+                page.keyboard.press("Escape")
+                check(
+                    ids(li) == ["gamma", "alpha", "delta"]
+                    and csv("#list-order") == "gamma,alpha,delta",
+                    "patch during a grab: Escape leaves the list as the server has it",
+                )
+
                 # ---------------- SortableGrid ----------------
                 tile = "#grid-box .dj-sortable-grid__item"
                 check(ids(tile) == [f"t{i}" for i in range(1, 7)], "grid renders in server order")
                 box = page.locator(f"{tile}[data-id=t3]").bounding_box()
-                page.locator(f"{tile}[data-id=t1]").drag_to(
-                    page.locator(f"{tile}[data-id=t3]"),
-                    target_position={"x": box["width"] - 3, "y": box["height"] / 2},
+                drag(
+                    f"{tile}[data-id=t1]",
+                    f"{tile}[data-id=t3]",
+                    box["width"] - 3,
+                    box["height"] / 2,
                 )
                 wait_text(
                     "#grid-order",
@@ -481,7 +553,18 @@ def main() -> int:
                     check(True, "log: a push_event appends an ERROR-coloured line")
                 except Exception:
                     check(False, "log: a push_event appends an ERROR-coloured line")
-                check(page.eval_on_selector(body, at_bottom), "log: follows the streamed line")
+                try:
+                    page.wait_for_function(
+                        "s => { const b = document.querySelector(s); return b.scrollTop + b.clientHeight >= b.scrollHeight - 2; }",
+                        arg=body,
+                        timeout=3000,
+                    )
+                except Exception:
+                    pass
+                check(
+                    page.eval_on_selector(body, at_bottom),
+                    "log: follows the streamed line (next frame)",
+                )
                 check(
                     page.eval_on_selector(
                         body,
@@ -491,6 +574,9 @@ def main() -> int:
                     "log: streamed line numbering continues (40)",
                 )
                 page.eval_on_selector(body, "b => { b.scrollTop = 0; }")
+                page.wait_for_timeout(
+                    150
+                )  # the scroll event: that is how the hook learns the reader moved
                 page.click("#stream")
                 page.wait_for_timeout(400)
                 check(
@@ -563,6 +649,62 @@ def main() -> int:
                     "custom: no 'No hook registered' warning",
                 )
                 page.screenshot(path=str(shots / "05-app-hooks-win.png"))
+
+                # ---------------- JsonViewer value colours (computed, in the browser) ----------------
+                load("/")
+                page.eval_on_selector(
+                    "#json-box .dj-json__node--collapsed > .dj-json__toggle", "e => e.click()"
+                )
+                colours = page.evaluate(
+                    """() => {
+                        const c = (s) => getComputedStyle(document.querySelector(s)).color;
+                        return {
+                            string: c('#json-box .dj-json__value--string'),
+                            viewer: getComputedStyle(document.querySelector('#json-box .dj-json-viewer')).backgroundColor,
+                        };
+                    }"""
+                )
+
+                def lum(rgb):
+                    vals = [int(v) for v in rgb[rgb.index("(") + 1 : rgb.index(")")].split(",")[:3]]
+                    ch = [
+                        (v / 255) / 12.92
+                        if v / 255 <= 0.03928
+                        else (((v / 255) + 0.055) / 1.055) ** 2.4
+                        for v in vals
+                    ]
+                    return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2]
+
+                ratio = (max(lum(colours["string"]), lum(colours["viewer"])) + 0.05) / (
+                    min(lum(colours["string"]), lum(colours["viewer"])) + 0.05
+                )
+                check(
+                    ratio >= 4.5,
+                    f"json: a string value reads on the viewer ({colours['string']} on {colours['viewer']} = {ratio:.1f}:1)",
+                )
+
+                # ---------------- LogViewer: many single-line events stay cheap ----------------
+                load("/")
+                took = page.evaluate(
+                    """() => {
+                        const send = (p) => window.djust.dispatchPushEventToHooks('new_logs3', p);
+                        const bulk = []; for (let i = 0; i < 10000; i++) bulk.push('INFO bulk ' + i);
+                        send({lines: bulk});
+                        const t0 = performance.now();
+                        for (let i = 0; i < 10000; i++) send({line: 'INFO single ' + i});
+                        return performance.now() - t0;
+                    }"""
+                )
+                rows = page.eval_on_selector_all(
+                    "#log3-box .dj-log-viewer__line", "els => els.length"
+                )
+                check(
+                    rows == 39 + 20000, f"log: 20,000 streamed lines are all present ({rows} rows)"
+                )
+                check(
+                    took < 8000,
+                    f"log: 10,000 single-line events onto a 10,000-row viewer took {took:.0f} ms (< 8000)",
+                )
 
                 errors = [t for k, t in console if k in ("error", "pageerror")]
                 check(not errors, f"no console errors or page errors: {errors[:3]}")
