@@ -241,8 +241,10 @@ function _morphPrerenderedMount(container, html, formRecoverySnapshot) {
     temp.innerHTML = html;
     morphChildren(container, temp);
     // The morph resets form fields to the server's values; put a saved draft
-    // back before form recovery, which restores what the user had typed (#3351).
-    restoreDraftFields();
+    // back into this container before form recovery, which restores what the
+    // user had typed (#3351). A reconnect is not a page load: its mount keeps
+    // the server's values, and recovery brings back what was typed.
+    if (!window.djust._isReconnect) restoreDraftFields(container);
     if (formRecoverySnapshot) window.djust._restoreFormRecovery(formRecoverySnapshot);
     // #1813 (a): embedded-view wrappers carry NO `id`, so morphChildren can
     // only align them positionally. Reconcile them by the stable

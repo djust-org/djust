@@ -1135,8 +1135,10 @@ function _morphPrerenderedMount(container, html, formRecoverySnapshot) {
     temp.innerHTML = html;
     morphChildren(container, temp);
     // The morph resets form fields to the server's values; put a saved draft
-    // back before form recovery, which restores what the user had typed (#3351).
-    restoreDraftFields();
+    // back into this container before form recovery, which restores what the
+    // user had typed (#3351). A reconnect is not a page load: its mount keeps
+    // the server's values, and recovery brings back what was typed.
+    if (!window.djust._isReconnect) restoreDraftFields(container);
     if (formRecoverySnapshot) window.djust._restoreFormRecovery(formRecoverySnapshot);
     // #1813 (a): embedded-view wrappers carry NO `id`, so morphChildren can
     // only align them positionally. Reconcile them by the stable
@@ -4156,13 +4158,16 @@ const globalDraftManager = new DraftManager();
 // attributes: a morph rewrites an element's attributes to the server's markup,
 // so a marker kept there is lost and the next pass would treat the field as new.
 //
-// _draftRestored: fields already given their one restore. A field the page
+// _draftRestored: field -> the name it was restored under. A field the page
 //   renders after init (a patch, a lazily hydrated view, a live_redirect) is
 //   restored once when it first shows up, and never again for as long as the
-//   element lives.
-// _draftEdited: fields the user has typed in. A restore never overwrites one.
-const _draftRestored = new WeakSet();
-const _draftEdited = new WeakSet();
+//   element lives. A morph can keep an element and change its name (a wizard
+//   step reusing the input), which makes it a new field: a new name restores
+//   again.
+// _draftEdited: field -> the name the user typed it under. A restore never
+//   overwrites an edited field.
+const _draftRestored = new WeakMap();
+const _draftEdited = new WeakMap();
 
 // Saving is ONE delegated listener per event type on the document, installed
 // once. Binding per field closed over the fields present at init, so a field
@@ -4186,8 +4191,9 @@ function _draftTargetFor(field) {
 function _collectDraftData(scope) {
     const draftData = {};
     scope.querySelectorAll('[data-draft="true"]').forEach(f => {
-        // Prevent prototype pollution attacks
-        if (f.name && !UNSAFE_KEYS.includes(f.name)) {
+        // Prevent prototype pollution attacks. A file input has no value a
+        // draft could put back (setting one throws).
+        if (f.name && !UNSAFE_KEYS.includes(f.name) && f.type !== 'file') {
             if (f.type === 'checkbox') {
                 draftData[f.name] = f.checked;
             } else {
@@ -4196,6 +4202,28 @@ function _collectDraftData(scope) {
         }
     });
     return draftData;
+}
+
+/**
+ * The draft to store: what is on the page now over what is already stored for
+ * the key (the unwritten save if one is pending, else storage). A name the
+ * page does not hold at the moment, such as a wizard's earlier step, keeps its
+ * saved value until `clear_draft()` removes the draft.
+ */
+function _mergeDraftData(draftKey, current) {
+    const previous = globalDraftManager.pendingData.get(draftKey) || globalDraftManager.loadDraft(draftKey);
+    const merged = {};
+    if (previous && typeof previous === 'object') {
+        Object.keys(previous).forEach(name => {
+            // eslint-disable-next-line security/detect-object-injection
+            if (!UNSAFE_KEYS.includes(name)) merged[name] = previous[name];
+        });
+    }
+    Object.keys(current).forEach(name => {
+        // eslint-disable-next-line security/detect-object-injection
+        merged[name] = current[name];
+    });
+    return merged;
 }
 
 function _onDraftFieldChange(event) {
@@ -4207,8 +4235,8 @@ function _onDraftFieldChange(event) {
     if (!place) return;
     const draftKey = place.root.getAttribute('data-draft-key');
     if (!draftKey) return;
-    _draftEdited.add(field);
-    globalDraftManager.saveDraft(draftKey, _collectDraftData(place.scope));
+    _draftEdited.set(field, field.name);
+    globalDraftManager.saveDraft(draftKey, _mergeDraftData(draftKey, _collectDraftData(place.scope)));
 }
 
 function _installDraftListeners() {
@@ -4233,11 +4261,12 @@ function syncDraftFields(atInit) {
     _installDraftListeners();
     const savedByKey = new Map();
     document.querySelectorAll('[data-draft="true"]').forEach(field => {
-        if (_draftRestored.has(field)) return;
-        _draftRestored.add(field);
+        if (_draftRestored.get(field) === field.name) return;
+        _draftRestored.set(field, field.name);
         const place = _draftTargetFor(field);
         const draftKey = place && place.root.getAttribute('data-draft-key');
         if (!draftKey || !field.name || UNSAFE_KEYS.includes(field.name)) return;
+        if (field.type === 'file') return;
         if (!savedByKey.has(draftKey)) {
             // A debounced save still waiting to be written is newer than storage.
             savedByKey.set(
@@ -4247,7 +4276,7 @@ function syncDraftFields(atInit) {
         }
         const saved = savedByKey.get(draftKey);
         if (!saved || !Object.prototype.hasOwnProperty.call(saved, field.name)) return;
-        if (!atInit && (_draftEdited.has(field) || field === document.activeElement)) return;
+        if (!atInit && (_draftEdited.get(field) === field.name || field === document.activeElement)) return;
         if (field.type === 'checkbox') {
             field.checked = saved[field.name];
         } else {
@@ -4257,18 +4286,24 @@ function syncDraftFields(atInit) {
 }
 
 /**
- * Restore the saved draft again into fields that were already restored.
+ * Restore the saved draft again into the fields of `scope` that were already
+ * restored.
  *
- * The page-load mount morphs the HTTP-prerendered DOM against the server's
- * HTML (#1610), and that morph writes the server's value into every field the
- * user is not in, so a restore done at init is undone by it. Called right
- * after that morph, this puts the draft back; a field the user has already
- * typed in or is focused in keeps its value. Fields the morph did not touch
- * get the value they already hold.
+ * A page-load mount morphs the HTTP-prerendered DOM against the server's HTML
+ * (#1610), and that morph writes the server's value into every field the user
+ * is not in, so a restore done at init is undone by it. Called right after that
+ * morph, this puts the draft back. It is scoped to the container the morph
+ * rewrote: a draft is applied when a field first appears or at page load, never
+ * again to fields of an unrelated container (a lazy view mounting later must not
+ * revert a value the server has set since). A field the user has already typed
+ * in or is focused in keeps its value.
  */
-function restoreDraftFields() {
+function restoreDraftFields(scope) {
+    if (!scope || typeof scope.querySelectorAll !== 'function') return;
     if (!document.querySelector('[data-draft-enabled]')) return;
-    document.querySelectorAll('[data-draft="true"]').forEach(field => _draftRestored.delete(field));
+    const fields = scope.querySelectorAll('[data-draft="true"]');
+    if (fields.length === 0) return;
+    fields.forEach(field => _draftRestored.delete(field));
     syncDraftFields(false);
 }
 

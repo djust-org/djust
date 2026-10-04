@@ -15,6 +15,14 @@ const clientCode = fs.readFileSync('./python/djust/static/djust/client.js', 'utf
 const FORM = (key, fields) =>
     `<form id="f" data-draft-enabled data-draft-key="${key}">${fields}</form>`;
 
+// djustInit is queued as a microtask by the bundle: wait for its own flag.
+async function initialized(window) {
+    for (let i = 0; i < 200 && !window.djustInitialized; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(window.djustInitialized).toBe(true);
+}
+
 // Boot the bundle on `bodyHtml`, with `saved` already in localStorage under the
 // draft key. The draft manager's 500 ms debounce is held on a queue the test
 // flushes, so a test decides when a save lands.
@@ -53,7 +61,7 @@ async function boot(bodyHtml, saved = {}) {
     };
 
     try { window.eval(clientCode); } catch (e) { /* client.js may throw on missing DOM APIs */ }
-    await new Promise((resolve) => realSetTimeout(resolve, 20)); // djustInit is a microtask
+    await initialized(window);
 
     const setItem = vi.spyOn(window.Storage.prototype, 'setItem');
     return {
@@ -313,7 +321,7 @@ describe('draft mode: the mount morph does not undo the restore (#3351)', () => 
         w.localStorage.setItem('djust_draft_k', JSON.stringify({ data: saved, timestamp: 1 }));
         w.eval(clientCode);
         w.document.dispatchEvent(new w.Event('DOMContentLoaded'));
-        await new Promise((resolve) => w.setTimeout(resolve, 20)); // djustInit
+        await initialized(w);
         const socket = new w.djust.LiveViewWebSocket();
         socket.primaryViewPath = 'test.Editor';
         socket.skipMountHtml = true;
@@ -344,5 +352,149 @@ describe('draft mode: the mount morph does not undo the restore (#3351)', () => 
             expect(w.document.querySelector('[name="b"]').value).toBe('saved b');
             expect(w.document.querySelector('[name="a"]').value).not.toBe('saved a');
         } finally { dom.window.close(); }
+    });
+});
+
+describe('draft mode: a mount of another container leaves the page alone (#3351)', () => {
+    const widget = '<div id="w1" dj-view="test.W" data-djust-target="w1"><p id="ph">placeholder</p></div>';
+    const page = FORM('k', '<input type="text" name="title" id="title" data-draft="true" value="">') + widget;
+
+    async function booted() {
+        const dom = new JSDOM(
+            `<div dj-root dj-view="test.Editor">${page}</div>`,
+            { runScripts: 'dangerously', url: 'http://localhost/' });
+        const w = dom.window;
+        w.DJUST_USE_WEBSOCKET = false;
+        w.WebSocket = class { constructor() { this.readyState = 0; } send() {} close() {} };
+        w.localStorage.setItem('djust_draft_k', JSON.stringify({ data: { title: 'olddraft' }, timestamp: 1 }));
+        w.eval(clientCode);
+        w.document.dispatchEvent(new w.Event('DOMContentLoaded'));
+        await initialized(w);
+        const socket = new w.djust.LiveViewWebSocket();
+        socket.primaryViewPath = 'test.Editor';
+        return { dom, w, socket };
+    }
+    const settle = async (w) => {
+        for (let i = 0; i < 10; i++) await new Promise((resolve) => w.setTimeout(resolve, 0));
+    };
+
+    it('does not revert a field the server has set when a lazy view mounts', async () => {
+        const { dom, w, socket } = await booted();
+        try {
+            const title = w.document.querySelector('#title');
+            expect(title.value).toBe('olddraft'); // page load: the draft wins
+            title.value = 'SERVER'; // a handler of the page view set it; no user edit
+            await socket.handleMessage({
+                type: 'mount', view: 'test.W', target_id: 'w1', version: 1,
+                html: '<p dj-id="1">widget</p>', has_ids: true,
+            });
+            await settle(w);
+            expect(w.document.querySelector('#w1').textContent).toContain('widget'); // it did mount
+            expect(title.value).toBe('SERVER');
+        } finally { dom.window.close(); }
+    });
+
+    it('does not put a draft over the server value on a reconnect mount', async () => {
+        const { dom, w, socket } = await booted();
+        try {
+            const title = w.document.querySelector('#title');
+            title.value = 'SERVER';
+            w.djust._isReconnect = true;
+            socket.skipMountHtml = true;
+            await socket.handleMessage({
+                type: 'mount', view: 'test.Editor', has_ids: true,
+                html: FORM('k', '<input type="text" name="title" id="title" data-draft="true" value="SERVER">') + widget,
+            });
+            await settle(w);
+            expect(w.document.querySelector('#title').value).toBe('SERVER');
+        } finally { dom.window.close(); }
+    });
+});
+
+describe('draft mode: a draft keeps the fields the page no longer holds (#3351)', () => {
+    const step1 = text('s1');
+    const step2 = text('s2');
+
+    it('keeps step 1 when step 2 is typed, restores it on the way back, and a clear removes all', async () => {
+        const env = await boot(FORM('k', step1));
+        const form = env.document.getElementById('f');
+
+        env.type(env.document.querySelector('[name="s1"]'), 'one');
+        env.flush();
+        expect(env.stored('k')).toEqual({ s1: 'one' });
+
+        form.innerHTML = step2; // next: step 2 replaces step 1
+        env.window.djust.reinitAfterDOMUpdate();
+        env.type(env.document.querySelector('[name="s2"]'), 'two');
+        env.flush();
+        expect(env.stored('k')).toEqual({ s1: 'one', s2: 'two' });
+
+        form.innerHTML = step1; // back: a new step 1 element
+        env.window.djust.reinitAfterDOMUpdate();
+        expect(env.document.querySelector('[name="s1"]').value).toBe('one');
+
+        // submit: clear_draft() puts data-draft-clear on the next render
+        form.setAttribute('data-draft-clear', '');
+        env.window.djust.reinitAfterDOMUpdate();
+        expect(env.stored('k')).toBe(null);
+        env.type(env.document.querySelector('[name="s1"]'), 'fresh');
+        env.flush();
+        expect(env.stored('k')).toEqual({ s1: 'fresh' });
+    });
+
+    it('restores a field a morph kept but renamed (one input reused for each step)', async () => {
+        const env = await boot(FORM('k', text('s1')));
+        const field = env.document.querySelector('[name="s1"]');
+        env.type(field, 'one');
+        env.flush();
+
+        field.name = 's2'; // the morph reuses the element for step 2 ...
+        field.value = '';
+        env.window.djust.reinitAfterDOMUpdate();
+        env.type(field, 'two');
+        env.flush();
+
+        field.name = 's1'; // ... and again for step 1
+        field.value = '';
+        env.window.djust.reinitAfterDOMUpdate();
+
+        expect(field.value).toBe('one');
+        expect(env.stored('k')).toEqual({ s1: 'one', s2: 'two' });
+    });
+
+    it('merges with an unwritten save as well as with storage', async () => {
+        const env = await boot(FORM('k', step1 + '<div id="slot"></div>'));
+        env.type(env.document.querySelector('[name="s1"]'), 'one'); // queued, not written
+        env.document.getElementById('slot').innerHTML = step2;
+        env.document.querySelector('[name="s1"]').remove();
+        env.window.djust.reinitAfterDOMUpdate();
+        env.type(env.document.querySelector('[name="s2"]'), 'two');
+        env.flush();
+        expect(env.stored('k')).toEqual({ s1: 'one', s2: 'two' });
+    });
+
+    it('never merges an unsafe key from storage into the draft', async () => {
+        const env = await boot(FORM('k', text('a')));
+        env.window.localStorage.setItem(
+            'djust_draft_k', '{"data":{"__proto__":{"polluted":true},"old":"x"},"timestamp":1}');
+        env.type(env.document.querySelector('[name="a"]'), 'v');
+        env.flush();
+        const stored = env.stored('k');
+        expect(Object.keys(stored).sort()).toEqual(['a', 'old']);
+        expect({}.polluted).toBeUndefined();
+    });
+});
+
+describe('draft mode: file inputs (#3351)', () => {
+    it('neither saves nor restores a file input, and does not throw', async () => {
+        const env = await boot(
+            FORM('k', text('a') + '<div id="slot"></div>'), { k: { up: 'C:\\fakepath\\x.txt', a: 'A' } });
+        env.document.getElementById('slot').innerHTML =
+            '<input type="file" name="up" data-draft="true">';
+        expect(() => env.window.djust.reinitAfterDOMUpdate()).not.toThrow();
+        expect(env.document.querySelector('[name="a"]').value).toBe('A');
+        env.type(env.document.querySelector('[name="a"]'), 'B');
+        env.flush();
+        expect(env.stored('k')).toEqual({ up: 'C:\\fakepath\\x.txt', a: 'B' }); // 'up' kept, not rewritten
     });
 });
