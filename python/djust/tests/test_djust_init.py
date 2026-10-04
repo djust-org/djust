@@ -598,7 +598,9 @@ def test_cli_init_reports_refusal(tmp_path, monkeypatch, capsys):
     from djust import cli
 
     monkeypatch.chdir(tmp_path)
-    args = argparse.Namespace(settings=None, dry_run=False, no_install=True, force=False)
+    args = argparse.Namespace(
+        settings=None, dry_run=False, no_install=True, force=False, templates=False
+    )
     assert cli.cmd_init(args) == 1
     assert "manage.py" in capsys.readouterr().out
 

@@ -258,7 +258,9 @@ def test_init_comment_no_longer_cites_the_fixed_admin_bug_as_a_blocker():
     assert "breaks the admin" not in block
     assert "#2872" not in block
     assert "deliberately untouched" not in block
-    assert templates.TEMPLATES_BLOCK.count("DjustTemplateBackend") >= 1
+    namespace = {"TEMPLATES": [{"BACKEND": "django.template.backends.django.DjangoTemplates"}]}
+    exec(templates.TEMPLATES_BLOCK, namespace)  # noqa: S102 — trusted template
+    assert namespace["TEMPLATES"][0]["BACKEND"] == ("djust.template_backend.DjustTemplateBackend")
 
 
 # --- #2984 ----------------------------------------------------------------------

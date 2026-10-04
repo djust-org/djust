@@ -318,23 +318,26 @@ if "CHANNEL_LAYERS" not in globals():
 # --- end djust ---
 """
 
-# The ``TEMPLATES`` block appended by ``djust init`` to a project whose setting
-# has a ``DjangoTemplates`` entry and no djust entry. It puts
-# ``DjustTemplateBackend`` first (the shape ``djust new`` writes and
-# ``djust.C016`` asks for) and leaves the project's own entries in the list,
-# untouched, as the fallback for everything djust does not find (the admin's
-# templates, other apps' Django-only templates). The djust entry mirrors the
-# first ``DjangoTemplates`` entry's ``DIRS`` and the ``OPTIONS`` keys
-# ``DjustTemplateBackend`` implements, so context processors, builtins and
-# libraries the project configured keep applying to the templates djust now
-# renders. ``loaders`` and the other Django-only keys stay on the Django entry:
-# the djust backend warns about them.
-TEMPLATES_MARKER = "# --- djust templates (added by djust init) ---"
+# The ``TEMPLATES`` block ``djust init --templates`` appends to a project whose
+# setting has a ``DjangoTemplates`` entry and no djust entry (``djust init``
+# alone never edits TEMPLATES). It puts ``DjustTemplateBackend`` first (the
+# shape ``djust new`` writes and ``djust.C016`` asks for) and leaves the
+# project's own entries in the list, untouched. Django moves to the next
+# engine only when a template does not exist, so the djust engine renders every
+# template it finds (``APP_DIRS`` is on), the admin's included; the Django entry
+# serves templates that live in no app or ``DIRS`` directory. The djust entry
+# mirrors the first ``DjangoTemplates`` entry's ``DIRS`` and the ``OPTIONS``
+# keys ``DjustTemplateBackend`` implements, so context processors, builtins and
+# libraries the project configured keep applying. ``loaders`` and the other
+# Django-only keys stay on the Django entry: the djust backend warns about them.
+# The djust entry becomes ``TEMPLATES[0]``: a later settings module that edits
+# ``TEMPLATES[0]["OPTIONS"]`` now edits it, not the Django entry.
+TEMPLATES_MARKER = "# --- djust templates (added by djust init --templates) ---"
 
 TEMPLATES_BLOCK = """\
-# --- djust templates (added by djust init) ---
+# --- djust templates (added by djust init --templates) ---
 # DjustTemplateBackend first, so djust renders your templates; your own
-# TEMPLATES entries stay after it, unchanged, as the fallback. The djust entry
+# TEMPLATES entries stay after it, unchanged. The djust entry
 # reuses the first DjangoTemplates entry's DIRS and its supported OPTIONS.
 # Reruns of `djust init` detect this block and leave settings unchanged.
 if not any("DjustTemplateBackend" in str(_entry.get("BACKEND")) for _entry in TEMPLATES):
@@ -348,6 +351,7 @@ if not any("DjustTemplateBackend" in str(_entry.get("BACKEND")) for _entry in TE
     )
     TEMPLATES = [
         {
+            "NAME": "djust",
             "BACKEND": "djust.template_backend.DjustTemplateBackend",
             "DIRS": list(_django.get("DIRS", [])),
             "APP_DIRS": True,
@@ -375,6 +379,7 @@ if not any("DjustTemplateBackend" in str(_entry.get("BACKEND")) for _entry in TE
 # it will not edit: the documented shape, added by hand.
 TEMPLATES_ENTRY_SNIPPET = """\
 TEMPLATES.insert(0, {
+    "NAME": "djust",
     "BACKEND": "djust.template_backend.DjustTemplateBackend",
     "DIRS": [BASE_DIR / "templates"],
     "APP_DIRS": True,

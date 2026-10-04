@@ -42,7 +42,8 @@ def _project(tmp_path, templates_source, *, extra=""):
 def _evaluate(path):
     """The settings module's namespace after running it, as Django would."""
     namespace = {"__file__": str(path)}
-    exec(compile(path.read_text(), str(path), "exec"), namespace)  # noqa: S102 — test fixture
+    text = path.read_bytes().decode("utf-8-sig")
+    exec(compile(text, str(path), "exec"), namespace)  # noqa: S102 — test fixture
     return namespace
 
 
@@ -50,9 +51,9 @@ def _templates_step(result):
     return next(step for step in result.steps if step.name == "TEMPLATES")
 
 
-def _run_init(tmp_path, **kwargs):
-    result = init.init_project(tmp_path, install=False, force=True, **kwargs)
-    return result
+def _run_init(tmp_path, templates=True, **kwargs):
+    """``djust init --templates`` unless a test is about the default."""
+    return init.init_project(tmp_path, install=False, force=True, templates=templates, **kwargs)
 
 
 # --- stock startproject output -------------------------------------------------
@@ -339,7 +340,7 @@ def test_an_unrecognised_templates_is_reported_with_the_snippet(tmp_path, source
     # The rest of the setup still happens: only TEMPLATES is left to the user.
     assert path.read_text().startswith(old_text.rstrip("\n"))
     assert init.SETTINGS_MARKER in path.read_text()
-    note = next(n for n in result.notes if "TEMPLATES was not edited" in n)
+    note = next(n for n in result.notes if "TEMPLATES was not changed" in n)
     assert T.TEMPLATES_ENTRY_SNIPPET in note
 
 
@@ -395,7 +396,7 @@ def test_dry_run_shows_exactly_what_a_real_run_writes(tmp_path):
     path = _project(tmp_path, CUSTOM_PROCESSORS)
     old = path.read_text()
 
-    dry = init.init_project(tmp_path, install=False, dry_run=True)
+    dry = init.init_project(tmp_path, install=False, dry_run=True, templates=True)
 
     assert path.read_text() == old  # nothing written
     assert _templates_step(dry).status == init.PLANNED
@@ -409,9 +410,9 @@ def test_dry_run_shows_exactly_what_a_real_run_writes(tmp_path):
 
 def test_dry_run_reports_an_unrecognised_templates_the_same_way(tmp_path):
     _project(tmp_path, "TEMPLATES = build_templates()\n")
-    dry = init.init_project(tmp_path, install=False, dry_run=True)
+    dry = init.init_project(tmp_path, install=False, dry_run=True, templates=True)
     assert _templates_step(dry).status == init.ATTENTION
-    assert any("TEMPLATES was not edited" in n for n in dry.notes)
+    assert any("TEMPLATES was not changed" in n for n in dry.notes)
     assert dry.exit_code == 0  # a dry run never fails
 
 
@@ -431,7 +432,8 @@ def test_crlf_settings_keep_their_line_endings(tmp_path):
 
 def test_djust_new_and_djust_init_write_the_same_djust_entry():
     """`djust new` writes the djust entry first, ``APP_DIRS`` on, with the four
-    standard processors; ``djust init``'s documented snippet is that entry."""
+    standard processors; the snippet ``djust init`` prints is that entry plus the
+    ``NAME`` alias (which ``djust new`` leaves to Django's default)."""
     new_settings = T.SETTINGS_PY % {
         "app_name": "app",
         "secret_key": "x",
@@ -451,15 +453,34 @@ def test_djust_new_and_djust_init_write_the_same_djust_entry():
 
     snippet_ns = {"TEMPLATES": [], "BASE_DIR": Path("/base")}
     exec(T.TEMPLATES_ENTRY_SNIPPET, snippet_ns)  # noqa: S102 — trusted template
-    documented = snippet_ns["TEMPLATES"][0]
+    documented = dict(snippet_ns["TEMPLATES"][0])
 
+    assert documented.pop("NAME") == "djust"
+    assert generated["OPTIONS"]["context_processors"]  # the comparison is not vacuous
     assert generated == documented
     assert [t["BACKEND"] for t in namespace["TEMPLATES"]] == [DJUST_BACKEND, DJANGO_BACKEND]
 
 
+def test_the_block_and_the_snippet_agree_on_the_name():
+    namespace = {"TEMPLATES": [{"BACKEND": DJANGO_BACKEND}]}
+    exec(T.TEMPLATES_BLOCK, namespace)  # noqa: S102 — trusted template
+    assert namespace["TEMPLATES"][0]["NAME"] == "djust"
+    assert '"NAME": "djust"' in T.TEMPLATES_ENTRY_SNIPPET
+
+
 def test_the_installation_guide_shows_the_snippet_init_prints():
     guide = Path(__file__).resolve().parents[3] / "docs/website/getting-started/installation.md"
-    assert T.TEMPLATES_ENTRY_SNIPPET in guide.read_text()
+    text = guide.read_text()
+    assert T.TEMPLATES_ENTRY_SNIPPET.startswith("TEMPLATES.insert(0, {")  # not vacuous
+    assert T.TEMPLATES_ENTRY_SNIPPET in text
+    assert "--templates" in text
+
+
+def test_the_guide_does_not_claim_a_django_fallback_for_templates_djust_finds():
+    guide = Path(__file__).resolve().parents[3] / "docs/website/getting-started/installation.md"
+    text = guide.read_text()
+    assert "still render" not in text  # the claim was false: djust renders what it finds
+    assert "TEMPLATES[0]" in text  # the override hazard is documented
 
 
 # --- a real startproject: check, admin, a plain Django view and a LiveView ------------
@@ -535,10 +556,12 @@ def _check(root, env):
 
 
 @pytest.mark.parametrize("version", ["4_2", "5_2"])
-def test_a_startproject_renders_everything_under_the_new_order(tmp_path, version):
-    """The order the issue asks for, end to end: the admin (Django templates the
-    djust engine now renders first), a plain Django template view, and a LiveView
-    all render, and `manage.py check` has nothing to say about templates."""
+def test_a_startproject_renders_under_the_templates_flag(tmp_path, version):
+    """`djust init --templates` end to end: the admin, a plain Django template view
+    and a LiveView answer 200 with djust's engine first, `manage.py check` has
+    nothing to say about templates, and T019 still sees a broken binding. This
+    asserts status and a few substrings only, NOT that the admin renders exactly
+    as under Django's engine (it does not: see the installation guide)."""
     subprocess.run(
         [sys.executable, "-m", "django", "startproject", "mysite", str(tmp_path)],
         check=True,
@@ -561,7 +584,7 @@ def test_a_startproject_renders_everything_under_the_new_order(tmp_path, version
         '<div dj-root><p>count {{ count }}</p><button dj-click="inc">+</button></div>\n'
     )
 
-    result = init.init_project(tmp_path, install=False, force=True)
+    result = _run_init(tmp_path)
     assert result.exit_code == 0, result.steps
 
     env = {k: v for k, v in os.environ.items() if k != "DJANGO_SETTINGS_MODULE"}
@@ -593,3 +616,152 @@ def test_a_startproject_renders_everything_under_the_new_order(tmp_path, version
     )
     broken = _check(tmp_path, env)
     assert "djust.T019" in broken.stdout + broken.stderr
+
+
+# --- the default: report, never edit -----------------------------------------------
+
+
+def test_the_default_run_reports_the_snippet_and_edits_nothing(tmp_path):
+    path = _project(tmp_path, CUSTOM_PROCESSORS)
+    before = _evaluate(path)["TEMPLATES"]
+
+    result = _run_init(tmp_path, templates=False)
+
+    step = _templates_step(result)
+    assert step.status == init.SKIPPED
+    assert "--templates" in step.detail
+    assert result.exit_code == 0
+    assert T.TEMPLATES_MARKER not in path.read_text()
+    assert _evaluate(path)["TEMPLATES"] == before
+    note = next(n for n in result.notes if "TEMPLATES was not changed" in n)
+    assert T.TEMPLATES_ENTRY_SNIPPET in note
+    assert "--templates" in note
+    # The rest of init still happens.
+    assert init.SETTINGS_MARKER in path.read_text()
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "TEMPLATES = build_templates()\n",
+        "from .base import *\n",
+        "TEMPLATES = []\n",
+        'TEMPLATES = [{"BACKEND": "django.template.backends.jinja2.Jinja2", "DIRS": []}]\n',
+        CUSTOM_DIRS + "TEMPLATES += [{}]\n",
+        "TEMPLATES = [\n",
+    ],
+)
+def test_an_unreadable_templates_is_informational_without_the_flag(tmp_path, source):
+    """No permanent exit 2 for a project that does not want djust-first."""
+    _project(tmp_path, source)
+    result = _run_init(tmp_path, templates=False)
+    assert _templates_step(result).status == init.SKIPPED
+    assert result.exit_code == 0
+
+
+def test_djust_after_django_is_informational_without_the_flag(tmp_path):
+    _project(
+        tmp_path,
+        "TEMPLATES = [\n"
+        '    {"BACKEND": "django.template.backends.django.DjangoTemplates", "DIRS": []},\n'
+        '    {"BACKEND": "djust.template_backend.DjustTemplateBackend", "DIRS": []},\n'
+        "]\n",
+    )
+    result = _run_init(tmp_path, templates=False)
+    assert _templates_step(result).status == init.SKIPPED
+    assert result.exit_code == 0
+    assert any("djust.C016" in note for note in result.notes)
+
+
+@pytest.mark.parametrize("templates", [False, True])
+def test_an_existing_djust_entry_is_unchanged_with_or_without_the_flag(tmp_path, templates):
+    path = _project(tmp_path, DJUST_FIRST)
+    result = _run_init(tmp_path, templates=templates)
+    assert _templates_step(result).status == init.UNCHANGED
+    assert T.TEMPLATES_MARKER not in path.read_text()
+
+
+def test_the_flag_then_a_plain_rerun_changes_nothing(tmp_path):
+    path = _project(tmp_path, CUSTOM_PROCESSORS)
+    _run_init(tmp_path, templates=True)
+    first = path.read_text()
+
+    result = _run_init(tmp_path, templates=False)
+
+    assert path.read_text() == first
+    assert _templates_step(result).status == init.UNCHANGED
+    assert result.exit_code == 0
+
+
+def test_a_removed_block_is_not_re_added_without_the_flag(tmp_path):
+    """The marker is the only state: remove the block and a plain rerun only
+    reports, it does not bring the block back."""
+    path = _project(tmp_path, CUSTOM_PROCESSORS)
+    _run_init(tmp_path, templates=True)
+    text = path.read_text()
+    removed = text[: text.index(T.TEMPLATES_MARKER)].rstrip("\n") + "\n"
+    path.write_text(removed)
+
+    result = _run_init(tmp_path, templates=False)
+
+    assert path.read_text() == removed
+    assert _templates_step(result).status == init.SKIPPED
+    assert result.exit_code == 0
+
+
+def test_the_flag_on_an_unreadable_templates_is_attention(tmp_path):
+    _project(tmp_path, "TEMPLATES = build_templates()\n")
+    result = _run_init(tmp_path, templates=True)
+    assert _templates_step(result).status == init.ATTENTION
+    assert result.exit_code == 2
+
+
+def test_a_settings_file_with_a_byte_order_mark_is_read(tmp_path):
+    path = _project(tmp_path, CUSTOM_DIRS)
+    path.write_bytes(b"\xef\xbb\xbf" + path.read_bytes())
+
+    default = _run_init(tmp_path, templates=False)
+    assert "parse" not in _templates_step(default).detail
+    assert "--templates" in _templates_step(default).detail
+
+    result = _run_init(tmp_path, templates=True)
+    assert _templates_step(result).status == init.DONE
+    assert path.read_bytes().startswith(b"\xef\xbb\xbf")  # kept
+    assert _evaluate(path)["TEMPLATES"][0]["BACKEND"] == DJUST_BACKEND
+
+
+def test_the_cli_passes_the_flag_through(tmp_path, monkeypatch):
+    import argparse
+
+    from djust import cli
+
+    seen = {}
+
+    def fake(root, **kwargs):
+        seen.update(kwargs)
+        return init.InitResult(steps=[init.Step("x", init.DONE, "")])
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(init, "init_project", fake)
+    base = dict(settings=None, dry_run=False, no_install=True, force=False)
+    cli.cmd_init(argparse.Namespace(templates=True, **base))
+    assert seen["templates"] is True
+    cli.cmd_init(argparse.Namespace(templates=False, **base))
+    assert seen["templates"] is False
+
+
+def test_the_parser_defaults_templates_off(tmp_path, monkeypatch, capsys):
+    from djust import cli
+
+    make_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["djust", "init", "--dry-run", "--no-install"])
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert "skipped" in out and "--templates" in out
+    monkeypatch.setattr(sys, "argv", ["djust", "init", "--dry-run", "--no-install", "--templates"])
+    with pytest.raises(SystemExit):
+        cli.main()
+    assert "would change  add DjustTemplateBackend first" in capsys.readouterr().out

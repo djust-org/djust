@@ -248,7 +248,8 @@ def _names_djust_backend(tree: ast.Module) -> bool:
 def classify_templates(source: str) -> TemplatesPlan:
     """Decide what to do about the TEMPLATES in ``source`` without running it."""
     try:
-        tree = ast.parse(source)
+        # A UTF-8 byte order mark is valid in a Python file, not in ast.parse's text.
+        tree = ast.parse(source.lstrip("\ufeff"))
     except SyntaxError:
         return TemplatesPlan("unrecognised", "the settings file does not parse")
     backends, reason = _templates_literal(tree)
@@ -260,49 +261,63 @@ def classify_templates(source: str) -> TemplatesPlan:
             if djust_at is not None and _DJANGO_BACKEND in backends[:djust_at]:
                 return TemplatesPlan(
                     "misordered",
-                    "DjangoTemplates comes before DjustTemplateBackend; not reordered",
+                    "DjangoTemplates comes before DjustTemplateBackend",
                 )
         return TemplatesPlan("present", "DjustTemplateBackend already configured")
     if backends is None:
-        return TemplatesPlan("unrecognised", "%s; not edited" % reason)
+        return TemplatesPlan("unrecognised", reason)
     if _DJANGO_BACKEND not in backends:
-        return TemplatesPlan("unrecognised", "no DjangoTemplates entry to build on; not edited")
+        return TemplatesPlan("unrecognised", "no DjangoTemplates entry to build on")
     return TemplatesPlan("add", "")
 
 
-def plan_templates(project: Project, source: str) -> Tuple[Optional[str], Step, Optional[str]]:
+def plan_templates(
+    project: Project, source: str, opt_in: bool = False
+) -> Tuple[Optional[str], Step, Optional[str]]:
     """The TEMPLATES block to append to ``source`` (or None), its step, and a
-    note with the snippet to add by hand when the setting is not edited."""
+    note with the snippet to add by hand.
+
+    TEMPLATES is only edited when ``opt_in`` (``djust init --templates``) and
+    the setting is one init can read with certainty. Otherwise the step is
+    informational (``skipped``, exit code 0); it is ATTENTION only when the
+    user asked for the edit and it could not be done.
+    """
     name = "TEMPLATES"
     if TEMPLATES_MARKER in source:
         return None, Step(name, UNCHANGED, "djust block already present"), None
     plan = classify_templates(source)
     if plan.kind == "present":
         return None, Step(name, UNCHANGED, plan.detail), None
-    if plan.kind == "add":
+    if opt_in and plan.kind == "add":
         return (
             T.TEMPLATES_BLOCK,
             Step(name, DONE, "DjustTemplateBackend added first", "add DjustTemplateBackend first"),
             None,
         )
+    settings_name = project.settings_path.relative_to(project.root)
     if plan.kind == "misordered":
+        detail = "%s; not reordered" % plan.detail
         note = (
             "%s lists DjangoTemplates before DjustTemplateBackend, so Django renders every "
-            "template it finds (djust.C016). djust init does not reorder a customized "
-            "TEMPLATES; move the DjustTemplateBackend entry first by hand."
-        ) % project.settings_path.relative_to(project.root)
-    else:
-        note = (
-            "%s TEMPLATES was not edited (%s). To render your templates with djust and keep "
-            "Django's engine as the fallback, put the djust entry first, with the context "
-            "processors your templates use:\n\n%s"
-            % (
-                project.settings_path.relative_to(project.root),
-                plan.detail.rsplit("; not edited", 1)[0],
-                T.TEMPLATES_ENTRY_SNIPPET,
-            )
+            "template it finds (djust.C016). djust init never reorders a TEMPLATES; move the "
+            "DjustTemplateBackend entry first by hand if you want djust's engine to render "
+            "your templates." % settings_name
         )
-    return None, Step(name, ATTENTION, plan.detail), note
+    else:
+        if plan.kind == "add":
+            detail = "not edited; --templates adds DjustTemplateBackend first"
+            why = "djust init does not edit TEMPLATES unless you pass --templates"
+        else:
+            detail = "%s; not edited" % plan.detail
+            why = "djust init cannot edit it (%s)" % plan.detail
+        note = (
+            "%s TEMPLATES was not changed: %s. LiveViews render with djust's engine whatever "
+            "TEMPLATES says. To render your other templates with djust's engine too, put the "
+            "djust entry first (read the notes in the installation guide on what djust's "
+            "engine does not render like Django's):\n\n%s"
+            % (settings_name, why, T.TEMPLATES_ENTRY_SNIPPET)
+        )
+    return None, Step(name, ATTENTION if opt_in else SKIPPED, detail), note
 
 
 def render_asgi(project: Project) -> str:
@@ -818,6 +833,7 @@ def init_project(
     dry_run: bool = False,
     install: bool = True,
     force: bool = False,
+    templates: bool = False,
 ) -> InitResult:
     project = detect_project(root, settings_module)
     python = find_project_python(root, os.environ)
@@ -829,7 +845,7 @@ def init_project(
     # Plan TEMPLATES against the file as it will be after the block above, and
     # fold both blocks into the one FileChange for settings.py.
     settings_text = settings_change.new if settings_change else _read(project.settings_path)
-    templates_block, step, templates_note = plan_templates(project, settings_text)
+    templates_block, step, templates_note = plan_templates(project, settings_text, opt_in=templates)
     result.steps.append(step)
     if templates_note:
         result.notes.append(templates_note)
