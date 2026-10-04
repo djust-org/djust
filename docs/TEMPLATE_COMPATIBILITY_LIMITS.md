@@ -76,6 +76,9 @@ These cases must not be classified as intentional incompatibilities:
   survive the template's lexical scopes, including assignments before an error.
 - A standalone block raises `TemplateSyntaxError` when `block.super` is evaluated;
   an unexecuted branch does not raise merely because the expression appears there.
+- `block.super` is evaluated only when something reads it, including a Python-bridged
+  tag: the parent's own tags run once per read (never memoized, as `BlockNode.super()`
+  is a method call), and not at all for a tag that never reads it.
 - Separate include nodes under explicitly uncached loaders retain distinct state,
   while repeated executions of the same include node reuse its state as Django does.
 - Template engine access used by Django's variable-resolution logging is available.

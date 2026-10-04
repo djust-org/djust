@@ -69,6 +69,27 @@ class CompiledTemplate:
 
     ...
 
+class LazyBlock:
+    """The ``block`` a bridged Django tag handler receives while a
+    ``{{ block.super }}`` is armed (#2918).
+
+    Built only by the engine. ``super`` renders the parent block when it is
+    READ and renders it again on every read (never memoized, as Django's
+    ``BlockNode.super()`` is a method call); asking whether ``super`` exists,
+    or for the keys, renders nothing. Answers Django's shape
+    (``context["block"].super()``) and the ``dict`` shape ``block`` used to be
+    (``block["super"]``, ``block.get("super")``, ``"super" in block``).
+    """
+
+    def super(self) -> str: ...
+    def __getitem__(self, key: object) -> str: ...
+    def get(self, key: object, default: object = None) -> object: ...
+    def __contains__(self, key: object) -> bool: ...
+    def __len__(self) -> int: ...
+    def keys(self) -> list[str]: ...
+    def values(self) -> list[str]: ...
+    def items(self) -> list[tuple[str, str]]: ...
+
 class TemplateObject:
     """The shape an arbitrary Python object takes inside the context dict a
     bridged Django tag handler receives (#2731).
@@ -1376,6 +1397,7 @@ __all__ = [
     "compile_template",
     "CompiledTemplate",
     "TemplateObject",
+    "LazyBlock",
     "template_cache_contains",
     "registry_generation",
     "new_registry_namespace",

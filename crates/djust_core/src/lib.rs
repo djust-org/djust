@@ -21,7 +21,7 @@ pub mod raw_text;
 pub mod render_env;
 pub mod serialization;
 
-pub use context::{Context, SharedValues};
+pub use context::{Context, LazyBlock, SharedValues};
 pub use errors::{DjangoRustError, Result};
 pub use object_key::ObjectKey;
 pub use render_env::RenderEnv;

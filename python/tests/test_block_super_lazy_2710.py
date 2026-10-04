@@ -380,9 +380,12 @@ class TestTheDeferralHasOneStatementPerBoundary:
         assert "context.to_hashmap()" in helper
 
     def test_resolve_is_the_only_reader_of_the_armed_source(self) -> None:
-        source = CONTEXT_RS.read_text()
+        # Production source only: `context::tests` implements the trait with a
+        # counting stub (#2918), which is a declaration, not a reader.
+        source = CONTEXT_RS.read_text().split("#[cfg(test)]", 1)[0]
         # The trait declaration, `Context::resolve`'s call, and
-        # `render_armed_block_super`'s (the Python bridge's escape hatch).
+        # `render_armed_block_super`'s (a bridged tag's read of `block.super`
+        # through `LazyBlock`, #2918).
         assert source.count("render_block_super(") == 3
 
 

@@ -5396,6 +5396,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // review). It has no `#[new]`, so registering exposes a NAME, not a
     // constructor: only `value_into_handler_pyobject` builds one.
     m.add_class::<djust_core::TemplateObject>()?;
+    m.add_class::<djust_core::LazyBlock>()?;
     m.add_function(wrap_pyfunction!(render_template, m)?)?;
     m.add_function(wrap_pyfunction!(render_template_with_dirs, m)?)?;
     m.add_function(wrap_pyfunction!(compile_template, m)?)?;
