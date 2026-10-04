@@ -84,6 +84,9 @@ These cases must not be classified as intentional incompatibilities:
   Django: a tag that reads `block.super` through its context when nothing in the
   template body names it answers `''` (the parent is not armed), and a tag inside an
   `{% include %}`d file reads the including block's parent where Django answers `''`.
+  A `block` kept from one tag call and read by a LATER bridged call in the same render
+  answers `''` (Django still answers the parent), and a user `block` that is an empty
+  dict (a loop item `{}`, `{% with block=empty_dict %}`) is replaced by the lazy object.
 - Separate include nodes under explicitly uncached loaders retain distinct state,
   while repeated executions of the same include node reuse its state as Django does.
 - Template engine access used by Django's variable-resolution logging is available.
