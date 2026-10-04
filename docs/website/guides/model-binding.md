@@ -85,7 +85,7 @@ An input with `dj-model` is bound when it enters the page, not only at load: one
 
 ### Which elements bind
 
-`dj-model` binds a form control (`input`, `textarea`, `select`) or a `contenteditable` element, whose text is the value it sends. A `contenteditable` element sends on every `input` event; with `.lazy` it sends when it loses focus (it fires no `change`). The `.debounce-N` form is found on those same elements. On any other element (a custom element that fires `input`) use `dj-model`, `dj-model.lazy` or the unnumbered `dj-model.debounce` (300 ms).
+`dj-model` binds a form control (`input`, `textarea`, `select`) or a `contenteditable` element, whose text is the value it sends. A `contenteditable` element sends on every `input` event; with `.lazy` it sends when it loses focus (it fires no `change`). A form control inside an editable container sends its own value, not the container's text. The `.debounce-N` form is found on those same elements. On any other element (a custom element that fires `input`) use `dj-model`, `dj-model.lazy` or the unnumbered `dj-model.debounce` (300 ms).
 
 A debounced update waits per field *and per view*: two `dj-lazy` views that bind the same field name each keep their own pending update.
 

@@ -459,6 +459,29 @@ describe('model_binding', () => {
             expect(modelUpdates).toEqual([{ field: 'note', value: 'noted' }]);
         });
 
+        it('sends a form control inside a contenteditable container by its own value', () => {
+            const { window, document, modelUpdates } = createEnv(
+                '<div id="box" contenteditable="true"><input id="inner" type="text" dj-model="note2"></div>');
+            window.djust.bindModelElements(document);
+            // Chromium reports isContentEditable for a control inside an editable container.
+            const inner = document.getElementById('inner');
+            Object.defineProperty(inner, 'isContentEditable', { value: true });
+            typeInto(window, inner, 'hello');
+            expect(modelUpdates).toEqual([{ field: 'note2', value: 'hello' }]);
+        });
+
+        it('keeps .lazy on change for a control inside a contenteditable container', () => {
+            const { window, document, modelUpdates } = createEnv(
+                '<div contenteditable="true"><input id="inner" type="text" dj-model.lazy="n"></div>');
+            const inner = document.getElementById('inner');
+            Object.defineProperty(inner, 'isContentEditable', { value: true });
+            window.djust.bindModelElements(document);
+            typeInto(window, inner, 'x');
+            expect(modelUpdates).toEqual([]);
+            inner.dispatchEvent(new window.Event('change', { bubbles: true }));
+            expect(modelUpdates).toEqual([{ field: 'n', value: 'x' }]);
+        });
+
         it('rebinds when a patch turns dj-model into dj-model.debounce-N', async () => {
             const { window, document, modelUpdates } = createEnv(
                 '<input id="a" type="text" dj-model="q">');

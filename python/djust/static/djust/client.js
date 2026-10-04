@@ -15058,6 +15058,9 @@ function _parseModelAttr(el) {
  * Get the current value from a form element.
  */
 function _isContentEditable(el) {
+    // A control inside an editable container reports isContentEditable too, but
+    // its value is its own.
+    if (el.matches('input, textarea, select')) return false;
     if (el.isContentEditable === true) return true;
     const attr = el.getAttribute('contenteditable');
     return attr !== null && attr.toLowerCase() !== 'false';

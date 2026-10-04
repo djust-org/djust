@@ -83,6 +83,16 @@ PROJECT = {
             '<form id="f" data-draft-enabled data-draft-key="k3351">'
             '<input id="always" name="always" data-draft="true">'
             '<button type="button" id="toggle" dj-click="toggle">toggle</button>'
+            # A server-set value (settitle), and a two-step wizard (next / back).
+            '<input id="title" name="title" data-draft="true" value="{{ title }}">'
+            '<button type="button" id="settitle" dj-click="settitle">settitle</button>'
+            "{% if step == 1 %}"
+            '<input id="s1" name="s1" data-draft="true">'
+            '<button type="button" id="next" dj-click="go_next">next</button>'
+            "{% else %}"
+            '<input id="s2" name="s2" data-draft="true">'
+            '<button type="button" id="back" dj-click="go_back">back</button>'
+            "{% endif %}"
             "{% if show %}"
             '<input id="cond" name="cond" data-draft="true">'
             '<input id="note-in" name="note_in" dj-model="note">'
@@ -93,9 +103,16 @@ PROJECT = {
             '<button type="button" id="refresh" dj-click="refresh">refresh</button>'
             '<p id="note">[{{ note }}]</p><p id="ce-out">[{{ ce_text }}]</p>'
             '<p hidden>{{ refreshes }}</p>'
+            # A form control inside an editable container sends its own value.
+            '<div id="cew" contenteditable="true"><input id="inner" dj-model="note2"></div>'
+            '<p id="o2">[{{ note2 }}]</p>'
             "</div>"
             '<div id="wa" dj-view="draftapp.views.Widget" dj-lazy="idle"></div>'
             '<div id="wb" dj-view="draftapp.views.Widget" dj-lazy="idle"></div>'
+            # Mounts when scrolled into view, after the page has been used.
+            '<div style="height:4000px"></div>'
+            '<div id="wc" dj-view="draftapp.views.Widget" dj-lazy="viewport">'
+            '<p id="ph">placeholder</p></div>'
             "</body></html>"
         )
 
@@ -103,13 +120,28 @@ PROJECT = {
             template = PAGE
             draft_key = "k3351"
             # The numbered modifier forms are not derived from the template.
-            allowed_model_fields = ["note", "ce_text"]
+            allowed_model_fields = ["note", "ce_text", "note2"]
 
             def mount(self, request, **kwargs):
                 self.show = False
                 self.note = ""
                 self.ce_text = ""
                 self.refreshes = 0
+                self.title = ""
+                self.note2 = ""
+                self.step = 1
+
+            @event_handler
+            def settitle(self, **kwargs):
+                self.title = "SERVER"
+
+            @event_handler
+            def go_next(self, **kwargs):
+                self.step = 2
+
+            @event_handler
+            def go_back(self, **kwargs):
+                self.step = 1
 
             @event_handler
             def toggle(self, **kwargs):
@@ -343,6 +375,67 @@ def main() -> int:
                     "view B keeps its debounced update",
                     wait_text("#wb .out", "[two]") == "[two]",
                     text("#wb .out"),
+                )
+
+                # --- a lazy view mounting later leaves the page's fields alone --
+                page.evaluate("() => localStorage.clear()")
+                load()
+                page.fill("#title", "olddraft")
+                page.wait_for_timeout(900)
+                load()
+                check(
+                    "page load: the saved draft wins over the rendered value",
+                    page.input_value("#title") == "olddraft",
+                    page.input_value("#title"),
+                )
+                page.click("#settitle")
+                page.wait_for_function(
+                    "() => document.querySelector('#title').value === 'SERVER'", timeout=5000
+                )
+                page.evaluate("() => document.querySelector('#wc').scrollIntoView()")
+                try:
+                    page.wait_for_function("() => !document.querySelector('#ph')", timeout=8000)
+                except Exception:
+                    pass
+                page.wait_for_timeout(500)
+                check(
+                    "a lazy view hydrating later did not revert the server's value",
+                    page.input_value("#title") == "SERVER",
+                    page.input_value("#title"),
+                )
+
+                # --- wizard: an earlier step's draft survives later steps --------
+                page.evaluate("() => localStorage.clear()")
+                load()
+                page.fill("#s1", "ONE")
+                page.wait_for_timeout(900)
+                page.click("#next")
+                page.wait_for_selector("#s2", timeout=5000)
+                page.fill("#s2", "TWO")
+                page.wait_for_timeout(900)
+                saved = stored() or {}
+                check(
+                    "step 1 and step 2 are both in the draft",
+                    saved.get("s1") == "ONE" and saved.get("s2") == "TWO",
+                    saved,
+                )
+                page.click("#back")
+                page.wait_for_selector("#s1", timeout=5000)
+                check(
+                    "going back restores step 1",
+                    page.input_value("#s1") == "ONE",
+                    page.input_value("#s1"),
+                )
+
+                # --- a control inside an editable container ---------------------
+                page.click("#inner")
+                page.keyboard.type("hello")
+                page.wait_for_timeout(300)
+                page.click("#refresh")
+                check(
+                    "an input inside a contenteditable container sends its own value",
+                    wait_text("#o2", "[hello]") == "[hello]",
+                    text("#o2"),
                 )
 
                 browser.close()
