@@ -688,14 +688,17 @@ pub trait BlockSuperSource: std::fmt::Debug + Send + Sync {
 /// have its error swallowed, and run it a second time; re-wrapping the error
 /// changes the class a tag's `except` sees; a "pending exception" slot leaves a
 /// stale error for the next read. So `__getitem__` asks WHO is calling: when the
-/// immediate Python caller is Django's own `_resolve_lookup` (compared by code
-/// object, not by name), it answers exactly what a `BlockNode` answers
-/// (`TypeError: not subscriptable`, no evaluation, no warning) and Django falls
-/// through to `super()` as it always has. Anyone else is user code reading the
-/// legacy way. If a future Django moved the subscript out of `_resolve_lookup`,
-/// the resolver would take the legacy path (a warning, and a double run only
-/// when the parent raises one of the five classes); the differential tests run
-/// the resolver paths under `-W error::DeprecationWarning` so that fails loudly.
+/// immediate Python caller is Django's own `_resolve_lookup` frame (matched by
+/// file and name, so a wrapped method still counts and a look-alike in user code
+/// does not), or djust's own Rust resolver is subscripting this very object, it
+/// answers exactly what a `BlockNode` answers
+/// (`TypeError: not subscriptable`, no evaluation, no warning) and the resolver
+/// falls through to `super()` as it always has. Anyone else is user code reading
+/// the legacy way. If a future Django moved the subscript out of
+/// `_resolve_lookup`, the resolver would take the legacy path (a warning, and a
+/// double run only when the parent raises one of the five classes); the
+/// differential tests run the resolver paths under
+/// `-W error::DeprecationWarning`, so that fails loudly when the lock moves.
 ///
 /// What it returns is a `SafeString`: rendered template output, already
 /// escaped by whatever produced it, which is the grant Django makes too.
@@ -718,29 +721,71 @@ const LAZY_BLOCK_REPR: &str = "<LazyBlock super=<deferred>>";
 
 /// Is the immediate Python caller Django's `Variable._resolve_lookup`?
 ///
-/// Compared by CODE OBJECT, so a renamed local or a user function that happens
-/// to be called `_resolve_lookup` cannot match. `sys._getframe(0)` is the
-/// Python frame that performed the subscript (a pymethod pushes no frame of its
-/// own). False when Django's template module was never imported, when there is
-/// no Python frame at all (an embedded unit test), or when anything about the
-/// probe fails: the caller is then treated as user code.
+/// Matched by the frame's FILE and NAME: `co_filename` equal to
+/// `django.template.base.__file__` and `co_name == "_resolve_lookup"`. The
+/// first version compared the code object with the one `Variable._resolve_lookup`
+/// holds NOW, which fails the moment anything wraps or replaces that method (a
+/// profiler, a decorator, a monkeypatch): the wrapper calls the original, whose
+/// frame is still Django's own but whose code object is no longer the one the
+/// attribute reads back. A user function that merely shares the name lives in
+/// another file and still reads as user code, and a subclass reaching the base
+/// implementation through `super()` is still Django's frame.
+///
+/// `sys._getframe(0)` is the Python frame that performed the subscript (a
+/// pymethod pushes no frame of its own). False when Django's template module
+/// was never imported, when there is no Python frame at all (an embedded unit
+/// test), or when anything about the probe fails: the caller is then treated as
+/// user code.
 fn called_by_django_resolver(py: Python<'_>) -> bool {
     let probe = || -> PyResult<bool> {
-        let modules = py.import("sys")?.getattr("modules")?;
-        let Some(base) = modules.get_item("django.template.base").ok() else {
+        let sys = py.import("sys")?;
+        let Some(base) = sys
+            .getattr("modules")?
+            .get_item("django.template.base")
+            .ok()
+        else {
             return Ok(false);
         };
-        let resolver_code = base
-            .getattr("Variable")?
-            .getattr("_resolve_lookup")?
-            .getattr("__code__")?;
-        let caller_code = py
-            .import("sys")?
-            .call_method1("_getframe", (0,))?
-            .getattr("f_code")?;
-        Ok(caller_code.is(&resolver_code))
+        let caller_code = sys.call_method1("_getframe", (0,))?.getattr("f_code")?;
+        if caller_code.getattr("co_name")?.extract::<String>()? != "_resolve_lookup" {
+            return Ok(false);
+        }
+        let caller_file = caller_code.getattr("co_filename")?;
+        caller_file.eq(base.getattr("__file__")?)
     };
     probe().unwrap_or(false)
+}
+
+thread_local! {
+    /// The object this thread's RUST resolver is currently subscripting as
+    /// Django's step 1 (`0` = none). See [`step1_get_item`].
+    static RUST_STEP1_TARGET: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Django's resolution step 1 (`current[bit]`) as the RUST resolvers perform
+/// it ([`Context::walk_live`] and the sidecar walk).
+///
+/// They have no Python frame of their own, so [`called_by_django_resolver`]
+/// cannot recognise them: a template rendered in Rust that holds a `block`
+/// (`_rust.render_template("{{ block.super }}", {"block": context["block"]})`)
+/// reached a lazy block's `__getitem__` as if it were legacy user code, warned,
+/// and, over a parent raising one of the five classes this step swallows, ran
+/// the parent twice. So the object being subscripted is recorded here for the
+/// duration of the call and [`LazyBlock::__getitem__`] answers it as Django's
+/// resolver is answered. Keyed by OBJECT, not a bare flag, so nested user code
+/// that happens to subscript some other lazy block is still user code.
+fn step1_get_item<'py, K>(current: &Bound<'py, PyAny>, key: K) -> PyResult<Bound<'py, PyAny>>
+where
+    K: pyo3::conversion::IntoPyObject<'py>,
+{
+    struct Restore(usize);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            RUST_STEP1_TARGET.with(|cell| cell.set(self.0));
+        }
+    }
+    let _restore = Restore(RUST_STEP1_TARGET.with(|cell| cell.replace(current.as_ptr() as usize)));
+    current.get_item(key)
 }
 
 /// The standard djust deprecation for a dict-style read of the lazy `block`.
@@ -830,11 +875,13 @@ impl LazyBlock {
     /// else it warns, renders the parent once, and propagates the parent's own
     /// exception unwrapped. See the type's docs for why it must ask.
     fn __getitem__<'py>(
-        &self,
-        py: Python<'py>,
+        slf: &Bound<'py, Self>,
         key: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        if called_by_django_resolver(py) {
+        let py = slf.py();
+        if called_by_django_resolver(py)
+            || RUST_STEP1_TARGET.with(|cell| cell.get()) == slf.as_ptr() as usize
+        {
             return Err(pyo3::exceptions::PyTypeError::new_err(
                 "'LazyBlock' object is not subscriptable",
             ));
@@ -842,7 +889,7 @@ impl LazyBlock {
         match key.extract::<String>() {
             Ok(name) if name == "super" => {
                 warn_dict_style(py)?;
-                self.read(py)
+                slf.borrow().read(py)
             }
             _ => Err(pyo3::exceptions::PyKeyError::new_err(key.to_string())),
         }
@@ -2432,7 +2479,7 @@ impl Context {
                 // when its failure is spelled as an exception. `maybe_call`
                 // one step below already propagates a real exception raised
                 // INSIDE a nullary method; this makes the getattr half agree.
-                let next = match current.get_item(*part) {
+                let next = match step1_get_item(&current, *part) {
                     Ok(v) => Ok(v),
                     // Django step 1: `except (TypeError, AttributeError,
                     // KeyError, ValueError, IndexError)` — the last two are
@@ -2876,7 +2923,7 @@ impl Context {
         // Django's own `hasattr` (which swallows) would.
         let has_getitem = current.get_type().hasattr("__getitem__").unwrap_or(false);
         if has_getitem {
-            match current.get_item(part) {
+            match step1_get_item(current, part) {
                 Ok(found) => return Ok(Walked::Object(found)),
                 // Django step 1: `except (TypeError, AttributeError, KeyError,
                 // ValueError, IndexError)` — the last two its own numpy

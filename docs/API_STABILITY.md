@@ -293,7 +293,8 @@ The dict-style reads keep working as a deprecated compatibility path: each emits
 read (no memoization), and lets the parent's own exception propagate. They are
 deprecated since 1.3 and removed no earlier than 2.0.0. Django's own resolution
 (`Variable("block.super")`, `{% blocktranslate with s=block.super %}`) is not
-affected and never warns.
+affected and never warns. Under `-W error::DeprecationWarning` the legacy read raises
+the warning at the tag, before the parent runs.
 
 ```python
 # Before

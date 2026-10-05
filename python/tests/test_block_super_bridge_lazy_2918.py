@@ -29,6 +29,7 @@ the rendered output AND the number of times each probe ran.
 from __future__ import annotations
 
 import copy
+import functools
 import gc
 import pickle
 import re
@@ -66,6 +67,7 @@ if not settings.configured:
 from django.template import Context as DjangoContext  # noqa: E402
 from django.template import Engine  # noqa: E402
 
+from djust._rust import render_template  # noqa: E402
 from djust.template import DjustTemplateBackend  # noqa: E402
 
 LIB_NAME = "probe2918_lib"
@@ -163,6 +165,15 @@ def catch_dict(context, label):
         return context["block"]["super"]
     except Exception as exc:  # noqa: BLE001 - the class IS the answer
         return f"caught-{type(exc).__name__}"
+
+
+@register.simple_tag(takes_context=True)
+def nested_rust(context, label, form):
+    """A tag that renders a template IN RUST with the lazy block in its context:
+    the Rust resolver, not Django's, performs the lookup."""
+    _tick(label)
+    template = {"var": "{{ block.super }}", "if": "{% if block.super %}Y{% endif %}"}[form]
+    return render_template(f"[{template}]", {"block": context["block"]})
 
 
 @register.simple_tag(takes_context=True)
@@ -689,6 +700,46 @@ class TestTheLegacyDictPathIsDeprecatedButExact:
             rendered, calls = _answer("djust", template_dir, source)
             assert rendered == f"caught-{kind}"
             assert calls == {"child": 1, "parent": 1}, (kind, calls)
+
+    def test_a_wrapped_resolver_is_still_djangos_resolver(self, template_dir, monkeypatch):
+        """Profilers, decorators and monkeypatches replace
+        ``Variable._resolve_lookup`` with a wrapper that calls the original;
+        the original's frame is still Django's own, though its code object is
+        no longer the one the attribute reads back."""
+        original = dj_template.Variable._resolve_lookup
+
+        @functools.wraps(original)
+        def wrapper(self, context):
+            return original(self, context)
+
+        monkeypatch.setattr(dj_template.Variable, "_resolve_lookup", wrapper)
+        for kind in ("ValueError", "KeyError"):
+            source = _child(f"boom_{kind}.html", ARM + "{% catch_super 'child' %}")
+            rendered, calls = _answer("djust", template_dir, source)  # warnings are errors
+            assert rendered == f"caught-{kind}"
+            assert calls == {"child": 1, "parent": 1}, calls
+        source = _child("tick.html", ARM + "{% probe_super_twice 'child' %}")
+        rendered, calls = _answer("djust", template_dir, source)
+        assert calls == {"child": 1, "parent": 2}
+
+    @pytest.mark.parametrize("form", ["var", "if"])
+    def test_a_template_rendered_in_rust_with_the_block_is_not_legacy_user_code(
+        self, form, template_dir
+    ):
+        """The Rust resolver performs Django's step 1 with no Python frame of
+        its own, so the frame test cannot see it."""
+        body = f"{{% nested_rust 'child' '{form}' %}}"
+        (rendered, calls), warned = self._record(template_dir, body, "amp.html")
+        assert warned == [], [str(w.message) for w in warned]
+        assert "<b>" in rendered or "Y" in rendered or "&lt;b&gt;" in rendered, rendered
+        assert calls == {"child": 1}
+
+    @pytest.mark.parametrize("kind", ["ValueError", "KeyError", "AttributeError"])
+    def test_a_rust_render_over_a_raising_parent_runs_the_parent_once(self, kind, template_dir):
+        source = _child(f"boom_{kind}.html", ARM + "{% nested_rust 'child' 'var' %}")
+        rendered, calls = _answer("djust", template_dir, source)  # warnings are errors
+        assert "parent exploded" in rendered
+        assert calls == {"child": 1, "parent": 1}, calls
 
     def test_a_function_named_like_the_resolver_is_still_user_code(self, template_dir):
         (rendered, _), warned = self._record(

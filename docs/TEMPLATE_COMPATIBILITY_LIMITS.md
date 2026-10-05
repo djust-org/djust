@@ -84,7 +84,9 @@ These cases must not be classified as intentional incompatibilities:
   the tag used to receive survives as a **deprecated** path (since 1.3, removed no
   earlier than 2.0.0, use `block.super()`): `block["super"]`, `.get("super")`,
   `.values()`, `.items()` and `dict(block)` still read the parent, once per read,
-  with a `DeprecationWarning`. Two shapes still differ from
+  with a `DeprecationWarning` (an exception at the tag under
+  `-W error::DeprecationWarning`). The `block` is not a `dict`: `isinstance(block, dict)`
+  and `block == {...}` are false. Two shapes still differ from
   Django: a tag that reads `block.super` through its context when nothing in the
   template body names it answers `''` (the parent is not armed), and a tag inside an
   `{% include %}`d file reads the including block's parent where Django answers `''`.
