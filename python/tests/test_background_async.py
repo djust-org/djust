@@ -3,7 +3,7 @@
 Verifies that @background correctly handles both sync and async def
 handlers.  #692 added a workaround in ``_run_async_work`` to detect
 unawaited coroutine returns.  #697 upgraded the ``@background``
-decorator itself to detect ``asyncio.iscoroutinefunction`` and create
+decorator itself to detect ``iscoroutinefunction`` and create
 a native async closure, eliminating the workaround for new code.
 """
 
@@ -206,7 +206,7 @@ class TestCoroutineDetection:
 class TestBackgroundNativeAsyncDetection:
     """#697: @background should natively detect async def handlers.
 
-    The decorator should use asyncio.iscoroutinefunction to create an
+    The decorator should use iscoroutinefunction to create an
     async closure, so _run_async_work can call it directly on the event
     loop instead of routing through sync_to_async first.
     """
@@ -222,7 +222,7 @@ class TestBackgroundNativeAsyncDetection:
 
         do_work(view)
         callback = view._scheduled[0][1]
-        assert asyncio.iscoroutinefunction(callback)
+        assert inspect.iscoroutinefunction(callback)
 
     def test_sync_handler_closure_is_not_coroutinefunction(self):
         """The closure for a sync handler is NOT a coroutine function."""
@@ -235,7 +235,7 @@ class TestBackgroundNativeAsyncDetection:
 
         do_work(view)
         callback = view._scheduled[0][1]
-        assert not asyncio.iscoroutinefunction(callback)
+        assert not inspect.iscoroutinefunction(callback)
 
     @pytest.mark.asyncio
     async def test_native_async_closure_executes_correctly(self):

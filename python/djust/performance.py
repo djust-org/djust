@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 
+from asgiref.sync import iscoroutinefunction
+
 
 @dataclass
 class TimingNode:
@@ -556,9 +558,7 @@ def track_performance(operation: str) -> Callable[[Callable[..., Any]], Callable
                 return await func(*args, **kwargs)
 
         # Return appropriate wrapper based on function type
-        import asyncio
-
-        if asyncio.iscoroutinefunction(func):
+        if iscoroutinefunction(func):
             return async_wrapper
         else:
             return wrapper
