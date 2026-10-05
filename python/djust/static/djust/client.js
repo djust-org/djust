@@ -14836,17 +14836,22 @@ function _createHookInstance(hookDef, el) {
 
     // pushEvent: send a custom event to the server
     instance.pushEvent = function(event, payload = {}) {
-        if (window.djust.liveViewInstance && window.djust.liveViewInstance.ws) {
-            window.djust.liveViewInstance.ws.send(JSON.stringify({
-                type: 'event',
-                event: event,
-                params: payload,
-                // A hook inside a view mounted beside the page view talks to
-                // that view, not the page view (#3252).
-                ...slotFrameFields(slotIdFor(el)),
-            }));
+        const transport = window.djust.liveViewInstance;
+        const frame = {
+            type: 'event',
+            event: event,
+            params: payload,
+            // A hook inside a view mounted beside the page view talks to
+            // that view, not the page view (#3252).
+            ...slotFrameFields(slotIdFor(el)),
+        };
+        if (transport && transport.ws) {
+            transport.ws.send(JSON.stringify(frame));
+        } else if (transport && transport.transportName === 'sse' && transport.viewMounted) {
+            // The SSE transport posts the frame, as it does for every event.
+            transport.sendMessage(frame);
         } else {
-            console.warn(`[dj-hook] Cannot pushEvent "${event}" — no WebSocket connection`);
+            console.warn(`[dj-hook] Cannot pushEvent "${event}" — no live connection`);
         }
     };
 

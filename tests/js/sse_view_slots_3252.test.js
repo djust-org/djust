@@ -158,6 +158,23 @@ describe('events', () => {
     });
 });
 
+describe('a dj-hook', () => {
+    it('pushes its event to the view it sits in, over SSE', async () => {
+        const page = await mountedPage();
+        page.win.DjustHooks = {
+            Ping: { mounted() { this.el.addEventListener('click', () => this.pushEvent('hooked', { n: 1 })); } },
+        };
+        await hydrated(page, 'w1');
+        await serve(page, mountFrame('app.Widget', 4,
+            '<button id="hook" dj-hook="Ping" dj-id="1">hook</button>', { target_id: 'w1' }));
+        page.doc.getElementById('hook').click();
+        await tick();
+        expect(eventsOf(page)).toEqual([
+            { type: 'event', event: 'hooked', params: { n: 1 }, target_id: 'w1' },
+        ]);
+    });
+});
+
 describe('frames addressed to a view', () => {
     it('apply to its container only, against its own version', async () => {
         const page = await mountedPage();
