@@ -426,6 +426,90 @@ def test_the_restart_helper_does_not_signal_before_the_handlers_exist(tmp_path):
         _uds_restart_cycle(cmd, env, uds, 1, ready_marker=_READY_AFTER_HANDLERS)
 
 
+def _log_text(log):
+    # pread, not seek: the child shares the file's offset (``stdout=log``).
+    return os.pread(log.fileno(), 1 << 20, 0).decode(errors="replace")
+
+
+# A server whose bind is slow, announcing where it is so a test can signal it at
+# exactly that point: ``entered`` is inside ``bind_socket()`` before the socket
+# file exists, ``bound`` is after the file exists.
+_SLOW_BIND = (
+    "import runpy, sys, time, uvicorn\n"
+    "bind = uvicorn.Config.bind_socket\n"
+    "def slow_bind(self):\n"
+    "    print('AT-ENTERED', flush=True)\n"
+    "    if WHERE == 'entered':\n"
+    "        time.sleep(1.5)\n"
+    "    sock = bind(self)\n"
+    "    print('AT-BOUND', flush=True)\n"
+    "    if WHERE == 'bound':\n"
+    "        time.sleep(1.5)\n"
+    "    return sock\n"
+    "uvicorn.Config.bind_socket = slow_bind\n"
+    "sys.argv = ['djust'] + sys.argv[1:]\n"
+    "runpy.run_module('djust', run_name='__main__')\n"
+)
+
+
+@pytest.mark.parametrize("where", ["entered", "bound"])
+def test_a_sigterm_while_the_socket_is_being_bound_is_a_clean_exit(tmp_path, where):
+    """The handlers are installed before ``bind_socket()``: a SIGTERM that arrives
+    while the socket is bound (or just after its file exists) used to take the
+    default action, exit -15 and leave the file, so the next start failed with
+    "address in use". It is a normal shutdown now: status 0, no socket file."""
+    (tmp_path / "mlapp.py").write_text(_APP)
+    marker = {"entered": "AT-ENTERED", "bound": "AT-BOUND"}[where]
+    with tempfile.TemporaryDirectory(prefix="ml") as socket_dir:
+        uds = os.path.join(socket_dir, "s.sock")
+        env = {**os.environ, "PYTHONPATH": REPO_PYTHON}
+        env.pop("DJANGO_SETTINGS_MODULE", None)
+        cmd = [
+            sys.executable, "-c", f"WHERE = {where!r}\n" + _SLOW_BIND,
+            "serve", "mlapp:app", "--loops", "2", "--uds", uds,
+            "--app-dir", str(tmp_path), "--lifespan", "off", "--allow-gil",
+        ]  # fmt: skip
+        with tempfile.TemporaryFile(mode="w+") as log:
+            proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, text=True, env=env)
+            try:
+                deadline = time.monotonic() + 20
+                while marker not in _log_text(log):
+                    assert proc.poll() is None, _log_text(log)
+                    assert time.monotonic() < deadline, _log_text(log)
+                    time.sleep(0.02)
+                proc.send_signal(signal.SIGTERM)
+                code = proc.wait(timeout=20)
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait(timeout=5)
+            out = _log_text(log)
+        assert code == 0, f"exit status {code}\n{out}"
+        assert not os.path.exists(uds), f"the socket file was left behind\n{out}"
+        # ... and the path is free for the next start.
+        _uds_restart_cycle(
+            [
+                sys.executable,
+                "-m",
+                "djust",
+                "serve",
+                "mlapp:app",
+                "--loops",
+                "2",
+                "--uds",
+                uds,
+                "--app-dir",
+                str(tmp_path),
+                "--lifespan",
+                "off",
+                "--allow-gil",
+            ],  # fmt: skip
+            env,
+            uds,
+            1,
+        )
+
+
 @pytest.mark.parametrize(
     ("child", "expected", "startup_timeout", "stop_timeout"),
     [
