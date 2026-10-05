@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Dict, Iterable, List, Optional,
 from urllib.parse import parse_qs, urlencode
 
 from django.utils.datastructures import MultiValueDict
+from django.utils.safestring import SafeData
 
 from .._exposure_providers import (
     RUST_RENDER_PROVIDER,
@@ -1086,6 +1087,7 @@ class RustBridgeMixin:
             # (int, float, bool, str, None) which can never contain SafeString.
             _JSON_PRIMITIVES = (int, float, bool, type(None))
             safe_keys: List[str] = []
+            sidecar_only_keys: Set[str] = set()
             rendered_context: Dict[str, Any] = {}
             needs_normalize = False
             for key, value in context.items():
@@ -1102,6 +1104,16 @@ class RustBridgeMixin:
                 # ``{{ theme_head }}`` SafeString) are NOT skipped — they fall
                 # through to the normal handling below.
                 if key in _request_scoped_keys and not _is_json_serializable(value):
+                    # A lazily rendered trusted-HTML value (theming's
+                    # ``theme_head`` & co., #3028) is SafeData that is not a
+                    # ``str``. It must NOT keep a stale state entry under the
+                    # same name (the rolling-deploy case: state persisted by a
+                    # build whose processor stored the rendered string; the
+                    # state entry would win over the sidecar and was never
+                    # re-marked safe), so it is left out of the retained keys
+                    # below. That does not render it.
+                    if isinstance(value, SafeData):
+                        sidecar_only_keys.add(key)
                     continue
                 if isinstance(value, forms.BaseForm):
                     from djust.serialization import render_form_value
@@ -1287,7 +1299,7 @@ class RustBridgeMixin:
             # being in this render's context.
             removed_keys: List[str] = []
             if hasattr(self._rust_view, "retain_state_keys"):
-                keep_keys = list(full_context)
+                keep_keys = [k for k in full_context if k not in sidecar_only_keys]
                 if getattr(self, "_static_assigns_sent", False):
                     keep_keys.extend(getattr(self, "static_assigns", None) or [])
                 removed_keys = self._rust_view.retain_state_keys(keep_keys)
