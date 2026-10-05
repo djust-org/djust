@@ -323,6 +323,10 @@ def test_one_loop_reaching_limit_max_requests_stops_the_process(tmp_path):
     assert out.count("shutdown on djust-loop-") == 2, out
 
 
+#: Logged by each loop thread, which starts after the signal handlers are installed.
+_READY_AFTER_HANDLERS = "Started server process"
+
+
 def _child_output(log):
     # Read through pread: the child shares the file's offset (``stdout=log``), and
     # a seek here would make its next write land in the wrong place.
@@ -342,10 +346,12 @@ def _uds_restart_cycle(
                 assert proc.poll() is None, "server exited before creating the UNIX socket"
                 assert time.monotonic() < deadline, "server did not create the UNIX socket"
                 time.sleep(0.1)
-            # The socket file appears when the server binds, BEFORE it installs its
-            # signal handlers: a SIGTERM in that window kills it with status -15
-            # and leaves the socket behind (#3128 follow-up). Wait until the
-            # server says it is running, which it does only after the handlers.
+            # The socket file appears when the server binds, and uvicorn logs
+            # "Uvicorn running on unix socket" at that same moment, BEFORE the
+            # signal handlers are installed: a SIGTERM in that window kills the
+            # server with status -15 and leaves the socket behind. Wait for a
+            # line that is logged after them (``Started server process``, from
+            # the loop threads, which start once the handlers are in).
             while ready_marker is not None and ready_marker not in _child_output(log):
                 assert proc.poll() is None, "server exited before it reported running"
                 assert time.monotonic() < deadline, f"server never reported {ready_marker!r}"
@@ -386,7 +392,38 @@ def test_a_unix_socket_is_removed_on_exit_so_a_restart_can_bind(tmp_path):
             "--uds", uds, "--app-dir", str(tmp_path), "--lifespan", "off", "--allow-gil",
         ]  # fmt: skip
         for attempt in (1, 2):  # the second start must bind the same path
-            _uds_restart_cycle(cmd, env, uds, attempt, ready_marker="Uvicorn running on")
+            _uds_restart_cycle(cmd, env, uds, attempt, ready_marker=_READY_AFTER_HANDLERS)
+
+
+def test_the_restart_helper_does_not_signal_before_the_handlers_exist(tmp_path):
+    """A slow start must not turn the restart test into a flake.
+
+    ``bind_socket()`` creates the socket file (and logs "Uvicorn running on")
+    before the handlers go in. Delaying the server right after it by a second
+    makes any readiness check that fires at bind time send SIGTERM too early
+    (exit -15, socket left behind); a check on ``_READY_AFTER_HANDLERS`` waits.
+    """
+    (tmp_path / "mlapp.py").write_text(_APP)
+    delayed_start = (
+        "import runpy, sys, time, uvicorn\n"
+        "bind = uvicorn.Config.bind_socket\n"
+        "def slow_bind(self):\n"
+        "    sock = bind(self)\n"
+        "    time.sleep(1.0)\n"
+        "    return sock\n"
+        "uvicorn.Config.bind_socket = slow_bind\n"
+        "sys.argv = ['djust'] + sys.argv[1:]\n"
+        "runpy.run_module('djust', run_name='__main__')\n"
+    )
+    with tempfile.TemporaryDirectory(prefix="ml") as socket_dir:
+        uds = os.path.join(socket_dir, "s.sock")
+        env = {**os.environ, "PYTHONPATH": REPO_PYTHON}
+        env.pop("DJANGO_SETTINGS_MODULE", None)
+        cmd = [
+            sys.executable, "-c", delayed_start, "serve", "mlapp:app", "--loops", "2",
+            "--uds", uds, "--app-dir", str(tmp_path), "--lifespan", "off", "--allow-gil",
+        ]  # fmt: skip
+        _uds_restart_cycle(cmd, env, uds, 1, ready_marker=_READY_AFTER_HANDLERS)
 
 
 @pytest.mark.parametrize(
