@@ -55,6 +55,25 @@ HTTP load of the destination. If the stream drops after navigation, reconnect
 targets the current route rather than the original stream's page. This does not
 promise restoration of all in-memory state after a disconnected stream.
 
+### Several views on one session
+
+A page can hold views beside the page view (`dj-lazy` containers, see
+[Several LiveViews on One Page](website/guides/multiple-views.md)). Over SSE each
+one mounts with a `mount` frame that names its container:
+
+```json
+{ "type": "mount", "view": "myapp.views.Widget", "url": "/dashboard/", "params": {}, "target_id": "widget-a" }
+{ "type": "event", "event": "bump", "params": {}, "target_id": "widget-a" }
+{ "type": "unmount", "target_id": "widget-a" }
+```
+
+Each is a root view of its own with its own runtime, saved state, authorization
+and teardown; the frames the server sends for it carry the same `target_id`. A
+frame for an address with nothing mounted is refused with `code:
+"view_unavailable"`. A navigation (`live_redirect_mount`) and the end of the
+stream release every view; an `unmount` frame releases one. SSE has no
+`mount_batch`, server push, presence, `db_notify` or tick, for any view.
+
 ### Why not the Referer header?
 
 The page URL travels in `data.url` (sent by the client) rather than being

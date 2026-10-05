@@ -124,6 +124,8 @@ def authorize_event(view: Any, request: Any, binding: StateBinding) -> Any:
     mounted = view._djust_mount_request
     request.path = mounted.path
     request.path_info = mounted.path_info
+    # A view beside the page view (#3252) is bound to its own slot.
+    request._djust_slot_target = getattr(mounted, "_djust_slot_target", None)
     request.resolver_match = mounted.resolver_match
     resolver = getattr(view, "resolve_tenant", None)
     if callable(resolver):
