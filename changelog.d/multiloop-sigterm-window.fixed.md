@@ -4,5 +4,5 @@
   the file behind, and the next start failed with "address in use". The handlers
   are now installed first; a signal received before the event loops exist is
   recorded and the server shuts down cleanly (exit status 0, socket file
-  removed). A failed bind no longer removes a socket path that belongs to another
-  server.
+  removed). The shutdown never removes a socket path it did not create: after a
+  failed bind the path belongs to another server and is left alone.

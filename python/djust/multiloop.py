@@ -408,8 +408,10 @@ def serve(app: Any, *, loops: int = 1, allow_gil: bool = False, **uvicorn_kwargs
         if sock is not None:
             sock.close()
         _loop_count = 0
-        # uvicorn.run removes its UNIX socket file on exit; so does this. Only a
-        # file this call bound: a failed bind means another server owns the path.
+        # uvicorn.run removes its UNIX socket file on exit; so does this. Never a
+        # path it did not create: after a failed bind the path is another server's.
+        # (If bind() succeeds and uvicorn's chmod then fails, the file stays, as
+        # it always did.)
         if sock is not None and config.uds and os.path.exists(config.uds):
             os.remove(config.uds)
 
