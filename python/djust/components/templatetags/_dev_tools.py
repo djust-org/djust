@@ -459,10 +459,18 @@ class LogViewerNode(template.Node):
             stream_attr = f' data-stream-event="{e_stream}"'
 
         scroll_attr = ' data-auto-scroll="true"' if auto_scroll else ""
+        # What the LogViewer hook needs to append streamed lines like these.
+        hook_attrs = ""
+        if show_line_numbers:
+            hook_attrs += ' data-line-numbers="true"'
+        if max_lines and max_lines > 0:
+            hook_attrs += f' data-max-lines="{int(max_lines)}"'
+        if filter_level:
+            hook_attrs += f' data-filter-level="{conditional_escape(str(filter_level).lower())}"'
 
         return _safe(
             f'<div class="{class_str}" dj-hook="LogViewer"'
-            f'{stream_attr}{scroll_attr} role="log" aria-live="polite">'
+            f'{stream_attr}{scroll_attr}{hook_attrs} role="log" aria-live="polite">'
             f'<div class="dj-log-viewer__body">{"".join(lines_html)}</div>'
             f"</div>"
         )

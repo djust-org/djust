@@ -1,7 +1,7 @@
 """Sortable Grid component — 2D drag-and-drop grid."""
 
 import html
-from djust.components.utils import url_attr
+from djust.components.utils import unique_ids as _unique_ids, url_attr
 from typing import Any, Optional
 
 from djust import Component
@@ -10,8 +10,34 @@ from djust import Component
 class SortableGrid(Component):
     """2D drag-and-drop grid layout.
 
-    Uses ``dj-hook="SortableGrid"`` for client-side drag interactions.
-    Fires a server event with the new order on drop.
+    Uses ``dj-hook="SortableGrid"`` for client-side drag interactions; the
+    page must include ``djust_components/sortable-grid.js``. Tiles reorder by
+    mouse drag, or by keyboard (Space grabs the focused tile, the arrow keys
+    move it, Up/Down by a row of ``columns``, Enter drops it, Escape cancels).
+    Fires ``move_event`` with ``order`` (the item ids in their new order) on
+    drop. An app's own ``SortableGrid`` hook, in ``window.djust.hooks`` or
+    ``window.DjustHooks``, replaces the shipped one (a hook assigned with
+    ``window.DjustHooks = {...}`` after the script also drops it; merge with
+    ``Object.assign`` instead).
+
+    ``order`` comes from the browser, so treat it as untrusted: accept it only
+    if it is a permutation of the ids you rendered, and ignore it otherwise.
+    A handler that merely filters it deletes data when a client sends a
+    missing or repeated id::
+
+        @event_handler()
+        def reorder(self, order=None, **kwargs):
+            by_id = {str(i["id"]): i for i in self.items}
+            if not isinstance(order, list) or sorted(map(str, order)) != sorted(by_id):
+                return
+            self.items = [by_id[str(key)] for key in order]
+
+    Use one ``move_event`` per list: the payload does not say which list sent
+    it. Items need distinct, non-empty ``id`` values: the server's re-render
+    can only follow the client's reorder when it can key the items, so a list
+    where any ``id`` is empty, missing or repeated renders without ``data-key``
+    and the hook leaves it inert (no drag, no keyboard reorder), logging one
+    console warning.
 
     Usage in a LiveView::
 
@@ -74,11 +100,13 @@ class SortableGrid(Component):
         e_event = html.escape(self.move_event)
         e_gap = html.escape(self.gap)
 
+        keyed = _unique_ids(self.items)
         items_html = []
         for item in self.items:
             if not isinstance(item, dict):
                 continue
             item_id = html.escape(str(item.get("id", "")))
+            key_attr = f' data-key="{item_id}"' if keyed else ""
             label = html.escape(str(item.get("label", "")))
             thumbnail = item.get("thumbnail", "")
             thumb_html = ""
@@ -90,7 +118,7 @@ class SortableGrid(Component):
                 )
             drag_attr = ' draggable="true"' if not self.disabled else ""
             items_html.append(
-                f'<div class="dj-sortable-grid__item" data-id="{item_id}"{drag_attr}>'
+                f'<div class="dj-sortable-grid__item" data-id="{item_id}"{key_attr}{drag_attr}>'
                 f"{thumb_html}"
                 f'<span class="dj-sortable-grid__label">{label}</span></div>'
             )

@@ -2133,9 +2133,11 @@ button.rating-star:hover ~ .rating-star { color: hsl(var(--muted-foreground)); }
 .dj-json__colon { color: var(--dj-json-fg, #d4d4d4); }
 .dj-json__bracket { color: var(--dj-json-bracket-color, #808080); }
 .dj-json__count { color: rgba(255,255,255,0.35); font-size: 0.75rem; }
-.dj-json__value--string { color: var(--dj-json-string-color, #ce9178); }
-.dj-json__value--number { color: var(--dj-json-number-color, #b5cea8); }
-.dj-json__value--bool, .dj-json__value--null { color: var(--dj-json-bool-color, #569cd6); }
+/* Two classes each: the class-coverage rule `.dj-json__value` further down sets the page foreground, which is dark on this viewer's dark background, and would win over a one-class rule that comes first. */
+.dj-json-viewer .dj-json__value { color: var(--dj-json-fg, #d4d4d4); }
+.dj-json-viewer .dj-json__value--string { color: var(--dj-json-string-color, #ce9178); }
+.dj-json-viewer .dj-json__value--number { color: var(--dj-json-number-color, #b5cea8); }
+.dj-json-viewer .dj-json__value--bool, .dj-json-viewer .dj-json__value--null { color: var(--dj-json-bool-color, #569cd6); }
 .dj-json__pair, .dj-json__item { line-height: 1.6; }
 
 /* --- Log Viewer --- */

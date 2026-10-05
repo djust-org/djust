@@ -24,6 +24,7 @@ python tests/playwright/test_draft_mode.py
 
 ## Available Tests
 
+- **test_component_interactions_2985.py** - #2985 SortableList, SortableGrid, JsonViewer and LogViewer hooks in headless Chromium against a real LiveView over WebSocket: mouse and keyboard reorder, server re-render agreement, expand/collapse and copy, streamed and re-rendered log following, and an app's own hook of the same name keeping its place; self-contained (`DJUST_SERVER_PYTHON`, optional `CHROMIUM_EXECUTABLE` and `SHOTS_DIR`)
 - **test_page_shell_fallback_3036.py** - #3036 page-shell fallback in headless Chromium, self-contained (builds and serves its own three-page project; `DJUST_SERVER_PYTHON`, optional `CHROMIUM_EXECUTABLE`): a destination with a different shell is a real load, including with a `#fragment` and on Back onto a hashed entry
 - **test_loading_attribute.py** - Tests @loading HTML attributes (disable, class, show, hide)
 - **test_interactive_acceptance.py** - ADR-034 C4 acceptance: async and failing callbacks, `close`, duplicate/stale observations, keyboard focus, legacy plain `DropdownMenu`, two-browser isolation (`ACCEPTANCE_BASE`, default `http://localhost:18438`; standalone)

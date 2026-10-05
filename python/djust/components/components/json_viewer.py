@@ -11,7 +11,12 @@ class JsonViewer(Component):
     """Interactive collapsible JSON tree viewer.
 
     Renders JSON data as a navigable, collapsible tree with syntax-colored
-    values. Uses ``dj-hook="JsonViewer"`` for client-side expand/collapse.
+    values. Uses ``dj-hook="JsonViewer"`` for client-side expand/collapse and
+    copy; the page must include ``djust_components/json-viewer.js``. A node
+    toggles on click, Enter, Space or the arrow keys. An app's own
+    ``JsonViewer`` hook, in ``window.djust.hooks`` or ``window.DjustHooks``,
+    replaces the shipped one (a hook assigned with ``window.DjustHooks = {...}``
+    after the script also drops it; merge with ``Object.assign`` instead).
 
     Usage in a LiveView::
 
