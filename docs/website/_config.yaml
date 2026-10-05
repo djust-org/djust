@@ -212,6 +212,11 @@ navigation:
         file: guides/sticky-child-persistence.md
         order: 6.85
         level: intermediate
+      - title: Several LiveViews on One Page
+        slug: multiple-views
+        file: guides/multiple-views.md
+        order: 6.9
+        level: intermediate
       - title: Model Binding
         slug: model-binding
         file: guides/model-binding.md
