@@ -281,7 +281,7 @@ While a `role="dialog"` modal is on the page:
   `dj-click` control you mark `data-dj-close` in your own `role="dialog"`
   markup; no other control is ever clicked on `Esc` (a dialog with `dj-click` controls but no explicit close control logs a console warning once, instead of pressing one). A handler closer to the
   key (a hook that handles `Esc` or `Tab` itself and calls `preventDefault`)
-  takes the key first, and the dialog layer leaves it alone.
+  takes `Tab` or `Esc` first, and the dialog layer leaves it alone. Escape presses the close control with a real click, so the event carries that control's own `data-value` and arguments. Every dialog djust ships (`Modal`, `ImageLightbox`, `Tour`, `{% theme_modal %}`) carries the marker; a `slot_close` replacement for the theming modal needs `data-dj-close` and a `dj-click` of its own.
 - **Nested dialogs** are handled with a stack: the focus trap and `Esc` always
   act on the top-most (most recently opened) dialog, and `Esc` pops one level.
 

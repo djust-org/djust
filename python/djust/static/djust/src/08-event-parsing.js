@@ -258,6 +258,9 @@ function extractTypedParams(element) {
             attr.name.startsWith('data-djust') ||
             attr.name === 'dj-id' ||
             attr.name === 'data-loading' ||
+            // Marks a dialog's explicit close control (51-keyboard-nav); a
+            // marker, not an argument: it must not reach the handler as `close`.
+            attr.name === 'data-dj-close' ||
             attr.name === 'data-component-id') {
             continue;
         }

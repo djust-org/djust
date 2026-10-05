@@ -12,8 +12,10 @@ did, and it keeps working for a page that loads `scaffold.css` without
 `components.css`.
 
 Escape-to-close now works through the framework rather than `components.js`:
-`51-keyboard-nav.js:_closeModal` locates a dialog's close control with
-`[dj-click]` and dispatches it, which this button carries. Focus trapping and
+`51-keyboard-nav.js:_closeModal` dispatches the dialog's explicit close control,
+the `[dj-click]` element marked `data-dj-close` (or `.dj-modal__close`), which
+this button carries. A `slot_close` replacement must carry `data-dj-close` and a
+`dj-click` too, or Escape no longer reaches the server. Focus trapping and
 `aria-modal` come from the same module.
 
 `data-theme-modal` / `data-theme-modal-close` below are the client fallback,
@@ -43,7 +45,7 @@ rather than as a side effect of this one.
         {{ slot_close|safe }}
         {% else %}
         <button class="{{ css_prefix }}modal-close" aria-label="Close"
-                data-theme-modal-close
+                data-theme-modal-close data-dj-close
                 dj-click="toggle_modal" data-value="{{ id }}"
                 {% if component_id %}data-component-id="{{ component_id }}"{% endif %}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

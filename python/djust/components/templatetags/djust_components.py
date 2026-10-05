@@ -9720,7 +9720,7 @@ class LightboxNode(template.Node):
             f'data-close-event="{e_close}" data-navigate-event="{e_nav}" '
             f'role="dialog" aria-modal="true">'
             f'<div class="dj-lightbox__backdrop" dj-click="{e_close}"></div>'
-            f'<button class="dj-lightbox__close" dj-click="{e_close}" '
+            f'<button class="dj-lightbox__close" data-dj-close dj-click="{e_close}" '
             f'aria-label="Close">&times;</button>'
             f"{prev_btn}"
             f'<div class="dj-lightbox__stage">{img_html}{caption_html}</div>'

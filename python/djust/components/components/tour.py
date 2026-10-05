@@ -130,7 +130,7 @@ class Tour(Component):
         skip_btn = ""
         if self.show_skip and idx < total - 1:
             skip_btn = (
-                f'<button class="dj-tour__skip" type="button" '
+                f'<button class="dj-tour__skip" data-dj-close type="button" '
                 f"{self.event_attrs(self.event, value='skip')}>Skip tour</button>"
             )
 

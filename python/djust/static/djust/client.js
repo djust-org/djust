@@ -4704,6 +4704,9 @@ function extractTypedParams(element) {
             attr.name.startsWith('data-djust') ||
             attr.name === 'dj-id' ||
             attr.name === 'data-loading' ||
+            // Marks a dialog's explicit close control (51-keyboard-nav); a
+            // marker, not an argument: it must not reach the handler as `close`.
+            attr.name === 'data-dj-close' ||
             attr.name === 'data-component-id') {
             continue;
         }
@@ -21655,7 +21658,14 @@ globalThis.djust.djTransitionGroup = {
     function _closeModal(dialog) {
         const closer = dialog.querySelector('.dj-modal__close[dj-click]') ||
             dialog.querySelector('[data-dj-close][dj-click]');
-        if (!closer && !_warnedNoCloser && dialog.querySelector('[dj-click]')) {
+        if (closer) {
+            // Press it, so the event carries exactly what a click on it sends
+            // (its data-value / dj-value-* arguments, strict-handler binding,
+            // dj-confirm, locks); a bare handleEvent(name) sent none of that.
+            closer.click();
+            return true;
+        }
+        if (!_warnedNoCloser && dialog.querySelector('[dj-click]')) {
             // Migration signal for dialogs that relied on the old fallback:
             // Escape now does nothing here instead of pressing a control that
             // might be destructive. Once per page.
@@ -21666,7 +21676,7 @@ globalThis.djust.djTransitionGroup = {
                 '(or use .dj-modal__close) to keep Escape-to-close.'
             );
         }
-        return _dispatchFrom(closer);
+        return false;
     }
 
     // -----------------------------------------------------------------------
@@ -21785,10 +21795,6 @@ globalThis.djust.djTransitionGroup = {
     // -----------------------------------------------------------------------
 
     function _handleKeydown(e) {
-        // A handler closer to the target already took this key (a hook that
-        // runs its own Escape/Tab handling calls preventDefault): do not act
-        // on it a second time.
-        if (e.defaultPrevented) return;
         const target = e.target;
         if (!target || typeof target.closest !== 'function') return;
 
@@ -21804,6 +21810,12 @@ globalThis.djust.djTransitionGroup = {
             const innerDropdown = target.closest('.dj-dropdown');
             const dropdownInDialog =
                 innerDropdown && dialog.contains(innerDropdown);
+            // A handler closer to the target already took Tab or Escape (a
+            // hook that runs its own dialog handling calls preventDefault):
+            // do not act on it a second time. Only these two keys: the roving
+            // below (and the dropdown, tablist and accordion handlers) keep
+            // running after an earlier preventDefault, as before.
+            if ((e.key === 'Tab' || e.key === 'Escape') && e.defaultPrevented) return;
             // Tab is handled FIRST and returned — the focus trap is always
             // dialog-scoped and must never fall through to the dropdown.
             if (e.key === 'Tab') {
