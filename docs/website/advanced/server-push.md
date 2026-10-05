@@ -24,7 +24,35 @@ push_to_view("myapp.views.ChatView", handler="handle_new_message",
               payload={"text": "Hello from the server!"})
 ```
 
-A pushed `handler` must start with `handle_` or be decorated with `@event_handler`. Any other name is blocked (logged as `server_push: blocked handler`) and never called.
+A pushed `handler` must start with `handle_`, be decorated with `@event_handler`, or be marked `@push_handler`. Any other name is blocked (logged as `server_push: blocked handler`) and never called.
+
+### Handlers only the server may call: `@push_handler`
+
+A browser can send an event naming any method of your view. Under the default `event_security = "strict"` it is refused for a method without `@event_handler`, which is why an undecorated `handle_*` method works as a push target. Under `"warn"` and `"open"` the browser is not refused, so that method is also a browser event target.
+
+`@push_handler` marks a method that only server push may call, in every `event_security` mode:
+
+```python
+from djust.decorators import push_handler
+
+class RoomView(LiveView):
+    @push_handler
+    def refresh_room(self, room: str = "", **kwargs):
+        self.rooms = load_rooms(room)
+```
+
+```python
+push_to_view("games.views.RoomView", handler="refresh_room", payload={"room": "a"})
+```
+
+- The name does not need the `handle_` prefix.
+- A browser event naming it is refused on the WebSocket, SSE and HTTP POST transports with the same response as a method that does not exist. It is not suggested in debug-mode "did you mean" hints, and the HTTP API answers `unknown_handler`.
+- It is not an event handler: it does not appear in the view schema, `djust_audit` or the HTTP API, and `djust.V004` does not suggest decorating it. A template binding to it is reported by `djust.T019` in every mode.
+- `@event_handler` or `@server_function` on the same method is a `TypeError` at decoration time. So are `@permission_required`, `@rate_limit`, `@debounce`, `@throttle`, `@cache`, `@optimistic` and `@client_state`: server push enforces none of them, so they would be inert and look like protection. Check authorization inside the handler. `@background` is allowed.
+- **The marker is inherited by overrides.** If any class in the MRO (a base, a mixin) defines the name with `@push_handler`, an override without the marker is still push-only, and server push still reaches it. `djust.V021` reports the override; re-apply the marker to silence it. Adding `@event_handler` to the override does not make it browser-callable (V021 warns).
+- It may sit above or below `@staticmethod` / `@classmethod`. Put it topmost among ordinary decorators.
+- To test one, use `LiveViewTestClient.send_push("name", payload={...})`. `send_event` refuses it, as a browser is refused.
+- Existing `handle_*` handlers keep working exactly as before; the marker is opt-in.
 
 ## Push from Celery Tasks
 
@@ -122,7 +150,7 @@ class SharedNoteView(LiveView):
         self.content = content
 ```
 
-The receiver is named `handle_broadcast` because pushed handlers must start with `handle_` (or be `@event_handler`-decorated). The sender skips its own broadcast, and peers receive it and update their state normally.
+The receiver is named `handle_broadcast` because pushed handlers must start with `handle_` (or be `@event_handler`-decorated or `@push_handler`-marked). The sender skips its own broadcast, and peers receive it and update their state normally.
 
 ## Scoped Push: One Room, Not Every Room
 
@@ -199,7 +227,7 @@ Synchronous. Sends an update to all clients connected to `view_path`, or with `s
 | ----------- | ------ | --------------------------------------------- |
 | `view_path` | `str`  | Dotted import path of the LiveView class      |
 | `state`     | `dict` | Attribute names and values to set on the view |
-| `handler`   | `str`  | Name of a method to call on the view — must start with `handle_` or be decorated with `@event_handler`; other names are blocked |
+| `handler`   | `str`  | Name of a method to call on the view — must start with `handle_`, be decorated with `@event_handler`, or be marked `@push_handler`; other names are blocked |
 | `payload`   | `dict` | Keyword arguments passed to the handler       |
 | `scope`     | `str` or `int` | Only the sessions in this scope (see [Scoped Push](#scoped-push-one-room-not-every-room)); `None` reaches every session |
 

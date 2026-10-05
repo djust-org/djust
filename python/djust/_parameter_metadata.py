@@ -18,7 +18,7 @@ from typing import Any, NamedTuple
 
 from ._class_snapshot import namespace
 from ._parameter_contract import ContractError
-from .decorators import is_event_handler, is_server_function
+from .decorators import is_event_handler, is_push_only, is_server_function
 from .validation import (
     get_handler_coercion,
     get_handler_parameter_policy,
@@ -115,7 +115,9 @@ def declared_handlers(
             is_event_handler(function)
             or (server_functions and is_server_function(function))
             or (decorated and "_djust_decorators" in vars(function))
-        ):
+        ) and not is_push_only(cls, name, function):
+            # A push-only name is never a browser handler, even when an
+            # override of it carries @event_handler (#3002).
             yield DeclaredHandler(name, member, function, owner)
 
 
@@ -286,7 +288,7 @@ def _event_methods(owner: Any) -> dict[str, Any]:
             method = _resolve_method(owner, name, member, in_storage, declaration_type)
         else:
             method = _resolve_method(owner, name, wrapper, in_storage, owner_type)
-        if method is not None:
+        if method is not None and not is_push_only(declaration, name, method):
             methods[name] = method
     # Names only the instance holds. Anything but a function or method there
     # can never resolve to a handler, so only those take the full lookup.
@@ -301,7 +303,7 @@ def _event_methods(owner: Any) -> dict[str, Any]:
         member = value if wrapper is _ABSENT else wrapper
         binding_class = declaration_type if wrapper is _ABSENT else owner_type
         method = _resolve_method(owner, name, member, True, binding_class)
-        if method is not None:
+        if method is not None and not is_push_only(declaration, name, method):
             methods[name] = method
 
     if bound_component:

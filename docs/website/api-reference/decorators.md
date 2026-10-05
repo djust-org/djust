@@ -23,6 +23,7 @@ from djust.decorators import (
     rate_limit,
     background,
     server_function,
+    push_handler,
 )
 ```
 
@@ -430,6 +431,24 @@ Mark a method as a same-origin browser RPC target. The client calls it with `awa
 def search(self, q: str = "", **kwargs) -> list[dict]:
     return [{"id": p.id, "name": p.name} for p in Product.objects.filter(name__icontains=q)[:10]]
 ```
+
+---
+
+## `@push_handler`
+
+Mark a method that only server push may call. `push_to_view(..., handler="name")` reaches it under any name, and a browser event naming it is refused in every `event_security` mode (`strict`, `warn` and `open`) on every transport, with the same response as a method that does not exist.
+
+```python
+@push_handler
+def refresh_room(self, room: str = "", **kwargs):
+    self.rooms = load_rooms(room)
+```
+
+It is not an event handler. It cannot be combined with `@event_handler` or `@server_function`, nor with `@permission_required`, `@rate_limit`, `@debounce`, `@throttle`, `@cache`, `@optimistic` or `@client_state` (`TypeError` at decoration time): server push enforces none of those, so on a push handler they would do nothing and look like protection. Check authorization inside the handler. `@background` is allowed.
+
+**The marker is inherited by overrides.** If any class in the MRO defines the name with `@push_handler`, an override or a shadowing method without the marker is still push-only, so forgetting it fails closed. `djust.V021` reports the override; re-apply `@push_handler` to silence it. Adding `@event_handler` to such an override does not make it browser-callable (V021 warns).
+
+It may sit above or below `@staticmethod` / `@classmethod`. Put it topmost among ordinary decorators: a third-party wrapper that skips `functools.wraps` and sits above it hides the marker on the wrapper (the name-level rule above still covers the name when another class in the MRO marks it). See [Server Push](../advanced/server-push.md#handlers-only-the-server-may-call-push_handler).
 
 ---
 

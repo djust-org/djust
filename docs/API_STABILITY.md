@@ -57,16 +57,17 @@ document takes effect at **1.0.0**.
 The **public API** — the surface SemVer covers — is exactly the following:
 
 1. **Top-level package exports.** Every name in `djust.__init__.py`'s `__all__`
-   (58 symbols as of 0.9.7). `from djust import X` for any such `X` is a
+   (65 symbols as of 1.3). `from djust import X` for any such `X` is a
    supported, stable import.
 
 2. **The documented decorators.** Every name in `djust.decorators.__all__`
-   (17 names). These include the core decorators (`event_handler`,
-   `server_function`, `permission_required`, `rate_limit`, `reactive`,
+   (21 names as of 1.3). These include the core decorators (`event_handler`,
+   `server_function`, `push_handler`, `permission_required`, `rate_limit`, `reactive`,
    `state`, `computed`, `debounce`, `throttle`, `optimistic`, `cache`,
    `client_state`, `background`, `on_mount`), the deprecated alias `event`
    (see [Currently Deprecated Symbols](#currently-deprecated-symbols)), and the
-   introspection predicates `is_event_handler` and `is_server_function`.
+   introspection predicates `is_event_handler`, `is_server_function` and
+   `is_push_handler`.
 
 3. **Public `LiveView` / `LiveComponent` / `Component` methods.** The
    documented public methods and lifecycle hooks of these classes —

@@ -492,7 +492,7 @@ def mount(self, request, **kwargs):
 
 **Severity**: Info
 
-**What causes it**: A public method name matches event handler naming patterns (e.g., `on_*`, `toggle_*`, `select_*`, `update_*`, `delete_*`, `create_*`, `add_*`, `remove_*`, `save_*`, `cancel_*`, `submit_*`, `close_*`, `open_*`) but is not decorated with `@event_handler`. `handle_*` methods are not flagged: an undecorated `handle_*` method is the way to write a handler that server push can call and browsers cannot.
+**What causes it**: A public method name matches event handler naming patterns (e.g., `on_*`, `toggle_*`, `select_*`, `update_*`, `delete_*`, `create_*`, `add_*`, `remove_*`, `save_*`, `cancel_*`, `submit_*`, `close_*`, `open_*`) but is not decorated with `@event_handler`. `handle_*` methods and methods marked `@push_handler` are not flagged: an undecorated `handle_*` method is a push target that browsers cannot call under the default `strict` mode, and `@push_handler` marks a method that only server push may call in every `event_security` mode.
 
 Without the decorator, the method cannot be called from templates via `dj-click` or other directives.
 
@@ -740,6 +740,16 @@ V008 is broader than V006 and will flag any custom class instantiation, not just
 **What causes it**: A view with `use_actors = True` declares an interactive component (from `djust.components.interactive`). Actor views do not support them: the actor path has its own dispatch and render baseline, which the component registry does not use. Message: "<view> sets use_actors = True and declares interactive component(s) <names>, which actor views do not support."
 
 **Fix**: Remove `use_actors = True` from the view, or move the interactive component to a view that does not use actors.
+
+---
+
+### V021: Override of a `@push_handler` method
+
+**Severity**: Info; Warning when the override carries `@event_handler`
+
+**What causes it**: A subclass (or a class that shadows a mixin's method) defines a method whose name a base defines with `@push_handler`, without re-applying the marker. The marker is inherited by method name, so the override is still refused to browsers in every `event_security` mode and server push still reaches it. Message: "<view>.<name>() overrides a @push_handler method without the marker; it is still push-only (the marker is inherited by name)." If the override has `@event_handler` the message says browsers are still refused: the decorator cannot make the name browser-callable.
+
+**Fix**: Add `@push_handler` to the override. For the `@event_handler` case, remove the decorator, or rename the method if a browser should be able to call it.
 
 ---
 
@@ -1185,7 +1195,7 @@ The directives covered are every server-event directive the client binds (`dj-cl
 
 **What causes it**: A `dj-*` event binding names something its owner cannot
 receive from the browser. That might be a missing method, a method without
-`@event_handler`, or an output callback. It might be an action or output of an
+`@event_handler`, an output callback, or a `@push_handler` method that only server push may call. It might be an action or output of an
 interactive component the view declares, which a view-owned binding never
 reaches. It might also be an invalid event name, or arguments on `dj-submit` /
 `dj-keydown` / `dj-keyup` / `dj-click-away`, which send their value verbatim.

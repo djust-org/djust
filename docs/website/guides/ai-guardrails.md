@@ -203,7 +203,7 @@ Each check has an ID such as `djust.V004`: a family letter and a number. The the
 | `S` | Security | S013 |
 | `T` | Templates | T019 to T022; T023 to T025 (main) |
 | `U` | Update notice | none |
-| `V` | Validation of LiveView classes and handlers | V016 to V020 |
+| `V` | Validation of LiveView classes and handlers | V016 to V021 |
 | `Y` | Accessibility | none |
 
 ### Checks that matter for generated code
@@ -279,7 +279,7 @@ WARNINGS:
 
 INFOS:
 ?: (djust.V004) shop.views.ShopView.toggle_cart() looks like an event handler but is missing @event_handler.
-	HINT: Add @event_handler decorator or prefix with _ if it is private.
+	HINT: Add @event_handler decorator, mark it @push_handler if only server push calls it, or prefix with _ if it is private.
 
 System check identified 6 issues (0 silenced).
 ```
