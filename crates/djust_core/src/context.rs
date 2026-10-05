@@ -665,20 +665,37 @@ pub trait BlockSuperSource: std::fmt::Debug + Send + Sync {
 /// twice renders the parent twice, and **nothing here may memoize** — a
 /// parent holding `{% cycle 'a' 'b' %}` answers `a` then `b`.
 ///
-/// It has Django's shape and only Django's: `super` is a METHOD
-/// (`context["block"].super()`, and what `Variable("block.super")` resolves
-/// by auto-calling it), with `get("super")`, `"super" in block`, `len`, the
-/// keys and `values()` / `items()` alongside. There is deliberately NO
-/// `__getitem__`: Django's `BlockNode` is not subscriptable, and its resolver
-/// CATCHES the five exception classes a mapping access may raise
-/// (`TypeError`, `AttributeError`, `KeyError`, `ValueError`, `IndexError`) and
-/// walks on to the method. A `block["super"]` that evaluated the parent would
-/// run it, have its own error swallowed, and then run it a second time through
-/// the method — or, if it re-wrapped the error to escape the resolver, change
-/// the exception class a tag's `except ValueError` sees. Without it the parent
-/// runs once per read and its exception propagates unchanged. (The `dict` this
-/// object replaced allowed `block["super"]`; no handler in the workspace uses
-/// it.) Asking whether `super` exists, or for the keys, does not evaluate it.
+/// Its shape is Django's: `super` is a METHOD (`context["block"].super()`, and
+/// what `Variable("block.super")` resolves by auto-calling it), with
+/// `"super" in block`, `len` and the keys alongside, none of which evaluates
+/// anything.
+///
+/// **Dict-style reads are a DEPRECATED compatibility path** (deprecated in 1.3,
+/// removed no earlier than 2.0; replacement `block.super()`): the `dict` this
+/// object replaced allowed `block["super"]`, and `get("super")`, `values()` and
+/// `items()` read it too. Each such read emits the standard djust
+/// `DeprecationWarning` (`djust._deprecation.warn_deprecated`, attributed to the
+/// tag's own line), renders the parent once, and lets the parent's own
+/// exception propagate unchanged — so `except ValueError` around it works as it
+/// did against the dict.
+///
+/// The one hard part is `__getitem__`. Django's `Variable._resolve_lookup`
+/// tries `current[bit]` FIRST and CATCHES the five exception classes a mapping
+/// access may raise (`TypeError`, `AttributeError`, `KeyError`, `ValueError`,
+/// `IndexError`), then walks on to `getattr` — which for Django's own
+/// `BlockNode` is the `super()` method, because a `BlockNode` is not
+/// subscriptable. An evaluating `__getitem__` would therefore run the parent,
+/// have its error swallowed, and run it a second time; re-wrapping the error
+/// changes the class a tag's `except` sees; a "pending exception" slot leaves a
+/// stale error for the next read. So `__getitem__` asks WHO is calling: when the
+/// immediate Python caller is Django's own `_resolve_lookup` (compared by code
+/// object, not by name), it answers exactly what a `BlockNode` answers
+/// (`TypeError: not subscriptable`, no evaluation, no warning) and Django falls
+/// through to `super()` as it always has. Anyone else is user code reading the
+/// legacy way. If a future Django moved the subscript out of `_resolve_lookup`,
+/// the resolver would take the legacy path (a warning, and a double run only
+/// when the parent raises one of the five classes); the differential tests run
+/// the resolver paths under `-W error::DeprecationWarning` so that fails loudly.
 ///
 /// What it returns is a `SafeString`: rendered template output, already
 /// escaped by whatever produced it, which is the grant Django makes too.
@@ -698,6 +715,58 @@ pub struct LazyBlock {
 }
 
 const LAZY_BLOCK_REPR: &str = "<LazyBlock super=<deferred>>";
+
+/// Is the immediate Python caller Django's `Variable._resolve_lookup`?
+///
+/// Compared by CODE OBJECT, so a renamed local or a user function that happens
+/// to be called `_resolve_lookup` cannot match. `sys._getframe(0)` is the
+/// Python frame that performed the subscript (a pymethod pushes no frame of its
+/// own). False when Django's template module was never imported, when there is
+/// no Python frame at all (an embedded unit test), or when anything about the
+/// probe fails: the caller is then treated as user code.
+fn called_by_django_resolver(py: Python<'_>) -> bool {
+    let probe = || -> PyResult<bool> {
+        let modules = py.import("sys")?.getattr("modules")?;
+        let Some(base) = modules.get_item("django.template.base").ok() else {
+            return Ok(false);
+        };
+        let resolver_code = base
+            .getattr("Variable")?
+            .getattr("_resolve_lookup")?
+            .getattr("__code__")?;
+        let caller_code = py
+            .import("sys")?
+            .call_method1("_getframe", (0,))?
+            .getattr("f_code")?;
+        Ok(caller_code.is(&resolver_code))
+    };
+    probe().unwrap_or(false)
+}
+
+/// The standard djust deprecation for a dict-style read of the lazy `block`.
+///
+/// Through `djust._deprecation.warn_deprecated` like every other djust
+/// deprecation; its default `stacklevel=2` lands on the Python frame that made
+/// the read (the Rust frames in between do not exist for `warnings`). A failure
+/// to IMPORT the helper (a bare embedded interpreter) is not an error; a
+/// warning promoted to an exception by the caller's filters is, and propagates.
+fn warn_dict_style(py: Python<'_>) -> PyResult<()> {
+    let Ok(module) = py.import("djust._deprecation") else {
+        return Ok(());
+    };
+    let kwargs = pyo3::types::PyDict::new(py);
+    kwargs.set_item("since", "1.3")?;
+    kwargs.set_item("removed_in", "2.0.0")?;
+    kwargs.set_item("instead", "block.super()")?;
+    module.getattr("warn_deprecated")?.call(
+        (
+            "Dict-style access to `block.super` (`block['super']`, `block.get('super')`, \
+             `block.values()`, `block.items()`) on the context a template tag receives",
+        ),
+        Some(&kwargs),
+    )?;
+    Ok(())
+}
 
 impl LazyBlock {
     /// One read: render the parent now, exactly as `Context::resolve` does.
@@ -752,6 +821,34 @@ impl LazyBlock {
         self.read(py)
     }
 
+    /// `block["super"]` — the legacy dict-style read (deprecated since 1.3,
+    /// removed no earlier than 2.0; use [`LazyBlock::super_call`]).
+    ///
+    /// From Django's own resolver this is a `TypeError`, exactly what a
+    /// `BlockNode` answers, so the resolver falls through to `super()` with the
+    /// parent evaluated once and its own exception propagating. From anything
+    /// else it warns, renders the parent once, and propagates the parent's own
+    /// exception unwrapped. See the type's docs for why it must ask.
+    fn __getitem__<'py>(
+        &self,
+        py: Python<'py>,
+        key: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        if called_by_django_resolver(py) {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "'LazyBlock' object is not subscriptable",
+            ));
+        }
+        match key.extract::<String>() {
+            Ok(name) if name == "super" => {
+                warn_dict_style(py)?;
+                self.read(py)
+            }
+            _ => Err(pyo3::exceptions::PyKeyError::new_err(key.to_string())),
+        }
+    }
+
+    /// Deprecated like [`LazyBlock::__getitem__`] when it reads `super`.
     #[pyo3(signature = (key, default=None))]
     fn get<'py>(
         &self,
@@ -760,7 +857,10 @@ impl LazyBlock {
         default: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         match key.extract::<String>() {
-            Ok(name) if name == "super" => self.read(py),
+            Ok(name) if name == "super" => {
+                warn_dict_style(py)?;
+                self.read(py)
+            }
             _ => Ok(default.unwrap_or_else(|| py.None().into_bound(py))),
         }
     }
@@ -784,12 +884,16 @@ impl LazyBlock {
         Ok(pyo3::types::PyList::new(py, ["super"])?.into_any())
     }
 
-    /// Reads `super`: a read per call, not a cached pair.
+    /// Reads `super`: a read per call, not a cached pair. Deprecated like
+    /// [`LazyBlock::__getitem__`].
     fn values<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        warn_dict_style(py)?;
         Ok(pyo3::types::PyList::new(py, [self.read(py)?])?.into_any())
     }
 
+    /// Reads `super`; deprecated like [`LazyBlock::__getitem__`].
     fn items<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        warn_dict_style(py)?;
         let name = "super".into_pyobject(py)?.into_any();
         let pair = pyo3::types::PyTuple::new(py, [name, self.read(py)?])?;
         Ok(pyo3::types::PyList::new(py, [pair])?.into_any())
@@ -4352,11 +4456,15 @@ mod tests {
             let _ = block.call_method0("super");
             let _ = block.call_method0("super");
             let _ = block.call_method1("get", ("super",));
-            assert_eq!(calls.load(Ordering::SeqCst), 3, "one render per read");
+            // The legacy dict-style read (deprecated): no Python frame calls
+            // it here, so it is user code, not Django's resolver — it renders.
+            let _ = block.get_item("super");
+            assert_eq!(calls.load(Ordering::SeqCst), 4, "one render per read");
             assert!(
-                block.get_item("super").is_err(),
-                "not subscriptable, as Django's BlockNode is not"
+                block.get_item("other").is_err(),
+                "a key other than `super` is a KeyError, and renders nothing"
             );
+            assert_eq!(calls.load(Ordering::SeqCst), 4);
         });
 
         drop(guard);
@@ -4365,7 +4473,7 @@ mod tests {
         });
         assert_eq!(
             calls.load(Ordering::SeqCst),
-            3,
+            4,
             "the call is over: a retained handle renders nothing"
         );
     }

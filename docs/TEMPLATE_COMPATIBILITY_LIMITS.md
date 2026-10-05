@@ -79,8 +79,12 @@ These cases must not be classified as intentional incompatibilities:
 - `block.super` is evaluated only when something reads it, including a Python-bridged
   tag that reads it through its context: the parent's own tags run once per read
   (never memoized, as `BlockNode.super()` is a method call), and not at all for a tag
-  that never reads it. The `block` a bridged tag receives is not subscriptable, as
-  Django's is not, and is good only for that tag call. Two shapes still differ from
+  that never reads it. The `block` a bridged tag receives has Django's `BlockNode`
+  shape (`context["block"].super()`) and is good only for that tag call. The dict
+  the tag used to receive survives as a **deprecated** path (since 1.3, removed no
+  earlier than 2.0.0, use `block.super()`): `block["super"]`, `.get("super")`,
+  `.values()`, `.items()` and `dict(block)` still read the parent, once per read,
+  with a `DeprecationWarning`. Two shapes still differ from
   Django: a tag that reads `block.super` through its context when nothing in the
   template body names it answers `''` (the parent is not armed), and a tag inside an
   `{% include %}`d file reads the including block's parent where Django answers `''`.

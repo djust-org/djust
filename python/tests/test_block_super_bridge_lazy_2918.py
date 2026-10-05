@@ -35,6 +35,7 @@ import re
 import sys
 import tempfile
 import types
+import warnings
 import weakref
 from pathlib import Path
 
@@ -131,15 +132,48 @@ def probe_methods(context, label):
     )
 
 
+#: The legacy dict-style reads of ``block`` (deprecated since 1.3, removed no
+#: earlier than 2.0), by name.
+DICT_FORMS = ("getitem", "get", "values", "items", "dict")
+
+
 @register.simple_tag(takes_context=True)
-def probe_subscript(context, label):
-    """Django's ``BlockNode`` is not subscriptable, and neither is this."""
+def probe_dict(context, label, form):
+    """Read ``block`` the way the pre-#2710 ``dict`` allowed."""
+    _tick(label)
+    block = context["block"]
+    if form == "getitem":
+        got = block["super"]
+    elif form == "get":
+        got = block.get("super")
+    elif form == "values":
+        (got,) = block.values()
+    elif form == "items":
+        ((_, got),) = block.items()
+    else:
+        got = dict(block)["super"]
+    return got
+
+
+@register.simple_tag(takes_context=True)
+def catch_dict(context, label):
+    """A tag with its own ``except`` around the legacy ``block["super"]``."""
     _tick(label)
     try:
-        context["block"]["super"]
-    except TypeError:
-        return "TypeError"
-    return "subscriptable"
+        return context["block"]["super"]
+    except Exception as exc:  # noqa: BLE001 - the class IS the answer
+        return f"caught-{type(exc).__name__}"
+
+
+@register.simple_tag(takes_context=True)
+def spoof_resolver(context, label):
+    """User code whose function is NAMED like Django's resolver: still user code."""
+    _tick(label)
+
+    def _resolve_lookup():
+        return context["block"]["super"]
+
+    return _resolve_lookup()
 
 
 @register.simple_tag(takes_context=True)
@@ -439,8 +473,17 @@ def template_dir():
         yield directory
 
 
-def _answer(engine: str, template_dir: str, source: str):
-    """``(rendered-or-exception, {probe label: calls})`` for one cell."""
+#: The text of the legacy-access DeprecationWarning, for filters.
+DEPRECATION_TEXT = "Dict-style access to `block.super`"
+
+
+def _answer(engine: str, template_dir: str, source: str, *, deprecations: str = "error"):
+    """``(rendered-or-exception, {probe label: calls})`` for one cell.
+
+    ``deprecations="error"`` promotes the legacy-access warning to an
+    exception: every Django-resolver path in the differential must emit none,
+    which is what proves ``__getitem__`` recognises Django's resolver.
+    """
     CALLS.clear()
     data = {
         "show": False,
@@ -448,6 +491,12 @@ def _answer(engine: str, template_dir: str, source: str):
         "x": "X",
         "danger": "<script>x</script>",
     }
+    with warnings.catch_warnings():
+        warnings.filterwarnings(deprecations, message=DEPRECATION_TEXT, category=DeprecationWarning)
+        return _answer_inner(engine, template_dir, source, data)
+
+
+def _answer_inner(engine, template_dir, source, data):
     try:
         engine_obj = Engine(
             dirs=[template_dir],
@@ -561,23 +610,16 @@ class TestTheMechanism:
 
 
 class TestTheShapeOfTheBlockAHandlerReceives:
-    """Django's own ``BlockNode`` shape: ``super()`` is a method, the object is
-    not subscriptable, and asking about it never evaluates it. (The ``dict``
-    this replaced allowed ``block["super"]``; keeping that is what made a
-    parent's ``ValueError`` arrive as a different class, so it is gone. Nothing
-    in djust, djust.org, djustlive, djust-docs, docs.djust.org or sklful uses
-    it.)"""
+    """Django's own ``BlockNode`` shape: ``super()`` is a method, and asking
+    about the object never evaluates it. The ``dict`` this replaced also allowed
+    ``block["super"]`` and friends; that survives as a DEPRECATED compatibility
+    path (see ``TestTheLegacyDictPathIsDeprecatedButExact``)."""
 
-    def test_get_super_and_membership_answer_the_parent_once_per_read(self, template_dir):
+    def test_super_method_and_membership_answer_the_parent_once_per_read(self, template_dir):
         source = _child("amp.html", ARM + "{% probe_methods 'child' %}")
-        rendered, calls = _answer("djust", template_dir, source)
+        rendered, calls = _answer("djust", template_dir, source, deprecations="ignore")
         assert rendered == "<b>&</b>|<b>&</b>|True|False|True"
         assert calls == {"child": 1}
-
-    def test_it_is_not_subscriptable_exactly_as_djangos_block_is_not(self, template_dir):
-        source = _child("amp.html", ARM + "{% probe_subscript 'child' %}")
-        assert _answer("djust", template_dir, source) == _answer("django", template_dir, source)
-        assert _answer("djust", template_dir, source)[0] == "TypeError"
 
     def test_containment_and_keys_do_not_render_the_parent(self, template_dir):
         source = _child("tick.html", ARM + "{% probe_membership 'child' %}")
@@ -588,6 +630,93 @@ class TestTheShapeOfTheBlockAHandlerReceives:
     def test_copy_and_deepcopy_return_the_handle_and_pickle_refuses(self, template_dir):
         source = _child("tick.html", ARM + "{% probe_copy %}")
         assert _answer("djust", template_dir, source)[0] == "True|True|TypeError"
+
+
+class TestTheLegacyDictPathIsDeprecatedButExact:
+    """``block["super"]``, ``get``, ``values``, ``items`` and ``dict(block)``
+    keep working as a deprecated compatibility path (deprecated in 1.3, removed
+    no earlier than 2.0, replacement ``block.super()``).
+
+    The hard requirement: Django's resolver tries ``current[bit]`` first and
+    swallows five exception classes, so the legacy subscript must be invisible
+    to it. Every differential cell above runs with the warning promoted to an
+    error, so a resolver path that reached the legacy branch would fail there.
+    """
+
+    @staticmethod
+    def _record(template_dir, body, parent="tick.html"):
+        source = _child(parent, ARM + body)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            answer = _answer("djust", template_dir, source, deprecations="always")
+        return answer, [w for w in caught if DEPRECATION_TEXT in str(w.message)]
+
+    @pytest.mark.parametrize("form", DICT_FORMS)
+    def test_each_dict_style_read_works_warns_once_and_renders_the_parent_once(
+        self, form, template_dir
+    ):
+        (rendered, calls), warned = self._record(
+            template_dir, f"{{% probe_dict 'child' '{form}' %}}"
+        )
+        assert rendered == "&lt;parent&gt;"
+        assert calls == {"child": 1, "parent": 1}
+        assert len(warned) == 1, [str(w.message) for w in warned]
+        warning = warned[0]
+        assert issubclass(warning.category, DeprecationWarning)
+        message = str(warning.message)
+        assert "since djust 1.3" in message and "no earlier than 2.0.0" in message
+        assert "Use block.super() instead" in message
+        assert warning.filename == __file__, "attributed to the tag's own line, not djust"
+
+    def test_it_is_not_memoized_each_dict_read_renders_again(self, template_dir):
+        body = "{% probe_dict 'a' 'getitem' %}{% probe_dict 'b' 'getitem' %}"
+        (rendered, calls), warned = self._record(template_dir, body, parent="cyc.html")
+        assert rendered == "ab"
+        assert len(warned) == 2
+
+    @pytest.mark.parametrize("kind", sorted(RAISED))
+    def test_the_parents_own_exception_class_reaches_a_tags_except(self, kind, template_dir):
+        source = _child(f"boom_{kind}.html", ARM + "{% catch_dict 'child' %}")
+        rendered, calls = _answer("djust", template_dir, source, deprecations="ignore")
+        assert rendered == f"caught-{kind}"
+        assert calls == {"child": 1, "parent": 1}
+
+    def test_the_resolver_path_over_a_raising_parent_runs_the_parent_once(self, template_dir):
+        """The reason ``__getitem__`` asks who is calling: Django's resolver
+        swallows the five classes at its mapping step."""
+        for kind in sorted(RAISED):
+            source = _child(f"boom_{kind}.html", ARM + "{% catch_super 'child' %}")
+            rendered, calls = _answer("djust", template_dir, source)
+            assert rendered == f"caught-{kind}"
+            assert calls == {"child": 1, "parent": 1}, (kind, calls)
+
+    def test_a_function_named_like_the_resolver_is_still_user_code(self, template_dir):
+        (rendered, _), warned = self._record(
+            template_dir, "{% spoof_resolver 'child' %}", parent="amp.html"
+        )
+        # The parent's own markup is already safe, so it is not escaped again.
+        assert rendered == "<b>&</b>"
+        assert len(warned) == 1
+
+    def test_warnings_as_errors_stop_the_read_before_the_parent_runs(self, template_dir):
+        source = _child("tick.html", ARM + "{% probe_dict 'child' 'getitem' %}")
+        rendered, calls = _answer("djust", template_dir, source, deprecations="error")
+        assert rendered.startswith("<<") and "block.super()" in rendered
+        assert "parent" not in calls
+
+    def test_the_non_evaluating_forms_stay_silent(self, template_dir):
+        body = "{% probe_membership 'child' %}{% probe_super_call 'child' %}"
+        (_, calls), warned = self._record(template_dir, body)
+        assert warned == []
+        assert calls == {"child": 2, "parent": 1}
+
+    def test_a_block_kept_past_the_render_answers_empty_on_the_legacy_path_too(self, template_dir):
+        holder = TestTheLazyBlockDoesNotOutliveTheCall._render(template_dir, "{% keep_block %}")
+        CALLS.clear()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            assert str(holder.block["super"]) == ""
+        assert CALLS == {}
 
 
 class TestTheParentsOwnExceptionReachesTheTag:
@@ -647,7 +776,8 @@ class TestTheLazyBlockDoesNotOutliveTheCall:
         holder = self._render(template_dir, "{% keep_block %}")
         CALLS.clear()
         assert str(holder.block.super()) == ""
-        assert holder.block.get("super") is not None and str(holder.block.get("super")) == ""
+        with pytest.warns(DeprecationWarning, match="Dict-style access"):
+            assert str(holder.block.get("super")) == ""
         assert CALLS == {}, "a retained handle re-ran the parent's tags after the render"
 
     def test_a_holder_that_keeps_the_block_is_collectable(self, template_dir):
