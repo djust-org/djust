@@ -722,6 +722,19 @@ class TestTheLegacyDictPathIsDeprecatedButExact:
         rendered, calls = _answer("djust", template_dir, source)
         assert calls == {"child": 1, "parent": 2}
 
+    def test_a_sourceless_django_is_still_djangos_resolver(self, template_dir, monkeypatch):
+        """A `.pyc`-only Django has a `co_filename` that is not the module's
+        `__file__`; the frame is recognised by its globals, not its path."""
+        func = dj_template.Variable._resolve_lookup
+        code = func.__code__
+        monkeypatch.setattr(func, "__code__", code.replace(co_filename="<sourceless>"))
+        assert func.__code__.co_filename != django.template.base.__file__
+        for kind in ("ValueError", "KeyError"):
+            source = _child(f"boom_{kind}.html", ARM + "{% catch_super 'child' %}")
+            rendered, calls = _answer("djust", template_dir, source)  # warnings are errors
+            assert rendered == f"caught-{kind}"
+            assert calls == {"child": 1, "parent": 1}, calls
+
     @pytest.mark.parametrize("form", ["var", "if"])
     def test_a_template_rendered_in_rust_with_the_block_is_not_legacy_user_code(
         self, form, template_dir

@@ -721,14 +721,14 @@ const LAZY_BLOCK_REPR: &str = "<LazyBlock super=<deferred>>";
 
 /// Is the immediate Python caller Django's `Variable._resolve_lookup`?
 ///
-/// Matched by the frame's FILE and NAME: `co_filename` equal to
-/// `django.template.base.__file__` and `co_name == "_resolve_lookup"`. The
+/// Matched by the frame's MODULE and NAME: `f_globals` is the namespace of
+/// `django.template.base` and `co_name == "_resolve_lookup"`. The
 /// first version compared the code object with the one `Variable._resolve_lookup`
 /// holds NOW, which fails the moment anything wraps or replaces that method (a
 /// profiler, a decorator, a monkeypatch): the wrapper calls the original, whose
 /// frame is still Django's own but whose code object is no longer the one the
 /// attribute reads back. A user function that merely shares the name lives in
-/// another file and still reads as user code, and a subclass reaching the base
+/// another module and still reads as user code, and a subclass reaching the base
 /// implementation through `super()` is still Django's frame.
 ///
 /// `sys._getframe(0)` is the Python frame that performed the subscript (a
@@ -746,12 +746,18 @@ fn called_by_django_resolver(py: Python<'_>) -> bool {
         else {
             return Ok(false);
         };
-        let caller_code = sys.call_method1("_getframe", (0,))?.getattr("f_code")?;
-        if caller_code.getattr("co_name")?.extract::<String>()? != "_resolve_lookup" {
+        let frame = sys.call_method1("_getframe", (0,))?;
+        if frame
+            .getattr("f_code")?
+            .getattr("co_name")?
+            .extract::<String>()?
+            != "_resolve_lookup"
+        {
             return Ok(false);
         }
-        let caller_file = caller_code.getattr("co_filename")?;
-        caller_file.eq(base.getattr("__file__")?)
+        // The frame's globals ARE the module's namespace. (`co_filename` is not
+        // `__file__` for a sourceless, `.pyc`-only Django.)
+        Ok(frame.getattr("f_globals")?.is(&base.getattr("__dict__")?))
     };
     probe().unwrap_or(false)
 }
