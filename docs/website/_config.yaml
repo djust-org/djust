@@ -317,6 +317,11 @@ navigation:
         file: guides/mcp-server.md
         order: 14
         level: advanced
+      - title: AI Guardrails
+        slug: ai-guardrails
+        file: guides/ai-guardrails.md
+        order: 14.5
+        level: intermediate
       - title: Error Codes
         slug: error-codes
         file: guides/error-codes.md
