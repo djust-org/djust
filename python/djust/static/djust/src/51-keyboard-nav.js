@@ -135,9 +135,15 @@
 
     // Esc inside a modal — dispatch the modal's configured close event so
     // server state stays in sync (mirrors 35-dj-dialog.js reverse-sync).
+    //
+    // Only an EXPLICIT close control counts: the stock modal's
+    // `.dj-modal__close`, or any `[dj-click]` an app marks `data-dj-close`.
+    // This used to fall back to the first `[dj-click]` in the dialog, which
+    // is whatever control happens to come first (a Delete or Confirm button,
+    // or a Next button that needs its value) and fired it on Escape.
     function _closeModal(dialog) {
         const closer = dialog.querySelector('.dj-modal__close[dj-click]') ||
-            dialog.querySelector('[dj-click]');
+            dialog.querySelector('[data-dj-close][dj-click]');
         return _dispatchFrom(closer);
     }
 
@@ -257,6 +263,10 @@
     // -----------------------------------------------------------------------
 
     function _handleKeydown(e) {
+        // A handler closer to the target already took this key (a hook that
+        // runs its own Escape/Tab handling calls preventDefault): do not act
+        // on it a second time.
+        if (e.defaultPrevented) return;
         const target = e.target;
         if (!target || typeof target.closest !== 'function') return;
 
