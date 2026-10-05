@@ -14,6 +14,25 @@ class ActivityFeed(Component):
     timestamps, and action descriptions. Supports WebSocket streaming
     for live updates.
 
+    With ``stream_event`` the component carries ``dj-hook="ActivityFeed"``; the
+    page must include ``djust_components/activity-feed.js``. The hook puts the
+    events the view pushes at the top of the feed (newest first, as rendered),
+    keeps at most ``max_items`` rows, announces new activity in a polite live
+    region, and makes the feed keyboard-navigable (each article focusable,
+    Page Down / Page Up between them, as in the WAI-ARIA feed pattern)::
+
+        self.push_event("activity_update", {"events": [
+            {"user": "Alice", "action": "commented on", "target": "Issue #42",
+             "time": "now"}]})
+
+    Every field is shown as text, and an avatar only if it is an http(s),
+    relative or inline image URL. Stream the events or re-render ``events``,
+    not both for the same feed.
+    An app's own ``ActivityFeed`` hook, in ``window.djust.hooks`` or
+    ``window.DjustHooks``, replaces the shipped one (a hook assigned with
+    ``window.DjustHooks = {...}`` after the script also drops it; merge with
+    ``Object.assign`` instead).
+
     Usage in a LiveView::
 
         self.feed = ActivityFeed(
@@ -73,6 +92,11 @@ class ActivityFeed(Component):
         if self.stream_event:
             attrs.append(f'data-stream-event="{html.escape(self.stream_event)}"')
             attrs.append('dj-hook="ActivityFeed"')
+            # What the hook needs to keep a streamed feed to the same length.
+            try:
+                attrs.append(f'data-max-items="{int(self.max_items)}"')
+            except (ValueError, TypeError):
+                pass
 
         visible = self.events[: self.max_items]
 

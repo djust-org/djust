@@ -1284,6 +1284,8 @@ class ActivityFeedNode(template.Node):
         if e_stream:
             attrs.append(f'data-stream-event="{e_stream}"')
             attrs.append('dj-hook="ActivityFeed"')
+            # What the hook needs to keep a streamed feed to the same length.
+            attrs.append(f'data-max-items="{max_items}"')
 
         visible = events[:max_items]
 

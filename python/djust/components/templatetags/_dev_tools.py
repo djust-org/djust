@@ -87,6 +87,7 @@ class TerminalNode(template.Node):
         show_line_numbers = kw.get("show_line_numbers", False)
         wrap = kw.get("wrap", False)
         custom_class = kw.get("class", "")
+        max_lines = kw.get("max_lines", 0)
 
         e_class = conditional_escape(str(custom_class))
 
@@ -129,8 +130,19 @@ class TerminalNode(template.Node):
             e_stream = conditional_escape(str(stream_event))
             stream_attr = f' data-stream-event="{e_stream}"'
 
+        # What the Terminal hook needs to render and trim streamed lines like these.
+        hook_attrs = ""
+        if show_line_numbers:
+            hook_attrs += ' data-line-numbers="true"'
+        try:
+            max_lines = int(max_lines)
+        except (ValueError, TypeError):
+            max_lines = 0
+        if max_lines > 0:
+            hook_attrs += f' data-max-lines="{max_lines}"'
+
         return _safe(
-            f'<div class="{class_str}" dj-hook="Terminal"{stream_attr}>'
+            f'<div class="{class_str}" dj-hook="Terminal"{stream_attr}{hook_attrs}>'
             f"{title_html}"
             f'<div class="dj-terminal__body">{"".join(lines_html)}</div>'
             f"</div>"
