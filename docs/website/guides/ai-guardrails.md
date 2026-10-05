@@ -78,7 +78,7 @@ python manage.py djust_ai_context --output docs/djust-context.md
 python manage.py djust_ai_context --force            # replace an existing file (main)
 ```
 
-Those three formats are the only ones, and `claude` is the default. The file has two parts. The first is a framework reference: template directives, lifecycle methods, decorators, and conventions. The second is read from your project: each view's template, mixins, auth settings, handlers with their parameters and the variables its template can use, plus components and URL routes. For the example view, the project part is:
+Those three formats are the only ones, and `claude` is the default. The file has two parts. The first is a framework reference: template directives, lifecycle methods, decorators, and conventions. The directive list covers every directive in djust's schema, grouped by category. In 1.2.2 and the 1.3 release candidates it left out eleven (`dj-prefetch`, `dj-key`, `dj-lazy`, `dj-virtual`, `dj-track-static`, `dj-transition`, `dj-remove`, `dj-transition-group`, `dj-view-transitions`, `dj-flip` and `dj-auto-recover`), which only `djust_schema` and the MCP server described. The second is read from your project: each view's template, mixins, auth settings, handlers with their parameters and the variables its template can use, plus components and URL routes. For the example view, the project part is:
 
 ```text
 ## Project Views

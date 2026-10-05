@@ -93,7 +93,7 @@ Every LiveView template needs these two things:
 
 | Attribute | Fires On | Handler Receives |
 |---|---|---|
-| `dj-input="handler"` | Every keystroke | `value=` current field value |
+| `dj-input="handler"` | `input` event; text fields debounced 300 ms by default (`dj-debounce` / `dj-throttle` override) | `value=` current field value |
 | `dj-change="handler"` | Blur / select change | `value=` current field value |
 | `dj-blur="handler"` | Focus leaves element | `value=` current field value |
 | `dj-focus="handler"` | Focus enters element | `value=` current field value |
@@ -112,7 +112,7 @@ Every LiveView template needs these two things:
 <!-- Defer until blur -->
 <input dj-input="validate" dj-debounce="blur" />
 
-<!-- Disable default debounce on dj-input -->
+<!-- Disable the default 300 ms debounce on dj-input: one event per keystroke -->
 <input dj-input="on_change" dj-debounce="0" />
 
 <!-- Legacy data-* attributes (still supported) -->

@@ -289,7 +289,7 @@ Use `data-*` attributes. Kebab-case converts to snake_case automatically:
 ### Template event binding reference
 
 ```html
-<!-- Text input (fires on every keystroke) -->
+<!-- Text input (input event, debounced 300 ms by default) -->
 <input type="text" dj-input="search" value="{{ search_query }}">
 
 <!-- Select/dropdown (fires on selection change) -->
@@ -1240,10 +1240,10 @@ python manage.py collectstatic --noinput
 
 ### Search Without Debouncing
 
-**Problem:** Search input triggers API calls on every keystroke.
+**Problem:** Search input triggers API calls on every keystroke. `dj-input` already debounces text fields by 300 ms, so this bites when that default is turned off (`dj-debounce="0"`) or when 300 ms is too short for the work each event does.
 
 **Why it's wrong:**
-- Excessive server load: typing "django" = 6 requests (d, dj, dja, djan, djang, django)
+- Excessive server load: with the debounce off (`dj-debounce="0"`), typing "django" = 6 requests (d, dj, dja, djan, djang, django); with the 300 ms default it is one request per typing pause, still one too many if each one is expensive
 - Wasted database queries for incomplete input
 - Poor UX: results flash rapidly as user types
 - Race conditions: later responses can arrive before earlier ones
@@ -1255,9 +1255,9 @@ Use `@debounce` to wait for user to stop typing:
 # ❌ Don't do this
 @event_handler
 def search(self, value: str = "", **kwargs):
-    """Fires on EVERY keystroke"""
+    """Runs once per input event: every keystroke with dj-debounce="0\""""
     self.search_query = value
-    self._refresh_results()  # Database query every keystroke!
+    self._refresh_results()  # Database query on every event!
 
 # ✅ Do this instead
 @event_handler

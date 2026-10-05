@@ -134,7 +134,7 @@ For developers who care about HTML5 validation, support `data-dj-*` as an alias:
 | Attribute | Purpose | Example |
 |-----------|---------|---------|
 | `dj-click` | Click events | `dj-click="save"` |
-| `dj-input` | Input events (every keystroke) | `dj-input="search"` |
+| `dj-input` | Input events (text fields debounced 300 ms) | `dj-input="search"` |
 | `dj-change` | Change events | `dj-change="filter_category"` |
 | `dj-submit` | Form submission | `dj-submit="save_form"` |
 | `dj-keydown` | Keyboard events | `dj-keydown="handle_key"` |
