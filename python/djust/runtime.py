@@ -3354,6 +3354,12 @@ class ViewRuntime:
 
         # ---- Build request ----
         request = await self._build_request(page_url=page_url, params=params)
+        # A view mounted beside the page view (#3252) is addressed by its slot
+        # wherever the request is bound to an identity (explicit saved state,
+        # client snapshots, event authorization).
+        slot_target = getattr(view_instance, "_djust_slot_target", None)
+        if slot_target:
+            request._djust_slot_target = slot_target
 
         from ._exposure import uses_legacy_exposure
 
@@ -3574,7 +3580,9 @@ class ViewRuntime:
             state_snapshot = data.get("state_snapshot")
             # Fix #11 — operator-level master switch (WS websocket.py:2499).
             state_master_on = getattr(settings, "DJUST_STATE_SNAPSHOT_ENABLED", True)
-            if state_master_on and state_snapshot and opt_in:
+            # A view beside the page view (#3252) takes no navigation snapshot:
+            # the client's token is the page view's, and mints none for it.
+            if state_master_on and state_snapshot and opt_in and not slot_target:
                 snapshot_slug = state_snapshot.get("view_slug", "")
                 if snapshot_slug == view_path:
                     state_dict = None
@@ -3717,6 +3725,7 @@ class ViewRuntime:
                     incoming = data.get("state_snapshot")
                     if (
                         getattr(settings, "DJUST_STATE_SNAPSHOT_ENABLED", True)
+                        and not slot_target
                         and type(incoming) is dict
                         and incoming.get("view_slug") == view_path
                         and await sync_to_async(view_instance._should_restore_snapshot)(request)
@@ -4140,6 +4149,13 @@ class ViewRuntime:
                 "Failed to emit state_snapshot_signed for %s; proceeding without snapshot",
                 sanitize_for_log(view_path),
             )
+
+        # A view beside the page view (#3252) ships no navigation snapshot, not
+        # even the null that clears one: the client keeps one token per view
+        # class for the page view, which a sibling of that class would overwrite
+        # or revoke.
+        if slot_target:
+            mount_msg.pop("state_snapshot_signed", None)
 
         # ADR-038 D-b / D-n: value-free service-worker cache signals — an
         # ineligibility marker for explicit pages, an HMAC identity marker the
@@ -6838,6 +6854,8 @@ class ViewRuntime:
         """
         from .security.state_snapshot import legacy_snapshot_fields
 
+        if getattr(view, "_djust_slot_target", None):
+            return {}  # a view beside the page view mints none (#3252)
         return await sync_to_async(legacy_snapshot_fields)(
             view,
             getattr(view, "_djust_mount_view_path", None),
@@ -6860,8 +6878,8 @@ class ViewRuntime:
         from ._exposure_sessions import request_binding
         from ._exposure_snapshots import snapshot_codec
 
-        if uses_legacy_exposure(view):
-            return {}
+        if uses_legacy_exposure(view) or getattr(view, "_djust_slot_target", None):
+            return {}  # a view beside the page view mints none (#3252)
         fields: Dict[str, Any] = {
             "view": view._djust_mount_view_path,
             "state_snapshot_signed": None,
@@ -7046,7 +7064,11 @@ class ViewRuntime:
         if async_batch:
             extra["async_batch"] = async_batch
         view_path = getattr(view, "_djust_mount_view_path", None)
-        if isinstance(view_path, str) and view_path:
+        if (
+            isinstance(view_path, str)
+            and view_path
+            and not getattr(view, "_djust_slot_target", None)
+        ):
             # The withheld success frame would have refreshed or revoked the
             # client's signed snapshot; the error revokes it instead, so a
             # token captured before this turn cannot outlive the failed save.

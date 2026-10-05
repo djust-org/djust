@@ -19,6 +19,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, TypeGuard
+from urllib.parse import quote
 from uuid import UUID
 
 from django.contrib.sessions.backends.base import SessionBase
@@ -143,9 +144,20 @@ def _request_principal(request: Any) -> tuple[str, str]:
 
 
 def request_binding(request: Any) -> "StateBinding":
-    """Bind an established server session to the current principal and route."""
+    """Bind an established server session to the current principal and route.
+
+    A view mounted beside the page view (#3252) shares the page's route and
+    session, so its request carries the view's ``_djust_slot_target`` and the
+    binding names it: the stored state, the client snapshot and the event
+    authorization of one view never match a sibling's, even of the same class.
+    The page view's binding is unchanged.
+    """
     user_id, tenant_id = _request_principal(request)
-    return StateBinding(request.session.session_key, user_id, tenant_id, request.path)
+    route = request.path
+    slot = getattr(request, "_djust_slot_target", None)
+    if type(slot) is str and slot:
+        route = f"{route}#slot:{quote(slot, safe='')}"
+    return StateBinding(request.session.session_key, user_id, tenant_id, route)
 
 
 def server_state_adapter(
