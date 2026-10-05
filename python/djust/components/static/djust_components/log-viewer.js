@@ -202,11 +202,15 @@
       }
       body.appendChild(added);
 
-      if (max > 0) {
+      if (max > 0 && this._rows > max) {
         while (this._rows > max && body.firstElementChild) {
           body.removeChild(body.firstElementChild);
           this._rows -= 1;
         }
+        // Trimming shrinks the content, and the browser may clamp scrollTop to
+        // match: a decrease nobody asked for, whose (late) scroll event must
+        // not read as the reader scrolling up.
+        this._lastTop = undefined;
       }
       if (pinned) this._followSoon();
     },
