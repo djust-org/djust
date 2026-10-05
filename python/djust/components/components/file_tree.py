@@ -10,7 +10,22 @@ class FileTree(Component):
     """File browser tree with icons, expand/collapse, and selection.
 
     Renders a tree of file/folder nodes. Folders can be expanded/collapsed.
-    Uses ``dj-hook="FileTree"`` for client-side interactions.
+    Uses ``dj-hook="FileTree"`` for client-side interactions; the page must
+    include ``djust_components/file-tree.js``. Clicking a folder (or its arrow)
+    expands or collapses it on the page without a server round trip; the
+    reader's open and closed folders survive a re-render that does not change
+    them. The keyboard follows the WAI-ARIA tree pattern: one tab stop, Up/Down
+    through the visible rows, Right/Left to open, close and step in or out,
+    Home/End, typing a letter to jump, Enter/Space to open a folder or select
+    a file. Selecting a file clicks its row, so it fires ``event`` exactly as a
+    mouse click does; the script sends nothing of its own.
+
+    The selection event carries the row's ``name`` from the browser, so treat
+    it as untrusted: accept it only if it names a node you rendered.
+    An app's own ``FileTree`` hook, in ``window.djust.hooks`` or
+    ``window.DjustHooks``, replaces the shipped one (a hook assigned with
+    ``window.DjustHooks = {...}`` after the script also drops it; merge with
+    ``Object.assign`` instead).
 
     Usage in a LiveView::
 

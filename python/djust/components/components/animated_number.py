@@ -10,7 +10,17 @@ class AnimatedNumber(Component):
     """Animated counting number display.
 
     Renders a number with a CSS/JS counting animation from 0 (or previous
-    value) to the target value. Uses dj-hook for client-side animation.
+    value) to the target value. Uses dj-hook for client-side animation; the
+    page must include ``djust_components/animated-number.js``. The server
+    renders the final number as text, so the page is right without the
+    script; with it the number counts up from 0 when it first appears and from
+    the number on screen whenever a re-render changes ``value``, and always
+    ends on the exact text the server rendered. Nothing is announced while it
+    counts, and ``prefers-reduced-motion`` or a zero ``duration`` skip the
+    animation. An app's own ``AnimatedNumber`` hook, in
+    ``window.djust.hooks`` or ``window.DjustHooks``, replaces the shipped one
+    (a hook assigned with ``window.DjustHooks = {...}`` after the script also
+    drops it; merge with ``Object.assign`` instead).
 
     Usage in a LiveView::
 

@@ -9,7 +9,31 @@ from djust import Component
 class ImageLightbox(Component):
     """Full-screen image viewer overlay with navigation.
 
-    Uses ``dj-hook="ImageLightbox"`` for client-side keyboard/swipe nav.
+    Uses ``dj-hook="ImageLightbox"`` for client-side keyboard/swipe nav; the
+    page must include ``djust_components/image-lightbox.js``. While the
+    lightbox is open, focus moves into it and stays there (Tab cycles), the
+    page behind does not scroll, Escape closes it, ArrowLeft / ArrowRight and a
+    horizontal swipe go to the previous / next image, the new image is
+    announced to screen readers, and focus returns to the opener when it
+    closes. Each of those presses the component's own Close / Previous / Next
+    control, so the events and values are exactly the ones it renders: the
+    script sends nothing of its own.
+
+    The navigate event's ``value`` comes from the browser, so treat it as
+    untrusted: clamp it to the images you have (the previous button of the
+    first image sends ``-1``) and ignore anything that is not an integer::
+
+        @event_handler()
+        def lightbox_navigate(self, value=0, **kwargs):
+            try:
+                self.active = max(0, min(int(value), len(self.images) - 1))
+            except (TypeError, ValueError):
+                pass
+
+    An app's own ``ImageLightbox`` hook, in ``window.djust.hooks`` or
+    ``window.DjustHooks``, replaces the shipped one (a hook assigned with
+    ``window.DjustHooks = {...}`` after the script also drops it; merge with
+    ``Object.assign`` instead).
 
     Usage in a LiveView::
 
