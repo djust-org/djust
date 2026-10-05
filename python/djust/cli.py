@@ -442,6 +442,7 @@ def cmd_init(args: argparse.Namespace) -> int:
             dry_run=args.dry_run,
             install=not args.no_install,
             force=args.force,
+            templates=getattr(args, "templates", False),
         )
     except InitError as e:
         print("Error: %s" % e)
@@ -1178,6 +1179,11 @@ def main() -> None:
     )
     init_parser.add_argument(
         "--force", action="store_true", help="Edit files even if they have uncommitted changes"
+    )
+    init_parser.add_argument(
+        "--templates",
+        action="store_true",
+        help="Also put DjustTemplateBackend first in TEMPLATES (default: only report it)",
     )
 
     # startproject command (legacy)

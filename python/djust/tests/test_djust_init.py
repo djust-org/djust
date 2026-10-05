@@ -52,6 +52,24 @@ for url in ("/admin/", "/admin/auth/user/", "/admin/auth/user/%d/change/" % user
 """
 
 
+STOCK_TEMPLATES = """\
+TEMPLATES = [
+    {
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
+        "DIRS": [],
+        "APP_DIRS": True,
+        "OPTIONS": {
+            "context_processors": [
+                "django.template.context_processors.request",
+                "django.contrib.auth.context_processors.auth",
+                "django.contrib.messages.context_processors.messages",
+            ],
+        },
+    },
+]
+"""
+
+
 def make_project(root: Path, name: str = "mysite", asgi: str = STOCK_ASGI) -> Path:
     (root / name).mkdir(parents=True)
     (root / "manage.py").write_text(
@@ -59,7 +77,7 @@ def make_project(root: Path, name: str = "mysite", asgi: str = STOCK_ASGI) -> Pa
     )
     (root / name / "__init__.py").write_text("")
     (root / name / "settings.py").write_text(
-        'INSTALLED_APPS = ["django.contrib.auth"]\nTEMPLATES = []\n'
+        'INSTALLED_APPS = ["django.contrib.auth"]\n' + STOCK_TEMPLATES
     )
     (root / name / "asgi.py").write_text(asgi)
     return root
@@ -580,7 +598,9 @@ def test_cli_init_reports_refusal(tmp_path, monkeypatch, capsys):
     from djust import cli
 
     monkeypatch.chdir(tmp_path)
-    args = argparse.Namespace(settings=None, dry_run=False, no_install=True, force=False)
+    args = argparse.Namespace(
+        settings=None, dry_run=False, no_install=True, force=False, templates=False
+    )
     assert cli.cmd_init(args) == 1
     assert "manage.py" in capsys.readouterr().out
 

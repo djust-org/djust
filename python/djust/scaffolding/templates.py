@@ -292,12 +292,9 @@ application = ProtocolTypeRouter(
 # The conditions run inside the user's settings module, so the block is
 # correct for list or tuple settings, apps listed by label or AppConfig path,
 # and projects that configure their own channel layer, without parsing the
-# user's code. TEMPLATES is deliberately untouched: LiveViews read their
-# template source directly, so the project's existing engines keep working
-# as they are. Rewriting a user's TEMPLATES safely (DjustTemplateBackend
-# first, carrying the context processors djust.C016 checks for) is a separate
-# feature (#2884); the admin incompatibility that used to argue against it
-# (#2872) is fixed.
+# user's code. TEMPLATES has its own block, TEMPLATES_BLOCK, because it is
+# only added where the existing setting is recognised (see ``plan_templates``
+# in ``init_project``); every other shape is reported, not rewritten.
 
 SETTINGS_BLOCK = """\
 # --- djust (added by djust init) ---
@@ -319,6 +316,82 @@ if "CHANNEL_LAYERS" not in globals():
         "default": {"BACKEND": "channels.layers.InMemoryChannelLayer"},
     }
 # --- end djust ---
+"""
+
+# The ``TEMPLATES`` block ``djust init --templates`` appends to a project whose
+# setting has a ``DjangoTemplates`` entry and no djust entry (``djust init``
+# alone never edits TEMPLATES). It puts ``DjustTemplateBackend`` first (the
+# shape ``djust new`` writes and ``djust.C016`` asks for) and leaves the
+# project's own entries in the list, untouched. Django moves to the next
+# engine only when a template does not exist, so the djust engine renders every
+# template it finds (``APP_DIRS`` is on), the admin's included; the Django entry
+# serves templates that live in no app or ``DIRS`` directory. The djust entry
+# mirrors the first ``DjangoTemplates`` entry's ``DIRS`` and the ``OPTIONS``
+# keys ``DjustTemplateBackend`` implements, so context processors, builtins and
+# libraries the project configured keep applying. ``loaders`` and the other
+# Django-only keys stay on the Django entry: the djust backend warns about them.
+# The djust entry becomes ``TEMPLATES[0]``: a later settings module that edits
+# ``TEMPLATES[0]["OPTIONS"]`` now edits it, not the Django entry.
+TEMPLATES_MARKER = "# --- djust templates (added by djust init --templates) ---"
+
+TEMPLATES_BLOCK = """\
+# --- djust templates (added by djust init --templates) ---
+# DjustTemplateBackend first, so djust renders your templates; your own
+# TEMPLATES entries stay after it, unchanged. The djust entry
+# reuses the first DjangoTemplates entry's DIRS and its supported OPTIONS.
+# Reruns of `djust init` detect this block and leave settings unchanged.
+if not any("DjustTemplateBackend" in str(_entry.get("BACKEND")) for _entry in TEMPLATES):
+    _django = next(
+        (
+            _entry
+            for _entry in TEMPLATES
+            if _entry.get("BACKEND") == "django.template.backends.django.DjangoTemplates"
+        ),
+        {},
+    )
+    TEMPLATES = [
+        {
+            "NAME": "djust",
+            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "DIRS": list(_django.get("DIRS", [])),
+            "APP_DIRS": True,
+            "OPTIONS": {
+                _key: _value
+                for _key, _value in _django.get("OPTIONS", {}).items()
+                if _key
+                in (
+                    "context_processors",
+                    "string_if_invalid",
+                    "debug",
+                    "autoescape",
+                    "libraries",
+                    "builtins",
+                )
+            },
+        },
+        *TEMPLATES,
+    ]
+    del _django
+# --- end djust templates ---
+"""
+
+# What ``djust init`` prints, and the docs show, for a project whose TEMPLATES
+# it will not edit: the documented shape, added by hand.
+TEMPLATES_ENTRY_SNIPPET = """\
+TEMPLATES.insert(0, {
+    "NAME": "djust",
+    "BACKEND": "djust.template_backend.DjustTemplateBackend",
+    "DIRS": [BASE_DIR / "templates"],
+    "APP_DIRS": True,
+    "OPTIONS": {
+        "context_processors": [
+            "django.template.context_processors.debug",
+            "django.template.context_processors.request",
+            "django.contrib.auth.context_processors.auth",
+            "django.contrib.messages.context_processors.messages",
+        ],
+    },
+})
 """
 
 # ---------------------------------------------------------------------------
