@@ -2328,6 +2328,9 @@ function reinitAfterDOMUpdate(scope) {
     bindLiveViewEvents(scope);
     // A clear_draft() from an event handler arrives in a patch (#2971).
     applyDraftClearFlag();
+    // A data-draft field this update inserted is restored and saved from its
+    // first render, not only the ones present at init (#3351).
+    syncDraftFields();
     // Extract any new colocated hook definitions (<script type="djust/hook">)
     // from the freshly-patched DOM BEFORE we mount/update hooks so definitions
     // are visible to mountHooks().
