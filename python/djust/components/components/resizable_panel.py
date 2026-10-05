@@ -17,7 +17,11 @@ class ResizablePanel(Component):
     direction (10 px, Shift 50 px), Home / End for the smallest / largest size,
     and double-click or Enter to return to ``initial_size``. The size is
     clamped to ``min_size`` / ``max_size`` and to the container, and the
-    handle is a WAI-ARIA window splitter (``aria-valuenow`` and friends).
+    handle is a WAI-ARIA window splitter (``aria-valuenow`` and friends); in a
+    right-to-left context, where the handle is on the left edge, dragging and
+    the arrow keys are mirrored. The server renders ``aria-orientation`` as the
+    panel's direction; the hook corrects it to the separator's own orientation
+    (a width-resizing panel has a vertical bar).
 
     The size is the reader's own and is not sent to the server. When a drag or
     key press ends the panel dispatches a bubbling ``dj-resize`` CustomEvent

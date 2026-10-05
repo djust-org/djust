@@ -7,9 +7,15 @@
  * changing that structure, so a server re-render still patches cleanly:
  *
  * - click a folder, or its arrow, to expand or collapse it. The state is the
- *   reader's own and lives on the page: it is not sent to the server. A
- *   re-render that leaves a folder's markup unchanged leaves it as the reader
- *   set it;
+ *   reader's own and lives on the page: it is not sent to the server. It is
+ *   remembered by the folder's NAME PATH (its name and its parents' names), not
+ *   by its position, so a re-render that inserts, removes or reorders rows
+ *   leaves each folder as the reader set it. The server's own open/closed
+ *   markup stays untouched and applies to every folder the reader has not
+ *   touched (and again once the reader's choice matches it). It is applied
+ *   through a ``data-dj-open`` attribute on the children block, which
+ *   components.css turns into display; the same keys keep the roving tab stop
+ *   and keyboard focus on the same row across a re-render;
  * - one tab stop (roving tabindex). Up/Down move through the visible rows,
  *   Right expands a folder or steps into it, Left collapses it or steps out to
  *   its parent, Home/End jump, typing a letter jumps to the next row starting
@@ -34,11 +40,13 @@
   var TOGGLE = "dj-file-tree__toggle";
   var ICON = "dj-file-tree__icon";
   var NAME = "dj-file-tree__name";
-  var EXPANDED = "dj-file-tree__node--expanded";
   var SELECTED = "dj-file-tree__node--selected";
   var FOLDER_CLOSED = "📁";
   var FOLDER_OPEN = "📂";
   var TYPEAHEAD_MS = 600;
+  var OPEN_ATTR = "data-dj-open";
+  var SEP = "\u0001";
+  var DUP = "\u0000";
 
   function isNode(el) {
     return !!el && el.nodeType === 1 && el.classList.contains(NODE);
@@ -61,21 +69,102 @@
     return !!groupOf(node) && !!toggleOf(node);
   }
 
-  function isExpanded(node) {
-    var group = groupOf(node);
-    return !!group && group.style.display !== "none";
+  // What the server rendered: a collapsed folder's children block carries an
+  // inline ``display:none``. The hook never writes that, so it stays the
+  // server's truth however rows shift.
+  function serverOpen(group) {
+    return group.style.display !== "none";
   }
 
-  // Every row under ``container``, in document order, with its depth. Rows
-  // inside a collapsed folder are skipped unless ``all`` is set.
-  function walk(container, depth, all, fn) {
+  // What is shown: the reader's choice (data-dj-open) over the server's.
+  function isExpanded(node) {
+    var group = groupOf(node);
+    if (!group) return false;
+    var chosen = group.getAttribute(OPEN_ATTR);
+    return chosen === null ? serverOpen(group) : chosen === "true";
+  }
+
+  function rowName(node) {
+    var name = node.getAttribute("data-name");
+    return name === null ? nameOf(node) : name;
+  }
+
+  // Every row under ``container``, in document order, with its depth and its
+  // name path. Rows inside a collapsed folder are skipped unless ``all`` is
+  // set. A path segment is the row's name, plus an occurrence number when a
+  // sibling before it has the same name.
+  function walk(container, depth, all, fn, prefix) {
     var kids = container.children;
+    var seen = null;
     for (var i = 0; i < kids.length; i++) {
       var node = kids[i];
       if (!isNode(node)) continue;
-      fn(node, depth);
-      if (isFolder(node) && (all || isExpanded(node))) walk(groupOf(node), depth + 1, all, fn);
+      var name = rowName(node);
+      seen = seen || Object.create(null);
+      var occurrence = seen[name] || 0;
+      seen[name] = occurrence + 1;
+      var key = (prefix || "") + SEP + (occurrence ? name + DUP + occurrence : name);
+      fn(node, depth, key);
+      if (isFolder(node) && (all || isExpanded(node))) {
+        walk(groupOf(node), depth + 1, all, fn, key);
+      }
     }
+  }
+
+  // The same key for one row, from its position among its siblings.
+  function pathKey(node) {
+    var segments = [];
+    var cur = node;
+    while (isNode(cur)) {
+      var name = rowName(cur);
+      var occurrence = 0;
+      for (var p = cur.previousElementSibling; p; p = p.previousElementSibling) {
+        if (isNode(p) && rowName(p) === name) occurrence += 1;
+      }
+      segments.push(occurrence ? name + DUP + occurrence : name);
+      var group = cur.parentElement;
+      if (!group || !group.classList.contains(GROUP)) break;
+      cur = group.previousElementSibling;
+    }
+    return SEP + segments.reverse().join(SEP);
+  }
+
+  // The row with this key, or null.
+  function findByKey(root, key) {
+    var segments = key.split(SEP).slice(1);
+    var container = root;
+    var found = null;
+    for (var s = 0; s < segments.length; s++) {
+      var want = segments[s];
+      found = null;
+      var seen = Object.create(null);
+      var kids = container.children;
+      for (var i = 0; i < kids.length; i++) {
+        var node = kids[i];
+        if (!isNode(node)) continue;
+        var name = rowName(node);
+        var occurrence = seen[name] || 0;
+        seen[name] = occurrence + 1;
+        if ((occurrence ? name + DUP + occurrence : name) === want) {
+          found = node;
+          break;
+        }
+      }
+      if (!found) return null;
+      if (s < segments.length - 1) {
+        container = groupOf(found);
+        if (!container) return null;
+      }
+    }
+    return found;
+  }
+
+  // Whether every folder above the row is open.
+  function shown(node) {
+    for (var cur = parentRow(node); cur; cur = parentRow(cur)) {
+      if (!isExpanded(cur)) return false;
+    }
+    return true;
   }
 
   function visibleRows(root) {
@@ -107,21 +196,51 @@
 
   var fileTree = {
     mounted: function () {
+      this._open = new Map();
       this._bind();
       this._sync();
+    },
+
+    // A server patch may shift rows under the reader's focus and tab stop:
+    // note where they are, by name path, before it lands.
+    beforeUpdate: function () {
+      var active = document.activeElement;
+      this._focusKey = isNode(active) && this.el.contains(active) ? pathKey(active) : null;
+      this._activeKey = this._active && this.el.contains(this._active) ? pathKey(this._active) : null;
     },
 
     updated: function () {
       if (this._boundEl !== this.el) {
         this._unbind();
         this._bind();
-        this._sync();
+        this._dirty = true;
       }
       // Anything that changed the tree reached the observer (its callback runs
       // after this synchronous patch, so ask for the pending records); nothing
       // else costs a walk, however many patches the page receives.
       if (this._observer && this._observer.takeRecords().length) this._dirty = true;
       if (this._dirty) this._sync();
+      this._refocus();
+    },
+
+    // Put keyboard focus back on the row it was on, by path, if the patch
+    // dropped it or left it on a different row; failing that, on the nearest
+    // folder above it that is still shown.
+    _refocus: function () {
+      var key = this._focusKey;
+      this._focusKey = null;
+      if (key === null || key === undefined) return;
+      var root = this.el;
+      var active = document.activeElement;
+      var inTree = isNode(active) && root.contains(active);
+      if (inTree ? pathKey(active) === key : active && active !== document.body) return;
+      var target = findByKey(root, key);
+      while (key.indexOf(SEP) !== key.lastIndexOf(SEP) && (!target || !shown(target))) {
+        key = key.slice(0, key.lastIndexOf(SEP));
+        target = findByKey(root, key);
+      }
+      if (!target || !shown(target)) target = visibleRows(root)[0];
+      if (target) this._focus(target);
     },
 
     destroyed: function () {
@@ -134,21 +253,37 @@
       var root = this.el;
       var self = this;
       this._dirty = false;
-      var active = this._active && root.contains(this._active) ? this._active : null;
+      // The tab stop stays on the same row by name path across a patch.
+      var activeKey = this._activeKey;
+      this._activeKey = null;
+      var active = !activeKey && this._active && root.contains(this._active) ? this._active : null;
       var firstRow = null;
       var selectedRow = null;
+      var keyed = null;
       var rows = [];
+      var seenFolders = this._open.size > 1000 ? new Set() : null;
       setAttr(root, "role", "tree");
-      walk(root, 0, true, function (node, depth) {
+      walk(root, 0, true, function (node, depth, key) {
         rows.push(node);
         if (!firstRow) firstRow = node;
         if (!selectedRow && node.classList.contains(SELECTED)) selectedRow = node;
+        if (activeKey && !keyed && key === activeKey) keyed = node;
         setAttr(node, "role", "treeitem");
         setAttr(node, "aria-level", String(depth + 1));
         setAttr(node, "aria-selected", node.classList.contains(SELECTED) ? "true" : "false");
-        if (isFolder(node)) self._reflect(node);
+        if (isFolder(node)) {
+          if (seenFolders) seenFolders.add(key);
+          self._apply(node, key);
+        }
       });
-      var tab = active || selectedRow || firstRow;
+      if (seenFolders) {
+        // A long-lived tree whose folders come and go does not keep every
+        // choice the reader ever made.
+        this._open.forEach(function (_open, key) {
+          if (!seenFolders.has(key)) self._open.delete(key);
+        });
+      }
+      var tab = keyed || active || selectedRow || firstRow;
       this._active = tab;
       rows.forEach(function (node) {
         setAttr(node, "tabindex", node === tab ? "0" : "-1");
@@ -156,11 +291,29 @@
       if (this._observer) this._observer.takeRecords();
     },
 
-    // Make a folder row agree with its children block.
+    // Make a folder row agree with what is shown: the reader's choice for its
+    // name path if there is one (carried on the children block), the server's
+    // markup otherwise.
+    _apply: function (node, key) {
+      var group = groupOf(node);
+      var chosen = this._open.get(key);
+      if (chosen !== undefined && chosen === serverOpen(group)) {
+        // The reader's choice now agrees with the server; follow the server again.
+        this._open.delete(key);
+        chosen = undefined;
+      }
+      if (chosen === undefined) {
+        if (group.hasAttribute(OPEN_ATTR)) group.removeAttribute(OPEN_ATTR);
+      } else {
+        setAttr(group, OPEN_ATTR, chosen ? "true" : "false");
+      }
+      this._reflect(node);
+    },
+
+    // The ARIA state, arrow and icon of a folder row for what is shown.
     _reflect: function (node) {
       var group = groupOf(node);
-      var open = group.style.display !== "none";
-      node.classList.toggle(EXPANDED, open);
+      var open = isExpanded(node);
       setAttr(node, "aria-expanded", open ? "true" : "false");
       setAttr(group, "role", "group");
       var toggle = toggleOf(node);
@@ -184,11 +337,9 @@
     _setExpanded: function (node, open) {
       var group = groupOf(node);
       if (!group || isExpanded(node) === open) return;
-      group.style.display = open ? "" : "none";
-      // The server renders ``style="display:none"``; an emptied style attribute
-      // is the same as none at all.
-      if (open && !group.getAttribute("style")) group.removeAttribute("style");
-      this._reflect(node);
+      var key = pathKey(node);
+      this._open.set(key, open);
+      this._apply(node, key);
       if (!open) {
         var active = document.activeElement;
         if (active && group.contains(active)) this._focus(node);
@@ -299,7 +450,7 @@
           // The state the hook reads (class, style) and what it writes (a morph
           // that restores the server's markup resets these, and then the next
           // patch must apply them again).
-          attributeFilter: ["class", "style", "tabindex", "role", "aria-level", "aria-selected", "aria-expanded"],
+          attributeFilter: ["class", "style", "tabindex", "role", "aria-level", "aria-selected", "aria-expanded", OPEN_ATTR],
         });
       }
     },

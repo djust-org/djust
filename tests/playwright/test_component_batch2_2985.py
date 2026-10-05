@@ -82,6 +82,7 @@ PROJECT = {
             path("", views.Demo.as_view()),
             path("custom/", views.Custom.as_view()),
             path("big/", views.Big.as_view()),
+            path("rtl/", views.Rtl.as_view()),
         ]
     """,
     "cmpapp/views.py": (
@@ -102,6 +103,8 @@ PROJECT = {
             <p>selected: <span id="sel">{{ selected }}</span></p>
           </section>
           <button id="move-sel" dj-click="move_selection">move selection</button>
+          <button id="insert-folder" dj-click="insert_folder">insert folder</button>
+          <button id="reverse-nodes" dj-click="reverse_nodes">reverse nodes</button>
           <section id="panels">
             <div id="p-h-box" style="width:800px">
               {%% resizable_panel direction="horizontal" min_size="100px" max_size="500px" initial_size="300px" %%}<p>horizontal</p>{%% endresizable_panel %%}
@@ -186,11 +189,24 @@ PROJECT = {
                 self.selected = "utils.py"
 
             @event_handler()
+            def insert_folder(self, **kwargs):
+                self.nodes = [
+                    {"name": "aaa", "type": "folder", "children": [{"name": "a.py", "type": "file"}]}
+                ] + self.nodes
+
+            @event_handler()
+            def reverse_nodes(self, **kwargs):
+                self.nodes = list(reversed(self.nodes))
+
+            @event_handler()
             def bump(self, **kwargs):
                 self.total = 98765.43
 
         class Demo(Base):
             template = page(SCRIPTS)
+
+        class Rtl(Base):
+            template = page(SCRIPTS).replace("<div dj-root>", '<div dj-root dir="rtl">')
 
         class Custom(Base):
             # The app registered its own hooks: two in window.djust.hooks, two in window.DjustHooks.
@@ -531,6 +547,43 @@ def main() -> int:
                     clip={"x": 0, "y": 0, "width": 1000, "height": 700},
                 )
 
+                # ---- the server re-renders and rows shift (positional diff) ----
+                load("/")
+                page.click(f"{row('src')} .dj-file-tree__toggle")
+                check(hidden_children("src"), "tree re-render: the reader collapses src")
+                page.evaluate("() => document.getElementById('insert-folder').click()")
+                page.wait_for_selector(row("aaa"), timeout=6000)
+                page.wait_for_timeout(300)
+                check(
+                    not hidden_children("aaa")
+                    and hidden_children("src")
+                    and not hidden_children("docs"),
+                    "tree re-render: a folder inserted above does not move the reader's collapse (aaa open, src still closed, docs open)",
+                )
+                check(
+                    page.get_attribute(row("src"), "aria-expanded") == "false"
+                    and page.get_attribute(row("docs"), "aria-expanded") == "true",
+                    "tree re-render: aria-expanded follows the right folders",
+                )
+                page.focus(row("README.md"))
+                page.evaluate("() => document.getElementById('reverse-nodes').click()")
+                page.wait_for_timeout(600)
+                check(
+                    active().endswith("[README.md]"),
+                    f"tree re-render: keyboard focus stays on README.md when the server reverses the rows ({active()})",
+                )
+                check(
+                    page.evaluate(
+                        "() => document.querySelectorAll('.dj-file-tree__node[tabindex=\"0\"]').length"
+                    )
+                    == 1,
+                    "tree re-render: still exactly one tab stop",
+                )
+                check(
+                    hidden_children("src"),
+                    "tree re-render: and src is still collapsed after the reverse",
+                )
+
                 # ======================= ResizablePanel =======================
                 def width(sel):
                     return page.evaluate(
@@ -646,6 +699,48 @@ def main() -> int:
                     path=str(shots / "03-panels.png"),
                     clip={"x": 0, "y": 600, "width": 1000, "height": 800},
                 )
+
+                # ---- right to left: the handle is on the panel's left edge ----
+                load("/rtl/")
+                prt = "#p-h-box .dj-resizable-panel"
+                hrt = f"{prt} .dj-resizable-panel__handle"
+                check(
+                    page.evaluate(
+                        "([p, h]) => document.querySelector(h).getBoundingClientRect().left < "
+                        "document.querySelector(p).getBoundingClientRect().left + 20",
+                        [prt, hrt],
+                    ),
+                    "rtl panel: the handle is on the panel's left edge",
+                )
+                w0 = width(prt)
+                box = page.locator(hrt).bounding_box()
+                cx, cy = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+                page.mouse.move(cx, cy)
+                page.mouse.down()
+                page.mouse.move(cx - 30, cy, steps=5)
+                page.mouse.move(cx - 60, cy, steps=5)
+                page.mouse.up()
+                check(
+                    abs(width(prt) - (w0 + 60)) < 2,
+                    f"rtl panel: dragging the handle outward (left) grows it ({w0:.0f} -> {width(prt):.0f}px)",
+                )
+                box = page.locator(hrt).bounding_box()
+                cx, cy = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+                page.mouse.move(cx, cy)
+                page.mouse.down()
+                page.mouse.move(cx + 50, cy, steps=6)
+                page.mouse.up()
+                check(
+                    abs(width(prt) - (w0 + 10)) < 2,
+                    f"rtl panel: dragging inward (right) shrinks it ({width(prt):.0f}px)",
+                )
+                page.focus(hrt)
+                before = width(prt)
+                page.keyboard.press("ArrowLeft")
+                check(abs(width(prt) - (before + 10)) < 2, "rtl panel: ArrowLeft grows it")
+                page.keyboard.press("ArrowRight")
+                page.keyboard.press("ArrowRight")
+                check(abs(width(prt) - (before - 10)) < 2, "rtl panel: ArrowRight shrinks it")
 
                 # ======================= AnimatedNumber =======================
                 load("/")

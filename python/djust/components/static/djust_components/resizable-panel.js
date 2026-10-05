@@ -7,7 +7,8 @@
  *   data-max-size) and to the panel's container, and is held as an inline
  *   pixel width (or height) on the panel.
  * - The handle is a WAI-ARIA window splitter: Tab to it, then the arrow keys
- *   along the direction resize by 10 px (Shift: 50 px), Home / End go to the
+ *   along the direction resize by 10 px (Shift: 50 px; mirrored in a
+ *   right-to-left context, where the handle is on the left edge), Home / End go to the
  *   smallest / largest size, and aria-valuenow / min / max / text follow.
  *   Double-click (or Enter) puts the panel back at its initial size.
  * - ``disabled`` (data-disabled) turns all of it off.
@@ -66,6 +67,12 @@
 
     _horizontal: function () {
       return this.el.getAttribute("data-direction") !== "vertical";
+    },
+
+    // A horizontal panel in a right-to-left context has its handle on the left
+    // edge, so dragging or pressing "outward" grows it the other way round.
+    _rtl: function () {
+      return this._horizontal() && window.getComputedStyle(this.el).direction === "rtl";
     },
 
     _prop: function () {
@@ -186,6 +193,7 @@
             id: e.pointerId,
             start: self._horizontal() ? e.clientX : e.clientY,
             size: self._size(),
+            sign: self._rtl() ? -1 : 1,
           };
           if (handle.setPointerCapture && e.pointerId !== undefined) {
             try {
@@ -199,8 +207,14 @@
 
         pointermove: function (e) {
           if (!drag || e.pointerId !== drag.id) return;
+          // The button was released somewhere we heard nothing about: stop.
+          if (typeof e.buttons === "number" && e.buttons === 0) {
+            drag = null;
+            self._emit();
+            return;
+          }
           var pos = self._horizontal() ? e.clientX : e.clientY;
-          self._apply(drag.size + (pos - drag.start));
+          self._apply(drag.size + drag.sign * (pos - drag.start));
         },
 
         pointerup: function (e) {
@@ -231,8 +245,9 @@
           if (!handle || e.target !== handle || self._disabled()) return;
           if (e.altKey || e.ctrlKey || e.metaKey) return;
           var horizontal = self._horizontal();
-          var grow = horizontal ? "ArrowRight" : "ArrowDown";
-          var shrink = horizontal ? "ArrowLeft" : "ArrowUp";
+          var rtl = self._rtl();
+          var grow = horizontal ? (rtl ? "ArrowLeft" : "ArrowRight") : "ArrowDown";
+          var shrink = horizontal ? (rtl ? "ArrowRight" : "ArrowLeft") : "ArrowUp";
           var step = e.shiftKey ? BIG_STEP : STEP;
           var b = self._bounds();
           var target = null;

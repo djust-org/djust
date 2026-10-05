@@ -12,9 +12,15 @@ class FileTree(Component):
     Renders a tree of file/folder nodes. Folders can be expanded/collapsed.
     Uses ``dj-hook="FileTree"`` for client-side interactions; the page must
     include ``djust_components/file-tree.js``. Clicking a folder (or its arrow)
-    expands or collapses it on the page without a server round trip; the
-    reader's open and closed folders survive a re-render that does not change
-    them. The keyboard follows the WAI-ARIA tree pattern: one tab stop, Up/Down
+    expands or collapses it on the page without a server round trip. The
+    reader's choice is remembered by the folder's name path (its name and its
+    parents'), not its position, so it survives a re-render that inserts,
+    removes or reorders rows, and keyboard focus stays on the same row; a
+    folder the reader has not touched shows the server's ``expanded`` state, a
+    renamed folder counts as a new one, and two siblings with one name are told
+    apart by order. The choice is applied through a ``data-dj-open`` attribute
+    that ``components.css`` turns into display (the server's own markup is
+    never rewritten), so the stylesheet that styles the tree must be loaded. The keyboard follows the WAI-ARIA tree pattern: one tab stop, Up/Down
     through the visible rows, Right/Left to open, close and step in or out,
     Home/End, typing a letter to jump, Enter/Space to open a folder or select
     a file. Selecting a file clicks its row, so it fires ``event`` exactly as a

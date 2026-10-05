@@ -207,3 +207,19 @@ class TestScriptsAreShippedAndFound:
         source = (STATIC / script).read_text()
         for sink in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval("):
             assert sink not in source, sink
+
+
+class TestFileTreeOpenStateRule:
+    def test_the_stylesheet_turns_the_hooks_choice_into_display(self):
+        """The hook records the reader's open/closed choice on the children block
+        (it never rewrites the server's style), so components.css must act on it,
+        and beat the server's inline ``display:none``."""
+        css = (STATIC / "components.css").read_text()
+        assert re.search(
+            r'\.dj-file-tree__children\[data-dj-open="true"\]\s*\{[^}]*display:\s*block\s*!important',
+            css,
+        )
+        assert re.search(
+            r'\.dj-file-tree__children\[data-dj-open="false"\]\s*\{[^}]*display:\s*none\s*!important',
+            css,
+        )

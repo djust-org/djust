@@ -15,7 +15,8 @@ class ImageLightbox(Component):
     page behind does not scroll, Escape closes it, ArrowLeft / ArrowRight and a
     horizontal swipe go to the previous / next image, the new image is
     announced to screen readers, and focus returns to the opener when it
-    closes. Each of those presses the component's own Close / Previous / Next
+    closes (with several lightboxes open, the page scroll is unlocked only
+    when the last one closes). Each of those presses the component's own Close / Previous / Next
     control, so the events and values are exactly the ones it renders: the
     script sends nothing of its own.
 

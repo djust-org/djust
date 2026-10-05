@@ -23,6 +23,34 @@
 (function () {
   "use strict";
 
+  // Page scroll is locked while ANY lightbox is open: one lock, taken by the
+  // first and given back by the last. A page that was already locked is left
+  // locked.
+  var scrollLocks = 0;
+  var scrollOwned = false;
+  var scrollPrev = "";
+
+  function lockScroll() {
+    if (scrollLocks === 0) {
+      var body = document.body;
+      scrollOwned = body.style.overflow !== "hidden";
+      if (scrollOwned) {
+        scrollPrev = body.style.overflow;
+        body.style.overflow = "hidden";
+      }
+    }
+    scrollLocks += 1;
+  }
+
+  function unlockScroll() {
+    if (scrollLocks === 0) return;
+    scrollLocks -= 1;
+    if (scrollLocks === 0 && scrollOwned && document.body.style.overflow === "hidden") {
+      document.body.style.overflow = scrollPrev;
+    }
+    if (scrollLocks === 0) scrollOwned = false;
+  }
+
   var FOCUSABLE = "button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])";
   var SWIPE_MIN = 50;
 
@@ -111,19 +139,15 @@
     },
 
     _lockScroll: function () {
-      var body = document.body;
-      if (body.style.overflow !== "hidden") {
-        this._prevOverflow = body.style.overflow;
-        this._locked = true;
-        body.style.overflow = "hidden";
-      }
+      if (this._locked) return;
+      this._locked = true;
+      lockScroll();
     },
 
     _unlockScroll: function () {
-      if (this._locked && document.body.style.overflow === "hidden") {
-        document.body.style.overflow = this._prevOverflow || "";
-      }
+      if (!this._locked) return;
       this._locked = false;
+      unlockScroll();
     },
 
     _press: function (cls) {
@@ -143,6 +167,10 @@
         if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey) return;
         if (e.key === "Escape") {
           e.preventDefault();
+          // djust's own modal handling (keyboard-nav) would also react to
+          // Escape in a role=dialog by clicking the first dj-click control it
+          // finds (here the backdrop): the close event would be sent twice.
+          e.stopPropagation();
           self._press("dj-lightbox__close");
         } else if (e.key === "ArrowLeft") {
           e.preventDefault();
@@ -156,6 +184,7 @@
           });
           if (!items.length) {
             e.preventDefault();
+            e.stopPropagation();
             self._focus(root);
             return;
           }
@@ -164,9 +193,11 @@
           var active = document.activeElement;
           if (e.shiftKey && (active === first || active === root || !root.contains(active))) {
             e.preventDefault();
+            e.stopPropagation();
             self._focus(last);
           } else if (!e.shiftKey && (active === last || !root.contains(active))) {
             e.preventDefault();
+            e.stopPropagation();
             self._focus(first);
           }
         }

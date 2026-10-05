@@ -352,6 +352,36 @@ describe('ImageLightbox', () => {
         expect(close).toBeTruthy();
     });
 
+    it('two lightboxes share one scroll lock: it is given back only when the last closes', () => {
+        const env = createEnv(LIGHTBOX() + LIGHTBOX({ active: 0 }));
+        env.window.eval(read('image-lightbox.js'));
+        env.window.document.body.style.overflow = 'auto';
+        env.window.djust.mountHooks();
+        const [first, second] = Array.from(env.window.document.querySelectorAll('.dj-lightbox'));
+        expect(env.window.document.body.style.overflow).toBe('hidden');
+        first.remove();
+        env.window.djust.updateHooks();
+        expect(env.window.document.body.style.overflow).toBe('hidden'); // the second is still open
+        second.remove();
+        env.window.djust.updateHooks();
+        expect(env.window.document.body.style.overflow).toBe('auto');
+    });
+
+    it('Escape and a wrapping Tab stop at the dialog, so djust\'s own modal handler does not repeat them', () => {
+        const env = boot('<button id="behind">b</button>' + LIGHTBOX(), 'image-lightbox.js');
+        const reached = [];
+        env.window.document.addEventListener('keydown', (e) => reached.push(e.key));
+        const close = env.$('.dj-lightbox__close');
+        key(env.window, close, 'Escape');
+        const next = env.$('.dj-lightbox__next');
+        next.focus();
+        key(env.window, next, 'Tab'); // wraps
+        expect(reached).toEqual([]);
+        env.$('.dj-lightbox__prev').focus();
+        key(env.window, env.$('.dj-lightbox__prev'), 'Tab'); // inside: left to the browser (and core)
+        expect(reached).toEqual(['Tab']);
+    });
+
     it('does not double-bind after repeated patches', () => {
         const env = boot(LIGHTBOX(), 'image-lightbox.js');
         const log = clicks(env);
@@ -368,7 +398,11 @@ describe('ImageLightbox', () => {
 
 const row = (env, name) => env.$(`.dj-file-tree__node[data-name="${name}"]`);
 const group = (env, name) => row(env, name).nextElementSibling;
-const hidden = (g) => g.style.display === 'none';
+// What is shown: the reader's choice (data-dj-open, which components.css turns into display) over the server's inline style.
+const hidden = (g) => {
+    const chosen = g.getAttribute('data-dj-open');
+    return chosen === null ? g.style.display === 'none' : chosen === 'false';
+};
 
 describe('FileTree', () => {
     it('applies tree semantics, and keeps exactly one tab stop on the selected row', () => {
@@ -391,19 +425,17 @@ describe('FileTree', () => {
         expect(toggle.getAttribute('aria-hidden')).toBe('true');
     });
 
-    it('clicking a folder (row or arrow) expands and collapses it, with glyph, icon, class and aria in step', () => {
+    it('clicking a folder (row or arrow) expands and collapses it, with glyph, icon and aria in step', () => {
         const env = boot(TREE(), 'file-tree.js');
         const sub = row(env, 'sub');
         sub.querySelector('.dj-file-tree__name').click();
         expect(hidden(group(env, 'sub'))).toBe(false);
         expect(sub.getAttribute('aria-expanded')).toBe('true');
-        expect(sub.classList.contains('dj-file-tree__node--expanded')).toBe(true);
         expect(sub.querySelector('.dj-file-tree__toggle').textContent).toBe('▼');
         expect(sub.querySelector('.dj-file-tree__icon').textContent).toBe('📂');
         sub.querySelector('.dj-file-tree__toggle').click();
         expect(hidden(group(env, 'sub'))).toBe(true);
         expect(sub.getAttribute('aria-expanded')).toBe('false');
-        expect(sub.classList.contains('dj-file-tree__node--expanded')).toBe(false);
         expect(sub.querySelector('.dj-file-tree__icon').textContent).toBe('📁');
     });
 
@@ -539,16 +571,15 @@ describe('FileTree', () => {
             expect(row(env, 'main.py').getAttribute('aria-selected')).toBe('false');
         });
 
-        it('a server class patch that overwrites a folder\'s class is reconciled with what is visible', () => {
+        it('never writes the server\'s markup for a folder: its class and inline style stay what the server rendered', () => {
             const env = boot(TREE(), 'file-tree.js');
-            const sub = row(env, 'sub');
-            sub.click(); // reader opens it
-            // the server patches the whole class attribute back to its own (collapsed) state
-            sub.setAttribute('class', 'dj-file-tree__node dj-file-tree__node--folder');
-            env.window.djust.updateHooks();
+            const snap = () => [row(env, 'sub').getAttribute('class'), group(env, 'sub').getAttribute('style'), row(env, 'src').getAttribute('class'), group(env, 'src').getAttribute('style')];
+            const before = snap();
+            row(env, 'sub').click(); // open the collapsed one
+            row(env, 'src').click(); // close the open one
+            expect(snap()).toEqual(before);
             expect(hidden(group(env, 'sub'))).toBe(false);
-            expect(sub.classList.contains('dj-file-tree__node--expanded')).toBe(true);
-            expect(sub.getAttribute('aria-expanded')).toBe('true');
+            expect(hidden(group(env, 'src'))).toBe(true);
         });
 
         it('new rows from a patch get their attributes, and a removed row\'s tab stop moves on', () => {
@@ -789,6 +820,59 @@ describe('ResizablePanel', () => {
         expect(env.events).toHaveLength(1);
     });
 
+    describe('right to left (the handle is on the panel\'s left edge)', () => {
+        const rtl = () => setup({}, PANEL().replace('style="width:300px', 'style="direction:rtl;width:300px'));
+
+        it('dragging outward (to the left) grows the panel, dragging inward shrinks it', () => {
+            const env = rtl();
+            pointer(env.window, env.handle, 'pointerdown', 300, 10);
+            pointer(env.window, env.handle, 'pointermove', 240, 10);
+            expect(env.panel.style.width).toBe('360px');
+            pointer(env.window, env.handle, 'pointermove', 340, 10);
+            expect(env.panel.style.width).toBe('260px');
+            pointer(env.window, env.handle, 'pointerup', 340, 10);
+        });
+
+        it('ArrowLeft grows and ArrowRight shrinks', () => {
+            const env = rtl();
+            key(env.window, env.handle, 'ArrowLeft');
+            expect(env.panel.style.width).toBe('310px');
+            key(env.window, env.handle, 'ArrowRight', { shiftKey: true });
+            expect(env.panel.style.width).toBe('260px');
+        });
+
+        it('Home and End are still smallest and largest', () => {
+            const env = rtl();
+            key(env.window, env.handle, 'End');
+            expect(env.panel.style.width).toBe('600px');
+            key(env.window, env.handle, 'Home');
+            expect(env.panel.style.width).toBe('100px');
+        });
+
+        it('a vertical panel is not mirrored', () => {
+            const env = setup({}, PANEL({ direction: 'vertical' }).replace('style="height:300px', 'style="direction:rtl;height:300px'));
+            key(env.window, env.handle, 'ArrowDown');
+            expect(env.panel.style.height).toBe('310px');
+            pointer(env.window, env.handle, 'pointerdown', 10, 300);
+            pointer(env.window, env.handle, 'pointermove', 10, 340);
+            expect(env.panel.style.height).toBe('350px'); // 310 after the key, +40
+        });
+    });
+
+    it('a move reporting no buttons pressed ends the drag (the release happened where nothing heard it)', () => {
+        const env = setup();
+        pointer(env.window, env.handle, 'pointerdown', 300, 10);
+        pointer(env.window, env.handle, 'pointermove', 350, 10);
+        expect(env.panel.style.width).toBe('350px');
+        const e = new env.window.Event('pointermove', { bubbles: true });
+        Object.assign(e, { clientX: 450, clientY: 10, pointerId: 1, buttons: 0 });
+        env.handle.dispatchEvent(e);
+        expect(env.panel.style.width).toBe('350px');
+        expect(env.events).toEqual([{ size: 350, direction: 'horizontal' }]);
+        pointer(env.window, env.handle, 'pointermove', 500, 10); // and the drag is over
+        expect(env.panel.style.width).toBe('350px');
+    });
+
     it('keeps an aria-label an app supplied', () => {
         const env = setup({}, PANEL().replace('role="separator"', 'role="separator" aria-label="Sidebar width"'));
         expect(env.handle.getAttribute('aria-label')).toBe('Sidebar width');
@@ -904,6 +988,160 @@ describe('AnimatedNumber', () => {
 // Large trees stay cheap (the real-browser run measures the same in Chromium)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// FileTree: the server re-renders and rows shift (the VDOM diff is positional)
+// ---------------------------------------------------------------------------
+
+// What the client does with a server re-render of the tree: the focused node is
+// replaced, and attributes the hook put on nodes (here data-dj-open on the
+// children blocks) stay on the same POSITION, now describing a different folder.
+function serverRerender(env, spec) {
+    const tree = env.$('.dj-file-tree');
+    const stale = Array.from(tree.querySelectorAll('.dj-file-tree__children')).map((g) => g.getAttribute('data-dj-open'));
+    env.window.djust.beforeUpdateHooks();
+    tree.innerHTML = spec.map((n) => node(n)).join('');
+    Array.from(tree.querySelectorAll('.dj-file-tree__children')).forEach((g, i) => {
+        if (stale[i] !== undefined && stale[i] !== null) g.setAttribute('data-dj-open', stale[i]);
+    });
+    env.window.djust.updateHooks();
+}
+
+const folder = (name, children, extra = {}) => ({ name, type: 'folder', children, ...extra });
+const file = (name) => ({ name });
+
+describe('FileTree when the server re-renders and rows shift', () => {
+    const base = () => [
+        folder('src', [file('main.py'), file('utils.py')]),
+        folder('docs', [file('guide.md')]),
+        file('README.md'),
+    ];
+    const shown = (env, name) => !hidden(group(env, name));
+
+    it('an inserted folder above does not hand the reader\'s collapse to the wrong folder', () => {
+        const env = boot(TREE(base()), 'file-tree.js');
+        row(env, 'src').click(); // the reader collapses src
+        expect(shown(env, 'src')).toBe(false);
+        serverRerender(env, [folder('aaa', [file('a.py')]), ...base()]);
+        expect(shown(env, 'aaa')).toBe(true);
+        expect(shown(env, 'src')).toBe(false); // still the reader's
+        expect(shown(env, 'docs')).toBe(true);
+        expect(row(env, 'src').getAttribute('aria-expanded')).toBe('false');
+        expect(row(env, 'aaa').getAttribute('aria-expanded')).toBe('true');
+        expect(row(env, 'docs').getAttribute('aria-expanded')).toBe('true');
+    });
+
+    it('a removed folder above, a reorder and a reverse keep each folder as the reader left it', () => {
+        const env = boot(TREE(base()), 'file-tree.js');
+        row(env, 'docs').click(); // collapse docs
+        serverRerender(env, base().slice(1)); // src removed
+        expect(shown(env, 'docs')).toBe(false);
+        serverRerender(env, [folder('docs', [file('guide.md')]), folder('src', [file('main.py')]), file('README.md')]);
+        expect(shown(env, 'docs')).toBe(false);
+        expect(shown(env, 'src')).toBe(true);
+        serverRerender(env, [file('README.md'), folder('src', [file('main.py')]), folder('docs', [file('guide.md')])]);
+        expect(shown(env, 'docs')).toBe(false);
+        expect(shown(env, 'src')).toBe(true);
+    });
+
+    it('a folder the reader opened that the server renders closed stays open when rows shift', () => {
+        const spec = () => [folder('lib', [file('x.py')], { expanded: false }), folder('src', [file('main.py')], { expanded: false })];
+        const env = boot(TREE(spec()), 'file-tree.js');
+        row(env, 'src').click(); // open src
+        serverRerender(env, [folder('new', [file('n.py')], { expanded: false }), ...spec()]);
+        expect(shown(env, 'src')).toBe(true);
+        expect(shown(env, 'lib')).toBe(false);
+        expect(shown(env, 'new')).toBe(false);
+    });
+
+    it('a renamed folder takes the server\'s state; renaming back restores the reader\'s', () => {
+        const env = boot(TREE(base()), 'file-tree.js');
+        row(env, 'docs').click();
+        serverRerender(env, [base()[0], folder('docs2', [file('guide.md')]), file('README.md')]);
+        expect(shown(env, 'docs2')).toBe(true);
+        serverRerender(env, base());
+        expect(shown(env, 'docs')).toBe(false);
+    });
+
+    it('the same name under different parents, and twice under one parent, are different folders', () => {
+        const spec = () => [
+            folder('a', [folder('lib', [file('1')]), folder('lib', [file('2')]), file('z')]),
+            folder('b', [folder('lib', [file('3')])]),
+        ];
+        const env = boot(TREE(spec()), 'file-tree.js');
+        const libs = () => env.$$('.dj-file-tree__node[data-name="lib"]');
+        const hiddenLibs = () => libs().map((l) => hidden(l.nextElementSibling));
+        libs()[1].click(); // the second lib under a
+        expect(hiddenLibs()).toEqual([false, true, false]);
+        serverRerender(env, [folder('top', [file('t')]), ...spec()]);
+        expect(hiddenLibs()).toEqual([false, true, false]);
+        libs()[2].click(); // b/lib
+        serverRerender(env, [folder('top', [file('t')]), ...spec()]);
+        expect(hiddenLibs()).toEqual([false, true, true]);
+    });
+
+    it('a choice that matches the server\'s state is dropped, so the server can change it later', () => {
+        const closed = [folder('src', [file('m')], { expanded: false })];
+        const env = boot(TREE(closed), 'file-tree.js');
+        row(env, 'src').click(); // the reader opens it
+        serverRerender(env, [folder('src', [file('m')], { expanded: true })]); // the server opens it too
+        expect(group(env, 'src').hasAttribute('data-dj-open')).toBe(false);
+        serverRerender(env, [folder('src', [file('m')], { expanded: false })]); // and later closes it
+        expect(shown(env, 'src')).toBe(false);
+    });
+
+    it('keyboard focus stays on the same row (by path) when the server reverses the rows', () => {
+        const env = boot(TREE(base()), 'file-tree.js');
+        row(env, 'README.md').focus();
+        serverRerender(env, base().reverse());
+        expect(env.window.document.activeElement).toBe(row(env, 'README.md'));
+        expect(row(env, 'README.md').getAttribute('tabindex')).toBe('0');
+    });
+
+    it('focus on a row inside a folder follows that row when a folder is inserted above', () => {
+        const env = boot(TREE(base()), 'file-tree.js');
+        row(env, 'guide.md').focus();
+        serverRerender(env, [folder('aaa', [file('a.py')]), ...base()]);
+        expect(env.window.document.activeElement.getAttribute('data-name')).toBe('guide.md');
+        expect(env.$$('.dj-file-tree__node').filter((n) => n.getAttribute('tabindex') === '0')).toHaveLength(1);
+    });
+
+    it('when the focused row is gone, focus goes to the nearest folder above that is still shown', () => {
+        const env = boot(TREE(base()), 'file-tree.js');
+        row(env, 'main.py').focus();
+        serverRerender(env, [folder('src', [file('utils.py')]), base()[1], base()[2]]); // main.py removed
+        expect(env.window.document.activeElement.getAttribute('data-name')).toBe('src');
+        // and when even that folder is closed by the reader's choice, the folder itself holds it
+        const env2 = boot(TREE(base()), 'file-tree.js');
+        row(env2, 'main.py').focus();
+        row(env2, 'src').click();
+        env2.window.document.body.focus();
+        row(env2, 'src').focus();
+        serverRerender(env2, base());
+        expect(env2.window.document.activeElement.getAttribute('data-name')).toBe('src');
+    });
+
+    it('leaves focus alone when the reader had moved it elsewhere', () => {
+        const env = boot(TREE(base()) + '<button id="out">x</button>', 'file-tree.js');
+        row(env, 'README.md').focus();
+        const tree = env.$('.dj-file-tree');
+        env.window.djust.beforeUpdateHooks();
+        env.$('#out').focus();
+        tree.innerHTML = base().map((n) => node(n)).join('');
+        env.window.djust.updateHooks();
+        expect(env.window.document.activeElement.id).toBe('out');
+    });
+
+    it('the roving tab stop stays on the same row by path after an insert, even with focus elsewhere', () => {
+        const env = boot(TREE(base()) + '<button id="out">x</button>', 'file-tree.js');
+        row(env, 'utils.py').focus();
+        env.$('#out').focus();
+        serverRerender(env, [folder('aaa', [file('a.py')]), ...base()]);
+        const stops = env.$$('.dj-file-tree__node').filter((n) => n.getAttribute('tabindex') === '0');
+        expect(stops.map((n) => n.getAttribute('data-name'))).toEqual(['utils.py']);
+        expect(env.window.document.activeElement.id).toBe('out');
+    });
+});
+
 describe('FileTree on a large tree', () => {
     const big = (folders, files) => Array.from({ length: folders }, (_, f) => ({
         name: `dir${f}`,
@@ -912,18 +1150,18 @@ describe('FileTree on a large tree', () => {
         children: Array.from({ length: files }, (_, i) => ({ name: `f${f}_${i}.txt` })),
     }));
 
-    it('keyboard navigation and a patch of one row do not rewalk collapsed folders\' rows per key', () => {
-        const env = boot(TREE(big(40, 100)), 'file-tree.js');
-        expect(env.$$('.dj-file-tree__node').length).toBe(40 + 4000);
+    it('keyboard navigation does not rewrite attributes per key, however many rows are collapsed', () => {
+        const env = boot(TREE(big(20, 100)), 'file-tree.js');
+        expect(env.$$('.dj-file-tree__node').length).toBe(20 + 2000);
         const first = env.$('.dj-file-tree__node');
         first.focus();
         let walked = 0;
         const real = env.window.Element.prototype.setAttribute;
         env.window.Element.prototype.setAttribute = function (...a) { walked += 1; return real.apply(this, a); };
-        // only dir0 is open: 1 + 100 + 39 visible rows; End must land on the last directory row
+        // only dir0 is open: 1 + 100 + 19 visible rows; End must land on the last directory row
         key(env.window, first, 'End');
-        expect(env.window.document.activeElement.getAttribute('data-name')).toBe('dir39');
+        expect(env.window.document.activeElement.getAttribute('data-name')).toBe('dir19');
         env.window.Element.prototype.setAttribute = real;
         expect(walked).toBeLessThan(10);
-    });
+    }, 30000);
 });
