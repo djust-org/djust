@@ -9,9 +9,10 @@ is not**. `html/parser.py` was rewritten for HTML5-spec alignment in CPython
 3.12.10, and 3.14 changed the end-of-input character-reference handling again,
 so the three interpreters djust's CI matrix runs disagree with each other:
 
-    3.12.9   vs 3.12.13 : 1108 / 4000 corpus values differ
+    3.12.9   vs 3.12.13 : 1076 / 4000 corpus values differ
     3.12.13  vs 3.13.7  :    0
-    3.12.13  vs 3.14.6  :  224
+    3.12.13  vs 3.14.6  :  231   (end-of-input `&` / `&#` handling)
+    3.13.7   vs 3.13.15 :  239   (the same, plus 8 abrupt-comment values)
 
 A differential that computes its reference at run time therefore asserts a
 DIFFERENT contract on every runner — it can pass locally and fail in CI for

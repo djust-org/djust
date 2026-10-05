@@ -799,7 +799,7 @@ Pass them via `context` / `self.*`; the serializer handles the rest.
 | `safe` | `{{ html\|safe }}` | Mark pre-escaped HTML safe |
 | `escape` | `{{ text\|escape }}` | Force HTML escaping |
 | `force_escape` | `{{ text\|force_escape }}` | Escape even in `{% autoescape off %}` |
-| `striptags` | `{{ html\|striptags }}` | Remove all HTML tags |
+| `striptags` | `{{ html\|striptags }}` | Remove all HTML tags (differs from Django on malformed markup on newer CPython: [details](../core-concepts/templates.md#striptags-and-the-python-version)) |
 
 ---
 

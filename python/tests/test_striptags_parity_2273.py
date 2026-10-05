@@ -32,9 +32,10 @@ The reference moves; the port does not
 and changed again in **3.14**, so the interpreters this project's CI matrix
 runs do not agree with each other:
 
-    3.12.9   vs 3.12.13 : 1108 / 4000 corpus values differ
+    3.12.9   vs 3.12.13 : 1076 / 4000 corpus values differ
     3.12.13  vs 3.13.7  :    0
-    3.12.13  vs 3.14.6  :  224   (end-of-input `&` / `&#` handling)
+    3.12.13  vs 3.14.6  :  231   (end-of-input `&` / `&#` handling)
+    3.13.7   vs 3.13.15 :  239   (the same, plus 8 abrupt-comment values)
 
 The first version of this module computed its reference at run time, so it
 asserted a different contract on every runner: green on the repo's 3.12.9
@@ -108,9 +109,11 @@ randomized differential:
 
 from __future__ import annotations
 
+import ast
 import json
 import pathlib
 import random
+import re
 import sys
 from typing import Any
 
@@ -121,6 +124,7 @@ pytest.importorskip("django")
 from django.core.exceptions import SuspiciousOperation  # noqa: E402
 from django.template import Context as DjangoContext  # noqa: E402
 from django.template import Template as DjangoTemplate  # noqa: E402
+from django.utils.html import conditional_escape, escape  # noqa: E402
 from django.utils.html import strip_tags as django_strip_tags  # noqa: E402
 
 from djust import _rust  # noqa: E402
@@ -655,6 +659,142 @@ class TestAbruptEmptyCommentClose:
             f"django={django_answer(value)!r}, recorded for this rule: {sorted(group)}. "
             f"html.parser moved again; regenerate scripts/gen-striptags-reference.py"
         )
+
+
+TEMPLATES_DOC = (
+    pathlib.Path(__file__).resolve().parents[2] / "docs/website/core-concepts/templates.md"
+)
+DOC_HEADING = "### `striptags` and the Python version"
+
+
+def _documented_section() -> str:
+    if not TEMPLATES_DOC.exists():
+        pytest.skip("docs/ not available next to the tests")
+    text = TEMPLATES_DOC.read_text(encoding="utf-8")
+    start = text.index(DOC_HEADING)
+    return text[start : text.index("\n### ", start + 1)]
+
+
+def _doc_rows(block: str) -> list[tuple[str, str, str]]:
+    """The `` `input` | `djust` | `django` `` rows of a table; each cell is a
+    Python string literal, so a tab or quote is written exactly as Python does."""
+    rows = re.findall(r"^\| `(.+?)` \| `(.+?)` \| `(.+?)` \|$", block, re.M)
+    return [tuple(ast.literal_eval(cell) for cell in row) for row in rows]  # type: ignore[misc]
+
+
+def _differs_per_version() -> dict[str, int]:
+    """Corpus values where djust's `striptags` differs from each recorded
+    interpreter, measured the way the `htmlparser.rs` header measures them."""
+    data = load_fixture()
+    versions = data["versions"]
+    differs = dict.fromkeys(versions, 0)
+    for bucket in (data["stable"], data["unstable"]):
+        for value, answer in bucket.items():
+            got = _rust.render_template("{{ p|striptags }}", {"p": value})
+            per = answer if isinstance(answer, dict) else dict.fromkeys(versions, answer)
+            for version in versions:
+                recorded = per[version]
+                if recorded.startswith("OK:") and got != escape(recorded[3:]):
+                    differs[version] += 1
+    return differs
+
+
+def _eight_values() -> list[str]:
+    """The values 3.14.7 changed against 3.14.6: the abrupt-comment family."""
+    unstable = load_fixture()["unstable"]
+    return sorted(v for v, per in unstable.items() if per["3.14.6"] != per["3.14.7"])
+
+
+class TestDocumentedDifferences:
+    """`docs/website/core-concepts/templates.md` documents where `striptags`
+    differs from Django. Every value and figure there is re-derived from the
+    pinned fixture and the live filter, so the page and the pin cannot drift."""
+
+    def test_the_eight_values_are_exactly_the_documented_rows(self) -> None:
+        section = _documented_section()
+        rows = _doc_rows(section[section.index("Abruptly closed empty comments") :])
+        eight = _eight_values()
+        assert len(eight) == 8, eight
+        assert sorted(r[0] for r in rows) == eight
+        unstable = load_fixture()["unstable"]
+        for value, djust_says, django_newer in rows:
+            per = unstable[value]
+            # djust and every earlier CPython agree; both newer ones differ.
+            assert djust_answer(value) == "OK:" + djust_says
+            for older in ("3.12.13", "3.13.7", "3.14.6"):
+                assert per[older] == "OK:" + djust_says, (value, older)
+            for newer in ("3.13.15", "3.14.7"):
+                assert per[newer] == "OK:" + django_newer, (value, newer)
+            assert djust_says != django_newer
+
+    @pytest.mark.parametrize("value", _eight_values())
+    def test_this_interpreter_returns_the_documented_django_answer(self, value: str) -> None:
+        section = _documented_section()
+        row = next(
+            r
+            for r in _doc_rows(section[section.index("Abruptly closed empty comments") :])
+            if r[0] == value
+        )
+        newer = _closes_empty_comment_abruptly(sys.version_info[:3])
+        if not newer and sys.version_info[:3] < (3, 12, 10):
+            pytest.skip("the page's 'before' column starts at 3.12.10 (older parser)")
+        assert django_answer(value) == "OK:" + (row[2] if newer else row[1])
+
+    def test_the_end_of_input_examples_are_what_both_sides_return(self) -> None:
+        section = _documented_section()
+        block = section[section.index("`&` and `&#` at the end") : section.index("Abruptly closed")]
+        rows = _doc_rows(block)
+        assert len(rows) >= 3, rows
+        unstable = load_fixture()["unstable"]
+        for value, djust_says, django_newer in rows:
+            per = unstable[value]
+            assert djust_answer(value) == "OK:" + djust_says
+            assert per["3.13.7"] == "OK:" + djust_says
+            # Changed by 3.13.10 / 3.14.1, so 3.14.6 has it and 3.14.7 did not
+            # change it again: it is not one of the eight.
+            assert per["3.14.6"] == per["3.14.7"] == "OK:" + django_newer
+            assert djust_says != django_newer
+
+    def test_the_figures_table_is_the_measured_one(self) -> None:
+        section = _documented_section()
+        table = section[: section.index("- **Before 3.12.10**")]
+        documented: dict[str, tuple[int, float]] = {}
+        for versions, count, share in re.findall(
+            r"^\| ([\d., ]+) \| (\d+) \| ([\d.]+)% \|$", table, re.M
+        ):
+            for version in (v.strip() for v in versions.split(",")):
+                documented[version] = (int(count), float(share))
+        measured = _differs_per_version()
+        assert set(documented) == set(measured), (set(documented), set(measured))
+        for version, (count, share) in documented.items():
+            assert measured[version] == count, (version, measured[version], count)
+            assert round(count / 40, 1) == share, (version, count, share)
+        # "231 of the 239": the end-of-input change plus the eight.
+        assert documented["3.14.6"][0] == 231
+        assert documented["3.14.7"][0] == 231 + len(_eight_values())
+        assert "231 of the 239 values" in section and "**eight** of the 239" in section
+
+    def test_djust_does_not_follow_the_newer_comment_rule(self) -> None:
+        """The decision the page documents: the pinned rule stays."""
+        assert djust_answer("<!--->a<!--->") == "OK:"
+        assert djust_answer("<!-->x-->") == "OK:"
+
+    def test_the_documented_workaround_returns_djusts_django_answer(self) -> None:
+        """`{{ v|django_striptags }}` is Django's own `strip_tags`, whatever the
+        interpreter, and it differs from the built-in only on the documented
+        values (checked on the running interpreter)."""
+        name = "_dj_striptags_docs_django_striptags"
+
+        def django_striptags(value: Any) -> str:
+            return django_strip_tags(value)
+
+        _rust.register_custom_filter(name, django_striptags, True, False)
+        try:
+            for value in _eight_values():
+                got = _rust.render_template("{{ p|" + name + " }}", {"p": value})
+                assert got == conditional_escape(django_strip_tags(value)), value
+        finally:
+            _rust.unregister_custom_filter(name)
 
 
 class TestPinnedReferenceIsHonest:
