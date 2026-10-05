@@ -487,3 +487,66 @@ async def test_closing_the_stream_ends_the_live_mount_of_every_view_beside_the_p
     await stream.aclose()
     await _until(lambda: len(_calls("disconnected")) == 2, "the views' disconnected()")
     assert sorted(_calls("disconnected")) == ["w1", "w2"]
+
+
+# --------------------------------------------------------------------------- #
+# Rate limit and the binding of a page whose path looks like a slot
+# --------------------------------------------------------------------------- #
+
+
+async def test_a_burst_of_mount_frames_hits_the_connection_rate_limit():
+    session, key, stream = await _open()
+    try:
+        # Frames the mount refuses at once, so the burst outruns the bucket's refill
+        # (a real mount costs about 100 ms and would not).
+        for i in range(60):
+            await _post(
+                session,
+                key,
+                {"type": "mount", "view": "no.such.View", "url": "/page/", "target_id": "w%d" % i},
+            )
+        codes = []
+        while True:
+            try:
+                codes.append((await _frame(stream, "error", timeout=0.3)).get("code"))
+            except (AssertionError, asyncio.TimeoutError, StopAsyncIteration):
+                break
+        assert "rate_limited" in codes, "60 mounts in a burst were never throttled: %r" % (codes,)
+        # Nothing mounted (a sustained flood also ends the session, as on a socket).
+        assert session._slots == {}
+    finally:
+        await stream.aclose()
+
+
+async def test_unmount_frames_are_rate_limited_too():
+    session, key, stream = await _open()
+    try:
+        for _ in range(80):
+            await _post(session, key, {"type": "unmount", "target_id": "never"})
+        codes = set()
+        while True:
+            try:
+                codes.add((await _frame(stream, "error", timeout=0.3)).get("code"))
+            except (AssertionError, asyncio.TimeoutError, StopAsyncIteration):
+                break
+        assert "rate_limited" in codes, codes
+    finally:
+        await stream.aclose()
+
+
+async def test_a_page_whose_path_looks_like_a_slot_does_not_share_the_slots_binding():
+    from djust._exposure_sessions import request_binding
+
+    key = await sync_to_async(_fresh_key)()
+    base = await sync_to_async(_request)("GET", "/a", {}, key)
+    slotted = await sync_to_async(_request)("GET", "/a", {}, key)
+    slotted._djust_slot_target = "x"
+    lookalike = await sync_to_async(_request)("GET", "/a%23slot:x", {}, key)
+    assert lookalike.path == "/a#slot:x", lookalike.path
+    plain = await sync_to_async(request_binding)(base)
+    assert await sync_to_async(request_binding)(slotted) != plain
+    assert await sync_to_async(request_binding)(lookalike) != await sync_to_async(request_binding)(
+        slotted
+    )
+    # The page view's binding is what it was before slots existed.
+    assert plain.view == "/a"

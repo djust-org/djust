@@ -76,7 +76,7 @@ Two views that share a channel-layer group (two views of one class, the same `li
 
 ### Limits
 
-`LIVEVIEW_CONFIG["max_views_per_connection"]` (default `64`) bounds how many views one socket hosts besides the page view. A mount past the limit is refused. The address is client-supplied, so it is checked: 1 to 200 printable ASCII characters, with no whitespace and none of `" ' ` \ < >`. An address that does not pass is refused, never taken for a page mount.
+`LIVEVIEW_CONFIG["max_views_per_connection"]` (default `64`) bounds how many views one socket hosts besides the page view. A mount past the limit is refused. The address is client-supplied, so it is checked: 1 to 200 printable ASCII characters, with no whitespace and none of `" ' ` \ < >`. An address that does not pass is refused, never taken for a page mount. The limit is per connection, so what one browser can hold is the limit times its connections: over SSE, `DJUST_SSE_MAX_SESSIONS_PER_CLIENT` sessions (default 20) of up to 64 views each. Mounts and unmounts count against the connection's message rate limit like every other frame; a burst past it is answered `rate_limited` and a sustained flood closes the connection.
 
 ## Transports
 

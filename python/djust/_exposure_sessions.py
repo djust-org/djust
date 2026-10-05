@@ -156,7 +156,9 @@ def request_binding(request: Any) -> "StateBinding":
     route = request.path
     slot = getattr(request, "_djust_slot_target", None)
     if type(slot) is str and slot:
-        route = f"{route}#slot:{quote(slot, safe='')}"
+        # A page route always starts with "/", so the slot form (which starts
+        # with "slot:") cannot equal any page's, whatever characters its path holds.
+        route = f"slot:{quote(slot, safe='')}:{route}"
     return StateBinding(request.session.session_key, user_id, tenant_id, route)
 
 

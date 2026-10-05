@@ -590,6 +590,17 @@ class SSESession:
             await self.send_error("Invalid view address", **fields)
             return
         frame_type = data.get("type")
+        if frame_type in ("mount", "unmount"):
+            # Each mount runs a view's mount, render and state restore: bound
+            # the rate of them as the WebSocket bounds every frame (and this
+            # session bounds a navigation).
+            if not self._rate_limiter.check(frame_type):
+                await self.send_error(
+                    "Rate limit exceeded", code="rate_limited", **self._ref_fields(data)
+                )
+                if self._rate_limiter.should_disconnect():
+                    self.shutdown()
+                return
         if frame_type == "mount":
             await self._mount_slot(request, data)
             return
