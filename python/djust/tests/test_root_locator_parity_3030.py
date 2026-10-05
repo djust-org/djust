@@ -12,9 +12,8 @@ before a letter, ``/`` or ``!``.
 The Rust half is pinned in ``crates/djust_live/src/lib.rs``
 (``dj_root_content_range_2663::*_3030``).
 
-(#3031, dj-root vs dj-view precedence, is NOT changed here: aligning it moves
-the VDOM root of a dj-view-only parent that embeds a ``{% live_render %}``
-child with its own ``dj-root``. It is a 1.3 item.)
+(#3031, dj-root vs dj-view precedence and embedded-child ownership, was settled
+later for every locator at once: see ``test_root_selection_3031.py``.)
 """
 
 from __future__ import annotations
