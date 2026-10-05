@@ -141,9 +141,21 @@
     // This used to fall back to the first `[dj-click]` in the dialog, which
     // is whatever control happens to come first (a Delete or Confirm button,
     // or a Next button that needs its value) and fired it on Escape.
+    let _warnedNoCloser = false;
     function _closeModal(dialog) {
         const closer = dialog.querySelector('.dj-modal__close[dj-click]') ||
             dialog.querySelector('[data-dj-close][dj-click]');
+        if (!closer && !_warnedNoCloser && dialog.querySelector('[dj-click]')) {
+            // Migration signal for dialogs that relied on the old fallback:
+            // Escape now does nothing here instead of pressing a control that
+            // might be destructive. Once per page.
+            _warnedNoCloser = true;
+            console.warn(
+                '[djust] Escape in a role="dialog" no longer clicks its first dj-click ' +
+                'control. Mark the control that closes it with data-dj-close ' +
+                '(or use .dj-modal__close) to keep Escape-to-close.'
+            );
+        }
         return _dispatchFrom(closer);
     }
 

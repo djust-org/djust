@@ -279,7 +279,7 @@ While a `role="dialog"` modal is on the page:
   server's `open` state stays in sync — closing client-side only would desync
   it. The close control it uses is the stock modal's `.dj-modal__close`, or any
   `dj-click` control you mark `data-dj-close` in your own `role="dialog"`
-  markup; no other control is ever clicked on `Esc`. A handler closer to the
+  markup; no other control is ever clicked on `Esc` (a dialog with `dj-click` controls but no explicit close control logs a console warning once, instead of pressing one). A handler closer to the
   key (a hook that handles `Esc` or `Tab` itself and calls `preventDefault`)
   takes the key first, and the dialog layer leaves it alone.
 - **Nested dialogs** are handled with a stack: the focus trap and `Esc` always

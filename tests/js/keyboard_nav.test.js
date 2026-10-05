@@ -682,6 +682,35 @@ describe('keyboard-nav — Esc and Tab in a dialog with other dj-click controls'
         expect(calls(dom)).toEqual([]);
     });
 
+    it('says once, in the console, why Escape did nothing (the old fallback is gone)', () => {
+        const dom = createDom(`
+          <div role="dialog" aria-modal="true">
+            <button id="del" dj-click="delete_everything">Delete</button>
+          </div>`);
+        installHandleEventSpy(dom);
+        const warnings = [];
+        dom.window.console.warn = (...a) => warnings.push(a.join(' '));
+        const del = dom.window.document.getElementById('del');
+        del.focus();
+        press(dom, del, 'Escape');
+        press(dom, del, 'Escape');
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain('data-dj-close');
+        expect(calls(dom)).toEqual([]);
+    });
+
+    it('does not warn when there is an explicit close control, or when the dialog has no dj-click control at all', () => {
+        const dom = createDom(`
+          <div role="dialog" aria-modal="true" id="d1"><button id="x" class="dj-modal__close" dj-click="close">x</button></div>
+          <div role="dialog" aria-modal="true" id="d2"><button id="plain">plain</button></div>`);
+        installHandleEventSpy(dom);
+        const warnings = [];
+        dom.window.console.warn = (...a) => warnings.push(a.join(' '));
+        press(dom, dom.window.document.getElementById('x'), 'Escape');
+        press(dom, dom.window.document.getElementById('plain'), 'Escape');
+        expect(warnings).toEqual([]);
+    });
+
     it('a control marked data-dj-close is the close control of an app\'s own dialog', () => {
         const dom = createDom(`
           <div role="dialog" aria-modal="true">
