@@ -540,7 +540,8 @@ def _same_element_family(a: str, b: str) -> bool:
     return a == b or a.startswith(b + "-") or b.startswith(a + "-")
 
 
-#: (consumer class, rewritten text class) -> why it is safe. Each reviewed by reading
+#: Base class -> why its colourless border is safe. Covers the 20 (consumer, rewritten
+#: text class) same-element pairs the scan finds (``__`` children are different elements). Each reviewed by reading
 #: the rules: the modifier sets its own ``border-color``, so the colourless border of the
 #: base never falls back to the (now ``-text``) ``color``.
 REVIEWED_COLOURLESS_BORDERS = {
