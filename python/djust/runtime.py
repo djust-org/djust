@@ -2762,12 +2762,18 @@ class SSESessionTransport:
     # ------------------------------------------------------------------ #
 
     def on_view_instantiated(self, view: Any) -> None:
-        """No-op for SSE (#1915, Finding B).
+        """Stamp the slot a view mounted beside the page view lives in (#3252).
 
         SSE has no WS consumer to back-reference; the SSE-transport identity
         stamp (``_sse_session_id`` / ``_sse_session`` / query string) already
-        lands in :meth:`on_view_mounted`. Nothing to do here."""
-        return None
+        lands in :meth:`on_view_mounted`. The page view has no slot."""
+        slot_target = getattr(self._session, "target_id", None)
+        if isinstance(slot_target, str) and slot_target:
+            view._djust_slot_target = slot_target
+
+    def hosts_other_views(self) -> bool:
+        """Whether this session has hosted views besides one (#3252); sticky."""
+        return bool(getattr(self._session, "_hosted_several_views", False))
 
     def uses_actors_for_mount(self, view: Any) -> bool:
         """SSE never mounts through actors (#1915, Finding D).
