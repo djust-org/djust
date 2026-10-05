@@ -454,6 +454,61 @@ describe('draft mode: a slot restores its draft on its first mount only (#3351)'
     });
 });
 
+describe('draft mode: a removed slot that comes back mounts as new (#3351)', () => {
+    const inner = FORM('slotk', '<input type="text" name="sf" id="sf" data-draft="true" value="">');
+    const frame = (html) => ({
+        type: 'mount', view: 'test.W', target_id: 'w1', version: 1, html, has_ids: true,
+    });
+    const container = (w) => {
+        const el = w.document.createElement('div');
+        el.id = 'w1';
+        el.setAttribute('dj-view', 'test.W');
+        el.setAttribute('data-djust-target', 'w1');
+        el.innerHTML = inner;
+        return el;
+    };
+
+    it('restores its draft again after the slot was unmounted and re-inserted', async () => {
+        const dom = new JSDOM(
+            `<div dj-root dj-view="test.Editor"><p>page</p></div>`,
+            { runScripts: 'dangerously', url: 'http://localhost/' });
+        const w = dom.window;
+        try {
+            w.DJUST_USE_WEBSOCKET = false;
+            w.WebSocket = class { constructor() { this.readyState = 0; } send() {} close() {} };
+            w.localStorage.setItem('djust_draft_slotk', JSON.stringify({ data: { sf: 'olddraft' }, timestamp: 1 }));
+            w.eval(clientCode);
+            w.document.dispatchEvent(new w.Event('DOMContentLoaded'));
+            await initialized(w);
+            const socket = new w.djust.LiveViewWebSocket();
+            socket.primaryViewPath = 'test.Editor';
+            const settle = async () => {
+                for (let i = 0; i < 10; i++) await new Promise((resolve) => w.setTimeout(resolve, 0));
+            };
+
+            w.document.body.appendChild(container(w));
+            await socket.handleMessage(frame(inner));
+            await settle();
+            expect(w.document.querySelector('#sf').value).toBe('olddraft');
+
+            // The view's container leaves the page and the client confirms it.
+            w.document.getElementById('w1').remove();
+            expect(socket.unmountView('w1')).toBe(false); // socket is down: nothing to send, slot forgotten
+            expect(w.djust.viewSlots.mounted()).toEqual([]);
+
+            // Later the same id comes back (another step of the page): a patch
+            // inserts its container, then its mount morphs it against the
+            // server's HTML.
+            w.document.body.appendChild(container(w));
+            w.djust.reinitAfterDOMUpdate();
+            expect(w.document.querySelector('#sf').value).toBe('olddraft'); // first appearance
+            await socket.handleMessage(frame(inner.replace('value=""', 'value="SERVER"')));
+            await settle();
+            expect(w.document.querySelector('#sf').value).toBe('olddraft'); // a first mount again
+        } finally { dom.window.close(); }
+    });
+});
+
 describe('draft mode: a draft keeps the fields the page no longer holds (#3351)', () => {
     const step1 = text('s1');
     const step2 = text('s2');

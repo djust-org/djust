@@ -190,8 +190,9 @@ and the keys of fields you later remove from the template, stay until
 `self.clear_draft()` (a successful submit) removes the whole draft. **Nothing
 else clears a draft: not logging out, not signing in as someone else, not
 leaving the page.** On a shared browser the next user sees the previous user's
-draft unless you call `clear_draft()` or key the draft per user
-(`draft_key`).
+draft unless you call `clear_draft()` or key the draft per user by overriding
+`get_draft_key()` (`draft_key` is a fixed class attribute, the same for every
+user).
 
 - Two roots with the same `data-draft-key` write the same draft and overwrite
   each other's fields of the same name. Give each root its own key.

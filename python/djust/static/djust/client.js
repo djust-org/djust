@@ -11774,8 +11774,10 @@ const _SLOT_FRAME_TYPES = new Set([
     'mount', 'patch', 'html_update', 'html_recovery', 'embedded_update', 'child_update', 'sticky_update',
 ]);
 
-// Slots that have had a mount in this document, kept across reconnects (the
-// map of mounted slots is cleared when the socket drops).
+// Slots that have had a mount and are still around, kept across a reconnect (a
+// reconnect re-mounts them over their existing container). Dropped with the
+// slot (forgetSlot / clearSlots), so a container inserted later under the same
+// id mounts as new.
 const _slotsMountedBefore = new Set();
 
 function _slotSelector(targetId) {
@@ -11893,12 +11895,16 @@ function watchSlotContainers() {
 }
 
 function forgetSlot(targetId) {
+    // Gone for good, not reconnecting: a container later inserted under the same
+    // id is a first mount again (it restores its draft).
+    _slotsMountedBefore.delete(targetId);
     _mountedSlots.delete(targetId);
     _slotVersions.delete(targetId);
 }
 
 /** Forget every slot (the page is replaced, or the socket is gone). */
 function clearSlots() {
+    _slotsMountedBefore.clear();
     _mountedSlots.clear();
     _slotVersions.clear();
     _activeSlot = null;
