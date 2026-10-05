@@ -200,6 +200,10 @@ function _warnDeadScripts(root) {
 }
 
 function storeSignedSnapshot(data, primaryViewPath) {
+    // A view mounted beside the page view (#3252) shares the page's route and
+    // its view class: its frames must neither replace nor revoke the page
+    // view's token. The server ships none for it either.
+    if (typeof data.target_id === 'string' && data.target_id) return;
     // Mounts, successful primary-view event acknowledgements and primary-view
     // server-turn frames carry navigation state. Child frames cannot replace
     // it, and error frames may only revoke it.

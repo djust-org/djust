@@ -112,7 +112,7 @@ What carries over and what does not:
 - A child that did not opt in is re-created on each request, as it is on every parent render over HTTP: its state does not accumulate between events (two `inc` events on a counter child both answer `count=1`). Routing works; persistence does not. Give a child that must keep state `sticky=True` with state persistence, or use the WebSocket or SSE transport.
 - Each event re-renders the page once to register its children: a second `get_context_data` and a mount per child. Fine for a page; worth knowing for a page with many children.
 - An id that names no child of the page, an [explicit-exposure](../state/explicit-exposure.md) child, and any child of an explicit-exposure page are refused with `{"error": "Embedded view not found"}`. An explicit child's turn is authorized against the mount binding of a socket session, which a stateless request has not.
-- Views mounted beside the page view (lazy and batched views, see [Several LiveViews on One Page](multiple-views.md)) need the WebSocket: the client refuses their events over this fallback instead of posting them to the page.
+- Views mounted beside the page view (lazy and batched views, see [Several LiveViews on One Page](multiple-views.md#transports)) are live over a WebSocket and over the SSE transport, which hosts them as views of its own. The page-POST fallback (a browser without `EventSource`) cannot host them: a lazy view is not hydrated, the client reports it (`djust:error`, `code: "view_unavailable"`), and an event from inside one is refused instead of being posted to the page.
 
 ## Behavior Differences
 

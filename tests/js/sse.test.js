@@ -35,6 +35,9 @@ global.handleServerResponse = vi.fn();
 // built bundle, so provide it here the same way as handleServerResponse.
 global.stripClientOwnedFrameFlags = vi.fn();
 global.storeSignedSnapshot = vi.fn();
+// Siblings from 13b-view-slots.js (#3252): events name the view they belong to.
+global.slotIdFor = vi.fn(() => null);
+global.slotFrameFields = (targetId) => (targetId ? { target_id: targetId } : {});
 global.globalLoadingManager = { stopLoading: vi.fn() };
 global.dispatchPushEventToHooks = vi.fn();
 
