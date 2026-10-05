@@ -34,6 +34,15 @@
 //! | 3.12.9 | 992 | 24.8% |
 //! | 3.12.13, 3.13.7 | 0 | — |
 //! | 3.14.6 | 231 | 5.8% |
+//! | 3.13.15, 3.14.7 | 239 | 6.0% |
+//!
+//! The last two rows are the same two behaviours at different release points,
+//! not 3.14 against 3.13. The end-of-input `&` / `&#` handling (231 values)
+//! arrived in 3.13.10 and 3.14.1, so every later 3.13 / 3.14 patch release has
+//! it. 3.13.15 and 3.14.7 add eight more values: an abruptly closed empty
+//! comment (`<!-->`, `<!--->`) now ends at its first `>`, where every earlier
+//! release searched on for a later `-->` (CI run 37169161029). djust keeps the earlier
+//! comment rule.
 //!
 //! **This is djust's own pinned behaviour on every host, not a claim about the
 //! running interpreter.** djust deliberately does not branch on
@@ -42,7 +51,7 @@
 //! and Django's own `strip_tags` is disclaimed as "not guaranteed to produce
 //! safe output" regardless. That decision is #2286;
 //! `python/tests/fixtures/striptags_reference_2273.json` records every supported
-//! interpreter's answer per value (3.12.9, 3.12.13, 3.13.7, 3.14.6), splitting
+//! interpreter's answer per value (3.12.9, 3.12.13, 3.13.7, 3.13.15, 3.14.6, 3.14.7), splitting
 //! them into a `stable` set asserted on every runner and an `unstable` set that
 //! keeps the moving reference visible in the repo (#2273).
 //!

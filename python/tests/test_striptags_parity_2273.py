@@ -53,14 +53,38 @@ value may only sit in `unstable` if the recorded CPythons genuinely disagree,
 and the `stable` half is re-derived from the running interpreter's real Django
 on every run.
 
+`html.parser` also moves inside a minor line. The `&` / `&#` end-of-input change
+that the table above attributes to "3.14" first shipped in **3.13.10** and
+**3.14.1** (3.13.7-3.13.9 and 3.14.0 still behave like 3.12.13), and the patch
+releases **3.13.15** and **3.14.7** moved eight more values (CI run 37169161029). Their
+`parse_comment` now lets an *abruptly closed empty comment* -- `<!-->` or
+`<!--->` right after the opener, which HTML5 ends at the first `>` -- win over a
+later `-->`; before, the whole span up to that later `-->` was one comment:
+
+    <!--->a<!--->     3.12.13 / 3.13.7 / 3.14.6 : ``       3.13.15 / 3.14.7 : `a`
+
+Six of those eight had been in `stable`, so they left it and now sit in
+`unstable` with every version's answer. `TestAbruptEmptyCommentClose` pins the
+split. djust keeps the older answer, for two reasons: the pinned behaviour is
+the contract and a CPython release does not change it, and 3.12 and every older
+3.13 / 3.14 patch release that a deployment may still run behave that way. Following 3.13.15
+is a one-function change in `htmlparser.rs` (`comment_close`, which would try the
+abrupt form first) and a fixture
+regeneration; it is a decision about which CPython `striptags` tracks, not a
+test fix. Whatever the next CPython change is, the same two steps apply:
+regenerate with every CI interpreter (`scripts/gen-striptags-reference.py`),
+then decide whether the port follows.
+
 Port target
 -----------
-djust implements the **3.12.10+ / 3.13** tokenizer. The 3.14 delta is confined
-to `&`/`&#` at end of input and is tracked separately; on the corpus djust
-matches 3.13 on 1149 of the 1316 unstable values and 3.14 on 934, the remainder
-being shared-tokenizer changes (comment close, `locatetagend`, the widened
-CDATA element set) that also affect the truncators and are deliberately not in
-this PR's scope.
+djust implements the **3.12.10+ / 3.13** tokenizer (the pre-3.13.15 comment
+close, see above). The `&`/`&#` end-of-input change (3.13.10+ / 3.14.1+) is not
+ported. Measured over the 1289 `unstable` values in the fixture, djust's answer
+equals the recorded answer for 3.12.13 and 3.13.7 on all 1289, for 3.14.6 on
+1058, for 3.13.15 and 3.14.7 on 1050 and for 3.12.9 on 213. The remainder are
+shared-tokenizer changes (comment close, `locatetagend`, the widened CDATA
+element set, the end-of-input handling) that also affect the truncators and are
+deliberately not in this PR's scope.
 
 One chain divergence that remains is NOT `striptags`: `|escape|striptags`
 (#2281). It is pinned in `TestKnownRemainingDivergences` together with a proof
@@ -567,6 +591,70 @@ class TestPinnedDifferential:
         assert sum("<!--" in v for v in values) > 20, "no comments"
         changed = sum(1 for v in values if djust_answer(v) != "OK:" + v)
         assert changed > len(values) // 3, f"only {changed} values were altered"
+
+
+def _python_version(version: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in version.split("."))
+
+
+def _closes_empty_comment_abruptly(version: tuple[int, ...]) -> bool:
+    """Does this CPython end `<!-->` / `<!--->` at the first `>` (CI run 37169161029)?
+
+    Introduced in 3.13.15 and 3.14.7; 3.12 and every earlier 3.13 / 3.14 patch
+    release keep the older "search for a later `-->`" rule.
+    """
+    if version >= (3, 14):
+        return version >= (3, 14, 7)
+    return (3, 13, 15) <= version
+
+
+# Values the corpus holds where the two rules give different answers.
+ABRUPT_EMPTY_COMMENT_VALUES = [
+    "<!--->-->",
+    "<!--->a<!--->",
+    "<!--->< b><b x=\t<!DOCTYPE html><!--->",
+    "<!---><?pi>&#-->",
+    "<!--><br/><0>--><br/>",
+    "<script><!--->&#65<<>><!-- c --></>",
+]
+
+
+class TestAbruptEmptyCommentClose:
+    """The one place a CPython PATCH release moved `html.parser` under us.
+
+    djust follows the older rule; see "The reference moves" above. This pins
+    that the split is real, recorded, and what the interpreter running the
+    test actually does, so a further CPython change turns this red and names
+    the value instead of passing silently.
+    """
+
+    @pytest.mark.parametrize("value", ABRUPT_EMPTY_COMMENT_VALUES)
+    def test_the_fixture_records_the_split(self, value: str) -> None:
+        recorded = load_fixture()["unstable"][value]
+        older = {
+            a for v, a in recorded.items() if not _closes_empty_comment_abruptly(_python_version(v))
+        }
+        newer = {
+            a for v, a in recorded.items() if _closes_empty_comment_abruptly(_python_version(v))
+        }
+        assert len(older) == 1 and len(newer) == 1 and older != newer, recorded
+        # djust follows the older rule, deliberately.
+        assert djust_answer(value) in older
+
+    @pytest.mark.parametrize("value", ABRUPT_EMPTY_COMMENT_VALUES)
+    def test_this_interpreter_matches_its_group(self, value: str) -> None:
+        recorded = load_fixture()["unstable"][value]
+        mine = _closes_empty_comment_abruptly(sys.version_info[:3])
+        group = {
+            a
+            for v, a in recorded.items()
+            if _closes_empty_comment_abruptly(_python_version(v)) == mine
+        }
+        assert django_answer(value) in group, (
+            f"{value!r} on python {'.'.join(map(str, sys.version_info[:3]))}: "
+            f"django={django_answer(value)!r}, recorded for this rule: {sorted(group)}. "
+            f"html.parser moved again; regenerate scripts/gen-striptags-reference.py"
+        )
 
 
 class TestPinnedReferenceIsHonest:
