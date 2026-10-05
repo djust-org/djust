@@ -28,9 +28,9 @@ sets, rather than the parallel-path drift a second tokenizer would be (#1646).
 
 The reference moves; the port does not
 --------------------------------------
-`html/parser.py` was rewritten for HTML5-spec alignment in **CPython 3.12.10**
-and changed again in **3.14**, so the interpreters this project's CI matrix
-runs do not agree with each other:
+`html/parser.py` was rewritten for HTML5-spec alignment in **CPython 3.12.12**
+(3.12.9 through 3.12.11 share the old parser) and changed again in **3.14**, so
+the interpreters this project's CI matrix runs do not agree with each other:
 
     3.12.9   vs 3.12.13 : 1076 / 4000 corpus values differ
     3.12.13  vs 3.13.7  :    0
@@ -78,7 +78,7 @@ then decide whether the port follows.
 
 Port target
 -----------
-djust implements the **3.12.10+ / 3.13** tokenizer (the pre-3.13.15 comment
+djust implements the **3.12.12+ / 3.13** tokenizer (the pre-3.13.15 comment
 close, see above). The `&`/`&#` end-of-input change (3.13.10+ / 3.14.1+) is not
 ported. Measured over the 1289 `unstable` values in the fixture, djust's answer
 equals the recorded answer for 3.12.13 and 3.13.7 on all 1289, for 3.14.6 on
@@ -736,8 +736,8 @@ class TestDocumentedDifferences:
             if r[0] == value
         )
         newer = _closes_empty_comment_abruptly(sys.version_info[:3])
-        if not newer and sys.version_info[:3] < (3, 12, 10):
-            pytest.skip("the page's 'before' column starts at 3.12.10 (older parser)")
+        if not newer and sys.version_info[:3] < (3, 12, 12):
+            pytest.skip("the page's 'before' column starts at 3.12.12 (older parser)")
         assert django_answer(value) == "OK:" + (row[2] if newer else row[1])
 
     def test_the_end_of_input_examples_are_what_both_sides_return(self) -> None:
@@ -757,7 +757,7 @@ class TestDocumentedDifferences:
 
     def test_the_figures_table_is_the_measured_one(self) -> None:
         section = _documented_section()
-        table = section[: section.index("- **Before 3.12.10**")]
+        table = section[: section.index("- **Before 3.12.12.**")]
         documented: dict[str, tuple[int, float]] = {}
         for versions, count, share in re.findall(
             r"^\| ([\d., ]+) \| (\d+) \| ([\d.]+)% \|$", table, re.M
@@ -856,7 +856,7 @@ class TestPinnedReferenceIsHonest:
         CPythons disagree about.
 
         This is the guard for the failure that made this PR red in CI: a
-        literal whose answer moved in 3.12.10 passes on the repo's 3.12.9
+        literal whose answer moved in 3.12.12 passes on the repo's 3.12.9
         `.venv` and fails on every CI interpreter. Three such values were in
         this module's `UNREPORTED_VALUES` list, put there by hand.
         """
@@ -881,7 +881,7 @@ class TestPinnedReferenceIsHonest:
         versions = load_fixture()["versions"]
         assert len(versions) >= 2, versions
         # The split is only meaningful if the captured versions actually
-        # straddle the 3.12.10 html.parser rewrite.
+        # straddle the 3.12.12 html.parser rewrite.
         assert len(load_fixture()["unstable"]) > 100, (
             f"only {len(load_fixture()['unstable'])} unstable values — the capture "
             f"probably used interpreters that all share one html.parser"
