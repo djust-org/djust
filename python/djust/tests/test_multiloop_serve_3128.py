@@ -323,7 +323,15 @@ def test_one_loop_reaching_limit_max_requests_stops_the_process(tmp_path):
     assert out.count("shutdown on djust-loop-") == 2, out
 
 
-def _uds_restart_cycle(cmd, env, uds, attempt, startup_timeout=20, stop_timeout=20):
+def _child_output(log):
+    # Read through pread: the child shares the file's offset (``stdout=log``), and
+    # a seek here would make its next write land in the wrong place.
+    return os.pread(log.fileno(), 1 << 20, 0).decode(errors="replace")
+
+
+def _uds_restart_cycle(
+    cmd, env, uds, attempt, startup_timeout=20, stop_timeout=20, ready_marker=None
+):
     # A file cannot fill up and block the child while we wait for its socket.
     with tempfile.TemporaryFile(mode="w+") as log:
         proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, text=True, env=env)
@@ -334,6 +342,14 @@ def _uds_restart_cycle(cmd, env, uds, attempt, startup_timeout=20, stop_timeout=
                 assert proc.poll() is None, "server exited before creating the UNIX socket"
                 assert time.monotonic() < deadline, "server did not create the UNIX socket"
                 time.sleep(0.1)
+            # The socket file appears when the server binds, BEFORE it installs its
+            # signal handlers: a SIGTERM in that window kills it with status -15
+            # and leaves the socket behind (#3128 follow-up). Wait until the
+            # server says it is running, which it does only after the handlers.
+            while ready_marker is not None and ready_marker not in _child_output(log):
+                assert proc.poll() is None, "server exited before it reported running"
+                assert time.monotonic() < deadline, f"server never reported {ready_marker!r}"
+                time.sleep(0.05)
             phase = "shutdown"
             proc.send_signal(signal.SIGTERM)
             code = proc.wait(timeout=stop_timeout)
@@ -370,7 +386,7 @@ def test_a_unix_socket_is_removed_on_exit_so_a_restart_can_bind(tmp_path):
             "--uds", uds, "--app-dir", str(tmp_path), "--lifespan", "off", "--allow-gil",
         ]  # fmt: skip
         for attempt in (1, 2):  # the second start must bind the same path
-            _uds_restart_cycle(cmd, env, uds, attempt)
+            _uds_restart_cycle(cmd, env, uds, attempt, ready_marker="Uvicorn running on")
 
 
 @pytest.mark.parametrize(
