@@ -153,9 +153,31 @@ const lazyHydrationManager = {
 
         if (globalThis.djustDebug) console.log(`[LiveView:lazy] Hydrating: ${viewPath}`);
 
+        // Over SSE the view mounts with a frame of its own beside the page
+        // view, once the page view is mounted (#3252): the stream is the
+        // session's, there is no socket to connect.
+        if (liveViewWS && liveViewWS.transportName === 'sse' && liveViewWS.enabled) {
+            if (liveViewWS.viewMounted) {
+                this.mountElement(element, viewPath);
+            } else {
+                this.pendingMounts.push({ element, viewPath });
+            }
+            return;
+        }
+
         // Ensure WebSocket is connected (skip in HTTP-only mode)
         if (window.DJUST_USE_WEBSOCKET === false) {
-            if (globalThis.djustDebug) console.log('[LiveView:lazy] HTTP-only mode — skipping WebSocket for lazy element');
+            // No stream either (a browser without EventSource, or a page with no
+            // page view for a session to mount): the view cannot go live. Say
+            // so rather than leave a container that looks interactive and is
+            // not (#3252).
+            if (globalThis.djustDebug) console.log('[LiveView:lazy] HTTP-only mode — a lazy view cannot hydrate');
+            this.hydratedElements.delete(elementId);
+            window.dispatchEvent(new CustomEvent('djust:error', {detail: {
+                error: `The lazy view "${viewPath}" was not mounted: it needs the WebSocket or SSE transport.`,
+                code: 'view_unavailable',
+                traceback: null,
+            }}));
             return;
         }
         if (!liveViewWS || !liveViewWS.enabled) {
