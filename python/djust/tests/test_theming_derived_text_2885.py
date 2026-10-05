@@ -315,6 +315,15 @@ def _text_rules():
             yield source, selectors, decls
 
 
+#: ``.dj-status-dot`` paints ``background: currentColor``, so these ``color``
+#: declarations are FILLS and keep the fill token on purpose (pinned below).
+STATUS_DOT_FILLS = {
+    ".dj-status-dot-success",
+    ".dj-status-dot-info",
+    ".dj-status-dot-warning",
+}
+
+
 def _bare_fill_outside_a_text_wrapper(value: str) -> bool:
     """True if ``value`` reads a fill token that is not the fallback of its ``-text`` token."""
     for match in _FILL_VAR.finditer(value):
@@ -332,7 +341,9 @@ def test_no_text_colour_is_a_fill():
     offenders = [
         (source, selectors, decls["color"])
         for source, selectors, decls in _text_rules()
-        if "color" in decls and _bare_fill_outside_a_text_wrapper(decls["color"])
+        if "color" in decls
+        and _bare_fill_outside_a_text_wrapper(decls["color"])
+        and not set(selectors) <= STATUS_DOT_FILLS
     ]
     assert not offenders, offenders[:8]
     converted = [1 for _, _, d in _text_rules() if re.search(r"--\w+-text", d.get("color", ""))]
@@ -489,3 +500,130 @@ def test_editor_recomputes_every_derived_text_colour_and_exports_none():
         assert f'"{fill}"' in fills.group(1)
     token_fields = re.search(r"var TOKEN_FIELDS = \[(.*?)\];", html, re.S)
     assert token_fields and "_text" not in token_fields.group(1)
+
+
+# --- the colour of a rewritten rule must not leak into a fill via currentColor --
+#
+# ``color`` is not only text: ``background: currentColor`` (a dot), ``fill``/``stroke:
+# currentColor`` (an icon), ``box-shadow``/``outline`` with no colour and a ``border``
+# with no colour all take the element's ``color``. Switching a modifier's ``color`` to a
+# ``*-text`` colour therefore recolours those fills too (the status dots did, #2885
+# review). So for every rule whose ``color`` was switched, no sibling rule of the SAME
+# element (same class, or the base class it modifies) may paint a fill from currentColor,
+# unless the modifier sets that colour itself.
+
+_COLOUR_WORD = re.compile(r"hsl|rgb|#[0-9a-f]{3}|var\(|transparent|currentcolor|inherit", re.I)
+
+
+def _currentcolor_consumers(decls: dict[str, str]) -> set[str]:
+    kinds = set()
+    for prop, value in decls.items():
+        if "currentcolor" in value.lower() and prop not in ("color",):
+            kinds.add(prop)
+        if re.fullmatch(r"border(-(top|right|bottom|left))?|outline", prop) and re.search(
+            r"\b(solid|dashed|dotted|double)\b", value
+        ):
+            if not _COLOUR_WORD.search(value):
+                kinds.add(f"{prop} (no colour)")
+    return kinds
+
+
+def _element_classes(selector: str) -> set[str]:
+    compound = re.split(r"[ >+~]+", selector.strip())[-1]
+    compound = re.sub(r"::?[\w-]+(\([^)]*\))?", "", compound)
+    return set(re.findall(r"\.([\w-]+)", compound))
+
+
+def _same_element_family(a: str, b: str) -> bool:
+    """``a`` and ``b`` can be the same element: equal, or one is a modifier of the other
+    (``badge`` / ``badge-success``); ``__`` marks a child element, which is not."""
+    return a == b or a.startswith(b + "-") or b.startswith(a + "-")
+
+
+#: (consumer class, rewritten text class) -> why it is safe. Each reviewed by reading
+#: the rules: the modifier sets its own ``border-color``, so the colourless border of the
+#: base never falls back to the (now ``-text``) ``color``.
+REVIEWED_COLOURLESS_BORDERS = {
+    "alert": "alert-info/-success/-warning set border-color",
+    "badge": "badge-* variants set border-color",
+    "flash-item": "flash-item-* variants set border-color",
+    "message": "message-* variants set border-color",
+    "toast": "toast-success/-warning/-info set border-color",
+    "dj-segmented-progress__indicator": "each step state sets border-color",
+}
+
+
+def _all_rules():
+    for path in STATIC_CSS:
+        for selectors, decls in _rules(path.read_text()):
+            yield path.name, selectors, decls
+
+
+def test_a_rewritten_colour_does_not_recolour_a_currentcolor_fill():
+    text_classes: dict[str, set[str]] = {}
+    for name, selectors, decls in _all_rules():
+        if re.search(r"--(primary|brand|info|success|warning)-text", decls.get("color", "")):
+            for selector in selectors:
+                for cls in _element_classes(selector):
+                    text_classes.setdefault(cls, set()).add(f"{name}: {selector}")
+    assert len(text_classes) > 100  # not vacuous
+
+    leaks = []
+    for name, selectors, decls in _all_rules():
+        kinds = _currentcolor_consumers(decls)
+        if not kinds:
+            continue
+        for selector in selectors:
+            for consumer in _element_classes(selector):
+                for text_cls in text_classes:
+                    if not _same_element_family(consumer, text_cls):
+                        continue
+                    kinds_left = {
+                        k
+                        for k in kinds
+                        if not (
+                            k.endswith("(no colour)") and consumer in REVIEWED_COLOURLESS_BORDERS
+                        )
+                    }
+                    if kinds_left:
+                        leaks.append((name, selector, sorted(kinds_left), text_cls))
+    assert not leaks, leaks[:6]
+
+
+def test_the_reviewed_colourless_borders_really_set_their_own_colour():
+    """The allow-list above is only true while every modifier names its border colour."""
+    modifiers = {
+        "alert": ("alert-info", "alert-success", "alert-warning"),
+        "badge": ("badge-online", "badge-warning", "badge-info", "badge-default"),
+        "flash-item": ("flash-item-info", "flash-item-success", "flash-item-warning"),
+        "message": ("message-info", "message-success", "message-warning"),
+        "toast": ("toast-success", "toast-warning", "toast-info"),
+        "dj-segmented-progress__indicator": ("dj-segmented-progress__indicator",),
+    }
+    rules = list(_all_rules())
+    for base, names in modifiers.items():
+        assert base in REVIEWED_COLOURLESS_BORDERS
+        for modifier in names:
+            has_border_colour = any(
+                modifier in {c for s in selectors for c in _element_classes(s)}
+                and any(
+                    re.fullmatch(r"border(-(top|right|bottom|left))?-color", prop)
+                    or (prop.startswith("border") and _COLOUR_WORD.search(value))
+                    for prop, value in decls.items()
+                )
+                for _name, selectors, decls in rules
+            )
+            assert has_border_colour, f".{modifier} no longer sets a border colour"
+
+
+def test_the_status_dots_keep_painting_with_the_fill():
+    """``.dj-status-dot`` paints ``background: currentColor``, so its colour modifiers
+    must stay on the fill: a dot is a fill, not text (#2885 review)."""
+    css = (ROOT / "components/static/djust_components/components-classes.css").read_text()
+    seen = set()
+    for selectors, decls in _rules(css):
+        for variant in ("success", "info", "warning", "danger"):
+            if f".dj-status-dot-{variant}" in selectors:
+                assert "-text" not in decls["color"], (variant, decls["color"])
+                seen.add(variant)
+    assert seen == {"success", "info", "warning", "danger"}

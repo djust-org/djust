@@ -86,19 +86,19 @@
 
 /* Color variants */
 .dj-status-dot-success {
-  color: var(--dj-status-dot-success, hsl(var(--success-text, var(--success, 160 84% 39%))));
+  color: var(--dj-status-dot-success, hsl(var(--success, 160 84% 39%)));
 }
 
 .dj-status-dot-info {
-  color: var(--dj-status-dot-info, hsl(var(--primary-text, var(--primary, 222 47% 51%))));
+  color: var(--dj-status-dot-info, hsl(var(--primary, 222 47% 51%)));
 }
 
 .dj-status-dot-warning {
-  color: var(--dj-status-dot-warning, hsl(var(--warning-text, var(--warning, 48 96% 53%))));
+  color: var(--dj-status-dot-warning, hsl(var(--warning, 48 96% 53%)));
 }
 
 .dj-status-dot-danger {
-  color: var(--dj-status-dot-danger, hsl(var(--destructive-text, var(--destructive, 0 84% 60%))));
+  color: var(--dj-status-dot-danger, hsl(var(--destructive, 0 84% 60%)));
 }
 
 .dj-status-dot-muted {

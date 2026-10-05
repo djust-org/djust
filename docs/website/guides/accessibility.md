@@ -459,8 +459,12 @@ status and trend text, and the auth links.
 Each is the fill's hue and saturation with only the **lightness** moved, to the nearest
 value that reaches 4.5:1 on the page, on a card and on the fill's own 10% and 15%
 washes. A fill that already reads is returned unchanged, so those presets render exactly
-as before, and **the fills never move**: `--primary`, `--success`, ... still paint
-backgrounds, borders, dots and focus rings, and their labels are untouched. No preset
+as before, and **the fill tokens never move**: `--primary`, `--success`, ... still paint
+backgrounds, borders, dots and focus rings (the status dots keep the fill), and their
+labels are untouched. One thing follows the text colour on purpose: anything the CSS draws
+from `currentColor` on a text element, such as a link's underline or an inline icon's stroke,
+takes the text colour of that element. A component that draws a fill from `currentColor`
+must keep its `color` on the fill token (as `.dj-status-dot-*` does). No preset
 sets the text colours; `djust.theming` computes them for each mode and emits them with
 the other variables (`ThemeTokens.primary_text` in Python, `--primary-text` in CSS,
 `text-primary-text` in Tailwind). The same solver derives all six (`destructive` too).
