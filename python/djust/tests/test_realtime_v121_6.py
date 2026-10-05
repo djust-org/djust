@@ -3,7 +3,8 @@
 * #2968 — the client's 30 s ``ping`` refreshes a tracked presence, so users
   no longer drop out of ``list_presences()`` after ~60 s on an open page.
 * #3007 — the lifecycle schema no longer advertises LiveView hooks the
-  server never calls.
+  server never calls (``connected()`` / ``disconnected()`` became real hooks
+  later in 1.3, see ``test_lifecycle_contract_3007.py``).
 * #3003 — ``@rate_limit`` documents that rejections count toward the 4429
   disconnect.
 
@@ -129,8 +130,17 @@ class TestLifecycleSchema:
         from djust.schema import LIFECYCLE_METHODS
 
         names = {m["name"] for m in LIFECYCLE_METHODS}
-        assert not names & {"connected", "disconnected", "unmount"}, names
-        assert {"mount", "get_context_data", "handle_params", "handle_tick"} <= names
+        # ``connected`` / ``disconnected`` are real since #3007 (pinned in
+        # test_lifecycle_contract_3007.py); nothing ever calls ``unmount``.
+        assert "unmount" not in names, names
+        assert {
+            "mount",
+            "connected",
+            "get_context_data",
+            "handle_params",
+            "handle_tick",
+            "disconnected",
+        } <= names
 
     def test_every_listed_hook_is_called_by_the_framework(self):
         """Each schema entry names a method the framework really invokes —

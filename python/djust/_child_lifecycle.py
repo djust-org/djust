@@ -1,12 +1,20 @@
 """Owned-subtree disposal for the gated explicit lifecycle."""
 
+import inspect
 import logging
-from typing import Any
+import weakref
+from typing import Any, Callable, Optional
+
+from asgiref.sync import sync_to_async
 
 from .mixins.async_work import AsyncWorkMixin
 from .mixins.waiters import WaiterMixin
 
 logger = logging.getLogger(__name__)
+
+#: Set on a root view when it reaches the connected phase of its live mount;
+#: popped by whoever runs ``disconnected()``, so the hook runs at most once.
+_CONNECTED_FLAG = "_djust_connected_phase"
 
 
 def dispose_child_subtree(child: Any, *, navigation: bool = False) -> None:
@@ -185,6 +193,130 @@ def untrack_view_presence(view: Any) -> None:
         log_failure_for(
             logger, (view,), exc, "Error cleaning up presence: %s", exc, level="warning"
         )
+
+
+#: Hook names a view can define: ``(class, name)`` pairs already warned about.
+_HOOK_WARNED: "weakref.WeakKeyDictionary[type, set[str]]" = weakref.WeakKeyDictionary()
+_HOOK_NAMES = ("connected", "disconnected")
+
+
+def _defines_hook(view: Any, name: str) -> bool:
+    """Whether ``name`` exists on the view at all, found without running a descriptor."""
+    try:
+        inspect.getattr_static(view, name)
+    except AttributeError:
+        return False
+    return True
+
+
+def _lifecycle_hook(view: Any, name: str) -> Optional[Callable[[], Any]]:
+    """The view's ``connected`` / ``disconnected`` hook, or None (#3007).
+
+    Only a plain method that takes no arguments counts: a function, static or
+    class method that is not ``async def`` and binds with no extra argument.
+    Anything else that carries the name (a state attribute, a property, a nested
+    class, a method that needs arguments, a coroutine function) was code that
+    never ran as a hook before this contract, so it is skipped, with one
+    value-free warning per class, instead of failing a mount or a teardown. The
+    lookup is static: a property is never evaluated.
+    """
+    try:
+        found = inspect.getattr_static(view, name)
+    except AttributeError:
+        return None
+    reason = None
+    hook: Optional[Callable[[], Any]] = None
+    if not (inspect.isfunction(found) or isinstance(found, (staticmethod, classmethod))):
+        reason = "is not a regular method"
+    else:
+        try:
+            hook = getattr(view, name)
+            if inspect.iscoroutinefunction(hook):
+                reason = "is async def"
+            else:
+                inspect.signature(hook).bind()
+        except TypeError:
+            reason = "takes arguments"
+        except Exception:  # noqa: BLE001 — a hostile descriptor must not fail a mount
+            reason = "cannot be resolved"
+    if reason is None:
+        return hook
+    warned = _HOOK_WARNED.setdefault(type(view), set())
+    if name not in warned:
+        warned.add(name)
+        logger.warning(
+            "%s.%s %s; djust skips it as the %s() lifecycle hook (it takes no arguments, "
+            "is not async, and runs on a worker thread)",
+            type(view).__qualname__,
+            name,
+            reason,
+            name,
+        )
+    return None
+
+
+def awaiting_disconnected(view: Any) -> bool:
+    """Whether ``view`` reached the connected phase and has not run ``disconnected()``."""
+    return bool(view is not None and view.__dict__.get(_CONNECTED_FLAG, False))
+
+
+def begin_live_connection(view: Any) -> Optional[Callable[[], Any]]:
+    """Enter the connected phase of a live mount (#3007); returns the ``connected`` hook to run.
+
+    Called by ``ViewRuntime.dispatch_mount`` once the view is admitted and set
+    up (auth, ``on_mount`` hooks, ``mount()`` or a state restore, the
+    object-permission check, ``handle_params()``) and before its first render,
+    so state the hook sets is in the mount frame. The caller runs the returned
+    hook on a worker thread (None: nothing to run); an exception from it is the
+    caller's, and fails the mount as one from ``mount()`` does. Only the live
+    mount gets here: the HTTP render and the HTTP POST fallback never do.
+
+    Marks the view so :func:`run_view_disconnected` runs for it, whether or not
+    it defines ``connected``. A view whose class defines neither hook is not
+    marked and costs nothing.
+    """
+    if not any(_defines_hook(view, name) for name in _HOOK_NAMES):
+        return None
+    view.__dict__[_CONNECTED_FLAG] = True
+    return _lifecycle_hook(view, "connected")
+
+
+def run_view_disconnected(view: Any) -> None:
+    """The ``disconnected()`` view hook (#3007), sync: call it on a worker thread.
+
+    Runs for a view that reached the connected phase, once, when its live mount
+    ends: its socket (or SSE stream) closed, or a navigation, a second mount, an
+    ``unmount`` frame or a revoked authorization released it. A view the mount
+    refused earlier never runs it. Best effort: the tenant the view mounted
+    under is bound, as for its events; an exception is logged without its value
+    and never stops the teardown.
+    """
+    if not view.__dict__.pop(_CONNECTED_FLAG, False):
+        return
+    hook = _lifecycle_hook(view, "disconnected")
+    if hook is None:
+        return
+    from .runtime import _tenant_context
+
+    try:
+        with _tenant_context(getattr(view, "_tenant", None)):
+            hook()
+    except Exception as exc:  # noqa: BLE001 — application hook; teardown must go on
+        from ._exposure_diagnostics import log_failure_for
+
+        log_failure_for(logger, (view,), exc, "Error in disconnected(): %s", exc, level="warning")
+
+
+async def fire_view_disconnected(view: Any) -> None:
+    """:func:`run_view_disconnected` for an async caller, before the view's release.
+
+    The hook runs on a worker thread, so it may use the ORM. A view that never
+    reached the connected phase costs no thread hop. Callers release the view in
+    a ``finally``, so a cancellation during the hook still releases it.
+    """
+    if not awaiting_disconnected(view):
+        return
+    await sync_to_async(run_view_disconnected)(view)
 
 
 def release_root_view(view: Any, *, navigation: bool, reason: str) -> None:

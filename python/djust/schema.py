@@ -769,6 +769,15 @@ LIFECYCLE_METHODS: List[Dict[str, Any]] = [
         "required": False,
     },
     {
+        "name": "connected",
+        "signature": "def connected(self):",
+        "description": "Called once per live (WebSocket or SSE) mount, after mount() or a "
+        "state restore and handle_params() and before the first render. Never called on "
+        "the HTTP render or the HTTP POST fallback. Raising fails the mount.",
+        "phase": "initialization",
+        "required": False,
+    },
+    {
         "name": "get_context_data",
         "signature": "def get_context_data(self, **kwargs) -> dict:",
         "description": "Return dict of template context variables. By default, all public "
@@ -792,14 +801,22 @@ LIFECYCLE_METHODS: List[Dict[str, Any]] = [
         "phase": "lifecycle",
         "required": False,
     },
+    {
+        "name": "disconnected",
+        "signature": "def disconnected(self):",
+        "description": "Called once for each view that got connected(), when its live mount "
+        "ends: the socket or SSE stream closed, or the view was replaced (live_redirect, a "
+        "second mount), unmounted or revoked. Runs on a worker thread; the socket is gone, so "
+        "nothing it queues is sent. Best effort: not called if the process dies. Exceptions "
+        "are logged.",
+        "phase": "lifecycle",
+        "required": False,
+    },
 ]
-# No ``unmount`` / ``connected`` / ``disconnected`` entries: djust 1.2 never
-# calls a LiveView method by those names (the ``connected()`` /
-# ``disconnected()`` callbacks that do exist are client-side ``dj-hook``
-# callbacks). Listing them told tools and AI assistants to implement hooks
-# that never fire (#3007). Detect the WebSocket mount with
-# ``getattr(self, "_websocket_session_id", None)``; real server-side hooks are
-# planned for 1.3.
+# No ``unmount`` entry: djust never calls a LiveView method by that name.
+# ``connected`` and ``disconnected`` are the server-side hooks of #3007 (the
+# callbacks of the same names on a ``dj-hook`` object are the client-side
+# ones). The contract is in the LiveView API reference, "Lifecycle contract".
 
 #: Class-level configuration attributes
 CLASS_ATTRIBUTES: List[Dict[str, Any]] = [

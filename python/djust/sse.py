@@ -463,6 +463,8 @@ class SSESession:
         # Presence untracks scheduled by shutdown() (#3254): held so a task is
         # not garbage-collected before it finishes, dropped when it does.
         self._presence_untrack_tasks: set[asyncio.Task] = set()
+        # In-flight ``disconnected()`` hook runs (#3007), held until they finish.
+        self._disconnected_tasks: set[asyncio.Task] = set()
         # The loop that serves the stream GET. With several event loops
         # (djust serve --loops N, #3128) a later event POST can arrive on
         # another loop; it hops here, because the queue, the locks and the
@@ -616,15 +618,21 @@ class SSESession:
                         await self._untrack_replaced_presence(old_view)
                 if old_view is not None:
                     try:
-                        from ._child_lifecycle import release_root_view
+                        from ._child_lifecycle import fire_view_disconnected, release_root_view
 
                         # The teardown the WebSocket live_redirect shares
                         # (#3244); SSE keeps no sticky children, so every
                         # child goes with the page. Its presence is untracked
-                        # below, after the new page has mounted (#3254).
-                        await sync_to_async(release_root_view)(
-                            old_view, navigation=True, reason="view_navigation"
-                        )
+                        # below, after the new page has mounted (#3254). The old
+                        # page's ``disconnected()`` hook (#3007) runs first, as
+                        # on a ``live_redirect``; the release follows it even if
+                        # the hook is cancelled.
+                        try:
+                            await fire_view_disconnected(old_view)
+                        finally:
+                            await sync_to_async(release_root_view)(
+                                old_view, navigation=True, reason="view_navigation"
+                            )
                     except Exception:
                         logger.warning("SSE old view cleanup failed during navigation")
                 try:
@@ -724,12 +732,36 @@ class SSESession:
         view = self.view_instance
         if view is not None:
             self._untrack_presence(view)
+            self._run_disconnected(view)
             # The WebSocket disconnect's teardown (#3232, #3239, #3244).
             release_root_view(view, navigation=False, reason="view_disconnect")
             self.view_instance = None
             self.runtime.view_instance = None
         self._put(None)  # None is the sentinel value
         self._closed_sentinel_queued = True
+
+    def _run_disconnected(self, view: Any) -> None:
+        """Run a closing view's ``disconnected()`` hook (#3007) without blocking the loop.
+
+        ``shutdown()`` is synchronous and the hook may use the ORM, so on a loop
+        thread the hook runs as a task on a worker thread, after ``shutdown``
+        has released the view, as the presence untrack does (#3254): it must not
+        rely on the view's uploads, waiters or children still being in place.
+        With no running loop it runs inline, before the release. A view that
+        never reached the connected phase costs nothing.
+        """
+        from ._child_lifecycle import awaiting_disconnected, run_view_disconnected
+
+        if not awaiting_disconnected(view):
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            run_view_disconnected(view)
+            return
+        task = loop.create_task(sync_to_async(run_view_disconnected)(view))
+        self._disconnected_tasks.add(task)
+        task.add_done_callback(self._disconnected_tasks.discard)
 
     def _untrack_presence(self, view: Any) -> None:
         """Untrack a closing view's presence without blocking the loop (#3254).
