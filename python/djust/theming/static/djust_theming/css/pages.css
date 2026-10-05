@@ -67,7 +67,7 @@
   }
 
   .page-link {
-    color: hsl(var(--link, var(--primary)));
+    color: hsl(var(--link, var(--primary-text, var(--primary))));
     text-decoration: none;
     font-size: var(--font-size-sm, 0.875rem);
   }
@@ -84,7 +84,7 @@
   }
 
   .page-footer-text a {
-    color: hsl(var(--link, var(--primary)));
+    color: hsl(var(--link, var(--primary-text, var(--primary))));
     text-decoration: none;
   }
 

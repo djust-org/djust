@@ -63,7 +63,7 @@ class TestAlertInfoAndRole:
             render('{% theme_alert "x" role="button" %}')
 
     def test_info_is_in_the_contrast_matrix(self):
-        assert ("info", "info_tint", 4.5, "info text on its alert tint") in CONTRAST_PAIRS
+        assert ("info_text", "info_tint", 4.5, "info text on its alert tint") in CONTRAST_PAIRS
 
     def test_the_legal_preset_passes_it_in_both_modes(self):
         from djust.theming._types import _contrast
@@ -71,5 +71,5 @@ class TestAlertInfoAndRole:
 
         for mode in ("light", "dark"):
             tokens = getattr(THEME_PRESETS["legal"], mode)
-            assert _contrast(tokens.info, tokens.info_tint) >= 4.5, mode
+            assert _contrast(tokens.info_text, tokens.info_tint) >= 4.5, mode
             assert _contrast(tokens.info_foreground, tokens.info) >= 4.5, mode

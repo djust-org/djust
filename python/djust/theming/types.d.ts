@@ -247,6 +247,7 @@ export interface DesignSystemCSSVariables {
   '--popover-foreground': string;
   '--primary': string;
   '--primary-foreground': string;
+  '--primary-text': string;
   '--secondary': string;
   '--secondary-foreground': string;
   '--muted': string;
@@ -258,8 +259,10 @@ export interface DesignSystemCSSVariables {
   '--destructive-text': string;
   '--success': string;
   '--success-foreground': string;
+  '--success-text': string;
   '--warning': string;
   '--warning-foreground': string;
+  '--warning-text': string;
   '--border': string;
   '--input': string;
   '--ring': string;

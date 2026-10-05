@@ -97,7 +97,7 @@ class Markdown(Component):
         --dj-prose-font-size: base font size (default: 1rem)
         --dj-prose-line-height: line height (default: 1.6)
         --dj-prose-heading-color: heading color (default: var(--foreground))
-        --dj-prose-link-color: link color (default: var(--primary))
+        --dj-prose-link-color: link color (default: var(--primary-text, var(--primary)))
         --dj-prose-code-bg: inline code background (default: var(--muted))
         --dj-prose-code-color: inline code text (default: var(--foreground))
         --dj-prose-blockquote-border: blockquote left border color (default: var(--border))

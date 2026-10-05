@@ -301,7 +301,7 @@ djust components use the theme's CSS custom properties for styling. Color tokens
 }
 ```
 
-`--destructive` is a fill (it sits under `--destructive-foreground`). Anything that paints "error" as text or an icon reads `--destructive-text` instead, which the theme generator derives from `--destructive` so that it reaches 4.5:1 on the page in every preset and mode. Set it yourself only if you do not use the theme generator; the component stylesheet falls back to `--destructive` when it is absent. See [Accessibility](../guides/accessibility.md#error-text-uses---destructive-text-not---destructive).
+`--destructive` is a fill (it sits under `--destructive-foreground`). Anything that paints "error" as text or an icon reads `--destructive-text` instead, which the theme generator derives from `--destructive` so that it reaches 4.5:1 on the page in every preset and mode. Set it yourself only if you do not use the theme generator; the component stylesheet falls back to `--destructive` when it is absent. See [Accessibility](../guides/accessibility.md#error-text-uses---destructive-text-not---destructive). The same goes for `--primary`, `--info`, `--success` and `--warning`: they are fills, and anything that paints them as text reads `--primary-text`, `--info-text`, `--success-text` or `--warning-text` (fallback to the fill when absent); see [Accessibility](../guides/accessibility.md#primary-and-status-colours-as-text-use---primary-text---info-text---success-text---warning-text).
 
 For the full component library and design system, install the extras:
 

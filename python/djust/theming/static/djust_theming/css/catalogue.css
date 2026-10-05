@@ -87,7 +87,7 @@ body.dc-body {
 }
 .dc-sidebar .sidebar-item:hover { color: hsl(var(--foreground)); background: hsl(var(--muted, 220 13% 91%) / 0.3); }
 .dc-sidebar .sidebar-item.active {
-  color: hsl(var(--primary, 222 47% 51%)); background: hsl(var(--primary, 222 47% 51%) / 0.08);
+  color: hsl(var(--primary-text, var(--primary, 222 47% 51%))); background: hsl(var(--primary, 222 47% 51%) / 0.08);
   border-left-color: hsl(var(--primary, 222 47% 51%)); font-weight: 500;
 }
 .dc-sidebar .empty-state { padding: 1rem; }
@@ -99,7 +99,7 @@ body.dc-body {
 .dc-rail .toc-title { font-size: 0.6875rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: hsl(var(--muted-foreground)); margin-bottom: 0.5rem; }
 .dc-rail .toc-item { display: block; padding: 0.25rem 0 0.25rem 0.75rem !important; color: hsl(var(--muted-foreground)); text-decoration: none; border-left: 2px solid hsl(var(--border)); }
 .dc-rail .toc-item:hover { color: hsl(var(--foreground)); }
-.dc-rail .toc-item-active { color: hsl(var(--primary)); border-left-color: hsl(var(--primary)); }
+.dc-rail .toc-item-active { color: hsl(var(--primary-text, var(--primary))); border-left-color: hsl(var(--primary)); }
 
 /* The theme breadcrumb renders its own separator element, and
    djust_components' stylesheet — loaded on the same page — also draws one
@@ -114,7 +114,7 @@ body.dc-body {
 .dc-comp-title { font-family: var(--font-heading, system-ui); font-size: 1.875rem; font-weight: 700; margin: 0.5rem 0 0.25rem; letter-spacing: -0.01em; }
 .dc-comp-desc { margin: 0 0 0.75rem; color: hsl(var(--muted-foreground)); max-width: 60ch; }
 .dc-comp-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; font-size: 0.75rem; color: hsl(var(--muted-foreground)); margin-bottom: 1.5rem; }
-.badge-template { background: hsl(var(--primary, 222 47% 51%) / 0.12); color: hsl(var(--primary, 222 47% 51%)); }
+.badge-template { background: hsl(var(--primary, 222 47% 51%) / 0.12); color: hsl(var(--primary-text, var(--primary, 222 47% 51%))); }
 .badge-python { background: hsl(var(--muted, 220 13% 91%) / 0.5); color: hsl(var(--muted-foreground)); }
 
 /* ===== Sections (card) ===== */
