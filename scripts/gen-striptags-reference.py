@@ -6,7 +6,7 @@ Why this fixture exists
 `striptags` is a port of `django.utils.html.strip_tags`, which is fifteen lines
 of Django over CPython's `html.parser`. The Rust port is fixed; **the reference
 is not**. `html/parser.py` was rewritten for HTML5-spec alignment in CPython
-3.12.10, and 3.14 changed the end-of-input character-reference handling again,
+3.12.12, and 3.14 changed the end-of-input character-reference handling again,
 so the three interpreters djust's CI matrix runs disagree with each other:
 
     3.12.9   vs 3.12.13 : 1076 / 4000 corpus values differ
