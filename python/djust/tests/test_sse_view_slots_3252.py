@@ -494,25 +494,41 @@ async def test_closing_the_stream_ends_the_live_mount_of_every_view_beside_the_p
 # --------------------------------------------------------------------------- #
 
 
-async def test_a_burst_of_mount_frames_hits_the_connection_rate_limit():
+def _tiny_limiter(session, burst):
+    """A limiter that refills nothing: exactly ``burst`` frames pass, however
+    slowly the machine runs the test (the default bucket refills 100 a second)."""
+    from djust.rate_limit import ConnectionRateLimiter
+
+    session._rate_limiter = ConnectionRateLimiter(rate=0, burst=burst, max_warnings=3)
+
+
+async def _error_codes(stream):
+    codes = []
+    while True:
+        try:
+            codes.append((await _frame(stream, "error", timeout=0.3)).get("code"))
+        except (AssertionError, asyncio.TimeoutError, StopAsyncIteration):
+            return codes
+
+
+async def test_mount_frames_past_the_connection_rate_limit_are_throttled_then_close_the_session():
     session, key, stream = await _open()
+    _tiny_limiter(session, 5)
     try:
-        # Frames the mount refuses at once, so the burst outruns the bucket's refill
-        # (a real mount costs about 100 ms and would not).
-        for i in range(60):
+        # Frames the mount refuses at once (the view is not allowed): each one
+        # that passes the limiter answers an error of its own.
+        for i in range(12):
             await _post(
                 session,
                 key,
                 {"type": "mount", "view": "no.such.View", "url": "/page/", "target_id": "w%d" % i},
             )
-        codes = []
-        while True:
-            try:
-                codes.append((await _frame(stream, "error", timeout=0.3)).get("code"))
-            except (AssertionError, asyncio.TimeoutError, StopAsyncIteration):
-                break
-        assert "rate_limited" in codes, "60 mounts in a burst were never throttled: %r" % (codes,)
-        # Nothing mounted (a sustained flood also ends the session, as on a socket).
+        codes = await _error_codes(stream)
+        # Exactly the burst passes; the next three are throttled and the third
+        # ends the session, as a flood on a socket does.
+        assert codes[:5] == [None] * 5, codes
+        assert codes[5:8] == ["rate_limited"] * 3, codes
+        assert session.active is False
         assert session._slots == {}
     finally:
         await stream.aclose()
@@ -520,16 +536,26 @@ async def test_a_burst_of_mount_frames_hits_the_connection_rate_limit():
 
 async def test_unmount_frames_are_rate_limited_too():
     session, key, stream = await _open()
+    _tiny_limiter(session, 4)
     try:
-        for _ in range(80):
+        for _ in range(6):
             await _post(session, key, {"type": "unmount", "target_id": "never"})
-        codes = set()
-        while True:
-            try:
-                codes.add((await _frame(stream, "error", timeout=0.3)).get("code"))
-            except (AssertionError, asyncio.TimeoutError, StopAsyncIteration):
-                break
-        assert "rate_limited" in codes, codes
+        # An unmount of an address with nothing mounted is silent; the ones past
+        # the burst are throttled.
+        assert (await _error_codes(stream))[:2] == ["rate_limited"] * 2
+    finally:
+        await stream.aclose()
+
+
+async def test_a_view_beside_the_page_view_mounts_while_the_limit_has_room():
+    session, key, stream = await _open()
+    _tiny_limiter(session, 3)
+    try:
+        for target in ("w1", "w2", "w3"):
+            assert (await _mount(session, key, stream, Widget, target))["type"] == "mount"
+        refused = await _mount(session, key, stream, Widget, "w4")
+        assert refused.get("code") == "rate_limited", refused
+        assert set(session._slots) == {"w1", "w2", "w3"}
     finally:
         await stream.aclose()
 
