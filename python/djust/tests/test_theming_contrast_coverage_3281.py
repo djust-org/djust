@@ -167,38 +167,31 @@ class TestLegacyDebtIsDocumented:
                         missing.append((name, mode, fg, bg))
         assert not missing
 
-    def test_djust_light_primary_as_text_is_exempt_not_recoloured(self):
-        """#3165: ``primary`` is the brand orange carrying dark ink labels."""
+    def test_djust_light_primary_as_text_is_read_through_primary_text(self):
+        """#3165 / #2885: ``primary`` is the brand orange carrying dark ink labels, so
+        the fill is not recoloured (2.65:1 as text on the page); text that paints
+        primary reads the derived ``primary_text``, which passes with no exemption."""
         assert _ratio("djust", "light", "primary", "background") < 4.5
-        assert ("djust", "light", "primary", "background") in A11Y_EXEMPTIONS
+        assert _ratio("djust", "light", "primary_text", "background") >= 4.5
+        assert ("djust", "light", "primary_text", "background") not in A11Y_EXEMPTIONS
 
 
 # The framework's own presets are the ones people copy. Their debt is pinned
 # exactly, so a new row or a worse ratio there is a conscious edit.
 FLAGSHIP_DEBT = {
+    # #2885: primary and the status colours are read as text through derived
+    # ``*_text`` colours, which are solved, so only the input border is left.
     "djust": {
-        ("light", "primary", "background"),
-        ("light", "primary", "card"),
-        ("light", "info", "info_tint"),
-        ("light", "success", "success_tint"),
-        ("light", "warning", "warning_tint"),
         ("light", "input", "background"),
         ("dark", "input", "background"),
     },
     "default": {
-        ("light", "info", "info_tint"),
-        ("light", "success", "success_tint"),
-        ("light", "warning", "warning_tint"),
         ("light", "input", "background"),
-        ("dark", "success", "success_tint"),
         ("dark", "input", "background"),
     },
 }
 FLAGSHIP_DEBT["shadcn"] = FLAGSHIP_DEBT["blue"] = FLAGSHIP_DEBT["default"]
 FLAGSHIP_DEBT["slate"] = {
-    ("light", "info", "info_tint"),
-    ("light", "success", "success_tint"),
-    ("light", "warning", "warning_tint"),
     ("light", "input", "background"),
     ("dark", "input", "background"),
 }

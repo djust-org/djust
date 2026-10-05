@@ -145,7 +145,7 @@ a:hover {
 }
 
 .nav-link.active {
-  color: hsl(var(--primary));
+  color: hsl(var(--primary-text, var(--primary)));
   background: hsl(var(--primary) / 0.12);
   box-shadow: inset 0 0 0 1px hsl(var(--primary) / 0.25);
 }
@@ -212,7 +212,7 @@ a:hover {
 
 .sidebar-item.active {
   background: hsl(var(--primary) / 0.12);
-  color: hsl(var(--primary));
+  color: hsl(var(--primary-text, var(--primary)));
   font-weight: var(--font-semibold);
   box-shadow: inset 0 0 0 1px hsl(var(--primary) / 0.25);
 }
@@ -596,12 +596,12 @@ a:hover {
 
 .badge-success {
   background: hsl(var(--success) / 0.1);
-  color: hsl(var(--success));
+  color: hsl(var(--success-text, var(--success)));
 }
 
 .badge-warning {
   background: hsl(var(--warning) / 0.1);
-  color: hsl(var(--warning));
+  color: hsl(var(--warning-text, var(--warning)));
 }
 
 .badge-info {
@@ -622,12 +622,12 @@ a:hover {
 
 .status-active {
   background: hsl(var(--success) / 0.1);
-  color: hsl(var(--success));
+  color: hsl(var(--success-text, var(--success)));
 }
 
 .status-inactive {
   background: hsl(var(--warning) / 0.1);
-  color: hsl(var(--warning));
+  color: hsl(var(--warning-text, var(--warning)));
 }
 
 
@@ -856,8 +856,8 @@ a:hover {
   font-weight: var(--font-medium);
 }
 
-.stat-card.stat-success .stat-value { color: hsl(var(--success)); }
-.stat-card.stat-warning .stat-value { color: hsl(var(--warning)); }
+.stat-card.stat-success .stat-value { color: hsl(var(--success-text, var(--success))); }
+.stat-card.stat-warning .stat-value { color: hsl(var(--warning-text, var(--warning))); }
 .stat-card.stat-danger .stat-value { color: hsl(var(--destructive-text, var(--destructive))); }
 
 
@@ -988,7 +988,7 @@ a:hover {
 
 .sort-pill.active {
   background: hsl(var(--primary) / 0.1);
-  color: hsl(var(--primary));
+  color: hsl(var(--primary-text, var(--primary)));
   border-color: transparent;
 }
 
@@ -1009,8 +1009,8 @@ a:hover {
 .text-muted { color: hsl(var(--muted-foreground)); }
 .text-foreground { color: hsl(var(--foreground)); }
 .text-muted-foreground { color: hsl(var(--muted-foreground)); }
-.text-success { color: hsl(var(--success)); }
-.text-warning { color: hsl(var(--warning)); }
+.text-success { color: hsl(var(--success-text, var(--success))); }
+.text-warning { color: hsl(var(--warning-text, var(--warning))); }
 .text-danger { color: hsl(var(--destructive-text, var(--destructive))); }
 
 .font-medium { font-weight: var(--font-medium); }
@@ -1372,7 +1372,7 @@ p { margin-bottom: 0.75rem; }
 }
 
 .hero h1 .hero-accent {
-  color: hsl(var(--brand, var(--primary)));
+  color: hsl(var(--brand-text, var(--brand, var(--primary-text, var(--primary)))));
 }
 
 .hero-subtitle {
@@ -1430,7 +1430,7 @@ p { margin-bottom: 0.75rem; }
 .message-success {
   background: hsl(var(--success) / 0.1);
   border-color: hsl(var(--success) / 0.3);
-  color: hsl(var(--success));
+  color: hsl(var(--success-text, var(--success)));
 }
 
 .flash-item-error,
@@ -1444,14 +1444,14 @@ p { margin-bottom: 0.75rem; }
 .message-warning {
   background: hsl(var(--warning) / 0.1);
   border-color: hsl(var(--warning) / 0.3);
-  color: hsl(var(--warning));
+  color: hsl(var(--warning-text, var(--warning)));
 }
 
 .flash-item-info,
 .message-info {
   background: hsl(var(--info, var(--primary)) / 0.1);
   border-color: hsl(var(--info, var(--primary)) / 0.3);
-  color: hsl(var(--info, var(--primary)));
+  color: hsl(var(--info-text, var(--info, var(--primary-text, var(--primary)))));
 }
 
 /* djust LiveView flash banner (fixed top) */
@@ -1546,7 +1546,7 @@ p { margin-bottom: 0.75rem; }
 /* Text */
 .text-small { font-size: var(--text-sm, 0.875rem); }
 .text-right { text-align: right; }
-.text-primary { color: hsl(var(--primary)); }
+.text-primary { color: hsl(var(--primary-text, var(--primary))); }
 
 /* Flex helpers */
 .flex-center {
@@ -1589,8 +1589,8 @@ p { margin-bottom: 0.75rem; }
    14. Stat Display Variants
    ============================================ */
 
-.stat-value-primary { color: hsl(var(--primary)); }
-.stat-value-success { color: hsl(var(--success)); }
+.stat-value-primary { color: hsl(var(--primary-text, var(--primary))); }
+.stat-value-success { color: hsl(var(--success-text, var(--success))); }
 .stat-value-lg { font-size: var(--text-3xl, 2rem); }
 .stat-value-xl { font-size: var(--text-4xl, 3.5rem); }
 
@@ -1881,7 +1881,7 @@ body::after {
 
 .sidebar-nav .nav-link.active {
   background: hsl(var(--brand, var(--primary)) / 0.1);
-  color: hsl(var(--brand, var(--primary)));
+  color: hsl(var(--brand-text, var(--brand, var(--primary-text, var(--primary)))));
   font-weight: var(--font-semibold, 600);
 }
 

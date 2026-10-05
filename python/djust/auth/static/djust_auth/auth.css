@@ -46,7 +46,7 @@
 .dj-auth-divider { display: flex; align-items: center; gap: 12px; margin: 20px 0 4px; color: hsl(var(--muted-foreground)); font-size: .8rem; }
 .dj-auth-divider::before, .dj-auth-divider::after { content: ""; flex: 1; height: 1px; background: hsl(var(--border)); }
 .dj-auth-links { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 20px; font-size: .875rem; }
-.dj-auth-links a { color: hsl(var(--primary)); text-decoration: none; }
+.dj-auth-links a { color: hsl(var(--primary-text, var(--primary))); text-decoration: none; }
 .dj-auth-links a:hover { text-decoration: underline; }
 .dj-auth-footer { padding: 16px 24px; font-size: .8rem; color: hsl(var(--muted-foreground)); text-align: center; }
 @media (max-width: 480px) {

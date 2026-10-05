@@ -85,6 +85,8 @@ def _generate_color_config(preset: ThemePreset, extend: bool = True) -> Dict[str
         "primary": {
             "DEFAULT": "hsl(var(--primary))",
             "foreground": "hsl(var(--primary-foreground))",
+            # Primary as TEXT (#2885): ``text-primary-text``. ``DEFAULT`` is the fill.
+            "text": "hsl(var(--primary-text))",
         },
         "secondary": {
             "DEFAULT": "hsl(var(--secondary))",
@@ -116,10 +118,12 @@ def _generate_color_config(preset: ThemePreset, extend: bool = True) -> Dict[str
         "success": {
             "DEFAULT": "hsl(var(--success))",
             "foreground": "hsl(var(--success-foreground))",
+            "text": "hsl(var(--success-text))",  # status as TEXT (#2885)
         },
         "warning": {
             "DEFAULT": "hsl(var(--warning))",
             "foreground": "hsl(var(--warning-foreground))",
+            "text": "hsl(var(--warning-text))",  # status as TEXT (#2885)
         },
     }
 
@@ -196,6 +200,7 @@ def export_preset_as_tailwind_colors(preset_name: str = "default") -> Dict[str, 
         "light-foreground": light.foreground.to_hsl_func(),
         "light-primary": light.primary.to_hsl_func(),
         "light-primary-foreground": light.primary_foreground.to_hsl_func(),
+        "light-primary-text": light.primary_text.to_hsl_func(),
         "light-secondary": light.secondary.to_hsl_func(),
         "light-muted": light.muted.to_hsl_func(),
         "light-accent": light.accent.to_hsl_func(),
@@ -207,6 +212,7 @@ def export_preset_as_tailwind_colors(preset_name: str = "default") -> Dict[str, 
         "dark-foreground": dark.foreground.to_hsl_func(),
         "dark-primary": dark.primary.to_hsl_func(),
         "dark-primary-foreground": dark.primary_foreground.to_hsl_func(),
+        "dark-primary-text": dark.primary_text.to_hsl_func(),
         "dark-secondary": dark.secondary.to_hsl_func(),
         "dark-muted": dark.muted.to_hsl_func(),
         "dark-accent": dark.accent.to_hsl_func(),
@@ -265,17 +271,17 @@ def generate_tailwind_apply_examples() -> str:
 
 /* Alert variants */
 .alert-info {
-  @apply bg-info/10 text-info border border-info/20;
+  @apply bg-info/10 text-info-text border border-info/20;
   @apply rounded-md p-4;
 }
 
 .alert-success {
-  @apply bg-success/10 text-success border border-success/20;
+  @apply bg-success/10 text-success-text border border-success/20;
   @apply rounded-md p-4;
 }
 
 .alert-warning {
-  @apply bg-warning/10 text-warning border border-warning/20;
+  @apply bg-warning/10 text-warning-text border border-warning/20;
   @apply rounded-md p-4;
 }
 
@@ -309,6 +315,7 @@ def _tokens_to_theme_vars(tokens: ThemeTokens, prefix: str = "") -> list[tuple[s
         ("popover-foreground", f"hsl({tokens.popover_foreground.to_hsl()})"),
         ("primary", f"hsl({tokens.primary.to_hsl()})"),
         ("primary-foreground", f"hsl({tokens.primary_foreground.to_hsl()})"),
+        ("primary-text", f"hsl({tokens.primary_text.to_hsl()})"),
         ("secondary", f"hsl({tokens.secondary.to_hsl()})"),
         ("secondary-foreground", f"hsl({tokens.secondary_foreground.to_hsl()})"),
         ("muted", f"hsl({tokens.muted.to_hsl()})"),
@@ -320,10 +327,13 @@ def _tokens_to_theme_vars(tokens: ThemeTokens, prefix: str = "") -> list[tuple[s
         ("destructive-text", f"hsl({tokens.destructive_text.to_hsl()})"),
         ("success", f"hsl({tokens.success.to_hsl()})"),
         ("success-foreground", f"hsl({tokens.success_foreground.to_hsl()})"),
+        ("success-text", f"hsl({tokens.success_text.to_hsl()})"),
         ("warning", f"hsl({tokens.warning.to_hsl()})"),
         ("warning-foreground", f"hsl({tokens.warning_foreground.to_hsl()})"),
+        ("warning-text", f"hsl({tokens.warning_text.to_hsl()})"),
         ("info", f"hsl({tokens.info.to_hsl()})"),
         ("info-foreground", f"hsl({tokens.info_foreground.to_hsl()})"),
+        ("info-text", f"hsl({tokens.info_text.to_hsl()})"),
         ("link", f"hsl({tokens.link.to_hsl()})"),
         ("link-hover", f"hsl({tokens.link_hover.to_hsl()})"),
         ("code", f"hsl({tokens.code.to_hsl()})"),

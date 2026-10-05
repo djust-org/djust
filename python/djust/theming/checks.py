@@ -8,7 +8,7 @@ from django.core.checks import CheckMessage, Error, Warning, register, Tags
 from ._config import get_theme_config, parse_preset_names
 from .accessibility import AccessibilityValidator
 from ._registry_accessor import get_registry
-from .a11y_exemptions import A11Y_EXEMPTIONS, CONTRAST_PAIRS
+from .a11y_exemptions import A11Y_EXEMPTIONS, CONTRAST_PAIRS, DERIVED_TEXT_TOKENS
 
 
 # Foreground/background pairs to check — the canonical matrix defined in
@@ -65,18 +65,18 @@ def _presets_to_check() -> Iterator[tuple[str, Any]]:
 
 
 def _contrast_hint(fg_attr: str, bg_attr: str, minimum: float) -> str:
-    if fg_attr == "destructive_text":
-        # Derived (#3320): solved from ``destructive`` by lightness against the page
+    if fg_attr in DERIVED_TEXT_TOKENS:
+        # Derived (#3320, #2885): solved from the fill by lightness against the page
         # and card, so a preset author cannot set it. It only misses when those
         # surfaces are so mid-tone that neither a dark nor a light text clears the
         # bar, and the surfaces are what to change. (Not to be confused with the
-        # ``destructive_text`` label of the label-on-fill pair in
-        # ``AccessibilityValidator``, which is ``destructive_foreground`` on
-        # ``destructive``.)
+        # ``destructive_text`` / ``primary_text`` / ... LABELS of the label-on-fill
+        # pairs in ``AccessibilityValidator``, which are ``*_foreground`` on the fill.)
+        fill = fg_attr[: -len("_text")]
         return (
-            "destructive_text is derived from destructive and cannot be set. It misses 4.5:1 only "
+            f"{fg_attr} is derived from {fill} and cannot be set. It misses 4.5:1 only "
             "when the page and card are mid-tone; make background or card lighter or darker, "
-            f"or change destructive's hue or saturation, to reach at least {minimum}:1 contrast."
+            f"or change {fill}'s hue or saturation, to reach at least {minimum}:1 contrast."
         )
     if bg_attr.endswith("_tint"):
         # ``*_tint`` is derived (the colour at 10% over the page or a card), so

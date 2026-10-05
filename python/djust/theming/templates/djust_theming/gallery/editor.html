@@ -1057,14 +1057,21 @@
       }
       // END destructive-text solver
 
-      // Recompute --destructive-text from a mode's tokens and set it. The preview
-      // would otherwise keep the first-loaded preset's derived value (#3344).
+      // Recompute the derived text colours from a mode's tokens and set them:
+      // --destructive-text (#3344) and, from #2885, --primary-text, --info-text,
+      // --success-text and --warning-text. They are solved by the same function
+      // (the Python side shares one solver too). The preview would otherwise keep
+      // the first-loaded preset's derived values. (--brand-text is not here: brand
+      // is not an editor token.)
+      var DERIVED_TEXT_FILLS = ["destructive", "primary", "info", "success", "warning"];
       function applyDestructiveText(mode) {
         var t = currentTokens[mode];
-        if (!t || !t.destructive || !t.background || !t.card) return;
+        if (!t || !t.background || !t.card) return;
         var bg = dtHslToRgb(t.background.h, t.background.s, t.background.l);
         var card = dtHslToRgb(t.card.h, t.card.s, t.card.l);
-        applyCSSVar("destructive_text", solveDestructiveText(t.destructive, bg, card));
+        DERIVED_TEXT_FILLS.forEach(function(fill) {
+          if (t[fill]) applyCSSVar(fill + "_text", solveDestructiveText(t[fill], bg, card));
+        });
       }
 
       var currentMode = "light";

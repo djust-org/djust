@@ -36,7 +36,7 @@ class ExpandableText(Component):
         --dj-expandable-text-fg: text color (default: inherit)
         --dj-expandable-text-font-size: font size (default: inherit)
         --dj-expandable-text-line-height: line height (default: 1.5)
-        --dj-expandable-text-toggle-color: toggle link color (default: var(--primary, #2563eb))
+        --dj-expandable-text-toggle-color: toggle link color (default: var(--primary-text, var(--primary, #2563eb)))
         --dj-expandable-text-toggle-font-size: toggle font size (default: 0.875rem)
 
     Args:

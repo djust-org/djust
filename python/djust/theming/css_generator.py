@@ -64,6 +64,7 @@ class ThemeCSSGenerator:
             ("popover-foreground", tokens.popover_foreground),
             ("primary", tokens.primary),
             ("primary-foreground", tokens.primary_foreground),
+            ("primary-text", tokens.primary_text),
             ("secondary", tokens.secondary),
             ("secondary-foreground", tokens.secondary_foreground),
             ("muted", tokens.muted),
@@ -75,10 +76,13 @@ class ThemeCSSGenerator:
             ("destructive-text", tokens.destructive_text),
             ("success", tokens.success),
             ("success-foreground", tokens.success_foreground),
+            ("success-text", tokens.success_text),
             ("warning", tokens.warning),
             ("warning-foreground", tokens.warning_foreground),
+            ("warning-text", tokens.warning_text),
             ("info", tokens.info),
             ("info-foreground", tokens.info_foreground),
+            ("info-text", tokens.info_text),
             ("link", tokens.link),
             ("link-hover", tokens.link_hover),
             ("code", tokens.code),
@@ -87,6 +91,7 @@ class ThemeCSSGenerator:
             ("selection-foreground", tokens.selection_foreground),
             ("brand", tokens.brand),
             ("brand-foreground", tokens.brand_foreground),
+            ("brand-text", tokens.brand_text),
             ("border", tokens.border),
             ("input", tokens.input),
             ("ring", tokens.ring),
@@ -337,18 +342,18 @@ html.theme-ready *::after {
 .text-foreground { color: hsl(var(--foreground)); }
 .text-card-foreground { color: hsl(var(--card-foreground)); }
 .text-popover-foreground { color: hsl(var(--popover-foreground)); }
-.text-primary { color: hsl(var(--primary)); }
+.text-primary { color: hsl(var(--primary-text)); }
 .text-primary-foreground { color: hsl(var(--primary-foreground)); }
 .text-secondary-foreground { color: hsl(var(--secondary-foreground)); }
 .text-muted-foreground { color: hsl(var(--muted-foreground)); }
 .text-accent-foreground { color: hsl(var(--accent-foreground)); }
 .text-destructive { color: hsl(var(--destructive-text)); }
 .text-destructive-foreground { color: hsl(var(--destructive-foreground)); }
-.text-success { color: hsl(var(--success)); }
+.text-success { color: hsl(var(--success-text)); }
 .text-success-foreground { color: hsl(var(--success-foreground)); }
-.text-warning { color: hsl(var(--warning)); }
+.text-warning { color: hsl(var(--warning-text)); }
 .text-warning-foreground { color: hsl(var(--warning-foreground)); }
-.text-info { color: hsl(var(--info)); }
+.text-info { color: hsl(var(--info-text)); }
 .text-info-foreground { color: hsl(var(--info-foreground)); }
 .text-link { color: hsl(var(--link)); }
 .text-code-foreground { color: hsl(var(--code-foreground)); }

@@ -32,11 +32,11 @@ any fill, background or border TOKEN is touched:
 tracks, scrollbar thumbs, spinners and skeletons (components.css), so a moved
 ``muted_foreground`` shifts those by the same step, always away from the page.
 
-The remaining failures are NOT text-colour fixes and are reported, never
-applied: ``primary`` and the status colours read AS text on a page or a tint
-(they are also fills, so fixing them needs a derived ``*_text`` token like
-``destructive_text`` (#3320), or a new fill), and the ``input`` border is a
-non-text UI edge.
+``primary``, ``brand`` and the status colours read AS text on a page or a tint;
+they are also fills, so they are not moved here: the derived ``*_text`` tokens
+(``destructive_text`` #3320, then ``primary_text`` ... #2885) carry that, solved by
+``ThemeTokens``. The remaining failure that is NOT a text-colour fix is reported,
+never applied: the ``input`` border is a non-text UI edge.
 
 Usage (from the repository root):
     PYTHONPATH=python python scripts/fix_theme_text_contrast.py            # summary
@@ -73,6 +73,8 @@ from djust.theming.accessibility import AccessibilityValidator  # noqa: E402
 from djust.theming.presets import THEME_PRESETS  # noqa: E402
 
 MODES = ("light", "dark")
+#: The fills that are also painted as text, each with a derived ``<fill>_text`` colour.
+DERIVED_FILLS = ("primary", "brand", "info", "success", "warning", "destructive")
 THEMES_DIR = os.path.join(ROOT, "python", "djust", "theming", "themes")
 EXEMPTIONS_PATH = os.path.join(ROOT, "python", "djust", "theming", "a11y_exemptions.py")
 
@@ -454,6 +456,53 @@ def write_html(path: str, moves: list[Move], max_delta: int) -> None:
             )
         return "\n".join(out)
 
+    def derived_rows() -> tuple[str, int, int]:
+        """Rows for the derived ``*_text`` colours (a fill read as text), skipping the
+        presets whose fill already reads (their text colour IS the fill)."""
+        out, changed, kept = [], 0, 0
+        for name in sorted(THEME_PRESETS):
+            first = True
+            for mode in MODES:
+                tokens = getattr(THEME_PRESETS[name], mode)
+                for fill in DERIVED_FILLS:
+                    colour, text = getattr(tokens, fill), getattr(tokens, f"{fill}_text")
+                    if colour == text:
+                        kept += 1
+                        continue
+                    changed += 1
+                    surfaces = ["background", "card"]
+                    if fill in ("info", "success", "warning", "destructive"):
+                        surfaces.append(f"{fill}_tint")
+                    cells = "".join(
+                        f'<span class="pair"><em>on {sf}</em>{_chip(colour, getattr(tokens, sf))}'
+                        f"{_chip(text, getattr(tokens, sf))}</span>"
+                        for sf in surfaces
+                    )
+                    anchor = f' id="derived-{name}"' if first else ""
+                    first = False
+                    out.append(
+                        f"<tr{anchor}><td>{name}</td><td>{mode}</td><td><code>{fill}_text</code></td>"
+                        f'<td>{cells}<span class="fill">fill (unchanged): '
+                        f'<i style="background:{_css(colour)}"></i> '
+                        f"{colour.lightness}</span></td>"
+                        f"<td>{colour.lightness} &rarr; {text.lightness}</td></tr>"
+                    )
+        return "\n".join(out), changed, kept
+
+    applied_html = (
+        f"<h2>1. Text nudges still pending ({len(applied)}), no polarity flip, at most "
+        f"{max_delta} lightness points</h2>\n<table><tr><th>preset</th><th>mode</th><th>token</th>"
+        f"<th>before / after</th><th>L</th></tr>\n{rows(applied)}</table>"
+        if applied
+        else "<p>Section 1 (text nudges) is empty: they merged in #3372.</p>"
+    )
+    derived_html, derived_changed, derived_kept = derived_rows()
+    index = " ".join(
+        f'<a href="#derived-{n}">{n}</a>'
+        for n in sorted(THEME_PRESETS)
+        if f'id="derived-{n}"' in derived_html
+    )
+
     page = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Theme text contrast #2885</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -466,14 +515,22 @@ td, th {{ border-bottom: 1px solid #ddd; padding: .35rem .5rem; text-align: left
 .chip small {{ font-weight: 400; margin-left: .5rem; opacity: .85; }}
 .box {{ display: inline-block; padding: .4rem .8rem; margin-right: .6rem; border-radius: 6px; color: #666; }}
 .pair {{ display: block; }} .pair em {{ font-size: 11px; color: #777; margin-right: .4rem; }}
+.fill {{ display: block; font-size: 11px; color: #777; }}
+.fill i {{ display: inline-block; width: 1.4em; height: .8em; border: 1px solid rgba(128,128,128,.4); vertical-align: middle; }}
+nav.index a {{ margin-right: .5rem; }}
 h2 {{ margin-top: 2.5rem; }}
 </style></head><body>
 <h1>Theme text contrast (#2885): before / after</h1>
 <p>Each pair of chips is the token as it ships (left) and as solved (right); the number is the WCAG ratio.
 Only text tokens move, in lightness, hue and saturation kept.</p>
-<h2>1. Applied: text nudges ({len(applied)}), no polarity flip, at most {max_delta} lightness points</h2>
+<h2>0. Applied: derived readable text colours ({derived_changed} moved, {derived_kept} fills already read and are unchanged)</h2>
+<p>The FILL (what buttons, badges, dots and borders paint) is never touched: it is shown as a swatch under each row.
+Only the colour used AS TEXT (links, <code>.text-primary</code>, alert/badge/status text) moves, left chip = the fill used as text today,
+right chip = the derived text colour. Same hue and saturation; lightness only.</p>
+<nav class="index">{index}</nav>
 <table><tr><th>preset</th><th>mode</th><th>token</th><th>before / after</th><th>L</th></tr>
-{rows(applied)}</table>
+{derived_html}</table>
+{applied_html}
 <h2>2. SUBSTANTIAL, not applied: polarity flips, larger moves, documented-hex and paired moves ({len(substantial)})</h2>
 <table><tr><th>preset</th><th>mode</th><th>token</th><th>before / after</th><th>L</th></tr>
 {rows(substantial)}</table>
