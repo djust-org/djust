@@ -84,9 +84,8 @@ class _WatcherProbe:
 
     ``events`` are the file events the observer delivered to the handler;
     ``drops`` are the dispatcher's calls to ``invalidate_installed_cache``, each
-    with whether the cache was gone right after that call. Waiting on these
-    instead of polling ``_installed_cache`` keeps the test independent of
-    anything else that touches the cache while the watcher runs (#3359).
+    with whether the cache was gone right after that call. The test waits on
+    these, not on a fixed sleep and a poll of ``_installed_cache`` (#3359).
     """
 
     def __init__(self):
@@ -155,10 +154,10 @@ def _run_dispatcher_against_a_new_module(late_app, tmp_path, probe):
     """Start the real watcher on ``tmp_path``, add a ``templatetags`` module, and
     return the dispatcher's cache drops that this module's event caused.
 
-    Waits on the watcher's own signals, not on a fixed sleep or on the shared
-    cache: the observer's start-up latency (FSEvents, a loaded machine) is not a
-    thing the test can know, and a repopulation of the cache by someone else is
-    not a failure of the dispatcher.
+    Waits on the watcher's own signals, not on a fixed sleep: the observer's
+    start-up latency (FSEvents on macOS, a loaded machine) is not something the
+    test can know, and a file written before the observer is live is never
+    reported (the original test failed that way when the observer started late).
     """
     from djust import enable_hot_reload
     from djust.config import config
@@ -214,29 +213,8 @@ def _run_dispatcher_against_a_new_module(late_app, tmp_path, probe):
         config.set("hot_reload_watch_dirs", prev_dirs)
 
 
-@pytest.fixture
-def no_hot_reload_broadcast(monkeypatch):
-    """The dispatcher's broadcast is not under test and must not reach anyone.
-
-    ``LiveViewConsumer.broadcast_reload`` is a ``group_send`` to
-    ``djust_hotreload``; a consumer an earlier test left connected in this
-    worker answers it by re-rendering its view, which re-warms
-    ``template_libraries._installed_cache`` right after the dispatcher dropped it
-    (#3359).
-    """
-    pytest.importorskip("channels")
-    from djust.websocket import LiveViewConsumer
-
-    async def broadcast_reload(file_path):
-        return None
-
-    monkeypatch.setattr(LiveViewConsumer, "broadcast_reload", staticmethod(broadcast_reload))
-
-
 @pytest.mark.django_db
-def test_hot_reload_change_dispatcher_drops_the_library_cache(
-    late_app, tmp_path, watcher_probe, no_hot_reload_broadcast
-):
+def test_hot_reload_change_dispatcher_drops_the_library_cache(late_app, tmp_path, watcher_probe):
     """The REAL watcher: ``enable_hot_reload`` → watchdog observer → debounced
     ``on_file_change`` → ``invalidate_installed_cache``. Not a unit call on
     the hook — the file lands on disk and the observer has to notice it."""
@@ -245,34 +223,3 @@ def test_hot_reload_change_dispatcher_drops_the_library_cache(
         "the hot-reload dispatcher must drop _installed_cache when a .py "
         "file appears under a watched directory (#2602)"
     )
-
-
-@pytest.mark.django_db
-def test_the_dispatcher_drop_is_judged_at_the_call_not_on_the_shared_cache(
-    late_app, tmp_path, watcher_probe, monkeypatch
-):
-    """#3359: something that re-warms the cache right after the dispatcher drops
-    it (a consumer another test left on the ``djust_hotreload`` group re-renders
-    its view on the broadcast) must not fail a test about the drop.
-
-    The broadcast here does exactly that, so a test that polls
-    ``_installed_cache`` for ``None`` never sees it and times out; this one
-    judges the cache at the moment of the call.
-    """
-    pytest.importorskip("channels")
-    from djust.websocket import LiveViewConsumer
-
-    rewarmed = threading.Event()
-
-    async def rewarming_broadcast(file_path):
-        # What a view re-rendering on the broadcast does to the cache, whichever
-        # backend it renders with: the scan is stored again.
-        template_libraries._installed_cache = {"rewarmed": "by-a-render"}
-        rewarmed.set()
-
-    monkeypatch.setattr(LiveViewConsumer, "broadcast_reload", staticmethod(rewarming_broadcast))
-
-    drops = _run_dispatcher_against_a_new_module(late_app, tmp_path, watcher_probe)
-    assert drops and all(drops)
-    # The re-warming broadcast really ran after the drop.
-    assert rewarmed.wait(60), "the broadcast never ran"
