@@ -62,6 +62,12 @@ class Page(_Counted, LiveView):
 class Widget(_Counted, LiveView):
     template = '<div dj-view="' + MOD + '.Widget"><b>widget={{ count }}</b></div>'
 
+    def connected(self):
+        EVENTS.append(("connected", self.tag))
+
+    def disconnected(self):
+        EVENTS.append(("disconnected", self.tag))
+
 
 class Guarded(_Counted, LiveView):
     login_required = True
@@ -214,7 +220,7 @@ async def test_a_view_mounts_beside_the_page_view_and_leaves_it_as_it_was():
         assert "widget=0" in reply["html"]
         # The page view is still the session's, and was not remounted.
         assert session.view_instance is page
-        assert EVENTS == [("mount", "page"), ("mount", "w1")]
+        assert _calls("mount") == ["page", "w1"]
         assert set(session._slots) == {"w1"}
         assert VIEWS["w1"]._websocket_session_id == session.session_id + ".w1"
     finally:
@@ -443,3 +449,41 @@ async def test_a_view_beside_the_page_view_mints_no_navigation_snapshot():
         assert "state_snapshot_signed" not in sibling, sibling.keys()
     finally:
         await stream.aclose()
+
+
+# --------------------------------------------------------------------------- #
+# The lifecycle hooks (#3007) of a view beside the page view
+# --------------------------------------------------------------------------- #
+
+
+def _calls(what):
+    return [tag for (kind, tag) in EVENTS if kind == what]
+
+
+async def test_a_view_beside_the_page_view_gets_connected_and_disconnected_once_each():
+    session, key, stream = await _open()
+    await _mount(session, key, stream, Widget, "w1")
+    await _mount(session, key, stream, Widget, "w2")
+    await _mount(session, key, stream, Widget, "w3")
+    assert sorted(_calls("connected")) == ["w1", "w2", "w3"]
+
+    # Unmounting one ends only its live mount.
+    await _post(session, key, {"type": "unmount", "target_id": "w1"})
+    assert _calls("disconnected") == ["w1"]
+    # Mounting the same container again ends the replaced view's.
+    await _mount(session, key, stream, Widget, "w2")
+    assert _calls("disconnected") == ["w1", "w2"]
+    # A navigation ends the rest, before the new page mounts.
+    await _post(session, key, {"type": "live_redirect_mount", "url": "/page/", "params": {}})
+    await _frame(stream, "mount")
+    assert sorted(_calls("disconnected")) == ["w1", "w2", "w2", "w3"]
+    await stream.aclose()
+
+
+async def test_closing_the_stream_ends_the_live_mount_of_every_view_beside_the_page_view():
+    session, key, stream = await _open()
+    await _mount(session, key, stream, Widget, "w1")
+    await _mount(session, key, stream, Widget, "w2")
+    await stream.aclose()
+    await _until(lambda: len(_calls("disconnected")) == 2, "the views' disconnected()")
+    assert sorted(_calls("disconnected")) == ["w1", "w2"]
