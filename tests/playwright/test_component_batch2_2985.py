@@ -83,6 +83,8 @@ PROJECT = {
             path("custom/", views.Custom.as_view()),
             path("big/", views.Big.as_view()),
             path("rtl/", views.Rtl.as_view()),
+            path("nocss/", views.NoCss.as_view()),
+            path("dup/", views.Dup.as_view()),
         ]
     """,
     "cmpapp/views.py": (
@@ -105,6 +107,9 @@ PROJECT = {
           <button id="move-sel" dj-click="move_selection">move selection</button>
           <button id="insert-folder" dj-click="insert_folder">insert folder</button>
           <button id="reverse-nodes" dj-click="reverse_nodes">reverse nodes</button>
+          <button id="rename-src" dj-click="rename_src">rename src</button>
+          <button id="swap-first" dj-click="swap_first">swap first two</button>
+          <button id="remove-main" dj-click="remove_main">remove main.py</button>
           <section id="panels">
             <div id="p-h-box" style="width:800px">
               {%% resizable_panel direction="horizontal" min_size="100px" max_size="500px" initial_size="300px" %%}<p>horizontal</p>{%% endresizable_panel %%}
@@ -131,11 +136,11 @@ PROJECT = {
         </div>
         """
 
-        def page(head, body=BODY):
+        def page(head, body=BODY, css=True):
             return (
                 "{%% load live_tags djust_components %%}<!DOCTYPE html><html><head><title>c</title>"
                 "{%% djust_client_config %%}"
-                '<link rel="stylesheet" href="/static/djust_components/components.css">'
+                + ('<link rel="stylesheet" href="/static/djust_components/components.css">' if css else "")
                 + head + "</head><body>" + body + "</body></html>"
             )
 
@@ -195,6 +200,19 @@ PROJECT = {
                 ] + self.nodes
 
             @event_handler()
+            def rename_src(self, **kwargs):
+                self.nodes = [dict(self.nodes[0], name="source")] + self.nodes[1:]
+
+            @event_handler()
+            def swap_first(self, **kwargs):
+                self.nodes = [self.nodes[1], self.nodes[0]] + self.nodes[2:]
+
+            @event_handler()
+            def remove_main(self, **kwargs):
+                src = self.nodes[0]
+                self.nodes = [dict(src, children=[c for c in src["children"] if c["name"] != "main.py"])] + self.nodes[1:]
+
+            @event_handler()
             def reverse_nodes(self, **kwargs):
                 self.nodes = list(reversed(self.nodes))
 
@@ -204,6 +222,23 @@ PROJECT = {
 
         class Demo(Base):
             template = page(SCRIPTS)
+
+        class NoCss(Base):
+            # No stylesheet at all: the hook has to do the collapsing itself.
+            template = page(SCRIPTS, css=False)
+
+        class Dup(Base):
+            template = page(SCRIPTS)
+
+            def mount(self, request, **kwargs):
+                super().mount(request, **kwargs)
+                self.nodes = [
+                    {"name": "a", "type": "folder", "children": [
+                        {"name": "lib", "type": "folder", "children": [{"name": "x.py", "type": "file"}]},
+                        {"name": "lib", "type": "folder", "children": [{"name": "y.py", "type": "file"}]}]},
+                    {"name": "b", "type": "folder", "children": [
+                        {"name": "lib", "type": "folder", "children": [{"name": "z.py", "type": "file"}]}]},
+                ]
 
         class Rtl(Base):
             template = page(SCRIPTS).replace("<div dj-root>", '<div dj-root dir="rtl">')
@@ -311,6 +346,14 @@ def main() -> int:
                 )
                 context = browser.new_context(viewport={"width": 1000, "height": 1500})
                 page = context.new_page()
+                frames = []
+                page.on(
+                    "websocket",
+                    lambda ws: ws.on(
+                        "framesent",
+                        lambda f: frames.append(str(f)) if '"type":"event"' in str(f) else None,
+                    ),
+                )
                 console = []
                 page.on("console", lambda m: console.append((m.type, m.text)))
                 page.on("pageerror", lambda e: console.append(("pageerror", str(e))))
@@ -430,8 +473,15 @@ def main() -> int:
                 )
                 wait_text("#lb-active", "2", "lightbox: a swipe left goes to the next image")
                 page.screenshot(path=str(shots / "01-lightbox.png"))
+                mark = len(frames)
                 page.keyboard.press("Escape")
                 wait_text("#lb-open", "False", "lightbox: Escape closes it on the server")
+                page.wait_for_timeout(300)
+                closes = [f for f in frames[mark:] if '"event":"close_lightbox"' in f]
+                check(
+                    len(closes) == 1,
+                    f"lightbox: Escape sends the close event exactly once ({len(closes)})",
+                )
                 page.wait_for_timeout(200)
                 check(
                     page.evaluate("() => document.activeElement.id") == "open-lb",
@@ -584,7 +634,108 @@ def main() -> int:
                     "tree re-render: and src is still collapsed after the reverse",
                 )
 
+                # ---- more server re-renders: rename, swap, remove the focused row / its parent ----
+                load("/")
+                page.click(f"{row('src')} .dj-file-tree__toggle")
+                page.evaluate("() => document.getElementById('rename-src').click()")
+                page.wait_for_selector(row("source"), timeout=6000)
+                page.wait_for_timeout(300)
+                check(
+                    not hidden_children("source")
+                    and page.get_attribute(row("source"), "aria-expanded") == "true",
+                    "tree re-render: a folder renamed in place takes the server's state (open), not the old slot's collapse",
+                )
+                load("/")
+                page.click(f"{row('src')} .dj-file-tree__toggle")
+                page.evaluate("() => document.getElementById('swap-first').click()")
+                page.wait_for_timeout(600)
+                names = page.eval_on_selector_all(
+                    ".dj-file-tree > .dj-file-tree__node--folder",
+                    "els => els.map(e => e.getAttribute('data-name'))",
+                )
+                check(
+                    names[:2] == ["docs", "src"]
+                    and hidden_children("src")
+                    and not hidden_children("docs"),
+                    f"tree re-render: two folders swapped in place keep their own state ({names[:2]}, src closed, docs open)",
+                )
+                load("/")
+                page.focus(row("main.py"))
+                page.evaluate("() => document.getElementById('remove-main').click()")
+                page.wait_for_timeout(600)
+                check(
+                    page.evaluate(
+                        "() => !!document.activeElement.closest('.dj-file-tree') && document.activeElement.classList.contains('dj-file-tree__node')"
+                    ),
+                    f"tree re-render: removing the focused row leaves focus on a row of the tree ({active()})",
+                )
+                check(
+                    page.evaluate(
+                        "() => document.querySelectorAll('.dj-file-tree__node[tabindex=\"0\"]').length"
+                    )
+                    == 1,
+                    "tree re-render: and one tab stop",
+                )
+
+                # ---- the same name under different parents and twice under one parent ----
+                load("/dup/")
+                libs = ".dj-file-tree__node[data-name=lib]"
+                hidden_libs = (
+                    "() => [...document.querySelectorAll('.dj-file-tree__node[data-name=lib]')]"
+                    ".map(l => getComputedStyle(l.nextElementSibling).display === 'none')"
+                )
+                page.locator(libs).nth(1).locator(".dj-file-tree__toggle").click()
+                check(
+                    page.evaluate(hidden_libs) == [False, True, False],
+                    "tree duplicates: collapsing the second lib under a leaves the first and b/lib open",
+                )
+                page.evaluate("() => document.getElementById('insert-folder').click()")
+                page.wait_for_selector(row("aaa"), timeout=6000)
+                page.wait_for_timeout(300)
+                check(
+                    page.evaluate(hidden_libs) == [False, True, False],
+                    "tree duplicates: and each keeps its own state after a folder is inserted above",
+                )
+
+                # ---- no stylesheet at all: the hook collapses and expands by itself ----
+                load("/nocss/")
+                check(
+                    page.evaluate(
+                        "() => ![...document.querySelectorAll('link[rel=stylesheet]')].some((l) => l.href.includes('components.css'))"
+                    ),
+                    "no stylesheet: components.css is not loaded on this page",
+                )
+                page.click(f"{row('docs')} .dj-file-tree__toggle")
+                check(
+                    hidden_children("docs"),
+                    "no stylesheet: collapsing an open folder hides its children",
+                )
+                page.click(f"{row('sub')} .dj-file-tree__name")
+                check(
+                    not hidden_children("sub"),
+                    "no stylesheet: opening a server-collapsed folder shows its children",
+                )
+                check(
+                    page.get_attribute(row("sub"), "aria-expanded") == "true"
+                    and page.evaluate(
+                        "s => document.querySelector(s).nextElementSibling.getBoundingClientRect().height > 0",
+                        row("sub"),
+                    ),
+                    "no stylesheet: aria and layout agree",
+                )
+                page.evaluate("() => document.getElementById('insert-folder').click()")
+                page.wait_for_selector(row("aaa"), timeout=6000)
+                page.wait_for_timeout(300)
+                check(
+                    hidden_children("docs")
+                    and not hidden_children("sub")
+                    and not hidden_children("aaa"),
+                    "no stylesheet: and a re-render that inserts a folder above leaves each state in place",
+                )
+
                 # ======================= ResizablePanel =======================
+                load("/")
+
                 def width(sel):
                     return page.evaluate(
                         "s => document.querySelector(s).getBoundingClientRect().width", sel

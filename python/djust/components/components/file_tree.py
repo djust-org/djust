@@ -18,9 +18,11 @@ class FileTree(Component):
     removes or reorders rows, and keyboard focus stays on the same row; a
     folder the reader has not touched shows the server's ``expanded`` state, a
     renamed folder counts as a new one, and two siblings with one name are told
-    apart by order. The choice is applied through a ``data-dj-open`` attribute
-    that ``components.css`` turns into display (the server's own markup is
-    never rewritten), so the stylesheet that styles the tree must be loaded. The keyboard follows the WAI-ARIA tree pattern: one tab stop, Up/Down
+    apart by order. The hook writes the choice as an inline ``display`` on the
+    children block itself (no stylesheet is required, and the server's own
+    ``display:none`` keeps applying to folders the reader has not touched),
+    marks a block the reader changed with ``data-dj-open``, and keeps the row's
+    ``dj-file-tree__node--expanded`` class and ARIA state in step. The keyboard follows the WAI-ARIA tree pattern: one tab stop, Up/Down
     through the visible rows, Right/Left to open, close and step in or out,
     Home/End, typing a letter to jump, Enter/Space to open a folder or select
     a file. Selecting a file clicks its row, so it fires ``event`` exactly as a

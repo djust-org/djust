@@ -2162,9 +2162,6 @@ button.rating-star:hover ~ .rating-star { color: hsl(var(--muted-foreground)); }
 .dj-file-tree__icon { font-size: 1rem; line-height: 1; }
 .dj-file-tree__name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dj-file-tree__children { /* indentation handled inline */ }
-/* The FileTree hook records the reader's open/closed choice for a folder by name path on its children block; it wins over the server's inline display:none. */
-.dj-file-tree__children[data-dj-open="true"] { display: block !important; }
-.dj-file-tree__children[data-dj-open="false"] { display: none !important; }
 
 /* --- Tour / Onboarding Guide --- */
 .dj-tour__overlay { position: fixed; inset: 0; background: var(--dj-tour-overlay-bg, rgba(0,0,0,0.5)); z-index: 9998; }

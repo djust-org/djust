@@ -41,6 +41,7 @@ function boot(markup, scriptFile, opts) {
     const env = createEnv(markup, opts);
     env.window.eval(read(scriptFile));
     env.window.djust.mountHooks();
+    env.initialHtml = markup;
     env.$ = (sel) => env.window.document.querySelector(sel);
     env.$$ = (sel) => Array.from(env.window.document.querySelectorAll(sel));
     env.live = () => (env.window.document.getElementById('dj-component-live') || {}).textContent;
@@ -398,11 +399,8 @@ describe('ImageLightbox', () => {
 
 const row = (env, name) => env.$(`.dj-file-tree__node[data-name="${name}"]`);
 const group = (env, name) => row(env, name).nextElementSibling;
-// What is shown: the reader's choice (data-dj-open, which components.css turns into display) over the server's inline style.
-const hidden = (g) => {
-    const chosen = g.getAttribute('data-dj-open');
-    return chosen === null ? g.style.display === 'none' : chosen === 'false';
-};
+// What is shown: the hook writes the display inline itself, so no stylesheet is needed.
+const hidden = (g) => g.style.display === 'none';
 
 describe('FileTree', () => {
     it('applies tree semantics, and keeps exactly one tab stop on the selected row', () => {
@@ -571,15 +569,18 @@ describe('FileTree', () => {
             expect(row(env, 'main.py').getAttribute('aria-selected')).toBe('false');
         });
 
-        it('never writes the server\'s markup for a folder: its class and inline style stay what the server rendered', () => {
+        it('writes the reader\'s choice as an inline display (no stylesheet needed) and leaves the server\'s markup exactly as it was once the choice agrees with it', () => {
             const env = boot(TREE(), 'file-tree.js');
-            const snap = () => [row(env, 'sub').getAttribute('class'), group(env, 'sub').getAttribute('style'), row(env, 'src').getAttribute('class'), group(env, 'src').getAttribute('style')];
-            const before = snap();
-            row(env, 'sub').click(); // open the collapsed one
-            row(env, 'src').click(); // close the open one
-            expect(snap()).toEqual(before);
-            expect(hidden(group(env, 'sub'))).toBe(false);
-            expect(hidden(group(env, 'src'))).toBe(true);
+            const sub = row(env, 'sub');
+            expect(group(env, 'sub').getAttribute('style')).toBe('display:none');
+            sub.click(); // open the server-collapsed folder
+            expect(group(env, 'sub').style.display).toBe('');
+            expect(group(env, 'sub').getAttribute('data-dj-open')).toBe('true');
+            expect(sub.classList.contains('dj-file-tree__node--expanded')).toBe(true);
+            sub.click(); // close it again: it is the server's own state, and no marker is left
+            expect(group(env, 'sub').style.display).toBe('none');
+            expect(group(env, 'sub').hasAttribute('data-dj-open')).toBe(false);
+            expect(sub.classList.contains('dj-file-tree__node--expanded')).toBe(false);
         });
 
         it('new rows from a patch get their attributes, and a removed row\'s tab stop moves on', () => {
@@ -992,17 +993,56 @@ describe('AnimatedNumber', () => {
 // FileTree: the server re-renders and rows shift (the VDOM diff is positional)
 // ---------------------------------------------------------------------------
 
-// What the client does with a server re-render of the tree: the focused node is
-// replaced, and attributes the hook put on nodes (here data-dj-open on the
-// children blocks) stay on the same POSITION, now describing a different folder.
+// What the client does with a server re-render of the tree. The VDOM diff is
+// positional: it compares the server's PREVIOUS markup with its new markup, child
+// by child, and rewrites only what differs, in the live DOM. Whatever the hook put
+// on a node (inline display, aria, text) stays on that node, now describing
+// whatever the server put at that position. The mirror below is the server's own
+// view (never touched by the hook).
+function patchChildren(live, mirror, next) {
+    const max = Math.max(mirror.childNodes.length, next.childNodes.length);
+    for (let i = 0; i < max; i++) {
+        const lc = live.childNodes[i];
+        const mc = mirror.childNodes[i];
+        const nc = next.childNodes[i];
+        if (!nc) {
+            while (live.childNodes[i]) live.removeChild(live.childNodes[i]);
+            while (mirror.childNodes[i]) mirror.removeChild(mirror.childNodes[i]);
+            break;
+        }
+        if (!mc) {
+            live.appendChild(nc.cloneNode(true));
+            mirror.appendChild(nc.cloneNode(true));
+            continue;
+        }
+        if (nc.nodeName !== mc.nodeName) {
+            live.replaceChild(nc.cloneNode(true), lc);
+            mirror.replaceChild(nc.cloneNode(true), mc);
+            continue;
+        }
+        if (nc.nodeType === 3) {
+            if (mc.textContent !== nc.textContent) {
+                lc.textContent = nc.textContent;
+                mc.textContent = nc.textContent;
+            }
+            continue;
+        }
+        for (const a of new Set([...mc.getAttributeNames(), ...nc.getAttributeNames()])) {
+            const nv = nc.getAttribute(a);
+            if (mc.getAttribute(a) === nv) continue;
+            if (nv === null) { lc.removeAttribute(a); mc.removeAttribute(a); } else { lc.setAttribute(a, nv); mc.setAttribute(a, nv); }
+        }
+        patchChildren(lc, mc, nc);
+    }
+}
+
 function serverRerender(env, spec) {
+    const doc = env.window.document;
     const tree = env.$('.dj-file-tree');
-    const stale = Array.from(tree.querySelectorAll('.dj-file-tree__children')).map((g) => g.getAttribute('data-dj-open'));
+    const parse = (html) => { const t = doc.createElement('template'); t.innerHTML = html; return t.content; };
+    if (!env.__mirror) env.__mirror = parse(env.initialHtml).querySelector('.dj-file-tree');
     env.window.djust.beforeUpdateHooks();
-    tree.innerHTML = spec.map((n) => node(n)).join('');
-    Array.from(tree.querySelectorAll('.dj-file-tree__children')).forEach((g, i) => {
-        if (stale[i] !== undefined && stale[i] !== null) g.setAttribute('data-dj-open', stale[i]);
-    });
+    patchChildren(tree, env.__mirror, parse(spec.map((n) => node(n)).join('')));
     env.window.djust.updateHooks();
 }
 
@@ -1060,6 +1100,48 @@ describe('FileTree when the server re-renders and rows shift', () => {
         expect(shown(env, 'docs2')).toBe(true);
         serverRerender(env, base());
         expect(shown(env, 'docs')).toBe(false);
+    });
+
+    it('a folder renamed in place (names and text rewritten, same shape) takes the server\'s state, not the old slot\'s', () => {
+        const env = boot(TREE(base()), 'file-tree.js');
+        row(env, 'src').click(); // the reader collapses src
+        serverRerender(env, [folder('source', [file('main.py'), file('utils.py')]), base()[1], base()[2]]);
+        expect(shown(env, 'source')).toBe(true);
+        expect(row(env, 'source').getAttribute('aria-expanded')).toBe('true');
+        serverRerender(env, base()); // and renamed back
+        expect(shown(env, 'src')).toBe(false);
+        expect(row(env, 'src').getAttribute('aria-expanded')).toBe('false');
+    });
+
+    it('a change of only the data-name attribute re-keys the state too', () => {
+        const env = boot(TREE(base()), 'file-tree.js');
+        row(env, 'src').click(); // collapsed
+        expect(shown(env, 'src')).toBe(false);
+        env.window.djust.beforeUpdateHooks();
+        row(env, 'src').setAttribute('data-name', 'elsewhere');
+        env.window.djust.updateHooks();
+        expect(shown(env, 'elsewhere')).toBe(true);
+    });
+
+    it('two folders of the same shape swapped in place keep each one\'s own state', () => {
+        const three = (a, b) => [folder(a, [file('1'), file('2')]), folder(b, [file('1'), file('2')]), folder('d3', [file('1'), file('2')])];
+        const env = boot(TREE(three('d1', 'd2')), 'file-tree.js');
+        row(env, 'd1').click(); // the reader collapses d1
+        serverRerender(env, three('d2', 'd1')); // the server swaps them
+        expect(shown(env, 'd1')).toBe(false); // d1, now second, is still collapsed
+        expect(shown(env, 'd2')).toBe(true);
+        expect(shown(env, 'd3')).toBe(true);
+        expect(env.$$('.dj-file-tree__node--folder').map((n) => n.getAttribute('data-name'))).toEqual(['d2', 'd1', 'd3']);
+    });
+
+    it('a server change of a folder\'s inline display is picked up even when the reader had set it differently', () => {
+        const env = boot(TREE([folder('src', [file('m')], { expanded: false })]), 'file-tree.js');
+        row(env, 'src').click(); // reader opens
+        expect(shown(env, 'src')).toBe(true);
+        serverRerender(env, [folder('src', [file('m')], { expanded: true })]); // server opens too: choice dropped
+        serverRerender(env, [folder('src', [file('m')], { expanded: false })]); // server closes: follows
+        expect(shown(env, 'src')).toBe(false);
+        expect(group(env, 'src').hasAttribute('data-dj-open')).toBe(false);
     });
 
     it('the same name under different parents, and twice under one parent, are different folders', () => {

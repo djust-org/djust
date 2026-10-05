@@ -11,11 +11,12 @@
  *   remembered by the folder's NAME PATH (its name and its parents' names), not
  *   by its position, so a re-render that inserts, removes or reorders rows
  *   leaves each folder as the reader set it. The server's own open/closed
- *   markup stays untouched and applies to every folder the reader has not
- *   touched (and again once the reader's choice matches it). It is applied
- *   through a ``data-dj-open`` attribute on the children block, which
- *   components.css turns into display; the same keys keep the roving tab stop
- *   and keyboard focus on the same row across a re-render;
+ *   markup applies to every folder the reader has not touched (and again once
+ *   the reader's choice matches it): the hook remembers the server's
+ *   ``display:none`` per children block, writes the reader's choice as an
+ *   inline display itself (so no stylesheet is needed), and marks a block the
+ *   reader changed with ``data-dj-open``. The same keys keep the roving tab
+ *   stop and keyboard focus on the same row across a re-render;
  * - one tab stop (roving tabindex). Up/Down move through the visible rows,
  *   Right expands a folder or steps into it, Left collapses it or steps out to
  *   its parent, Home/End jump, typing a letter jumps to the next row starting
@@ -69,19 +70,23 @@
     return !!groupOf(node) && !!toggleOf(node);
   }
 
-  // What the server rendered: a collapsed folder's children block carries an
-  // inline ``display:none``. The hook never writes that, so it stays the
-  // server's truth however rows shift.
+  // What the server last rendered for a children block (open or not): a
+  // collapsed folder carries an inline ``display:none``. The hook writes the
+  // inline display itself, so it remembers the server's value per element (in
+  // JavaScript, not on the page) and learns a new one when a server patch
+  // changes the block's style.
+  var SERVER_OPEN = new WeakMap();
+
   function serverOpen(group) {
-    return group.style.display !== "none";
+    if (!SERVER_OPEN.has(group)) SERVER_OPEN.set(group, group.style.display !== "none");
+    return SERVER_OPEN.get(group);
   }
 
-  // What is shown: the reader's choice (data-dj-open) over the server's.
+  // What is shown: the inline display (the reader's choice where there is one,
+  // the server's otherwise).
   function isExpanded(node) {
     var group = groupOf(node);
-    if (!group) return false;
-    var chosen = group.getAttribute(OPEN_ATTR);
-    return chosen === null ? serverOpen(group) : chosen === "true";
+    return !!group && group.style.display !== "none";
   }
 
   function rowName(node) {
@@ -218,7 +223,13 @@
       // Anything that changed the tree reached the observer (its callback runs
       // after this synchronous patch, so ask for the pending records); nothing
       // else costs a walk, however many patches the page receives.
-      if (this._observer && this._observer.takeRecords().length) this._dirty = true;
+      if (this._observer) {
+        var pending = this._observer.takeRecords();
+        if (pending.length) {
+          this._noteRecords(pending);
+          this._dirty = true;
+        }
+      }
       if (this._dirty) this._sync();
       this._refocus();
     },
@@ -232,8 +243,11 @@
       if (key === null || key === undefined) return;
       var root = this.el;
       var active = document.activeElement;
-      var inTree = isNode(active) && root.contains(active);
-      if (inTree ? pathKey(active) === key : active && active !== document.body) return;
+      // Lost: nothing has focus, or focus is on an element of the tree that a
+      // patch turned into something else. Moved: a row that now holds another path.
+      var lost = !active || active === document.body || (root.contains(active) && !isNode(active));
+      var moved = isNode(active) && root.contains(active) && pathKey(active) !== key;
+      if (!lost && !moved) return;
       var target = findByKey(root, key);
       while (key.indexOf(SEP) !== key.lastIndexOf(SEP) && (!target || !shown(target))) {
         key = key.slice(0, key.lastIndexOf(SEP));
@@ -296,12 +310,20 @@
     // markup otherwise.
     _apply: function (node, key) {
       var group = groupOf(node);
+      var server = serverOpen(group);
       var chosen = this._open.get(key);
-      if (chosen !== undefined && chosen === serverOpen(group)) {
+      if (chosen !== undefined && chosen === server) {
         // The reader's choice now agrees with the server; follow the server again.
         this._open.delete(key);
         chosen = undefined;
       }
+      var open = chosen === undefined ? server : chosen;
+      var want = open ? "" : "none";
+      // The style attribute is left in place even when empty: a server patch
+      // that removes it must still reach the observer (removing an attribute
+      // that is not there leaves no record), and that is how the hook learns
+      // the server's new value.
+      if (group.style.display !== want) group.style.display = want;
       if (chosen === undefined) {
         if (group.hasAttribute(OPEN_ATTR)) group.removeAttribute(OPEN_ATTR);
       } else {
@@ -310,10 +332,24 @@
       this._reflect(node);
     },
 
+    // A server patch that rewrote a children block's style tells us what the
+    // server now wants for it. (Records of the hook's own writes are always
+    // discarded with takeRecords(), so what is left is the server's.)
+    _noteRecords: function (records) {
+      for (var i = 0; i < records.length; i++) {
+        var r = records[i];
+        if (r.type === "attributes" && r.attributeName === "style" && r.target.classList &&
+            r.target.classList.contains(GROUP)) {
+          SERVER_OPEN.set(r.target, r.target.style.display !== "none");
+        }
+      }
+    },
+
     // The ARIA state, arrow and icon of a folder row for what is shown.
     _reflect: function (node) {
       var group = groupOf(node);
       var open = isExpanded(node);
+      node.classList.toggle("dj-file-tree__node--expanded", open);
       setAttr(node, "aria-expanded", open ? "true" : "false");
       setAttr(group, "role", "group");
       var toggle = toggleOf(node);
@@ -440,17 +476,21 @@
       });
 
       if (window.MutationObserver) {
-        this._observer = new MutationObserver(function () {
+        this._observer = new MutationObserver(function (records) {
+          self._noteRecords(records);
           self._dirty = true;
         });
         this._observer.observe(root, {
           childList: true,
           subtree: true,
+          // A rename or a swap that rewrites names (and their text) in place
+          // moves a folder's name path without changing the tree's shape.
+          characterData: true,
           attributes: true,
-          // The state the hook reads (class, style) and what it writes (a morph
-          // that restores the server's markup resets these, and then the next
-          // patch must apply them again).
-          attributeFilter: ["class", "style", "tabindex", "role", "aria-level", "aria-selected", "aria-expanded", OPEN_ATTR],
+          // The state the hook reads (class, style, data-name) and what it
+          // writes (a morph that restores the server's markup resets these,
+          // and then the next patch must apply them again).
+          attributeFilter: ["class", "style", "data-name", "tabindex", "role", "aria-level", "aria-selected", "aria-expanded", OPEN_ATTR],
         });
       }
     },
