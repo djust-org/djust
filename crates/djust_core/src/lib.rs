@@ -3021,6 +3021,11 @@ fn is_py_non_printable(c: char) -> bool {
 /// | 3.12 | 15.0.0 | 148998 |
 /// | 3.13 | 15.1.0 | 149625 |
 /// | 3.14 | 16.0.0 | 154810 |
+/// | 3.15 | 17.0.0 | 159613 |
+///
+/// CPython 3.15 (Unicode 17.0, #3255) has the same shape: 4803 code points
+/// became printable, none stopped being printable, and every one of them was
+/// unassigned in 16.0.
 ///
 /// But the drift has a SHAPE, and that is what makes a fixed table correct.
 /// Measured end to end (13.0 → 16.0): of those 11130 code points, **11130
