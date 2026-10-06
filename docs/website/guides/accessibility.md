@@ -455,9 +455,12 @@ A `--*-foreground` label sits on its fill (`--primary-foreground` on `--primary`
 (white on a bright button, most often), the label token was moved in lightness only, hue
 and saturation kept, to the nearest lightness that reads: usually to dark ink on a bright
 fill. The fills never moved, and only the label tokens and `link` / `link_hover` changed.
-A few labels are still documented exemptions in
-`djust.theming.a11y_exemptions` because their source documents a brand hex that is not
-ours to recolour, or because the token is also painted as a background.
+Some pairs are documented exemptions in `djust.theming.a11y_exemptions` on purpose:
+tokens whose source documents a brand hex that the palette keeps (monokai and stripe
+`link`, github and stripe muted text), and the `--input` border, which is a non-text UI
+component whose 3:1 (WCAG 1.4.11) is not applied to the shipped presets (revisit on
+request). User-authored presets are still measured on all of them. `accent_foreground`
+is the one label still open, because `.status-badge-accent` paints it as a background.
 
 ### Primary and status colours as text use `--primary-text`, `--info-text`, `--success-text`, `--warning-text`
 

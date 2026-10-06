@@ -25,6 +25,7 @@ import os
 import shutil
 import sys
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -128,6 +129,35 @@ class TestApprovedMovesAreApplied:
         flip = fix.Move("x", "light", "primary_foreground", before, 10, True)
         assert not flip.is_nudge(fix.DEFAULT_MAX_DELTA)  # not a nudge, but not held either
         assert not flip.hold
+
+
+class TestDeliberateExemptions:
+    """Two groups are exempt by the owner's decision (2026-10-06), not as debt: they carry
+    their own reason, and everything else in the exemption list is the undecided rest."""
+
+    def test_every_input_border_row_says_it_is_a_non_text_component(self):
+        rows = {k: v for k, v in A11Y_EXEMPTIONS.items() if (k[2], k[3]) == ("input", "background")}
+        assert len(rows) == 131
+        for key, reason in rows.items():
+            assert "non-text UI components" in reason and "revisit on request" in reason, key
+            assert "grandfathered" not in reason, key
+
+    def test_the_brand_hex_rows_name_the_hex_their_source_documents(self):
+        from djust.theming.a11y_exemptions import BRAND_HEX_EXEMPTIONS
+
+        assert len(BRAND_HEX_EXEMPTIONS) == 6
+        for (preset, _mode, _fg, _bg), hex_ in BRAND_HEX_EXEMPTIONS.items():
+            source = (Path(fix.THEMES_DIR) / f"{preset}.py").read_text().lower()
+            assert hex_.lower() in source, f"{preset} no longer documents {hex_}"
+            reason = A11Y_EXEMPTIONS[(preset, _mode, _fg, _bg)]
+            assert hex_ in reason and "not debt" in reason
+
+    def test_the_label_and_link_rows_left_are_exactly_the_brand_hex_and_accent_ones(self):
+        from djust.theming.a11y_exemptions import BRAND_HEX_EXEMPTIONS
+
+        rest = {k for k in A11Y_EXEMPTIONS if k[2] in fix.LABEL_TOKENS} - set(BRAND_HEX_EXEMPTIONS)
+        assert rest and all(k[2] == "accent_foreground" for k in rest)
+        assert len(rest) + len(BRAND_HEX_EXEMPTIONS) == PENDING_TEXT_PAIR_EXEMPTIONS
 
 
 class TestLinkHover:

@@ -34,13 +34,15 @@ solves each failing ``*_foreground`` label, ``link`` and ``link_hover`` in
 lightness only (hue and saturation kept) and writes the small, same-side
 moves, which removed their rows. The owner then approved the polarity flips and
 the large moves of the label and link tokens (2026-10-06): a label that failed
-on its fill flips between light and dark ink, and the fill never moves. The 23
-entries that remain for those tokens are the ones that were NOT approved: tokens
-whose source documents an exact brand hex (monokai and stripe ``link``, github
-and stripe ``muted_foreground``, and the ``link_hover`` that moves with monokai's
-link) and ``accent_foreground``, which ``.status-badge-accent`` paints as a
-background (``--proposals --include-substantial`` lists them); ``--check`` fails
-while a small move is still pending.
+on its fill flips between light and dark ink, and the fill never moves. Two groups
+are exempt BY DECISION, not as debt (owner, 2026-10-06): the 131 ``input`` border rows
+(non-text UI components, 3:1 not applied to the shipped presets, revisit on request:
+``INPUT_BORDER_EXEMPTION_REASON``) and the 6 rows of tokens whose source documents an
+exact brand hex that the owner keeps (monokai and stripe ``link``, github and stripe
+``muted_foreground``: ``BRAND_HEX_EXEMPTIONS``). The other 17 label rows are
+``accent_foreground``, which ``.status-badge-accent`` paints as a background; that
+one is still undecided (``--proposals --include-substantial`` lists it).
+``--check`` fails while a small move is still pending.
 
 Entries were auto-generated from ``scripts/report_theme_contrast.py
 --python-dict`` (2026-07, #2060; 2026-09, #2874) — do not hand-edit
@@ -454,6 +456,46 @@ A11Y_EXEMPTIONS.update(
     {
         key: f"grandfathered at the #3281/#3165 matrix extension (2026-09, #2885 owns remediation); ratio {ratio:.2f}"
         for key, ratio in _PAIR_DEBT_2885.items()
+    }
+)
+
+# Two groups the owner decided to EXEMPT deliberately (John, 2026-10-06, #2885). They are
+# not debt waiting for a fix: they are documented decisions, each with its reason, and
+# they stay in the exact ratchet pin.
+#
+# 1. The ``input`` border on the background (WCAG 1.4.11, 3:1). An input border is a
+#    non-text UI component and the shipped palettes keep it subtle on purpose, so the 3:1
+#    is not applied to the shipped presets. User-authored presets are still measured by
+#    W001. Revisit on request.
+INPUT_BORDER_EXEMPTION_REASON = (
+    "input borders are non-text UI components; 3:1 not applied to the shipped presets "
+    "(owner decision 2026-10-06, #2885); revisit on request; ratio {ratio:.2f}"
+)
+A11Y_EXEMPTIONS.update(
+    {
+        key: INPUT_BORDER_EXEMPTION_REASON.format(ratio=ratio)
+        for key, ratio in _PAIR_DEBT_2885.items()
+        if (key[2], key[3]) == ("input", "background")
+    }
+)
+
+# 2. Tokens whose source documents an exact brand hex. The hex is the palette's identity,
+#    so the owner keeps it and the pair stays below 4.5:1: key -> the documented hex.
+BRAND_HEX_EXEMPTIONS: dict[tuple[str, str, str, str], str] = {
+    ("github", "light", "muted_foreground", "muted"): "#656D76",
+    ("monokai", "dark", "link", "card"): "#ae81ff",
+    ("monokai", "light", "link", "background"): "#ae81ff",
+    ("monokai", "light", "link", "card"): "#ae81ff",
+    ("stripe", "light", "link", "background"): "#635BFF",
+    ("stripe", "light", "muted_foreground", "muted"): "#697386",
+}
+A11Y_EXEMPTIONS.update(
+    {
+        key: (
+            f"keeps its documented brand hex {hex_}, which is the palette's identity "
+            "(owner decision 2026-10-06, #2885); exempt, not debt"
+        )
+        for key, hex_ in BRAND_HEX_EXEMPTIONS.items()
     }
 )
 

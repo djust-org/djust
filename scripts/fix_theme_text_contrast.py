@@ -28,7 +28,7 @@ any fill, background or border TOKEN is touched:
   below and ``accent_foreground`` (``.status-badge-accent`` paints it as a background).
 * Held back: a token whose source line documents an exact hex colour (for
   example ``# Purple #ae81ff``) is a stated brand value, so any move of it is
-  an identity decision for the owner, never a nudge.
+  an identity decision for the owner, never a nudge (2026-10-06: the owner keeps these hexes, so they are exempt, not debt).
 
 "Text token" is about the token, not about every place the CSS paints it:
 ``--muted-foreground`` is also the fill or stroke of status dots, switch
@@ -39,7 +39,7 @@ tracks, scrollbar thumbs, spinners and skeletons (components.css), so a moved
 they are also fills, so they are not moved here: the derived ``*_text`` tokens
 (``destructive_text`` #3320, then ``primary_text`` ... #2885) carry that, solved by
 ``ThemeTokens``. The remaining failure that is NOT a text-colour fix is reported,
-never applied: the ``input`` border is a non-text UI edge.
+never applied: the ``input`` border is a non-text UI edge, exempt by the owner's decision of 2026-10-06 (3:1 not applied to the shipped presets; revisit on request).
 
 Usage (from the repository root):
     PYTHONPATH=python python scripts/fix_theme_text_contrast.py            # summary
@@ -568,7 +568,7 @@ right chip = the derived text colour. Same hue and saturation; lightness only.</
 <h2>2. NOT applied: {"held moves (documented brand hex, fill-painted accent_foreground)" if approved else "polarity flips, larger moves, documented-hex and paired moves"} ({len(substantial)})</h2>
 <table><tr><th>preset</th><th>mode</th><th>token</th><th>before / after</th><th>L</th></tr>
 {rows(substantial)}</table>
-<h2>3. SUBSTANTIAL, not applied: input border, 3:1 non-text ({len(groups["border"])})</h2>
+<h2>3. Exempt by decision (not applied): input border, 3:1 non-text ({len(groups["border"])}); kept for reference</h2>
 <table><tr><th>preset</th><th>mode</th><th>before / after</th><th>L</th></tr>
 {border_rows()}</table>
 </body></html>"""
