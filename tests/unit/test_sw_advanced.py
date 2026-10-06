@@ -881,13 +881,15 @@ class TestMountBatchNavigatePassthrough:
         batch_frames = [f for f in consumer.sent_frames if f.get("type") == "mount_batch"]
         assert len(batch_frames) == 1
         batch = batch_frames[0]
-        # Fix #4 — the redirect appears in navigate[]; the other view
-        # still mounts. The redirecting view must NOT appear in views[]
-        # OR failed[] (it's a legitimate redirect, not a failure).
-        assert "navigate" in batch
-        assert len(batch["navigate"]) == 1
-        assert batch["navigate"][0]["to"] == "/login"
-        assert batch["navigate"][0]["target_id"] == "needs-redirect"
+        # Fix #4, as of #3252: the redirect is reported for that view alone in
+        # refused[] (its container shows it; no page navigates, so no
+        # navigate[]); the other view still mounts. The redirecting view must
+        # NOT appear in views[] OR failed[] (a refusal, not a failure).
+        assert "navigate" not in batch
+        assert len(batch["refused"]) == 1
+        assert batch["refused"][0]["reason"] == "redirect"
+        assert batch["refused"][0]["to"] == "/login"
+        assert batch["refused"][0]["target_id"] == "needs-redirect"
         # Successful mount for the non-redirecting view.
         survivor_ids = {v["target_id"] for v in batch["views"]}
         assert survivor_ids == {"ok-1"}

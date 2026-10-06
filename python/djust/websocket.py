@@ -3083,6 +3083,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         mount_frame = None
         error_frame = None
         navigate_frame = None
+        refused_frame = None
         push_events: list = []
         for frame in captured:
             ftype = frame.get("type")
@@ -3090,10 +3091,24 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 mount_frame = frame
             elif ftype == "error":
                 error_frame = frame
+            elif ftype == "view_refused":
+                refused_frame = frame
             elif ftype == "navigate":
                 navigate_frame = frame
             elif ftype == "push_event":
                 push_events.append(frame)
+
+        if refused_frame is not None:
+            # Refused (login, permission, ``on_mount`` redirect): reported for
+            # this view alone, in ``refused[]``; the client shows it in the
+            # view's container and no page navigates (#3252).
+            return (
+                False,
+                {"target_id": target_id, "view": view_path},
+                None,
+                {**refused_frame, "target_id": target_id, "view": view_path},
+                push_events,
+            )
 
         if navigate_frame is not None:
             # Redirect — surface through the batch response so the
@@ -3256,9 +3271,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         successes: list = []
         failures: list = []
         navigates: list = []
+        refused: list = []
         all_push_events: list = []
         await self._mount_batch_entries(
-            views_list, client_timezone, successes, failures, navigates, all_push_events
+            views_list, client_timezone, successes, failures, navigates, all_push_events, refused
         )
 
         response: Dict[str, Any] = {
@@ -3269,6 +3285,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         }
         if navigates:
             response["navigate"] = navigates
+        if refused:
+            response["refused"] = refused
         await self.send_json(response)
 
         # Fix #1295: flush push events that were captured during mount.
@@ -3287,6 +3305,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         failures: list,
         navigates: list,
         all_push_events: list,
+        refused: Optional[list] = None,
     ) -> None:
         """Mount each ``mount_batch`` entry in order, sorting the outcomes."""
         for view_data in views_list:
@@ -3310,7 +3329,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 successes.append(payload)
                 continue
             if nav is not None:
-                navigates.append(nav)
+                if nav.get("type") == "view_refused" and refused is not None:
+                    refused.append(nav)
+                else:
+                    navigates.append(nav)
                 continue
             failed = dict(payload)
             failed["error"] = err or "unknown"

@@ -159,6 +159,29 @@ _CONSUMER_METHODS = frozenset(
     }
 )
 
+#: Why a view beside the page view was refused, as ``view_refused`` frames name it.
+REFUSAL_REASONS = frozenset({"login_required", "permission_denied", "redirect"})
+
+
+def refusal_frame(reason: str, to: Optional[str] = None) -> Dict[str, Any]:
+    """The ``view_refused`` frame for a view that may not be shown (#3252).
+
+    ``reason`` is ``login_required`` (the view needs a sign-in; ``to`` is the
+    sign-in URL), ``permission_denied`` or ``redirect`` (an ``on_mount`` hook
+    sent the view elsewhere; ``to`` is where). The frame carries no message
+    text: the client words it, and the application can restyle or replace it
+    through the ``djust:view-refused`` event.
+    """
+    frame: Dict[str, Any] = {
+        "type": "view_refused",
+        "reason": reason if reason in REFUSAL_REASONS else "permission_denied",
+        "code": "permission_denied",
+    }
+    if isinstance(to, str) and to:
+        frame["to"] = to
+    return frame
+
+
 # Auth refusals. A refused slot is torn down on its own: the socket also carries
 # the views that are still allowed to be live.
 _AUTH_CLOSE_CODES = frozenset({4401, 4403})
@@ -167,7 +190,7 @@ _AUTH_CLOSE_CODES = frozenset({4401, 4403})
 class ViewSlot:
     """One view mounted on the socket besides the page view."""
 
-    __slots__ = ("target_id", "state", "capture", "runtime", "facade", "closing")
+    __slots__ = ("target_id", "state", "capture", "runtime", "facade", "closing", "refused")
 
     def __init__(self, consumer: Any, target_id: str) -> None:
         self.target_id = target_id
@@ -177,6 +200,9 @@ class ViewSlot:
         #: (``mount_batch`` gathers each entry's mount frame).
         self.capture: Optional[List[Dict[str, Any]]] = None
         self.closing = False
+        #: True once a ``view_refused`` frame told the client this view is not
+        #: allowed (sent at most once).
+        self.refused = False
         self.facade = SlotConsumer(consumer, self)
         from .runtime import ViewRuntime, WSConsumerTransport
 
@@ -274,6 +300,19 @@ class SlotConsumer:
             data.setdefault("target_id", slot.target_id)
         await consumer.send_json(data)
 
+    async def send_refusal(self, reason: str, to: Optional[str] = None) -> None:
+        """Tell the client this view is refused (a ``view_refused`` frame).
+
+        The client renders the refusal into this view's container; the page
+        view, the other views and the page's URL are untouched. At most once
+        per view. ``to`` is the sign-in URL a login redirect named, if any.
+        """
+        slot: ViewSlot = object.__getattribute__(self, "_slot")
+        if slot.refused:
+            return
+        slot.refused = True
+        await self.send_json(refusal_frame(reason, to))
+
     async def close(self, code: Optional[int] = None, reason: Optional[str] = None) -> None:
         """Close what this view runs on.
 
@@ -282,8 +321,11 @@ class SlotConsumer:
         """
         consumer = object.__getattribute__(self, "_slot_consumer")
         if code in _AUTH_CLOSE_CODES:
-            await consumer._release_slot(
-                object.__getattribute__(self, "_slot"), reason="view_refused"
-            )
+            slot = object.__getattribute__(self, "_slot")
+            if not slot.refused:
+                # A refusal that arrives after the view mounted (its authority
+                # was revoked): the container shows it too.
+                await self.send_refusal("permission_denied")
+            await consumer._release_slot(slot, reason="view_refused")
             return
         await consumer.close(code, reason)

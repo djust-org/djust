@@ -5,8 +5,9 @@ given. ``xfail(strict=True)`` turns into a failure the day one is fixed, so the
 fix has to delete its marker (and move the test into the transport's own file).
 
 Open on #3252 after the SSE work: a slow handler in one view delays the others
-on its connection (one render lock), and a refused login-required lazy view
-still sends the whole page to the login page. Not pinned here because they are
+on its connection (one render lock). A refused lazy view used to send the whole
+page to the login page; it is now refused alone
+(``test_multi_view_refusal_3252.py``). Not pinned here because they are
 client-side: events sent from code with no element go to the page view, the
 destination's ``dj-lazy`` containers do not hydrate after ``live_redirect``, and
 the page-POST fallback (a browser with no ``EventSource``) cannot host lazy
@@ -45,12 +46,6 @@ class Slow(LiveView):
     @event_handler()
     def quick(self, **kwargs):
         pass
-
-
-class Guarded(LiveView):
-    exposure_policy = "legacy"
-    login_required = True
-    template = '<div dj-view="' + MOD + '.Guarded" dj-id="0"><b>guarded</b></div>'
 
 
 @pytest.fixture(autouse=True)
@@ -110,21 +105,4 @@ async def test_a_slow_handler_in_one_view_does_not_delay_another_view():
         assert frames[-1]["target_id"] == "b"
     finally:
         RELEASE.set()
-        await communicator.disconnect()
-
-
-@pytest.mark.xfail(
-    strict=True, reason="a refused lazy view's login redirect is a page-level navigate frame"
-)
-async def test_a_refused_lazy_view_does_not_send_the_whole_page_to_login():
-    communicator = await _connect()
-    try:
-        await communicator.send_json_to({"type": "mount", "view": MOD + ".Slow", "url": "/p/"})
-        await _until(communicator, "mount")
-        await communicator.send_json_to(
-            {"type": "mount", "view": MOD + ".Guarded", "url": "/p/", "target_id": "g"}
-        )
-        frames = await _until(communicator, "navigate", "error", "mount")
-        assert not any(f.get("type") == "navigate" for f in frames), frames
-    finally:
         await communicator.disconnect()
