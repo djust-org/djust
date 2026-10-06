@@ -454,7 +454,7 @@ A `--*-foreground` label sits on its fill (`--primary-foreground` on `--primary`
 `W001` measures every such pair at 4.5:1. Where a shipped preset's label missed it
 (white on a bright button, most often), the label token was moved in lightness only, hue
 and saturation kept, to the nearest lightness that reads: usually to dark ink on a bright
-fill. The fills never moved, and only the label tokens and `link` / `link_hover` changed.
+fill. No fill, background or border token moved: only the label tokens and `link` / `link_hover` changed. `--muted-foreground` is also drawn as dots, switch tracks and scrollbar thumbs, which follow its move (away from the page). A label is only painted on the fill it belongs to; a test scans every rule that sets `color` from a `--*-foreground` token and requires the same rule's background to be that fill.
 Some pairs are documented exemptions in `djust.theming.a11y_exemptions` on purpose:
 tokens whose source documents a brand hex that the palette keeps (monokai and stripe
 `link`, github and stripe muted text), and the `--input` border, which is a non-text UI

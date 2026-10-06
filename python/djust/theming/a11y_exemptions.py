@@ -34,7 +34,7 @@ solves each failing ``*_foreground`` label, ``link`` and ``link_hover`` in
 lightness only (hue and saturation kept) and writes the small, same-side
 moves, which removed their rows. The owner then approved the polarity flips and
 the large moves of the label and link tokens (2026-10-06): a label that failed
-on its fill flips between light and dark ink, and the fill never moves. Two groups
+on its fill flips between light and dark ink; no fill token moves (``muted_foreground`` also paints dots and tracks, which follow it). Two groups
 are exempt BY DECISION, not as debt (owner, 2026-10-06): the 131 ``input`` border rows
 (non-text UI components, 3:1 not applied to the shipped presets, revisit on request:
 ``INPUT_BORDER_EXEMPTION_REASON``) and the 6 rows of tokens whose source documents an
