@@ -8630,6 +8630,7 @@ class TerminalHandler:
         wrap = kw.get("wrap", False)
         custom_class = kw.get("class", "")
         max_lines = kw.get("max_lines", 0)
+        auto_scroll = kw.get("auto_scroll", True)
 
         e_class = conditional_escape(str(custom_class))
         classes = ["dj-terminal"]
@@ -8681,6 +8682,8 @@ class TerminalHandler:
             max_lines = 0
         if max_lines > 0:
             hook_attrs += f' data-max-lines="{max_lines}"'
+        if not auto_scroll:
+            hook_attrs += ' data-auto-scroll="false"'
 
         return _safe(
             f'<div class="{class_str}" dj-hook="Terminal"{stream_attr}{hook_attrs}>'
