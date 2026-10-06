@@ -81,6 +81,26 @@ class ProfileView(UploadMixin, LiveView):
 </style>
 ```
 
+### Or use the `ImageUploadPreview` component
+
+`ImageUploadPreview` wraps these directives for images: pass the slot name as `upload` and it renders the `dj-upload-drop` zone and the `dj-upload` input for you, and adds what a reader sees around them: a thumbnail per file the moment it is chosen or dropped (a browser object URL: nothing is read into memory or sent for the preview), a progress bar and Cancel while it uploads, Remove afterwards, and announcements for screen readers. The transfer, the progress events, the cancellation and every server-side check are the ones described on this page; the component adds no transport.
+
+```python
+class PhotosView(UploadMixin, LiveView):
+    def mount(self, request, **kwargs):
+        self.allow_upload("photos", accept="image/*", max_entries=5, max_file_size=5_000_000)
+        self.upload = ImageUploadPreview(
+            name="photos", upload="photos", max=5, max_size=5_000_000, event="photos_uploaded"
+        )
+
+    @event_handler()
+    def photos_uploaded(self, count=0, **kwargs):
+        for entry in self.consume_uploaded_entries("photos"):
+            ...  # as above: entry.safe_client_name, never entry.client_name
+```
+
+`accept`, `max` and `max_size` on the component are UX pre-checks only: a file that fails one is listed with the reason and never sent, which spares a wasted upload. The server still enforces what `allow_upload` says (and refuses SVG and other active content unless `allow_active_content=True`); keep the two in step. The component's `event` fires once a selection has finished uploading, with `count` (the browser's claim: display only; read what arrived with `consume_uploaded_entries`). If your Content-Security-Policy restricts `img-src`, allow `blob:` for the thumbnails (a blocked thumbnail falls back to a name-and-size row; uploads are unaffected).
+
 ## `allow_upload()` Parameters
 
 | Parameter | Type | Default | Description |

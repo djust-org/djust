@@ -1809,17 +1809,24 @@ class ImageUploadPreviewNode(template.Node):
             "</svg>"
         )
 
+        from djust.components.components.image_upload_preview import ITEMS_HTML, upload_attrs
+
+        root_attrs, zone_attrs, input_attrs = upload_attrs(
+            kw.get("upload"), kw.get("max_size", 0), "event" in kw
+        )
+
         return mark_safe(
             f'<div class="{cls}" dj-hook="ImageUploadPreview" '
-            f'data-event="{e_event}" data-max="{max_count}">'
-            f'<label class="dj-img-upload__dropzone">'
+            f'data-event="{e_event}" data-max="{max_count}"{root_attrs}>'
+            f'<label class="dj-img-upload__dropzone"{zone_attrs}>'
             f"{upload_svg}"
             f'<span class="dj-img-upload__text">Drop images here or click to upload</span>'
             f'<span class="dj-img-upload__hint">Max {max_count} images</span>'
             f'<input type="file" name="{e_name}" accept="{e_accept}" '
-            f'multiple class="dj-img-upload__input" aria-label="Upload images">'
+            f'multiple class="dj-img-upload__input" aria-label="Upload images"{input_attrs}>'
             f"</label>"
             f"{thumbs_html}"
+            f"{ITEMS_HTML}"
             f"</div>"
         )
 
