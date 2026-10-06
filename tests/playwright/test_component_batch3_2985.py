@@ -641,6 +641,60 @@ def main() -> int:
                         f"{name}: six trimmed bursts of 1,500 variable-height lines all end at the bottom (gaps {[round(g) for g in gaps]})",
                     )
 
+                # ---- a reader scrolls up while the stream keeps appending and trimming ----
+                # (3 variable-height lines per append, max_lines=50, wrapped; pushed through
+                # the same client path as a server push_event, at the pace of one per frame)
+                start_stream = """([event, prefix, ms]) => {
+                    let n = 0;
+                    window.__stream = setInterval(() => {
+                        const lines = [];
+                        for (let k = 0; k < 3; k++, n++) lines.push(prefix + 'v'.repeat(5 + (n * n * 31 + n * 7) % 420) + ' ' + n);
+                        window.djust.dispatchPushEventToHooks(event, {lines});
+                    }, ms);
+                }"""
+                stop_stream = "() => { clearInterval(window.__stream); window.__stream = 0; }"
+                for ms in (16, 50):
+                    for name, body_sel, event, prefix in (
+                        ("terminal", "#trim-term .dj-terminal__body", "trim_out", ""),
+                        ("log viewer", "#trim-log .dj-log-viewer__body", "log_trim", "INFO "),
+                    ):
+                        page.eval_on_selector(body_sel, "b => b.scrollIntoView({block: 'center'})")
+                        page.evaluate(start_stream, [event, prefix, ms])
+                        page.wait_for_timeout(500)
+                        # sampled between appends and the frame that follows them: take the best of a few
+                        follows = min(
+                            (page.eval_on_selector(body_sel, gap), page.wait_for_timeout(37))[0]
+                            for _ in range(6)
+                        )
+                        box = page.eval_on_selector(
+                            body_sel,
+                            "b => { const r = b.getBoundingClientRect(); return {x: r.left + r.width / 2, y: r.top + r.height / 2}; }",
+                        )
+                        page.mouse.move(box["x"], box["y"])
+                        for _ in range(3):
+                            page.mouse.wheel(0, -120)
+                            page.wait_for_timeout(30)
+                        page.wait_for_timeout(600)
+                        up = page.eval_on_selector(body_sel, gap)
+                        check(
+                            follows <= 1 and up > 40,
+                            f"{name}: a reader who wheels up during a trimmed stream (appends every {ms} ms) stays up (gap {follows:.0f} then {up:.0f})",
+                        )
+                        # back to the bottom (the scroll event is delivered while the
+                        # stream is quiet): following resumes when it starts again
+                        page.evaluate(stop_stream)
+                        page.eval_on_selector(body_sel, "b => { b.scrollTop = b.scrollHeight; }")
+                        page.wait_for_timeout(300)
+                        page.evaluate(start_stream, [event, prefix, ms])
+                        page.wait_for_timeout(600)
+                        page.evaluate(stop_stream)
+                        page.wait_for_timeout(200)  # the last follow of the stream settles
+                        resumed = page.eval_on_selector(body_sel, gap)
+                        check(
+                            resumed <= 1,
+                            f"{name}: back at the bottom it follows the stream again (every {ms} ms, gap {resumed:.0f})",
+                        )
+
                 # ======================= Tour =======================
                 page.evaluate("() => window.scrollTo(0, 0)")
                 page.focus("#start-tour")

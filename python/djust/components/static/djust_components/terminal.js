@@ -176,6 +176,20 @@
       this._onScroll = null;
     },
 
+    // Trimming shrinks the content, and the browser clamps scrollTop to match:
+    // a decrease nobody asked for, whose (late) scroll event must not read as the
+    // reader scrolling up. Move the remembered position to the new maximum (where
+    // the clamp lands) instead of forgetting it, so a reader who really scrolls up
+    // afterwards is still recognised. Once per frame, never per append: reading
+    // scrollHeight forces a layout.
+    _settle: function () {
+      if (!this._trimmed) return;
+      this._trimmed = false;
+      var body = scroller(this.el);
+      var maxTop = body.scrollHeight - body.clientHeight;
+      if (this._lastTop !== undefined && this._lastTop > maxTop) this._lastTop = maxTop;
+    },
+
     _follow: function () {
       var body = scroller(this.el);
       body.scrollTop = body.scrollHeight;
@@ -185,12 +199,14 @@
     _followSoon: function () {
       var self = this;
       if (!window.requestAnimationFrame) {
+        this._settle();
         this._follow();
         return;
       }
       if (this._raf) return;
       this._raf = window.requestAnimationFrame(function () {
         self._raf = 0;
+        self._settle();
         if (self._pinned !== false) self._follow();
       });
     },
@@ -236,10 +252,7 @@
           body.removeChild(body.firstElementChild);
           this._rows -= 1;
         }
-        // Trimming shrinks the content, and the browser may clamp scrollTop to
-        // match: a decrease nobody asked for, whose (late) scroll event must
-        // not read as the reader scrolling up.
-        this._lastTop = undefined;
+        this._trimmed = true; // _settle() accounts for it once per frame
       }
       if (pinned) this._followSoon();
     },

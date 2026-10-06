@@ -14,7 +14,8 @@
  *
  *   Every field is shown as text, and an avatar only if it is an http(s),
  *   relative or inline image URL. The feed keeps at most data-max-items rows
- *   (the component's ``max_items``, default 50): the oldest fall off the end.
+ *   (the component's ``max_items``, default 50): the oldest fall off the end
+ *   (focus on a row that falls off moves to the last row left).
  *   Streamed rows live on the page: a view should either stream them or
  *   re-render ``events``, not both for the same feed.
  * - Announcements: the new activity is read out in a polite live region (a
@@ -218,9 +219,18 @@
       });
       root.insertBefore(fragment, root.firstChild);
       this._rows += events.length;
+      var active = root.ownerDocument.activeElement;
+      var lostFocus = false;
       while (this._rows > max && root.lastElementChild) {
+        if (active && root.lastElementChild.contains(active)) lostFocus = true;
         root.removeChild(root.lastElementChild);
         this._rows -= 1;
+      }
+      // A focused row that fell off the end would drop focus to the page:
+      // keep the keyboard user in the feed, on the nearest row left.
+      if (lostFocus) {
+        var left = this._articles();
+        if (left.length) left[left.length - 1].focus();
       }
       this._renumberSoon();
 

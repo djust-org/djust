@@ -27,55 +27,85 @@ function boot() {
     window.IntersectionObserver = class { observe() {} disconnect() {} };
     try { window.eval(clientCode); } catch (_e) { /* client.js may throw on DOM APIs jsdom lacks */ }
     const body = window.document.querySelector('.dj-log-viewer__body');
-    const st = { height: 1000, top: 900 };
-    Object.defineProperty(body, 'scrollHeight', { get: () => st.height, configurable: true });
+    // Layout model: a row whose text holds T<n> is tall (200 px), any other 50 px.
+    // Reading the height lays out, which clamps scrollTop to the new maximum
+    // like a browser does.
+    const st = { top: 0, reads: 0 };
+    const height = () => Array.from(body.children).reduce((n, r) => n + (/T\d/.test(r.textContent) ? 200 : 50), 0);
+    const clamp = () => { st.top = Math.min(st.top, Math.max(0, height() - 100)); };
+    Object.defineProperty(body, 'scrollHeight', { get: () => { st.reads += 1; clamp(); return height(); }, configurable: true });
     Object.defineProperty(body, 'clientHeight', { get: () => 100, configurable: true });
-    Object.defineProperty(body, 'scrollTop', { get: () => st.top, set: (v) => { st.top = v; }, configurable: true });
+    Object.defineProperty(body, 'scrollTop', { get: () => { clamp(); return st.top; }, set: (v) => { st.top = v; }, configurable: true });
     window.eval(script);
     window.djust.mountHooks();
-    return { window, body, st };
+    const push = (lines) => window.djust.dispatchPushEventToHooks('new_logs', { lines });
+    const bottom = () => Math.max(0, height() - 100);
+    const scroll = (top) => { st.top = top; body.dispatchEvent(new window.Event('scroll')); };
+    return { window, body, st, push, bottom, scroll, top: () => body.scrollTop };
 }
 
 const frame = (window) => new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
 
 describe('LogViewer with max_lines', () => {
     it('keeps following across many trimmed bursts whose clamping scroll events arrive late', async () => {
-        const { window, body, st } = boot();
-        body.scrollTop = 900;
-        body.dispatchEvent(new window.Event('scroll'));
-        for (let burst = 0; burst < 6; burst++) {
-            window.djust.dispatchPushEventToHooks('new_logs', { lines: ['a', 'b', 'c', 'd', 'e', 'f'] });
-            st.top -= 40; // the clamp for the shorter content
-            st.height += 300; // more rows arrived before its scroll event
+        const { window, body, push, bottom, scroll, top } = boot();
+        push(['T1', 'T2', 'T3', 'T4']); // four tall rows
+        await frame(window);
+        scroll(bottom());
+        for (let round = 0; round < 6; round++) {
+            push(['a', 'b', 'c', 'd', 'e', 'f']); // trims the tall rows: the browser clamps scrollTop at the next layout
+            await frame(window);
+            push(['T5', 'T6']); // more (tall) rows arrive before the clamp's scroll event is delivered
             body.dispatchEvent(new window.Event('scroll'));
             await frame(window);
-            expect(st.top).toBe(st.height);
+            expect(top()).toBe(bottom());
         }
     });
 
-    it('a reader who really scrolled up still stays up', async () => {
-        const { window, body, st } = boot();
-        body.scrollTop = 900;
-        body.dispatchEvent(new window.Event('scroll'));
-        window.djust.dispatchPushEventToHooks('new_logs', { lines: ['a', 'b', 'c', 'd', 'e', 'f'] });
+    it('a reader who scrolls up during a trimmed stream (appends every frame) stays up, and resuming at the bottom follows again', async () => {
+        const { window, st, push, bottom, scroll, top } = boot();
+        push(['T1', 'T2', 'T3', 'T4']);
         await frame(window);
-        // the first scroll event after a trim is only a baseline; a later one is the reader
-        body.dispatchEvent(new window.Event('scroll'));
-        st.top = 200;
-        body.dispatchEvent(new window.Event('scroll'));
-        window.djust.dispatchPushEventToHooks('new_logs', { lines: ['g'] });
+        scroll(bottom());
+        st.reads = 0;
+        for (let i = 0; i < 20; i++) push(['a' + i, 'b' + i]); // trimming on every append...
+        expect(st.reads).toBe(0); // ...without measuring per append
+        scroll(0); // the reader scrolls up before the frame
         await frame(window);
-        expect(st.top).toBe(200);
+        expect(top()).toBe(0);
+        for (let round = 0; round < 5; round++) {
+            push(['x' + round, 'y' + round, 'z' + round]); // still trimming
+            await frame(window);
+            expect(top()).toBe(0);
+        }
+        scroll(bottom());
+        push(['T9']);
+        await frame(window);
+        expect(top()).toBe(bottom());
+    });
+
+    it('the same, when the clamp\'s own scroll event has been delivered first', async () => {
+        const { window, push, bottom, scroll, top } = boot();
+        push(['T1', 'T2', 'T3', 'T4']);
+        await frame(window);
+        scroll(bottom());
+        push(['a', 'b', 'c']);
+        await frame(window);
+        scroll(top()); // the clamp's (late) scroll event
+        scroll(10); // then the reader
+        push(['d']);
+        await frame(window);
+        expect(top()).toBe(10);
     });
 
     it('an append that trims nothing leaves the reader\'s scroll-up detection alone', async () => {
-        const { window, body, st } = boot();
-        body.scrollTop = 900;
-        body.dispatchEvent(new window.Event('scroll'));
-        window.djust.dispatchPushEventToHooks('new_logs', { line: 'a' }); // 1 row: below max_lines
-        st.top = 200; // the reader scrolls up before the frame
-        body.dispatchEvent(new window.Event('scroll'));
+        const { window, push, bottom, scroll, top } = boot();
+        push(['T1', 'T2']);
         await frame(window);
-        expect(st.top).toBe(200);
+        scroll(bottom());
+        push(['b']); // 3 rows: below max_lines
+        scroll(0); // the reader scrolls up before the frame
+        await frame(window);
+        expect(top()).toBe(0);
     });
 });

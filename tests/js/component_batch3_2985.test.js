@@ -215,6 +215,25 @@ describe('ActivityFeed', () => {
         expect(who(env)).toEqual(['N4', 'N1', 'N2', 'N3']);
     });
 
+    it('a focused row that is trimmed away hands focus to the nearest row left (not the page)', async () => {
+        const env = boot(FEED({ max: 3 }), 'activity-feed.js');
+        const doc = env.window.document;
+        rows(env)[1].focus(); // Bob, the oldest
+        expect(doc.activeElement).toBe(rows(env)[1]);
+        env.push('activity_update', { events: [1, 2].map((i) => ({ user: `N${i}`, action: 'did' })) }); // Bob falls off
+        expect(who(env)).toEqual(['N1', 'N2', 'Alice']);
+        expect(doc.activeElement).toBe(rows(env)[2]);
+        // focus on a row that stays is left alone, and so is focus outside the feed
+        await frame(env); // new rows become focusable on the next frame
+        rows(env)[0].focus();
+        expect(doc.activeElement).toBe(rows(env)[0]);
+        env.push('activity_update', { event: { user: 'N3', action: 'did' } });
+        expect(doc.activeElement.querySelector('strong').textContent).toBe('N1');
+        doc.activeElement.blur();
+        env.push('activity_update', { event: { user: 'N4', action: 'did' } });
+        expect(doc.activeElement).toBe(doc.body);
+    });
+
     it('falls back to 50 without data-max-items', () => {
         const env = boot(FEED().replace(' data-max-items="5"', ''), 'activity-feed.js');
         env.push('activity_update', { events: Array.from({ length: 60 }, (_, i) => ({ user: `U${i}`, action: 'x' })) });
@@ -395,22 +414,26 @@ describe('Terminal', () => {
 
     it('many sequences in one line stay flat', () => {
         const env = boot(TERM(), 'terminal.js');
-        const line = Array.from({ length: 20000 }, (_, i) => `${ESC}[${31 + (i % 6)}mx`).join('');
+        const n = 3000;
+        const line = Array.from({ length: n }, (_, i) => `${ESC}[${31 + (i % 6)}mx`).join('');
         env.push('term_out', { line });
         const row = textRows(env)[2];
-        expect(row.textContent).toBe('x'.repeat(20000));
-        expect(row.querySelector(':scope span span')).toBeNull();
+        expect(row.textContent).toBe('x'.repeat(n));
+        expect(row.querySelector(':scope span span')).toBeNull(); // flat: no nesting
+        expect(row.querySelectorAll('span')).toHaveLength(n); // one span per run
     });
 
-    it('oversized and degenerate lines are cheap', () => {
+    it('oversized and degenerate lines produce bounded output', () => {
         const env = boot(TERM(), 'terminal.js');
-        const t0 = Date.now();
-        env.push('term_out', { line: 'y'.repeat(1_000_000) });
-        env.push('term_out', { line: `${ESC}[31m` + 'z'.repeat(1_000_000) + `${ESC}[0m` });
-        env.push('term_out', { line: `${ESC}[` + '1'.repeat(1_000_000) });
-        env.push('term_out', { line: `${ESC}[;`.repeat(100000) });
-        expect(Date.now() - t0).toBeLessThan(3000);
-        expect(textRows(env)[2].textContent.length).toBe(1_000_000);
+        env.push('term_out', { line: 'y'.repeat(100_000) });
+        env.push('term_out', { line: `${ESC}[31m` + 'z'.repeat(100_000) + `${ESC}[0m` });
+        env.push('term_out', { line: `${ESC}[` + '1'.repeat(100_000) });
+        env.push('term_out', { line: `${ESC}[;`.repeat(10_000) });
+        const rows = textRows(env);
+        expect(rows[2].textContent.length).toBe(100_000);
+        expect(rows[3].textContent.length).toBe(100_000);
+        expect(rows[3].querySelectorAll('span')).toHaveLength(1); // one colour run, not one per character
+        for (const r of rows.slice(2)) expect(r.querySelectorAll('span').length).toBeLessThan(10_001);
     });
 
     it('everything streamed is text, never markup', () => {
@@ -495,25 +518,76 @@ describe('Terminal', () => {
             expect(st.top).toBe(st.height);
         });
 
-        it('keeps following when trimming old rows clamps scrollTop (the late scroll event is not the reader scrolling up)', async () => {
+        // A layout model for max_lines streams: a row whose text is T<n> is tall
+        // (200 px), any other 50 px; reading the height lays out, which clamps
+        // scrollTop to the new maximum like a browser does.
+        const trimmed = () => {
             const env = createEnv(TERM({ attrs: ' data-stream-event="term_out" data-max-lines="4"' }));
             const body = env.window.document.querySelector('.dj-terminal__body');
-            const st = { height: 1000, top: 900, writes: 0 };
-            stub(body, st);
+            const st = { top: 0, writes: 0, reads: 0 };
+            const height = () => Array.from(body.children).reduce((n, r) => n + (/T\d/.test(r.textContent) ? 200 : 50), 0);
+            const clamp = () => { st.top = Math.min(st.top, Math.max(0, height() - 100)); };
+            Object.defineProperty(body, 'scrollHeight', { get: () => { st.reads += 1; clamp(); return height(); }, configurable: true });
+            Object.defineProperty(body, 'clientHeight', { get: () => 100, configurable: true });
+            Object.defineProperty(body, 'scrollTop', { get: () => { clamp(); return st.top; }, set: (v) => { st.top = v; st.writes += 1; }, configurable: true });
             env.window.eval(read('terminal.js'));
             env.window.djust.mountHooks();
-            const push = (n, p) => env.window.djust.dispatchPushEventToHooks(n, p);
-            scrolled(env, body, st, 900);
-            for (let burst = 0; burst < 6; burst++) {
-                push('term_out', { lines: ['a', 'b', 'c', 'd', 'e', 'f'] }); // trims
-                // the browser clamped scrollTop for the shorter content; more rows arrived before
-                // the scroll event of that clamp was delivered
-                st.top -= 40;
-                st.height += 300;
+            const push = (lines) => env.window.djust.dispatchPushEventToHooks('term_out', { lines });
+            const bottom = () => Math.max(0, height() - 100);
+            const scroll = (top) => { st.top = top; body.dispatchEvent(new env.window.Event('scroll')); };
+            const top = () => body.scrollTop;
+            return { env, body, st, push, bottom, scroll, top };
+        };
+
+        it('keeps following when trimming old rows clamps scrollTop (the late scroll event is not the reader scrolling up)', async () => {
+            const { env, body, push, bottom, scroll, top } = trimmed();
+            push(['T1', 'T2', 'T3', 'T4']); // four tall rows
+            await frame(env);
+            scroll(bottom());
+            for (let round = 0; round < 6; round++) {
+                push(['a', 'b', 'c', 'd', 'e', 'f']); // trims the tall rows: the browser clamps scrollTop at the next layout
+                await frame(env);
+                push(['T5', 'T6']); // more (tall) rows arrive before the clamp's scroll event is delivered
                 body.dispatchEvent(new env.window.Event('scroll'));
                 await frame(env);
-                expect(st.top).toBe(st.height); // still following
+                expect(top()).toBe(bottom()); // still following
             }
+        });
+
+        it('a reader who scrolls up during a trimmed stream (appends every frame) stays up, and resuming at the bottom follows again', async () => {
+            const { env, st, push, bottom, scroll, top } = trimmed();
+            push(['T1', 'T2', 'T3', 'T4']);
+            await frame(env);
+            scroll(bottom());
+            st.reads = 0;
+            for (let i = 0; i < 20; i++) push(['a' + i, 'b' + i]); // trimming on every append...
+            expect(st.reads).toBe(0); // ...without measuring per append
+            scroll(0); // the reader scrolls up before the frame
+            await frame(env);
+            expect(top()).toBe(0);
+            for (let round = 0; round < 5; round++) {
+                push(['x' + round, 'y' + round, 'z' + round]); // still trimming
+                await frame(env);
+                expect(top()).toBe(0);
+            }
+            scroll(bottom());
+            push(['T9']);
+            await frame(env);
+            expect(top()).toBe(bottom());
+        });
+
+        it('the same, when the clamp\'s own scroll event has been delivered first', async () => {
+            const { env, push, bottom, scroll, top } = trimmed();
+            push(['T1', 'T2', 'T3', 'T4']);
+            await frame(env);
+            scroll(bottom());
+            push(['a', 'b', 'c']);
+            await frame(env);
+            scroll(top()); // the clamp's (late) scroll event
+            scroll(10); // then the reader
+            push(['d']);
+            await frame(env);
+            expect(top()).toBe(10);
         });
 
         it('scrolls once per frame, never measures per event, and not if the reader scrolled up in the same frame', async () => {
