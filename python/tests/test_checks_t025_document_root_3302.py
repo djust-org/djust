@@ -282,3 +282,14 @@ def test_unterminated_input_is_scanned_in_one_pass(markup):
     started = time.perf_counter()
     _find_document_roots(_document_root_scan_text(markup))
     assert time.perf_counter() - started < 3.0
+
+
+def test_message_says_it_is_unsupported_and_ignored_and_what_to_do(tmp_path, settings):
+    # The fail-safe: the attribute is ignored, nothing mounts, the page stays HTTP.
+    found = _scan(tmp_path, settings, '<html dj-view="a.V"><body><p>x</p></body></html>')
+    assert len(found) == 1
+    msg = found[0].msg
+    assert "not supported and is ignored" in msg
+    assert "no live view is mounted" in msg and "plain HTTP page" in msg
+    assert "Put it on <body> or a <div>" in msg
+    assert "<body>" in found[0].hint

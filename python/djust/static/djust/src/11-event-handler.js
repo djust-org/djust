@@ -397,13 +397,13 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     // Keepalive teardown sends deliberately outlive the outgoing page.
     const httpController = teardown ? null : new AbortController();
     if (httpController) _pendingHttpControllers.add(httpController);
-    const httpOwner = document.querySelector('[dj-root]') || document.body;
+    const httpOwner = document.querySelector('[dj-root]:not(html):not(head)') || document.body;
     // The fragment never reaches the server, so an in-page #anchor jump
     // does not make this a different page (PR #3122 review).
     const pageUrl = () => window.location.href.split('#')[0];
     const httpUrl = pageUrl();
     const httpGeneration = _httpPageGeneration;
-    const ownsHttpResponse = () => httpOwner === (document.querySelector('[dj-root]') || document.body)
+    const ownsHttpResponse = () => httpOwner === (document.querySelector('[dj-root]:not(html):not(head)') || document.body)
         && httpUrl === pageUrl() && httpGeneration === _httpPageGeneration;
     // Keepalive teardown sends are not queued: they must leave with the page.
     const previousHttpEvent = teardown ? null : _httpEventChain;

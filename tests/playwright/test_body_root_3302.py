@@ -43,9 +43,13 @@ SIBLINGS = (
 )
 
 
-def document(body_attrs, inner, head=""):
+def document(body_attrs, inner, head="", html_attrs="", head_attrs=""):
     return (
-        "{% load live_tags %}<!DOCTYPE html><html><head><title>t</title>"
+        "{% load live_tags %}<!DOCTYPE html><html"
+        + html_attrs
+        + "><head"
+        + head_attrs
+        + "><title>t</title>"
         "{% djust_client_config %}"
         + head
         + "</head><body"
@@ -200,6 +204,10 @@ def views_source():
         document(' dj-view="bodyapp.views.Split"', "<div dj-root>" + SIBLINGS + "</div>"),
     )
     cls("Twin", document(" dj-root", "<div dj-root>" + SIBLINGS + "</div>"))
+    # A root on <html> or <head> is unsupported and ignored: the page stays HTTP.
+    cls("HtmlView", document("", SIBLINGS, html_attrs=' dj-view="bodyapp.views.HtmlView"'))
+    cls("HtmlRoot", document("", SIBLINGS, html_attrs=" dj-root"))
+    cls("HeadView", document("", SIBLINGS, head_attrs=' dj-view="bodyapp.views.HeadView"'))
     return "\n".join(out)
 
 
@@ -219,6 +227,9 @@ URLS = {
     "lazy": "Lazy",
     "split": "Split",
     "twin": "Twin",
+    "htmlview": "HtmlView",
+    "htmlroot": "HtmlRoot",
+    "headview": "HeadView",
 }
 
 
@@ -313,7 +324,7 @@ class Run:
         if not cond:
             self.failures.append(label + (" " + str(detail) if detail else ""))
 
-    def open(self, transport, path, extension=True):
+    def open(self, transport, path, extension=True, warnings=None):
         ctx = self.browser.new_context()
         ctx.add_init_script(INIT[transport])
         if transport == "http":
@@ -329,6 +340,11 @@ class Run:
             "console",
             lambda m: errors.append("console: " + m.text[:200]) if m.type == "error" else None,
         )
+        if warnings is not None:
+            page.on(
+                "console",
+                lambda m: warnings.append(m.text) if m.type == "warning" else None,
+            )
         watch = TransportWatch(page)
         page.goto(self.base + path)
         return ctx, page, errors, watch
@@ -635,6 +651,39 @@ def section_reconnect(run):
     ctx.close()
 
 
+def section_document_root(run, page_name, transport="websocket"):
+    """`dj-view` / `dj-root` on <html> or <head> is unsupported and ignored: no
+    mount, nothing replaced, one console warning, and the page stays a working
+    HTTP page. Before, it mounted, the body shrank to the first element and the
+    client threw a TypeError."""
+    label = f"{page_name}/{transport}"
+    warnings = []
+    ctx, page, errors, watch = run.open(transport, f"/{page_name}/", warnings=warnings)
+    http = page.evaluate(SNAP)
+    run.check(
+        f"{label}: HTTP render has every sibling",
+        http["ids"] == ["hd", "mn", "ft", "cnt", "btn"],
+        http,
+    )
+    page.wait_for_timeout(3000)
+    s = page.evaluate(SNAP)
+    run.check(
+        f"{label}: every sibling is still there", s["ids"] == ["hd", "mn", "ft", "cnt", "btn"], s
+    )
+    run.check(f"{label}: nothing mounted", not s["mounted"], s)
+    run.check(
+        f"{label}: no WebSocket or SSE opened", watch.websockets == 0 and watch.sse_streams == 0
+    )
+    mine = [w for w in warnings if "not supported and is ignored" in w]
+    run.check(
+        f"{label}: one console warning naming the fix",
+        len(mine) == 1 and "<body> or a <div>" in mine[0],
+        mine,
+    )
+    run.check(f"{label}: no client errors", not errors, errors[:3])
+    ctx.close()
+
+
 def main() -> int:
     failures = []
     only = set(filter(None, os.environ.get("BODY_ROOT_ONLY", "").split(",")))
@@ -681,6 +730,10 @@ def main() -> int:
                 if wanted("lazy"):
                     guarded(section_lazy, run)
                     guarded(section_lazy, run, "lazywrap")
+                if wanted("document-root"):
+                    for transport in ("websocket", "sse"):
+                        for page_name in ("htmlview", "htmlroot", "headview"):
+                            guarded(section_document_root, run, page_name, transport)
                 if wanted("reconnect"):
                     guarded(section_reconnect, run)
                 if wanted("split"):

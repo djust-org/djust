@@ -540,11 +540,11 @@ _DJ_TABLE_SECTION_ROOT_RE = re.compile(
     re.IGNORECASE,
 )
 
-# T025 (#3302) -- `dj-view` / `dj-root` on `<html>` or `<head>`. The HTTP
-# render of such a page is complete, but neither can be a root (the VDOM starts
-# at `<body>`), so the WebSocket mount cannot use it and the live page loses
-# its content. `<body>` itself IS a supported root (#3302): its children are the
-# page's top-level siblings. Same
+# T025 (#3302) -- `dj-view` / `dj-root` on `<html>` or `<head>`. Neither can be
+# a root (the VDOM starts at `<body>`), so djust ignores it: the server render
+# is unchanged, the client mounts nothing, and the page stays a plain HTTP page.
+# `<body>` itself IS a supported root (#3302): its children are the page's
+# top-level siblings. Same
 # same-tag scoping as T017 above, found by a scanner rather than one regexp:
 # quoted values and Django `{% %}` / `{{ }}` units are walked whole, so a `>`
 # inside `data-x="a>b"` or `{% if a > b %}` does not end the tag early and text
@@ -1706,11 +1706,12 @@ def _check_document_element_root(
 ) -> None:
     """T025 (#3302): Detect dj-view / dj-root on ``<html>`` or ``<head>``.
 
-    The root must be ``<body>`` or an element inside it. With the attribute on
-    ``<html>`` or ``<head>`` the HTTP render is complete, but the VDOM starts at
-    ``<body>``, so the WebSocket mount cannot use that element as the root and
-    the live page loses its content, and nothing says so. (``<body>`` itself is
-    a supported root; its children are the page's top-level siblings.)
+    The root must be ``<body>`` or an element inside it. An attribute on
+    ``<html>`` or ``<head>`` is unsupported and ignored: the server render is
+    unchanged, the client mounts no view, and the page stays a plain HTTP page
+    (before, it mounted and replaced the page with its first element).
+    (``<body>`` itself is a supported root; its children are the page's
+    top-level siblings.)
 
     ``{% verbatim %}`` regions, HTML comments and ``<script>`` bodies are
     skipped, so a documentation page or a script string can show the mistake.
@@ -1739,9 +1740,9 @@ def _check_document_element_root(
             hint += " (A noqa comment without a reason does not suppress T025.)"
         errors.append(
             DjustWarning(
-                "%s:%d -- '%s' is on <%s>, which cannot be a root. The HTTP render "
-                "is complete, but the WebSocket mount cannot use it as the root, "
-                "so the live page loses its content." % (relpath, lineno, attr, tag_name),
+                "%s:%d -- '%s' is on <%s>, which is not supported and is ignored: "
+                "no live view is mounted and the page stays a plain HTTP page. "
+                "Put it on <body> or a <div>." % (relpath, lineno, attr, tag_name),
                 hint=hint,
                 id="djust.T025",
                 fix_hint=(

@@ -1370,7 +1370,7 @@ function _applyDjUpdateElementsInner(existingRoot, newRoot) {
 function _stampDjIds(serverHtml, container) {
     if (!container) {
         container = findPageViewContainer() || // #2632
-                    document.querySelector('[dj-root]');
+                    document.querySelector('[dj-root]:not(html):not(head)');
     }
     if (!container) return;
 

@@ -24,7 +24,7 @@ function findPageViewContainer() {
     // Not a view that hydrates beside the page view (`dj-lazy`, or mounted at a
     // `data-djust-target`, #3252): it is not the page.
     return document.querySelector(
-        '[dj-view]:not([dj-sticky-root]):not([data-djust-embedded]):not([dj-lazy]):not([data-djust-target])');
+        '[dj-view]:not(html):not(head):not([dj-sticky-root]):not([data-djust-embedded]):not([dj-lazy]):not([data-djust-target])');
 }
 
 /**
@@ -774,7 +774,7 @@ class LiveViewWebSocket {
                     // path (~line 641).
                     if (hasDataDjAttrs && data.html) {
                         const _morphContainer = findPageViewContainer()
-                                            || document.querySelector('[dj-root]');
+                                            || document.querySelector('[dj-root]:not(html):not(head)');
                         if (_morphContainer) {
                             _morphPrerenderedMount(_morphContainer, data.html, formRecoverySnapshot);
                             if (globalThis.djustDebug) console.log('[LiveView] Morphed pre-rendered DOM against WS-mount HTML (#1610)');
@@ -896,7 +896,7 @@ class LiveViewWebSocket {
                     // selection via the shared helper (#2632).
                     let container = findPageViewContainer();
                     if (!container) {
-                        container = document.querySelector('[dj-root]');
+                        container = document.querySelector('[dj-root]:not(html):not(head)');
                     }
                     if (container) {
                         // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine

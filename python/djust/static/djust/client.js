@@ -312,9 +312,9 @@ function reinitLiveViewForTurboNav() {
     globalThis.djust._installPageParameterContracts();
 
     // Find all LiveView containers in the new content
-    const allContainers = document.querySelectorAll('[dj-view]');
-    const lazyContainers = document.querySelectorAll('[dj-view][dj-lazy]');
-    const eagerContainers = document.querySelectorAll('[dj-view]:not([dj-lazy])');
+    const allContainers = document.querySelectorAll('[dj-view]:not(html):not(head)');
+    const lazyContainers = document.querySelectorAll('[dj-view][dj-lazy]:not(html):not(head)');
+    const eagerContainers = document.querySelectorAll('[dj-view]:not([dj-lazy]):not(html):not(head)');
 
     if (globalThis.djustDebug) console.log(`[LiveView:TurboNav] Found ${allContainers.length} containers (${lazyContainers.length} lazy, ${eagerContainers.length} eager)`);
 
@@ -918,7 +918,7 @@ function findPageViewContainer() {
     // Not a view that hydrates beside the page view (`dj-lazy`, or mounted at a
     // `data-djust-target`, #3252): it is not the page.
     return document.querySelector(
-        '[dj-view]:not([dj-sticky-root]):not([data-djust-embedded]):not([dj-lazy]):not([data-djust-target])');
+        '[dj-view]:not(html):not(head):not([dj-sticky-root]):not([data-djust-embedded]):not([dj-lazy]):not([data-djust-target])');
 }
 
 /**
@@ -1668,7 +1668,7 @@ class LiveViewWebSocket {
                     // path (~line 641).
                     if (hasDataDjAttrs && data.html) {
                         const _morphContainer = findPageViewContainer()
-                                            || document.querySelector('[dj-root]');
+                                            || document.querySelector('[dj-root]:not(html):not(head)');
                         if (_morphContainer) {
                             _morphPrerenderedMount(_morphContainer, data.html, formRecoverySnapshot);
                             if (globalThis.djustDebug) console.log('[LiveView] Morphed pre-rendered DOM against WS-mount HTML (#1610)');
@@ -1790,7 +1790,7 @@ class LiveViewWebSocket {
                     // selection via the shared helper (#2632).
                     let container = findPageViewContainer();
                     if (!container) {
-                        container = document.querySelector('[dj-root]');
+                        container = document.querySelector('[dj-root]:not(html):not(head)');
                     }
                     if (container) {
                         // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
@@ -3077,7 +3077,7 @@ class LiveViewSSE {
                     // #2632: the PAGE container — a sticky/embedded root
                     // with a valueless dj-view must not receive the page.
                     let container = findPageViewContainer();
-                    if (!container) container = document.querySelector('[dj-root]');
+                    if (!container) container = document.querySelector('[dj-root]:not(html):not(head)');
                     if (container) {
                         if (typeof data.view === 'string') container.setAttribute('dj-view', data.view);
                         const hasDataDjAttrs = data.has_ids === true;
@@ -5512,7 +5512,7 @@ let _scopedGovernorRoots = [];
  * the scanned root was neither refreshed nor evicted — exactly the #2110 bug.
  */
 function _refreshScopedGovernorRoots() {
-    const allRoots = document.querySelectorAll('[dj-view], [dj-root]');
+    const allRoots = document.querySelectorAll('[dj-view]:not(html):not(head), [dj-root]:not(html):not(head)');
     const roots = [];
     allRoots.forEach(function(r) {
         if (roots.length && roots[roots.length - 1].contains(r)) return;
@@ -6977,7 +6977,7 @@ function bindLiveViewEvents(scope) {
     // Only install on actual [dj-view]/[dj-root] elements, NOT on document.body
     // fallback — body persists across TurboNav page swaps, causing duplicate
     // events when navigating away from a LiveView page and back.
-    const liveRoot = findPageViewContainer() || document.querySelector('[dj-root]'); // #2632
+    const liveRoot = findPageViewContainer() || document.querySelector('[dj-root]:not(html):not(head)'); // #2632
     if (liveRoot) installDelegatedListeners(liveRoot);
 
     // Bind upload handlers (dj-upload, dj-upload-drop, dj-upload-preview)
@@ -7635,7 +7635,7 @@ function getLiveViewRoot() {
     // While a frame for a view mounted beside the page view is applied, that
     // view's container is the root (#3252).
     if (_activeSlot) return _activeSlot.root;
-    return findPageViewContainer() || document.querySelector('[dj-root]') || document.body;
+    return findPageViewContainer() || document.querySelector('[dj-root]:not(html):not(head)') || document.body;
 }
 
 // Helper: Clear optimistic state
@@ -7823,7 +7823,7 @@ function _formRecoveryKey(field, root) {
 // Capture before mount mutates the DOM. Keep defaults in the NEW markup so
 // the normal recovery scanner can still compare the draft with server state.
 function _captureFormRecovery() {
-    const root = findPageViewContainer() || document.querySelector('[dj-root]');
+    const root = findPageViewContainer() || document.querySelector('[dj-root]:not(html):not(head)');
     if (!root) return null;
     const values = new Map();
     for (const field of _formRecoveryFields(root)) {
@@ -7839,7 +7839,7 @@ function _captureFormRecovery() {
 
 function _restoreFormRecovery(snapshot) {
     if (!snapshot) return;
-    const root = findPageViewContainer() || document.querySelector('[dj-root]');
+    const root = findPageViewContainer() || document.querySelector('[dj-root]:not(html):not(head)');
     if (!root || root.getAttribute('dj-view') !== snapshot.view) return;
     for (const field of _formRecoveryFields(root)) {
         const values = snapshot.values.get(_formRecoveryKey(field, root));
@@ -7859,7 +7859,7 @@ function _processFormRecovery() {
     if (!window.djust._isReconnect) return;
 
     let root = findPageViewContainer(); // #2632
-    if (!root) root = document.querySelector('[dj-root]');
+    if (!root) root = document.querySelector('[dj-root]:not(html):not(head)');
     if (!root) return;
 
     // Collect fields to recover
@@ -8634,13 +8634,13 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     // Keepalive teardown sends deliberately outlive the outgoing page.
     const httpController = teardown ? null : new AbortController();
     if (httpController) _pendingHttpControllers.add(httpController);
-    const httpOwner = document.querySelector('[dj-root]') || document.body;
+    const httpOwner = document.querySelector('[dj-root]:not(html):not(head)') || document.body;
     // The fragment never reaches the server, so an in-page #anchor jump
     // does not make this a different page (PR #3122 review).
     const pageUrl = () => window.location.href.split('#')[0];
     const httpUrl = pageUrl();
     const httpGeneration = _httpPageGeneration;
-    const ownsHttpResponse = () => httpOwner === (document.querySelector('[dj-root]') || document.body)
+    const ownsHttpResponse = () => httpOwner === (document.querySelector('[dj-root]:not(html):not(head)') || document.body)
         && httpUrl === pageUrl() && httpGeneration === _httpPageGeneration;
     // Keepalive teardown sends are not queued: they must leave with the page.
     const previousHttpEvent = teardown ? null : _httpEventChain;
@@ -10110,7 +10110,7 @@ function _applyDjUpdateElementsInner(existingRoot, newRoot) {
 function _stampDjIds(serverHtml, container) {
     if (!container) {
         container = findPageViewContainer() || // #2632
-                    document.querySelector('[dj-root]');
+                    document.querySelector('[dj-root]:not(html):not(head)');
     }
     if (!container) return;
 
@@ -12344,8 +12344,29 @@ window.djust._switchToSSETransport = _switchToSSETransport;
 // Auto-stamp dj-root and dj-liveview-root on [dj-view]
 // elements so developers only need to write dj-view (#258).
 // Extracted as a helper so both djustInit() and reinitLiveViewForTurboNav() can call it.
+// #3302: `dj-view` / `dj-root` on `<html>` or `<head>` is unsupported. It is
+// ignored everywhere the client looks for a container, so the page stays a
+// plain HTTP page instead of mounting a view that replaces the whole document
+// element. Say so once.
+let _documentRootWarned = false;
+function warnUnsupportedDocumentRoot() {
+    if (_documentRootWarned) return;
+    for (const el of [document.documentElement, document.head]) {
+        if (el && (el.hasAttribute('dj-view') || el.hasAttribute('dj-root'))) {
+            _documentRootWarned = true;
+            console.warn(
+                '[djust] dj-view / dj-root on <' + el.tagName.toLowerCase() + '> is not supported and is ignored: ' +
+                'no live view is mounted and the page stays a plain HTTP page. ' +
+                'Put dj-view on <body> or a <div> (system check djust.T025).'
+            );
+            return;
+        }
+    }
+}
+
 function autoStampRootAttributes() {
-    const allContainers = document.querySelectorAll('[dj-view]');
+    warnUnsupportedDocumentRoot();
+    const allContainers = document.querySelectorAll('[dj-view]:not(html):not(head)');
     allContainers.forEach(container => {
         if (!container.hasAttribute('dj-root')) {
             container.setAttribute('dj-root', '');
@@ -12356,6 +12377,8 @@ function autoStampRootAttributes() {
     });
     return allContainers;
 }
+
+window.djust._autoStampRootAttributes = autoStampRootAttributes;
 
 // Initialize on load (support both normal page load and dynamic script injection via TurboNav)
 function djustInit() {
@@ -12369,7 +12392,8 @@ function djustInit() {
     _installPageParameterContracts();
 
     if (allContainers.length === 0) {
-        if (globalThis.djustDebug) console.error(
+        // (A root on <html>/<head> already got its own, precise warning.)
+        if (globalThis.djustDebug && !_documentRootWarned) console.error(
             '[LiveView] No containers found! Your template root element needs:\n' +
             '  dj-view="app.views.MyView"\n' +
             'Example: <div dj-view="myapp.views.DashboardView">'
@@ -12378,8 +12402,8 @@ function djustInit() {
         if (globalThis.djustDebug) console.log(`[LiveView] Found ${allContainers.length} containers`);
     }
 
-    const lazyContainers = document.querySelectorAll('[dj-view][dj-lazy]');
-    const eagerContainers = document.querySelectorAll('[dj-view]:not([dj-lazy])');
+    const lazyContainers = document.querySelectorAll('[dj-view][dj-lazy]:not(html):not(head)');
+    const eagerContainers = document.querySelectorAll('[dj-view]:not([dj-lazy]):not(html):not(head)');
 
     // Register lazy containers with the lazy hydration manager
     lazyContainers.forEach(container => {
@@ -14472,7 +14496,7 @@ window.djust.getActiveStreams = getActiveStreams;
                         const vdomReply = await window.djust._sw.lookupVdom(destinationKey);
                         if (vdomReply && vdomReply.hit && !vdomReply.stale && typeof vdomReply.html === 'string') {
                             let fastContainer = findPageViewContainer(); // #2632
-                            if (!fastContainer) fastContainer = document.querySelector('[dj-root]');
+                            if (!fastContainer) fastContainer = document.querySelector('[dj-root]:not(html):not(head)');
                             if (fastContainer) {
                                 // codeql[js/xss] -- html is server-rendered; only reads from SW cache keyed by same-origin url
                                 replaceContainerHtml(fastContainer, vdomReply.html);

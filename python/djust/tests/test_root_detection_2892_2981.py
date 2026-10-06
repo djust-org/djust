@@ -335,6 +335,32 @@ def test_unsupported_root_on_html_warns_once(caplog):
     hits = [r for r in caplog.records if "#2892" in r.getMessage()]
     assert len(hits) == 1, [r.getMessage() for r in caplog.records]
     assert "BodyRoot" in hits[0].getMessage()
+    # The fail-safe: unsupported and ignored, the page stays a plain HTTP page.
+    assert "not supported and is ignored" in hits[0].getMessage()
+    assert "no live view is mounted" in hits[0].getMessage()
+
+
+def test_html_root_page_renders_unchanged_and_is_not_stamped_3302():
+    """``<html dj-view>`` is ignored: the server render is the complete document
+    (no root claimed, no view path stamped, nothing normalised), so the page
+    works as plain HTTP and the client has nothing to mount."""
+    base = _BASE.replace("<html>", '<html dj-view="app.HtmlRoot">')
+    child = '{% extends "base_2892.html" %}\n{% block content %}<p>x</p>{% endblock %}\n'
+    with _TemplateHarness(base, child):
+        cls = _extends_view("HtmlRootPage")
+        v = cls()
+        v.mount(None)
+        v.get_template()
+        ssr = v.render_full_template(None)
+        stamped = v._stamp_dj_view(ssr, "app.HtmlRootPage")
+    assert ssr.upper().count("<!DOCTYPE") == 1
+    for part in ("<nav>NAV</nav>", "<p>x</p>", "<footer>F</footer>", "<head>"):
+        assert part in ssr, part
+    assert stamped == ssr, "nothing to stamp: <html> is never a root"
+    assert (
+        template_mod._search_dj_root_open(ssr, template_mod._DJ_ROOT_RE, template_mod._DJ_VIEW_RE)
+        is None
+    )
 
 
 def test_body_root_in_the_base_template_is_a_root_3302(caplog):

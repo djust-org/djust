@@ -439,7 +439,7 @@
                         const vdomReply = await window.djust._sw.lookupVdom(destinationKey);
                         if (vdomReply && vdomReply.hit && !vdomReply.stale && typeof vdomReply.html === 'string') {
                             let fastContainer = findPageViewContainer(); // #2632
-                            if (!fastContainer) fastContainer = document.querySelector('[dj-root]');
+                            if (!fastContainer) fastContainer = document.querySelector('[dj-root]:not(html):not(head)');
                             if (fastContainer) {
                                 // codeql[js/xss] -- html is server-rendered; only reads from SW cache keyed by same-origin url
                                 replaceContainerHtml(fastContainer, vdomReply.html);

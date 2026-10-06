@@ -41,8 +41,29 @@ window.djust._switchToSSETransport = _switchToSSETransport;
 // Auto-stamp dj-root and dj-liveview-root on [dj-view]
 // elements so developers only need to write dj-view (#258).
 // Extracted as a helper so both djustInit() and reinitLiveViewForTurboNav() can call it.
+// #3302: `dj-view` / `dj-root` on `<html>` or `<head>` is unsupported. It is
+// ignored everywhere the client looks for a container, so the page stays a
+// plain HTTP page instead of mounting a view that replaces the whole document
+// element. Say so once.
+let _documentRootWarned = false;
+function warnUnsupportedDocumentRoot() {
+    if (_documentRootWarned) return;
+    for (const el of [document.documentElement, document.head]) {
+        if (el && (el.hasAttribute('dj-view') || el.hasAttribute('dj-root'))) {
+            _documentRootWarned = true;
+            console.warn(
+                '[djust] dj-view / dj-root on <' + el.tagName.toLowerCase() + '> is not supported and is ignored: ' +
+                'no live view is mounted and the page stays a plain HTTP page. ' +
+                'Put dj-view on <body> or a <div> (system check djust.T025).'
+            );
+            return;
+        }
+    }
+}
+
 function autoStampRootAttributes() {
-    const allContainers = document.querySelectorAll('[dj-view]');
+    warnUnsupportedDocumentRoot();
+    const allContainers = document.querySelectorAll('[dj-view]:not(html):not(head)');
     allContainers.forEach(container => {
         if (!container.hasAttribute('dj-root')) {
             container.setAttribute('dj-root', '');
@@ -53,6 +74,8 @@ function autoStampRootAttributes() {
     });
     return allContainers;
 }
+
+window.djust._autoStampRootAttributes = autoStampRootAttributes;
 
 // Initialize on load (support both normal page load and dynamic script injection via TurboNav)
 function djustInit() {
@@ -66,7 +89,8 @@ function djustInit() {
     _installPageParameterContracts();
 
     if (allContainers.length === 0) {
-        if (globalThis.djustDebug) console.error(
+        // (A root on <html>/<head> already got its own, precise warning.)
+        if (globalThis.djustDebug && !_documentRootWarned) console.error(
             '[LiveView] No containers found! Your template root element needs:\n' +
             '  dj-view="app.views.MyView"\n' +
             'Example: <div dj-view="myapp.views.DashboardView">'
@@ -75,8 +99,8 @@ function djustInit() {
         if (globalThis.djustDebug) console.log(`[LiveView] Found ${allContainers.length} containers`);
     }
 
-    const lazyContainers = document.querySelectorAll('[dj-view][dj-lazy]');
-    const eagerContainers = document.querySelectorAll('[dj-view]:not([dj-lazy])');
+    const lazyContainers = document.querySelectorAll('[dj-view][dj-lazy]:not(html):not(head)');
+    const eagerContainers = document.querySelectorAll('[dj-view]:not([dj-lazy]):not(html):not(head)');
 
     // Register lazy containers with the lazy hydration manager
     lazyContainers.forEach(container => {

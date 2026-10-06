@@ -77,7 +77,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | T022 | Templates | Warning | Markup supplies routing context (`view_id` / `component_id`) as an argument (ADR-037) |
 | T023 | Templates | Info | T019-T022 were skipped: no usable template engine (none configured, or it could not be built) |
 | T024 | Templates | Warning | A template an owner renders reads `is_staff`, `is_superuser` or `password` through a `user` variable; djust never serializes them |
-| T025 | Templates | Warning | `dj-view` / `dj-root` on `<html>` or `<head>`: the HTTP render is complete but neither can be a root, so the live page loses its content (`<body>` is a supported root) |
+| T025 | Templates | Warning | `dj-view` / `dj-root` on `<html>` or `<head>`: unsupported and ignored, no live view is mounted and the page stays a plain HTTP page (`<body>` is a supported root) |
 | Q001 | Quality | Info | print() statement found |
 | Q002 | Quality | Warning | f-string in logger call |
 | Q003 | Quality | Info | console.log without djustDebug guard |
@@ -793,10 +793,10 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Severity**: Warning
 - **Method**: Regex (template scan; `{% verbatim %}` regions, HTML comments and `<script>` bodies are skipped)
 - **What it detects**: A `dj-view` or `dj-root` attribute on the `<html>` or
-  `<head>` tag itself. The HTTP render of such a page is complete, but the VDOM
-  starts at `<body>`, so the WebSocket mount cannot use that element as the root
-  and the live page loses its content, and nothing says so (#3302). `<body>`
-  itself is a supported root, so it is not reported.
+  `<head>` tag itself. Neither can be a root (the VDOM starts at `<body>`), so
+  djust ignores it: the page renders as usual, the client mounts no view, and
+  the page stays a plain HTTP page (#3302). `<body>` itself is a supported root,
+  so it is not reported.
 - **Fix**: Put `dj-root` (or `dj-view`) on `<body>`, or on one element inside it
   that wraps the page content, such as `<div dj-root>` or `<main dj-root>`.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["T025"]}`, or one match

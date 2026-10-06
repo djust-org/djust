@@ -119,6 +119,9 @@ _BODY_TWINS = {_DJ_ROOT_RE: _BODY_ROOT_RE, _DJ_VIEW_RE: _BODY_VIEW_RE}
 # no usable root was trying to declare one (``_warn_unmatched_root``).
 _ANY_ROOT_ATTR_RE = _root_open_re(r"<[A-Za-z][A-Za-z0-9-]*(?=[ \t\n\r\f/>])", "dj-(?:root|view)")
 
+# The same on `<html>` / `<head>` only: unsupported and ignored (#3302).
+_DOCUMENT_ROOT_ATTR_RE = _root_open_re(r"<(?:html|head)(?=[ \t\n\r\f/>])", "dj-(?:root|view)")
+
 # View classes already warned about an unusable root (one warning per class
 # per process — the render path runs on every GET).
 _UNMATCHED_ROOT_WARNED: "set[str]" = set()
@@ -1715,19 +1718,30 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         if label in _UNMATCHED_ROOT_WARNED:
             return
         _UNMATCHED_ROOT_WARNED.add(label)
-        reason = (
-            "its closing tag was not found"
-            if found
-            else "it is on <html> or <head>, which is not supported"
-        )
-        logger.warning(
-            "[LiveView] %s: the page declares a dj-root/dj-view root but %s. "
-            "The initial render was NOT normalised to match the WebSocket frame, "
-            "so patches will fail and fall back to full re-renders. Put dj-root "
-            "on <body> or an element inside it, with a matching close tag (#2892).",
-            label,
-            reason,
-        )
+        if found:
+            logger.warning(
+                "[LiveView] %s: the page declares a dj-root/dj-view root but its closing "
+                "tag was not found. The initial render was NOT normalised to match the "
+                "WebSocket frame, so patches will fail and fall back to full re-renders. "
+                "Put dj-root on <body> or an element inside it, with a matching close tag "
+                "(#2892).",
+                label,
+            )
+        elif _DOCUMENT_ROOT_ATTR_RE.search(_mask_raw_text(shell_html)):
+            logger.warning(
+                "[LiveView] %s: the page declares dj-root/dj-view on <html> or <head>, which "
+                "is not supported and is ignored: the page renders as usual, no live view is "
+                "mounted and it stays a plain HTTP page. Put dj-root on <body> or an element "
+                "inside it (#2892, #3302).",
+                label,
+            )
+        else:
+            logger.warning(
+                "[LiveView] %s: the page declares a dj-root/dj-view root but no usable root "
+                "was found (an embedded or lazy view's container is not the page's root). "
+                "The initial render was NOT normalised to match the WebSocket frame (#2892).",
+                label,
+            )
 
     def _set_shell_sidecar(
         self,

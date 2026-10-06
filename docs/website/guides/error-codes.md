@@ -1295,13 +1295,13 @@ line above, or all of them with `DJUST_CONFIG = {"suppress_checks": ["T024"]}`.
 **Severity**: Warning
 
 **What causes it**: `dj-view` or `dj-root` is on the `<html>` or `<head>` tag.
-The HTTP render of the page is complete, but neither element can be a root: the
-VDOM starts at `<body>`, so the WebSocket mount cannot use it and the live page
-loses its content. (`<body>` itself is a supported root: its children are the
-page's top-level elements.)
-Message: "<file>:<line> -- '<attr>' is on <tag>, which cannot be a root. The HTTP
-render is complete, but the WebSocket mount cannot use it as the root, so the
-live page loses its content."
+Neither element can be a root (the VDOM starts at `<body>`), so djust ignores it:
+the page renders as usual, no live view is mounted, and the page stays a plain
+HTTP page. (`<body>` itself is a supported root: its children are the page's
+top-level elements.)
+Message: "<file>:<line> -- '<attr>' is on <tag>, which is not supported and is
+ignored: no live view is mounted and the page stays a plain HTTP page. Put it on
+<body> or a <div>."
 
 **Fix**: Put the attribute on `<body>`, or on one element inside it that wraps
 the page content, such as `<div dj-root>`. See
