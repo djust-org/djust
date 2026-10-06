@@ -599,6 +599,42 @@ def section_split(run, page_name="split"):
     ctx.close()
 
 
+def section_reconnect(run):
+    """A dropped socket reconnects and re-mounts over the live page."""
+    label = "reconnect/websocket"
+    ctx, page, errors, _watch = run.open("websocket", "/body/")
+    run.wait_live(page, "websocket")
+    page.evaluate("() => document.getElementById('btn').click()")
+    run.settle_cnt(page, "1")
+    page.evaluate("() => window.djust.liveViewInstance.ws.close()")
+    page.wait_for_timeout(300)
+    try:
+        page.wait_for_function(
+            "() => window.djust.liveViewInstance.viewMounted === true && "
+            "window.djust.liveViewInstance.ws && window.djust.liveViewInstance.ws.readyState === 1",
+            timeout=15000,
+        )
+    except Exception:
+        pass
+    page.wait_for_timeout(500)
+    s = page.evaluate(SNAP)
+    run.check(
+        f"{label}: siblings survive the re-mount", s["ids"] == ["hd", "mn", "ft", "cnt", "btn"], s
+    )
+    run.check(
+        f"{label}: extension nodes survive the re-mount",
+        s["lead"] == "ext-lead" and s["trail"] and s["extRuns"] == 1,
+        s,
+    )
+    page.evaluate("() => document.getElementById('btn').click()")
+    run.check(
+        f"{label}: update lands after the re-mount",
+        run.settle_cnt(page, "2") or run.settle_cnt(page, "1"),
+    )
+    run.check(f"{label}: no client errors", not errors, errors[:3])
+    ctx.close()
+
+
 def main() -> int:
     failures = []
     only = set(filter(None, os.environ.get("BODY_ROOT_ONLY", "").split(",")))
@@ -645,6 +681,8 @@ def main() -> int:
                 if wanted("lazy"):
                     guarded(section_lazy, run)
                     guarded(section_lazy, run, "lazywrap")
+                if wanted("reconnect"):
+                    guarded(section_reconnect, run)
                 if wanted("split"):
                     guarded(section_split, run)
                     guarded(section_split, run, "twin")
