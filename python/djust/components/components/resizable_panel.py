@@ -11,7 +11,25 @@ from typing import Any
 class ResizablePanel(Component):
     """Container with a drag-to-resize handle.
 
-    Uses ``dj-hook="ResizablePanel"`` for client-side resize interactions.
+    Uses ``dj-hook="ResizablePanel"`` for client-side resize interactions; the
+    page must include ``djust_components/resizable-panel.js``. Drag the handle
+    (mouse, touch or pen), or Tab to it and use the arrow keys along the
+    direction (10 px, Shift 50 px), Home / End for the smallest / largest size,
+    and double-click or Enter to return to ``initial_size``. The size is
+    clamped to ``min_size`` / ``max_size`` and to the container, and the
+    handle is a WAI-ARIA window splitter (``aria-valuenow`` and friends); in a
+    right-to-left context, where the handle is on the left edge, dragging and
+    the arrow keys are mirrored. The server renders ``aria-orientation`` as the
+    panel's direction; the hook corrects it to the separator's own orientation
+    (a width-resizing panel has a vertical bar).
+
+    The size is the reader's own and is not sent to the server. When a drag or
+    key press ends the panel dispatches a bubbling ``dj-resize`` CustomEvent
+    with ``detail: {size, direction}`` (pixels) that page script may listen to.
+    An app's own ``ResizablePanel`` hook, in ``window.djust.hooks`` or
+    ``window.DjustHooks``, replaces the shipped one (a hook assigned with
+    ``window.DjustHooks = {...}`` after the script also drops it; merge with
+    ``Object.assign`` instead).
 
     Usage in a LiveView::
 
