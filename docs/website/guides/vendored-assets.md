@@ -26,8 +26,8 @@ djust itself, a component package, or your own project — declares it in a
 
 If you never write `<script src="...">` or `<link href="...">` by hand for
 third-party code, you don't need this guide — djust's own components already
-declare their assets, and `{% code_block %}` and the ttyd terminal already
-use them.
+declare their assets, and `{% code_block %}`, the ttyd terminal and
+`MapPicker` (Leaflet) already use them.
 
 ## The schema
 

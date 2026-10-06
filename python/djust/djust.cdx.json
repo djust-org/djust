@@ -153,6 +153,43 @@
       "version": "11.12.0"
     },
     {
+      "bom-ref": "asset:leaflet",
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "djust_components/vendor/leaflet/leaflet.js"
+          },
+          {
+            "location": "djust_components/vendor/leaflet/leaflet.css"
+          }
+        ]
+      },
+      "name": "leaflet",
+      "properties": [
+        {
+          "name": "djust:integrity:djust_components/vendor/leaflet/leaflet.js",
+          "value": "sha384-RlDTp9ZTEa1w1dkAgp9JdVRzgM17EwpjnbZEZoyC8nij6p0/e/VSoJZltPbaAIsl"
+        },
+        {
+          "name": "djust:integrity:djust_components/vendor/leaflet/leaflet.css",
+          "value": "sha384-Eg+NzzpxiHf8n8FR0ootH/p/s0a33ljAFe4AqhcVbsQfR/WmVsHNIR1Uh37E0omq"
+        }
+      ],
+      "type": "file"
+    },
+    {
+      "bom-ref": "asset:leaflet:pkg:npm/leaflet@1.9.4",
+      "licenses": [
+        {
+          "expression": "BSD-2-Clause"
+        }
+      ],
+      "name": "leaflet",
+      "purl": "pkg:npm/leaflet@1.9.4",
+      "type": "library",
+      "version": "1.9.4"
+    },
+    {
       "bom-ref": "asset:markdown-visual",
       "evidence": {
         "occurrences": [
@@ -2407,6 +2444,12 @@
     },
     {
       "dependsOn": [
+        "asset:leaflet:pkg:npm/leaflet@1.9.4"
+      ],
+      "ref": "asset:leaflet"
+    },
+    {
+      "dependsOn": [
         "asset:markdown-visual:pkg:npm/%40floating-ui/core@1.8.0",
         "asset:markdown-visual:pkg:npm/%40floating-ui/dom@1.8.0",
         "asset:markdown-visual:pkg:npm/%40floating-ui/utils@0.2.12",
@@ -2473,7 +2516,7 @@
     "properties": [
       {
         "name": "djust:manifest-digest",
-        "value": "26486dfa8a78bf0d035eeeb1439220243d4a083026c0f266c58345aa2ae348b6"
+        "value": "557f0adb95016193f0a02875ef5f22574558b8b0f0007f6badd7c6f2597b08b8"
       }
     ],
     "tools": {

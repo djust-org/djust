@@ -16,6 +16,16 @@ function ensureDir(file) {
   mkdirSync(dirname(file), { recursive: true });
 }
 
+// A vendored file is hashed (SRI) and compared byte for byte (make vendor-check), so what the
+// build writes must not depend on a checkout's line-ending settings: leaflet.css and its license
+// text are CRLF upstream and every other vendored file is LF.
+const lf = (text) => text.replace(/\r\n/g, "\n");
+
+function copyAsset(from, to) {
+  if (/\.css$/.test(to)) writeFileSync(to, lf(readFileSync(from, "utf8")));
+  else copyFileSync(from, to);
+}
+
 // A package's root is the nearest package.json that names it: nested ones such as
 // highlight.js/es/package.json ({"type": "module"}) only set the module format.
 function hasName(dir) {
@@ -35,7 +45,7 @@ function describe(dir) {
     throw new Error(`${pkg.name}@${pkg.version} has no SPDX "license" field`);
   const file = LICENSE_FILES.find((name) => existsSync(join(dir, name)));
   if (!file) throw new Error(`Missing license text for ${pkg.name}`);
-  return { name: pkg.name, version: pkg.version, license: pkg.license, text: readFileSync(join(dir, file), "utf8") };
+  return { name: pkg.name, version: pkg.version, license: pkg.license, text: lf(readFileSync(join(dir, file), "utf8")) };
 }
 
 function fileEntry(app, rel, extra = {}) {
@@ -77,10 +87,15 @@ async function buildEsbuild(bundle) {
   for (const item of [...(bundle.extra ?? []), ...(bundle.variants ?? [])]) {
     const target = staticPath(bundle.app, item.out);
     ensureDir(target);
-    // copyFileSync throws on a missing source, so a theme absent from the pinned
+    // The copy throws on a missing source, so a theme absent from the pinned
     // highlight.js release fails the build instead of being dropped.
-    copyFileSync(item.from, target);
+    copyAsset(item.from, target);
     files.push(fileEntry(bundle.app, item.out, item.variant ? { variant: item.variant } : {}));
+  }
+  for (const item of bundle.copy ?? []) {
+    const target = staticPath(bundle.app, item.out);
+    ensureDir(target);
+    copyAsset(item.from, target);
   }
   reportSize(bundle, outfile);
   return {

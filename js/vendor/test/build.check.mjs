@@ -23,7 +23,7 @@ test("every declared vendored file matches its integrity", () => {
 });
 
 test("djust's assets are all declared", () => {
-  assert.deepEqual(Object.keys(manifest("components").assets).sort(), ["highlight.js", "markdown-visual", "xterm"]);
+  assert.deepEqual(Object.keys(manifest("components").assets).sort(), ["highlight.js", "leaflet", "markdown-visual", "xterm"]);
   assert.deepEqual(Object.keys(manifest("admin_ext").assets), ["admin-css"]);
 });
 
