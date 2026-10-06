@@ -10118,6 +10118,7 @@ class CollabSelectionHandler:
         kw = _parse_args(args, context)
         users = kw.get("users", [])
         custom_class = kw.get("class", "")
+        target = kw.get("target", "")
 
         if not isinstance(users, list):
             users = []
@@ -10168,10 +10169,11 @@ class CollabSelectionHandler:
 
         total = len(users)
         label = f"{total} selection{'s' if total != 1 else ''}"
+        target_attr = f' data-target="{conditional_escape(str(target))}"' if target else ""
 
         return _safe(
             f'<div class="{cls}" role="group" aria-label="{label}" '
-            f'dj-hook="CollabSelection">'
+            f'dj-hook="CollabSelection"{target_attr}>'
             f"{''.join(parts)}"
             f"</div>"
         )

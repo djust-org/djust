@@ -30,6 +30,40 @@ class DashboardGrid(Component):
 
         {{ dashboard|safe }}
 
+    What the hook sends (``djust_components/dashboard-grid.js``): dragging a
+    panel's header (or Space/Enter, then the arrow keys, on a focused panel)
+    sends ``move_event`` with ``{"id": "chart", "col": 2, "row": 1}``, and
+    dragging its bottom handle (or Shift+arrow keys while grabbed) sends
+    ``resize_event`` with ``{"id": "chart", "width": 3, "height": 2}``. All
+    numbers are whole grid units, 1-based for ``col`` and ``row``. Nothing is
+    moved on the client: the panel stays where it is until the view
+    re-renders with the new numbers, so an app that ignores the event leaves
+    the dashboard as it was.
+
+    These payloads come from the browser and are **untrusted**. Check that the
+    ``id`` is one of this dashboard's panels and that the user may change it,
+    that the numbers are integers, and clamp them to the grid before storing
+    them::
+
+        @event_handler()
+        def dashboard_move(self, id: str = "", col: int = 1, row: int = 1, **kwargs):
+            panel = self.panels_by_id.get(id)  # unknown id: ignore
+            if panel is None or not self.can_edit(panel):
+                return
+            panel["col"] = max(1, min(int(col), self.columns - panel["width"] + 1))
+            panel["row"] = max(1, int(row))
+
+        @event_handler()
+        def dashboard_resize(self, id: str = "", width: int = 1, height: int = 1, **kwargs):
+            panel = self.panels_by_id.get(id)
+            if panel is None or not self.can_edit(panel):
+                return
+            panel["width"] = max(1, min(int(width), self.columns - panel["col"] + 1))
+            panel["height"] = max(1, int(height))
+
+    Overlap is the app's call: the grid places panels where their numbers say.
+    Panels are matched by ``id``, so give every panel a unique one.
+
     Args:
         panels: list of panel dicts with id, title, col, row, width, height, content
         columns: number of grid columns (default 4)
