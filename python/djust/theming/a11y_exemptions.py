@@ -39,9 +39,11 @@ are exempt BY DECISION, not as debt (owner, 2026-10-06): the 131 ``input`` borde
 (non-text UI components, 3:1 not applied to the shipped presets, revisit on request:
 ``INPUT_BORDER_EXEMPTION_REASON``) and the 6 rows of tokens whose source documents an
 exact brand hex that the owner keeps (monokai and stripe ``link``, github and stripe
-``muted_foreground``: ``BRAND_HEX_EXEMPTIONS``). The other 17 label rows are
-``accent_foreground``, which ``.status-badge-accent`` paints as a background; that
-one is still undecided (``--proposals --include-substantial`` lists it).
+``muted_foreground``: ``BRAND_HEX_EXEMPTIONS``). Four rows are tailwind's and everforest's
+light ``muted_foreground``, held because the move that fixes the page pair would make the
+syntax comments on the ``--code`` surface read worse (``CODE_SURFACE_EXEMPTIONS``). The other
+17 label rows are ``accent_foreground``, which ``.status-badge-accent`` paints as a
+background; that one is still undecided (``--proposals --include-substantial`` lists it).
 ``--check`` fails while a small move is still pending.
 
 Entries were auto-generated from ``scripts/report_theme_contrast.py
@@ -496,6 +498,28 @@ A11Y_EXEMPTIONS.update(
             "(owner decision 2026-10-06, #2885); exempt, not debt"
         )
         for key, hex_ in BRAND_HEX_EXEMPTIONS.items()
+    }
+)
+
+# 3. ``muted_foreground`` where a move that fixes its matrix pair would make it read worse
+#    somewhere else it is painted: the ``.code-block`` surface (``--code``) carries
+#    syntax comments and punctuation in ``--muted-foreground`` (``.hl-c``, ``.hl-o``,
+#    ...). Darkening tailwind's and everforest's light ``muted_foreground`` for the page
+#    would put those comments on the dark code surface at 3.1:1 and 2.1:1, so the move is
+#    held and the page pair stays a documented exemption (#2885 review, round 2).
+CODE_SURFACE_EXEMPTIONS: tuple[tuple[str, str], ...] = (
+    ("tailwind", "light"),
+    ("everforest", "light"),
+)
+A11Y_EXEMPTIONS.update(
+    {
+        (preset, mode, "muted_foreground", surface): (
+            "muted_foreground is also the syntax-comment colour on the --code surface "
+            "(.code-block .hl-c); the move that fixes this pair would make those comments "
+            "read worse there, so it is held (#2885, round 2); exempt, not debt"
+        )
+        for preset, mode in CODE_SURFACE_EXEMPTIONS
+        for surface in ("muted", "background")
     }
 )
 

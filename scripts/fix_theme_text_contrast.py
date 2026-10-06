@@ -26,6 +26,10 @@ any fill, background or border TOKEN is touched:
 * ``--include-substantial`` (owner-approved 2026-10-06) writes the polarity flips and
   the large same-side moves of the label and link tokens as well, except the held ones
   below and ``accent_foreground`` (``.status-badge-accent`` paints it as a background).
+* A move must not make its label read WORSE on another surface it is painted on
+  (``HOVER_FILL_ALPHAS`` / ``PAINTED_SURFACES``: a solid button's hover fill, the
+  ``--code`` surface of syntax comments): the solver looks for the nearest lightness that
+  fixes the matrix pair and keeps those, and a move with none is held.
 * Held back: a token whose source line documents an exact hex colour (for
   example ``# Purple #ae81ff``) is a stated brand value, so any move of it is
   an identity decision for the owner, never a nudge (2026-10-06: the owner keeps these hexes, so they are exempt, not debt).
@@ -113,6 +117,24 @@ FILL_PAINTED_TOKENS = {
     "accent_foreground": "painted as a fill (.status-badge-accent)",
 }
 HOVER_TOKEN = "link_hover"
+
+#: Surfaces a label is also painted on, beyond the one the contrast matrix measures (#2885
+#: review). A move must not make the label read WORSE on any of them (below 4.5:1 and lower
+#: than before); a move that cannot avoid that is held. Both tables are checked against the
+#: stylesheets by ``test_theming_label_surfaces_2885.py``.
+#:
+#: ``.btn-*:hover``, ``.fab-*:hover`` and ``.split-btn-*:hover`` paint the fill at these
+#: alphas over the page or a card, with the label on top.
+HOVER_FILL_ALPHAS = (0.75, 0.85, 0.9)
+#: A hover state is transient: its label may read lower than at rest, but not below this,
+#: unless it already did before the move.
+HOVER_FLOOR = 3.0
+HOVER_LABEL_FILLS = ("primary", "destructive", "success", "warning")
+#: ``muted_foreground`` is read on these surfaces: ``code`` is the ``.code-block`` surface
+#: its syntax comments and punctuation (``.hl-c``, ``.hl-o``, ...) sit on.
+PAINTED_SURFACES = {
+    "muted_foreground": ("background", "card", "muted", "secondary", "border", "code")
+}
 TEXT_TOKENS = LABEL_TOKENS | {HOVER_TOKEN}
 HOVER_PAIRS: list[tuple[str, str, float, str]] = [
     (HOVER_TOKEN, "background", 4.5, "link hover on background"),
@@ -195,6 +217,45 @@ class Move:
         return "nudge" if self.delta <= max_delta else f"large move ({self.delta} pts)"
 
 
+def _blend(fill: ColorScale, base: ColorScale, alpha: float) -> ColorScale:
+    """``fill`` at ``alpha`` over ``base``, as ``ThemeTokens._tint`` composes it."""
+    return ColorScale.from_rgb(
+        *(round(alpha * f + (1 - alpha) * b) for f, b in zip(fill.to_rgb(), base.to_rgb()))
+    )
+
+
+def aux_surfaces(token: str, tokens: ThemeTokens) -> list[tuple[str, ColorScale, float]]:
+    """The extra ``(name, surface, floor)`` triples ``token`` must not get worse on."""
+    out: list[tuple[str, ColorScale, float]] = []
+    fill = token.removesuffix("_foreground")
+    if token.endswith("_foreground") and fill in HOVER_LABEL_FILLS:
+        for alpha in HOVER_FILL_ALPHAS:
+            for base in ("background", "card"):
+                out.append(
+                    (
+                        f"{fill} hover {alpha} over {base}",
+                        _blend(getattr(tokens, fill), getattr(tokens, base), alpha),
+                        HOVER_FLOOR,
+                    )
+                )
+    for surface in PAINTED_SURFACES.get(token, ()):
+        out.append((f"{surface} surface", getattr(tokens, surface), 4.5))
+    return out
+
+
+def _worsens(
+    before: ColorScale, after: ColorScale, aux: list[tuple[str, ColorScale, float]]
+) -> list[str]:
+    """Names of the aux surfaces where ``after`` reads below the surface's floor AND lower
+    than ``before`` did (a surface that already read worse before is not made worse)."""
+    bad = []
+    for name, surface, floor in aux:
+        old, new = _ratio(before, surface), _ratio(after, surface)
+        if new < min(old, floor) - 1e-9:
+            bad.append(name)
+    return bad
+
+
 def _single_move(
     name: str,
     mode: str,
@@ -203,15 +264,34 @@ def _single_move(
     surfaces: list[tuple[ColorScale, float]],
     comment: str,
     accept: Callable[[int], bool] | None = None,
+    aux: list[tuple[str, ColorScale, float]] | None = None,
 ) -> Move | None:
     light = solve_lightness(colour, surfaces, accept)
     if light is None:
         return None
     if light == -1:
         raise SystemExit(f"{name}/{mode}: no lightness fixes {token}")
+    hold = "documented hex" if _HEX.search(comment) else ""
+    if aux and _worsens(colour, ColorScale(colour.h, colour.s, light), aux):
+        # The nearest lightness that fixes the matrix pair makes the label read worse
+        # somewhere else it is painted: look for one that does not, else hold the move.
+        base = accept or (lambda _light: True)
+
+        def keeps_aux(cand: int) -> bool:
+            return base(cand) and not _worsens(colour, ColorScale(colour.h, colour.s, cand), aux)
+
+        alt = solve_lightness(colour, surfaces, keeps_aux)
+        if alt is not None and alt != -1:
+            light = alt
+        elif not hold:
+            worse = _worsens(colour, ColorScale(colour.h, colour.s, light), aux)
+            hold = (
+                f"would read worse on {worse[0]} (and {len(worse) - 1} more)"
+                if len(worse) > 1
+                else f"would read worse on {worse[0]}"
+            )
     mean = sum(s.lightness for s, _ in surfaces) / len(surfaces)
     flip = (colour.lightness >= mean) != (light >= mean)
-    hold = "documented hex" if _HEX.search(comment) else ""
     return Move(name, mode, token, colour, light, flip, hold)
 
 
@@ -233,7 +313,13 @@ def moves_for_mode(
     moves: list[Move] = []
     for token in sorted(LABEL_TOKENS - {"link"}):
         move = _single_move(
-            name, mode, token, getattr(tokens, token), surfaces_of(token), note(token)
+            name,
+            mode,
+            token,
+            getattr(tokens, token),
+            surfaces_of(token),
+            note(token),
+            aux=aux_surfaces(token, tokens),
         )
         if move:
             if (

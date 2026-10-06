@@ -44,7 +44,7 @@ _spec.loader.exec_module(fix)
 
 #: Exempted text pairs (``*_foreground`` labels and ``link``) at the #2885
 #: remediation. EXACT: lower it when a pair is fixed.
-PENDING_TEXT_PAIR_EXEMPTIONS = 23
+PENDING_TEXT_PAIR_EXEMPTIONS = 27
 
 _validator = AccessibilityValidator()
 
@@ -101,6 +101,7 @@ class TestApprovedMovesAreApplied:
         "documented hex",
         "paired with a documented-hex move",
         "painted as a fill (.status-badge-accent)",
+        "would read worse on code surface",
     }
 
     def test_nothing_approved_is_left_unapplied(self):
@@ -152,12 +153,21 @@ class TestDeliberateExemptions:
             reason = A11Y_EXEMPTIONS[(preset, _mode, _fg, _bg)]
             assert hex_ in reason and "not debt" in reason
 
-    def test_the_label_and_link_rows_left_are_exactly_the_brand_hex_and_accent_ones(self):
-        from djust.theming.a11y_exemptions import BRAND_HEX_EXEMPTIONS
+    def test_the_label_and_link_rows_left_are_the_brand_hex_code_surface_and_accent_ones(self):
+        from djust.theming.a11y_exemptions import BRAND_HEX_EXEMPTIONS, CODE_SURFACE_EXEMPTIONS
 
-        rest = {k for k in A11Y_EXEMPTIONS if k[2] in fix.LABEL_TOKENS} - set(BRAND_HEX_EXEMPTIONS)
+        label_rows = {k for k in A11Y_EXEMPTIONS if k[2] in fix.LABEL_TOKENS}
+        code_rows = {
+            (p, m, "muted_foreground", s)
+            for p, m in CODE_SURFACE_EXEMPTIONS
+            for s in ("muted", "background")
+        }
+        assert code_rows <= label_rows and set(BRAND_HEX_EXEMPTIONS) <= label_rows
+        rest = label_rows - set(BRAND_HEX_EXEMPTIONS) - code_rows
         assert rest and all(k[2] == "accent_foreground" for k in rest)
-        assert len(rest) + len(BRAND_HEX_EXEMPTIONS) == PENDING_TEXT_PAIR_EXEMPTIONS
+        assert (
+            len(rest) + len(BRAND_HEX_EXEMPTIONS) + len(code_rows) == PENDING_TEXT_PAIR_EXEMPTIONS
+        )
 
 
 class TestLinkHover:
