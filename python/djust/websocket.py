@@ -143,6 +143,11 @@ async def _acquire_render_lock(lock: asyncio.Lock, timeout: float) -> None:
     await asyncio.wait_for(lock.acquire(), timeout=timeout)
 
 
+def _real_consumer(consumer: Any) -> Any:
+    """The socket's own consumer, for a consumer or a view's stand-in (#3252)."""
+    return getattr(consumer, "_slot_consumer", consumer)
+
+
 def _is_send_after_close_error(exc: RuntimeError) -> bool:
     """True when *exc* is the ASGI server rejecting a send on a closed socket.
 
@@ -789,6 +794,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # The queue the page view's frames run on while the socket hosts views
         # beside it (``_view_lanes``, #3252); None until a frame is queued.
         self._lane: Optional["ViewLane"] = None
+        # Uploads whose register waits on a view's lane (ref -> the view's
+        # consumer), and uploads stopped because a busy view had no room for
+        # more of them (#3252).
+        self._pending_uploads: Dict[str, Any] = {}
+        self._aborted_uploads: Dict[str, None] = {}
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
         """Run the consumer; guarantee ``disconnect()`` cleanup (#3000).
@@ -2542,6 +2552,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         lanes = self._lanes()
         for lane in lanes:
             lane.drop_queued()
+        self._pending_uploads = {}
+        self._aborted_uploads = {}
         for lane in lanes:
             await lane.quiesce()
 
@@ -2918,11 +2930,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             self._note_upload_owner(data.get("ref"), consumer)
         queued = self._queue_on_lane(consumer, handler, data)
         if queued is None:
+            self._finish_queued_upload(handler, data, consumer)
             await self._refuse_busy_view(data)
             return
         if queued:
             return
         await getattr(consumer, handler)(data)
+        self._finish_queued_upload(handler, data, consumer)
 
     #: Uploads whose ``upload_register`` / ``upload_resume`` is queued on a view's
     #: lane remembered at most this many at a time (#3252).
@@ -2944,6 +2958,47 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         pending[ref] = consumer
         while len(pending) > self._MAX_PENDING_UPLOADS:
             pending.pop(next(iter(pending)))
+
+    def _finish_queued_upload(self, handler: str, data: Dict[str, Any], consumer: Any) -> None:
+        """An ``upload_register`` / ``upload_resume`` has run (or was refused): its
+        ref no longer needs the pending map, and an upload that was stopped while
+        its register waited is cancelled now that its entry exists."""
+        if handler not in ("_handle_upload_register", "_handle_upload_resume"):
+            return
+        ref = data.get("ref")
+        if not isinstance(ref, str):
+            return
+        (getattr(self, "_pending_uploads", None) or {}).pop(ref, None)
+        if ref in (getattr(self, "_aborted_uploads", None) or {}):
+            manager = getattr(getattr(consumer, "view_instance", None), "_upload_manager", None)
+            if manager is not None:
+                manager.cancel_upload(ref)
+
+    def _forget_upload(self, ref: Any) -> None:
+        """An upload ended (complete, cancel, error): drop what is remembered of it."""
+        (getattr(self, "_pending_uploads", None) or {}).pop(ref, None)
+        (getattr(self, "_aborted_uploads", None) or {}).pop(ref, None)
+
+    def _forget_uploads_of(self, consumer: Any) -> None:
+        """A view is released: nothing remembered for it outlives it."""
+        pending = getattr(self, "_pending_uploads", None) or {}
+        for ref in [r for r, owner in pending.items() if owner is consumer]:
+            pending.pop(ref, None)
+
+    def _upload_queue_budget(self) -> int:
+        """Bytes of upload frames a busy view's lane may hold (#3252).
+
+        ``rate_limit.upload_burst`` frames (default 400) of ``max_message_size``
+        (default 64 KiB), about 25 MiB: what the connection's upload rate limit
+        lets a client send in one burst, so an ordinary upload of a default-sized
+        file (10 MB, 160 chunks of 63 KiB) fits behind a busy view many times over.
+        """
+        rate_limit = djust_config.get("rate_limit", {})
+        burst = rate_limit.get("upload_burst", 400) if isinstance(rate_limit, dict) else 400
+        size = djust_config.get("max_message_size", 65536)
+        burst = burst if type(burst) is int and burst > 0 else 400
+        size = size if type(size) is int and size > 0 else 65536
+        return burst * size
 
     def _lanes(self) -> List["ViewLane"]:
         """The lane of the page view and of each view beside it that has one."""
@@ -3003,6 +3058,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         try:
             if handler:
                 await getattr(self, handler)(data)
+                _real_consumer(self)._finish_queued_upload(handler, data, self)
             else:
                 await self._dispatch_runtime_owned(data)
         except Exception as e:
@@ -3676,25 +3732,60 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 logger.warning("Invalid upload frame received")
             return
 
-        # An upload belongs to the view that registered it: with several views
-        # on the socket, the one whose manager holds this ref (#3252).
-        owner = self._upload_owner(frame["ref"])
-        # A view with turns queued or running keeps its uploads in order too: the
-        # frames of an upload follow its register on the view's lane, so they are
-        # never applied before the register has run (#3252).
-        lane = getattr(owner, "_lane", None)
-        if (
-            lane is not None
-            and lane.busy()
-            and lane.submit(
-                owner._run_lane_item, ("_handle_upload_frame_for_view", frame), force=True
-            )
-        ):
+        ref = frame["ref"]
+        owner = self._known_upload_owner(ref)
+        lane = getattr(owner, "_lane", None) if owner is not None else None
+        if lane is not None and lane.busy():
+            # A view with turns queued or running keeps its uploads in order too:
+            # the frames of an upload follow its register on the view's lane, so
+            # they are never applied before the register has run (#3252). Only an
+            # upload whose ref is known is queued (an unknown ref is answered
+            # inline, as it always was), and what is queued is bounded in bytes.
+            size = len(frame["data"]) if frame["type"] == "chunk" else 0
+            if lane.submit(
+                owner._run_lane_item,
+                ("_handle_upload_frame_for_view", frame),
+                size=size,
+                budget=self._upload_queue_budget(),
+            ):
+                return
+            await self._abort_busy_upload(owner, ref)
             return
+        owner = owner if owner is not None else self._default_consumer()
         await type(self)._handle_upload_frame_for_view(owner, frame)
 
-    def _upload_owner(self, ref: Any) -> Any:
-        """The consumer-like whose view registered the upload ``ref``."""
+    async def _abort_busy_upload(self, owner: Any, ref: str) -> None:
+        """A busy view's lane has no room for more of this upload: stop the upload.
+
+        The client is told (an ``upload_progress`` error for the ref), the upload
+        is cancelled if its entry exists (or when its queued register runs), and
+        later frames of the ref are answered like those of an unknown upload. The
+        upload fails visibly rather than losing chunks.
+        """
+        from .uploads import build_progress_message
+
+        aborted: Dict[str, None] = getattr(self, "_aborted_uploads", None) or {}
+        self._aborted_uploads = aborted
+        aborted[ref] = None
+        while len(aborted) > self._MAX_PENDING_UPLOADS:
+            aborted.pop(next(iter(aborted)))
+        (getattr(self, "_pending_uploads", None) or {}).pop(ref, None)
+        manager = getattr(owner.view_instance, "_upload_manager", None)
+        entries = getattr(manager, "_entries", None)
+        if manager is not None and isinstance(entries, dict) and ref in entries:
+            manager.cancel_upload(ref)
+        message = build_progress_message(ref, 0, "error")
+        message["error"] = "The view is busy and cannot take more of this upload; try again."
+        await owner.send_json(message)
+
+    def _known_upload_owner(self, ref: Any) -> Any:
+        """The consumer-like whose view registered the upload ``ref``, or None.
+
+        None for a ref no view knows (never registered, or stopped by
+        :meth:`_abort_busy_upload`).
+        """
+        if ref in (getattr(self, "_aborted_uploads", None) or {}):
+            return None
         for consumer in self._view_consumers():
             manager = getattr(consumer.view_instance, "_upload_manager", None)
             entries = getattr(manager, "_entries", None)
@@ -3704,7 +3795,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         pending = (getattr(self, "_pending_uploads", None) or {}).get(ref)
         if pending is not None and pending.view_instance is not None:
             return pending
-        return self._default_consumer()
+        return None
+
+    def _upload_owner(self, ref: Any) -> Any:
+        """The consumer-like whose view registered the upload ``ref`` (the default one if none did)."""
+        owner = self._known_upload_owner(ref)
+        return owner if owner is not None else self._default_consumer()
 
     async def _handle_upload_frame_for_view(self, frame: Dict[str, Any]) -> None:
         """Apply a parsed upload frame to the upload manager of the view ``self`` runs."""
@@ -3730,6 +3826,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 if entry and (progress % 10 == 0 or progress >= 100):
                     await self.send_json(build_progress_message(ref, progress))
             else:
+                _real_consumer(self)._forget_upload(ref)
                 # Surface error details (writer exception, size-limit, etc.)
                 err_entry = mgr._entries.get(ref)
                 error_msg = err_entry.error if err_entry and err_entry.error else None
@@ -3739,6 +3836,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 await self.send_json(msg)
 
         elif frame["type"] == "complete":
+            _real_consumer(self)._forget_upload(ref)
             entry = mgr.complete_upload(ref)
             if entry:
                 await self.send_json(build_progress_message(ref, 100, "complete"))
@@ -3756,6 +3854,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 )
 
         elif frame["type"] == "cancel":
+            _real_consumer(self)._forget_upload(ref)
             mgr.cancel_upload(ref)
             await self.send_json(build_progress_message(ref, 0, "cancelled"))
 
@@ -4494,6 +4593,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         lane = getattr(consumer, "_lane", None)
         if lane is not None:
             await lane.quiesce()
+        self._forget_uploads_of(consumer)
         await leave_consumer_view_groups(consumer)
         # Presence waits for the replacement mount (#3254): see
         # ``_defer_presence_untrack``. Not for a backend with one record per

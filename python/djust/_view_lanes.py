@@ -34,20 +34,32 @@ logger = logging.getLogger(__name__)
 #: handler cannot grow memory without limit. A frame past it is refused.
 MAX_QUEUED_TURNS = 64
 
-#: A queued turn: the coroutine function that runs it, and its argument.
-_Turn = Tuple[Callable[[Any], Awaitable[None]], Any]
+#: What a queued turn is charged against a lane's byte budget besides its payload:
+#: the frame object and its queue entry. It bounds the number of tiny frames (a
+#: ``complete`` or ``cancel`` carries no data) the same way the payload bounds the
+#: large ones.
+TURN_OVERHEAD_BYTES = 256
+
+#: A queued turn: the coroutine function that runs it, its argument, and the
+#: bytes it is charged.
+_Turn = Tuple[Callable[[Any], Awaitable[None]], Any, int]
 
 
 class ViewLane:
     """A FIFO of turns for one view, run one at a time by a task that exists
     only while turns are queued (an idle lane holds no task)."""
 
-    __slots__ = ("_turns", "_task", "_waiting")
+    __slots__ = ("_turns", "_task", "_waiting", "_bytes")
 
     def __init__(self) -> None:
         self._turns: Deque[_Turn] = collections.deque()
         self._task: Optional["asyncio.Future[None]"] = None
         self._waiting = 0
+        self._bytes = 0
+
+    def queued_bytes(self) -> int:
+        """What the queued turns are charged against the byte budget."""
+        return self._bytes
 
     def queued(self) -> int:
         """How many turns are waiting behind the running one."""
@@ -62,26 +74,40 @@ class ViewLane:
         return bool(self._turns) or (self._task is not None and not self._task.done())
 
     def submit(
-        self, run: Callable[[Any], Awaitable[None]], item: Any, *, force: bool = False
+        self,
+        run: Callable[[Any], Awaitable[None]],
+        item: Any,
+        *,
+        size: Optional[int] = None,
+        budget: Optional[int] = None,
     ) -> bool:
         """Queue a turn; it runs after the ones already queued.
 
-        False, with nothing queued, when ``MAX_QUEUED_TURNS`` are already
-        waiting. ``force`` queues anyway: for the frames of an upload, which
-        must follow their ``upload_register`` and cannot be refused without
-        losing the file (their volume is bounded by the upload limits and the
-        connection's upload rate limit).
+        False, with nothing queued, when it does not fit. An ordinary turn
+        (``size`` None) is refused when ``MAX_QUEUED_TURNS`` are already waiting.
+        A turn with a ``size`` (the frames of an upload, which must follow their
+        ``upload_register`` and so cannot simply be refused) is charged
+        ``size + TURN_OVERHEAD_BYTES`` against ``budget`` instead and refused only
+        when that would exceed it.
         """
-        if not force and len(self._turns) >= MAX_QUEUED_TURNS:
-            return False
-        self._turns.append((run, item))
+        if size is None:
+            if len(self._turns) >= MAX_QUEUED_TURNS:
+                return False
+            charge = 0
+        else:
+            charge = size + TURN_OVERHEAD_BYTES
+            if budget is not None and self._bytes + charge > budget:
+                return False
+        self._turns.append((run, item, charge))
+        self._bytes += charge
         if self._task is None or self._task.done():
             self._task = asyncio.ensure_future(self._work())
         return True
 
     async def _work(self) -> None:
         while self._turns:
-            run, item = self._turns.popleft()
+            run, item, charge = self._turns.popleft()
+            self._bytes -= charge
             try:
                 await run(item)
             except asyncio.CancelledError:
@@ -108,10 +134,12 @@ class ViewLane:
     def drop_queued(self) -> None:
         """Forget the turns that have not started (the connection is gone)."""
         self._turns.clear()
+        self._bytes = 0
 
     def cancel(self) -> None:
         """Stop now: forget what is queued and cancel the running turn."""
         self._turns.clear()
+        self._bytes = 0
         task = self._task
         if task is not None and not task.done() and task is not asyncio.current_task():
             task.cancel()

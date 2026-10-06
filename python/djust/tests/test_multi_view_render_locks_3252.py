@@ -867,3 +867,200 @@ async def test_an_upload_to_an_idle_view_is_still_applied_inline():
         assert VIEWS["up"]._upload_manager._entries[ref].complete
     finally:
         await communicator.disconnect()
+
+
+# --------------------------------------------------------------------------- #
+# What an upload may queue behind a busy view is bounded
+# --------------------------------------------------------------------------- #
+
+
+def _register_frame(ref, target="up", size=3):
+    return {
+        "type": "upload_register",
+        "target_id": target,
+        "upload_name": "doc",
+        "ref": ref,
+        "client_name": "a.txt",
+        "client_type": "text/plain",
+        "client_size": size,
+    }
+
+
+def _chunk(ref, index, data):
+    return bytes([FRAME_CHUNK]) + uuid.UUID(ref).bytes + struct.pack(">I", index) + data
+
+
+def _complete(ref):
+    return bytes([FRAME_COMPLETE]) + uuid.UUID(ref).bytes
+
+
+async def _busy_uploader(communicator):
+    await _mount(communicator, Page)
+    await _mount(communicator, Uploader, "up")
+    await _send(communicator, "hold", "up", ref=1)
+    await _wait_started()
+    return CONSUMERS[-1]._slot_map()["up"].facade._lane
+
+
+async def test_frames_of_unregistered_refs_are_not_queued_behind_a_busy_view():
+    """Only an upload whose ref is known is queued: forged refs are answered
+    inline as they always were, so a client cannot pile bytes up in a lane."""
+    communicator = await _connect()
+    try:
+        await _page_and_widget(communicator)  # two views: the page view has a lane
+        await _send(communicator, "hold", ref=1)  # and it is busy
+        await _wait_started()
+        lane = CONSUMERS[-1]._lane
+        for _ in range(400):
+            ref = str(uuid.uuid4())
+            await communicator.send_to(bytes_data=_chunk(ref, 0, b"x" * 1024))
+        # Frames go through the receive loop in order: a ping after them is
+        # answered only once all 400 have been handled (and none was queued).
+        await communicator.send_json_to({"type": "ping"})
+        await _until(communicator, "pong")
+        assert lane.queued() == 0 and lane.queued_bytes() == 0
+        assert CONSUMERS[-1]._pending_uploads == {}
+    finally:
+        RELEASE.set()
+        await communicator.disconnect()
+
+
+async def test_an_upload_past_the_lane_budget_is_stopped_visibly_not_dropped(monkeypatch):
+    communicator = await _connect()
+    try:
+        lane = await _busy_uploader(communicator)
+        consumer = CONSUMERS[-1]
+        monkeypatch.setattr(type(consumer), "_upload_queue_budget", lambda self: 1000)
+        ref = str(uuid.uuid4())
+        await communicator.send_json_to(_register_frame(ref, size=600))
+        await communicator.send_to(bytes_data=_chunk(ref, 0, b"a" * 300))  # fits
+        await _spin_until(lambda: lane.queued() == 2, "the register and the first chunk")
+        await communicator.send_to(bytes_data=_chunk(ref, 1, b"b" * 300))  # does not
+        error = (await _until(communicator, "upload_progress"))[-1]
+        assert error["status"] == "error" and error["ref"] == ref, error
+        assert "busy" in error["error"]
+        assert ref in consumer._aborted_uploads
+        # Later frames of the stopped upload are answered like an unknown upload's.
+        await communicator.send_to(bytes_data=_complete(ref))
+        await communicator.send_json_to({"type": "ping"})
+        await _until(communicator, "pong")
+        assert lane.queued() == 2
+        RELEASE.set()
+        await _replies(communicator, 1)
+        await _spin_until(lambda: not lane.busy(), "the lane to drain")
+        # The queued register ran and its upload was cancelled: it did not complete.
+        entries = VIEWS["up"]._upload_manager._entries
+        assert ref not in entries or not entries[ref].complete
+        assert ref not in consumer._pending_uploads
+    finally:
+        RELEASE.set()
+        await communicator.disconnect()
+
+
+async def test_a_large_upload_behind_a_busy_view_completes_within_the_default_budget():
+    """150 chunks of the stock chunk size (a 9.7 MB file, just under the slot's
+    10 MB default limit) wait behind a busy view and the file arrives whole."""
+    from djust.uploads import DEFAULT_CHUNK_SIZE
+
+    communicator = await _connect()
+    try:
+        lane = await _busy_uploader(communicator)
+        consumer = CONSUMERS[-1]
+        chunks = 150
+        data = b"z" * DEFAULT_CHUNK_SIZE
+        assert chunks * (len(data) + 256) < consumer._upload_queue_budget()
+        ref = str(uuid.uuid4())
+        await communicator.send_json_to(_register_frame(ref, size=chunks * len(data)))
+        for index in range(chunks):
+            await communicator.send_to(bytes_data=_chunk(ref, index, data))
+        await communicator.send_to(bytes_data=_complete(ref))
+        await _spin_until(lambda: lane.queued() == chunks + 2, "every frame to queue")
+        RELEASE.set()
+        frames = await _until(communicator, "upload_progress")
+        while frames[-1].get("status") != "complete":
+            frames += await _until(communicator, "upload_progress")
+        assert not [f for f in frames if f.get("status") == "error"], frames
+        assert VIEWS["up"]._upload_manager._entries[ref].complete
+        assert lane.queued_bytes() == 0
+        assert consumer._pending_uploads == {}
+    finally:
+        RELEASE.set()
+        await communicator.disconnect()
+
+
+async def test_a_register_that_has_run_is_no_longer_remembered_as_pending():
+    communicator = await _connect()
+    try:
+        lane = await _busy_uploader(communicator)
+        consumer = CONSUMERS[-1]
+        ref = str(uuid.uuid4())
+        await communicator.send_json_to(_register_frame(ref))
+        await _spin_until(lambda: lane.queued() == 1, "the register to queue")
+        assert ref in consumer._pending_uploads
+        RELEASE.set()
+        await _until(communicator, "upload_registered")
+        await _spin_until(lambda: not lane.busy(), "the lane to drain")
+        # Registered but neither completed nor cancelled: the manager knows it now.
+        assert ref in VIEWS["up"]._upload_manager._entries
+        assert consumer._pending_uploads == {}
+    finally:
+        RELEASE.set()
+        await communicator.disconnect()
+
+
+async def test_releasing_a_view_forgets_the_uploads_remembered_for_it():
+    communicator = await _connect()
+    try:
+        await _mount(communicator, Page)
+        await _mount(communicator, Uploader, "up")
+        consumer = CONSUMERS[-1]
+        facade = consumer._slot_map()["up"].facade
+        ref = str(uuid.uuid4())
+        consumer._note_upload_owner(ref, facade)  # a register that never got to run
+        await communicator.send_json_to({"type": "unmount", "target_id": "up"})
+        await _spin_until(lambda: "up" not in consumer._slot_map(), "the view's release")
+        assert consumer._pending_uploads == {}
+    finally:
+        await communicator.disconnect()
+
+
+async def test_a_disconnect_drops_the_uploads_whose_register_never_ran():
+    communicator = await _connect()
+    lane = await _busy_uploader(communicator)
+    consumer = CONSUMERS[-1]
+    await communicator.send_json_to(_register_frame(str(uuid.uuid4())))
+    await _spin_until(lambda: lane.queued() == 1, "the register to queue")
+    assert len(consumer._pending_uploads) == 1
+    disconnecting = asyncio.ensure_future(communicator.disconnect())
+    await _spin_until(lambda: lane.waiting() == 1, "the disconnect to wait on the lane")
+    RELEASE.set()
+    await asyncio.wait_for(disconnecting, PATIENCE)
+    assert consumer._pending_uploads == {} and consumer._aborted_uploads == {}
+
+
+async def test_nothing_is_remembered_of_an_upload_after_it_ends_its_view_goes_or_the_socket_closes():
+    communicator = await _connect()
+    try:
+        lane = await _busy_uploader(communicator)
+        consumer = CONSUMERS[-1]
+        done, cancelled, orphan = (str(uuid.uuid4()) for _ in range(3))
+        await communicator.send_json_to(_register_frame(done))
+        await communicator.send_to(bytes_data=_chunk(done, 0, b"abc"))
+        await communicator.send_to(bytes_data=_complete(done))
+        await communicator.send_json_to(_register_frame(cancelled))
+        await communicator.send_to(bytes_data=bytes([0x03]) + uuid.UUID(cancelled).bytes)
+        await communicator.send_json_to(_register_frame(orphan))
+        await _spin_until(lambda: lane.queued() == 6, "the frames to queue")
+        assert set(consumer._pending_uploads) == {done, cancelled, orphan}
+        # The register of the last upload is queued behind an unmount of the view.
+        await communicator.send_json_to({"type": "unmount", "target_id": "up"})
+        await _spin_until(lambda: lane.queued() == 7, "the unmount to queue")
+        RELEASE.set()
+        await _spin_until(lambda: "up" not in consumer._slot_map(), "the view's release")
+        await _spin_until(lambda: not lane.busy(), "the lane to drain")
+        assert consumer._pending_uploads == {}, consumer._pending_uploads
+        assert consumer._aborted_uploads == {}
+    finally:
+        RELEASE.set()
+        await communicator.disconnect()
+    assert consumer._pending_uploads == {} and consumer._aborted_uploads == {}
