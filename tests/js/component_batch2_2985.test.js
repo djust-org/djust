@@ -368,19 +368,17 @@ describe('ImageLightbox', () => {
         expect(env.window.document.body.style.overflow).toBe('auto');
     });
 
-    it('Escape and a wrapping Tab stop at the dialog, so djust\'s own modal handler does not repeat them', () => {
+    it('Escape and a wrapping Tab are marked handled (preventDefault), which is how djust\'s own modal handler knows to skip them', () => {
         const env = boot('<button id="behind">b</button>' + LIGHTBOX(), 'image-lightbox.js');
         const reached = [];
-        env.window.document.addEventListener('keydown', (e) => reached.push(e.key));
-        const close = env.$('.dj-lightbox__close');
-        key(env.window, close, 'Escape');
+        env.window.document.addEventListener('keydown', (e) => reached.push([e.key, e.defaultPrevented]));
+        key(env.window, env.$('.dj-lightbox__close'), 'Escape');
         const next = env.$('.dj-lightbox__next');
         next.focus();
         key(env.window, next, 'Tab'); // wraps
-        expect(reached).toEqual([]);
         env.$('.dj-lightbox__prev').focus();
         key(env.window, env.$('.dj-lightbox__prev'), 'Tab'); // inside: left to the browser (and core)
-        expect(reached).toEqual(['Tab']);
+        expect(reached).toEqual([['Escape', true], ['Tab', true], ['Tab', false]]);
     });
 
     it('does not double-bind after repeated patches', () => {
