@@ -927,14 +927,26 @@ describe('Tour', () => {
             expect(log).toEqual([]);
         });
 
-        it('Escape does not reach djust\'s own modal handler (which would click the first dj-click control with no value)', () => {
+        it('Escape is marked handled (preventDefault), which is how djust\'s own modal handler knows to skip it', () => {
             for (const markup of [TOUR({ step: 1 }), TOUR({ step: 0 }).replace(/<button class="dj-tour__skip".*?<\/button>/, '')]) {
                 const env = tourEnv(markup);
                 const reached = [];
-                env.window.document.addEventListener('keydown', (e) => reached.push(e.key));
+                env.window.document.addEventListener('keydown', (e) => reached.push([e.key, e.defaultPrevented]));
                 key(env.window, pop(env), 'Escape');
-                expect(reached).toEqual([]);
+                expect(reached).toEqual([['Escape', true]]);
             }
+        });
+
+        it('a wrapping Tab is marked handled; a Tab inside the popover is left to the browser', () => {
+            const env = tourEnv(TOUR({ step: 1 }));
+            const reached = [];
+            env.window.document.addEventListener('keydown', (e) => reached.push([e.key, e.defaultPrevented]));
+            const buttons = env.$$('.dj-tour__popover button');
+            buttons[buttons.length - 1].focus();
+            key(env.window, buttons[buttons.length - 1], 'Tab'); // wraps to the first
+            buttons[0].focus();
+            key(env.window, buttons[0], 'Tab'); // moves on inside
+            expect(reached).toEqual([['Tab', true], ['Tab', false]]);
         });
 
         it('no Back on the first step: ArrowLeft does nothing', () => {
