@@ -50,9 +50,22 @@ Don't put `dj-root` on a separate inner element to keep a wrapper out of VDOM di
 
 ### Which element?
 
-The root can be any element inside `<body>`: a `<div>`, or the semantically better `<main>`, `<section>` or `<article>`. It can't be `<html>`, `<head>` or `<body>` itself (`djust.T025`), or a table-section element such as `<tbody>` (`djust.T017`). With the root on `<html>` the HTTP render is complete, but the WebSocket mount keeps only the first element inside `<body>`, so the live page loses the rest. `manage.py check` warns about it, and djust logs a warning when a page declares its root there, because the first render can't be matched to the live updates that follow.
+The root can be any element inside `<body>`: a `<div>`, or the semantically better `<main>`, `<section>` or `<article>`. It can also be `<body>` itself: `<body dj-root>` (or `<body dj-view="myapp.views.Page">`) makes the page's top-level elements, say a `<header>`, a `<main>` and a `<footer>`, the view's content, with no wrapper element. It can't be `<html>` or `<head>` (`djust.T025`), or a table-section element such as `<tbody>` (`djust.T017`). With the root on `<html>` the HTTP render is complete, but the WebSocket mount cannot use it, so the live page loses its content. `manage.py check` warns about it, and djust logs a warning when a page declares its root there, because the first render can't be matched to the live updates that follow.
 
-When a page has more than one candidate, one rule picks the root, in the Python render and in the Rust VDOM alike: the first `dj-root` in document order, otherwise the first `dj-view`. An embedded `{% live_render %}` child belongs to its own view, so the child's wrapper and everything inside it are never the page's root: a `dj-root` in a child's template does not take over its parent's page, and a page with no root of its own does not adopt a child's. Markup that only looks like a root (inside an attribute value, a comment, a `<script>` or `<style>` body) is text and is ignored.
+When a page has more than one candidate, one rule picks the root, in the Python render and in the Rust VDOM alike. First, elements that belong to another view are set aside: an embedded `{% live_render %}` child's wrapper and everything inside it, and a `dj-lazy` view's container. Then the first `dj-root` in document order, otherwise the first `dj-view`. Only when nothing inside `<body>` declares either does `<body>` itself count, if it carries `dj-root` or `dj-view`; `<html>` and `<head>` never do. So a page that already has a root keeps it, a `<body dj-view>` still yields to a `dj-root` on an element inside it (the layout `djust.T005` warns about), and a `dj-root` in a child's template never takes over its parent's page. Markup that only looks like a root (inside an attribute value, a comment, a `<script>` or `<style>` body) is text and is ignored.
+
+#### A `<body>` root
+
+With the root on `<body>`, the view owns the elements djust rendered for it and leaves the other children of `<body>` alone: djust's own scripts and debug panel, a dev toolbar, the nodes a browser extension adds. The page's own scripts run once, when the page loads. A few rules follow from sharing `<body>`:
+
+- Put `dj-root` on `<body>` and djust adds the view path (`dj-view="..."`) for you, as it does for any `dj-root`. A valueless `<body dj-view>` has no view path and does not connect, as on any other element.
+- The body is the root only while nothing inside it declares one: a `dj-root` (or `dj-view`) on an element inside `<body>` is the root, as it always was.
+- A root can sit in a base template (`{% extends %}`): the `<body dj-root>` in the base, the content in the child's blocks.
+- The server updates `<body>`'s own attributes only when their rendered value changes. A class your own JavaScript toggles (a theme switcher, say) survives updates as long as the template does not render a different `class` on `<body>`.
+- A node another script puts at the very start of `<body>` is only recognized after the page has mounted over a WebSocket or SSE. On an HTTP-only page (no live connection) updates are applied by position, so keep such nodes at the end of `<body>`.
+- `dj-lazy` views work inside the page: a lazy container belongs to its own view, so it does not take the root from `<body>`, and the client no longer drops the address it gave the container when it morphs the page. The guide on [multiple views](multiple-views.md) still recommends placing them beside the root where you can.
+
+If you had `<body dj-view="...">` before: the page connected, then replaced `<body>` with its first element and stopped working. It now works as written; nothing in the template needs to change. If you worked around it with a wrapper (`<div dj-root>` around the content), that still works exactly as before.
 
 ---
 
