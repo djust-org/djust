@@ -85,6 +85,12 @@ function installHandleEventSpy(dom) {
         window.handleEvent = _kbNavHandleEventSpy;
         window.djust = window.djust || {};
         window.djust.handleEvent = _kbNavHandleEventSpy;
+        // Escape in a dialog presses the close control (a real click, which the
+        // client's own binding turns into an event): record it by its dj-click.
+        document.addEventListener('click', function (e) {
+            var el = e.target && e.target.closest && e.target.closest('[dj-click]');
+            if (el) window._handleEventCalls.push({ name: el.getAttribute('dj-click'), params: {}, via: 'click' });
+        }, true);
     `);
 }
 
@@ -645,5 +651,206 @@ describe('keyboard-nav — dropdown nested in dialog', () => {
         const evTab = press(dom, pb, 'Tab');
         expect(evTab.defaultPrevented).toBe(true);
         expect(dom.window.document.activeElement).toBe(pc);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Esc inside a dialog only ever uses an explicit close control, and a key a
+// closer handler already took is left alone
+// ---------------------------------------------------------------------------
+
+describe('keyboard-nav — Esc and Tab in a dialog with other dj-click controls', () => {
+    const calls = (dom) => dom.window._handleEventCalls.map((c) => c.name);
+
+    it('Esc never clicks an unrelated control that merely comes first (a Delete button)', () => {
+        const dom = createDom(`
+          <div role="dialog" aria-modal="true">
+            <button id="del" dj-click="delete_everything">Delete</button>
+            <button class="dj-modal__close" dj-click="close_dialog">x</button>
+          </div>`);
+        installHandleEventSpy(dom);
+        const del = dom.window.document.getElementById('del');
+        del.focus();
+        press(dom, del, 'Escape');
+        expect(calls(dom)).toEqual(['close_dialog']);
+    });
+
+    it('a dialog with no explicit close control sends nothing on Esc', () => {
+        const dom = createDom(`
+          <div role="dialog" aria-modal="true">
+            <button id="del" dj-click="delete_everything">Delete</button>
+            <button id="next" dj-click="tour" data-value="next">Next</button>
+          </div>`);
+        installHandleEventSpy(dom);
+        const del = dom.window.document.getElementById('del');
+        del.focus();
+        press(dom, del, 'Escape');
+        expect(calls(dom)).toEqual([]);
+    });
+
+    it('says once, in the console, why Escape did nothing (the old fallback is gone)', () => {
+        const dom = createDom(`
+          <div role="dialog" aria-modal="true">
+            <button id="del" dj-click="delete_everything">Delete</button>
+          </div>`);
+        installHandleEventSpy(dom);
+        const warnings = [];
+        dom.window.console.warn = (...a) => warnings.push(a.join(' '));
+        const del = dom.window.document.getElementById('del');
+        del.focus();
+        press(dom, del, 'Escape');
+        press(dom, del, 'Escape');
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain('data-dj-close');
+        expect(calls(dom)).toEqual([]);
+    });
+
+    it('does not warn when there is an explicit close control, or when the dialog has no dj-click control at all', () => {
+        const dom = createDom(`
+          <div role="dialog" aria-modal="true" id="d1"><button id="x" class="dj-modal__close" dj-click="close">x</button></div>
+          <div role="dialog" aria-modal="true" id="d2"><button id="plain">plain</button></div>`);
+        installHandleEventSpy(dom);
+        const warnings = [];
+        dom.window.console.warn = (...a) => warnings.push(a.join(' '));
+        press(dom, dom.window.document.getElementById('x'), 'Escape');
+        press(dom, dom.window.document.getElementById('plain'), 'Escape');
+        expect(warnings).toEqual([]);
+    });
+
+    it('a control marked data-dj-close is the close control of an app\'s own dialog', () => {
+        const dom = createDom(`
+          <div role="dialog" aria-modal="true">
+            <button id="del" dj-click="delete_everything">Delete</button>
+            <button data-dj-close dj-click="close_mine">Cancel</button>
+          </div>`);
+        installHandleEventSpy(dom);
+        const del = dom.window.document.getElementById('del');
+        del.focus();
+        press(dom, del, 'Escape');
+        expect(calls(dom)).toEqual(['close_mine']);
+    });
+
+    it('.dj-modal__close wins over a data-dj-close control', () => {
+        const dom = createDom(`
+          <div role="dialog" aria-modal="true">
+            <button data-dj-close dj-click="close_marked">x</button>
+            <button class="dj-modal__close" dj-click="close_stock">x</button>
+          </div>`);
+        installHandleEventSpy(dom);
+        const marked = dom.window.document.querySelector('[data-dj-close]');
+        marked.focus();
+        press(dom, marked, 'Escape');
+        expect(calls(dom)).toEqual(['close_stock']);
+    });
+
+    it('Escape the dialog\'s own handler already took (preventDefault) is not acted on again', () => {
+        const dom = createDom(`
+          <div role="dialog" aria-modal="true" id="d">
+            <button class="dj-modal__close" dj-click="close_dialog">x</button>
+            <button id="b">b</button>
+          </div>`);
+        installHandleEventSpy(dom);
+        const d = dom.window.document.getElementById('d');
+        d.addEventListener('keydown', (e) => { if (e.key === 'Escape') e.preventDefault(); });
+        const b = dom.window.document.getElementById('b');
+        b.focus();
+        press(dom, b, 'Escape');
+        expect(calls(dom)).toEqual([]);
+    });
+
+    it('Tab the dialog\'s own handler already took (preventDefault) is not wrapped by the core trap', () => {
+        const dom = createDom(`
+          <div role="dialog" aria-modal="true" id="d">
+            <button class="dj-modal__close" dj-click="close_dialog">x</button>
+            <button id="a">a</button>
+            <button id="b">b</button>
+          </div>`);
+        const d = dom.window.document.getElementById('d');
+        d.addEventListener('keydown', (e) => { if (e.key === 'Tab') e.preventDefault(); });
+        const b = dom.window.document.getElementById('b');
+        b.focus();
+        press(dom, b, 'Tab'); // on the last control: the core trap would wrap to the first
+        expect(dom.window.document.activeElement).toBe(b);
+    });
+
+    it('without such a handler the stock behaviour is unchanged (Esc closes once, Tab wraps)', () => {
+        const dom = createDom(`
+          <div role="dialog" aria-modal="true">
+            <button class="dj-modal__close" dj-click="close_dialog">x</button>
+            <button id="a">a</button>
+            <button id="b">b</button>
+          </div>`);
+        installHandleEventSpy(dom);
+        const b = dom.window.document.getElementById('b');
+        b.focus();
+        press(dom, b, 'Escape');
+        expect(calls(dom)).toEqual(['close_dialog']);
+        press(dom, b, 'Tab');
+        expect(dom.window.document.activeElement.className).toBe('dj-modal__close');
+    });
+});
+
+describe('keyboard-nav — roving keeps working after an earlier preventDefault', () => {
+    it('a tablist still roves when an ancestor handler (dj-keydown.prevent) already took the arrow', () => {
+        const dom = createDom(`
+          <div id="wrap"><nav role="tablist">
+            <button role="tab" id="t0" aria-selected="true" tabindex="0">0</button>
+            <button role="tab" id="t1" aria-selected="false" tabindex="-1">1</button>
+          </nav></div>`);
+        dom.window.document.getElementById('wrap').addEventListener('keydown', (e) => e.preventDefault());
+        const t0 = dom.window.document.getElementById('t0');
+        t0.focus();
+        press(dom, t0, 'ArrowRight');
+        expect(dom.window.document.activeElement.id).toBe('t1');
+    });
+
+    it('an accordion still moves focus when an ancestor handler already took the arrow', () => {
+        const dom = createDom(`
+          <div id="wrap"><div class="dj-accordion">
+            <button class="dj-accordion__trigger" id="a0">0</button>
+            <button class="dj-accordion__trigger" id="a1">1</button>
+          </div></div>`);
+        dom.window.document.getElementById('wrap').addEventListener('keydown', (e) => e.preventDefault());
+        const a0 = dom.window.document.getElementById('a0');
+        a0.focus();
+        press(dom, a0, 'ArrowDown');
+        expect(dom.window.document.activeElement.id).toBe('a1');
+    });
+
+    it('a dropdown outside a dialog still handles Escape after an earlier preventDefault', () => {
+        const dom = createDom(`
+          <div id="wrap"><div class="dj-dropdown" data-open="true">
+            <button class="dj-dropdown__trigger" id="trig" aria-haspopup="menu" aria-controls="m-menu" dj-click="toggle_dropdown">Menu</button>
+            <div role="menu" id="m-menu"><button role="menuitem" id="i1">One</button></div>
+          </div></div>`);
+        installHandleEventSpy(dom);
+        dom.window.document.getElementById('wrap').addEventListener('keydown', (e) => e.preventDefault());
+        const i1 = dom.window.document.getElementById('i1');
+        i1.focus();
+        press(dom, i1, 'Escape');
+        expect(dom.window._handleEventCalls.map((c) => c.name)).toEqual(['toggle_dropdown']);
+    });
+});
+
+describe('keyboard-nav — data-dj-close is a marker, not an event argument', () => {
+    it('a click on a marked control sends its own arguments and no `close`', () => {
+        const dom = createDom(`<button id="c" data-dj-close dj-click="tour" data-value="skip">Skip</button>`);
+        const params = dom.window.djust.extractTypedParams(dom.window.document.getElementById('c'));
+        expect(Object.keys(params)).toEqual(['value']);
+        expect(params.value).toBe('skip');
+    });
+
+    it('Escape presses the marked control, so the event carries the control\'s own value', () => {
+        const dom = createDom(`
+          <div role="dialog" aria-modal="true">
+            <button id="next" dj-click="tour" data-value="next">Next</button>
+            <button id="skip" data-dj-close dj-click="tour" data-value="skip">Skip</button>
+          </div>`);
+        let pressed = null;
+        dom.window.document.getElementById('skip').addEventListener('click', (e) => { pressed = e.target.getAttribute('data-value'); });
+        const next = dom.window.document.getElementById('next');
+        next.focus();
+        press(dom, next, 'Escape');
+        expect(pressed).toBe('skip');
     });
 });

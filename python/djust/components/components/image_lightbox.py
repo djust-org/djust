@@ -150,7 +150,7 @@ class ImageLightbox(Component):
             f'data-close-event="{e_close}" data-navigate-event="{e_nav}" '
             f'role="dialog" aria-modal="true">'
             f'<div class="dj-lightbox__backdrop" {self.event_attrs(self.close_event)}></div>'
-            f'<button class="dj-lightbox__close" {self.event_attrs(self.close_event)} '
+            f'<button class="dj-lightbox__close" data-dj-close {self.event_attrs(self.close_event)} '
             f'aria-label="Close">&times;</button>'
             f"{prev_btn}"
             f'<div class="dj-lightbox__stage">{img_html}{caption_html}</div>'
