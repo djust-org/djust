@@ -23,6 +23,9 @@ any fill, background or border TOKEN is touched:
   its ``link``/``link_hover`` partner is a nudge too. Nudges are what
   ``--apply`` writes. Everything else is listed (``--proposals``, ``--html``)
   and written only with ``--include-substantial``.
+* ``--include-substantial`` (owner-approved 2026-10-06) writes the polarity flips and
+  the large same-side moves of the label and link tokens as well, except the held ones
+  below and ``accent_foreground`` (``.status-badge-accent`` paints it as a background).
 * Held back: a token whose source line documents an exact hex colour (for
   example ``# Purple #ae81ff``) is a stated brand value, so any move of it is
   an identity decision for the owner, never a nudge.
@@ -103,6 +106,12 @@ LABEL_TOKENS = frozenset(
         "link",
     }
 )
+#: Label tokens that CSS also paints as a FILL: a flip or a large move would change that
+#: fill (the owner asked for fills to be preserved), so it stays held for review. Small
+#: same-side nudges are written (#3372).
+FILL_PAINTED_TOKENS = {
+    "accent_foreground": "painted as a fill (.status-badge-accent)",
+}
 HOVER_TOKEN = "link_hover"
 TEXT_TOKENS = LABEL_TOKENS | {HOVER_TOKEN}
 HOVER_PAIRS: list[tuple[str, str, float, str]] = [
@@ -212,6 +221,7 @@ def moves_for_mode(
     tokens: ThemeTokens,
     comments: Callable[[str], str] | None = None,
     max_delta: int = DEFAULT_MAX_DELTA,
+    approve_substantial: bool = False,
 ) -> list[Move]:
     """Every solved move for one preset mode. ``comments(token)`` returns the
     trailing source comment of a token's line (default: read the theme file)."""
@@ -226,6 +236,13 @@ def moves_for_mode(
             name, mode, token, getattr(tokens, token), surfaces_of(token), note(token)
         )
         if move:
+            if (
+                approve_substantial
+                and token in FILL_PAINTED_TOKENS
+                and not move.hold
+                and not move.is_nudge(max_delta)
+            ):
+                move = replace(move, hold=FILL_PAINTED_TOKENS[token])
             moves.append(move)
 
     link = tokens.link
@@ -243,7 +260,14 @@ def moves_for_mode(
         name, mode, HOVER_TOKEN, hover, surfaces_of(HOVER_TOKEN), note(HOVER_TOKEN), keeps_side
     )
     pair = [m for m in (link_move, hover_move) if m]
-    if link_move and not all(m.is_nudge(max_delta) for m in pair):
+    if approve_substantial:
+        # The owner approved flips and large moves (#2885): only a documented hex still
+        # holds, and it holds its partner too (they move together or not at all).
+        if link_move and any(m.hold == "documented hex" for m in pair):
+            pair = [
+                m if m.hold else replace(m, hold="paired with a documented-hex move") for m in pair
+            ]
+    elif link_move and not all(m.is_nudge(max_delta) for m in pair):
         # They move together or not at all: a nudge whose partner is not one is held.
         pair = [
             replace(m, hold="paired with a held link/link_hover move")
@@ -255,12 +279,20 @@ def moves_for_mode(
     return moves
 
 
-def collect_moves(max_delta: int = DEFAULT_MAX_DELTA) -> list[Move]:
+def collect_moves(
+    max_delta: int = DEFAULT_MAX_DELTA, approve_substantial: bool = False
+) -> list[Move]:
     moves: list[Move] = []
     for name in sorted(THEME_PRESETS):
         for mode in MODES:
             moves.extend(
-                moves_for_mode(name, mode, getattr(THEME_PRESETS[name], mode), max_delta=max_delta)
+                moves_for_mode(
+                    name,
+                    mode,
+                    getattr(THEME_PRESETS[name], mode),
+                    max_delta=max_delta,
+                    approve_substantial=approve_substantial,
+                )
             )
     return moves
 
@@ -414,9 +446,11 @@ def _chip(fg: ColorScale, bg: ColorScale, label: str = "Aa label") -> str:
     )
 
 
-def write_html(path: str, moves: list[Move], max_delta: int) -> None:
-    applied = [m for m in moves if m.is_nudge(max_delta)]
-    substantial = [m for m in moves if not m.is_nudge(max_delta)]
+def write_html(path: str, moves: list[Move], max_delta: int, approved: bool = False) -> None:
+    """``approved``: the moves came from ``collect_moves(approve_substantial=True)``, so
+    everything without a hold is applied and only the held moves are still open."""
+    applied = [m for m in moves if (not m.hold if approved else m.is_nudge(max_delta))]
+    substantial = [m for m in moves if m not in applied]
     groups = unfixable_by_text()
 
     def rows(subset: list[Move]) -> str:
@@ -490,8 +524,8 @@ def write_html(path: str, moves: list[Move], max_delta: int) -> None:
         return "\n".join(out), changed, kept
 
     applied_html = (
-        f"<h2>1. Text nudges still pending ({len(applied)}), no polarity flip, at most "
-        f"{max_delta} lightness points</h2>\n<table><tr><th>preset</th><th>mode</th><th>token</th>"
+        f"<h2>1. {'Applied: nudges, approved polarity flips and large moves' if approved else 'Text nudges still pending, no polarity flip, at most ' + str(max_delta) + ' lightness points'} "
+        f"({len(applied)})</h2>\n<table><tr><th>preset</th><th>mode</th><th>token</th>"
         f"<th>before / after</th><th>L</th></tr>\n{rows(applied)}</table>"
         if applied
         else "<p>Section 1 (text nudges) is empty: they merged in #3372.</p>"
@@ -531,7 +565,7 @@ right chip = the derived text colour. Same hue and saturation; lightness only.</
 <table><tr><th>preset</th><th>mode</th><th>token</th><th>before / after</th><th>L</th></tr>
 {derived_html}</table>
 {applied_html}
-<h2>2. SUBSTANTIAL, not applied: polarity flips, larger moves, documented-hex and paired moves ({len(substantial)})</h2>
+<h2>2. NOT applied: {"held moves (documented brand hex, fill-painted accent_foreground)" if approved else "polarity flips, larger moves, documented-hex and paired moves"} ({len(substantial)})</h2>
 <table><tr><th>preset</th><th>mode</th><th>token</th><th>before / after</th><th>L</th></tr>
 {rows(substantial)}</table>
 <h2>3. SUBSTANTIAL, not applied: input border, 3:1 non-text ({len(groups["border"])})</h2>
@@ -568,7 +602,11 @@ def main() -> int:
     parser.add_argument(
         "--include-substantial",
         action="store_true",
-        help="with --apply: ALSO write polarity flips and large moves (owner-approved only)",
+        help=(
+            "approve polarity flips and large moves of the label/link tokens (#2885, owner "
+            "approved 2026-10-06): proposals and --apply then include them. Tokens whose source "
+            "documents a hex, and their link/hover partner, stay held"
+        ),
     )
     parser.add_argument("--prune", action="store_true", help="drop stale A11Y_EXEMPTIONS rows")
     parser.add_argument("--check", action="store_true", help="exit 1 if a nudge is still pending")
@@ -577,9 +615,9 @@ def main() -> int:
     if args.prune:
         print(f"pruned {prune_exemptions()} now-stale A11Y_EXEMPTIONS rows")
         return 0
-    moves = collect_moves(args.max_delta)
+    moves = collect_moves(args.max_delta, approve_substantial=args.include_substantial)
     if args.html:
-        write_html(args.html, moves, args.max_delta)
+        write_html(args.html, moves, args.max_delta, approved=args.include_substantial)
         print(f"wrote {args.html}")
     if args.proposals:
         for m in moves:
@@ -596,7 +634,9 @@ def main() -> int:
         return 1 if pending else 0
     if args.apply:
         chosen = (
-            moves if args.include_substantial else [m for m in moves if m.is_nudge(args.max_delta)]
+            [m for m in moves if not m.hold]
+            if args.include_substantial
+            else [m for m in moves if m.is_nudge(args.max_delta)]
         )
         files = apply_moves(chosen)
         print(f"applied {len(chosen)} token moves across {files} theme files")

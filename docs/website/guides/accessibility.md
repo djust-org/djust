@@ -448,6 +448,17 @@ colour cannot clear all of them.
 Until that is done, put error text on the page or a card, or override
 `--destructive-text` for the surface.
 
+### Label colours on solid fills
+
+A `--*-foreground` label sits on its fill (`--primary-foreground` on `--primary`, ...), and
+`W001` measures every such pair at 4.5:1. Where a shipped preset's label missed it
+(white on a bright button, most often), the label token was moved in lightness only, hue
+and saturation kept, to the nearest lightness that reads: usually to dark ink on a bright
+fill. The fills never moved, and only the label tokens and `link` / `link_hover` changed.
+A few labels are still documented exemptions in
+`djust.theming.a11y_exemptions` because their source documents a brand hex that is not
+ours to recolour, or because the token is also painted as a background.
+
 ### Primary and status colours as text use `--primary-text`, `--info-text`, `--success-text`, `--warning-text`
 
 `--primary`, `--brand`, `--info`, `--success` and `--warning` are **fills** too: they sit under a
