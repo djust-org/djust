@@ -78,6 +78,21 @@ function _stampEmbeddedWrapperDjIds(liveContainer, serverTemplate) {
 }
 
 /**
+ * The scripts inside `container`. For a `<body>` root (#3302) the scripts of
+ * its foreign children (djust's own client scripts, extension nodes) are not
+ * the view's: they ran when the page loaded and must not run again.
+ */
+function _containerScripts(container) {
+    const scripts = Array.from(container.querySelectorAll('script'));
+    if (container !== document.body || !pageRootIsBody()) return scripts;
+    return scripts.filter((el) => {
+        let top = el;
+        while (top.parentNode && top.parentNode !== document.body) top = top.parentNode;
+        return !isForeignBodyChild(top);
+    });
+}
+
+/**
  * #1848: re-execute classic <script> tags inside a freshly-mounted/morphed
  * container so inline page JS inside the dj-root actually runs.
  *
@@ -104,15 +119,18 @@ function _stampEmbeddedWrapperDjIds(liveContainer, serverTemplate) {
  *
  * @param {Element} container - the mounted/morphed container to scan.
  */
-function _runInsertedScripts(container) {
+function _runInsertedScripts(container, alreadyRan) {
     if (!container || typeof container.querySelectorAll !== 'function') return;
     let scripts;
     try {
-        scripts = container.querySelectorAll('script');
+        scripts = _containerScripts(container);
     } catch (_err) {
         return;
     }
     for (const old of scripts) {
+        // #3302: a script the browser already ran (the prerendered page's own)
+        // is not run a second time.
+        if (alreadyRan && alreadyRan.has(old)) continue;
         // Skip already-executed scripts (idempotent on reconnect/re-mount)
         // and any djust-managed marker scripts.
         if (old.hasAttribute('data-djust-script-ran')) continue;
@@ -170,7 +188,7 @@ function _warnDeadScripts(root) {
     if (!root || typeof root.querySelectorAll !== 'function') return;
     let scripts;
     try {
-        scripts = root.querySelectorAll('script');
+        scripts = _containerScripts(root);
     } catch (_err) {
         return;
     }
@@ -243,7 +261,12 @@ function _morphPrerenderedMount(container, html, formRecoverySnapshot, restoreDr
     const temp = document.createElement('div');
     // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
     temp.innerHTML = html;
+    // #3302: with <body> as the container, the prerendered page's own scripts
+    // already ran when it loaded; only scripts the morph creates are run below.
+    const ranBefore = (container === document.body && pageRootIsBody())
+        ? new Set(_containerScripts(container)) : null;
     morphChildren(container, temp);
+    if (ranBefore) markBodyStamped();
     // The morph resets form fields to the server's values; put a saved draft
     // back into this container before form recovery, which restores what the
     // user had typed (#3351). Only a FIRST mount does: a reconnect's mount
@@ -262,7 +285,7 @@ function _morphPrerenderedMount(container, html, formRecoverySnapshot, restoreDr
     _stampEmbeddedWrapperDjIds(container, temp);
     // #1848: morphChildren re-creates inline <script> nodes inert. Re-run
     // classic page scripts inside the dj-root so their init runs on mount.
-    _runInsertedScripts(container);
+    _runInsertedScripts(container, ranBefore);
     // #2058: anything _runInsertedScripts() didn't re-execute gets a loud
     // DEBUG-mode warning instead of silently staying dead.
     _warnDeadScripts(container);
@@ -877,7 +900,7 @@ class LiveViewWebSocket {
                     }
                     if (container) {
                         // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
-                        container.innerHTML = data.html;
+                        replaceContainerHtml(container, data.html);
                         if (formRecoverySnapshot) window.djust._restoreFormRecovery(formRecoverySnapshot);
                         // #1848: innerHTML never executes inserted <script>.
                         // Re-run classic page scripts inside the dj-root so

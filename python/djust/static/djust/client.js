@@ -972,6 +972,21 @@ function _stampEmbeddedWrapperDjIds(liveContainer, serverTemplate) {
 }
 
 /**
+ * The scripts inside `container`. For a `<body>` root (#3302) the scripts of
+ * its foreign children (djust's own client scripts, extension nodes) are not
+ * the view's: they ran when the page loaded and must not run again.
+ */
+function _containerScripts(container) {
+    const scripts = Array.from(container.querySelectorAll('script'));
+    if (container !== document.body || !pageRootIsBody()) return scripts;
+    return scripts.filter((el) => {
+        let top = el;
+        while (top.parentNode && top.parentNode !== document.body) top = top.parentNode;
+        return !isForeignBodyChild(top);
+    });
+}
+
+/**
  * #1848: re-execute classic <script> tags inside a freshly-mounted/morphed
  * container so inline page JS inside the dj-root actually runs.
  *
@@ -998,15 +1013,18 @@ function _stampEmbeddedWrapperDjIds(liveContainer, serverTemplate) {
  *
  * @param {Element} container - the mounted/morphed container to scan.
  */
-function _runInsertedScripts(container) {
+function _runInsertedScripts(container, alreadyRan) {
     if (!container || typeof container.querySelectorAll !== 'function') return;
     let scripts;
     try {
-        scripts = container.querySelectorAll('script');
+        scripts = _containerScripts(container);
     } catch (_err) {
         return;
     }
     for (const old of scripts) {
+        // #3302: a script the browser already ran (the prerendered page's own)
+        // is not run a second time.
+        if (alreadyRan && alreadyRan.has(old)) continue;
         // Skip already-executed scripts (idempotent on reconnect/re-mount)
         // and any djust-managed marker scripts.
         if (old.hasAttribute('data-djust-script-ran')) continue;
@@ -1064,7 +1082,7 @@ function _warnDeadScripts(root) {
     if (!root || typeof root.querySelectorAll !== 'function') return;
     let scripts;
     try {
-        scripts = root.querySelectorAll('script');
+        scripts = _containerScripts(root);
     } catch (_err) {
         return;
     }
@@ -1137,7 +1155,12 @@ function _morphPrerenderedMount(container, html, formRecoverySnapshot, restoreDr
     const temp = document.createElement('div');
     // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
     temp.innerHTML = html;
+    // #3302: with <body> as the container, the prerendered page's own scripts
+    // already ran when it loaded; only scripts the morph creates are run below.
+    const ranBefore = (container === document.body && pageRootIsBody())
+        ? new Set(_containerScripts(container)) : null;
     morphChildren(container, temp);
+    if (ranBefore) markBodyStamped();
     // The morph resets form fields to the server's values; put a saved draft
     // back into this container before form recovery, which restores what the
     // user had typed (#3351). Only a FIRST mount does: a reconnect's mount
@@ -1156,7 +1179,7 @@ function _morphPrerenderedMount(container, html, formRecoverySnapshot, restoreDr
     _stampEmbeddedWrapperDjIds(container, temp);
     // #1848: morphChildren re-creates inline <script> nodes inert. Re-run
     // classic page scripts inside the dj-root so their init runs on mount.
-    _runInsertedScripts(container);
+    _runInsertedScripts(container, ranBefore);
     // #2058: anything _runInsertedScripts() didn't re-execute gets a loud
     // DEBUG-mode warning instead of silently staying dead.
     _warnDeadScripts(container);
@@ -1771,7 +1794,7 @@ class LiveViewWebSocket {
                     }
                     if (container) {
                         // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
-                        container.innerHTML = data.html;
+                        replaceContainerHtml(container, data.html);
                         if (formRecoverySnapshot) window.djust._restoreFormRecovery(formRecoverySnapshot);
                         // #1848: innerHTML never executes inserted <script>.
                         // Re-run classic page scripts inside the dj-root so
@@ -3066,7 +3089,7 @@ class LiveViewSSE {
                             _morphPrerenderedMount(container, data.html, null);
                         } else {
                             // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
-                            container.innerHTML = data.html;
+                            replaceContainerHtml(container, data.html);
                             // #2058: the SSE mount path never calls
                             // _runInsertedScripts() (WS-only fix) — a classic
                             // <script> is silently dead here exactly like
@@ -8776,6 +8799,75 @@ function isDjIfComment(text) {
 }
 
 /**
+ * #3302: a view whose root is `<body>` (`<body dj-view>` / `<body dj-root>`
+ * with no root declared inside it).
+ * Its VDOM children are the page's top-level siblings, but the live `<body>`
+ * also holds nodes the server never rendered for this view: djust's own
+ * injected scripts and debug panel, browser-extension and dev-toolbar nodes.
+ * Those are "foreign": a body child element with no `dj-id` once the view has
+ * been mounted (the server stamps every element it renders). Morphs, path
+ * resolution and content replacement must leave them alone.
+ */
+function pageRootIsBody() {
+    const body = document.body;
+    if (!body || !(body.hasAttribute('dj-view') || body.hasAttribute('dj-root'))) return false;
+    // <body> is the root of LAST RESORT, as on the server: any root inside it
+    // wins (a page that already works keeps its root). The containers of other
+    // views (an embedded child, a lazy view before or after it hydrates) do not
+    // count.
+    for (const el of body.querySelectorAll('[dj-root], [dj-view]')) {
+        if (el.closest('[data-djust-embedded], [dj-view][dj-lazy], [dj-view][data-djust-target]')) continue;
+        return false;
+    }
+    return true;
+}
+
+function isForeignBodyChild(node) {
+    return !!node && node.nodeType === Node.ELEMENT_NODE &&
+        node.parentNode === document.body &&
+        !node.hasAttribute('dj-id') &&
+        bodyHasStampedChildren() &&
+        pageRootIsBody();
+}
+
+/**
+ * Have the server's elements under `<body>` been stamped with their dj-id (a
+ * WebSocket/SSE mount or a content replacement did it)? Before that, and for
+ * the whole life of an HTTP-only page (patches insert a few stamped nodes, the
+ * rest never are), "no dj-id" cannot tell a server-rendered element from a
+ * foreign one (see `_morphChildrenInner`).
+ */
+function bodyHasStampedChildren() {
+    return !!(window.djust && window.djust._bodyStamped === true);
+}
+
+/** Record that the server's elements under `<body>` now carry their dj-id. */
+function markBodyStamped() {
+    if (window.djust) window.djust._bodyStamped = true;
+}
+
+/**
+ * Replace a container's content with server HTML (`innerHTML` semantics: the
+ * inserted scripts stay inert). For `<body>` the foreign children survive, in
+ * place, and the server's nodes land before any trailing foreign ones.
+ */
+function replaceContainerHtml(container, html) {
+    if (container !== document.body || !pageRootIsBody()) {
+        container.innerHTML = html;
+        return;
+    }
+    const all = Array.from(container.childNodes);
+    const owned = all.filter((n) => !isForeignBodyChild(n));
+    const lastOwned = owned.length ? all.indexOf(owned[owned.length - 1]) : -1;
+    const anchor = all.slice(lastOwned + 1).find((n) => isForeignBodyChild(n)) || null;
+    owned.forEach((n) => container.removeChild(n));
+    const tpl = document.createElement('template');
+    tpl.innerHTML = html;
+    container.insertBefore(tpl.content, anchor);
+    if (/\sdj-id=/.test(html)) markBodyStamped();
+}
+
+/**
  * Single source of truth for "does this child node count toward VDOM child
  * indices" (#1655). Both the path walker (``getNodeByPath``) and the index
  * resolver (``getSignificantChildren``) MUST agree, or index-based patches
@@ -8802,6 +8894,8 @@ function isDjIfComment(text) {
  * @returns {boolean}
  */
 function isSignificantChild(child, preserveWhitespace = false) {
+    // #3302: a <body> root's foreign children are not part of the VDOM.
+    if (isForeignBodyChild(child)) return false;
     if (child.nodeType === Node.ELEMENT_NODE) return true;
     if (child.nodeType === Node.TEXT_NODE) {
         if (preserveWhitespace) return true;
@@ -9546,8 +9640,40 @@ function morphChildren(existing, desired) {
 }
 
 function _morphChildrenInner(existing, desired) {
-    const existingNodes = Array.from(existing.childNodes);
+    let existingNodes = Array.from(existing.childNodes);
     const desiredNodes = Array.from(desired.childNodes);
+
+    // #3302: `<body>` as the root holds nodes the server did not render
+    // (injected scripts, debug UI, extension nodes). Once the server's elements
+    // carry a dj-id, a body child without one is foreign: left out of the
+    // alignment and never removed. Before the first mount nothing is stamped,
+    // so the prerendered DOM is aligned as usual and unmatched ELEMENTS are
+    // kept instead of removed (the foreign ones follow the template's content).
+    let keepUnmatchedElements = false;
+    let tailAnchor = null;
+    if (existing === document.body && pageRootIsBody()) {
+        if (bodyHasStampedChildren()) {
+            const owned = existingNodes.filter((n) => !isForeignBodyChild(n));
+            const lastOwned = owned.length ? existingNodes.indexOf(owned[owned.length - 1]) : -1;
+            tailAnchor = existingNodes.slice(lastOwned + 1).find((n) => isForeignBodyChild(n)) || null;
+            existingNodes = owned;
+        } else {
+            // Not stamped yet: an existing element is plausibly the server's
+            // when the server renders an element it could be (same id, or same
+            // tag where neither has an id). Anything else (an extension's node
+            // with its own id, a dev toolbar) is foreign and stays where it is.
+            const ids = new Set();
+            const tags = new Set();
+            for (const d of desiredNodes) {
+                if (d.nodeType !== Node.ELEMENT_NODE) continue;
+                if (d.id) ids.add(d.id); else tags.add(d.tagName);
+            }
+            existingNodes = existingNodes.filter((n) =>
+                n.nodeType !== Node.ELEMENT_NODE ||
+                (n.id ? ids.has(n.id) : tags.has(n.tagName)));
+            keepUnmatchedElements = true;
+        }
+    }
 
     // #1724: whether this parent preserves whitespace (<pre>/<code>/<textarea>
     // /<script>/<style>). Inside such elements EVERY text node is significant
@@ -9622,7 +9748,7 @@ function _morphChildrenInner(existing, desired) {
                 matched.add(eNode);
                 eIdx++;
             } else {
-                existing.insertBefore(document.createTextNode(dNode.textContent), eNode);
+                existing.insertBefore(document.createTextNode(dNode.textContent), eNode || tailAnchor);
             }
             continue;
         }
@@ -9636,7 +9762,7 @@ function _morphChildrenInner(existing, desired) {
                 matched.add(eNode);
                 eIdx++;
             } else {
-                existing.insertBefore(document.createComment(dNode.textContent), eNode);
+                existing.insertBefore(document.createComment(dNode.textContent), eNode || tailAnchor);
             }
             continue;
         }
@@ -9655,7 +9781,7 @@ function _morphChildrenInner(existing, desired) {
             matched.add(match);
             if (match !== eNode) {
                 // Move keyed element into correct position
-                existing.insertBefore(match, eNode);
+                existing.insertBefore(match, eNode || tailAnchor);
             } else {
                 eIdx++;
             }
@@ -9674,12 +9800,13 @@ function _morphChildrenInner(existing, desired) {
         }
 
         // Strategy 3: No match — clone desired child and insert
-        existing.insertBefore(dNode.cloneNode(true), eNode);
+        existing.insertBefore(dNode.cloneNode(true), eNode || tailAnchor);
     }
 
     // Remove unmatched existing children
     for (const node of existingNodes) {
         if (!matched.has(node) && node.parentNode === existing) {
+            if (keepUnmatchedElements && node.nodeType === Node.ELEMENT_NODE) continue;
             if (node.nodeType === Node.ELEMENT_NODE
                 && globalThis.djust
                 && typeof globalThis.djust.maybeDeferRemoval === 'function'
@@ -9760,6 +9887,10 @@ function _morphElementInner(existing, desired) {
         const name = existing.attributes[i].name;
         if (!desired.hasAttribute(name)) {
             if (isCanvas && (name === 'width' || name === 'height')) continue;
+            // The address the client gave a view's container is not the
+            // server's to remove: a page mount that morphs the container's
+            // ancestors (a `<body>` root holds every lazy view) must keep it.
+            if (name === 'data-djust-target' && existing.hasAttribute('dj-view')) continue;
             if (_isIgnored && _isIgnored(existing, name)) continue;
             existing.removeAttribute(name);
         }
@@ -10449,6 +10580,9 @@ window.djust._extractDjIfMarkerId = _extractDjIfMarkerId;
 // Export for testing
 window.djust.getSignificantChildren = getSignificantChildren;
 window.djust.isSignificantChild = isSignificantChild;
+window.djust.isForeignBodyChild = isForeignBodyChild;
+window.djust.replaceContainerHtml = replaceContainerHtml;
+window.djust.markBodyStamped = markBodyStamped;
 window.djust._applySinglePatch = applySinglePatch;
 window.djust._stampDjIds = _stampDjIds;
 window.djust._getNodeByPath = getNodeByPath;
@@ -14341,7 +14475,7 @@ window.djust.getActiveStreams = getActiveStreams;
                             if (!fastContainer) fastContainer = document.querySelector('[dj-root]');
                             if (fastContainer) {
                                 // codeql[js/xss] -- html is server-rendered; only reads from SW cache keyed by same-origin url
-                                fastContainer.innerHTML = vdomReply.html;
+                                replaceContainerHtml(fastContainer, vdomReply.html);
                                 window.dispatchEvent(new CustomEvent('djust:vdom-cache-applied', {
                                     detail: { url: url.pathname, version: vdomReply.version },
                                 }));

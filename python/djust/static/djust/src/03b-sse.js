@@ -309,7 +309,7 @@ class LiveViewSSE {
                             _morphPrerenderedMount(container, data.html, null);
                         } else {
                             // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
-                            container.innerHTML = data.html;
+                            replaceContainerHtml(container, data.html);
                             // #2058: the SSE mount path never calls
                             // _runInsertedScripts() (WS-only fix) — a classic
                             // <script> is silently dead here exactly like
