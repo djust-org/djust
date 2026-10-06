@@ -35,10 +35,14 @@ logger = logging.getLogger(__name__)
 # skipped the initial-GET normalisation for them).
 #
 # * Group 1 is the element name; ``_find_closing_tag_pos`` balances that name.
-# * ``html`` / ``head`` / ``body`` are excluded: the Rust VDOM's ``find_root``
-#   (``crates/djust_vdom/src/parser.rs``) searches INSIDE ``<body>``, so a root
-#   on those elements can never agree with the WS frame. The render path warns
-#   about such a root instead (``_warn_unmatched_root``).
+# * ``html`` / ``head`` / ``body`` are excluded from THIS pattern. ``html`` and
+#   ``head`` are never roots: the Rust VDOM's ``find_root``
+#   (``crates/djust_vdom/src/parser.rs``) starts at ``<body>``, so a root on
+#   them can never agree with the WS frame (the render path warns about such a
+#   root, ``_warn_unmatched_root``). ``<body>`` is the root of LAST RESORT
+#   (#3302): ``_search_dj_root_open`` tries the ``_BODY_*`` twins below only when
+#   nothing inside the page declares a root, so a page that already has one
+#   keeps it.
 # * QUOTE-AWARE: the tag body is consumed as whole quoted strings or single
 #   unquoted characters (``_TAG_BODY_UNIT``), so ``dj-root`` INSIDE an
 #   attribute value can never match. A user-supplied
@@ -59,8 +63,10 @@ logger = logging.getLogger(__name__)
 # wrapper and everything inside it belong to the child (``_embedded_child_spans``)
 # and are never the root; of the rest, the first ``dj-root`` in document order
 # wins, else the first ``dj-view`` (``_search_dj_root_open`` tries its patterns
-# in that order). ``python/tests/fixtures/root_selection_3031.json`` is the
-# shared corpus all three are tested against.
+# in that order), and only then ``<body>`` itself when it carries the attribute;
+# ``<html>`` and ``<head>`` never are.
+# ``python/tests/fixtures/root_selection_3031.json`` is the shared corpus all
+# three are tested against.
 _QUOTED = r""""[^"]*"|'[^']*'"""
 _TAG_BODY_UNIT = r"""(?:%s|[^'"<>])""" % _QUOTED
 _ROOT_TAG_NAME = r"<(?!(?:html|head|body)(?=[ \t\n\r\f/>]))([A-Za-z][A-Za-z0-9-]*)(?=[ \t\n\r\f/>])"
@@ -100,6 +106,13 @@ _DJ_ROOT_RE = _root_open_re(_ROOT_TAG_NAME, "dj-root")
 # of #2892. The attribute-name boundary also keeps ``<body
 # dj-view-transitions>`` and ``dj-viewport-*`` from matching.
 _DJ_VIEW_RE = _root_open_re(_ROOT_TAG_NAME, "dj-view")
+
+# ``<body>`` carrying dj-root / dj-view (#3302): the twins of the two patterns
+# above that match only the body tag. Group 1 is the element name, as above.
+_BODY_TAG_NAME = r"<(body)(?=[ \t\n\r\f/>])"
+_BODY_ROOT_RE = _root_open_re(_BODY_TAG_NAME, "dj-root")
+_BODY_VIEW_RE = _root_open_re(_BODY_TAG_NAME, "dj-view")
+_BODY_TWINS = {_DJ_ROOT_RE: _BODY_ROOT_RE, _DJ_VIEW_RE: _BODY_VIEW_RE}
 
 # Any tag carrying a dj-root / dj-view attribute, INCLUDING the elements the
 # two patterns above exclude. Only used to decide whether a page that yielded
@@ -273,7 +286,8 @@ def _search_dj_root_open(html: str, *patterns: "re.Pattern[str]") -> "Optional[r
     Tries ``patterns`` in order against a masked copy (see
     :func:`_mask_for_root_search`), so a tag-like string inside
     ``<script>``/``<style>``/``<!-- -->`` or inside a quoted attribute value
-    is never selected. The returned match's ``start()``/``end()`` index the
+    is never selected. When none matches, ``<body>`` itself is the root if it
+    carries the attribute (#3302). The returned match's ``start()``/``end()`` index the
     ORIGINAL string (the mask is length-preserving); do not read ``group()``
     from it.
     """
@@ -294,6 +308,13 @@ def _search_dj_root_open(html: str, *patterns: "re.Pattern[str]") -> "Optional[r
             if span_end is None:
                 return m
             pos = span_end
+    # #3302: nothing inside the page declares a root, so `<body>` is the root
+    # when it carries the attribute.
+    for pattern in patterns:
+        twin = _BODY_TWINS.get(pattern)
+        m = twin.search(masked) if twin is not None else None
+        if m:
+            return m
     return None
 
 
@@ -304,11 +325,14 @@ def _search_dj_root_open(html: str, *patterns: "re.Pattern[str]") -> "Optional[r
 # wrapper spliced the whole page into the child's slot (two documents, the
 # generic form of #3142).
 _EMBEDDED_ATTR_TOKEN_RE = re.compile(
-    _QUOTED + r"""|(?<=[ \t\n\r\f])(data-djust-embedded)(?=[ \t\n\r\f=>/])""", re.IGNORECASE
+    _QUOTED + r"""|(?<=[ \t\n\r\f])(data-djust-embedded|dj-lazy)(?=[ \t\n\r\f=>/])""",
+    re.IGNORECASE,
 )
 
 
-_EMBEDDED_MARKER_RE = re.compile("data-djust-embedded", re.IGNORECASE)
+# A lazy view's container (``dj-view dj-lazy``) is another view's, like an embedded
+# child's wrapper (#3302).
+_EMBEDDED_MARKER_RE = re.compile("data-djust-embedded|dj-lazy", re.IGNORECASE)
 
 
 def _embedded_child_spans(html: str, masked: str) -> "list[tuple[int, int]]":
@@ -1631,7 +1655,8 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         the one spelling the old literal replace handled — ``<div dj-root>`` —
         still renders byte-identically as ``<div dj-root dj-view="...">``.
         Tags inside ``<script>``/``<style>`` bodies and HTML comments are text
-        and are left alone (#2663).
+        and are left alone (#2663). A ``<body dj-root>`` is stamped when it is the
+        page's root (#3302).
         """
         attr = ' dj-view="%s"' % _html_escape(view_path, quote=True)
         masked = _mask_for_root_search(html)
@@ -1643,14 +1668,24 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             if _EMBEDDED_MARKER_RE.search(html) is not None
             else []
         )
+        starts = [
+            m.start()
+            for m in _DJ_ROOT_RE.finditer(masked)
+            if not (embedded and _span_containing(embedded, m.start()) is not None)
+        ]
+        # #3302: `<body dj-root>` is stamped only when it IS the page's root,
+        # i.e. nothing inside the page declares one (the client mounts on the
+        # first `[dj-view]`, so a stamp on an unused body would misdirect it).
+        if not starts:
+            chosen = _search_dj_root_open(html, _DJ_ROOT_RE, _DJ_VIEW_RE)
+            if chosen is not None and _root_tag_name(html, chosen) == "body":
+                starts = [chosen.start()]
         parts: list[str] = []
         last = 0
-        for m in _DJ_ROOT_RE.finditer(masked):
-            if embedded and _span_containing(embedded, m.start()) is not None:
-                continue
+        for start in starts:
             root_attr_end: Optional[int] = None
             has_view = False
-            _, attrs = _scan_html_tag(html, m.start())
+            _, attrs = _scan_html_tag(html, start)
             for begin, name_end, _value_start, end in attrs:
                 kind = html[begin:name_end].lower()
                 if kind == "dj-view":
@@ -1683,13 +1718,13 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         reason = (
             "its closing tag was not found"
             if found
-            else "it is on <html>, <head> or <body>, which is not supported"
+            else "it is on <html> or <head>, which is not supported"
         )
         logger.warning(
             "[LiveView] %s: the page declares a dj-root/dj-view root but %s. "
             "The initial render was NOT normalised to match the WebSocket frame, "
             "so patches will fail and fall back to full re-renders. Put dj-root "
-            "on an element inside <body> with a matching close tag (#2892).",
+            "on <body> or an element inside it, with a matching close tag (#2892).",
             label,
             reason,
         )

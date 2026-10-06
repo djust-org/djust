@@ -379,7 +379,7 @@ fn find_root(handle: &Handle) -> Handle {
     //
     // Strategy:
     // 1. Find <body> in the parsed document
-    // 2. Search for [dj-root] or [dj-view] element — this is the LiveView root
+    // 2. Search <body> itself and its descendants for [dj-root] or [dj-view] — this is the LiveView root
     //    whose innerHTML matches the client DOM. Using it as VDOM root ensures
     //    dj-id attributes stay in sync between server VDOM and client DOM.
     // 3. If no [dj-root]/[dj-view] found, fall back to first element child of <body>
@@ -434,23 +434,46 @@ fn find_body(handle: &Handle) -> Option<Handle> {
 ///
 /// * OWNERSHIP: a root belongs to the view that rendered it. An embedded
 ///   `{% live_render %}` child's wrapper (`dj-view` + `data-djust-embedded`,
-///   sticky or not) and everything inside it belong to the child, so no
-///   `dj-root` / `dj-view` there is ever the parent's root.
+///   sticky or not) or a lazy view's container (`dj-view` + `dj-lazy`) and
+///   everything inside it belong to that other view, so no `dj-root` /
+///   `dj-view` there is ever the parent's root.
 /// * PRECEDENCE: the first `dj-root` in document order, else the first
 ///   `dj-view`. (`dj-root` is what the client mounts on; `dj-view` alone is
 ///   the auto-inferred root.)
 ///
-/// Depth-first, document order, and only inside `<body>` (the caller starts
-/// there, so a root on `<html>`/`<head>`/`<body>` is never a candidate).
-fn find_liveview_root(handle: &Handle) -> Option<Handle> {
-    find_root_with_attr(handle, "dj-root").or_else(|| find_root_with_attr(handle, "dj-view"))
+/// Depth-first, document order, inside `<body>`; then `<body>` itself as the
+/// root of last resort (#3302): a `<body dj-view>` / `<body dj-root>` is a root
+/// whose children are the page's top-level siblings, but only when nothing
+/// inside it declares a root, so a page that already works keeps its root.
+/// `<html>` and `<head>` are never candidates (the caller starts at `<body>`).
+fn find_liveview_root(body: &Handle) -> Option<Handle> {
+    find_root_with_attr(body, "dj-root")
+        .or_else(|| find_root_with_attr(body, "dj-view"))
+        .or_else(|| {
+            ["dj-root", "dj-view"]
+                .into_iter()
+                .any(|attr| element_is_root_candidate(body, attr))
+                .then(|| body.clone())
+        })
 }
 
-/// An embedded-child wrapper: `dj-view` and `data-djust-embedded` on one
-/// element (what `{% live_render %}` emits, sticky or not).
+/// Does `handle` itself carry `attr` and not own another view's subtree?
+fn element_is_root_candidate(handle: &Handle, attr: &str) -> bool {
+    match handle.data {
+        NodeData::Element { ref attrs, .. } => {
+            let attrs = attrs.borrow();
+            !is_embedded_child_wrapper(&attrs)
+                && attrs.iter().any(|a| a.name.local.as_ref() == attr)
+        }
+        _ => false,
+    }
+}
+
+/// The container of ANOTHER view: `dj-view` with `data-djust-embedded` (what
+/// `{% live_render %}` emits, sticky or not) or with `dj-lazy` (a lazy view).
 fn is_embedded_child_wrapper(attrs: &[html5ever::Attribute]) -> bool {
     let has = |wanted: &str| attrs.iter().any(|a| a.name.local.as_ref() == wanted);
-    has("dj-view") && has("data-djust-embedded")
+    has("dj-view") && (has("data-djust-embedded") || has("dj-lazy"))
 }
 
 /// First element in `handle`'s subtree (document order) carrying `attr`,
@@ -785,6 +808,94 @@ mod tests {
         );
         assert_eq!(vnode.children.len(), 1);
         assert_eq!(vnode.children[0].tag, "p");
+    }
+
+    #[test]
+    fn body_with_dj_view_is_the_root_3302() {
+        // The page's top-level siblings are the root's children.
+        let html = r#"<!DOCTYPE html><html><head><title>t</title></head><body dj-view="app.V"><header>H</header><main>M</main><footer>F</footer></body></html>"#;
+        let vnode = parse_html(html).unwrap();
+        assert_eq!(vnode.tag, "body");
+        assert_eq!(vnode.attrs.get("dj-view"), Some(&"app.V".to_string()));
+        let tags: Vec<&str> = vnode.children.iter().map(|c| c.tag.as_str()).collect();
+        assert_eq!(tags, ["header", "main", "footer"]);
+    }
+
+    #[test]
+    fn body_with_dj_root_is_the_root_3302() {
+        let vnode = parse_html("<body dj-root><p>a</p><p>b</p></body>").unwrap();
+        assert_eq!(vnode.tag, "body");
+        assert_eq!(vnode.children.len(), 2);
+    }
+
+    #[test]
+    fn an_inner_root_always_beats_the_body_3302() {
+        // <body> is the root of last resort: any root inside it, dj-root or
+        // dj-view, is picked first, so a page that already works keeps its root.
+        for html in [
+            r#"<html><head></head><body dj-root><div dj-root><p>x</p></div></body></html>"#,
+            r#"<html><head></head><body dj-root><div dj-view="a.B"><p>x</p></div></body></html>"#,
+            r#"<html><head></head><body dj-view="a.B"><div dj-view="c.D"><p>x</p></div></body></html>"#,
+        ] {
+            let vnode = parse_html(html).unwrap();
+            assert_eq!(vnode.tag, "div", "{html}");
+        }
+    }
+
+    #[test]
+    fn lazy_view_containers_are_not_roots_so_a_body_root_stays_3302() {
+        let html = r#"<html><head></head><body dj-root><header>H</header><div id="w" dj-view="a.W" dj-lazy="idle"></div></body></html>"#;
+        let vnode = parse_html(html).unwrap();
+        assert_eq!(vnode.tag, "body");
+        assert_eq!(vnode.children.len(), 2);
+    }
+
+    #[test]
+    fn an_inner_dj_root_still_beats_a_body_dj_view_3302() {
+        // Pages that already work keep their root.
+        let html = r#"<html><head></head><body dj-view="app.V"><nav>N</nav><div dj-root><p>x</p></div></body></html>"#;
+        let vnode = parse_html(html).unwrap();
+        assert_eq!(vnode.tag, "div");
+        assert!(vnode.attrs.contains_key("dj-root"));
+    }
+
+    #[test]
+    fn html_and_head_are_never_roots_3302() {
+        let html = r#"<html dj-view="a.B"><head dj-root></head><body><header>H</header><main>M</main></body></html>"#;
+        let vnode = parse_html(html).unwrap();
+        assert_eq!(vnode.tag, "header", "falls back to the first body element");
+    }
+
+    #[test]
+    fn a_body_root_does_not_claim_an_embedded_childs_boundary_3302() {
+        let html = r#"<html><head></head><body dj-view="a.B"><header>H</header><div dj-view data-djust-embedded="c1"><div dj-root>C</div></div></body></html>"#;
+        let vnode = parse_html(html).unwrap();
+        assert_eq!(vnode.tag, "body");
+    }
+
+    #[test]
+    fn body_root_updates_diff_with_paths_below_the_body_3302() {
+        // A conditional top-level sibling is a child insert / remove under the
+        // body root, with no wire-format change and no root replacement.
+        let with_aside = r#"<html><head></head><body dj-root><header>H</header><aside>A</aside><main>M0</main></body></html>"#;
+        let without =
+            r#"<html><head></head><body dj-root><header>H</header><main>M1</main></body></html>"#;
+        let old = parse_html(with_aside).unwrap();
+        let new = parse_html(without).unwrap();
+        let patches = crate::diff(&old, &new);
+        assert!(!patches.is_empty());
+        assert!(
+            patches
+                .iter()
+                .all(|p| !matches!(p, crate::Patch::Replace { path, .. } if path.is_empty())),
+            "{patches:?}"
+        );
+        assert!(
+            patches
+                .iter()
+                .any(|p| matches!(p, crate::Patch::RemoveChild { path, .. } if path.is_empty())),
+            "{patches:?}"
+        );
     }
 
     #[test]

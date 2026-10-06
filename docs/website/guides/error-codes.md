@@ -1290,20 +1290,21 @@ line above, or all of them with `DJUST_CONFIG = {"suppress_checks": ["T024"]}`.
 
 ---
 
-### T025: dj-view or dj-root on `<html>`, `<head>` or `<body>`
+### T025: dj-view or dj-root on `<html>` or `<head>`
 
 **Severity**: Warning
 
-**What causes it**: `dj-view` or `dj-root` is on the `<html>`, `<head>` or `<body>`
-tag. The HTTP render of the page is complete, but the WebSocket mount looks for
-the root inside `<body>` and otherwise keeps only the first element child, so a
-page with a `<header>` and a `<main>` under `<body>` mounts with the header only.
-Message: "<file>:<line> -- '<attr>' is on <tag>. The HTTP render is complete, but
-the WebSocket mount keeps only the first element inside <body>, so the live page
-silently loses the rest."
+**What causes it**: `dj-view` or `dj-root` is on the `<html>` or `<head>` tag.
+The HTTP render of the page is complete, but neither element can be a root: the
+VDOM starts at `<body>`, so the WebSocket mount cannot use it and the live page
+loses its content. (`<body>` itself is a supported root: its children are the
+page's top-level elements.)
+Message: "<file>:<line> -- '<attr>' is on <tag>, which cannot be a root. The HTTP
+render is complete, but the WebSocket mount cannot use it as the root, so the
+live page loses its content."
 
-**Fix**: Put the attribute on one element inside `<body>` that wraps the whole
-page content, such as `<div dj-root>`. See
+**Fix**: Put the attribute on `<body>`, or on one element inside it that wraps
+the page content, such as `<div dj-root>`. See
 [Template requirements](template-requirements.md). Suppress with
 `DJUST_CONFIG = {"suppress_checks": ["T025"]}`, or one match with
 `{# noqa: T025 -- <reason> #}` on its line or the line above. HTML comments,

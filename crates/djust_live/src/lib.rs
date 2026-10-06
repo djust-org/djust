@@ -4732,14 +4732,16 @@ struct RootAttrs {
     root: bool,
     view: bool,
     embedded: bool,
+    lazy: bool,
 }
 
 impl RootAttrs {
-    /// An embedded `{% live_render %}` child's wrapper: `dj-view` together
-    /// with `data-djust-embedded` (sticky or not). Its subtree belongs to the
-    /// child, so it is never claimed as the parent's root (#3031).
+    /// A container of ANOTHER view: an embedded `{% live_render %}` child's
+    /// wrapper (`dj-view` + `data-djust-embedded`, sticky or not) or a lazy
+    /// view's container (`dj-view` + `dj-lazy`). Its subtree belongs to that
+    /// view, so it is never claimed as the parent's root (#3031, #3302).
     fn is_embedded_wrapper(self) -> bool {
-        self.view && self.embedded
+        self.view && (self.embedded || self.lazy)
     }
 }
 
@@ -4751,6 +4753,7 @@ fn root_attrs(tag_body: &[u8]) -> RootAttrs {
             found.root |= name.eq_ignore_ascii_case(b"dj-root");
             found.view |= name.eq_ignore_ascii_case(b"dj-view");
             found.embedded |= name.eq_ignore_ascii_case(b"data-djust-embedded");
+            found.lazy |= name.eq_ignore_ascii_case(b"dj-lazy");
         }
     }
     found
@@ -4845,7 +4848,8 @@ fn find_dj_root_content_range(html: &str) -> Option<(usize, usize)> {
 
 /// `(offset just past its `>`, lowercased tag name)` of the root's open tag,
 /// walking `bytes` tag by tag: the first `dj-root`, else the first `dj-view`,
-/// outside every embedded child's wrapper (#3031).
+/// outside every other view's container (an embedded child's wrapper or a lazy
+/// view, #3031), else `<body>` when it carries either attribute (#3302).
 ///
 /// A tag starts at `<` followed by an ASCII letter, `/` or `!`, as in the
 /// HTML tokenizer; any other `<` is text (#3030 — the Python walker applies
@@ -4855,10 +4859,12 @@ fn find_dj_root_content_range(html: &str) -> Option<(usize, usize)> {
 /// document when it has none, as the Python twin does).
 fn find_root_open(bytes: &[u8]) -> Option<(usize, Vec<u8>)> {
     let mut first_view: Option<(usize, Vec<u8>)> = None;
+    // `<body>` carrying a root attribute: the root of last resort (#3302).
+    let mut body_root: Option<(usize, Vec<u8>)> = None;
     let mut i = 0;
     loop {
         if i >= bytes.len() {
-            return first_view;
+            return first_view.or(body_root);
         }
         if bytes[i] != b'<' {
             i += 1;
@@ -4881,7 +4887,7 @@ fn find_root_open(bytes: &[u8]) -> Option<(usize, Vec<u8>)> {
                 i = k;
                 continue;
             }
-            Err(_) => return first_view,
+            Err(_) => return first_view.or(body_root),
         };
         let tag_body = &bytes[i + 1..j];
         if tag_body.is_empty() || tag_body[0] == b'/' || tag_body[0] == b'!' {
@@ -4898,24 +4904,33 @@ fn find_root_open(bytes: &[u8]) -> Option<(usize, Vec<u8>)> {
             .position(|&c| html_space(c) || c == b'/' || c == b'>')
             .unwrap_or(tag_body.len());
         let name = tag_body[..name_end].to_ascii_lowercase();
-        // A root on <html>/<head>/<body> is not a root the VDOM's
-        // `find_root` (which searches INSIDE <body>) can agree on; the Python
-        // twin (`mixins/template.py::_DJ_ROOT_RE`) skips them too (#2892).
-        if matches!(name.as_slice(), b"html" | b"head" | b"body") {
+        // A root on <html> or <head> is not a root the VDOM's `find_root`
+        // (which starts at <body>) can agree on; the Python twin
+        // (`mixins/template.py::_DJ_ROOT_RE`) skips them too (#2892).
+        if matches!(name.as_slice(), b"html" | b"head") {
+            i = j + 1;
+            continue;
+        }
+        // `<body>` is the root only when nothing inside it declares one, so a
+        // page that already has a root keeps it (#3302).
+        if name == b"body" {
+            if body_root.is_none() {
+                body_root = Some((j + 1, name));
+            }
             i = j + 1;
             continue;
         }
         if marks.is_embedded_wrapper() {
-            // The child's wrapper and its whole subtree are not ours.
+            // The other view's container and its whole subtree are not ours.
             match find_root_close(bytes, j + 1, &name) {
                 Some(close) => match find_open_tag_end(bytes, close) {
                     Ok(end) => {
                         i = end + 1;
                         continue;
                     }
-                    Err(_) => return first_view,
+                    Err(_) => return first_view.or(body_root),
                 },
-                None => return first_view,
+                None => return first_view.or(body_root),
             }
         }
         if marks.root {
@@ -5677,7 +5692,9 @@ mod dj_root_selection_3031 {
     //! The rule: a root belongs to the view that rendered it, so an embedded
     //! child's wrapper (`dj-view` + `data-djust-embedded`) and its subtree are
     //! never the parent's root; among the rest, the first `dj-root` beats the
-    //! first `dj-view`.
+    //! first `dj-view`. `<body>` carrying either attribute is the root of last
+    //! resort (#3302): used only when nothing inside it declares a root.
+    //! `<html>` and `<head>` never are.
     use super::{find_dj_root_content_range, find_root_open, parse_html};
     use serde_json::Value;
 
@@ -6010,8 +6027,21 @@ mod dj_root_content_range_2663 {
     }
 
     #[test]
-    fn root_on_body_is_not_selected() {
-        assert_eq!(inner("<body dj-root><p>a</p></body>"), None);
+    fn root_on_body_is_selected_3302() {
+        assert_eq!(inner("<body dj-root><p>a</p></body>"), Some("<p>a</p>"));
+        assert_eq!(
+            inner("<body dj-view=\"a.B\"><p>a</p></body>"),
+            Some("<p>a</p>")
+        );
+    }
+
+    #[test]
+    fn root_on_html_or_head_is_not_selected() {
+        assert_eq!(inner("<html dj-root><body><p>a</p></body></html>"), None);
+        assert_eq!(
+            inner("<html><head dj-view=\"a.B\"></head><body><p>a</p></body></html>"),
+            None
+        );
     }
 
     #[test]
