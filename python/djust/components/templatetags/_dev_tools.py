@@ -572,6 +572,7 @@ class FileTreeNode(template.Node):
         event = kw.get("event", "select_file")
         show_icons = kw.get("show_icons", True)
         custom_class = kw.get("class", "")
+        toggle_event = kw.get("toggle_event", "")
 
         e_class = conditional_escape(str(custom_class))
         e_event = conditional_escape(str(event))
@@ -589,9 +590,12 @@ class FileTreeNode(template.Node):
         for node in nodes:
             nodes_html.append(self._render_tree_node(node, 0, event, show_icons, str(selected)))
 
+        toggle_attr = (
+            f' data-toggle-event="{conditional_escape(str(toggle_event))}"' if toggle_event else ""
+        )
         return _safe(
             f'<div class="{class_str}" dj-hook="FileTree" '
-            f'data-event="{e_event}" data-selected="{e_selected}" '
+            f'data-event="{e_event}" data-selected="{e_selected}"{toggle_attr} '
             f'role="tree">{"".join(nodes_html)}</div>'
         )
 

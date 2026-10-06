@@ -1247,3 +1247,240 @@ describe('FileTree on a large tree', () => {
         expect(walked).toBeLessThan(10);
     }, 30000);
 });
+
+// ---------------------------------------------------------------------------
+// Optional server events: ResizablePanel resize_event, FileTree toggle_event
+// ---------------------------------------------------------------------------
+
+describe('ResizablePanel resize_event', () => {
+    const setup = (extra = ' data-resize-event="panel_resized"', markup = null) => {
+        const env = createEnv(markup || PANEL({ extra }));
+        env.window.eval(read('resizable-panel.js'));
+        env.$ = (s) => env.window.document.querySelector(s);
+        const panel = sized(env);
+        env.window.djust.mountHooks();
+        env.handle = env.$('.dj-resizable-panel__handle');
+        env.panel = panel;
+        env.sent = [];
+        env.window.djust.handleEvent = (n, p) => env.sent.push([n, p]);
+        env.events = [];
+        panel.addEventListener('dj-resize', (e) => env.events.push(e.detail));
+        return env;
+    };
+
+    it('without the attribute nothing goes to the server (the CustomEvent still does)', () => {
+        const env = setup('');
+        pointer(env.window, env.handle, 'pointerdown', 300, 10);
+        pointer(env.window, env.handle, 'pointermove', 350, 10);
+        pointer(env.window, env.handle, 'pointerup', 350, 10);
+        expect(env.sent).toEqual([]);
+        expect(env.events).toEqual([{ size: 350, direction: 'horizontal' }]);
+    });
+
+    it('a drag sends {size} once, when it ends, in whole pixels', () => {
+        const env = setup();
+        pointer(env.window, env.handle, 'pointerdown', 300, 10);
+        for (const x of [310, 330, 351.6]) pointer(env.window, env.handle, 'pointermove', x, 10);
+        expect(env.sent).toEqual([]);
+        pointer(env.window, env.handle, 'pointerup', 351.6, 10);
+        expect(env.sent).toEqual([['panel_resized', { size: 352 }]]);
+        expect(env.events).toEqual([{ size: 352, direction: 'horizontal' }]);
+    });
+
+    it('is the clamped size that is sent', () => {
+        const env = setup();
+        pointer(env.window, env.handle, 'pointerdown', 300, 10);
+        pointer(env.window, env.handle, 'pointermove', 9000, 10);
+        pointer(env.window, env.handle, 'pointerup', 9000, 10);
+        expect(env.sent).toEqual([['panel_resized', { size: 600 }]]);
+    });
+
+    it('a key press sends once per press; Home and End send the limits; a reset sends the initial size', () => {
+        const env = setup();
+        key(env.window, env.handle, 'ArrowRight');
+        key(env.window, env.handle, 'ArrowRight', { shiftKey: true });
+        key(env.window, env.handle, 'End');
+        key(env.window, env.handle, 'Home');
+        expect(env.sent.map((s) => s[1].size)).toEqual([310, 360, 600, 100]);
+        env.handle.dispatchEvent(new env.window.MouseEvent('dblclick', { bubbles: true }));
+        expect(env.sent.at(-1)).toEqual(['panel_resized', { size: 300 }]);
+    });
+
+    it('a key that changes nothing (not an arrow) sends nothing', () => {
+        const env = setup();
+        key(env.window, env.handle, 'a');
+        expect(env.sent).toEqual([]);
+    });
+
+    it('a cancelled drag still ends the gesture: it sends the size it is at', () => {
+        const env = setup();
+        pointer(env.window, env.handle, 'pointerdown', 300, 10);
+        pointer(env.window, env.handle, 'pointermove', 340, 10);
+        pointer(env.window, env.handle, 'pointercancel', 340, 10);
+        expect(env.sent).toEqual([['panel_resized', { size: 340 }]]);
+    });
+
+    it('a vertical panel sends the same {size} (the direction is the component\'s own)', () => {
+        const env = setup(' data-resize-event="panel_resized"', PANEL({ direction: 'vertical', extra: ' data-resize-event="panel_resized"' }));
+        pointer(env.window, env.handle, 'pointerdown', 10, 300);
+        pointer(env.window, env.handle, 'pointermove', 10, 380);
+        pointer(env.window, env.handle, 'pointerup', 10, 380);
+        expect(env.sent).toEqual([['panel_resized', { size: 380 }]]);
+    });
+
+    it('a disabled panel sends nothing', () => {
+        const env = setup(' data-resize-event="panel_resized" data-disabled="true"');
+        pointer(env.window, env.handle, 'pointerdown', 300, 10);
+        pointer(env.window, env.handle, 'pointermove', 340, 10);
+        pointer(env.window, env.handle, 'pointerup', 340, 10);
+        key(env.window, env.handle, 'ArrowRight');
+        expect(env.sent).toEqual([]);
+    });
+
+    it('a server re-render, with or without a new size, sends nothing', () => {
+        const env = setup();
+        env.panel.style.width = '420px';
+        env.window.djust.updateHooks();
+        expect(env.sent).toEqual([]);
+    });
+
+    it('goes through the client\'s strict-parameter check, and falls back to the hook\'s pushEvent', () => {
+        const env = setup();
+        env.window.djust._strictBinding = () => false;
+        key(env.window, env.handle, 'ArrowRight');
+        expect(env.sent).toEqual([]);
+        env.window.djust._strictBinding = () => ({ size: 1 });
+        key(env.window, env.handle, 'ArrowRight');
+        expect(env.sent).toEqual([['panel_resized', { size: 1 }]]);
+
+        const env2 = setup();
+        env2.window.djust.handleEvent = undefined;
+        const pushed = [];
+        const entry = [...env2.window.djust._activeHooks.values()].find((h) => h.instance && h.instance._emit);
+        entry.instance.pushEvent = (n, p) => pushed.push([n, p]);
+        key(env2.window, env2.handle, 'ArrowRight');
+        expect(pushed).toEqual([['panel_resized', { size: 310 }]]);
+    });
+
+    it('does not double-send after repeated patches', () => {
+        const env = setup();
+        for (let i = 0; i < 4; i++) env.window.djust.updateHooks();
+        key(env.window, env.handle, 'ArrowRight');
+        expect(env.sent).toHaveLength(1);
+    });
+});
+
+describe('FileTree toggle_event', () => {
+    const TREE_EV = (spec = TREE_SPEC) => TREE(spec).replace('data-selected="main.py"', 'data-selected="main.py" data-toggle-event="folder_toggled"');
+    const setup = (markup = TREE_EV()) => {
+        const env = boot(markup, 'file-tree.js');
+        env.sent = [];
+        env.window.djust.handleEvent = (n, p) => env.sent.push([n, p]);
+        return env;
+    };
+
+    it('without the attribute nothing is sent', () => {
+        const env = setup(TREE());
+        row(env, 'src').click();
+        expect(env.sent).toEqual([]);
+    });
+
+    it('collapsing and expanding by click sends {path, expanded}, once per change', () => {
+        const env = setup();
+        row(env, 'src').querySelector('.dj-file-tree__name').click();
+        expect(env.sent).toEqual([['folder_toggled', { path: ['src'], expanded: false }]]);
+        row(env, 'src').querySelector('.dj-file-tree__toggle').click();
+        expect(env.sent.at(-1)).toEqual(['folder_toggled', { path: ['src'], expanded: true }]);
+        expect(env.sent).toHaveLength(2);
+    });
+
+    it('the path is the folder\'s name and its parents\', from the root down', () => {
+        const env = setup();
+        row(env, 'sub').click(); // opens src/sub (closed by the server)
+        expect(env.sent).toEqual([['folder_toggled', { path: ['src', 'sub'], expanded: true }]]);
+    });
+
+    it('the keyboard sends too: ArrowRight opens, ArrowLeft closes, Enter and Space toggle', () => {
+        const env = setup();
+        const sub = row(env, 'sub');
+        sub.focus();
+        key(env.window, sub, 'ArrowRight');
+        key(env.window, sub, 'ArrowLeft');
+        key(env.window, sub, 'Enter');
+        key(env.window, sub, ' ');
+        expect(env.sent.map((s) => s[1].expanded)).toEqual([true, false, true, false]);
+        expect(env.sent.every((s) => s[1].path.join('/') === 'src/sub')).toBe(true);
+    });
+
+    it('moving focus (ArrowRight on an open folder, ArrowLeft on a file) is not a toggle', () => {
+        const env = setup();
+        const src = row(env, 'src');
+        src.focus();
+        key(env.window, src, 'ArrowRight'); // already open: steps into it
+        key(env.window, row(env, 'main.py'), 'ArrowLeft'); // a file: steps out
+        key(env.window, src, 'ArrowDown');
+        expect(env.sent).toEqual([]);
+    });
+
+    it('a file click is the selection event, not a toggle', () => {
+        const env = setup();
+        row(env, 'utils.py').click();
+        expect(env.sent).toEqual([]);
+    });
+
+    it('a server re-render never sends one, even when it changes what is open', () => {
+        const env = setup();
+        row(env, 'sub').click();
+        env.sent.length = 0;
+        group(env, 'docs').style.display = 'none'; // the server collapses docs
+        env.window.djust.updateHooks();
+        expect(env.sent).toEqual([]);
+    });
+
+    it('two siblings with one name send the same path (documented)', () => {
+        const env = setup(TREE_EV([{ name: 'dup', type: 'folder', children: [{ name: 'a' }] }, { name: 'dup', type: 'folder', children: [{ name: 'b' }] }]));
+        const dups = env.$$('.dj-file-tree__node[data-name="dup"]');
+        dups[1].click();
+        expect(env.sent).toEqual([['folder_toggled', { path: ['dup'], expanded: false }]]);
+    });
+
+    it('a hostile name is sent as the string it is', () => {
+        const evil = '&lt;img src=x onerror=window.__pwn=1&gt;';
+        const env = setup(TREE_EV([{ name: evil, type: 'folder', children: [{ name: 'a' }] }]));
+        env.$('.dj-file-tree__node--folder').click();
+        expect(env.sent[0][1].path).toEqual(['<img src=x onerror=window.__pwn=1>']); // the decoded attribute text, still just a string
+        expect(env.window.__pwn).toBeUndefined();
+    });
+
+    it('goes through the client\'s strict-parameter check, and falls back to the hook\'s pushEvent', () => {
+        const env = setup();
+        env.window.djust._strictBinding = () => false;
+        row(env, 'src').click();
+        expect(env.sent).toEqual([]);
+        const env2 = setup();
+        env2.window.djust.handleEvent = undefined;
+        const pushed = [];
+        const entry = [...env2.window.djust._activeHooks.values()].find((h) => h.instance && h.instance._setExpanded);
+        entry.instance.pushEvent = (n, p) => pushed.push([n, p]);
+        row(env2, 'src').click();
+        expect(pushed).toEqual([['folder_toggled', { path: ['src'], expanded: false }]]);
+    });
+
+    it('the reader\'s state still applies until it agrees with the server: after the server stores it, the page follows the server', () => {
+        const env = setup();
+        row(env, 'src').click(); // the reader closes src; the server now renders it closed too
+        expect(hidden(group(env, 'src'))).toBe(true);
+        group(env, 'src').style.display = 'none';
+        env.window.djust.updateHooks();
+        expect(hidden(group(env, 'src'))).toBe(true);
+        row(env, 'src').click(); // and the reader opens it again: sent again
+        expect(env.sent.map((s) => s[1].expanded)).toEqual([false, true]);
+    });
+
+    it('does not double-send after repeated patches', () => {
+        const env = setup();
+        for (let i = 0; i < 4; i++) env.window.djust.updateHooks();
+        row(env, 'src').click();
+        expect(env.sent).toHaveLength(1);
+    });
+});

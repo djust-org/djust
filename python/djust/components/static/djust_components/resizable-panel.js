@@ -13,10 +13,12 @@
  *   Double-click (or Enter) puts the panel back at its initial size.
  * - ``disabled`` (data-disabled) turns all of it off.
  *
- * The size is the reader's own and is not sent to the server; the hook
- * announces it to the page instead, as a bubbling ``dj-resize`` CustomEvent on
- * the panel with ``detail: {size, direction}`` (px) when a drag or key press
- * ends. A re-render that leaves the panel's style unchanged leaves it as the
+ * The size is the reader's own and is not sent to the server unless the
+ * component has a ``resize_event`` (data-resize-event): when a drag or key
+ * press ends the hook then sends that event with ``{size}`` (whole pixels;
+ * untrusted, clamp it on the server). Either way it announces the size to the
+ * page as a bubbling ``dj-resize`` CustomEvent on the panel with
+ * ``detail: {size, direction}`` (px). A re-render that leaves the panel's style unchanged leaves it as the
  * reader set it; one that changes the style (a new initial_size) takes over.
  *
  * An app's own ``ResizablePanel`` hook is never replaced: this registers in
@@ -28,6 +30,26 @@
 
   var STEP = 10;
   var BIG_STEP = 50;
+
+  // Same public entry point dj-click and dj-viewport use, so the event works
+  // over WebSocket, SSE and HTTP-only, honours strict parameter contracts and
+  // reaches the right view when several are mounted. Falls back to the hook's
+  // own pushEvent when the client API is absent.
+  function send(hook, root, eventName, params) {
+    var d = window.djust;
+    if (d && typeof d.handleEvent === "function") {
+      var sent = params;
+      if (typeof d._strictBinding === "function") {
+        var strict = d._strictBinding(root, eventName, params, []);
+        if (strict === false) return;
+        if (strict) sent = strict;
+      }
+      if (typeof d._markSlotOf === "function") d._markSlotOf(sent, root);
+      d.handleEvent(eventName, sent);
+    } else if (typeof hook.pushEvent === "function") {
+      hook.pushEvent(eventName, params);
+    }
+  }
 
   function limit(value, parentSize) {
     if (!value || value === "none" || value === "auto") return NaN;
@@ -159,15 +181,18 @@
     },
 
     _emit: function () {
+      var size = Math.round(this._size());
       this.el.dispatchEvent(
         new CustomEvent("dj-resize", {
           bubbles: true,
           detail: {
-            size: Math.round(this._size()),
+            size: size,
             direction: this._horizontal() ? "horizontal" : "vertical",
           },
         })
       );
+      var eventName = this.el.getAttribute("data-resize-event");
+      if (eventName && isFinite(size)) send(this, this.el, eventName, { size: size });
     },
 
     _reset: function () {

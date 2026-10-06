@@ -7383,6 +7383,7 @@ class ResizablePanelHandler:
         initial_size = kw.get("initial_size", "50%")
         disabled = kw.get("disabled", False)
         custom_class = kw.get("class", "")
+        resize_event = kw.get("resize_event", "")
 
         e_class = conditional_escape(str(custom_class))
 
@@ -7407,11 +7408,14 @@ class ResizablePanelHandler:
         style = f'style="{";".join(style_parts)}"'
 
         disabled_attr = ' data-disabled="true"' if disabled else ""
+        event_attr = (
+            f' data-resize-event="{conditional_escape(str(resize_event))}"' if resize_event else ""
+        )
 
         return _safe(
             f'<div class="{class_str}" dj-hook="ResizablePanel" '
             f'data-direction="{direction}" '
-            f'data-min-size="{e_min}" data-max-size="{e_max}" '
+            f'data-min-size="{e_min}" data-max-size="{e_max}"{event_attr} '
             f"{style}{disabled_attr}>"
             f'<div class="dj-resizable-panel__content">{content}</div>'
             f'<div class="dj-resizable-panel__handle" role="separator" '
@@ -9064,6 +9068,7 @@ class FileTreeHandler:
         event = kw.get("event", "select_file")
         show_icons = kw.get("show_icons", True)
         custom_class = kw.get("class", "")
+        toggle_event = kw.get("toggle_event", "")
 
         e_class = conditional_escape(str(custom_class))
         e_event = conditional_escape(str(event))
@@ -9083,9 +9088,12 @@ class FileTreeHandler:
                 self._render_tree_node(node, 0, str(event), show_icons, str(selected))
             )
 
+        toggle_attr = (
+            f' data-toggle-event="{conditional_escape(str(toggle_event))}"' if toggle_event else ""
+        )
         return _safe(
             f'<div class="{class_str}" dj-hook="FileTree" '
-            f'data-event="{e_event}" data-selected="{e_selected}" '
+            f'data-event="{e_event}" data-selected="{e_selected}"{toggle_attr} '
             f'role="tree">{"".join(nodes_html)}</div>'
         )
 

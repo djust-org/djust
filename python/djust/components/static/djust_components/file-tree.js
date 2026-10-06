@@ -21,6 +21,12 @@
  *   Right expands a folder or steps into it, Left collapses it or steps out to
  *   its parent, Home/End jump, typing a letter jumps to the next row starting
  *   with it, Enter/Space opens a folder or activates a file;
+ * - with a ``toggle_event`` (data-toggle-event) a change the reader makes
+ *   (click, arrow, Enter/Space on a folder) is also sent to the server, once
+ *   per change, as ``{path: [name, ...], expanded: bool}``: the folder's name
+ *   and its parents' names from the root (untrusted; look it up in the tree
+ *   you rendered). A server re-render never sends one. The reader's state on
+ *   the page still applies until it agrees with the server's;
  * - activating a file clicks the row, so it fires exactly the event the
  *   server rendered for it (``event``); the hook sends nothing of its own;
  * - rows get role=treeitem with aria-level, aria-expanded and aria-selected,
@@ -48,6 +54,26 @@
   var OPEN_ATTR = "data-dj-open";
   var SEP = "\u0001";
   var DUP = "\u0000";
+
+  // Same public entry point dj-click and dj-viewport use, so the event works
+  // over WebSocket, SSE and HTTP-only, honours strict parameter contracts and
+  // reaches the right view when several are mounted. Falls back to the hook's
+  // own pushEvent when the client API is absent.
+  function send(hook, root, eventName, params) {
+    var d = window.djust;
+    if (d && typeof d.handleEvent === "function") {
+      var sent = params;
+      if (typeof d._strictBinding === "function") {
+        var strict = d._strictBinding(root, eventName, params, []);
+        if (strict === false) return;
+        if (strict) sent = strict;
+      }
+      if (typeof d._markSlotOf === "function") d._markSlotOf(sent, root);
+      d.handleEvent(eventName, sent);
+    } else if (typeof hook.pushEvent === "function") {
+      hook.pushEvent(eventName, params);
+    }
+  }
 
   function isNode(el) {
     return !!el && el.nodeType === 1 && el.classList.contains(NODE);
@@ -132,6 +158,13 @@
       cur = group.previousElementSibling;
     }
     return SEP + segments.reverse().join(SEP);
+  }
+
+  // The names of the row and of its parents, from the root down.
+  function namePath(node) {
+    var names = [];
+    for (var cur = node; cur; cur = parentRow(cur)) names.push(rowName(cur));
+    return names.reverse();
   }
 
   // The row with this key, or null.
@@ -382,6 +415,8 @@
         if (this._active && group.contains(this._active)) this._rove(node);
       }
       if (this._observer) this._observer.takeRecords();
+      var eventName = this.el.getAttribute("data-toggle-event");
+      if (eventName) send(this, this.el, eventName, { path: namePath(node), expanded: open });
     },
 
     _toggle: function (node) {
