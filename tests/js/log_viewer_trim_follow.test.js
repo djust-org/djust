@@ -40,7 +40,10 @@ function boot() {
     window.djust.mountHooks();
     const push = (lines) => window.djust.dispatchPushEventToHooks('new_logs', { lines });
     const bottom = () => Math.max(0, height() - 100);
-    const scroll = (top) => { st.top = top; body.dispatchEvent(new window.Event('scroll')); };
+    const scroll = (top) => {
+        if (top < body.scrollTop) body.dispatchEvent(new window.Event('wheel', { bubbles: true })); // the reader moves up
+        st.top = top; body.dispatchEvent(new window.Event('scroll'));
+    };
     return { window, body, st, push, bottom, scroll, top: () => body.scrollTop };
 }
 
@@ -107,5 +110,63 @@ describe('LogViewer with max_lines', () => {
         scroll(0); // the reader scrolls up before the frame
         await frame(window);
         expect(top()).toBe(0);
+    });
+});
+
+describe('LogViewer: only the reader leaves the bottom (input, not the drop alone)', () => {
+    const drop = (body, st, window, top) => { st.top = top; body.dispatchEvent(new window.Event('scroll')); }; // no input
+    const input = (window, el, type) => el.dispatchEvent(new window.Event(type, { bubbles: true }));
+    const follows = async (window, push, top, bottom) => {
+        push(['T7']);
+        await frame(window);
+        return top() === bottom();
+    };
+
+    it('a drop with no reader input (a browser clamp) does not unpin', async () => {
+        const { window, body, st, push, bottom, top, scroll } = boot();
+        push(['T1', 'T2', 'T3', 'T4']);
+        await frame(window);
+        scroll(bottom());
+        drop(body, st, window, 100);
+        expect(await follows(window, push, top, bottom)).toBe(true);
+    });
+
+    for (const type of ['wheel', 'touchmove', 'keydown']) {
+        it(`a ${type} on the log, then a drop, unpins`, async () => {
+            const { window, body, st, push, bottom, top, scroll } = boot();
+            push(['T1', 'T2', 'T3', 'T4']);
+            await frame(window);
+            scroll(bottom());
+            input(window, body, type);
+            drop(body, st, window, 100);
+            expect(await follows(window, push, top, bottom)).toBe(false);
+            expect(top()).toBe(100);
+        });
+    }
+
+    it('a drop more than 600 ms after the last input does not unpin', async () => {
+        const { window, body, st, push, bottom, top, scroll } = boot();
+        const t = { now: 1000 };
+        window.Date.now = () => t.now;
+        push(['T1', 'T2', 'T3', 'T4']);
+        await frame(window);
+        scroll(bottom());
+        input(window, body, 'wheel');
+        t.now += 700;
+        drop(body, st, window, 100);
+        expect(await follows(window, push, top, bottom)).toBe(true);
+    });
+
+    it('a held pointer (a scrollbar drag) counts however long it is held', async () => {
+        const { window, body, st, push, bottom, top, scroll } = boot();
+        const t = { now: 1000 };
+        window.Date.now = () => t.now;
+        push(['T1', 'T2', 'T3', 'T4']);
+        await frame(window);
+        scroll(bottom());
+        input(window, body, 'pointerdown');
+        t.now += 5000;
+        drop(body, st, window, 100);
+        expect(await follows(window, push, top, bottom)).toBe(false);
     });
 });

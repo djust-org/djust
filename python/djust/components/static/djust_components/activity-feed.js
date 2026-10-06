@@ -230,7 +230,12 @@
       // keep the keyboard user in the feed, on the nearest row left.
       if (lostFocus) {
         var left = this._articles();
-        if (left.length) left[left.length - 1].focus();
+        if (left.length) {
+          var target = left[left.length - 1];
+          // New rows only become focusable on the next frame's renumbering.
+          if (target.getAttribute("tabindex") !== "0") target.setAttribute("tabindex", "0");
+          target.focus();
+        }
       }
       this._renumberSoon();
 

@@ -579,7 +579,8 @@ def main() -> int:
                     == "40",
                     "log: streamed line numbering continues (40)",
                 )
-                page.eval_on_selector(body, "b => { b.scrollTop = 0; }")
+                page.focus(body)
+                page.keyboard.press("Home")  # the reader: a key press, then the scroll event
                 page.wait_for_timeout(
                     150
                 )  # the scroll event: that is how the hook learns the reader moved
@@ -607,7 +608,9 @@ def main() -> int:
                 check(
                     page.eval_on_selector(body2, at_bottom), "log2: a server re-render is followed"
                 )
-                page.eval_on_selector(body2, "b => { b.scrollTop = 0; }")
+                page.focus(body2)
+                page.keyboard.press("Home")
+                page.wait_for_timeout(150)  # the scroll event
                 page.click("#grow")
                 page.wait_for_function(
                     "s => document.querySelector(s).textContent.includes('grown 2')",
@@ -649,7 +652,8 @@ def main() -> int:
                     page.eval_on_selector(body3, gap) <= 1,
                     "log: and a second burst follows too (pinning never lapsed)",
                 )
-                page.eval_on_selector(body3, "b => { b.scrollTop = 200; }")
+                page.focus(body3)
+                page.keyboard.press("Home")
                 page.wait_for_timeout(200)
                 page.evaluate("() => document.getElementById('burst').click()")
                 page.wait_for_function(
@@ -659,7 +663,7 @@ def main() -> int:
                 )
                 page.wait_for_timeout(300)
                 check(
-                    page.eval_on_selector(body3, "b => b.scrollTop") == 200,
+                    page.eval_on_selector(body3, "b => b.scrollTop") == 0,
                     "log: a reader who scrolled up stays up while 2,000 events stream",
                 )
                 page.eval_on_selector(body3, "b => { b.scrollTop = b.scrollHeight; }")

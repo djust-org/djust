@@ -525,12 +525,13 @@ def main() -> int:
                     "terminal: and a second burst follows too",
                 )
                 # a reader scrolled up stays up
-                page.eval_on_selector(body, "b => { b.scrollTop = 200; }")
+                page.focus(body)
+                page.keyboard.press("Home")  # the reader: a real key press scrolls to the top
                 page.wait_for_timeout(200)
                 page.evaluate("() => document.getElementById('term-many').click()")
                 page.wait_for_timeout(3500)
                 check(
-                    page.eval_on_selector(body, "b => b.scrollTop") == 200,
+                    page.eval_on_selector(body, "b => b.scrollTop") == 0,
                     "terminal: a reader who scrolled up stays up while 2,000 lines stream",
                 )
                 page.eval_on_selector(body, "b => { b.scrollTop = b.scrollHeight; }")
@@ -617,29 +618,45 @@ def main() -> int:
                 )
 
                 # ---- trimmed streams keep following across bursts (max_lines=50, wrapped, varying heights) ----
-                for name, body_sel, tail in (
-                    ("terminal", "#trim-term .dj-terminal__body", ".dj-terminal__text"),
-                    ("log viewer", "#trim-log .dj-log-viewer__body", ".dj-log-viewer__text"),
-                ):
-                    gaps = []
-                    for burst in range(1, 7):
-                        page.evaluate("() => document.getElementById('trim-burst').click()")
-                        page.wait_for_function(
-                            "([s, t]) => { const r = [...document.querySelectorAll(s + ' ' + t)].pop(); "
-                            "return r && r.textContent.endsWith(' 1499') && r.dataset.burst !== 'x'; }",
-                            arg=[body_sel, tail],
-                            timeout=30000,
+                # Twice: plain, and with a MutationObserver that reads offsetHeight on every
+                # mutation (anything that forces a layout between a trim and the next frame
+                # moves the browser's scrollTop clamp, and its scroll event, earlier).
+                observe = """() => {
+                    window.__observers = ['#trim-term .dj-terminal__body', '#trim-log .dj-log-viewer__body'].map((sel) => {
+                        const body = document.querySelector(sel);
+                        const o = new MutationObserver(() => { void body.offsetHeight; });
+                        o.observe(body, {childList: true});
+                        return o;
+                    });
+                }"""
+                for with_observer in (False, True):
+                    if with_observer:
+                        page.evaluate(observe)
+                    for name, body_sel, tail in (
+                        ("terminal", "#trim-term .dj-terminal__body", ".dj-terminal__text"),
+                        ("log viewer", "#trim-log .dj-log-viewer__body", ".dj-log-viewer__text"),
+                    ):
+                        gaps = []
+                        for burst in range(1, 7):
+                            page.evaluate("() => document.getElementById('trim-burst').click()")
+                            page.wait_for_function(
+                                "([s, t]) => { const r = [...document.querySelectorAll(s + ' ' + t)].pop(); "
+                                "return r && r.textContent.endsWith(' 1499') && r.dataset.burst !== 'x'; }",
+                                arg=[body_sel, tail],
+                                timeout=30000,
+                            )
+                            page.wait_for_timeout(500)
+                            gaps.append(page.eval_on_selector(body_sel, gap))
+                            page.evaluate(
+                                "([s, t]) => { [...document.querySelectorAll(s + ' ' + t)].pop().dataset.burst = 'x'; }",
+                                [body_sel, tail],
+                            )
+                        check(
+                            all(g <= 1 for g in gaps),
+                            f"{name}: six trimmed bursts of 1,500 variable-height lines all end at the bottom"
+                            f"{' (a MutationObserver forcing layout on every mutation)' if with_observer else ''}"
+                            f" (gaps {[round(g) for g in gaps]})",
                         )
-                        page.wait_for_timeout(500)
-                        gaps.append(page.eval_on_selector(body_sel, gap))
-                        page.evaluate(
-                            "([s, t]) => { [...document.querySelectorAll(s + ' ' + t)].pop().dataset.burst = 'x'; }",
-                            [body_sel, tail],
-                        )
-                    check(
-                        all(g <= 1 for g in gaps),
-                        f"{name}: six trimmed bursts of 1,500 variable-height lines all end at the bottom (gaps {[round(g) for g in gaps]})",
-                    )
 
                 # ---- a reader scrolls up while the stream keeps appending and trimming ----
                 # (3 variable-height lines per append, max_lines=50, wrapped; pushed through
@@ -653,7 +670,7 @@ def main() -> int:
                     }, ms);
                 }"""
                 stop_stream = "() => { clearInterval(window.__stream); window.__stream = 0; }"
-                for ms in (16, 50):
+                for ms in (16, 50, 200):
                     for name, body_sel, event, prefix in (
                         ("terminal", "#trim-term .dj-terminal__body", "trim_out", ""),
                         ("log viewer", "#trim-log .dj-log-viewer__body", "log_trim", "INFO "),

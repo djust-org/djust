@@ -234,6 +234,15 @@ describe('ActivityFeed', () => {
         expect(doc.activeElement).toBe(doc.body);
     });
 
+    it('focus moves to a row left even when every row left is new in that burst (not yet focusable)', () => {
+        const env = boot(FEED({ max: 2 }), 'activity-feed.js');
+        const doc = env.window.document;
+        rows(env)[1].focus();
+        env.push('activity_update', { events: [1, 2, 3].map((i) => ({ user: `N${i}`, action: 'did' })) });
+        expect(who(env)).toEqual(['N1', 'N2']);
+        expect(doc.activeElement).toBe(rows(env)[1]);
+    });
+
     it('falls back to 50 without data-max-items', () => {
         const env = boot(FEED().replace(' data-max-items="5"', ''), 'activity-feed.js');
         env.push('activity_update', { events: Array.from({ length: 60 }, (_, i) => ({ user: `U${i}`, action: 'x' })) });
@@ -477,7 +486,10 @@ describe('Terminal', () => {
             Object.defineProperty(body, 'clientHeight', { get: () => 100, configurable: true });
             Object.defineProperty(body, 'scrollTop', { get: () => st.top, set: (v) => { st.top = v; st.writes += 1; }, configurable: true });
         };
-        const scrolled = (env, body, st, top) => { st.top = top; body.dispatchEvent(new env.window.Event('scroll')); };
+        const scrolled = (env, body, st, top) => {
+            if (top < st.top) body.dispatchEvent(new env.window.Event('wheel', { bubbles: true })); // the reader moves up; a drop with no input is a browser clamp
+            st.top = top; body.dispatchEvent(new env.window.Event('scroll'));
+        };
         const setup = () => {
             const env = createEnv(TERM());
             const body = env.window.document.querySelector('.dj-terminal__body');
@@ -534,7 +546,10 @@ describe('Terminal', () => {
             env.window.djust.mountHooks();
             const push = (lines) => env.window.djust.dispatchPushEventToHooks('term_out', { lines });
             const bottom = () => Math.max(0, height() - 100);
-            const scroll = (top) => { st.top = top; body.dispatchEvent(new env.window.Event('scroll')); };
+            const scroll = (top) => {
+                if (top < body.scrollTop) body.dispatchEvent(new env.window.Event('wheel', { bubbles: true })); // the reader moves up
+                st.top = top; body.dispatchEvent(new env.window.Event('scroll'));
+            };
             const top = () => body.scrollTop;
             return { env, body, st, push, bottom, scroll, top };
         };
@@ -588,6 +603,74 @@ describe('Terminal', () => {
             push(['d']);
             await frame(env);
             expect(top()).toBe(10);
+        });
+
+        describe('only the reader leaves the bottom (input, not the drop alone)', () => {
+            const drop = (env, body, st, top) => { st.top = top; body.dispatchEvent(new env.window.Event('scroll')); }; // no input
+            const clock = (env, t) => { env.window.Date.now = () => t.now; };
+            const stillFollows = async (env, st) => {
+                env.push('term_out', { line: 'more' });
+                await frame(env);
+                return st.top === st.height;
+            };
+
+            it('a drop with no reader input (a browser clamp) does not unpin', async () => {
+                const { env, body, st } = setup();
+                drop(env, body, st, 900); // at the bottom
+                drop(env, body, st, 300);
+                expect(await stillFollows(env, st)).toBe(true);
+            });
+
+            for (const [name, type] of [['wheel', 'wheel'], ['touch', 'touchmove'], ['key', 'keydown']]) {
+                it(`a ${name} on the log, then a drop, unpins`, async () => {
+                    const { env, body, st } = setup();
+                    drop(env, body, st, 900); // at the bottom
+                    body.dispatchEvent(new env.window.Event(type, { bubbles: true }));
+                    drop(env, body, st, 300);
+                    expect(await stillFollows(env, st)).toBe(false);
+                    expect(st.top).toBe(300);
+                });
+            }
+
+            it('a drop more than 600 ms after the last input does not unpin', async () => {
+                const { env, body, st } = setup();
+                const t = { now: 1000 };
+                clock(env, t);
+                drop(env, body, st, 900); // at the bottom
+                body.dispatchEvent(new env.window.Event('wheel', { bubbles: true }));
+                t.now += 700;
+                drop(env, body, st, 300);
+                expect(await stillFollows(env, st)).toBe(true);
+            });
+
+            it('a held pointer (a scrollbar drag) counts however long it is held, and ends on release', async () => {
+                const { env, body, st } = setup();
+                const t = { now: 1000 };
+                clock(env, t);
+                drop(env, body, st, 900); // at the bottom
+                body.dispatchEvent(new env.window.Event('pointerdown', { bubbles: true }));
+                t.now += 5000;
+                drop(env, body, st, 300);
+                expect(await stillFollows(env, st)).toBe(false);
+
+                const second = setup();
+                const t2 = { now: 1000 };
+                clock(second.env, t2);
+                drop(second.env, second.body, second.st, 900);
+                second.body.dispatchEvent(new second.env.window.Event('pointerdown', { bubbles: true }));
+                second.env.window.document.dispatchEvent(new second.env.window.Event('pointerup', { bubbles: true }));
+                t2.now += 5000;
+                drop(second.env, second.body, second.st, 300);
+                expect(await stillFollows(second.env, second.st)).toBe(true);
+            });
+
+            it('input outside the log is not the reader scrolling it', async () => {
+                const { env, body, st } = setup();
+                drop(env, body, st, 900); // at the bottom
+                env.window.document.body.dispatchEvent(new env.window.Event('wheel', { bubbles: true }));
+                drop(env, body, st, 300);
+                expect(await stillFollows(env, st)).toBe(true);
+            });
         });
 
         it('scrolls once per frame, never measures per event, and not if the reader scrolled up in the same frame', async () => {

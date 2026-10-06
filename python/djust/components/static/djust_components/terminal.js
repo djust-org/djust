@@ -22,7 +22,12 @@
  * - Follow: the terminal stays pinned to the newest line until the reader
  *   scrolls up; scrolling back to the bottom resumes it (the same rules as
  *   LogViewer: the reader's position is tracked from scroll events and the
- *   follow is one scroll per frame).
+ *   follow is one scroll per frame). Only the reader leaves the bottom: a
+ *   wheel, touch, key or pointer press on the terminal, followed within
+ *   600 ms (or while the pointer is held, as in a scrollbar drag) by the
+ *   position moving up. A scroll that moves up with no such input, such as
+ *   the browser clamping the position when old lines are trimmed or code
+ *   setting ``scrollTop``, does not stop the follow.
  * - Accessibility: the output is a role=log region named by the title, kept
  *   aria-live=off so a build log does not flood a screen reader; the scrolling
  *   body is focusable for keyboard scrolling.
@@ -33,6 +38,9 @@
  */
 (function () {
   "use strict";
+
+  // A scroll that drops is the reader only if their input came this recently.
+  var INTENT_MS = 600;
 
   var MAX_PARAMS = 16;
   // The colours the server maps.
@@ -162,9 +170,46 @@
         if (e.target !== scroller(root)) return;
         var top = e.target.scrollTop;
         if (atBottom(e.target)) self._pinned = true;
-        else if (top < (self._lastTop === undefined ? top : self._lastTop) - 1) self._pinned = false;
+        else if (
+          top < (self._lastTop === undefined ? top : self._lastTop) - 1 &&
+          (self._held || Date.now() - self._intent < INTENT_MS)
+        ) {
+          // Only the reader moving UP leaves the bottom, and only the reader
+          // can: a drop nobody asked for (the browser clamping scrollTop when
+          // old rows are trimmed, whenever that layout happens) comes with no
+          // wheel, touch, key or pointer input just before it.
+          self._pinned = false;
+        }
+        if (self._held) self._intent = Date.now();
         self._lastTop = top;
       };
+      this._intent = -Infinity;
+      this._held = false;
+      var mark = function () {
+        self._intent = Date.now();
+      };
+      var hold = function () {
+        self._held = true;
+        mark();
+      };
+      var release = function () {
+        self._held = false;
+      };
+      // Reader input on the log itself (a drag on its scrollbar is a pointerdown on it).
+      this._inputs = [
+        [root, "wheel", mark],
+        [root, "touchstart", mark],
+        [root, "touchmove", mark],
+        [root, "touchend", mark],
+        [root, "keydown", mark],
+        [root, "pointerdown", hold],
+        [document, "pointerup", release],
+        [document, "pointercancel", release],
+        [document, "mouseup", release],
+      ];
+      this._inputs.forEach(function (i) {
+        i[0].addEventListener(i[1], i[2], { capture: true, passive: true });
+      });
       root.addEventListener("scroll", this._onScroll, true);
     },
 
@@ -172,22 +217,13 @@
       if (this._scrollEl && this._onScroll) {
         this._scrollEl.removeEventListener("scroll", this._onScroll, true);
       }
+      (this._inputs || []).forEach(function (i) {
+        i[0].removeEventListener(i[1], i[2], true);
+      });
+      this._inputs = null;
+      this._held = false;
       this._scrollEl = null;
       this._onScroll = null;
-    },
-
-    // Trimming shrinks the content, and the browser clamps scrollTop to match:
-    // a decrease nobody asked for, whose (late) scroll event must not read as the
-    // reader scrolling up. Move the remembered position to the new maximum (where
-    // the clamp lands) instead of forgetting it, so a reader who really scrolls up
-    // afterwards is still recognised. Once per frame, never per append: reading
-    // scrollHeight forces a layout.
-    _settle: function () {
-      if (!this._trimmed) return;
-      this._trimmed = false;
-      var body = scroller(this.el);
-      var maxTop = body.scrollHeight - body.clientHeight;
-      if (this._lastTop !== undefined && this._lastTop > maxTop) this._lastTop = maxTop;
     },
 
     _follow: function () {
@@ -199,14 +235,12 @@
     _followSoon: function () {
       var self = this;
       if (!window.requestAnimationFrame) {
-        this._settle();
         this._follow();
         return;
       }
       if (this._raf) return;
       this._raf = window.requestAnimationFrame(function () {
         self._raf = 0;
-        self._settle();
         if (self._pinned !== false) self._follow();
       });
     },
@@ -252,7 +286,6 @@
           body.removeChild(body.firstElementChild);
           this._rows -= 1;
         }
-        this._trimmed = true; // _settle() accounts for it once per frame
       }
       if (pinned) this._followSoon();
     },
