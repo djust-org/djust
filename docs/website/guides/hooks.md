@@ -59,7 +59,7 @@ coercion rules.
 
 ```javascript
 window.djust.hooks = Object.assign(window.djust.hooks || {}, {
-    MapPicker: {
+    StoreMap: {
         mounted() {
             this.map = new MapLibrary(this.el);
             this.map.on('click', (e) => {
