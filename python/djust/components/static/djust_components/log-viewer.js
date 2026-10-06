@@ -6,6 +6,11 @@
  *   stays pinned to its newest line as lines arrive, whether the server
  *   re-renders with more ``lines`` or streams them. If the reader scrolls up
  *   to read, it stops following; scrolling back to the bottom resumes it.
+ *   "The reader" means a wheel, touch, key or pointer press on the log
+ *   followed within 600 ms (or while the pointer is held, as in a scrollbar
+ *   drag) by the position moving up: a scroll that moves up with no such
+ *   input (the browser clamping the position when old lines are trimmed, or
+ *   code setting ``scrollTop``) does not stop the follow.
  * - Stream: with data-stream-event (the component's ``stream_event``) the
  *   hook listens for that server push_event and appends the lines it carries,
  *   coloured by level like the rendered ones. The payload is
@@ -28,6 +33,9 @@
  */
 (function () {
   "use strict";
+
+  // A scroll that drops is the reader only if their input came this recently.
+  var INTENT_MS = 600;
 
   var LEVEL_RE = /\b(INFO|WARN(?:ING)?|ERROR|DEBUG|TRACE|FATAL|CRITICAL)\b/i;
   // 1px of slack for sub-pixel scroll math.
@@ -110,9 +118,46 @@
         if (e.target !== scroller(root)) return;
         var top = e.target.scrollTop;
         if (atBottom(e.target)) self._pinned = true;
-        else if (top < (self._lastTop === undefined ? top : self._lastTop) - 1) self._pinned = false;
+        else if (
+          top < (self._lastTop === undefined ? top : self._lastTop) - 1 &&
+          (self._held || Date.now() - self._intent < INTENT_MS)
+        ) {
+          // Only the reader moving UP leaves the bottom, and only the reader
+          // can: a drop nobody asked for (the browser clamping scrollTop when
+          // old rows are trimmed, whenever that layout happens) comes with no
+          // wheel, touch, key or pointer input just before it.
+          self._pinned = false;
+        }
+        if (self._held) self._intent = Date.now();
         self._lastTop = top;
       };
+      this._intent = -Infinity;
+      this._held = false;
+      var mark = function () {
+        self._intent = Date.now();
+      };
+      var hold = function () {
+        self._held = true;
+        mark();
+      };
+      var release = function () {
+        self._held = false;
+      };
+      // Reader input on the log itself (a drag on its scrollbar is a pointerdown on it).
+      this._inputs = [
+        [root, "wheel", mark],
+        [root, "touchstart", mark],
+        [root, "touchmove", mark],
+        [root, "touchend", mark],
+        [root, "keydown", mark],
+        [root, "pointerdown", hold],
+        [document, "pointerup", release],
+        [document, "pointercancel", release],
+        [document, "mouseup", release],
+      ];
+      this._inputs.forEach(function (i) {
+        i[0].addEventListener(i[1], i[2], { capture: true, passive: true });
+      });
       // scroll does not bubble; capture it on the root.
       root.addEventListener("scroll", this._onScroll, true);
     },
@@ -121,6 +166,11 @@
       if (this._scrollEl && this._onScroll) {
         this._scrollEl.removeEventListener("scroll", this._onScroll, true);
       }
+      (this._inputs || []).forEach(function (i) {
+        i[0].removeEventListener(i[1], i[2], true);
+      });
+      this._inputs = null;
+      this._held = false;
       this._scrollEl = null;
       this._onScroll = null;
     },
@@ -202,7 +252,7 @@
       }
       body.appendChild(added);
 
-      if (max > 0) {
+      if (max > 0 && this._rows > max) {
         while (this._rows > max && body.firstElementChild) {
           body.removeChild(body.firstElementChild);
           this._rows -= 1;

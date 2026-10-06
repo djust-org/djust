@@ -754,6 +754,8 @@ describe('LogViewer', () => {
     // streamed line), and the follow is one scroll per animation frame.
     const frame = (env) => new Promise((resolve) => env.window.requestAnimationFrame(() => resolve()));
     const scrolled = (env, body, top) => {
+        // moving up is the reader: their wheel comes first (a drop with no input is a browser clamp)
+        if (top < body.scrollTop) body.dispatchEvent(new env.window.Event('wheel', { bubbles: true }));
         body.scrollTop = top;
         body.dispatchEvent(new env.window.Event('scroll'));
     };

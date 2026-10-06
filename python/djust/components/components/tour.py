@@ -11,7 +11,39 @@ class Tour(Component):
 
     Renders a guided tour overlay with spotlight on target elements,
     popover descriptions, and next/prev/skip navigation.
-    Uses ``dj-hook="Tour"`` for client-side positioning.
+    Uses ``dj-hook="Tour"`` for client-side positioning; the page must include
+    ``djust_components/tour.js``. The hook dims the page with a cut-out and a
+    ring around the step's ``target`` element (a CSS selector), places the
+    popover beside it, follows it as the page scrolls or resizes, scrolls it
+    into view, and falls back to a centred popover when the target is missing
+    (also after a server re-render removed it). The popover takes focus and
+    keeps it (Tab cycles), a new step is announced, and focus returns to the
+    opener when the tour ends. A field inside the spotlight can be clicked and
+    typed into: it keeps focus, and the arrow keys then belong to it.
+    ArrowRight / ArrowLeft go to the next / previous step (not past the last),
+    and Escape skips the tour; each presses the component's own button, so the
+    hook sends no event of its own.
+
+    Known limit: a CSS ``zoom`` on an ancestor of the tour or its target (not
+    browser zoom, and not a ``transform``, which is handled) shifts the
+    spotlight ring away from the target.
+
+    The buttons send ``event`` with ``value`` ``"next"``, ``"prev"``,
+    ``"skip"`` or ``"finish"``. ``value`` comes from the browser, so treat it
+    as untrusted: ignore anything else and clamp the step::
+
+        @event_handler()
+        def tour(self, value="", **kwargs):
+            if value == "next":
+                self.tour_step = min(self.tour_step + 1, len(self.steps) - 1)
+            elif value == "prev":
+                self.tour_step = max(self.tour_step - 1, 0)
+            elif value in ("skip", "finish"):
+                self.tour_open = False
+    An app's own ``Tour`` hook, in ``window.djust.hooks`` or
+    ``window.DjustHooks``, replaces the shipped one (a hook assigned with
+    ``window.DjustHooks = {...}`` after the script also drops it; merge with
+    ``Object.assign`` instead).
 
     Usage in a LiveView::
 
@@ -42,7 +74,8 @@ class Tour(Component):
     Args:
         steps: list of step dicts with target, title, content
         active: index of current step (default 0)
-        event: djust event prefix for navigation (fires event_next, event_prev, event_skip)
+        event: djust event the Back / Next / Skip / Finish buttons send, with
+            ``value`` ``"prev"`` / ``"next"`` / ``"skip"`` / ``"finish"``
         show_progress: show step progress indicator (default True)
         show_skip: show skip button (default True)
         custom_class: additional CSS classes
