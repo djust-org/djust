@@ -39,7 +39,7 @@ Put a lazy container **beside** the page view's `dj-root`, as in the example, no
 | **Server push** | `push_to_view("myapp.views.StatsWidget", ...)` runs the handler on every view of that class on the socket, and only those. Two views of one class both take it. |
 | **Presence and `db_notify`** | Each view joins and leaves its own presence group and `listen()` channels, and handles its own events. |
 | **State** | Each view keeps its own state and its own VDOM. Two lazy views of one class do not share a rendered tree. |
-| **Authorization** | Every view runs its own login, permission and object-permission checks when it mounts, and an [explicit-exposure](../state/explicit-exposure.md) view authorizes each of its events against its own session binding. A lazy view the user may not open is refused on its own: the page view and the other views stay live, and the socket stays open. The refusal still carries the redirect a page view's would (a login-required lazy view sends the browser to the login page, as it always has), so the browser leaves the page unless the page prevents it. A refusal at event time ends that view only. |
+| **Authorization** | Every view runs its own login, permission and object-permission checks when it mounts, and an [explicit-exposure](../state/explicit-exposure.md) view authorizes each of its events against its own session binding. A lazy view the user may not open is refused on its own: its container shows the refusal, the page view and the other views stay live, the socket stays open and the page does not navigate ([A refused view](#a-refused-view)). A refusal at event time ends that view only. |
 | **Tick, async work** | `tick_interval` / `handle_tick` and `start_async` work run per view, and their updates go to that view's container. |
 | **Uploads** | A file input (`dj-upload`, `dj-upload-drop`, `dj-paste`) inside a lazy view registers its upload with that view, so the view's `allow_upload` slots apply. The binary chunks carry the upload's `ref` and reach the view that registered it. |
 | **Hooks** | `this.pushEvent()` in a `dj-hook` inside a lazy view runs the event on that view. |
@@ -63,6 +63,23 @@ Every view on the socket has an address, the `target_id` of its container. The s
 - A frame that names a view that is not mounted (torn down, forged, never mounted) is refused. It is never answered by another view.
 
 An older client that predates `target_id` sends events with none: they go to the page view, or, on a socket that only hosts batched views, to the view mounted last, as before.
+
+### A refused view
+
+A view beside the page view that the user may not see (a login is required, a permission or the object permission is missing, an `on_mount` hook redirects) is refused on its own. The server answers with a `view_refused` frame addressed to the view's container (over `mount_batch`, an entry of the reply's `refused[]` array), never with the page-level `navigate` a page view's refusal is:
+
+```json
+{"type": "view_refused", "target_id": "members", "reason": "login_required", "code": "permission_denied", "to": "/accounts/login/?next=/dashboard/"}
+```
+
+`reason` is `login_required`, `permission_denied` or `redirect`; `to` is the sign-in (or redirect) URL when there is one. The client then
+
+- replaces the container's content with `<div class="dj-view-refused" role="alert">` holding a short message and, for `login_required` and `redirect`, a link to `to`; the container gets `data-djust-refused="<reason>"` to style. A `to` that is neither a same-origin path nor an http(s) URL gets no link;
+- leaves everything else alone: the page's URL, the page view and the other views are untouched, and nothing navigates;
+- forgets the view, so a reconnect does not mount it again (a reload, after the user signs in, does);
+- fires `djust:view-refused` on `window` with `detail: {targetId, view, reason, code, to, container}`, so an application can replace the default content or show its own sign-in prompt.
+
+The refused view is torn down on its own, and its address answers nothing afterwards (an event for it is refused with `view_unavailable`). A refusal at event time, a revoked session for instance, ends that view the same way. The page view's own refusal is unchanged: it is the page's, and sends the browser to the login page.
 
 ### Unmounting a view
 
@@ -112,5 +129,8 @@ Where a view cannot go live, the client says so (`djust:error` with `code: "view
 - **Latency is shared.** The connection's receive loop (or, over SSE, its dispatch lock) and render lock belong to the connection, not to a view: an event handler that takes a second delays the events of every other view on the socket by that second. Routing is independent; latency is not. Move slow work into `start_async`, which runs off the lock.
 - **Upload slot names are page-wide on the client.** The client keeps one upload configuration per slot name, so two views that each declare an `allow_upload("doc")` with different limits are validated client-side against the last one mounted. The server applies each view's own limits.
 - **Group-less sends are dropped when several views are mounted.** A raw `channel_layer.group_send` of a `server_push`, `presence_event` or `db_notify` message that names no `group` cannot be told apart per view, so a socket hosting more than one view drops it. `push_to_view`, `PresenceManager` and the `db_notify` listener already add it. With one view mounted nothing changes.
+- **Back and Forward.** A view beside the page view is not part of the page's saved state: the signed snapshot the client keeps for Back and Forward is the page view's, so lazy views mount fresh (empty, then hydrated) when the user comes back, while the page view restores as before. This holds on every transport.
+- **Without `EventSource`.** A browser with neither a WebSocket nor `EventSource` cannot host a lazy view at all: hydration is refused loudly (`djust:error`, `code: "view_unavailable"`) instead of leaving a dead container, and the page view keeps working through the HTTP fallback. There is nothing for that fallback to refuse per view, because it hosts none.
+- **A page of lazy views only, over SSE.** An SSE session is mounted by its page view (the stream's `?view=`), so a page with only `dj-lazy` containers has no session to host them. Give it a minimal page view, for example a `dj-root` view with a `<noscript>`-sized template, and the lazy views mount beside it. (Over WebSocket a page of lazy views only works as before.)
 - **After `live_redirect`.** `live_redirect` replaces the views on the socket and swaps the page's content without initializing the page again, so the destination's own `dj-lazy` containers do not hydrate until a full or TurboNav load.
 - **Time travel, the debug panel and bug-capture replay** work on the page view (or, on a batch-only socket, the last view); they are developer tools, not part of the live contract.

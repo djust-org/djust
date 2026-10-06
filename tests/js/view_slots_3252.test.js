@@ -573,3 +573,70 @@ describe('events from a container whose view was unmounted', () => {
         expect(fetched).toBe(0);
     });
 });
+
+
+describe('a refused view (#3252)', () => {
+    const refusal = (extra = {}) => ({
+        type: 'view_refused', target_id: 'w1', reason: 'login_required', code: 'permission_denied',
+        to: '/accounts/login/?next=/', ...extra,
+    });
+
+    it('shows the refusal in its own container and navigates nothing', async () => {
+        const { socket, doc, win } = await pageWithHydratedLazies();
+        const refused = [];
+        win.addEventListener('djust:view-refused', (e) => refused.push(e.detail));
+        const before = win.location.href;
+        await serve(socket, refusal());
+        const box = doc.querySelector('#w1 .dj-view-refused');
+        expect(box.getAttribute('role')).toBe('alert');
+        expect(box.textContent).toContain('Sign in');
+        expect(box.querySelector('a').getAttribute('href')).toBe('/accounts/login/?next=/');
+        expect(doc.getElementById('w1').getAttribute('data-djust-refused')).toBe('login_required');
+        // Only that container: the page view and the sibling are as they were.
+        expect(doc.getElementById('page-text').textContent).toBe('page');
+        expect(doc.getElementById('w2').textContent.trim()).toBe('');
+        expect(win.location.href).toBe(before);
+        expect(refused.map((d) => [d.targetId, d.reason, d.view])).toEqual([
+            ['w1', 'login_required', 'app.Widget'],
+        ]);
+        // The view is forgotten: a new socket does not mount it again.
+        expect(win.djust.viewSlots.mounted()).toEqual(['w2']);
+    });
+
+    it('words a permission refusal without a link, and never a link it cannot trust', async () => {
+        const { socket, doc } = await pageWithHydratedLazies();
+        await serve(socket, refusal({ reason: 'permission_denied', to: undefined }));
+        expect(doc.querySelector('#w1 .dj-view-refused a')).toBeNull();
+        expect(doc.querySelector('#w1 .dj-view-refused').textContent).toContain('do not have access');
+        await serve(socket, refusal({ target_id: 'w2', to: 'javascript:alert(1)' }));
+        expect(doc.querySelector('#w2 .dj-view-refused a')).toBeNull();
+    });
+
+    it('treats an unknown reason as a permission refusal', async () => {
+        const { socket, doc } = await pageWithHydratedLazies();
+        await serve(socket, refusal({ reason: '<img src=x onerror=alert(1)>', to: undefined }));
+        expect(doc.getElementById('w1').getAttribute('data-djust-refused')).toBe('permission_denied');
+        expect(doc.querySelector('#w1 img')).toBeNull();
+    });
+
+    it('applies the entries of a mount_batch reply that were refused', async () => {
+        const { socket, doc, win } = await pageWithHydratedLazies();
+        await serve(socket, {
+            type: 'mount_batch',
+            views: [{ type: 'mount', view: 'app.Widget', version: 3, target_id: 'w2', has_ids: true,
+                      html: '<p dj-id="1">ok</p>' }],
+            failed: [],
+            refused: [{ type: 'view_refused', target_id: 'w1', reason: 'login_required',
+                        code: 'permission_denied', view: 'app.Widget' }],
+        });
+        expect(doc.querySelector('#w1 .dj-view-refused')).not.toBeNull();
+        expect(doc.getElementById('w2').textContent).toContain('ok');
+        expect(win.djust.viewSlots.mounted()).toEqual(['w2']);
+    });
+
+    it('for a container that is not there does nothing', async () => {
+        const { socket, win } = await pageWithHydratedLazies();
+        await serve(socket, refusal({ target_id: 'nowhere' }));
+        expect(win.djust.viewSlots.mounted().sort()).toEqual(['w1', 'w2']);
+    });
+});

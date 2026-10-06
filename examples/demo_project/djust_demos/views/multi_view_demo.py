@@ -96,3 +96,11 @@ class MultiViewUploader(UploadMixin, LiveView):
     def save(self, **kwargs):
         for entry in self.consume_uploaded_entries("doc"):
             self.saved.append("%s (%d bytes)" % (entry.client_name, entry.client_size))
+
+
+class MultiViewGuarded(LiveView):
+    """A lazy view only a signed-in user may open (#3252): for an anonymous
+    visitor it is refused in its own container; the rest of the page stays live."""
+
+    login_required = True
+    template = '<div dj-root><p data-role="secret">members only</p></div>'

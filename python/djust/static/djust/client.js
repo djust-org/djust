@@ -1804,6 +1804,13 @@ class LiveViewWebSocket {
                 break;
             }
 
+            case 'view_refused':
+                // A view beside the page view is refused (login, permission, an
+                // `on_mount` redirect): its container shows it, the page does
+                // not navigate (#3252).
+                applyViewRefusal(data);
+                break;
+
             case 'mount_batch': {
                 // Mount-batch response (v0.6.0) — carries N per-view payloads.
                 // Apply each to [data-djust-target="<target_id>"] within a
@@ -1855,6 +1862,11 @@ class LiveViewWebSocket {
                     if (globalThis.djustDebug) {
                         console.warn('[LiveView] mount_batch failed: %s %o', String(f.view || ''), f);
                     }
+                }
+                // Views the user may not see: each one's container shows its own
+                // refusal, and nothing navigates (#3252).
+                for (const refused of (Array.isArray(data.refused) ? data.refused : [])) {
+                    applyViewRefusal(refused);
                 }
                 // Fix #4 — forward any navigate entries emitted by
                 // on_mount redirect hooks to the navigation dispatcher.
@@ -3147,6 +3159,12 @@ class LiveViewSSE {
                 }
                 break;
             }
+
+            case 'view_refused':
+                // A view beside the page view is refused: its container shows it
+                // and the page does not navigate (#3252).
+                applyViewRefusal(data);
+                break;
 
             case 'async_complete':
                 completeAsyncBatch(this, data.async_batch);
@@ -12157,6 +12175,73 @@ function applySlotMount(transport, data, options = {}) {
     return true;
 }
 
+// The words a refused view's container shows. The server names a reason, never
+// text: the application can restyle the container (`[data-djust-refused]`) or
+// replace the content from the `djust:view-refused` event.
+const _REFUSAL_TEXT = new Map([
+    ['login_required', 'Sign in to see this.'],
+    ['permission_denied', 'You do not have access to this.'],
+    ['redirect', 'This is not available here.'],
+]);
+const _REFUSAL_LINK_TEXT = new Map([
+    ['login_required', 'Sign in'],
+    ['redirect', 'Continue'],
+]);
+
+/**
+ * Show a refused view in its own container (#3252).
+ *
+ * A view mounted beside the page view that the user may not see answers with a
+ * `view_refused` frame addressed to its container. Only that container changes:
+ * the page view, the other views and the page's URL are untouched (no
+ * navigation, whatever sign-in URL the frame names; that URL becomes a link the
+ * user may follow). The view is forgotten, so a reconnect does not mount it
+ * again, and the event `djust:view-refused` tells the application, which may
+ * replace the default content.
+ *
+ * @param {Object} data  The `view_refused` frame, or an entry of a `mount_batch`
+ *                       reply's `refused[]`: `{target_id, reason, code, to?, view?}`.
+ * @returns {boolean} whether the view's container was found.
+ */
+function applyViewRefusal(data) {
+    const targetId = data && data.target_id;
+    if (typeof targetId !== 'string' || !targetId) return false;
+    const container = slotContainer(targetId);
+    forgetSlot(targetId);
+    if (!container) return false;
+    const reason = _REFUSAL_TEXT.has(data.reason) ? data.reason : 'permission_denied';
+    const target = typeof data.to === 'string' && window.djust.safeNavigationTarget
+        ? window.djust.safeNavigationTarget(data.to) : null;
+
+    container.setAttribute('data-djust-refused', reason);
+    container.removeAttribute('dj-cloak');
+    container.textContent = '';
+    const box = document.createElement('div');
+    box.className = 'dj-view-refused';
+    box.setAttribute('role', 'alert');
+    const text = document.createElement('p');
+    text.textContent = _REFUSAL_TEXT.get(reason);
+    box.appendChild(text);
+    if (target && _REFUSAL_LINK_TEXT.has(reason)) {
+        const link = document.createElement('a');
+        link.setAttribute('href', target);
+        link.textContent = _REFUSAL_LINK_TEXT.get(reason);
+        box.appendChild(link);
+    }
+    container.appendChild(box);
+    window.dispatchEvent(new CustomEvent('djust:view-refused', {
+        detail: {
+            targetId: targetId,
+            view: typeof data.view === 'string' ? data.view : container.getAttribute('dj-view'),
+            reason: reason,
+            code: typeof data.code === 'string' ? data.code : 'permission_denied',
+            to: target,
+            container: container,
+        },
+    }));
+    return true;
+}
+
 window.djust._markSlotOf = markSlotOf;
 window.djust.viewSlots = {
     contextOf: () => _activeSlot,
@@ -12166,6 +12251,7 @@ window.djust.viewSlots = {
     version: (targetId) => (_slotVersions.has(targetId) ? _slotVersions.get(targetId) : null),
     withSlot: withSlot,
     clear: clearSlots,
+    refuse: applyViewRefusal,
 };
 
 // ============================================================================
