@@ -634,6 +634,18 @@ describe('a refused view (#3252)', () => {
         expect(win.djust.viewSlots.mounted()).toEqual(['w2']);
     });
 
+    it('a refusal that names no container shows nothing and navigates nothing', async () => {
+        const { socket, doc, win } = await pageWithHydratedLazies();
+        const before = win.location.href;
+        await serve(socket, {
+            type: 'mount_batch', views: [], failed: [],
+            refused: [{ type: 'view_refused', target_id: '', reason: 'login_required', to: '/login/' }],
+        });
+        expect(doc.querySelector('.dj-view-refused')).toBeNull();
+        expect(win.location.href).toBe(before);
+        expect(win.djust.viewSlots.mounted().sort()).toEqual(['w1', 'w2']);
+    });
+
     it('for a container that is not there does nothing', async () => {
         const { socket, win } = await pageWithHydratedLazies();
         await serve(socket, refusal({ target_id: 'nowhere' }));

@@ -2865,7 +2865,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             except (ValueError, OverflowError):
                 # A forged NaN/infinity ref is not echoed; the refusal still goes out.
                 pass
-        await self.send_error("View not mounted. Please reload the page.", **fields)
+        # ``view_unavailable``, as the SSE transport answers (additive).
+        await self.send_error(
+            "View not mounted. Please reload the page.", code="view_unavailable", **fields
+        )
 
     async def _route_runtime_owned(self, data: Dict[str, Any]) -> None:
         """Send a runtime-owned frame (``mount``, ``event``, ``url_change``) to its view.

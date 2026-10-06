@@ -2187,8 +2187,11 @@ class WSConsumerTransport:
                 _dj_settings, "LOGIN_URL", "/accounts/login/"
             )
             # Best-effort refusal frames: the event is denied even if the peer is gone.
+            # A view beside the page view is refused in its own container, and
+            # only it goes (#3252); the page view's refusal is the page's.
             with contextlib.suppress(Exception):
-                await consumer.send_json({"type": "navigate", "to": login_url})
+                if not await self.send_view_refusal("login_required", login_url):
+                    await consumer.send_json({"type": "navigate", "to": login_url})
             with contextlib.suppress(Exception):
                 await consumer.close(code=4403)
             return False
@@ -2752,10 +2755,12 @@ class SSESessionTransport:
         if not authorized:
             # Best-effort refusal frames: the event is denied even if the stream is gone.
             with contextlib.suppress(Exception):
-                await session.send_error(
-                    "Session is no longer authorized. Please reload the page.",
-                    code="permission_denied",
-                )
+                # A view beside the page view is refused in its own container (#3252).
+                if not await self.send_view_refusal("permission_denied"):
+                    await session.send_error(
+                        "Session is no longer authorized. Please reload the page.",
+                        code="permission_denied",
+                    )
             with contextlib.suppress(Exception):
                 await session.close(code=4403)
             return False

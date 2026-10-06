@@ -79,7 +79,7 @@ A view beside the page view that the user may not see (a login is required, a pe
 - forgets the view, so a reconnect does not mount it again (a reload, after the user signs in, does);
 - fires `djust:view-refused` on `window` with `detail: {targetId, view, reason, code, to, container}`, so an application can replace the default content or show its own sign-in prompt.
 
-The refused view is torn down on its own, and its address answers nothing afterwards (an event for it is refused with `view_unavailable`). A refusal at event time, a revoked session for instance, ends that view the same way. The page view's own refusal is unchanged: it is the page's, and sends the browser to the login page.
+The refused view is torn down on its own, and its address answers nothing afterwards: an event for it is refused with `code: "view_unavailable"` (the error frame carries the event's `ref`). A refusal at event time ends that view the same way: when a view's re-check fails (`reauth_on_event`, a revoked session or permission), that view's container shows the refusal (`login_required`, with the sign-in URL), the socket stays open and no page navigates; only the page view's own revoked authority sends the browser to the login page and closes the socket (4403). The frame's `code` is always `permission_denied`; applications should key on `reason`. A `mount_batch` entry that names no usable `target_id` appears in `refused[]` with an empty `target_id`: there is no container to show it in, so the client shows nothing for it (and, unlike the old `navigate[]` entry, it does not navigate).
 
 ### Unmounting a view
 

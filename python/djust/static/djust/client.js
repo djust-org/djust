@@ -12205,7 +12205,11 @@ const _REFUSAL_LINK_TEXT = new Map([
  */
 function applyViewRefusal(data) {
     const targetId = data && data.target_id;
-    if (typeof targetId !== 'string' || !targetId) return false;
+    if (typeof targetId !== 'string' || !targetId) {
+        // A batch entry that named no container: nowhere to show it.
+        if (globalThis.djustDebug) console.warn('[LiveView] view refused with no target: %o', data);
+        return false;
+    }
     const container = slotContainer(targetId);
     forgetSlot(targetId);
     if (!container) return false;
