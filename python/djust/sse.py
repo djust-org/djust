@@ -712,7 +712,9 @@ class SSESession:
             self._slots[target_id] = slot
             self._hosted_several_views = True
             # Nothing else holds the new view's locks: its events find the slot
-            # but no view until the mount has finished (they are refused).
+            # but no view until the mount has finished, and are refused (before
+            # per-view locks they waited behind the mount on the one session
+            # lock; the stock client sends none until it has the mount reply).
             async with slot.dispatch_lock, slot.session._render_lock:
                 slot.session._event_request = request
                 try:

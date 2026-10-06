@@ -42,22 +42,37 @@ class ViewLane:
     """A FIFO of turns for one view, run one at a time by a task that exists
     only while turns are queued (an idle lane holds no task)."""
 
-    __slots__ = ("_turns", "_task")
+    __slots__ = ("_turns", "_task", "_waiting")
 
     def __init__(self) -> None:
         self._turns: Deque[_Turn] = collections.deque()
         self._task: Optional["asyncio.Future[None]"] = None
+        self._waiting = 0
+
+    def queued(self) -> int:
+        """How many turns are waiting behind the running one."""
+        return len(self._turns)
+
+    def waiting(self) -> int:
+        """How many tasks are blocked in :meth:`quiesce` on this lane."""
+        return self._waiting
 
     def busy(self) -> bool:
         """Whether a turn is queued or running."""
         return bool(self._turns) or (self._task is not None and not self._task.done())
 
-    def submit(self, run: Callable[[Any], Awaitable[None]], item: Any) -> bool:
+    def submit(
+        self, run: Callable[[Any], Awaitable[None]], item: Any, *, force: bool = False
+    ) -> bool:
         """Queue a turn; it runs after the ones already queued.
 
-        False, with nothing queued, when ``MAX_QUEUED_TURNS`` are already waiting.
+        False, with nothing queued, when ``MAX_QUEUED_TURNS`` are already
+        waiting. ``force`` queues anyway: for the frames of an upload, which
+        must follow their ``upload_register`` and cannot be refused without
+        losing the file (their volume is bounded by the upload limits and the
+        connection's upload rate limit).
         """
-        if len(self._turns) >= MAX_QUEUED_TURNS:
+        if not force and len(self._turns) >= MAX_QUEUED_TURNS:
             return False
         self._turns.append((run, item))
         if self._task is None or self._task.done():
@@ -84,7 +99,11 @@ class ViewLane:
         task = self._task
         if task is None or task.done() or task is asyncio.current_task():
             return
-        await asyncio.wait({task})
+        self._waiting += 1
+        try:
+            await asyncio.wait({task})
+        finally:
+            self._waiting -= 1
 
     def drop_queued(self) -> None:
         """Forget the turns that have not started (the connection is gone)."""

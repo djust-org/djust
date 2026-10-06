@@ -19,7 +19,9 @@ else that awaits, run).
 """
 
 import asyncio
+import struct
 import threading
+import uuid
 
 import pytest
 from asgiref.sync import sync_to_async
@@ -29,6 +31,7 @@ from django.test import override_settings
 
 from djust import LiveView, event_handler
 from djust.push import push_to_view
+from djust.uploads import FRAME_CHUNK, FRAME_COMPLETE, UploadMixin
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
 
@@ -63,6 +66,14 @@ class _View(LiveView):
         ORDER.append(("hold-end", self.tag))
 
     @event_handler()
+    def hold_sync(self, **kwargs):
+        """Blocks the connection's one synchronous thread until the test lets go."""
+        ORDER.append(("hold_sync-start", self.tag))
+        STARTED.set()
+        RELEASE.wait(PATIENCE)
+        ORDER.append(("hold_sync-end", self.tag))
+
+    @event_handler()
     async def quick(self, **kwargs):
         ORDER.append(("quick", self.tag))
 
@@ -87,6 +98,14 @@ class Page(_View):
     def push_widget(self, **kwargs):
         """An event in this view that pushes to the other view's class."""
         push_to_view(MOD + ".Widget", handler="bump")
+
+
+class Uploader(UploadMixin, _View):
+    template = '<div dj-view="' + MOD + '.Uploader"><b>uploader</b></div>'
+
+    def mount(self, request, **kwargs):
+        _View.mount(self, request, **kwargs)
+        self.allow_upload("doc", accept=".txt")
 
 
 class Widget(_View):
@@ -153,10 +172,10 @@ async def _send(communicator, event, target=None, ref=1):
 REPLIES = ("patch", "html_update", "noop", "error")
 
 
-async def _reply(communicator, ref):
+async def _reply(communicator, ref, timeout=PATIENCE):
     """The reply to the event with ``ref`` (others' frames are skipped)."""
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + PATIENCE
+    deadline = loop.time() + timeout
     while True:
         frame = await communicator.receive_json_from(timeout=deadline - loop.time())
         if frame.get("type") in REPLIES and frame.get("ref") == ref:
@@ -339,6 +358,47 @@ async def test_a_view_cannot_pile_up_more_than_a_bounded_number_of_queued_turns(
         await communicator.disconnect()
 
 
+# What is NOT concurrent over WebSocket: a plain ``def`` handler runs on the
+# connection's one synchronous thread, and so does the connection-cleanup hop
+# every inbound frame makes before it is dispatched. While that thread is
+# blocked, no other view's frame is answered, whether its handler is ``def`` or
+# ``async def``. Pinned as strict expected failures (a thread per view would fix
+# them, at one database connection per view; see the pull request).
+
+BLOCKED_SYNC_THREAD = (
+    "a blocked synchronous thread stalls every frame of the connection: handlers declared "
+    "with def, and the per-frame connection cleanup that precedes dispatch, share it"
+)
+
+
+@pytest.mark.xfail(strict=True, reason=BLOCKED_SYNC_THREAD)
+async def test_a_blocking_def_handler_in_one_view_does_not_delay_a_def_event_in_another():
+    communicator = await _connect()
+    try:
+        await _page_and_widget(communicator)
+        await _send(communicator, "hold_sync")
+        await _wait_started()
+        await _send(communicator, "quick_sync", "w", ref=2)
+        assert (await _reply(communicator, 2, timeout=3.0))["type"] != "error"
+    finally:
+        RELEASE.set()
+        await communicator.disconnect()
+
+
+@pytest.mark.xfail(strict=True, reason=BLOCKED_SYNC_THREAD)
+async def test_a_blocking_def_handler_in_one_view_does_not_delay_an_async_event_in_another():
+    communicator = await _connect()
+    try:
+        await _page_and_widget(communicator)
+        await _send(communicator, "hold_sync")
+        await _wait_started()
+        await _send(communicator, "quick", "w", ref=2)
+        assert (await _reply(communicator, 2, timeout=3.0))["type"] != "error"
+    finally:
+        RELEASE.set()
+        await communicator.disconnect()
+
+
 async def test_each_view_has_its_own_render_lock_and_busy_flag():
     communicator = await _connect()
     try:
@@ -444,11 +504,14 @@ async def test_unmount_waits_for_the_running_handler_then_releases_only_that_vie
         await _page_and_widget(communicator)
         await _send(communicator, "hold", "w", ref=1)
         await _wait_started()
-        await communicator.send_json_to({"type": "unmount", "target_id": "w"})
-        # The unmount is waiting for the handler: the view is still mounted.
-        await _send(communicator, "quick", ref=2)
-        await _reply(communicator, 2)  # the page view answers meanwhile
         consumer = CONSUMERS[-1]
+        lane = consumer._slot_map()["w"].facade._lane
+        await communicator.send_json_to({"type": "unmount", "target_id": "w"})
+        # The unmount is queued behind the running handler (a deterministic
+        # signal), and the page view answers meanwhile.
+        await _spin_until(lambda: lane.queued() == 1, "the unmount to queue on the view's lane")
+        await _send(communicator, "quick", ref=2)
+        await _reply(communicator, 2)
         assert "w" in consumer._slot_map()
         assert ("hold-end", "w") not in ORDER
         RELEASE.set()
@@ -466,12 +529,13 @@ async def test_a_navigation_waits_for_every_running_handler():
         await _page_and_widget(communicator)
         await _send(communicator, "hold", "w", ref=1)
         await _wait_started()
+        consumer = CONSUMERS[-1]
+        lane = consumer._slot_map()["w"].facade._lane
         await communicator.send_json_to(
             {"type": "live_redirect_mount", "view": MOD + ".Page", "url": "/p/", "params": {}}
         )
-        consumer = CONSUMERS[-1]
-        for _ in range(50):
-            await asyncio.sleep(0)
+        # The navigation is blocked waiting for the view's running turn.
+        await _spin_until(lambda: lane.waiting() == 1, "the navigation to wait on the lane")
         # The view is still mounted and its handler has not ended: the navigation waits.
         assert getattr(VIEWS["w"], "_djust_waiters_closed", False) is False
         assert ("hold-end", "w") not in ORDER, "the navigation released a view mid-handler"
@@ -490,13 +554,12 @@ async def test_a_disconnect_waits_for_the_running_handler_and_drops_the_queued_o
     consumer = CONSUMERS[-1]
     await _send(communicator, "hold", "w", ref=1)
     await _wait_started()
+    lane = consumer._slot_map()["w"].facade._lane
     await _send(communicator, "bump", "w", ref=2)  # queued behind the handler
-    for _ in range(50):
-        await asyncio.sleep(0)
+    await _spin_until(lambda: lane.queued() == 1, "the event to queue")
     disconnecting = asyncio.ensure_future(communicator.disconnect())
-    await _spin_until(lambda: getattr(consumer, "_disconnect_entered", False), "the disconnect")
-    for _ in range(50):
-        await asyncio.sleep(0)
+    await _spin_until(lambda: lane.waiting() == 1, "the disconnect to wait on the lane")
+    assert lane.queued() == 0, "the queued turn was not dropped"
     assert not disconnecting.done(), "the disconnect did not wait for the running handler"
     assert consumer._slot_map()["w"].facade.view_instance is not None
     RELEASE.set()
@@ -511,7 +574,6 @@ async def test_a_disconnect_waits_for_the_running_handler_and_drops_the_queued_o
 # --------------------------------------------------------------------------- #
 
 import json  # noqa: E402
-import uuid  # noqa: E402
 
 from django.contrib.auth import get_user  # noqa: E402
 from django.test import RequestFactory  # noqa: E402
@@ -723,3 +785,85 @@ async def test_over_sse_a_navigation_waits_for_every_views_running_turn(sse_setu
     finally:
         RELEASE.set()
         await stream.aclose()
+
+
+# --------------------------------------------------------------------------- #
+# Uploads keep their order behind a busy view
+# --------------------------------------------------------------------------- #
+
+
+async def test_an_upload_to_a_busy_view_is_applied_in_order_not_dropped():
+    """The register waits on the view's lane behind a running handler; the binary
+    chunk and complete frames (which carry only the ref) must follow it on the
+    same lane. Before, they were applied at once, found no manager that knew the
+    ref, and were dropped: the upload never completed."""
+    communicator = await _connect()
+    try:
+        await _mount(communicator, Page)
+        await _mount(communicator, Uploader, "up")
+        uploader = VIEWS["up"]
+        await _send(communicator, "hold", "up", ref=1)
+        await _wait_started()
+
+        ref = str(uuid.uuid4())
+        await communicator.send_json_to(
+            {
+                "type": "upload_register",
+                "target_id": "up",
+                "upload_name": "doc",
+                "ref": ref,
+                "client_name": "a.txt",
+                "client_type": "text/plain",
+                "client_size": 3,
+            }
+        )
+        raw = uuid.UUID(ref).bytes
+        await communicator.send_to(
+            bytes_data=bytes([FRAME_CHUNK]) + raw + struct.pack(">I", 0) + b"abc"
+        )
+        await communicator.send_to(bytes_data=bytes([FRAME_COMPLETE]) + raw)
+        lane = CONSUMERS[-1]._slot_map()["up"].facade._lane
+        await _spin_until(lambda: lane.queued() == 3, "the register and its frames to queue")
+        # Nothing has been applied: the view is still busy.
+        assert ref not in uploader._upload_manager._entries
+
+        RELEASE.set()
+        frames = await _until(communicator, "upload_progress")
+        while frames[-1].get("status") != "complete":
+            frames += await _until(communicator, "upload_progress")
+        assert [f["type"] for f in frames if f["type"] == "error"] == []
+        assert uploader._upload_manager._entries[ref].complete
+    finally:
+        RELEASE.set()
+        await communicator.disconnect()
+
+
+async def test_an_upload_to_an_idle_view_is_still_applied_inline():
+    communicator = await _connect()
+    try:
+        await _mount(communicator, Page)
+        await _mount(communicator, Uploader, "up")
+        ref = str(uuid.uuid4())
+        await communicator.send_json_to(
+            {
+                "type": "upload_register",
+                "target_id": "up",
+                "upload_name": "doc",
+                "ref": ref,
+                "client_name": "a.txt",
+                "client_type": "text/plain",
+                "client_size": 3,
+            }
+        )
+        await _until(communicator, "upload_registered")
+        raw = uuid.UUID(ref).bytes
+        await communicator.send_to(
+            bytes_data=bytes([FRAME_CHUNK]) + raw + struct.pack(">I", 0) + b"abc"
+        )
+        await communicator.send_to(bytes_data=bytes([FRAME_COMPLETE]) + raw)
+        frames = await _until(communicator, "upload_progress")
+        while frames[-1].get("status") != "complete":
+            frames += await _until(communicator, "upload_progress")
+        assert VIEWS["up"]._upload_manager._entries[ref].complete
+    finally:
+        await communicator.disconnect()

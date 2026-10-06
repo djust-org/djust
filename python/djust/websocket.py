@@ -2914,6 +2914,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if consumer is None:
             await self._refuse_unmounted_target(data)
             return
+        if handler in ("_handle_upload_register", "_handle_upload_resume"):
+            self._note_upload_owner(data.get("ref"), consumer)
         queued = self._queue_on_lane(consumer, handler, data)
         if queued is None:
             await self._refuse_busy_view(data)
@@ -2921,6 +2923,27 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if queued:
             return
         await getattr(consumer, handler)(data)
+
+    #: Uploads whose ``upload_register`` / ``upload_resume`` is queued on a view's
+    #: lane remembered at most this many at a time (#3252).
+    _MAX_PENDING_UPLOADS = 256
+
+    def _note_upload_owner(self, ref: Any, consumer: Any) -> None:
+        """Remember which view an upload ref was registered for, before it has run.
+
+        The upload's binary frames carry only the ref. A register that is still
+        queued on its view's lane has not put the ref in that view's manager, so
+        without this the chunks that follow it would be routed to the wrong view
+        and lost.
+        """
+        if not isinstance(ref, str) or not ref:
+            return
+        pending: Dict[str, Any] = getattr(self, "_pending_uploads", None) or {}
+        self._pending_uploads = pending
+        pending.pop(ref, None)
+        pending[ref] = consumer
+        while len(pending) > self._MAX_PENDING_UPLOADS:
+            pending.pop(next(iter(pending)))
 
     def _lanes(self) -> List["ViewLane"]:
         """The lane of the page view and of each view beside it that has one."""
@@ -2943,6 +2966,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 pass
         if isinstance(data.get("target_id"), str):
             fields["target_id"] = data["target_id"]
+        # Which event was dropped, so the application can decide to send it
+        # again: the frame is refused, not queued, and the client does not retry.
+        if isinstance(data.get("event"), str):
+            fields["event"] = data["event"][:100]
         await self.send_error("This view is busy. Try again in a moment.", **fields)
 
     def _queue_on_lane(self, consumer: Any, handler: str, data: Dict[str, Any]) -> Optional[bool]:
@@ -3652,6 +3679,18 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # An upload belongs to the view that registered it: with several views
         # on the socket, the one whose manager holds this ref (#3252).
         owner = self._upload_owner(frame["ref"])
+        # A view with turns queued or running keeps its uploads in order too: the
+        # frames of an upload follow its register on the view's lane, so they are
+        # never applied before the register has run (#3252).
+        lane = getattr(owner, "_lane", None)
+        if (
+            lane is not None
+            and lane.busy()
+            and lane.submit(
+                owner._run_lane_item, ("_handle_upload_frame_for_view", frame), force=True
+            )
+        ):
+            return
         await type(self)._handle_upload_frame_for_view(owner, frame)
 
     def _upload_owner(self, ref: Any) -> Any:
@@ -3661,6 +3700,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             entries = getattr(manager, "_entries", None)
             if isinstance(entries, dict) and ref in entries:
                 return consumer
+        # Registered, but the register is still queued on the view's lane.
+        pending = (getattr(self, "_pending_uploads", None) or {}).get(ref)
+        if pending is not None and pending.view_instance is not None:
+            return pending
         return self._default_consumer()
 
     async def _handle_upload_frame_for_view(self, frame: Dict[str, Any]) -> None:
