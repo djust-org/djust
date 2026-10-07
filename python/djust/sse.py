@@ -43,6 +43,7 @@ same worker process (e.g., nginx ``ip_hash`` or a sticky load-balancer).
 """
 
 import asyncio
+import contextlib
 import inspect
 import json
 import logging
@@ -311,21 +312,25 @@ async def _shutdown_closed_session(session: "SSESession") -> None:
     view; nothing routes to the old one any more, so it is disposed too, and
     the replacement is untouched.
     """
-    lock = session._dispatch_lock
-    acquired = False
+    # Every view's running turn is waited for (#3252): the page view's, and the
+    # views beside it. Each wait is bounded on its own.
+    held: list[asyncio.Lock] = []
     try:
-        try:
-            # Bounded (review I3): a turn stuck in storage must not keep the
-            # closed session, its runtime and view alive indefinitely. By the
-            # cap the turn has finished or is wedged, and a closed stream has
-            # nobody to send its frame to.
-            acquired = await asyncio.wait_for(lock.acquire(), timeout=_CLOSE_DISPATCH_WAIT_S)
-        except asyncio.TimeoutError:
-            logger.warning(
-                "SSE: closed session %s still dispatching after %ss; disposing it anyway",
-                sanitize_for_log(session.session_id),
-                _CLOSE_DISPATCH_WAIT_S,
-            )
+        slot_locks = [slot.dispatch_lock for slot in list(session._slots.values())]
+        for lock in [session._dispatch_lock, *slot_locks]:
+            try:
+                # Bounded (review I3): a turn stuck in storage must not keep the
+                # closed session, its runtime and view alive indefinitely. By the
+                # cap the turn has finished or is wedged, and a closed stream has
+                # nobody to send its frame to.
+                await asyncio.wait_for(lock.acquire(), timeout=_CLOSE_DISPATCH_WAIT_S)
+                held.append(lock)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "SSE: closed session %s still dispatching after %ss; disposing it anyway",
+                    sanitize_for_log(session.session_id),
+                    _CLOSE_DISPATCH_WAIT_S,
+                )
         # The latest state is stored before the view goes (#3248).
         await session.runtime.finish_state_saves()
         for slot in list(session._slots.values()):
@@ -336,7 +341,7 @@ async def _shutdown_closed_session(session: "SSESession") -> None:
             "SSE: shutting down closed session %s failed", sanitize_for_log(session.session_id)
         )
     finally:
-        if acquired:
+        for lock in held:
             lock.release()
 
 
@@ -489,8 +494,14 @@ class SSESession:
         self._rate_limiter: ConnectionRateLimiter = ConnectionRateLimiter()
         self._client_ip: Optional[str] = None
         # Serialize POST turns separately from render/result application.
+        #: The page view's: one of its turns at a time. Each view mounted
+        #: beside it has its own (``SSESlot.dispatch_lock``), so a slow turn in
+        #: one view does not delay the others (#3252).
         self._dispatch_lock = asyncio.Lock()
         self._render_lock = asyncio.Lock()
+        #: Orders the changes of which views the session hosts (a mount, a
+        #: replacement, a navigation). Taken before any view's lock.
+        self._structure_lock = asyncio.Lock()
 
         # ---- Owner binding (Finding #24, CWE-639/CWE-862) -------------------
         # The client-chosen session_id alone is NOT an authorization capability:
@@ -531,28 +542,51 @@ class SSESession:
     # ------------------------------------------------------------------ #
 
     async def dispatch(self, request: HttpRequest, data: dict[str, Any]) -> None:
-        """Dispatch an owner-checked POST without sharing its request mid-turn."""
+        """Dispatch an owner-checked POST without sharing its request mid-turn.
+
+        A POST takes the lock of the view it is for, so turns of different views
+        run at the same time and a view's own turns run one at a time. A
+        navigation replaces every view, so it takes them all.
+        """
+        if data.get("target_id") is not None:
+            # A view mounted beside the page view (#3252) has its own runtime; a
+            # frame that names none that is mounted is refused, never answered by
+            # the page view (which would run the event on the wrong view).
+            await self._dispatch_slot_frame(request, data)
+            return
+        if data.get("type") == "live_redirect_mount":
+            await self._navigate(request, data)
+            return
         async with self._dispatch_lock:
             if not self.active:
                 await self.send_error("SSE session closed. Please reload the page.")
                 return
             self._event_request = request
             try:
-                if data.get("target_id") is not None:
-                    # A view mounted beside the page view (#3252) has its own
-                    # runtime; a frame that names none that is mounted is
-                    # refused, never answered by the page view (which would run
-                    # the event on the wrong view).
-                    await self._dispatch_slot_frame(request, data)
-                elif data.get("type") == "live_redirect_mount":
-                    if not self._rate_limiter.check("live_redirect_mount"):
-                        await self.send_error("Navigation rate limit exceeded", code="rate_limited")
-                        if self._rate_limiter.should_disconnect():
-                            self.shutdown()
-                    else:
-                        await self._replace_view(request, data)
-                else:
-                    await self.runtime.dispatch_message(data)
+                await self.runtime.dispatch_message(data)
+            finally:
+                self._event_request = None
+
+    async def _navigate(self, request: HttpRequest, data: dict[str, Any]) -> None:
+        """A ``live_redirect_mount``: wait for every view's running turn, then replace the page."""
+        if not self._rate_limiter.check("live_redirect_mount"):
+            await self.send_error("Navigation rate limit exceeded", code="rate_limited")
+            if self._rate_limiter.should_disconnect():
+                self.shutdown()
+            return
+        # Lock order: structure, the page view, then each view beside it in the
+        # order it mounted. Nothing takes them in another order.
+        async with contextlib.AsyncExitStack() as stack:
+            await stack.enter_async_context(self._structure_lock)
+            await stack.enter_async_context(self._dispatch_lock)
+            for slot in list(self._slots.values()):
+                await stack.enter_async_context(slot.dispatch_lock)
+            if not self.active:
+                await self.send_error("SSE session closed. Please reload the page.")
+                return
+            self._event_request = request
+            try:
+                await self._replace_view(request, data)
             finally:
                 self._event_request = None
 
@@ -604,17 +638,32 @@ class SSESession:
         if frame_type == "mount":
             await self._mount_slot(request, data)
             return
-        if frame_type == "unmount":
-            async with self._render_lock:
-                await self._release_slot(target_id, reason="view_unmounted")
-            return
         slot = self._slots.get(target_id)
+        if frame_type == "unmount":
+            if slot is not None:
+                # After the turns of that view that are running or queued.
+                async with slot.dispatch_lock, slot.session._render_lock:
+                    if self._slots.get(target_id) is slot:
+                        await self._release_slot(target_id, reason="view_unmounted")
+            return
         if slot is None or slot.view is None:
             # Unmounted, forged or never mounted: answering with the page view
             # would run the event on the wrong view.
             await self.send_error("No view is mounted at this address", **fields)
             return
-        await slot.runtime.dispatch_message(data)
+        async with slot.dispatch_lock:
+            if self._slots.get(target_id) is not slot or slot.view is None:
+                # Its view went while this turn waited for its lock.
+                await self.send_error("No view is mounted at this address", **fields)
+                return
+            if not self.active:
+                await self.send_error("SSE session closed. Please reload the page.")
+                return
+            slot.session._event_request = request
+            try:
+                await slot.runtime.dispatch_message(data)
+            finally:
+                slot.session._event_request = None
 
     async def _mount_slot(self, request: HttpRequest, data: dict[str, Any]) -> None:
         """Mount the view of a ``mount`` frame that names a ``target_id``.
@@ -640,9 +689,17 @@ class SSESession:
         if not isinstance(params, dict):
             await self.send_error("Invalid mount parameters", **fields)
             return
-        async with self._render_lock:
-            if target_id in self._slots:
-                await self._release_slot(target_id, reason="view_replaced")
+        async with self._structure_lock:
+            if not self.active:
+                await self.send_error("SSE session closed. Please reload the page.")
+                return
+            previous = self._slots.get(target_id)
+            if previous is not None:
+                # The same container hydrating again: that view goes, after the
+                # turns of it that are running.
+                async with previous.dispatch_lock, previous.session._render_lock:
+                    if self._slots.get(target_id) is previous:
+                        await self._release_slot(target_id, reason="view_replaced")
             elif len(self._slots) >= self._max_slots():
                 logger.warning(
                     "SSE: refused a mount: this session already hosts %d views", len(self._slots)
@@ -654,21 +711,29 @@ class SSESession:
             slot.session._request = target_request
             self._slots[target_id] = slot
             self._hosted_several_views = True
-            try:
-                await slot.runtime.dispatch_message(
-                    {
-                        **data,
-                        "type": "mount",
-                        "url": target_request.path_info,
-                        "params": params,
-                    }
-                )
-            except BaseException:
-                await self._release_slot(target_id, reason="mount_failed")
-                raise
-            if slot.runtime.view_instance is None or not slot.session.mount_sent:
-                # Refused (the verdict frame was sent) or failed: no view stays.
-                await self._release_slot(target_id, reason="mount_failed")
+            # Nothing else holds the new view's locks: its events find the slot
+            # but no view until the mount has finished, and are refused (before
+            # per-view locks they waited behind the mount on the one session
+            # lock; the stock client sends none until it has the mount reply).
+            async with slot.dispatch_lock, slot.session._render_lock:
+                slot.session._event_request = request
+                try:
+                    await slot.runtime.dispatch_message(
+                        {
+                            **data,
+                            "type": "mount",
+                            "url": target_request.path_info,
+                            "params": params,
+                        }
+                    )
+                except BaseException:
+                    await self._release_slot(target_id, reason="mount_failed")
+                    raise
+                finally:
+                    slot.session._event_request = None
+                if slot.runtime.view_instance is None or not slot.session.mount_sent:
+                    # Refused (the verdict frame was sent) or failed: no view stays.
+                    await self._release_slot(target_id, reason="mount_failed")
 
     async def _release_slot(self, target_id: str, *, reason: str) -> None:
         """Tear down the view at ``target_id``; the page view and the others stay live."""
@@ -697,8 +762,11 @@ class SSESession:
             logger.warning("SSE: releasing a view mounted beside the page view failed")
 
     async def _release_all_slots(self, *, reason: str) -> None:
-        for target_id in list(self._slots):
-            await self._release_slot(target_id, reason=reason)
+        for target_id, slot in list(self._slots.items()):
+            # Under the view's own render lock, so a background result of it
+            # cannot render into the view being released (#3252).
+            async with slot.session._render_lock:
+                await self._release_slot(target_id, reason=reason)
 
     async def _replace_view(self, request: HttpRequest, data: dict[str, Any]) -> None:
         """Replace the page via shared mount/auth, using this POST's identity.
