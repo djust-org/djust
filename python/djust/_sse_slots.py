@@ -27,7 +27,7 @@ import asyncio
 import logging
 from typing import Any, Dict, Optional
 
-from ._view_slots import PAGE_LEVEL_FRAMES, valid_target_id
+from ._view_slots import PAGE_LEVEL_FRAMES, refusal_frame, valid_target_id
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,8 @@ class SSESlotSession:
         self._render_lock = asyncio.Lock()
         #: The POST request of the turn being dispatched for this view.
         self._event_request: Optional[Any] = None
+        #: True once a ``view_refused`` frame has been sent for the view.
+        self.refused = False
 
     # -- what differs for a slot -------------------------------------------
 
@@ -77,6 +79,13 @@ class SSESlotSession:
         kwargs.setdefault("target_id", self.target_id)
         await self._parent.send_error(error, **kwargs)
 
+    async def send_refusal(self, reason: str, to: Optional[str] = None) -> None:
+        """Tell the client this view is refused (see ``SlotConsumer.send_refusal``)."""
+        if self.refused:
+            return
+        self.refused = True
+        self.push(refusal_frame(reason, to))
+
     async def close(self, code: int = 1000) -> None:
         """Close what this view runs on.
 
@@ -85,6 +94,8 @@ class SSESlotSession:
         code is the stream's.
         """
         if code in (4401, 4403):
+            if not self.refused:
+                await self.send_refusal("permission_denied")
             await self._parent._release_slot(self.target_id, reason="view_refused")
             return
         await self._parent.close(code=code)

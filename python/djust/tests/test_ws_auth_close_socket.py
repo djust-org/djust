@@ -266,11 +266,13 @@ async def test_mount_batch_with_login_view_does_not_close_shared_socket():
     )
     resp = await communicator.receive_json_from(timeout=3)
     assert resp.get("type") == "mount_batch", f"got {resp!r}"
-    # Public view survived; login-required view is a navigate[] redirect.
+    # Public view survived; the login-required view is refused on its own
+    # (refused[]: its container shows it, #3252) and navigates nothing.
     survivor_targets = [v.get("target_id") for v in resp.get("views", [])]
-    nav_targets = [n.get("target_id") for n in resp.get("navigate", [])]
+    refused_targets = [n.get("target_id") for n in resp.get("refused", [])]
     assert "pub" in survivor_targets, f"public view dropped: {resp!r}"
-    assert "secret" in nav_targets, f"login view not reported as redirect: {resp!r}"
+    assert "secret" in refused_targets, f"login view not reported as refused: {resp!r}"
+    assert "navigate" not in resp, f"a batched refusal navigated the page: {resp!r}"
     # The shared socket must still be open (no mid-batch close). Probe it
     # deterministically: a closed socket cannot answer a ping. Receiving a
     # pong proves the transport stayed open without racing a wall-clock window.
@@ -332,11 +334,12 @@ async def test_mount_batch_with_objperm_denied_view_does_not_close_shared_socket
     )
     resp = await communicator.receive_json_from(timeout=3)
     assert resp.get("type") == "mount_batch", f"got {resp!r}"
-    # Public view survived; object-perm-denied view is isolated into failed[].
+    # Public view survived; the object-perm-denied view is refused on its own
+    # (refused[], #3252), not reported as a failure.
     survivor_targets = [v.get("target_id") for v in resp.get("views", [])]
-    failed_targets = [f.get("target_id") for f in resp.get("failed", [])]
+    refused_targets = [f.get("target_id") for f in resp.get("refused", [])]
     assert "pub" in survivor_targets, f"public view dropped by a sibling denial: {resp!r}"
-    assert "secret" in failed_targets, f"object-perm-denied view not reported in failed[]: {resp!r}"
+    assert "secret" in refused_targets, f"object-perm-denied view not reported refused: {resp!r}"
     # The denied object's content must not leak into the batch response.
     assert "secret" not in str(resp.get("views", [])), (
         "denied object rendered into a survivor frame"

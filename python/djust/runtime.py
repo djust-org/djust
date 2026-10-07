@@ -2187,8 +2187,11 @@ class WSConsumerTransport:
                 _dj_settings, "LOGIN_URL", "/accounts/login/"
             )
             # Best-effort refusal frames: the event is denied even if the peer is gone.
+            # A view beside the page view is refused in its own container, and
+            # only it goes (#3252); the page view's refusal is the page's.
             with contextlib.suppress(Exception):
-                await consumer.send_json({"type": "navigate", "to": login_url})
+                if not await self.send_view_refusal("login_required", login_url):
+                    await consumer.send_json({"type": "navigate", "to": login_url})
             with contextlib.suppress(Exception):
                 await consumer.close(code=4403)
             return False
@@ -2454,6 +2457,19 @@ class WSConsumerTransport:
         # upstream (verdict frame sent + view_instance cleared).
         if not self.mounting_in_batch:
             await consumer.close(code=4403)
+
+    async def send_view_refusal(self, reason: str, to: Optional[str] = None) -> bool:
+        """Report a refused view beside the page view to its own container (#3252).
+
+        True when this transport runs such a view (the ``view_refused`` frame is
+        sent, addressed to it) and the caller sends nothing else; False for the
+        page view, whose refusal is the page's: an error, or a navigation.
+        """
+        consumer = self._consumer
+        if not (isinstance(getattr(consumer, "target_id", None), str) and consumer.target_id):
+            return False
+        await consumer.send_refusal(reason, to)
+        return True
 
     def hosts_other_views(self) -> bool:
         """Whether this socket has hosted views besides one (#3252).
@@ -2739,10 +2755,12 @@ class SSESessionTransport:
         if not authorized:
             # Best-effort refusal frames: the event is denied even if the stream is gone.
             with contextlib.suppress(Exception):
-                await session.send_error(
-                    "Session is no longer authorized. Please reload the page.",
-                    code="permission_denied",
-                )
+                # A view beside the page view is refused in its own container (#3252).
+                if not await self.send_view_refusal("permission_denied"):
+                    await session.send_error(
+                        "Session is no longer authorized. Please reload the page.",
+                        code="permission_denied",
+                    )
             with contextlib.suppress(Exception):
                 await session.close(code=4403)
             return False
@@ -2770,6 +2788,16 @@ class SSESessionTransport:
         slot_target = getattr(self._session, "target_id", None)
         if isinstance(slot_target, str) and slot_target:
             view._djust_slot_target = slot_target
+
+    async def send_view_refusal(self, reason: str, to: Optional[str] = None) -> bool:
+        """Report a refused view beside the page view to its own container (#3252).
+
+        See :meth:`WSConsumerTransport.send_view_refusal`."""
+        session = self._session
+        if not (isinstance(getattr(session, "target_id", None), str) and session.target_id):
+            return False
+        await session.send_refusal(reason, to)
+        return True
 
     def hosts_other_views(self) -> bool:
         """Whether this session has hosted views besides one (#3252); sticky."""
@@ -3460,7 +3488,8 @@ class ViewRuntime:
 
         hook_redirect = await sync_to_async(run_on_mount_hooks)(view_instance, request, **params)
         if hook_redirect:
-            await self.transport.send({"type": "navigate", "to": hook_redirect})
+            if not await self._refused_view("redirect", hook_redirect):
+                await self.transport.send({"type": "navigate", "to": hook_redirect})
             await self._finalize_mount_auth("hook_redirect")
             self.view_instance = None
             return
@@ -3793,9 +3822,10 @@ class ViewRuntime:
                 "Object-permission denied for %s (runtime mount)",
                 view_instance.__class__.__name__,
             )
-            await self.transport.send_error(
-                "Access denied for this object.", code="permission_denied"
-            )
+            if not await self._refused_view("permission_denied"):
+                await self.transport.send_error(
+                    "Access denied for this object.", code="permission_denied"
+                )
             # ADR-022 Iter 3 Phase 3.3b (#1919, Finding E): the runtime sent the
             # error frame; finalize_mount_auth adds the transport-level
             # ``close(4403)`` the bespoke WS handle_mount performed UNCONDITIONALLY
@@ -6572,6 +6602,19 @@ class ViewRuntime:
             return
         request.tenant = resolved
 
+    async def _refused_view(self, reason: str, to: Optional[str] = None) -> bool:
+        """A view beside the page view is refused: tell its container, not the page (#3252).
+
+        Returns True when the view is one of those and the ``view_refused``
+        frame went out; the caller then skips the page-level refusal (an error
+        frame, or a ``navigate`` that would send the whole page to the login
+        page). False for the page view.
+        """
+        send = getattr(self.transport, "send_view_refusal", None)
+        if send is None:
+            return False
+        return bool(await send(reason, to))
+
     async def _check_auth(self, request: Any) -> Optional[bool]:
         """Run the shared pre-mount security sequence. Returns:
         - ``None`` if mount may proceed.
@@ -6606,9 +6649,10 @@ class ViewRuntime:
         try:
             redirect_url = await sync_to_async(run_pre_mount_auth)(self.view_instance, request)
         except PermissionDenied:
-            await self.transport.send(
-                {"type": "error", "error": "Permission denied", "code": "permission_denied"}
-            )
+            if not await self._refused_view("permission_denied"):
+                await self.transport.send(
+                    {"type": "error", "error": "Permission denied", "code": "permission_denied"}
+                )
             # ADR-022 Iter 3 Phase 3.3a (#1917, Finding E): the runtime already
             # sent the verdict frame; finalize_mount_auth adds ONLY the
             # transport-level close (WS close(4403) — unconditional for a
@@ -6634,7 +6678,8 @@ class ViewRuntime:
             return True
 
         if redirect_url:
-            await self.transport.send({"type": "navigate", "to": redirect_url})
+            if not await self._refused_view("login_required", redirect_url):
+                await self.transport.send({"type": "navigate", "to": redirect_url})
             # Finding E: the redirect verdict gates the WS close on
             # ``not _mounting_in_batch`` (#291 / #1780) — a batched login-required
             # view reports as ``navigate[]`` and closing would kill sibling mounts.
