@@ -152,20 +152,21 @@ class TestCheckStaysArmedForCustomPresets:
     def test_exempted_builtin_pair_is_still_actually_failing(self, settings):
         """The exemption skip is real: an exempted built-in pair must STILL
         measure below AA (it is documented debt, not a passing pair). Uses
-        dracula/dark muted_foreground-on-muted (1.92:1 pre-fix)."""
-        key = ("dracula", "dark", "muted_foreground", "muted")
+        stripe/light muted_foreground-on-muted: its source documents the brand
+        hex ``#697386``, so #2885 left it for the owner."""
+        key = ("stripe", "light", "muted_foreground", "muted")
         assert key in A11Y_EXEMPTIONS, (
-            "expected the documented dracula/dark muted exemption; if the "
+            "expected the documented stripe/light muted exemption; if the "
             "palette was genuinely fixed, update this test to another "
             "documented exemption"
         )
-        assert _ratio("dracula", "dark", "muted_foreground", "muted") < 4.5
+        assert _ratio("stripe", "light", "muted_foreground", "muted") < 4.5
 
-        settings.LIVEVIEW_CONFIG = {"theme": {"preset": "dracula"}}
+        settings.LIVEVIEW_CONFIG = {"theme": {"preset": "stripe"}}
         settings.DJUST_THEMING = {}
         warnings = check_preset_contrast(app_configs=None)
         assert warnings == [], (
-            "exempted dracula pair still warned — the exemption lookup in "
+            "exempted stripe pair still warned — the exemption lookup in "
             "check_preset_contrast is not being consulted"
         )
 
