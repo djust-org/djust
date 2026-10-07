@@ -34,7 +34,7 @@ the tag form.
 Performance note (documented tradeoff): like every Rust custom-tag handler,
 each ``{% theme_X %}`` invocation crosses the PyO3 boundary and runs a Python
 sidecar (~tens of µs + the tag body's own cost). The ``{{ theme_X }}``
-context-string form (#1435) pre-renders once per request and is cheaper when
+context-string form (#1435) renders once per request, on first read, and is cheaper when
 the same tag appears multiple times on a page. The tag form exists for
 customization-with-args and docs parity.
 

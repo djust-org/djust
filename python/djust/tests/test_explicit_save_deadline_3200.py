@@ -118,6 +118,15 @@ async def test_slow_storage_is_withheld_but_not_a_reload(staged, caplog):
     release = threading.Event()
     original = SessionStore.save
     calls = []
+    # Python 3.14's `asyncio.shield` hands the exception of a shielded future
+    # whose waiter is gone to the loop's exception handler, which the `asyncio`
+    # logger writes with the exception's message and traceback. The save's
+    # failure is reported value-free by the runtime instead; nothing may reach
+    # the loop handler.
+    loop_handler_calls = []
+    asyncio.get_running_loop().set_exception_handler(
+        lambda _loop, context: loop_handler_calls.append(context)
+    )
 
     with override_settings(DJUST_EXPLICIT_STATE_SAVE_TIMEOUT=0.05, DEBUG=False):
         SessionStore.save = _first_save_blocks_then_fails(original, release, calls)
@@ -155,6 +164,7 @@ async def test_slow_storage_is_withheld_but_not_a_reload(staged, caplog):
     assert view._force_full_html is False
     assert "STORE_SENTINEL" not in caplog.text
     assert "STORE_SENTINEL" not in json.dumps(transport.sent)
+    assert not loop_handler_calls, [c.get("message") for c in loop_handler_calls]
 
     # And the next ordinary turn is acknowledged as usual.
     transport.sent.clear()

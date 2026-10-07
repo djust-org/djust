@@ -249,12 +249,18 @@ def test_c016_processor_branch_needs_the_admin():
 
 
 def test_init_comment_no_longer_cites_the_fixed_admin_bug_as_a_blocker():
+    """#2872 is fixed and ``djust init`` now writes the djust-first TEMPLATES
+    (#2884), so the settings-block comment cites neither as a reason to skip it."""
     from djust.scaffolding import templates
 
     source = inspect.getsource(templates)
     block = source[source.index("settings block appended by") : source.index("SETTINGS_BLOCK =")]
     assert "breaks the admin" not in block
-    assert "#2872" in block and "fixed" in block
+    assert "#2872" not in block
+    assert "deliberately untouched" not in block
+    namespace = {"TEMPLATES": [{"BACKEND": "django.template.backends.django.DjangoTemplates"}]}
+    exec(templates.TEMPLATES_BLOCK, namespace)  # noqa: S102 — trusted template
+    assert namespace["TEMPLATES"][0]["BACKEND"] == ("djust.template_backend.DjustTemplateBackend")
 
 
 # --- #2984 ----------------------------------------------------------------------

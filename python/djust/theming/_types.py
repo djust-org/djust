@@ -202,6 +202,12 @@ def _solve_destructive_text(
     return (h, s, best)
 
 
+#: The same solve for any FILL colour that is also painted as text (#2885):
+#: ``primary``, ``brand``, ``info``, ``success`` and ``warning``. The parameter
+#: is named ``destructive`` above only because it came first.
+_solve_text_colour = _solve_destructive_text
+
+
 @dataclass
 class ThemeTokens:
     """
@@ -336,11 +342,47 @@ class ThemeTokens:
         and ``destructive`` stays the fill. A preset whose ``destructive``
         already passes keeps it exactly. Read-only: no preset sets it.
         """
-        d = self.destructive
-        h, s, lightness = _solve_destructive_text(
-            (d.h, d.s, d.lightness), self.background.to_rgb(), self.card.to_rgb()
+        return self._as_text(self.destructive)
+
+    def _as_text(self, fill: ColorScale) -> ColorScale:
+        """``fill`` moved ONLY in lightness until it reads as text on the page, on
+        a card and on its own 10% and 15% washes; unchanged when it already does."""
+        h, s, lightness = _solve_text_colour(
+            (fill.h, fill.s, fill.lightness), self.background.to_rgb(), self.card.to_rgb()
         )
         return ColorScale(h, s, lightness)
+
+    # Derived text colours (#2885). Like ``destructive_text`` they are not tokens:
+    # no preset sets them, they are solved from the fill, and the fill itself is
+    # never touched. Emitted as ``--primary-text``, ``--brand-text``,
+    # ``--info-text``, ``--success-text`` and ``--warning-text``. Everything that
+    # paints these colours AS TEXT (links, ``.text-primary``, alert and badge
+    # text, status text) reads these; fills, borders and backgrounds keep the
+    # fill token.
+    @property
+    def primary_text(self) -> ColorScale:
+        """``primary`` as TEXT: the fill unchanged when it reads, else lighter or darker."""
+        return self._as_text(self.primary)
+
+    @property
+    def brand_text(self) -> ColorScale:
+        """``brand`` as TEXT (see ``primary_text``)."""
+        return self._as_text(self.brand)
+
+    @property
+    def info_text(self) -> ColorScale:
+        """``info`` as TEXT (see ``primary_text``)."""
+        return self._as_text(self.info)
+
+    @property
+    def success_text(self) -> ColorScale:
+        """``success`` as TEXT (see ``primary_text``)."""
+        return self._as_text(self.success)
+
+    @property
+    def warning_text(self) -> ColorScale:
+        """``warning`` as TEXT (see ``primary_text``)."""
+        return self._as_text(self.warning)
 
 
 VALID_SURFACE_TREATMENT_STYLES: "FrozenSet[str]" = frozenset({"glass", "gradient", "noise"})

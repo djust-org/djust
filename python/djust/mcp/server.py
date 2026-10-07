@@ -1101,7 +1101,11 @@ def create_server() -> "FastMCP":
             if not isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
                 continue
             # Only check mount() and handler-like methods
-            if node.name not in ("mount", "connected") and not handler_pattern.match(node.name):
+            if node.name not in (
+                "mount",
+                "connected",
+                "disconnected",
+            ) and not handler_pattern.match(node.name):
                 continue
             for stmt in _ast.walk(node):
                 if isinstance(stmt, _ast.Assign):

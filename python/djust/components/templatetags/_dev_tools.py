@@ -87,6 +87,7 @@ class TerminalNode(template.Node):
         show_line_numbers = kw.get("show_line_numbers", False)
         wrap = kw.get("wrap", False)
         custom_class = kw.get("class", "")
+        max_lines = kw.get("max_lines", 0)
 
         e_class = conditional_escape(str(custom_class))
 
@@ -129,8 +130,19 @@ class TerminalNode(template.Node):
             e_stream = conditional_escape(str(stream_event))
             stream_attr = f' data-stream-event="{e_stream}"'
 
+        # What the Terminal hook needs to render and trim streamed lines like these.
+        hook_attrs = ""
+        if show_line_numbers:
+            hook_attrs += ' data-line-numbers="true"'
+        try:
+            max_lines = int(max_lines)
+        except (ValueError, TypeError):
+            max_lines = 0
+        if max_lines > 0:
+            hook_attrs += f' data-max-lines="{max_lines}"'
+
         return _safe(
-            f'<div class="{class_str}" dj-hook="Terminal"{stream_attr}>'
+            f'<div class="{class_str}" dj-hook="Terminal"{stream_attr}{hook_attrs}>'
             f"{title_html}"
             f'<div class="dj-terminal__body">{"".join(lines_html)}</div>'
             f"</div>"
@@ -459,10 +471,18 @@ class LogViewerNode(template.Node):
             stream_attr = f' data-stream-event="{e_stream}"'
 
         scroll_attr = ' data-auto-scroll="true"' if auto_scroll else ""
+        # What the LogViewer hook needs to append streamed lines like these.
+        hook_attrs = ""
+        if show_line_numbers:
+            hook_attrs += ' data-line-numbers="true"'
+        if max_lines and max_lines > 0:
+            hook_attrs += f' data-max-lines="{int(max_lines)}"'
+        if filter_level:
+            hook_attrs += f' data-filter-level="{conditional_escape(str(filter_level).lower())}"'
 
         return _safe(
             f'<div class="{class_str}" dj-hook="LogViewer"'
-            f'{stream_attr}{scroll_attr} role="log" aria-live="polite">'
+            f'{stream_attr}{scroll_attr}{hook_attrs} role="log" aria-live="polite">'
             f'<div class="dj-log-viewer__body">{"".join(lines_html)}</div>'
             f"</div>"
         )

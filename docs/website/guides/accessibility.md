@@ -277,7 +277,11 @@ While a `role="dialog"` modal is on the page:
 - **`Esc` closes the modal.** It dispatches the modal's configured close event
   to the server (the same event the backdrop and close button fire), so the
   server's `open` state stays in sync — closing client-side only would desync
-  it.
+  it. The close control it uses is the stock modal's `.dj-modal__close`, or any
+  `dj-click` control you mark `data-dj-close` in your own `role="dialog"`
+  markup; no other control is ever clicked on `Esc` (a dialog with `dj-click` controls but no explicit close control logs a console warning once, instead of pressing one). A handler closer to the
+  key (a hook that handles `Esc` or `Tab` itself and calls `preventDefault`)
+  takes `Tab` or `Esc` first, and the dialog layer leaves it alone. Escape presses the close control with a real click, so the event carries that control's own `data-value` and arguments. Every dialog djust ships (`Modal`, `ImageLightbox`, `Tour`, `{% theme_modal %}`) carries the marker; a `slot_close` replacement for the theming modal needs `data-dj-close` and a `dj-click` of its own.
 - **Nested dialogs** are handled with a stack: the focus trap and `Esc` always
   act on the top-most (most recently opened) dialog, and `Esc` pops one level.
 
@@ -443,6 +447,45 @@ which pass page and card today, and those surfaces are often mid-tone, where one
 colour cannot clear all of them.
 Until that is done, put error text on the page or a card, or override
 `--destructive-text` for the surface.
+
+### Primary and status colours as text use `--primary-text`, `--info-text`, `--success-text`, `--warning-text`
+
+`--primary`, `--brand`, `--info`, `--success` and `--warning` are **fills** too: they sit under a
+`--*-foreground` label on buttons and badges. Presets choose them for that job, so many
+are unreadable as text: a bright orange `primary` is 2.7:1 on a white page, a pale
+yellow `warning` is under 2:1, and a deep blue `info` vanishes on a dark page.
+Everything djust paints with these colours **as text** reads a derived token instead,
+exactly as error text reads `--destructive-text` (above): `.text-primary`,
+`.text-success`, `.text-warning`, `.text-info`, `.btn-link`, `.breadcrumb-item a`, the
+text and icon of the info, success and warning alert, toast, badge and tag variants,
+status and trend text, and the auth links.
+
+Each is the fill's hue and saturation with only the **lightness** moved, to the nearest
+value that reaches 4.5:1 on the page, on a card and on the fill's own 10% and 15%
+washes. A fill that already reads is returned unchanged, so those presets render exactly
+as before, and **the fill tokens never move**: `--primary`, `--success`, ... still paint
+backgrounds, borders, dots and focus rings (the status dots keep the fill), and their
+labels are untouched. One thing follows the text colour on purpose: anything the CSS draws
+from `currentColor` on a text element, such as a link's underline or an inline icon's stroke,
+takes the text colour of that element. A component that draws a fill from `currentColor`
+must keep its `color` on the fill token (as `.dj-status-dot-*` does). No preset
+sets the text colours; `djust.theming` computes them for each mode and emits them with
+the other variables (`ThemeTokens.primary_text` in Python, `--primary-text` in CSS,
+`text-primary-text` in Tailwind). The same solver derives all six (`destructive` too).
+
+Custom CSS should read them with the fallback, and keep the fill for fills:
+
+```css
+.my-link { color: hsl(var(--primary-text, var(--primary))); }
+.my-save-button { background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); }
+```
+
+If you override a fill while the generator is active, override its `-text` colour too
+(see the `--destructive` note above: CSS cannot recompute a contrast-solved colour).
+`W001` measures every derived text colour against the page, the card and (for the status
+colours) the alert tint, and the all-presets gate requires every shipped preset to pass
+in both modes with no exemption. The same limit applies as for `--destructive-text`:
+they are not solved against `muted`, `accent` or `secondary` surfaces.
 
 This validation runs over *theme* color tokens — it does not look at your
 component markup, which is what the `Y` checks and the built-in component ARIA

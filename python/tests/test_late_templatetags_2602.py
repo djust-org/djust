@@ -19,8 +19,10 @@ process-global tag registries between tests or workers.
 
 from __future__ import annotations
 
+import threading
 import time
 import uuid
+from pathlib import Path
 
 import pytest
 from django.conf import settings
@@ -77,12 +79,86 @@ def test_load_sees_a_templatetags_module_added_after_the_cache_was_warmed(late_a
     assert rendered == "hello world", rendered
 
 
-@pytest.mark.django_db
-def test_hot_reload_change_dispatcher_drops_the_library_cache(late_app, tmp_path):
-    """The REAL watcher: ``enable_hot_reload`` → watchdog observer → debounced
-    ``on_file_change`` → ``invalidate_installed_cache``. Not a unit call on
-    the hook — the file lands on disk and the observer has to notice it."""
+class _WatcherProbe:
+    """What the real watcher did, seen from the test.
+
+    ``events`` are the file events the observer delivered to the handler;
+    ``drops`` are the dispatcher's calls to ``invalidate_installed_cache``, each
+    with whether the cache was gone right after that call. The test waits on
+    these, not on a fixed sleep and a poll of ``_installed_cache`` (#3359).
+    """
+
+    def __init__(self):
+        self.events = []  # (monotonic time, file name)
+        self.drops = []  # (monotonic time, cache dropped by the call)
+        self._cond = threading.Condition()
+
+    def record_event(self, path):
+        with self._cond:
+            self.events.append((time.monotonic(), Path(path).name))
+            self._cond.notify_all()
+
+    def record_drop(self, dropped):
+        with self._cond:
+            self.drops.append((time.monotonic(), dropped))
+            self._cond.notify_all()
+
+    def wait_for(self, predicate, timeout):
+        deadline = time.monotonic() + timeout
+        with self._cond:
+            while not predicate():
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    return False
+                self._cond.wait(left)
+        return True
+
+    def event_time(self, name):
+        for t, n in self.events:
+            if n == name:
+                return t
+        return None
+
+    def drops_after(self, t):
+        return [dropped for when, dropped in self.drops if when > t]
+
+
+@pytest.fixture
+def watcher_probe(monkeypatch):
+    """Hooks that record the watcher's events and the dispatcher's cache drops.
+
+    Both are call-through: the real handler and the real
+    ``invalidate_installed_cache`` still run.
+    """
     pytest.importorskip("watchdog")
+    from djust.dev_server import DjustFileChangeHandler
+
+    probe = _WatcherProbe()
+    real_schedule = DjustFileChangeHandler.schedule_reload
+    real_invalidate = template_libraries.invalidate_installed_cache
+
+    def schedule_reload(self, path):
+        probe.record_event(path)
+        return real_schedule(self, path)
+
+    def invalidate():
+        real_invalidate()
+        probe.record_drop(template_libraries._installed_cache is None)
+
+    monkeypatch.setattr(DjustFileChangeHandler, "schedule_reload", schedule_reload)
+    monkeypatch.setattr(template_libraries, "invalidate_installed_cache", invalidate)
+    return probe
+
+
+def _run_dispatcher_against_a_new_module(late_app, tmp_path, probe):
+    """Start the real watcher on ``tmp_path``, add a ``templatetags`` module, and
+    return the dispatcher's cache drops that this module's event caused.
+
+    Waits on the watcher's own signals, not on a fixed sleep: the observer's
+    start-up latency (FSEvents on macOS, a loaded machine) is not something the
+    test can know, and a file written before the observer is live is never
+    reported (the original test failed that way when the observer started late).
+    """
     from djust import enable_hot_reload
     from djust.config import config
     from djust.dev_server import hot_reload_server
@@ -100,20 +176,50 @@ def test_hot_reload_change_dispatcher_drops_the_library_cache(late_app, tmp_path
             enable_hot_reload()
             assert hot_reload_server.is_running(), "enable_hot_reload must start the watcher"
 
+            # The observer starts asynchronously (FSEvents on macOS, an inotify
+            # thread elsewhere): a file written before it is live is never
+            # reported. Write a throwaway file until the observer reports one;
+            # that is the only proof it is watching, a sleep is a guess.
+            for attempt in range(30):
+                ready = "ready_%d_%s.py" % (attempt, uuid.uuid4().hex[:6])
+                (tmp_path / ready).write_text("")
+                if probe.wait_for(lambda: probe.event_time(ready) is not None, 2):
+                    break
+            else:
+                pytest.fail(
+                    "the hot-reload watcher never reported a file written under %s" % tmp_path
+                )
+
             # Warm the cache, then add a module under templatetags/.
             template_libraries._library_map()
             assert template_libraries._installed_cache is not None
-            time.sleep(0.3)  # let the observer settle on macOS FSEvents
             new_module = pkg / "templatetags" / ("late_new_%s.py" % uuid.uuid4().hex[:6])
             new_module.write_text(_TAG_SOURCE)
 
-            deadline = time.monotonic() + 15
-            while time.monotonic() < deadline and template_libraries._installed_cache is not None:
-                time.sleep(0.1)
-            assert template_libraries._installed_cache is None, (
-                "the hot-reload dispatcher must drop _installed_cache when a .py "
-                "file appears under a watched directory (#2602)"
+            # The observer delivers the new file's event ...
+            assert probe.wait_for(lambda: probe.event_time(new_module.name) is not None, 60), (
+                "the watcher never reported the new module (%s)" % new_module.name
             )
+            seen = probe.event_time(new_module.name)
+            # ... and the debounced dispatcher runs after it (it waits 0.5 s after
+            # the LAST event, so a call after this event is this burst's call).
+            assert probe.wait_for(lambda: bool(probe.drops_after(seen)), 60), (
+                "the hot-reload dispatcher did not call invalidate_installed_cache "
+                "after a .py file appeared under a watched directory (#2602)"
+            )
+            return probe.drops_after(seen)
     finally:
         hot_reload_server.stop()
         config.set("hot_reload_watch_dirs", prev_dirs)
+
+
+@pytest.mark.django_db
+def test_hot_reload_change_dispatcher_drops_the_library_cache(late_app, tmp_path, watcher_probe):
+    """The REAL watcher: ``enable_hot_reload`` → watchdog observer → debounced
+    ``on_file_change`` → ``invalidate_installed_cache``. Not a unit call on
+    the hook — the file lands on disk and the observer has to notice it."""
+    drops = _run_dispatcher_against_a_new_module(late_app, tmp_path, watcher_probe)
+    assert drops and all(drops), (
+        "the hot-reload dispatcher must drop _installed_cache when a .py "
+        "file appears under a watched directory (#2602)"
+    )

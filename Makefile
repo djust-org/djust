@@ -280,7 +280,7 @@ gen-vdom-fixtures: ## Regenerate client-faithful VDOM diff fixtures (CI gates fr
 	@$(PYTHON) scripts/gen_vdom_diff_fixtures.py
 
 .PHONY: test
-test: ## Run all tests (Python + JavaScript + Rust) in parallel
+test: ## Full integration gate: Python + JavaScript + Rust in parallel
 	@echo "$(GREEN)Running all tests in parallel...$(NC)"
 	@PY_EXIT=0; RS_EXIT=0; JS_EXIT=0; \
 	PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/ -n auto -q > /tmp/djust-test-py.log 2>&1 & PY_PID=$$!; \
@@ -305,6 +305,15 @@ test: ## Run all tests (Python + JavaScript + Rust) in parallel
 
 .PHONY: test-sequential
 test-sequential: test-python test-js test-rust ## Run all tests sequentially (fallback)
+
+# The same selector/fallback wrapper as the Python pre-push hook. This target
+# is an edit-loop convenience, never a replacement for test/CI/release gates.
+.PHONY: test-selected
+test-selected: ## Run affected Python tests (FROM/TO optional; unknown/shared changes run full)
+	@PRE_COMMIT_FROM_REF='$(FROM)' PRE_COMMIT_TO_REF='$(TO)' bash scripts/pre-push-pytest.sh
+
+.PHONY: test-integration
+test-integration: test ## Run the unchanged full integration gate before declaring a milestone ready
 
 .PHONY: test-rust
 test-rust: ## Run Rust tests

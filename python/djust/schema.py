@@ -56,7 +56,13 @@ DIRECTIVES: List[Dict[str, Any]] = [
     {
         "name": "dj-input",
         "category": "event",
-        "description": "Send event on every keystroke (auto-debounced 300ms for text, throttled for range/number)",
+        "description": "Send event on the input event. Text-like fields (text, search, email, url, tel, "
+        "password, textarea) are debounced 300ms by default, so a burst of typing sends one event; "
+        "range and color are throttled 150ms, number 100ms; checkbox, radio and select send "
+        "immediately. Any other input type (date, time, datetime-local, month, week, file, "
+        "custom elements) falls back to a 300ms debounce. "
+        'dj-debounce / dj-throttle override the default, and dj-debounce="0" '
+        "sends an event for every keystroke.",
         "value": "handler_name",
         "dom_event": "input",
         "example": '<input dj-input="search" name="query">',
@@ -763,6 +769,15 @@ LIFECYCLE_METHODS: List[Dict[str, Any]] = [
         "required": False,
     },
     {
+        "name": "connected",
+        "signature": "def connected(self):",
+        "description": "Called once per live (WebSocket or SSE) mount, after mount() or a "
+        "state restore and handle_params() and before the first render. Never called on "
+        "the HTTP render or the HTTP POST fallback. Raising fails the mount.",
+        "phase": "initialization",
+        "required": False,
+    },
+    {
         "name": "get_context_data",
         "signature": "def get_context_data(self, **kwargs) -> dict:",
         "description": "Return dict of template context variables. By default, all public "
@@ -786,14 +801,22 @@ LIFECYCLE_METHODS: List[Dict[str, Any]] = [
         "phase": "lifecycle",
         "required": False,
     },
+    {
+        "name": "disconnected",
+        "signature": "def disconnected(self):",
+        "description": "Called once for each view that got connected(), when its live mount "
+        "ends: the socket or SSE stream closed, or the view was replaced (live_redirect, a "
+        "second mount), unmounted or revoked. Runs on a worker thread; the socket is gone, so "
+        "nothing it queues is sent. Best effort: not called if the process dies. Exceptions "
+        "are logged.",
+        "phase": "lifecycle",
+        "required": False,
+    },
 ]
-# No ``unmount`` / ``connected`` / ``disconnected`` entries: djust 1.2 never
-# calls a LiveView method by those names (the ``connected()`` /
-# ``disconnected()`` callbacks that do exist are client-side ``dj-hook``
-# callbacks). Listing them told tools and AI assistants to implement hooks
-# that never fire (#3007). Detect the WebSocket mount with
-# ``getattr(self, "_websocket_session_id", None)``; real server-side hooks are
-# planned for 1.3.
+# No ``unmount`` entry: djust never calls a LiveView method by that name.
+# ``connected`` and ``disconnected`` are the server-side hooks of #3007 (the
+# callbacks of the same names on a ``dj-hook`` object are the client-side
+# ones). The contract is in the LiveView API reference, "Lifecycle contract".
 
 #: Class-level configuration attributes
 CLASS_ATTRIBUTES: List[Dict[str, Any]] = [
@@ -860,6 +883,24 @@ DECORATORS: List[Dict[str, Any]] = [
         "usage": [
             "@event_handler\ndef search(self, value: str = '', **kwargs):",
             "@event_handler(description='Update quantity')\ndef update_item(self, item_id: int, quantity: int, **kwargs):",
+        ],
+    },
+    {
+        "name": "@push_handler",
+        "import": "from djust.decorators import push_handler",
+        "description": "Mark a method that ONLY server push may call "
+        "(push_to_view(..., handler='name'), server_push). A browser event "
+        "naming it is refused in every event_security mode, as if the method "
+        "did not exist. Not an event handler. The marker is INHERITED by overrides: "
+        "an unmarked override of a marked method stays push-only (djust.V021 "
+        "reports it). TypeError with @event_handler, @server_function, "
+        "@permission_required, @rate_limit or any client-side decorator "
+        "(debounce, throttle, cache, ...): server push enforces none of them, "
+        "so check authorization in the handler. May sit above or below "
+        "@staticmethod/@classmethod; put it topmost among ordinary decorators.",
+        "params": {},
+        "usage": [
+            "@push_handler\ndef refresh_room(self, room: str = '', **kwargs):",
         ],
     },
     {
@@ -1110,7 +1151,9 @@ CONVENTIONS = {
         "Use @event_handler decorator for validation and metadata. Methods named "
         "on_*, toggle_*, update_*, etc. without @event_handler trigger "
         "a system check warning (djust.V004). Undecorated handle_* methods are "
-        "not flagged: server push may call them, browsers cannot.",
+        "not flagged: server push may call them, and under the default strict "
+        "event_security browsers cannot. For a handler only server push may call, "
+        "in every event_security mode, use @push_handler.",
     },
 }
 
@@ -1488,8 +1531,11 @@ BEST_PRACTICES = {
             "id": 6,
             "problem": "Search input without debouncing",
             "why": (
-                "Every keystroke sends a WebSocket message and triggers a full re-render. "
-                "This floods the server and causes poor UX with flickering."
+                "dj-input already debounces text fields 300ms by default, so a plain search box "
+                "sends one event per typing pause. The problem shows when that is turned off "
+                '(dj-debounce="0") or when each event is expensive enough that 300ms is too '
+                "short: every keystroke or short pause then sends a WebSocket message and a "
+                "full re-render, which floods the server and causes poor UX with flickering."
             ),
             "solution": (
                 "Apply @debounce(wait=0.5) to the handler: the client collapses "

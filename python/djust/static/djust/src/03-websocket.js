@@ -200,6 +200,10 @@ function _warnDeadScripts(root) {
 }
 
 function storeSignedSnapshot(data, primaryViewPath) {
+    // A view mounted beside the page view (#3252) shares the page's route and
+    // its view class: its frames must neither replace nor revoke the page
+    // view's token. The server ships none for it either.
+    if (typeof data.target_id === 'string' && data.target_id) return;
     // Mounts, successful primary-view event acknowledgements and primary-view
     // server-turn frames carry navigation state. Child frames cannot replace
     // it, and error frames may only revoke it.
@@ -235,11 +239,21 @@ function storeSignedSnapshot(data, primaryViewPath) {
 // mount-context state (per-connection values, and ADR-034's per-instance
 // component identities) reaches the page. Shared by the WebSocket and SSE
 // mount paths (#1646: one path, not two).
-function _morphPrerenderedMount(container, html, formRecoverySnapshot) {
+function _morphPrerenderedMount(container, html, formRecoverySnapshot, restoreDraft) {
     const temp = document.createElement('div');
     // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
     temp.innerHTML = html;
     morphChildren(container, temp);
+    // The morph resets form fields to the server's values; put a saved draft
+    // back into this container before form recovery, which restores what the
+    // user had typed (#3351). Only a FIRST mount does: a reconnect's mount
+    // keeps the server's values, and recovery brings back what was typed.
+    // `restoreDraft` is the caller's answer for this mount (a view slot knows
+    // whether it mounted before); without one, the page view's own flag, which
+    // is set for exactly the page mount a reconnect makes.
+    if (restoreDraft === undefined ? !window.djust._isReconnect : restoreDraft) {
+        restoreDraftFields(container);
+    }
     if (formRecoverySnapshot) window.djust._restoreFormRecovery(formRecoverySnapshot);
     // #1813 (a): embedded-view wrappers carry NO `id`, so morphChildren can
     // only align them positionally. Reconcile them by the stable
@@ -1135,6 +1149,9 @@ class LiveViewWebSocket {
                         error: data.error,
                         // Stable machine-readable code (#3319), e.g. 'permission_denied'.
                         code: typeof data.code === 'string' ? data.code : null,
+                        transient: data.transient === true,
+                        view: typeof data.view === 'string' ? data.view : (this.primaryViewPath || null),
+                        target_id: typeof data.target_id === 'string' ? data.target_id : null,
                         traceback: data.traceback || null,
                         event: data.event || this.lastEventName || null,
                         validation_details: data.validation_details || null

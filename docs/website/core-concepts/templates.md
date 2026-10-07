@@ -138,6 +138,68 @@ All 57 Django built-in filters are supported. Some notes:
 - HTML-producing filters (`urlize`, `urlizetrunc`, `unordered_list`) are in the Rust engine's `safe_output_filters` whitelist — they're automatically marked as safe without requiring `|safe`. They don't need `|safe`; adding it is redundant, since the filter already escaped its input. *(Standard Django achieves this via `SafeData` type-checking; djust uses an explicit whitelist instead.)*
 - `|safe` works as expected for pre-escaped HTML strings
 
+### `striptags` and the Python version
+
+djust's `striptags` is a port of Django's `strip_tags` over CPython's `html.parser` tokenizer, **pinned to one parser behaviour** so a template renders the same on every host. Django's own `strip_tags` runs whatever `html.parser` the interpreter ships, and CPython has changed that parser inside patch releases. On ordinary markup the two agree. They differ only on malformed or adversarial input (unterminated references, abruptly closed comments), and the figures below are measured over the repository's 4,000-value adversarial corpus, not over real-world HTML.
+
+| CPython | corpus values where djust differs from Django | share |
+|---|---|---|
+| 3.12.13, 3.13.7 | 0 | 0% |
+| 3.12.9 | 992 | 24.8% |
+| 3.14.6 | 231 | 5.8% |
+| 3.13.15, 3.14.7 | 239 | 6.0% |
+
+- **Before 3.12.12.** The parser predates the HTML5 alignment rewrite on 3.12.9 through 3.12.11 (3.12.9 is measured here) and, on the older lines, up to 3.11.13 and 3.10.18; djust differs on a quarter of the corpus. 3.12.12, 3.11.14 and 3.10.19 carry the rewritten parser. Cells where Django itself raises are left out of these counts (86 on 3.12.9, where the old parser fails on malformed input; 2 on every other measured release, the depth-guard values below).
+- **`&` and `&#` at the end of the input.** CPython 3.13.10 and 3.14.1 changed how an unterminated character reference is closed (231 of the 239 values above). djust keeps the earlier behaviour, so Django on those releases (measured through 3.14.7, the latest tested) returns, for example:
+
+| input | djust (and Django 3.12.12 up to the change) | Django on 3.13.10+ / 3.14.1+ |
+|---|---|---|
+| `'<i>&a'` | `'a'` | `'&a;'` |
+| `'<b>&#65'` | `'&#65'` | `'&#65;'` |
+| `'&#x<br>'` | `'&#x<br>'` | `'&#x'` |
+| `'&#xZZ<i>'` | `'&#xZZ<i>'` | `'&#xZZ'` |
+
+- **Abruptly closed empty comments.** CPython 3.13.15 and 3.14.7 end `<!-->` and `<!--->` at their first `>`, as HTML5 does. Before, the comment ran on to a later `-->`. These are the other **eight** of the 239 values. djust keeps the earlier rule, so it differs from Django on those two releases (and, as far as measured, no later one) on exactly these inputs (shown before autoescaping, as `strip_tags` returns them):
+
+| input | djust (and Django 3.12.12 up to the change) | Django on 3.13.15+ / 3.14.7+ |
+|---|---|---|
+| `'<!--->-->'` | `''` | `'-->'` |
+| `'<!--->a<!--->'` | `''` | `'a'` |
+| `'<!---><?pi>&#-->'` | `''` | `'&#-->'` |
+| `'<!--><br/><0>--><br/>'` | `''` | `'<0>-->'` |
+| `'price<!--->< b><i><!--a--!>'` | `'price'` | `'price< b>'` |
+| `'<script><!--->&#65<<>><!-- c --></>'` | `''` | `'&#65;<<>>'` |
+| `'<!--->< b><b x=\t<!DOCTYPE html><!--->'` | `''` | `'< b>'` |
+| `'<script>a<b</script><<b>script><!--->&a b<!-- c --><!--->'` | `'a'` | `'a&a; b'` |
+
+- **The depth guard.** Where Django raises `SuspiciousOperation` (an input that needs more than 50 stripping passes, or an unterminated tag of 1,002 or more characters (`<`, a letter, then 1,000 or more characters before any `>`) that contains 50 or more `<`), djust renders an empty string. Empty is the one refusal value that is safe in every context the output reaches.
+
+djust does not follow the newer parser on purpose. A template filter whose output changes when the base image is bumped is a worse property than a documented, fixed difference, and the pinned behaviour is covered by a differential test against Django on every supported interpreter. Following the newer rule is a deliberate change to `htmlparser.rs`, not something the running interpreter decides.
+
+`striptags` is not a sanitizer in either engine: Django documents that its output is not guaranteed safe. Keep autoescape on and do not pipe the result through `|safe`.
+
+**If you need Django's exact result on the running interpreter**, call Django's own function from a project filter under a different name, so the same template behaves the same in both engines (Django's engine lets a loaded filter shadow a built-in of the same name, djust's Rust engine does not), and use that where the difference matters:
+
+```python
+# apps/shared/templatetags/django_strip.py
+from django import template
+from django.utils.html import strip_tags
+
+register = template.Library()
+
+
+@register.filter(name="django_striptags", is_safe=True)
+def django_striptags(value):
+    return strip_tags(value)
+```
+
+```html
+{% load django_strip %}
+{{ comment|django_striptags }}
+```
+
+That output follows the interpreter, so it changes when the interpreter's parser does; computing the value in the view with `strip_tags` has the same property.
+
 ### Custom filters (`@register.filter`)
 
 Project-defined custom filters work in the Rust render path the same way they work in Django's Python renderer. djust walks each Django ``Library`` registered by your apps' ``templatetags/`` modules at the first LiveView render and forwards every filter callable to the Rust engine. Both ``filter.is_safe`` and ``filter.needs_autoescape`` are honoured.

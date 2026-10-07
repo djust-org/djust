@@ -1,12 +1,12 @@
 """#3252 / #3104 over SSE: an embedded child's event reaches the child, and a
-frame addressed to a view mounted beside the page view is refused.
+frame addressed to a view that is not mounted is refused.
 
-An SSE session hosts one view, like the HTTP fallback. A ``{% live_render %}``
-child's event already ran on the child over SSE (the shared runtime routes by
-``view_id``); this pins it as the counterpart of the HTTP routing (#3104). A
-lazy or batched view lives on a WebSocket: a frame that names one with
-``target_id`` is refused with ``code: "view_unavailable"``, because answering it
-with the session's only view would run the event on the wrong view.
+A ``{% live_render %}`` child's event runs on the child over SSE (the shared
+runtime routes by ``view_id``); this pins it as the counterpart of the HTTP
+routing (#3104). A frame that names a ``target_id`` with no view mounted there
+is refused with ``code: "view_unavailable"``, because answering it with the
+page view would run the event on the wrong view. The views that ARE mounted
+beside the page view are pinned in ``test_sse_view_slots_3252.py``.
 
 Driven through the real stream and message views, as the browser does.
 """
@@ -157,11 +157,13 @@ async def test_a_childs_event_runs_on_the_child_over_sse():
     "frame",
     [
         {"type": "event", "event": "click", "params": {}, "ref": 7, "target_id": "lazy-1"},
-        {"type": "mount", "view": MOD + ".Kid", "url": "/page/", "target_id": "lazy-1"},
         {"type": "url_change", "params": {}, "uri": "/page/", "target_id": "lazy-1"},
+        {"type": "request_html", "target_id": "lazy-1"},
     ],
 )
-async def test_a_frame_for_a_view_beside_the_page_view_is_refused_not_run_on_the_page(frame):
+async def test_a_frame_for_an_address_with_no_view_is_refused_not_run_on_the_page(frame):
+    """Nothing is mounted at ``lazy-1``: the frame is refused (``view_unavailable``),
+    never answered by the page view, which would run the event on the wrong view."""
     session, key, stream = await _open()
     try:
         page = session.view_instance

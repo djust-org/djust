@@ -83,6 +83,7 @@ How to build specific features.
 | **[Migrating from django-tenants](guides/migrating-from-django-tenants.md)** | Schema-per-tenant → row-level `djust.tenants`: data migration, code/settings diffs, rollout, isolation canary |
 | **[External Services](guides/services.md)**    | AWS, REST APIs, Redis integration patterns                |
 | **[MCP Server](guides/mcp-server.md)**         | AI assistant integration via Model Context Protocol       |
+| **[AI Guardrails](guides/ai-guardrails.md)**   | The checks and tooling that catch an AI assistant's mistakes: what to run, when, and what they miss |
 | **[HTTP API](guides/http-api.md)**             | Auto-generated HTTP endpoints + OpenAPI from `@event_handler` (ADR-008) |
 | **[Server Functions](guides/server-functions.md)** | `@server_function` + `djust.call()` — same-origin browser RPC without re-render (v0.7.0) |
 | **[Admin Widgets (v0.7.0)](guides/admin-widgets.md)** | Per-page LiveView slots on `DjustModelAdmin` + `@admin_action_with_progress` for bulk-action progress pages |

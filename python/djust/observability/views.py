@@ -507,7 +507,10 @@ def eval_handler(request: HttpRequest) -> HttpResponse:
         )
 
     handler = getattr(view, handler_name, None)
-    if handler is None or not callable(handler):
+    from djust.decorators import is_push_only
+
+    # A @push_handler method answers like a missing one (#3002).
+    if handler is None or not callable(handler) or is_push_only(view, handler_name, handler):
         return JsonResponse(
             {
                 "error": f"view '{view.__class__.__name__}' has no callable '{handler_name}'",

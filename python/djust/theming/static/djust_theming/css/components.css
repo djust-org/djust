@@ -74,19 +74,19 @@
 
 .alert-info {
     background-color: hsl(var(--info) / 0.1);
-    color: hsl(var(--info));
+    color: hsl(var(--info-text, var(--info)));
     border-color: hsl(var(--info) / 0.2);
 }
 
 .alert-success {
     background-color: hsl(var(--success) / 0.1);
-    color: hsl(var(--success));
+    color: hsl(var(--success-text, var(--success)));
     border-color: hsl(var(--success) / 0.2);
 }
 
 .alert-warning {
     background-color: hsl(var(--warning) / 0.1);
-    color: hsl(var(--warning));
+    color: hsl(var(--warning-text, var(--warning)));
     border-color: hsl(var(--warning) / 0.2);
 }
 
@@ -230,7 +230,7 @@
 
 .btn-link {
     background-color: transparent;
-    color: hsl(var(--primary));
+    color: hsl(var(--primary-text, var(--primary)));
     text-decoration: underline;
     text-underline-offset: 4px;
 }
@@ -950,13 +950,13 @@
 
 .toast-success {
     background-color: hsl(var(--success) / 0.1);
-    color: hsl(var(--success));
+    color: hsl(var(--success-text, var(--success)));
     border-color: hsl(var(--success) / 0.2);
 }
 
 .toast-warning {
     background-color: hsl(var(--warning) / 0.1);
-    color: hsl(var(--warning));
+    color: hsl(var(--warning-text, var(--warning)));
     border-color: hsl(var(--warning) / 0.2);
 }
 
@@ -1410,7 +1410,7 @@
     transition: background 0.1s;
 }
 .tp-select-option:hover { background: hsl(var(--accent, var(--muted))); }
-.tp-select-option.active { color: hsl(var(--primary)); font-weight: 600; }
+.tp-select-option.active { color: hsl(var(--primary-text, var(--primary))); font-weight: 600; }
 
 .theme-panel-customize-toggle {
     box-sizing: border-box;
@@ -1462,8 +1462,8 @@ label .text-danger, .form-label .text-danger { color: hsl(var(--destructive-text
 @media (max-width: 480px) { .stat-cards-row { grid-template-columns: 1fr; } }
 
 .stat-card { background: hsl(var(--card)); padding: 1.5rem; border-radius: 0.5rem; text-align: center; border: 1px solid hsl(var(--border)); }
-.stat-card .stat-icon { width: 50px; height: 50px; background: hsl(var(--secondary)); border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 1.5rem; color: hsl(var(--primary)); margin-bottom: 0.5rem; }
-.stat-card .stat-number { font-size: 2rem; font-weight: 700; color: hsl(var(--primary)); line-height: 1; margin-bottom: 0.25rem; }
+.stat-card .stat-icon { width: 50px; height: 50px; background: hsl(var(--secondary)); border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 1.5rem; color: hsl(var(--primary-text, var(--primary))); margin-bottom: 0.5rem; }
+.stat-card .stat-number { font-size: 2rem; font-weight: 700; color: hsl(var(--primary-text, var(--primary))); line-height: 1; margin-bottom: 0.25rem; }
 .stat-card .stat-label { color: hsl(var(--muted-foreground)); font-size: 0.95rem; font-weight: 600; }
 
 
@@ -1550,7 +1550,7 @@ label .text-danger, .form-label .text-danger { color: hsl(var(--destructive-text
 .breadcrumb-nav { margin-bottom: 1rem; font-size: 0.8125rem; }
 .breadcrumb { list-style: none; display: flex; flex-wrap: wrap; gap: 0.25rem; padding: 0; margin: 0; }
 .breadcrumb-item + .breadcrumb-item::before { content: "/"; color: hsl(var(--muted-foreground)); margin-right: 0.25rem; }
-.breadcrumb-item a { color: hsl(var(--primary)); text-decoration: none; }
+.breadcrumb-item a { color: hsl(var(--primary-text, var(--primary))); text-decoration: none; }
 .breadcrumb-item a:hover { text-decoration: underline; }
 .breadcrumb-item.active span { color: hsl(var(--muted-foreground)); }
 
@@ -1563,8 +1563,8 @@ label .text-danger, .form-label .text-danger { color: hsl(var(--destructive-text
 .validation-modal.modal-dialog { box-sizing: border-box; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 1050; width: 100%; max-width: 500px; padding: 0 1rem; }
 .validation-modal .modal-content { background: hsl(var(--surface-1, var(--card, 0 0% 100%))); border: 1px solid hsl(var(--border)); border-radius: var(--radius, 0.5rem); box-shadow: 0 10px 25px hsl(var(--foreground) / 0.2); overflow: hidden; }
 .validation-modal .modal-header.warning { display: flex; align-items: center; justify-content: space-between; padding: 1rem 1.25rem; background-color: hsl(var(--warning) / 0.12); border-bottom: 2px solid hsl(var(--warning)); }
-.validation-modal .modal-title { margin: 0; font-size: 1.125rem; font-weight: 700; color: hsl(var(--warning)); }
-.validation-modal .modal-close { background: transparent; border: 0; padding: 0 0.25rem; font-size: 1.5rem; line-height: 1; color: hsl(var(--warning)); cursor: pointer; }
+.validation-modal .modal-title { margin: 0; font-size: 1.125rem; font-weight: 700; color: hsl(var(--warning-text, var(--warning))); }
+.validation-modal .modal-close { background: transparent; border: 0; padding: 0 0.25rem; font-size: 1.5rem; line-height: 1; color: hsl(var(--warning-text, var(--warning))); cursor: pointer; }
 .validation-modal .modal-close:hover, .validation-modal .modal-close:focus { opacity: 0.75; outline: 2px solid hsl(var(--ring, var(--primary))); outline-offset: 2px; }
 .validation-modal .modal-body { padding: 1.25rem; color: hsl(var(--foreground)); }
 .validation-modal .modal-body p { margin: 0 0 0.75rem 0; }
@@ -1588,8 +1588,8 @@ label .text-danger, .form-label .text-danger { color: hsl(var(--destructive-text
 
 .uploaded-file-item { display: flex; align-items: center; justify-content: space-between; padding: 1rem; background: hsl(var(--background)); border: 1px solid hsl(var(--border)); border-radius: 0.25rem; margin-bottom: 0.75rem; }
 .file-info { display: flex; align-items: center; gap: 1rem; flex: 1; }
-.file-icon { color: hsl(var(--primary)); font-size: 1.5rem; }
-.btn-remove { background: transparent; color: hsl(var(--primary)); border: none; padding: 0.5rem; cursor: pointer; font-size: 1.25rem; }
+.file-icon { color: hsl(var(--primary-text, var(--primary))); font-size: 1.5rem; }
+.btn-remove { background: transparent; color: hsl(var(--primary-text, var(--primary))); border: none; padding: 0.5rem; cursor: pointer; font-size: 1.25rem; }
 .btn-remove:hover { color: hsl(var(--link-hover)); }
 .btn-remove:focus { outline: 2px solid hsl(var(--primary)); outline-offset: 2px; }
 

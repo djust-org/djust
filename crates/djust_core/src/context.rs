@@ -647,6 +647,329 @@ pub trait BlockSuperSource: std::fmt::Debug + Send + Sync {
     fn render_block_super(&self, ctx: &Context) -> crate::Result<String>;
 }
 
+/// The `block` a PYTHON-BRIDGED tag receives while a `{{ block.super }}` is
+/// armed (#2918).
+///
+/// A bridged tag gets the context as a flat map, and a map has nothing to
+/// defer behind. This used to be answered by rendering the parent for EVERY
+/// bridged call made inside an overriding block, whether or not the tag ever
+/// read it — identical output, but the parent's own side effects (a counter, a
+/// cache warmer, a bridged tag in the parent body) ran several times as often
+/// as in Django: 60 handler calls against 12 in the #2916 probe.
+///
+/// This object is what the map carries instead. It owns a snapshot of the
+/// context (a `Context` clone is copy-on-write, so the snapshot costs
+/// refcount bumps) and renders the parent when `super` is READ, through the
+/// same [`BlockSuperSource`] [`Context::resolve`] runs. Every read renders
+/// again: Django's `BlockNode.super()` is a method call, so a tag reading it
+/// twice renders the parent twice, and **nothing here may memoize** — a
+/// parent holding `{% cycle 'a' 'b' %}` answers `a` then `b`.
+///
+/// Its shape is Django's: `super` is a METHOD (`context["block"].super()`, and
+/// what `Variable("block.super")` resolves by auto-calling it), with
+/// `"super" in block`, `len` and the keys alongside, none of which evaluates
+/// anything.
+///
+/// **Dict-style reads are a DEPRECATED compatibility path** (deprecated in 1.3,
+/// removed no earlier than 2.0; replacement `block.super()`): the `dict` this
+/// object replaced allowed `block["super"]`, and `get("super")`, `values()` and
+/// `items()` read it too. Each such read emits the standard djust
+/// `DeprecationWarning` (`djust._deprecation.warn_deprecated`, attributed to the
+/// tag's own line), renders the parent once, and lets the parent's own
+/// exception propagate unchanged — so `except ValueError` around it works as it
+/// did against the dict.
+///
+/// The one hard part is `__getitem__`. Django's `Variable._resolve_lookup`
+/// tries `current[bit]` FIRST and CATCHES the five exception classes a mapping
+/// access may raise (`TypeError`, `AttributeError`, `KeyError`, `ValueError`,
+/// `IndexError`), then walks on to `getattr` — which for Django's own
+/// `BlockNode` is the `super()` method, because a `BlockNode` is not
+/// subscriptable. An evaluating `__getitem__` would therefore run the parent,
+/// have its error swallowed, and run it a second time; re-wrapping the error
+/// changes the class a tag's `except` sees; a "pending exception" slot leaves a
+/// stale error for the next read. So `__getitem__` asks WHO is calling: when the
+/// immediate Python caller is Django's own `_resolve_lookup` frame (matched by
+/// file and name, so a wrapped method still counts and a look-alike in user code
+/// does not), or djust's own Rust resolver is subscripting this very object, it
+/// answers exactly what a `BlockNode` answers
+/// (`TypeError: not subscriptable`, no evaluation, no warning) and the resolver
+/// falls through to `super()` as it always has. Anyone else is user code reading
+/// the legacy way. If a future Django moved the subscript out of
+/// `_resolve_lookup`, the resolver would take the legacy path (a warning, and a
+/// double run only when the parent raises one of the five classes); the
+/// differential tests run the resolver paths under
+/// `-W error::DeprecationWarning`, so that fails loudly when the lock moves.
+///
+/// What it returns is a `SafeString`: rendered template output, already
+/// escaped by whatever produced it, which is the grant Django makes too.
+///
+/// **It is only good for the bridged call that was handed it.** The snapshot
+/// holds strong references to the render context's Python objects, and a tag
+/// may keep the `Context` it receives (`holder.ctx = context`): that closes a
+/// cycle — holder, Django context, this object, the snapshot, holder — which
+/// Python's collector cannot see through, because this type has no
+/// `tp_traverse`. So [`LazyBlockGuard`] drops the snapshot when the call
+/// returns, and a later read answers `''`, which is what Django's retained
+/// `BlockNode.super()` answers once the render is over.
+#[pyclass(name = "LazyBlock", module = "djust._rust")]
+pub struct LazyBlock {
+    /// `None` once the bridged call that owned it has returned.
+    context: std::sync::Mutex<Option<Context>>,
+}
+
+const LAZY_BLOCK_REPR: &str = "<LazyBlock super=<deferred>>";
+
+/// Is the immediate Python caller Django's `Variable._resolve_lookup`?
+///
+/// Matched by the frame's MODULE and NAME: `f_globals` is the namespace of
+/// `django.template.base` and `co_name == "_resolve_lookup"`. The
+/// first version compared the code object with the one `Variable._resolve_lookup`
+/// holds NOW, which fails the moment anything wraps or replaces that method (a
+/// profiler, a decorator, a monkeypatch): the wrapper calls the original, whose
+/// frame is still Django's own but whose code object is no longer the one the
+/// attribute reads back. A user function that merely shares the name lives in
+/// another module and still reads as user code, and a subclass reaching the base
+/// implementation through `super()` is still Django's frame.
+///
+/// `sys._getframe(0)` is the Python frame that performed the subscript (a
+/// pymethod pushes no frame of its own). False when Django's template module
+/// was never imported, when there is no Python frame at all (an embedded unit
+/// test), or when anything about the probe fails: the caller is then treated as
+/// user code.
+fn called_by_django_resolver(py: Python<'_>) -> bool {
+    let probe = || -> PyResult<bool> {
+        let sys = py.import("sys")?;
+        let Some(base) = sys
+            .getattr("modules")?
+            .get_item("django.template.base")
+            .ok()
+        else {
+            return Ok(false);
+        };
+        let frame = sys.call_method1("_getframe", (0,))?;
+        if frame
+            .getattr("f_code")?
+            .getattr("co_name")?
+            .extract::<String>()?
+            != "_resolve_lookup"
+        {
+            return Ok(false);
+        }
+        // The frame's globals ARE the module's namespace. (`co_filename` is not
+        // `__file__` for a sourceless, `.pyc`-only Django.)
+        Ok(frame.getattr("f_globals")?.is(&base.getattr("__dict__")?))
+    };
+    probe().unwrap_or(false)
+}
+
+thread_local! {
+    /// The object this thread's RUST resolver is currently subscripting as
+    /// Django's step 1 (`0` = none). See [`step1_get_item`].
+    static RUST_STEP1_TARGET: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Django's resolution step 1 (`current[bit]`) as the RUST resolvers perform
+/// it ([`Context::walk_live`] and the sidecar walk).
+///
+/// They have no Python frame of their own, so [`called_by_django_resolver`]
+/// cannot recognise them: a template rendered in Rust that holds a `block`
+/// (`_rust.render_template("{{ block.super }}", {"block": context["block"]})`)
+/// reached a lazy block's `__getitem__` as if it were legacy user code, warned,
+/// and, over a parent raising one of the five classes this step swallows, ran
+/// the parent twice. So the object being subscripted is recorded here for the
+/// duration of the call and [`LazyBlock::__getitem__`] answers it as Django's
+/// resolver is answered. Keyed by OBJECT, not a bare flag, so nested user code
+/// that happens to subscript some other lazy block is still user code.
+fn step1_get_item<'py, K>(current: &Bound<'py, PyAny>, key: K) -> PyResult<Bound<'py, PyAny>>
+where
+    K: pyo3::conversion::IntoPyObject<'py>,
+{
+    struct Restore(usize);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            RUST_STEP1_TARGET.with(|cell| cell.set(self.0));
+        }
+    }
+    let _restore = Restore(RUST_STEP1_TARGET.with(|cell| cell.replace(current.as_ptr() as usize)));
+    current.get_item(key)
+}
+
+/// The standard djust deprecation for a dict-style read of the lazy `block`.
+///
+/// Through `djust._deprecation.warn_deprecated` like every other djust
+/// deprecation; its default `stacklevel=2` lands on the Python frame that made
+/// the read (the Rust frames in between do not exist for `warnings`). A failure
+/// to IMPORT the helper (a bare embedded interpreter) is not an error; a
+/// warning promoted to an exception by the caller's filters is, and propagates.
+fn warn_dict_style(py: Python<'_>) -> PyResult<()> {
+    let Ok(module) = py.import("djust._deprecation") else {
+        return Ok(());
+    };
+    let kwargs = pyo3::types::PyDict::new(py);
+    kwargs.set_item("since", "1.3")?;
+    kwargs.set_item("removed_in", "2.0.0")?;
+    kwargs.set_item("instead", "block.super()")?;
+    module.getattr("warn_deprecated")?.call(
+        (
+            "Dict-style access to `block.super` (`block['super']`, `block.get('super')`, \
+             `block.values()`, `block.items()`) on the context a template tag receives",
+        ),
+        Some(&kwargs),
+    )?;
+    Ok(())
+}
+
+impl LazyBlock {
+    /// One read: render the parent now, exactly as `Context::resolve` does.
+    ///
+    /// A Python exception the parent raised crosses WHOLE, so the tag that
+    /// read `super` sees the parent's own error; anything else becomes the
+    /// same Python error every other `DjangoRustError` does.
+    fn read<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        // Cloned out so the lock is not held across the render.
+        let snapshot = self
+            .context
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let html = match snapshot {
+            Some(context) => context.render_armed_block_super()?,
+            None => None,
+        };
+        // `None`: the call that owned this is over, or there is no further
+        // ancestor — Django's `BlockNode.super()` answers `''` in both.
+        crate::value_into_handler_pyobject(py, Value::SafeString(html.unwrap_or_default()))
+    }
+}
+
+/// Ends a [`LazyBlock`]'s life when the bridged call it was built for returns.
+///
+/// Held next to the flat map the handler is called with, so it drops after the
+/// call on every path, including `?` and a Python exception.
+pub struct LazyBlockGuard(Py<LazyBlock>);
+
+impl Drop for LazyBlockGuard {
+    fn drop(&mut self) {
+        Python::attach(|py| {
+            *self
+                .0
+                .bind(py)
+                .borrow()
+                .context
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        });
+    }
+}
+
+#[pymethods]
+impl LazyBlock {
+    /// Django's `BlockNode.super()` — a METHOD, so a tag written against
+    /// Django's `context["block"]` (`context["block"].super()`) works, and so
+    /// does the attribute step of `_resolve_lookup`, which auto-calls it.
+    #[pyo3(name = "super")]
+    fn super_call<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        self.read(py)
+    }
+
+    /// `block["super"]` — the legacy dict-style read (deprecated since 1.3,
+    /// removed no earlier than 2.0; use [`LazyBlock::super_call`]).
+    ///
+    /// From Django's own resolver this is a `TypeError`, exactly what a
+    /// `BlockNode` answers, so the resolver falls through to `super()` with the
+    /// parent evaluated once and its own exception propagating. From anything
+    /// else it warns, renders the parent once, and propagates the parent's own
+    /// exception unwrapped. See the type's docs for why it must ask.
+    fn __getitem__<'py>(
+        slf: &Bound<'py, Self>,
+        key: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let py = slf.py();
+        if called_by_django_resolver(py)
+            || RUST_STEP1_TARGET.with(|cell| cell.get()) == slf.as_ptr() as usize
+        {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "'LazyBlock' object is not subscriptable",
+            ));
+        }
+        match key.extract::<String>() {
+            Ok(name) if name == "super" => {
+                warn_dict_style(py)?;
+                slf.borrow().read(py)
+            }
+            _ => Err(pyo3::exceptions::PyKeyError::new_err(key.to_string())),
+        }
+    }
+
+    /// Deprecated like [`LazyBlock::__getitem__`] when it reads `super`.
+    #[pyo3(signature = (key, default=None))]
+    fn get<'py>(
+        &self,
+        py: Python<'py>,
+        key: &Bound<'py, PyAny>,
+        default: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        match key.extract::<String>() {
+            Ok(name) if name == "super" => {
+                warn_dict_style(py)?;
+                self.read(py)
+            }
+            _ => Ok(default.unwrap_or_else(|| py.None().into_bound(py))),
+        }
+    }
+
+    fn __contains__(&self, key: &Bound<'_, PyAny>) -> bool {
+        key.extract::<String>().is_ok_and(|name| name == "super")
+    }
+
+    fn __len__(&self) -> usize {
+        1
+    }
+
+    fn __iter__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        pyo3::types::PyList::new(py, ["super"])?
+            .as_any()
+            .try_iter()
+            .map(|it| it.into_any())
+    }
+
+    fn keys<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        Ok(pyo3::types::PyList::new(py, ["super"])?.into_any())
+    }
+
+    /// Reads `super`: a read per call, not a cached pair. Deprecated like
+    /// [`LazyBlock::__getitem__`].
+    fn values<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        warn_dict_style(py)?;
+        Ok(pyo3::types::PyList::new(py, [self.read(py)?])?.into_any())
+    }
+
+    /// Reads `super`; deprecated like [`LazyBlock::__getitem__`].
+    fn items<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        warn_dict_style(py)?;
+        let name = "super".into_pyobject(py)?.into_any();
+        let pair = pyo3::types::PyTuple::new(py, [name, self.read(py)?])?;
+        Ok(pyo3::types::PyList::new(py, [pair])?.into_any())
+    }
+
+    /// `copy.copy` / `copy.deepcopy` of a context (`context.flatten()`,
+    /// `copy.copy(context)`) reach this object; it is a handle, not state, so
+    /// the copy is itself. (`pickle` raises `TypeError`, as it does for a
+    /// `BlockNode`'s render state.)
+    fn __copy__(slf: Py<Self>) -> Py<Self> {
+        slf
+    }
+
+    fn __deepcopy__(slf: Py<Self>, _memo: &Bound<'_, PyAny>) -> Py<Self> {
+        slf
+    }
+
+    /// Never evaluates: a `repr` in a debug log must not run the parent.
+    fn __repr__(&self) -> &'static str {
+        LAZY_BLOCK_REPR
+    }
+}
+
 /// Outcome of the Django-parity callable handling for one resolved
 /// attribute (ADR-024, mirrors `Variable._resolve_lookup`).
 enum CallOutcome<'py> {
@@ -1257,18 +1580,50 @@ impl Context {
 
     /// Run the armed source NOW, or answer `None` when nothing is armed.
     ///
-    /// The escape hatch for the ONE boundary laziness cannot cross: a
-    /// PYTHON-BRIDGED tag receives the context as a flat map
-    /// ([`Context::to_hashmap`]), and a map has no callable to defer behind —
-    /// so `{% blocktranslate with s=block.super %}`, whose operands Django's
-    /// own Python code resolves against that map, needs the string. The
-    /// renderer's `bridge_context` is the only caller; see its doc for the
-    /// residual divergence that buys.
+    /// One read of `block.super`: [`LazyBlock`] calls it when a bridged tag
+    /// reads `super`, and every read calls it again (no memo, #2918).
     pub fn render_armed_block_super(&self) -> crate::Result<Option<String>> {
         match self.block_super.clone() {
             Some(source) => source.render_block_super(self).map(Some),
             None => Ok(None),
         }
+    }
+
+    /// The value a bridged tag's flat map carries under `block` while a
+    /// `block.super` is armed (#2918): a [`LazyBlock`] over a snapshot of this
+    /// context, handed to the handler as the very object (an ADR-027 live
+    /// handle), so `super` is rendered when the tag reads it and not before.
+    ///
+    /// The [`LazyBlockGuard`] ends the snapshot's life: keep it alive for
+    /// exactly the bridged call. `None` when nothing is armed — the caller
+    /// keeps the plain bound `block`.
+    pub fn lazy_block_value(&self) -> crate::Result<Option<(Value, LazyBlockGuard)>> {
+        if self.block_super.is_none() {
+            return Ok(None);
+        }
+        let lazy = LazyBlock {
+            context: std::sync::Mutex::new(Some(self.clone())),
+        };
+        let object = Python::attach(|py| Py::new(py, lazy))
+            .map_err(|e| crate::DjangoRustError::TemplateError(format!("block.super: {e}")))?;
+        let handle = Python::attach(|py| object.clone_ref(py).into_any());
+        let value = Value::Encoded(Box::new(crate::Encoded {
+            type_name: "LazyBlock".to_string(),
+            display: String::new(),
+            display_safe: false,
+            json: String::new(),
+            truthy: true,
+            len: None,
+            iterable: false,
+            repr: LAZY_BLOCK_REPR.to_string(),
+            cmp_key: None,
+            live: Some(std::sync::Arc::new(handle)),
+            str_raised: false,
+            attrs: Default::default(),
+            items: None,
+            eq_class: None,
+        }));
+        Ok(Some((value, LazyBlockGuard(object))))
     }
 
     /// A base block has no inheritance context; super is invalid until evaluated.
@@ -2130,7 +2485,7 @@ impl Context {
                 // when its failure is spelled as an exception. `maybe_call`
                 // one step below already propagates a real exception raised
                 // INSIDE a nullary method; this makes the getattr half agree.
-                let next = match current.get_item(*part) {
+                let next = match step1_get_item(&current, *part) {
                     Ok(v) => Ok(v),
                     // Django step 1: `except (TypeError, AttributeError,
                     // KeyError, ValueError, IndexError)` — the last two are
@@ -2574,7 +2929,7 @@ impl Context {
         // Django's own `hasattr` (which swallows) would.
         let has_getitem = current.get_type().hasattr("__getitem__").unwrap_or(false);
         if has_getitem {
-            match current.get_item(part) {
+            match step1_get_item(current, part) {
                 Ok(found) => return Ok(Walked::Object(found)),
                 // Django step 1: `except (TypeError, AttributeError, KeyError,
                 // ValueError, IndexError)` — the last two its own numpy
@@ -4100,5 +4455,79 @@ mod tests {
         assert!(!ctx.is_safe("p"));
         assert!(!ctx.is_safe("p.a"));
         assert!(ctx.is_safe("pp"), "a prefix-sharing SIBLING was revoked");
+    }
+
+    /// #2918 — a read of the lazy `block` renders the parent, and renders it
+    /// AGAIN on every read; asking whether `super` exists, or for the keys,
+    /// renders nothing; and once the bridged call's guard drops the snapshot
+    /// is gone, so a retained handle renders nothing more. A memoizing
+    /// `LazyBlock` fails the count; a guard that never invalidates fails the
+    /// last count (and leaks a Python-invisible cycle).
+    ///
+    /// Counts only: handing the rendered string to Python builds a Django
+    /// `SafeString`, and this crate's own test interpreter has no Django. The
+    /// values a read returns (`''` after the call, the parent's text before)
+    /// are asserted in `python/tests/test_block_super_bridge_lazy_2918.py`.
+    #[test]
+    fn lazy_block_renders_per_read_and_never_for_a_question() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        #[derive(Debug)]
+        struct Counting(Arc<AtomicUsize>);
+        impl BlockSuperSource for Counting {
+            fn render_block_super(&self, _ctx: &Context) -> crate::Result<String> {
+                let n = self.0.fetch_add(1, Ordering::SeqCst);
+                Ok(format!("p{n}"))
+            }
+        }
+
+        Python::initialize();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut ctx = Context::new();
+        assert!(ctx.lazy_block_value().unwrap().is_none(), "nothing armed");
+        ctx.arm_block_super(Arc::new(Counting(Arc::clone(&calls))));
+        let (value, guard) = ctx.lazy_block_value().unwrap().expect("armed");
+        let Value::Encoded(encoded) = value else {
+            panic!("the lazy block crosses as a live handle");
+        };
+        let handle = encoded.live.clone().expect("live handle");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "building it renders nothing"
+        );
+
+        Python::attach(|py| {
+            let block = handle.bind(py);
+            assert!(block.contains("super").unwrap());
+            let _ = block.call_method0("keys").unwrap();
+            assert_eq!(block.len().unwrap(), 1);
+            assert_eq!(calls.load(Ordering::SeqCst), 0, "a question is not a read");
+
+            // Each read renders once; the result is ignored (see above).
+            let _ = block.call_method0("super");
+            let _ = block.call_method0("super");
+            let _ = block.call_method1("get", ("super",));
+            // The legacy dict-style read (deprecated): no Python frame calls
+            // it here, so it is user code, not Django's resolver — it renders.
+            let _ = block.get_item("super");
+            assert_eq!(calls.load(Ordering::SeqCst), 4, "one render per read");
+            assert!(
+                block.get_item("other").is_err(),
+                "a key other than `super` is a KeyError, and renders nothing"
+            );
+            assert_eq!(calls.load(Ordering::SeqCst), 4);
+        });
+
+        drop(guard);
+        Python::attach(|py| {
+            let _ = handle.bind(py).call_method0("super");
+        });
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            4,
+            "the call is over: a retained handle renders nothing"
+        );
     }
 }

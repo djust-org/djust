@@ -1,0 +1,1 @@
+- Make affected Python test selection fall back to the full suite when any changed file is unclassified, test sources are unreadable, or shared/transitive code changes; document focused edit checks and unchanged full integration/release gates.

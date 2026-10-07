@@ -52,8 +52,15 @@ logger = logging.getLogger(__name__)
 #   at the next one instead of running to the next ``>`` (linear, not
 #   quadratic, on tag soup with no ``>``).
 #
-# The Rust twin that must agree on what a root is:
-# ``crates/djust_live/src/lib.rs::find_dj_root_content_range`` (#1646).
+# The Rust twins that must agree on what a root is (#1646, #3031):
+# ``crates/djust_live/src/lib.rs::find_dj_root_content_range`` (the text scan)
+# and ``crates/djust_vdom/src/parser.rs::find_liveview_root`` (the VDOM root).
+# ONE rule picks it, here and there: an embedded ``{% live_render %}`` child's
+# wrapper and everything inside it belong to the child (``_embedded_child_spans``)
+# and are never the root; of the rest, the first ``dj-root`` in document order
+# wins, else the first ``dj-view`` (``_search_dj_root_open`` tries its patterns
+# in that order). ``python/tests/fixtures/root_selection_3031.json`` is the
+# shared corpus all three are tested against.
 _QUOTED = r""""[^"]*"|'[^']*'"""
 _TAG_BODY_UNIT = r"""(?:%s|[^'"<>])""" % _QUOTED
 _ROOT_TAG_NAME = r"<(?!(?:html|head|body)(?=[ \t\n\r\f/>]))([A-Za-z][A-Za-z0-9-]*)(?=[ \t\n\r\f/>])"
@@ -301,11 +308,15 @@ _EMBEDDED_ATTR_TOKEN_RE = re.compile(
 )
 
 
+_EMBEDDED_MARKER_RE = re.compile("data-djust-embedded", re.IGNORECASE)
+
+
 def _embedded_child_spans(html: str, masked: str) -> "list[tuple[int, int]]":
     """``(start, end)`` of every embedded-child wrapper element in ``html``,
     outermost only, in document order. A wrapper whose close tag is missing
     runs to the end of the document (refuse to guess inside it)."""
-    if "data-djust-embedded" not in masked:
+    # Attribute names are case-insensitive, as in the Rust twins (#3031).
+    if _EMBEDDED_MARKER_RE.search(masked) is None:
         return []
     # ``masked`` is the caller's ``_mask_for_root_search`` copy, so this walk
     # sees exactly the tags the root search does (#2663).
@@ -1628,8 +1639,8 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         # child's, not this view's — stamping this view's path there would
         # tell the client to mount the page a second time inside the child.
         embedded = (
-            _embedded_child_spans(html, _mask_for_root_search(html))
-            if "data-djust-embedded" in html
+            _embedded_child_spans(html, masked)
+            if _EMBEDDED_MARKER_RE.search(html) is not None
             else []
         )
         parts: list[str] = []

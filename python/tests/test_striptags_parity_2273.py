@@ -28,13 +28,14 @@ sets, rather than the parallel-path drift a second tokenizer would be (#1646).
 
 The reference moves; the port does not
 --------------------------------------
-`html/parser.py` was rewritten for HTML5-spec alignment in **CPython 3.12.10**
-and changed again in **3.14**, so the interpreters this project's CI matrix
-runs do not agree with each other:
+`html/parser.py` was rewritten for HTML5-spec alignment in **CPython 3.12.12**
+(3.12.9 through 3.12.11 share the old parser) and changed again in **3.14**, so
+the interpreters this project's CI matrix runs do not agree with each other:
 
-    3.12.9   vs 3.12.13 : 1108 / 4000 corpus values differ
+    3.12.9   vs 3.12.13 : 1076 / 4000 corpus values differ
     3.12.13  vs 3.13.7  :    0
-    3.12.13  vs 3.14.6  :  224   (end-of-input `&` / `&#` handling)
+    3.12.13  vs 3.14.6  :  231   (end-of-input `&` / `&#` handling)
+    3.13.7   vs 3.13.15 :  239   (the same, plus 8 abrupt-comment values)
 
 The first version of this module computed its reference at run time, so it
 asserted a different contract on every runner: green on the repo's 3.12.9
@@ -53,14 +54,38 @@ value may only sit in `unstable` if the recorded CPythons genuinely disagree,
 and the `stable` half is re-derived from the running interpreter's real Django
 on every run.
 
+`html.parser` also moves inside a minor line. The `&` / `&#` end-of-input change
+that the table above attributes to "3.14" first shipped in **3.13.10** and
+**3.14.1** (3.13.7-3.13.9 and 3.14.0 still behave like 3.12.13), and the patch
+releases **3.13.15** and **3.14.7** moved eight more values (CI run 37169161029). Their
+`parse_comment` now lets an *abruptly closed empty comment* -- `<!-->` or
+`<!--->` right after the opener, which HTML5 ends at the first `>` -- win over a
+later `-->`; before, the whole span up to that later `-->` was one comment:
+
+    <!--->a<!--->     3.12.13 / 3.13.7 / 3.14.6 : ``       3.13.15 / 3.14.7 : `a`
+
+Six of those eight had been in `stable`, so they left it and now sit in
+`unstable` with every version's answer. `TestAbruptEmptyCommentClose` pins the
+split. djust keeps the older answer, for two reasons: the pinned behaviour is
+the contract and a CPython release does not change it, and 3.12 and every older
+3.13 / 3.14 patch release that a deployment may still run behave that way. Following 3.13.15
+is a one-function change in `htmlparser.rs` (`comment_close`, which would try the
+abrupt form first) and a fixture
+regeneration; it is a decision about which CPython `striptags` tracks, not a
+test fix. Whatever the next CPython change is, the same two steps apply:
+regenerate with every CI interpreter (`scripts/gen-striptags-reference.py`),
+then decide whether the port follows.
+
 Port target
 -----------
-djust implements the **3.12.10+ / 3.13** tokenizer. The 3.14 delta is confined
-to `&`/`&#` at end of input and is tracked separately; on the corpus djust
-matches 3.13 on 1149 of the 1316 unstable values and 3.14 on 934, the remainder
-being shared-tokenizer changes (comment close, `locatetagend`, the widened
-CDATA element set) that also affect the truncators and are deliberately not in
-this PR's scope.
+djust implements the **3.12.12+ / 3.13** tokenizer (the pre-3.13.15 comment
+close, see above). The `&`/`&#` end-of-input change (3.13.10+ / 3.14.1+) is not
+ported. Measured over the 1289 `unstable` values in the fixture, djust's answer
+equals the recorded answer for 3.12.13 and 3.13.7 on all 1289, for 3.14.6 on
+1058, for 3.13.15 and 3.14.7 on 1050 and for 3.12.9 on 213. The remainder are
+shared-tokenizer changes (comment close, `locatetagend`, the widened CDATA
+element set, the end-of-input handling) that also affect the truncators and are
+deliberately not in this PR's scope.
 
 One chain divergence that remains is NOT `striptags`: `|escape|striptags`
 (#2281). It is pinned in `TestKnownRemainingDivergences` together with a proof
@@ -84,9 +109,11 @@ randomized differential:
 
 from __future__ import annotations
 
+import ast
 import json
 import pathlib
 import random
+import re
 import sys
 from typing import Any
 
@@ -97,6 +124,7 @@ pytest.importorskip("django")
 from django.core.exceptions import SuspiciousOperation  # noqa: E402
 from django.template import Context as DjangoContext  # noqa: E402
 from django.template import Template as DjangoTemplate  # noqa: E402
+from django.utils.html import conditional_escape, escape  # noqa: E402
 from django.utils.html import strip_tags as django_strip_tags  # noqa: E402
 
 from djust import _rust  # noqa: E402
@@ -569,6 +597,206 @@ class TestPinnedDifferential:
         assert changed > len(values) // 3, f"only {changed} values were altered"
 
 
+def _python_version(version: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in version.split("."))
+
+
+def _closes_empty_comment_abruptly(version: tuple[int, ...]) -> bool:
+    """Does this CPython end `<!-->` / `<!--->` at the first `>` (CI run 37169161029)?
+
+    Introduced in 3.13.15 and 3.14.7; 3.12 and every earlier 3.13 / 3.14 patch
+    release keep the older "search for a later `-->`" rule.
+    """
+    if version >= (3, 14):
+        return version >= (3, 14, 7)
+    return (3, 13, 15) <= version
+
+
+# Values the corpus holds where the two rules give different answers.
+ABRUPT_EMPTY_COMMENT_VALUES = [
+    "<!--->-->",
+    "<!--->a<!--->",
+    "<!--->< b><b x=\t<!DOCTYPE html><!--->",
+    "<!---><?pi>&#-->",
+    "<!--><br/><0>--><br/>",
+    "<script><!--->&#65<<>><!-- c --></>",
+]
+
+
+class TestAbruptEmptyCommentClose:
+    """The one place a CPython PATCH release moved `html.parser` under us.
+
+    djust follows the older rule; see "The reference moves" above. This pins
+    that the split is real, recorded, and what the interpreter running the
+    test actually does, so a further CPython change turns this red and names
+    the value instead of passing silently.
+    """
+
+    @pytest.mark.parametrize("value", ABRUPT_EMPTY_COMMENT_VALUES)
+    def test_the_fixture_records_the_split(self, value: str) -> None:
+        recorded = load_fixture()["unstable"][value]
+        older = {
+            a for v, a in recorded.items() if not _closes_empty_comment_abruptly(_python_version(v))
+        }
+        newer = {
+            a for v, a in recorded.items() if _closes_empty_comment_abruptly(_python_version(v))
+        }
+        assert len(older) == 1 and len(newer) == 1 and older != newer, recorded
+        # djust follows the older rule, deliberately.
+        assert djust_answer(value) in older
+
+    @pytest.mark.parametrize("value", ABRUPT_EMPTY_COMMENT_VALUES)
+    def test_this_interpreter_matches_its_group(self, value: str) -> None:
+        recorded = load_fixture()["unstable"][value]
+        mine = _closes_empty_comment_abruptly(sys.version_info[:3])
+        group = {
+            a
+            for v, a in recorded.items()
+            if _closes_empty_comment_abruptly(_python_version(v)) == mine
+        }
+        assert django_answer(value) in group, (
+            f"{value!r} on python {'.'.join(map(str, sys.version_info[:3]))}: "
+            f"django={django_answer(value)!r}, recorded for this rule: {sorted(group)}. "
+            f"html.parser moved again; regenerate scripts/gen-striptags-reference.py"
+        )
+
+
+TEMPLATES_DOC = (
+    pathlib.Path(__file__).resolve().parents[2] / "docs/website/core-concepts/templates.md"
+)
+DOC_HEADING = "### `striptags` and the Python version"
+
+
+def _documented_section() -> str:
+    if not TEMPLATES_DOC.exists():
+        pytest.skip("docs/ not available next to the tests")
+    text = TEMPLATES_DOC.read_text(encoding="utf-8")
+    start = text.index(DOC_HEADING)
+    return text[start : text.index("\n### ", start + 1)]
+
+
+def _doc_rows(block: str) -> list[tuple[str, str, str]]:
+    """The `` `input` | `djust` | `django` `` rows of a table; each cell is a
+    Python string literal, so a tab or quote is written exactly as Python does."""
+    rows = re.findall(r"^\| `(.+?)` \| `(.+?)` \| `(.+?)` \|$", block, re.M)
+    return [tuple(ast.literal_eval(cell) for cell in row) for row in rows]  # type: ignore[misc]
+
+
+def _differs_per_version() -> dict[str, int]:
+    """Corpus values where djust's `striptags` differs from each recorded
+    interpreter, measured the way the `htmlparser.rs` header measures them."""
+    data = load_fixture()
+    versions = data["versions"]
+    differs = dict.fromkeys(versions, 0)
+    for bucket in (data["stable"], data["unstable"]):
+        for value, answer in bucket.items():
+            got = _rust.render_template("{{ p|striptags }}", {"p": value})
+            per = answer if isinstance(answer, dict) else dict.fromkeys(versions, answer)
+            for version in versions:
+                recorded = per[version]
+                if recorded.startswith("OK:") and got != escape(recorded[3:]):
+                    differs[version] += 1
+    return differs
+
+
+def _eight_values() -> list[str]:
+    """The values 3.14.7 changed against 3.14.6: the abrupt-comment family."""
+    unstable = load_fixture()["unstable"]
+    return sorted(v for v, per in unstable.items() if per["3.14.6"] != per["3.14.7"])
+
+
+class TestDocumentedDifferences:
+    """`docs/website/core-concepts/templates.md` documents where `striptags`
+    differs from Django. Every value and figure there is re-derived from the
+    pinned fixture and the live filter, so the page and the pin cannot drift."""
+
+    def test_the_eight_values_are_exactly_the_documented_rows(self) -> None:
+        section = _documented_section()
+        rows = _doc_rows(section[section.index("Abruptly closed empty comments") :])
+        eight = _eight_values()
+        assert len(eight) == 8, eight
+        assert sorted(r[0] for r in rows) == eight
+        unstable = load_fixture()["unstable"]
+        for value, djust_says, django_newer in rows:
+            per = unstable[value]
+            # djust and every earlier CPython agree; both newer ones differ.
+            assert djust_answer(value) == "OK:" + djust_says
+            for older in ("3.12.13", "3.13.7", "3.14.6"):
+                assert per[older] == "OK:" + djust_says, (value, older)
+            for newer in ("3.13.15", "3.14.7"):
+                assert per[newer] == "OK:" + django_newer, (value, newer)
+            assert djust_says != django_newer
+
+    @pytest.mark.parametrize("value", _eight_values())
+    def test_this_interpreter_returns_the_documented_django_answer(self, value: str) -> None:
+        section = _documented_section()
+        row = next(
+            r
+            for r in _doc_rows(section[section.index("Abruptly closed empty comments") :])
+            if r[0] == value
+        )
+        newer = _closes_empty_comment_abruptly(sys.version_info[:3])
+        if not newer and sys.version_info[:3] < (3, 12, 12):
+            pytest.skip("the page's 'before' column starts at 3.12.12 (older parser)")
+        assert django_answer(value) == "OK:" + (row[2] if newer else row[1])
+
+    def test_the_end_of_input_examples_are_what_both_sides_return(self) -> None:
+        section = _documented_section()
+        block = section[section.index("`&` and `&#` at the end") : section.index("Abruptly closed")]
+        rows = _doc_rows(block)
+        assert len(rows) >= 3, rows
+        unstable = load_fixture()["unstable"]
+        for value, djust_says, django_newer in rows:
+            per = unstable[value]
+            assert djust_answer(value) == "OK:" + djust_says
+            assert per["3.13.7"] == "OK:" + djust_says
+            # Changed by 3.13.10 / 3.14.1, so 3.14.6 has it and 3.14.7 did not
+            # change it again: it is not one of the eight.
+            assert per["3.14.6"] == per["3.14.7"] == "OK:" + django_newer
+            assert djust_says != django_newer
+
+    def test_the_figures_table_is_the_measured_one(self) -> None:
+        section = _documented_section()
+        table = section[: section.index("- **Before 3.12.12.**")]
+        documented: dict[str, tuple[int, float]] = {}
+        for versions, count, share in re.findall(
+            r"^\| ([\d., ]+) \| (\d+) \| ([\d.]+)% \|$", table, re.M
+        ):
+            for version in (v.strip() for v in versions.split(",")):
+                documented[version] = (int(count), float(share))
+        measured = _differs_per_version()
+        assert set(documented) == set(measured), (set(documented), set(measured))
+        for version, (count, share) in documented.items():
+            assert measured[version] == count, (version, measured[version], count)
+            assert round(count / 40, 1) == share, (version, count, share)
+        # "231 of the 239": the end-of-input change plus the eight.
+        assert documented["3.14.6"][0] == 231
+        assert documented["3.14.7"][0] == 231 + len(_eight_values())
+        assert "231 of the 239 values" in section and "**eight** of the 239" in section
+
+    def test_djust_does_not_follow_the_newer_comment_rule(self) -> None:
+        """The decision the page documents: the pinned rule stays."""
+        assert djust_answer("<!--->a<!--->") == "OK:"
+        assert djust_answer("<!-->x-->") == "OK:"
+
+    def test_the_documented_workaround_returns_djusts_django_answer(self) -> None:
+        """`{{ v|django_striptags }}` is Django's own `strip_tags`, whatever the
+        interpreter, and it differs from the built-in only on the documented
+        values (checked on the running interpreter)."""
+        name = "_dj_striptags_docs_django_striptags"
+
+        def django_striptags(value: Any) -> str:
+            return django_strip_tags(value)
+
+        _rust.register_custom_filter(name, django_striptags, True, False)
+        try:
+            for value in _eight_values():
+                got = _rust.render_template("{{ p|" + name + " }}", {"p": value})
+                assert got == conditional_escape(django_strip_tags(value)), value
+        finally:
+            _rust.unregister_custom_filter(name)
+
+
 class TestPinnedReferenceIsHonest:
     """The pin must not be able to launder a real divergence.
 
@@ -628,7 +856,7 @@ class TestPinnedReferenceIsHonest:
         CPythons disagree about.
 
         This is the guard for the failure that made this PR red in CI: a
-        literal whose answer moved in 3.12.10 passes on the repo's 3.12.9
+        literal whose answer moved in 3.12.12 passes on the repo's 3.12.9
         `.venv` and fails on every CI interpreter. Three such values were in
         this module's `UNREPORTED_VALUES` list, put there by hand.
         """
@@ -653,7 +881,7 @@ class TestPinnedReferenceIsHonest:
         versions = load_fixture()["versions"]
         assert len(versions) >= 2, versions
         # The split is only meaningful if the captured versions actually
-        # straddle the 3.12.10 html.parser rewrite.
+        # straddle the 3.12.12 html.parser rewrite.
         assert len(load_fixture()["unstable"]) > 100, (
             f"only {len(load_fixture()['unstable'])} unstable values — the capture "
             f"probably used interpreters that all share one html.parser"

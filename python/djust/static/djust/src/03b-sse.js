@@ -12,6 +12,11 @@
 //   - No presence tracking
 //   - No actor-based state management
 //   - No MessagePack binary encoding
+//
+// Views mounted beside the page view (dj-lazy containers, #3252) are independent
+// views of the session, as on the WebSocket: each mounts with a `mount` frame
+// that names its container (`target_id`), the server addresses every frame of it
+// the same way, and the shared slot code in 13b-view-slots.js applies them.
 // ============================================================================
 
 class LiveViewSSE {
@@ -20,6 +25,9 @@ class LiveViewSSE {
         this.eventSource = null;
         this.sseBaseUrl = null;
         this.enabled = true;
+        // Lets the lazy-hydration manager (13-lazy-hydration.js) tell this
+        // transport from the WebSocket one without referencing either class.
+        this.transportName = 'sse';
         this.viewMounted = false;
         this.primaryViewPath = null;
         this._hasConnectedBefore = false;
@@ -229,14 +237,26 @@ class LiveViewSSE {
      * 02-response-handler.js and all other message-handling modules work
      * without modification.
      */
-    async _handleMessageImpl(data) {
-        if (globalThis.djustDebug) console.log('[SSE] Received:', data.type, data);
-        // #3036: a live navigation to a page with a different page shell is a
-        // full page load; the destination's root is not applied.
-        if (window.djust.fallBackToFullLoadOnShellChange?.(data)) return;
-        // ADR-038 D-n: compared before anything from this mount is cached.
-        if (window.djust._sw) window.djust._sw.applyMountMetadata(data);
-        storeSignedSnapshot(data, this.primaryViewPath);
+    async _handleMessageImpl(data, inSlot = false) {
+        // `inSlot`: the frame was already received; this is its application in
+        // the context of the view it is addressed to (`_handleSlotFrame`).
+        if (!inSlot) {
+            if (globalThis.djustDebug) console.log('[SSE] Received:', data.type, data);
+            // #3036: a live navigation to a page with a different page shell is a
+            // full page load; the destination's root is not applied.
+            if (window.djust.fallBackToFullLoadOnShellChange?.(data)) return;
+            // ADR-038 D-n: compared before anything from this mount is cached.
+            if (window.djust._sw) window.djust._sw.applyMountMetadata(data);
+            storeSignedSnapshot(data, this.primaryViewPath);
+
+            // A frame addressed to a view mounted beside the page view (#3252)
+            // is applied to that view's container, in its own context.
+            if (typeof data.target_id === 'string' && data.target_id &&
+                _SLOT_FRAME_TYPES.has(data.type)) {
+                await this._handleSlotFrame(data);
+                return;
+            }
+        }
 
         switch (data.type) {
 
@@ -303,6 +323,15 @@ class LiveViewSSE {
                     }
                 }
                 this._replacingView = false;
+                // The views hydrated beside the page view lived on the session
+                // that closed (a reconnect, a fresh-id retry): mount them on this
+                // one (#3252). None are registered on the first mount, and a
+                // navigation cleared them.
+                this.remountSlots();
+                // The lazy views that were waiting for the page view to mount (#3252).
+                if (window.djust.lazyHydration && window.djust.lazyHydration.pendingMounts.length) {
+                    window.djust.lazyHydration.processPendingMounts();
+                }
                 // Trigger form recovery and dj-auto-recover after reconnect mount
                 if (window.djust._isReconnect) {
                     if (typeof window.djust._processFormRecovery === 'function') {
@@ -328,10 +357,19 @@ class LiveViewSSE {
 
             case 'error':
                 console.error('[SSE] Server error:', data.error);
+                // The view that frame names is not mounted on the server (its
+                // session was replaced, or it was refused): drop the client's
+                // registration so a reconnect does not mount it again (#3252).
+                if (data.code === 'view_unavailable' && typeof data.target_id === 'string') {
+                    forgetSlot(data.target_id);
+                }
                 window.dispatchEvent(new CustomEvent('djust:error', {
                     detail: {
                         error: data.error,
                         code: typeof data.code === 'string' ? data.code : null,
+                        transient: data.transient === true,
+                        view: typeof data.view === 'string' ? data.view : (this.primaryViewPath || null),
+                        target_id: typeof data.target_id === 'string' ? data.target_id : null,
                         traceback: data.traceback || null
                     }
                 }));
@@ -433,6 +471,10 @@ class LiveViewSSE {
     liveRedirectMount(outgoing) {
         if (!this.enabled || !this.viewMounted) return false;
         cancelPendingRateLimits();
+        // The server tears down every view of the session, the ones hydrated
+        // beside the page view too (#3252); the destination's own lazy
+        // containers are not hydrated yet.
+        clearSlots();
         // has_ids describes the incoming markup, not whether the current DOM
         // already represents it. Navigation must replace the previous page.
         this._replacingView = true;
@@ -464,15 +506,22 @@ class LiveViewSSE {
      * @param {string}      eventName      Handler name on the LiveView
      * @param {Object}      params         Event parameters
      * @param {Element|null} triggerElement DOM element that triggered the event
+     * @param {string|null}  slotId        Container address of the view the event
+     *                                     belongs to (#3252); null for the page view
      */
-    sendEvent(eventName, params = {}, triggerElement = null, keepalive = false) {
+    sendEvent(eventName, params = {}, triggerElement = null, slotId = null) {
         if (!this.enabled || !this.viewMounted) {
             return false;
         }
 
         const request = registerEventRequest(this, eventName, triggerElement);
         try {
-            if (!this.sendMessage({ type: 'event', event: eventName, params, ref: request.ref }, keepalive)) {
+            // An event from inside a view mounted beside the page view runs on
+            // that view (#3252); the page view's carries no address.
+            if (!this.sendMessage({
+                type: 'event', event: eventName, params, ref: request.ref,
+                ...slotFrameFields(slotId || slotIdFor(triggerElement)),
+            })) {
                 cancelEventRequests(this, request.ref);
             }
         } catch (error) {
@@ -480,6 +529,83 @@ class LiveViewSSE {
             throw error;
         }
         return request.promise;
+    }
+
+    /**
+     * Apply a frame the server addressed to a view mounted beside the page view
+     * (``target_id``, #3252): a ``mount`` reply fills the view's container, any
+     * other frame is handled by the code that handles the page view's frames,
+     * run in the view's context (``withSlot``).
+     */
+    async _handleSlotFrame(data) {
+        if (data.type === 'mount') {
+            const container = slotContainer(data.target_id);
+            const hadContent = !!container && container.innerHTML.trim().length > 0;
+            applySlotMount(this, data, { html: hadContent ? 'morph' : 'replace' });
+            document.querySelectorAll('[dj-cloak]').forEach(el => el.removeAttribute('dj-cloak'));
+            return;
+        }
+        const applied = await withSlot(data.target_id, () => this._handleMessageImpl(data, true));
+        if (applied === undefined) {
+            // The container is gone (the page replaced it): its frames have
+            // nowhere to go, but an event reply must still settle its request.
+            const event = acknowledgeEventRequest(this, data);
+            if (event && event.eventName) globalLoadingManager.stopLoading(event.eventName, event.trigger);
+        }
+    }
+
+    /**
+     * Mount a view beside the page view (lazy hydration, #3252): the frame names
+     * the container the view fills, so the server adds it to the session instead
+     * of replacing the page view.
+     *
+     * @param {string} viewPath  Dotted view path.
+     * @param {Object} params    Initial mount kwargs.
+     * @param {Object} options   ``{targetId}`` the container's address,
+     *                           ``{hasPrerendered}`` whether it holds server HTML.
+     */
+    mount(viewPath, params = {}, options = {}) {
+        if (!this.enabled || !this.viewMounted || !options.targetId) return false;
+        let clientTimezone = null;
+        try { clientTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { /* noop */ }
+        return this.sendMessage({
+            type: 'mount',
+            view: viewPath,
+            params,
+            url: window.location.pathname,
+            has_prerendered: options.hasPrerendered ?? false,
+            client_timezone: clientTimezone,
+            target_id: options.targetId,
+        });
+    }
+
+    /**
+     * Mount again every view hydrated beside the page view on a new session
+     * (the stream reconnected): the server holds no view for a stream that
+     * closed.
+     */
+    remountSlots() {
+        if (!this.enabled || !this.viewMounted) return;
+        const urlParams = Object.fromEntries(new URLSearchParams(window.location.search));
+        for (const [targetId, slot] of Array.from(_mountedSlots.entries())) {
+            if (!slotContainer(targetId)) {
+                forgetSlot(targetId);
+                continue;
+            }
+            _slotVersions.set(targetId, null);
+            this.mount(slot.viewPath, urlParams, { targetId: targetId, hasPrerendered: true });
+        }
+    }
+
+    /**
+     * Tell the server a view hydrated beside the page view is gone (its
+     * container was removed). The page view and the other views stay live.
+     */
+    unmountView(targetId) {
+        if (!_mountedSlots.has(targetId)) return false;
+        forgetSlot(targetId);
+        if (!this.enabled || !this.viewMounted) return false;
+        return this.sendMessage({ type: 'unmount', target_id: targetId });
     }
 
     sendTeardownEvent(eventName, params, _triggerElement) {

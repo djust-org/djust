@@ -408,10 +408,12 @@ class TestContrastPairsCompleteness:
             "brand_foreground",
             # #3281 / #3165: theme colours used as text or as a border.
             "link",
-            "primary",
-            "info",
-            "success",
-            "warning",
+            # #2885: fills painted as text are read through derived ``*_text`` colours.
+            "primary_text",
+            "brand_text",
+            "info_text",
+            "success_text",
+            "warning_text",
             "destructive_text",
             "input",
         }

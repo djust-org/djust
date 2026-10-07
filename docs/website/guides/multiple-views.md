@@ -4,7 +4,7 @@ slug: multiple-views
 section: guides
 order: 6.9
 level: intermediate
-description: "An eager page view, dj-lazy views and a mount_batch on one WebSocket: each is live on its own, and its events, pushes and presence go to it."
+description: "An eager page view, dj-lazy views and a mount_batch on one WebSocket or SSE stream: each is live on its own, and its events, pushes and presence go to it."
 ---
 
 # Several LiveViews on One Page
@@ -15,7 +15,7 @@ A page can hold more than one LiveView:
 - **lazy views**, `<div dj-view="myapp.views.Widget" dj-lazy>` containers that mount when they scroll into view, on the first click or hover, or when the browser is idle;
 - the views of a **`mount_batch`**: lazy views that hydrate together are mounted by one frame.
 
-They share one WebSocket. Each is a LiveView of its own on it: it has its own state, its own render, its own tick, presence and group memberships, and it is torn down on its own. A click in one view runs on that view, a server push goes to the views of the class it was sent to, and mounting a lazy view does not touch the page view.
+They share one connection, a WebSocket or (when WebSocket is off or blocked) an SSE stream; [what each transport carries](#transports) is below. Each is a LiveView of its own on it: it has its own state, its own render, its own tick, presence and group memberships, and it is torn down on its own. A click in one view runs on that view, a server push goes to the views of the class it was sent to, and mounting a lazy view does not touch the page view.
 
 ```html
 <div dj-root dj-view="myapp.views.Dashboard">
@@ -76,19 +76,40 @@ Two views that share a channel-layer group (two views of one class, the same `li
 
 ### Limits
 
-`LIVEVIEW_CONFIG["max_views_per_connection"]` (default `64`) bounds how many views one socket hosts besides the page view. A mount past the limit is refused. The address is client-supplied, so it is checked: 1 to 200 printable ASCII characters, with no whitespace and none of `" ' ` \ < >`. An address that does not pass is refused, never taken for a page mount.
+`LIVEVIEW_CONFIG["max_views_per_connection"]` (default `64`) bounds how many views one socket hosts besides the page view. A mount past the limit is refused. The address is client-supplied, so it is checked: 1 to 200 printable ASCII characters, with no whitespace and none of `" ' ` \ < >`. An address that does not pass is refused, never taken for a page mount. The limit is per connection, so what one browser can hold is the limit times its connections: over SSE, `DJUST_SSE_MAX_SESSIONS_PER_CLIENT` sessions (default 20) of up to 64 views each. Mounts and unmounts count against the connection's message rate limit like every other frame; a burst past it is answered `rate_limited` and a sustained flood closes the connection.
 
-## Over SSE and the HTTP fallback
+## Transports
+
+The contract above holds on every connection the page can have; what differs is what the connection carries.
+
+| | WebSocket | SSE stream | Page POST (no `EventSource`) |
+|---|---|---|---|
+| Page view | yes | yes | yes |
+| Lazy views (`dj-lazy`) | one `mount` frame each, or one `mount_batch` | one `mount` POST each (no `mount_batch`) | not hydrated: `djust:error` with `code: "view_unavailable"` |
+| Events, routed by view | yes | yes | the page view's and `{% live_render %}` children's; a lazy view's are refused |
+| Hooks (`pushEvent`) | to the view they sit in | to the view they sit in | no |
+| Uploads | yes | no | no |
+| Server push, presence, `db_notify`, tick | per view | none, for any view (SSE has no server push) | none |
+| `start_async` and background work | per view | per view | no |
+| Saved state, snapshots, authorization | per view | per view | the page view's |
+| Unmount one view | `unmount` frame | `unmount` frame | n/a |
+| Teardown | a disconnect, `live_redirect` or a page mount | the stream closing, `live_redirect` or an `unmount` frame | n/a |
+| Reconnect | every view mounts again on the new socket | the page view mounts, then every view beside it | n/a |
+| `max_views_per_connection` | yes | yes | n/a |
+
+Over SSE the session is the connection: a lazy container hydrates once the page view is mounted, with a `mount` POST that names its container (`target_id`), and the server addresses every frame of that view with the same `target_id`. A page with no lazy views is unchanged. A page that has no page view to mount a session for (only `dj-lazy` containers) cannot go live over SSE; its views are reported `view_unavailable`.
+
+Where a view cannot go live, the client says so (`djust:error` with `code: "view_unavailable"`, which the dev error overlay shows) instead of leaving a container that looks interactive, and an event from inside such a container is refused. It is never sent to the page view, which would run it there.
 
 - **Embedded `{% live_render %}` children are routed on every transport.** Over HTTP-only the request renders the page once to register its children, then validates, authorizes and runs the handler on the child the event's `view_id` names, and answers with the child's own HTML. See [HTTP-Only Mode](http-only-mode.md#embedded-views-over-the-http-fallback).
-- **Lazy and batched views need the WebSocket.** An SSE session and a page POST each host one view. A lazy view does not hydrate over them, and an event from one that hydrated before the socket dropped is refused (`djust:error` with `code: "view_unavailable"`), never sent to the page view, which would run it there.
+- **State is per view on every transport.** An [explicit-exposure](../state/explicit-exposure.md) view's `persist="server"` state is stored under its own address, so two views of one class on one page (and the page view) each restore their own after a reconnect. A view beside the page view takes part in no navigation snapshot: the signed snapshot the client keeps for Back is the page view's, and a sibling's frames neither replace nor revoke it.
 
 ## Behaviors worth knowing
 
-- **Reconnect.** After the socket reconnects the client mounts the page view and every lazy view again; each starts a new VDOM cursor with its mount reply.
+- **Reconnect.** After the socket reconnects (or, over SSE, the stream does) the client mounts the page view and every lazy view again; each starts a new VDOM cursor with its mount reply.
 - **Same class twice.** Two lazy views of one class on one page are two views: each has its own state and its own cached Rust view.
 - **Events with no element.** An event sent from code (`djust.handleEvent("name")`) has no container to belong to and goes to the page view. Events that come from a `dj-*` attribute in a lazy view carry its address. `dj-patch` and `dj-navigate` act on the page's URL and are the page's, wherever they sit.
-- **Latency is shared.** The socket's receive loop and render lock belong to the connection, not to a view: an event handler that takes a second delays the events of every other view on the socket by that second. Routing is independent; latency is not. Move slow work into `start_async`, which runs off the lock.
+- **Latency is shared.** The connection's receive loop (or, over SSE, its dispatch lock) and render lock belong to the connection, not to a view: an event handler that takes a second delays the events of every other view on the socket by that second. Routing is independent; latency is not. Move slow work into `start_async`, which runs off the lock.
 - **Upload slot names are page-wide on the client.** The client keeps one upload configuration per slot name, so two views that each declare an `allow_upload("doc")` with different limits are validated client-side against the last one mounted. The server applies each view's own limits.
 - **Group-less sends are dropped when several views are mounted.** A raw `channel_layer.group_send` of a `server_push`, `presence_event` or `db_notify` message that names no `group` cannot be told apart per view, so a socket hosting more than one view drops it. `push_to_view`, `PresenceManager` and the `db_notify` listener already add it. With one view mounted nothing changes.
 - **After `live_redirect`.** `live_redirect` replaces the views on the socket and swaps the page's content without initializing the page again, so the destination's own `dj-lazy` containers do not hydrate until a full or TurboNav load.

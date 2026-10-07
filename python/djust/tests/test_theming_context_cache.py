@@ -45,7 +45,7 @@ class TestThemeContextCache:
         """Same (preset, pack, mode, resolved_mode, presets) on two
         calls → CSS generation runs exactly once. Cache hit on the
         second call."""
-        from djust.theming.context_processors import theme_context
+        from djust.tests._eager_theme_context import eager_theme_context as theme_context
 
         mgr = _make_manager()
         with (
@@ -74,7 +74,7 @@ class TestThemeContextCache:
         rendering work; `theme_head` is independently cached at the
         Django template-engine level.
         """
-        from djust.theming.context_processors import theme_context
+        from djust.tests._eager_theme_context import eager_theme_context as theme_context
 
         mgr_a = _make_manager(preset="default")
         mgr_b = _make_manager(preset="ocean")
@@ -97,7 +97,7 @@ class TestThemeContextCache:
 
     def test_different_mode_misses_cache(self):
         """Different mode (light vs dark) → fresh render."""
-        from djust.theming.context_processors import theme_context
+        from djust.tests._eager_theme_context import eager_theme_context as theme_context
 
         mgr_light = _make_manager(mode="light", resolved_mode="light")
         mgr_dark = _make_manager(mode="dark", resolved_mode="dark")
@@ -114,7 +114,7 @@ class TestThemeContextCache:
 
     def test_different_pack_misses_cache(self):
         """Different pack → fresh render."""
-        from djust.theming.context_processors import theme_context
+        from djust.tests._eager_theme_context import eager_theme_context as theme_context
 
         mgr_a = _make_manager(pack=None)
         mgr_b = _make_manager(pack="shadcn-default")
@@ -131,7 +131,7 @@ class TestThemeContextCache:
         """Adding/removing a theme preset (e.g., a hot-reload of the
         manifest) must invalidate the cache for that key. The presets
         list is part of the cache key."""
-        from djust.theming.context_processors import theme_context
+        from djust.tests._eager_theme_context import eager_theme_context as theme_context
 
         presets_a = [
             {"name": "default", "display_name": "Default", "is_active": True},
@@ -154,10 +154,8 @@ class TestThemeContextCache:
     def test_clear_cache_drops_warm_state(self):
         """clear_theme_context_cache() forces a fresh render on next
         call — used for theme-pack hot-reload."""
-        from djust.theming.context_processors import (
-            clear_theme_context_cache,
-            theme_context,
-        )
+        from djust.tests._eager_theme_context import eager_theme_context as theme_context
+        from djust.theming.context_processors import clear_theme_context_cache
 
         mgr = _make_manager()
         with (
@@ -188,7 +186,7 @@ class TestThemeContextCache:
         `theme_context`. This test pins that wiring: whatever the
         classic tag returns is what the context-string emits.
         """
-        from djust.theming.context_processors import theme_context
+        from djust.tests._eager_theme_context import eager_theme_context as theme_context
 
         mgr = _make_manager()
         # Stub the classic tag to a deterministic value containing the
@@ -233,7 +231,7 @@ class TestThemeContextCache:
         failing blanked the whole pre-render set. Fixed in the #1452
         commit by per-tag wrapping.
         """
-        from djust.theming.context_processors import theme_context
+        from djust.tests._eager_theme_context import eager_theme_context as theme_context
 
         mgr = _make_manager()
         with (
@@ -272,7 +270,7 @@ class TestThemeContextCache:
         theme_mode_toggle, theme_preset_selector strings so templates
         can use them as `{{ theme_panel }}` instead of `{% theme_panel %}`.
         """
-        from djust.theming.context_processors import theme_context
+        from djust.tests._eager_theme_context import eager_theme_context as theme_context
 
         mgr = _make_manager()
         with (
@@ -320,7 +318,7 @@ class TestThemeContextCache:
         healthy tags still render. The 0.9.6rc2 broad-try/except
         wrapped all four in one block so any one failing blanked all.
         """
-        from djust.theming.context_processors import theme_context
+        from djust.tests._eager_theme_context import eager_theme_context as theme_context
 
         mgr = _make_manager()
         with (
@@ -359,7 +357,7 @@ class TestThemeContextCache:
         resolved_mode, presets_key) tuple — nothing from request flows
         in. Two requests with different `request.user`, `request.path`,
         etc. but same theme state get the SAME bytes."""
-        from djust.theming.context_processors import theme_context
+        from djust.tests._eager_theme_context import eager_theme_context as theme_context
 
         mgr = _make_manager()
         with (
@@ -385,7 +383,7 @@ class TestThemeContextCache:
         (#2380 — empty-except → logged, correctness over caching)."""
         import logging
 
-        from djust.theming.context_processors import theme_context
+        from djust.tests._eager_theme_context import eager_theme_context as theme_context
 
         class SlotsRequest:
             __slots__ = ()  # cannot hold `_djust_theme_ctx_cache`

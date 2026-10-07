@@ -328,6 +328,8 @@ async def _shutdown_closed_session(session: "SSESession") -> None:
             )
         # The latest state is stored before the view goes (#3248).
         await session.runtime.finish_state_saves()
+        for slot in list(session._slots.values()):
+            await slot.runtime.finish_state_saves()
         session.shutdown()
     except Exception:  # noqa: BLE001 — view hooks are app code; values stay out of logs
         logger.warning(
@@ -463,6 +465,14 @@ class SSESession:
         # Presence untracks scheduled by shutdown() (#3254): held so a task is
         # not garbage-collected before it finishes, dropped when it does.
         self._presence_untrack_tasks: set[asyncio.Task] = set()
+        # In-flight ``disconnected()`` hook runs (#3007), held until they finish.
+        self._disconnected_tasks: set[asyncio.Task] = set()
+        # The views mounted beside the page view (#3252), by ``target_id``. Empty
+        # for a page with no lazy views, which behaves exactly as before.
+        self._slots: dict[str, Any] = {}
+        # Sticky once a second view was hosted: the saves of the views read one
+        # another's (``SSESessionTransport.hosts_other_views``).
+        self._hosted_several_views = False
         # The loop that serves the stream GET. With several event loops
         # (djust serve --loops N, #3128) a later event POST can arrive on
         # another loop; it hops here, because the queue, the locks and the
@@ -529,21 +539,11 @@ class SSESession:
             self._event_request = request
             try:
                 if data.get("target_id") is not None:
-                    # A view mounted beside the page view (#3252) lives on a
-                    # WebSocket. This session hosts one view, and answering the
-                    # frame with it would run the event on the wrong view.
-                    fields: Dict[str, Any] = {"code": "view_unavailable"}
-                    ref = data.get("ref")
-                    if type(ref) is int or type(ref) is float:
-                        try:
-                            fields["ref"] = int(ref)
-                        except (ValueError, OverflowError):
-                            # A forged NaN/infinity ref is not echoed.
-                            pass
-                    await self.send_error(
-                        "A view mounted beside the page view needs the WebSocket transport.",
-                        **fields,
-                    )
+                    # A view mounted beside the page view (#3252) has its own
+                    # runtime; a frame that names none that is mounted is
+                    # refused, never answered by the page view (which would run
+                    # the event on the wrong view).
+                    await self._dispatch_slot_frame(request, data)
                 elif data.get("type") == "live_redirect_mount":
                     if not self._rate_limiter.check("live_redirect_mount"):
                         await self.send_error("Navigation rate limit exceeded", code="rate_limited")
@@ -555,6 +555,150 @@ class SSESession:
                     await self.runtime.dispatch_message(data)
             finally:
                 self._event_request = None
+
+    # ------------------------------------------------------------------ #
+    # Views mounted beside the page view (#3252)
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _ref_fields(data: dict[str, Any]) -> Dict[str, Any]:
+        """The ``ref`` of an event frame, echoed on its refusal so the client settles it."""
+        ref = data.get("ref")
+        if type(ref) is int or type(ref) is float:
+            try:
+                return {"ref": int(ref)}
+            except (ValueError, OverflowError):
+                # A forged NaN/infinity ref is not echoed.
+                pass
+        return {}
+
+    @staticmethod
+    def _max_slots() -> int:
+        from ._view_slots import DEFAULT_MAX_SLOTS
+        from .config import config as djust_config
+
+        limit = djust_config.get("max_views_per_connection", DEFAULT_MAX_SLOTS)
+        return limit if type(limit) is int and limit > 0 else DEFAULT_MAX_SLOTS
+
+    async def _dispatch_slot_frame(self, request: HttpRequest, data: dict[str, Any]) -> None:
+        """Route a frame that names a ``target_id`` to the view mounted there."""
+        from ._sse_slots import valid_target_id
+
+        target_id = data.get("target_id")
+        fields = {"code": "view_unavailable", **self._ref_fields(data)}
+        if not valid_target_id(target_id):
+            await self.send_error("Invalid view address", **fields)
+            return
+        frame_type = data.get("type")
+        if frame_type in ("mount", "unmount"):
+            # Each mount runs a view's mount, render and state restore: bound
+            # the rate of them as the WebSocket bounds every frame (and this
+            # session bounds a navigation).
+            if not self._rate_limiter.check(frame_type):
+                await self.send_error(
+                    "Rate limit exceeded", code="rate_limited", **self._ref_fields(data)
+                )
+                if self._rate_limiter.should_disconnect():
+                    self.shutdown()
+                return
+        if frame_type == "mount":
+            await self._mount_slot(request, data)
+            return
+        if frame_type == "unmount":
+            async with self._render_lock:
+                await self._release_slot(target_id, reason="view_unmounted")
+            return
+        slot = self._slots.get(target_id)
+        if slot is None or slot.view is None:
+            # Unmounted, forged or never mounted: answering with the page view
+            # would run the event on the wrong view.
+            await self.send_error("No view is mounted at this address", **fields)
+            return
+        await slot.runtime.dispatch_message(data)
+
+    async def _mount_slot(self, request: HttpRequest, data: dict[str, Any]) -> None:
+        """Mount the view of a ``mount`` frame that names a ``target_id``.
+
+        The view is added beside the page view and the other slots, none of
+        which is touched; a view already mounted at that address is replaced
+        (the same container hydrating again). Its ``mount`` reply, and every
+        later frame of the view, carry the ``target_id``.
+        """
+        from ._sse_navigation import page_request
+        from ._sse_slots import SSESlot
+        from .security.mount import validate_mount_url
+
+        target_id = data["target_id"]
+        fields = {"code": "view_unavailable"}
+        if self.view_instance is None:
+            await self.send_error("The page view is not mounted yet", **fields)
+            return
+        url, params = data.get("url", "/"), data.get("params") or {}
+        if not isinstance(url, str) or not url or validate_mount_url(url) != url:
+            await self.send_error("Invalid mount URL", **fields)
+            return
+        if not isinstance(params, dict):
+            await self.send_error("Invalid mount parameters", **fields)
+            return
+        async with self._render_lock:
+            if target_id in self._slots:
+                await self._release_slot(target_id, reason="view_replaced")
+            elif len(self._slots) >= self._max_slots():
+                logger.warning(
+                    "SSE: refused a mount: this session already hosts %d views", len(self._slots)
+                )
+                await self.send_error("Too many views on this connection", **fields)
+                return
+            target_request = await sync_to_async(page_request)(request, url, params)
+            slot = SSESlot(self, target_id)
+            slot.session._request = target_request
+            self._slots[target_id] = slot
+            self._hosted_several_views = True
+            try:
+                await slot.runtime.dispatch_message(
+                    {
+                        **data,
+                        "type": "mount",
+                        "url": target_request.path_info,
+                        "params": params,
+                    }
+                )
+            except BaseException:
+                await self._release_slot(target_id, reason="mount_failed")
+                raise
+            if slot.runtime.view_instance is None or not slot.session.mount_sent:
+                # Refused (the verdict frame was sent) or failed: no view stays.
+                await self._release_slot(target_id, reason="mount_failed")
+
+    async def _release_slot(self, target_id: str, *, reason: str) -> None:
+        """Tear down the view at ``target_id``; the page view and the others stay live."""
+        slot = self._slots.pop(target_id, None)
+        if slot is None:
+            return
+        view = slot.view
+        try:
+            # The latest state is stored before the view goes (#3248).
+            await slot.runtime.finish_state_saves()
+        except Exception:  # noqa: BLE001 — teardown goes on; storage errors may carry values
+            logger.warning("SSE: finishing a released view's trailing save failed")
+        slot.runtime.view_instance = None
+        slot.session.view_instance = None
+        if view is None:
+            return
+        await self._untrack_replaced_presence(view)
+        try:
+            from ._child_lifecycle import fire_view_disconnected, release_root_view
+
+            try:
+                await fire_view_disconnected(view)
+            finally:
+                await sync_to_async(release_root_view)(view, navigation=False, reason=reason)
+        except Exception:  # noqa: BLE001 — teardown must go on
+            logger.warning("SSE: releasing a view mounted beside the page view failed")
+
+    async def _release_all_slots(self, *, reason: str) -> None:
+        for target_id in list(self._slots):
+            await self._release_slot(target_id, reason=reason)
 
     async def _replace_view(self, request: HttpRequest, data: dict[str, Any]) -> None:
         """Replace the page via shared mount/auth, using this POST's identity.
@@ -596,6 +740,10 @@ class SSESession:
             restrict_diagnostics(self.view_instance)
             watch_diagnostic_owner(self, "view_instance")
             async with self._render_lock:
+                # A navigation replaces every view of the session: the ones
+                # mounted beside the page view go with it (#3252); the
+                # destination's own lazy containers hydrate again.
+                await self._release_all_slots(reason="view_navigation")
                 old_runtime, old_view = self.runtime, self.view_instance
                 # The latest state is stored before the old page goes (#3248):
                 # the new runtime's mount may restore from it.
@@ -616,15 +764,21 @@ class SSESession:
                         await self._untrack_replaced_presence(old_view)
                 if old_view is not None:
                     try:
-                        from ._child_lifecycle import release_root_view
+                        from ._child_lifecycle import fire_view_disconnected, release_root_view
 
                         # The teardown the WebSocket live_redirect shares
                         # (#3244); SSE keeps no sticky children, so every
                         # child goes with the page. Its presence is untracked
-                        # below, after the new page has mounted (#3254).
-                        await sync_to_async(release_root_view)(
-                            old_view, navigation=True, reason="view_navigation"
-                        )
+                        # below, after the new page has mounted (#3254). The old
+                        # page's ``disconnected()`` hook (#3007) runs first, as
+                        # on a ``live_redirect``; the release follows it even if
+                        # the hook is cancelled.
+                        try:
+                            await fire_view_disconnected(old_view)
+                        finally:
+                            await sync_to_async(release_root_view)(
+                                old_view, navigation=True, reason="view_navigation"
+                            )
                     except Exception:
                         logger.warning("SSE old view cleanup failed during navigation")
                 try:
@@ -721,15 +875,55 @@ class SSESession:
         from ._child_lifecycle import release_root_view
 
         self.active = False
+        for slot in list(self._slots.values()):
+            self._shutdown_slot(slot)
+        self._slots.clear()
         view = self.view_instance
         if view is not None:
             self._untrack_presence(view)
+            self._run_disconnected(view)
             # The WebSocket disconnect's teardown (#3232, #3239, #3244).
             release_root_view(view, navigation=False, reason="view_disconnect")
             self.view_instance = None
             self.runtime.view_instance = None
         self._put(None)  # None is the sentinel value
         self._closed_sentinel_queued = True
+
+    def _shutdown_slot(self, slot: Any) -> None:
+        """The close of one view mounted beside the page view: ``shutdown``'s steps for it."""
+        from ._child_lifecycle import release_root_view
+
+        view = slot.view
+        if view is None:
+            return
+        self._untrack_presence(view)
+        self._run_disconnected(view)
+        release_root_view(view, navigation=False, reason="view_disconnect")
+        slot.session.view_instance = None
+        slot.runtime.view_instance = None
+
+    def _run_disconnected(self, view: Any) -> None:
+        """Run a closing view's ``disconnected()`` hook (#3007) without blocking the loop.
+
+        ``shutdown()`` is synchronous and the hook may use the ORM, so on a loop
+        thread the hook runs as a task on a worker thread, after ``shutdown``
+        has released the view, as the presence untrack does (#3254): it must not
+        rely on the view's uploads, waiters or children still being in place.
+        With no running loop it runs inline, before the release. A view that
+        never reached the connected phase costs nothing.
+        """
+        from ._child_lifecycle import awaiting_disconnected, run_view_disconnected
+
+        if not awaiting_disconnected(view):
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            run_view_disconnected(view)
+            return
+        task = loop.create_task(sync_to_async(run_view_disconnected)(view))
+        self._disconnected_tasks.add(task)
+        task.add_done_callback(self._disconnected_tasks.discard)
 
     def _untrack_presence(self, view: Any) -> None:
         """Untrack a closing view's presence without blocking the loop (#3254).

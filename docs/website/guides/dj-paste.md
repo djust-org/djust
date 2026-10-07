@@ -122,7 +122,7 @@ When you want to intercept the paste completely — for example when you're rout
 
 ## When to reach for `dj-paste` vs `dj-input`
 
-- **`dj-input`** fires on every keystroke. The server sees the current value of the field. If a user pastes into a `dj-input`-bound textarea, you get the post-paste value as a single update — no paste metadata, no file support.
+- **`dj-input`** fires on the `input` event (text fields are debounced 300 ms by default, so a burst of typing is one event). The server sees the current value of the field. If a user pastes into a `dj-input`-bound textarea, you get the post-paste value as a single update — no paste metadata, no file support.
 - **`dj-paste`** fires once per paste. You receive text + HTML + file metadata. The native paste still happens (unless suppressed), so you can pair `dj-paste` with `dj-input` on the same element without conflict:
 
 ```html

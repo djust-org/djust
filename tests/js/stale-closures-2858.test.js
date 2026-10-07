@@ -73,7 +73,13 @@ function initClient(dom) {
 const getFetchCalls = (dom) => dom.window._testFetchCalls;
 const eventNames = (dom) => getFetchCalls(dom).map((c) => c.eventName);
 const bodyStrings = (dom) => getFetchCalls(dom).map((c) => JSON.stringify(c.body));
-const flush = () => new Promise((r) => setTimeout(r, 80));
+// Positive expectations wait for the effect (a poll tick, a dispatch, a preview
+// written by an async FileReader) instead of sleeping a fixed time: a fixed
+// sleep passes alone and fails when the machine is loaded. A NEGATIVE
+// expectation ("no second dispatch") can only be a short real wait, after the
+// positive effect has been seen.
+const until = (assertion) => vi.waitFor(assertion, { timeout: 10000, interval: 10 });
+const quiet = (ms = 60) => nativeSleep(ms);
 
 describe('#2858 dj-poll: a VALUE change on a surviving element must rebuild the phase', () => {
     beforeEach(() => {
@@ -87,15 +93,15 @@ describe('#2858 dj-poll: a VALUE change on a surviving element must rebuild the 
         initClient(dom);
 
         // Stimulus check: the poll fires under the OLD value.
-        await nativeSleep(250);
-        expect(eventNames(dom).filter((n) => n === 'refresh').length).toBeGreaterThanOrEqual(1);
+        await until(() => expect(eventNames(dom).filter((n) => n === 'refresh').length).toBeGreaterThanOrEqual(1));
 
         // Server re-render changes the VALUE; morphdom keeps the element and
         // only mutates the attribute. A bind pass must rebuild the interval.
         const before = eventNames(dom).length;
         dom.window.document.getElementById('p').setAttribute('dj-poll', 'renamed');
         dom.window.djust.bindLiveViewEvents();
-        await nativeSleep(250);
+        await until(() => expect(eventNames(dom).slice(before).includes('renamed')).toBe(true));
+        await quiet(120); // a stale 50 ms interval would have ticked again by now
 
         const after = eventNames(dom).slice(before);
         // Pre-fix this kept dispatching `refresh` (stale interval) and never
@@ -127,14 +133,13 @@ describe('#2858 dj-poll: a VALUE change on a surviving element must rebuild the 
         expect(el._djustPollIntervalId).toBe(originalId);
 
         // The surviving phase must still be alive and firing.
-        await nativeSleep(180);
-        expect(eventNames(dom).length).toBeGreaterThanOrEqual(1);
+        await until(() => expect(eventNames(dom).length).toBeGreaterThanOrEqual(1));
     });
 
     it('an INTERVAL change on a surviving element rebuilds at the new cadence', async () => {
         // dj-poll-interval is baked into setInterval, so the rebuild key must
-        // cover it: 200ms -> 20ms. Post-rebind, 250ms yields ~12 ticks; a
-        // phase that never rebuilt yields at most 1.
+        // cover it: 200ms -> 20ms. Observed through the delay the rebuild passes
+        // to setInterval, not through how many ticks fit in a sleep.
         const dom = createTestEnv(
             '<div dj-view="app.PollView"><div id="p" dj-poll="refresh" dj-poll-interval="200"></div></div>'
         );
@@ -144,13 +149,19 @@ describe('#2858 dj-poll: a VALUE change on a surviving element must rebuild the 
         const originalId = el._djustPollIntervalId;
 
         const before = eventNames(dom).length;
+        const delays = [];
+        const realSetInterval = dom.window.setInterval.bind(dom.window);
+        dom.window.setInterval = (fn, ms, ...args) => {
+            delays.push(ms);
+            return realSetInterval(fn, ms, ...args);
+        };
         el.setAttribute('dj-poll-interval', '20');
         dom.window.djust.bindLiveViewEvents();
-        await nativeSleep(250);
 
-        const after = eventNames(dom).slice(before);
         expect(el._djustPollIntervalId).not.toBe(originalId);
-        expect(after.length).toBeGreaterThanOrEqual(5);
+        expect(delays).toEqual([20]);
+        // ... and the rebuilt phase is alive.
+        await until(() => expect(eventNames(dom).length).toBeGreaterThan(before));
     });
 
     it('dispatches with FRESH data-* params after they change on the surviving element', async () => {
@@ -161,13 +172,9 @@ describe('#2858 dj-poll: a VALUE change on a surviving element must rebuild the 
         );
         initClient(dom);
 
-        await nativeSleep(130);
+        await until(() => expect(bodyStrings(dom).some((b) => b.includes('month'))).toBe(true));
         dom.window.document.getElementById('p').setAttribute('data-period', 'day');
-        await nativeSleep(130);
-
-        const bodies = bodyStrings(dom);
-        expect(bodies.some((b) => b.includes('month'))).toBe(true);
-        expect(bodies.some((b) => b.includes('day'))).toBe(true);
+        await until(() => expect(bodyStrings(dom).some((b) => b.includes('day'))).toBe(true));
     });
 });
 
@@ -190,8 +197,7 @@ describe('#2858 dj-model: an attribute change on a surviving element must rebuil
         dom.window.djust.bindModelElements();
 
         fireInput(dom, el);
-        await flush();
-        expect(eventNames(dom)).toEqual(['update_model']);
+        await until(() => expect(eventNames(dom)).toEqual(['update_model']));
         expect(bodyStrings(dom)[0]).toContain('"field_a"');
 
         // The template re-points the directive; the input survives the morph.
@@ -199,7 +205,8 @@ describe('#2858 dj-model: an attribute change on a surviving element must rebuil
         dom.window.djust.bindModelElements();
 
         fireInput(dom, el);
-        await flush();
+        await until(() => expect(eventNames(dom).length).toBe(2));
+        await quiet();
         // Pre-fix this dispatched field_a a SECOND time (stale closure).
         expect(eventNames(dom)).toEqual(['update_model', 'update_model']);
         expect(bodyStrings(dom)[1]).toContain('"field_b"');
@@ -217,21 +224,19 @@ describe('#2858 dj-model: an attribute change on a surviving element must rebuil
         dom.window.djust.bindModelElements();
 
         fireInput(dom, el);
-        await flush();
-        expect(eventNames(dom)).toEqual(['update_model']);
+        await until(() => expect(eventNames(dom)).toEqual(['update_model']));
 
         el.setAttribute('dj-model.lazy', 'q');
         el.removeAttribute('dj-model');
         dom.window.djust.bindModelElements();
 
         fireInput(dom, el);
-        await flush();
+        await quiet();
         // Pre-fix the old input listener kept firing (stale event type).
         expect(eventNames(dom)).toEqual(['update_model']);
 
         fireChange(dom, el);
-        await flush();
-        expect(eventNames(dom)).toEqual(['update_model', 'update_model']);
+        await until(() => expect(eventNames(dom)).toEqual(['update_model', 'update_model']));
     });
 
     it('an unchanged attribute tuple does NOT double-bind (one dispatch per input)', async () => {
@@ -247,7 +252,8 @@ describe('#2858 dj-model: an attribute change on a surviving element must rebuil
         dom.window.djust.bindModelElements();
 
         fireInput(dom, el);
-        await flush();
+        await until(() => expect(eventNames(dom).length).toBeGreaterThanOrEqual(1));
+        await quiet();
 
         expect(eventNames(dom)).toEqual(['update_model']);
     });
@@ -301,19 +307,18 @@ describe('#2858 dj-upload: a slot-name change on a surviving element must rebuil
         };
 
         drop();
-        await flush();
         // Stimulus check: the first slot preview was populated.
-        expect(prevA.children.length).toBeGreaterThan(0);
+        await until(() => expect(prevA.children.length).toBeGreaterThan(0));
 
         const countA = prevA.children.length;
         zone.setAttribute('dj-upload-drop', 'drop_b');
         dom.window.djust.uploads.bindHandlers();
 
         drop();
-        await flush();
+        await until(() => expect(prevB.children.length).toBeGreaterThan(0));
+        await quiet();
         // Pre-fix the stale closure kept writing previews into drop_a and
         // never touched drop_b.
-        expect(prevB.children.length).toBeGreaterThan(0);
         expect(prevA.children.length).toBe(countA);
     });
 
@@ -342,7 +347,8 @@ describe('#2858 dj-upload: a slot-name change on a surviving element must rebuil
         const ev = new dom.window.Event('drop', { bubbles: true });
         ev.dataTransfer = { files: [file] };
         zone.dispatchEvent(ev);
-        await flush();
+        await until(() => expect(errors.some((e) => e.includes('WebSocket not connected'))).toBe(true));
+        await quiet();
 
         const notConnected = errors.filter((e) => e.includes('WebSocket not connected'));
         expect(notConnected.length).toBe(1);

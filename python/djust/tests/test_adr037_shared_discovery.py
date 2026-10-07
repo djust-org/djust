@@ -216,6 +216,7 @@ def test_audit_lists_the_shared_discovery_minus_framework_surface(collect):
 def _dir_walk_metadata(view):
     """The retired runtime walk (ADR-037 row 9), kept as the test oracle."""
     from djust._parameter_metadata import handler_metadata
+    from djust.decorators import is_push_only
 
     metadata = {}
     for name in dir(view):
@@ -223,6 +224,10 @@ def _dir_walk_metadata(view):
             continue
         try:
             method = getattr(view, name)
+            # A @push_handler name (or an override of one) is not a browser
+            # handler, so dispatch resolves nothing for it (#3002).
+            if is_push_only(view, name, method):
+                continue
             if callable(method) and hasattr(method, "_djust_decorators"):
                 metadata[name] = handler_metadata(method)
         except (AttributeError, TypeError):

@@ -1819,7 +1819,7 @@ def component_client(component_name: str) -> dict:
     if hook:
         sources = _client_hook_sources()
         hook_shipped = bool(
-            re.search(rf'hooks\.{hook}\s*=|dj-hook="{hook}"|\b{hook}\s*:\s*\{{', sources)
+            re.search(rf'[hH]ooks\.{hook}\s*=|dj-hook="{hook}"|\b{hook}\s*:\s*\{{', sources)
         )
     return {"hook": hook, "script": script, "hook_shipped": hook_shipped}
 

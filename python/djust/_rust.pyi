@@ -69,6 +69,50 @@ class CompiledTemplate:
 
     ...
 
+class LazyBlock:
+    """The ``block`` a bridged Django tag handler receives while a
+    ``{{ block.super }}`` is armed (#2918).
+
+    Built only by the engine, and good only for the bridged call it was handed
+    to: afterwards ``super()`` answers ``''``, as Django's ``BlockNode`` does
+    once the render is over. ``super()`` renders the parent block when READ and
+    again on every read (never memoized); asking whether ``super`` exists, or
+    for the keys, renders nothing. It has Django's shape
+    (``context["block"].super()``, and ``Variable("block.super")``).
+
+    .. deprecated:: 1.3
+        The dict-style reads ``block["super"]``, ``get("super")``, ``values()``,
+        ``items()`` and ``dict(block)`` (the shape of the ``dict`` this replaced)
+        still work but emit a ``DeprecationWarning``; they are removed no
+        earlier than 2.0.0. Use ``block.super()``. Django's own resolver never
+        reaches them: ``__getitem__`` answers it ``TypeError`` (not
+        subscriptable) exactly as a ``BlockNode`` does.
+    """
+
+    def super(self) -> str: ...
+    def get(self, key: object, default: object = None) -> object:
+        """.. deprecated:: 1.3  Reading ``"super"`` this way; use ``super()``."""
+        ...
+
+    def __getitem__(self, key: object) -> str:
+        """.. deprecated:: 1.3  Use ``super()``."""
+        ...
+
+    def __contains__(self, key: object) -> bool: ...
+    def __len__(self) -> int: ...
+    def __iter__(self) -> object: ...
+    def keys(self) -> list[str]: ...
+    def values(self) -> list[str]:
+        """.. deprecated:: 1.3  Use ``super()``."""
+        ...
+
+    def items(self) -> list[tuple[str, str]]:
+        """.. deprecated:: 1.3  Use ``super()``."""
+        ...
+
+    def __copy__(self) -> LazyBlock: ...
+    def __deepcopy__(self, memo: object) -> LazyBlock: ...
+
 class TemplateObject:
     """The shape an arbitrary Python object takes inside the context dict a
     bridged Django tag handler receives (#2731).
@@ -1376,6 +1420,7 @@ __all__ = [
     "compile_template",
     "CompiledTemplate",
     "TemplateObject",
+    "LazyBlock",
     "template_cache_contains",
     "registry_generation",
     "new_registry_namespace",

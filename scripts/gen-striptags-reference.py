@@ -6,12 +6,13 @@ Why this fixture exists
 `striptags` is a port of `django.utils.html.strip_tags`, which is fifteen lines
 of Django over CPython's `html.parser`. The Rust port is fixed; **the reference
 is not**. `html/parser.py` was rewritten for HTML5-spec alignment in CPython
-3.12.10, and 3.14 changed the end-of-input character-reference handling again,
+3.12.12, and 3.14 changed the end-of-input character-reference handling again,
 so the three interpreters djust's CI matrix runs disagree with each other:
 
-    3.12.9   vs 3.12.13 : 1108 / 4000 corpus values differ
+    3.12.9   vs 3.12.13 : 1076 / 4000 corpus values differ
     3.12.13  vs 3.13.7  :    0
-    3.12.13  vs 3.14.6  :  224
+    3.12.13  vs 3.14.6  :  231   (end-of-input `&` / `&#` handling)
+    3.13.7   vs 3.13.15 :  239   (the same, plus 8 abrupt-comment values)
 
 A differential that computes its reference at run time therefore asserts a
 DIFFERENT contract on every runner — it can pass locally and fail in CI for
@@ -28,10 +29,17 @@ support matrix, and split:
                  disagreement is visible in the repo rather than discovered in
                  CI. djust must still behave like *one of* them.
 
+A CPython PATCH release can move it too: 3.13.15 and 3.14.7 changed how an
+abruptly closed empty comment (`<!-->`, `<!--->`) is closed (CI run 37169161029), so six
+values left `stable`. Capture EVERY interpreter the CI matrix runs, at the patch
+release it currently runs -- not one per minor version -- and regenerate when a
+CI interpreter is newer than the newest one in the fixture's `versions`. The
+fixture was last captured on 3.12.9, 3.12.13, 3.13.7, 3.13.15, 3.14.6, 3.14.7.
+
 Usage
 -----
     python scripts/gen-striptags-reference.py \\
-        /path/to/python3.12 /path/to/python3.13 /path/to/python3.14
+        /path/to/python3.12 /path/to/python3.13 /path/to/python3.14 ...
 
 Each interpreter needs only the standard library. The Django half of
 `strip_tags` (the `MAX_STRIP_TAGS_DEPTH` guards and the re-strip loop) is

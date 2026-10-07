@@ -47,9 +47,9 @@ label, .form-label { color: hsl(var(--foreground)); }
 .btn-warning { background-color: hsl(var(--warning)); border-color: hsl(var(--warning)); color: hsl(var(--warning-foreground)); }
 
 /* Alerts */
-.alert-info { background-color: hsl(var(--info) / 0.1); border-color: hsl(var(--info) / 0.3); color: hsl(var(--info)); }
-.alert-success { background-color: hsl(var(--success) / 0.1); border-color: hsl(var(--success) / 0.3); color: hsl(var(--success)); }
-.alert-warning { background-color: hsl(var(--warning) / 0.1); border-color: hsl(var(--warning) / 0.3); color: hsl(var(--warning)); }
+.alert-info { background-color: hsl(var(--info) / 0.1); border-color: hsl(var(--info) / 0.3); color: hsl(var(--info-text)); }
+.alert-success { background-color: hsl(var(--success) / 0.1); border-color: hsl(var(--success) / 0.3); color: hsl(var(--success-text)); }
+.alert-warning { background-color: hsl(var(--warning) / 0.1); border-color: hsl(var(--warning) / 0.3); color: hsl(var(--warning-text)); }
 .alert-danger { background-color: hsl(var(--destructive) / 0.1); border-color: hsl(var(--destructive) / 0.3); color: hsl(var(--destructive-text)); }
 
 /* Cards */
@@ -67,10 +67,10 @@ a:hover { color: hsl(var(--link-hover)); }
 
 /* Text utilities */
 .text-muted { color: hsl(var(--muted-foreground)) !important; }
-.text-primary { color: hsl(var(--primary)) !important; }
+.text-primary { color: hsl(var(--primary-text)) !important; }
 .text-danger { color: hsl(var(--destructive-text)) !important; }
-.text-success { color: hsl(var(--success)) !important; }
-.text-warning { color: hsl(var(--warning)) !important; }
+.text-success { color: hsl(var(--success-text)) !important; }
+.text-warning { color: hsl(var(--warning-text)) !important; }
 
 /* Borders */
 .border { border-color: hsl(var(--border)) !important; }
@@ -91,9 +91,9 @@ hr { border-color: hsl(var(--border)); }
 .btn-secondary { --bs-btn-bg: hsl(var(--secondary)); --bs-btn-border-color: hsl(var(--border)); --bs-btn-color: hsl(var(--secondary-foreground)); }
 
 /* Alerts */
-.alert-info { background-color: hsl(var(--info) / 0.1); border-color: hsl(var(--info) / 0.3); color: hsl(var(--info)); }
-.alert-success { background-color: hsl(var(--success) / 0.1); border-color: hsl(var(--success) / 0.3); color: hsl(var(--success)); }
-.alert-warning { background-color: hsl(var(--warning) / 0.1); border-color: hsl(var(--warning) / 0.3); color: hsl(var(--warning)); }
+.alert-info { background-color: hsl(var(--info) / 0.1); border-color: hsl(var(--info) / 0.3); color: hsl(var(--info-text)); }
+.alert-success { background-color: hsl(var(--success) / 0.1); border-color: hsl(var(--success) / 0.3); color: hsl(var(--success-text)); }
+.alert-warning { background-color: hsl(var(--warning) / 0.1); border-color: hsl(var(--warning) / 0.3); color: hsl(var(--warning-text)); }
 .alert-danger { background-color: hsl(var(--destructive) / 0.1); border-color: hsl(var(--destructive) / 0.3); color: hsl(var(--destructive-text)); }
 
 /* Cards */
@@ -654,7 +654,7 @@ body::before {{
         if interact.link_hover == "underline":
             link_hover = "text-decoration: underline;"
         elif interact.link_hover == "color":
-            link_hover = "color: hsl(var(--primary));"
+            link_hover = "color: hsl(var(--primary-text));"
         elif interact.link_hover == "background":
             link_hover = "background-color: hsla(var(--primary), 0.1);"
 

@@ -1094,7 +1094,7 @@ fn call_custom_tag(
     if returns_bindings && !context.block_super_is_armed() {
         // #2914: the live frames, memoised per frame version. Gated on the
         // SAME condition as `bridged_context_map`'s own fast path (#2710): an
-        // armed `block.super` binds a synthetic `block` key on a clone, which
+        // armed `block.super` swaps `block` for a lazy object (#2918), which
         // only the flattened map below carries.
         let (html, bindings) = crate::registry::call_handler_with_bindings(
             name,
@@ -2414,8 +2414,8 @@ impl djust_core::context::BlockSuperSource for DeferredBlockSuper {
     }
 }
 
-/// The context map to hand a PYTHON-BRIDGED tag, with `block.super`
-/// materialised when one is armed (#2710).
+/// The context map to hand a PYTHON-BRIDGED tag, with `block.super` deferred
+/// behind a lazy object when one is armed (#2710, #2918).
 ///
 /// #2710 defers the parent render to the moment an expression resolves
 /// `block.super`, which works for every operand channel the RENDERER owns
@@ -2423,39 +2423,54 @@ impl djust_core::context::BlockSuperSource for DeferredBlockSuper {
 /// renderer's: a bridged tag receives the context as a FLAT MAP
 /// ([`djust_core::Context::to_hashmap`]) and Django's own Python code then
 /// resolves against that map — `{% blocktranslate with s=block.super %}` is
-/// the shape that finds it. A map has nothing to defer behind, so this is
-/// where the laziness ends.
+/// the shape that finds it.
+///
+/// A map has nothing to defer behind, so `block` in it is a [`LazyBlock`]
+/// (`djust_core`) rather than a rendered string: the parent runs when the
+/// tag READS `super`, once per read, and not at all for a tag that never
+/// does. Django's context carries the `BlockNode` and `super()` is a method,
+/// so this is the same shape — the parent's own side effects now run exactly
+/// as often as Django's. The earlier version rendered the parent for every
+/// bridged call made inside an overriding block (60 handler calls against 12
+/// in #2916's probe).
 ///
 /// The ONE statement of that rule, read by every `to_hashmap()` caller,
 /// because a second copy is #1646 and the sites are seven
 /// (`the_python_bridge_has_exactly_the_callers_it_claims` pins the SET, not
-/// a floor). Costs nothing when nothing is armed, which is every render that
-/// is not inside an overriding `{% block %}`.
+/// a floor). Costs nothing when nothing is armed. Armed is wider than "inside
+/// a block that names `block.super`": every inherited block of an extending
+/// template is wrapped in a (possibly empty-parent) scope, so a bridged call
+/// anywhere inside `{% extends %}` pays for one `LazyBlock`.
 ///
-/// **The residual divergence, stated rather than left silent**: a bridged tag
-/// inside such a block renders the parent even when it never asks — the class
-/// #2710 fixes, narrowed to this boundary. Django does not: its context
-/// carries the `BlockNode` and `super()` is a method. Closing it would mean
-/// scanning the bridged tag's own source text for the name, which is the
-/// "static detection is not evidence of evaluation" reasoning #2710 rejects,
-/// one level down. What this DOES preserve is the pre-#2710 behaviour at
-/// these seven sites exactly, so nothing that worked stops working.
-fn bridged_context_map(context: &Context) -> Result<std::collections::HashMap<String, Value>> {
-    let Some(parent_html) = context.render_armed_block_super()? else {
-        return Ok(context.to_hashmap());
-    };
-    let mut owned = context.clone();
-    // Disarmed on the copy so nothing can render the parent a SECOND time
-    // for the same tag: the binding below is now the answer.
-    owned.disarm_block_super();
-    let mut block_obj = indexmap::IndexMap::new();
-    block_obj.insert(
-        djust_core::ObjectKey::from("super"),
-        Value::String(parent_html),
-    );
-    owned.bind("block".to_string(), Value::Object(block_obj), false);
-    owned.mark_safe("block.super".to_string());
-    Ok(owned.to_hashmap())
+/// A user binding named `block` (a `{% for block in … %}` variable) is left
+/// alone: the lazy object replaces only the scope's own, EMPTY `block`.
+fn bridged_context_map(context: &Context) -> Result<BridgedContextMap> {
+    let mut map = context.to_hashmap();
+    let mut guard = None;
+    if let Some((lazy_block, lazy_guard)) = context.lazy_block_value()? {
+        let scope_block =
+            matches!(map.get("block"), Some(Value::Object(fields)) if fields.is_empty());
+        if scope_block {
+            map.insert("block".to_string(), lazy_block);
+            guard = Some(lazy_guard);
+        }
+    }
+    Ok(BridgedContextMap { map, _guard: guard })
+}
+
+/// The flat map a bridged tag is called with, plus the [`LazyBlockGuard`] that
+/// ends the lazy `block`'s snapshot when this drops — after the call, on every
+/// path. Derefs to the map, so the seven callers pass `&context_map` as before.
+struct BridgedContextMap {
+    map: std::collections::HashMap<String, Value>,
+    _guard: Option<djust_core::LazyBlockGuard>,
+}
+
+impl std::ops::Deref for BridgedContextMap {
+    type Target = std::collections::HashMap<String, Value>;
+    fn deref(&self) -> &Self::Target {
+        &self.map
+    }
 }
 
 pub fn render_node_with_loader_mut<L: TemplateLoader>(

@@ -183,7 +183,7 @@ def check_liveviews(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
     from django.conf import settings
     from djust._component_subscriptions import is_component_subscription
-    from djust.decorators import is_event_handler
+    from djust.decorators import is_event_handler, is_push_only
 
     # Discover LiveViews from BOTH __subclasses__() (imported classes) AND the
     # root URLconf (URL-routed views, whose module may not be imported anywhere
@@ -368,6 +368,11 @@ def check_liveviews(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
             # ``@event_handler`` V004 would suggest (ADR-034; #3134).
             if is_component_subscription(method):
                 continue
+            # ``@push_handler`` marks a method only server push may call; V004's
+            # fix (``@event_handler``) would make it a browser event target
+            # (#3002). Any name, not just ``handle_*``.
+            if is_push_only(cls, name, method):
+                continue
             # ``handle_*`` is also the server-push namespace: ``server_push``
             # calls an undecorated ``handle_*`` method by design, and leaving it
             # undecorated is the only way to make a handler push can call but a
@@ -388,7 +393,10 @@ def check_liveviews(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                     DjustInfo(
                         "%s.%s() looks like an event handler but is missing @event_handler."
                         % (cls_label, name),
-                        hint="Add @event_handler decorator or prefix with _ if it is private.",
+                        hint=(
+                            "Add @event_handler decorator, mark it @push_handler if only "
+                            "server push calls it, or prefix with _ if it is private."
+                        ),
                         id="djust.V004",
                         fix_hint=(
                             "Add `@event_handler()` decorator above the method `%s` in `%s`."
@@ -1657,3 +1665,87 @@ def check_interactive_actor_views(app_configs: Any, **kwargs: Any) -> list[Check
             )
         )
     return errors
+
+
+@register("djust")
+def check_push_handler_overrides(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    """V021: a subclass overrides a ``@push_handler`` method without the marker.
+
+    The marker is inherited by method name: dispatch refuses a browser event
+    for any name that a class in the MRO defines with ``@push_handler``, so an
+    unmarked override is still push-only (Info: protected, but surprising). An
+    override that adds ``@event_handler`` is a contradiction (Warning): the
+    decorator cannot make the name browser-callable, so the event handler is
+    dead code (#3002).
+    """
+    messages: list[CheckMessage] = []
+    if _is_check_suppressed("djust.V021"):
+        return messages
+    try:
+        from djust.decorators import is_event_handler, is_push_handler
+        from djust.live_view import LiveView
+    except ImportError:
+        return messages
+
+    candidates = set(_routed_liveview_classes()) | set(_walk_subclasses(LiveView))
+    for cls in sorted(candidates, key=lambda c: (c.__module__, c.__qualname__)):
+        if _is_framework_internal_class(cls):
+            continue
+        label = "%s.%s" % (cls.__module__, cls.__qualname__)
+        # Names some class in the MRO defines with the marker; the effective
+        # definition of each is the first one in MRO order, which may live on a
+        # different base than the marker (``class V(A, B)`` with A.foo
+        # unmarked and B.foo marked).
+        marked: dict[str, list[type]] = {}
+        for klass in cls.__mro__:
+            for name, member in klass.__dict__.copy().items():
+                if is_push_handler(member):
+                    marked.setdefault(name, []).append(klass)
+        for name, markers in sorted(marked.items()):
+            owner = next(k for k in cls.__mro__ if name in k.__dict__)
+            function = getattr(owner.__dict__[name], "__func__", owner.__dict__[name])
+            if not callable(function) or is_push_handler(function):
+                continue
+            # An own override, or one on a class that is not itself checked
+            # (a plain mixin). A LiveView base that carries the override reports
+            # it on its own.
+            reported_by_owner = owner is not cls and owner in candidates
+            if reported_by_owner and any(m in owner.__mro__ for m in markers):
+                continue
+            try:
+                file_path = inspect.getsourcefile(function) or ""
+                line_number: Optional[int] = inspect.getsourcelines(function)[1]
+            except (OSError, TypeError):
+                file_path, line_number = "", None
+            where = "" if owner is cls else " (inherited from %s)" % owner.__qualname__
+            if is_event_handler(function):
+                messages.append(
+                    DjustWarning(
+                        "%s.%s()%s is an @event_handler but overrides a @push_handler method; "
+                        "browsers are still refused (the marker is inherited by name)."
+                        % (label, name, where),
+                        hint=(
+                            "Remove @event_handler to keep it push-only, or rename the "
+                            "method if a browser should be able to call it."
+                        ),
+                        id="djust.V021",
+                        fix_hint="Remove `@event_handler` from `%s.%s`."
+                        % (owner.__qualname__, name),
+                        file_path=file_path,
+                        line_number=line_number,
+                    )
+                )
+            else:
+                messages.append(
+                    DjustInfo(
+                        "%s.%s()%s overrides a @push_handler method without the marker; "
+                        "it is still push-only (the marker is inherited by name)."
+                        % (label, name, where),
+                        hint="Add @push_handler to the override to say so.",
+                        id="djust.V021",
+                        fix_hint="Add `@push_handler` above `%s.%s`." % (owner.__qualname__, name),
+                        file_path=file_path,
+                        line_number=line_number,
+                    )
+                )
+    return messages

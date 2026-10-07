@@ -386,6 +386,9 @@ def test_no_text_colour_is_the_destructive_fill():
         if "color" in decls
         and "--destructive-text" not in decls["color"]
         and _DESTRUCTIVE_VAR.search(decls["color"])
+        # ``.dj-status-dot`` paints ``background: currentColor``: its ``color`` is the
+        # FILL (a dot, not text), so the variant keeps the fill token (#2885).
+        and selectors != [".dj-status-dot-danger"]
     ]
     assert not offenders, offenders[:5]
     # not vacuous: the scan really did see the converted rules

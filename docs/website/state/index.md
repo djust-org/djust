@@ -164,6 +164,42 @@ The template opts in: mark a container with `data-draft-enabled` and
 The draft is restored when the user returns to the page. Drafts have no
 expiry; call `self.clear_draft()` after a successful save to remove it.
 
+### Fields that appear later
+
+A field is saved and restored from the moment it enters the page, not only the
+ones present at load: a field a patch inserts (an `{% if %}` that turns true, a
+wizard step), a field the server replaces with a new element, and a draft root
+inside a `dj-lazy` view that hydrates later.
+
+**The saved draft wins over the server-rendered value** on a field's first
+appearance, at page load and for a field that appears later, exactly as it does
+for a field present at load. After that the draft is never put back: not over a
+field the user is typing in (focused, or already edited), not after the user
+clears it, and not when an unrelated view mounts or the connection reconnects, so
+a value the server sets later is kept. A morph that reuses one input under a new
+`name` (a wizard step) counts as a new field. A `dj-lazy` view restores its draft
+when it first mounts; its re-mount after a reconnect keeps the server's values.
+
+### What a draft holds
+
+Each draft root saves the fields inside it under its own `data-draft-key`. A save
+is the fields on the page now merged over what is already stored for the key, so
+a field that is not on the page at the moment, such as an earlier wizard step,
+keeps its saved value and is restored when that step shows again. Those values,
+and the keys of fields you later remove from the template, stay until
+`self.clear_draft()` (a successful submit) removes the whole draft. **Nothing
+else clears a draft: not logging out, not signing in as someone else, not
+leaving the page.** On a shared browser the next user sees the previous user's
+draft unless you call `clear_draft()` or key the draft per user by overriding
+`get_draft_key()` (`draft_key` is a fixed class attribute, the same for every
+user).
+
+- Two roots with the same `data-draft-key` write the same draft and overwrite
+  each other's fields of the same name. Give each root its own key.
+- A draft is stored as plain text in `localStorage`. This includes a field you
+  mark `data-draft="true"` that is a password: do not mark one.
+- A `type="file"` field is neither saved nor restored.
+
 ## Debugging Decorators
 
 Enable client-side logging to see decorator behavior:

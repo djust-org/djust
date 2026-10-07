@@ -18,6 +18,7 @@ __all__ = [
     "interpolate_color",
     "interpolate_color_gradient",
     "safe_url",
+    "unique_ids",
     "url_attr",
 ]
 
@@ -219,6 +220,20 @@ def safe_url(value: Any) -> str:
 
 # Image sources may legitimately be inline ``data:image/...`` URIs.
 _DATA_IMAGE_RE = re.compile(r"^data:image/[a-z0-9.+-]+[;,]")
+
+
+def unique_ids(items: Any) -> bool:
+    """Whether a sortable list's items can all be keyed by their ``id``.
+
+    The VDOM diff keys children on ``data-key``; it falls back to positional
+    diffing, and warns (DJE-050/051), when siblings repeat a key or only some
+    carry one. So the key is emitted only when every dict item has a distinct,
+    non-empty ``id``.
+    """
+    if not isinstance(items, list):
+        return False
+    ids = [str(item.get("id", "")) for item in items if isinstance(item, dict)]
+    return bool(ids) and all(ids) and len(set(ids)) == len(ids)
 
 
 def url_attr(value: Any, *, image: bool = False) -> str:

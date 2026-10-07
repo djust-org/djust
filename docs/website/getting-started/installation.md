@@ -126,11 +126,13 @@ Run this from the directory containing `manage.py`:
 uvx djust@latest init
 ```
 
-To see the changes first without writing anything, add `--dry-run`.
+To see the changes first without writing anything, add `--dry-run`. To also put
+`DjustTemplateBackend` first in `TEMPLATES`, add `--templates` (read the limits
+in [Rendering your other templates with djust](#rendering-your-other-templates-with-djust) first).
 
 | Part | What `djust init` does |
 | --- | --- |
-| `settings.py` | Appends a marked block that adds `channels` and `djust` to `INSTALLED_APPS` (unless already listed, by name or AppConfig path), sets `ASGI_APPLICATION`, and sets an in-memory `CHANNEL_LAYERS` unless you already configure one. `TEMPLATES` is left alone: LiveViews render their templates with djust's engine regardless, and everything else keeps rendering as before. Running `init` again leaves the file unchanged. |
+| `settings.py` | Appends a marked block that adds `channels` and `djust` to `INSTALLED_APPS` (unless already listed, by name or AppConfig path), sets `ASGI_APPLICATION`, and sets an in-memory `CHANNEL_LAYERS` unless you already configure one. `TEMPLATES` is not edited: `init` reports the entry that puts `DjustTemplateBackend` first and prints it, and `djust init --templates` appends it for you (see [Rendering your other templates with djust](#rendering-your-other-templates-with-djust)). Running `init` again leaves the file unchanged. |
 | `asgi.py` | Replaces Django's default file with one that routes LiveView WebSockets and serves static files under Uvicorn. A customized `asgi.py`, or a default one pointing at a different settings module, is left alone; `init` prints the code to merge instead. |
 | Packages | Adds `djust`, `channels`, and `uvicorn[standard]`: with `uv add` in a uv project, or by adding missing lines to `requirements.txt` and installing into the project's `.venv`. For Poetry, or a project with neither, it prints the command to run. |
 | Check | Runs `manage.py check` once the packages are installed. |
@@ -243,14 +245,59 @@ CHANNEL_LAYERS = {
 }
 ```
 
-Optionally, render your other templates with djust's engine too by
-registering its backend **before** the existing Django backend. LiveViews do
-not need this step: they render with djust's engine either way, and
-`djust init` skips it. If the project uses the Django admin, keep the three
-context processors below: with this order djust's engine renders the admin's
-templates, and without the auth processor the admin index fails with
-`KeyError: 'user'`. The `djust.C016` system check flags a djust entry that
-lacks them ([#2883](https://github.com/djust-org/djust/issues/2883)).
+#### Rendering your other templates with djust
+
+This step is optional. LiveViews render with djust's engine whatever `TEMPLATES`
+says, and `djust init` leaves `TEMPLATES` alone unless you pass `--templates`.
+Registering the djust backend **before** your Django backend makes djust's
+engine render the other templates in the project too (a speed-up, and the shape
+`djust new` writes). Read the limits first.
+
+Django tries the engines in `TEMPLATES` order and moves on to the next one only
+when a template does not exist. The djust entry has `APP_DIRS: True`, so it finds
+and renders every template in your apps and `DIRS`, the admin's and your
+installed packages' included. `DjangoTemplates` second only serves templates
+that live in no app or `DIRS` directory. If djust's engine cannot render a
+template it finds, the page fails; Django's engine is not tried.
+
+Known differences from Django's engine. They exist independently of `djust init`
+(they reproduce on released djust 1.2.3) and also affect projects made by
+`djust new --with-db`:
+
+- **Raw block tags.** A custom `@register.tag` block tag that does not keep its
+  body as a single node list cannot be bridged and raises `TemplateSyntaxError`
+  when the template compiles. django-allauth's `{% element %}` tag is one, so
+  its account pages (login, signup, password reset) fail.
+- **`{{ form }}` and `{% for field in form %}`.** A form renders as an escaped
+  dict instead of Django's layout, and iterating it yields field names, not
+  `BoundField`s. `{{ form.as_p }}`, `as_ul`, `as_table` and `as_div` render
+  correctly. The admin changelist's "Action" dropdown depends on iterating a
+  form, so it does not appear: bulk actions such as "Delete selected" are
+  unavailable.
+- **`ErrorList`.** An empty error list renders `[]`, and a non-empty one renders
+  as a Python list, not `<ul class="errorlist">`. The admin login and password
+  forms show the stray `[]`.
+- **`DEBUG`.** With `DEBUG = True` every template rendered by djust's engine
+  gets a `data-dj-src` attribute on its first element, including HTML emails.
+
+Check your own pages, the admin and any third-party app templates before
+enabling it.
+
+Once the djust entry is first, `TEMPLATES[0]` is the djust entry, and its index
+is no longer a safe way to reach the Django one (with Jinja2 listed first, Django
+is `TEMPLATES[2]`). A later settings module that edits `TEMPLATES[0]["OPTIONS"]`,
+such as the production caching idiom, therefore edits the djust entry. Find the
+`DjangoTemplates` entry by its `BACKEND` instead. `loaders` and `file_charset`
+belong on that Django entry: the djust backend ignores `loaders` and logs a
+warning. The keys the djust backend implements (`context_processors`, `debug`,
+`autoescape`, `builtins`, `libraries`, `string_if_invalid`) are copied into the
+djust entry when it is added, so set them on the djust entry, or on both.
+
+If the project uses the Django admin, keep the `request`, `auth` and `messages`
+context processors below: djust's engine renders the admin's templates, and
+without the auth processor the admin index fails with `KeyError: 'user'`. The
+`djust.C016` system check flags a djust entry that lacks them
+([#2883](https://github.com/djust-org/djust/issues/2883)).
 
 ```python
 TEMPLATES.insert(0, {
@@ -260,6 +307,7 @@ TEMPLATES.insert(0, {
     "APP_DIRS": True,
     "OPTIONS": {
         "context_processors": [
+            "django.template.context_processors.debug",
             "django.template.context_processors.request",
             "django.contrib.auth.context_processors.auth",
             "django.contrib.messages.context_processors.messages",
@@ -267,6 +315,15 @@ TEMPLATES.insert(0, {
     },
 })
 ```
+
+`djust init --templates` appends the same entry as a marked block at the end of
+`settings.py`: it reuses the first `DjangoTemplates` entry's `DIRS`,
+`context_processors`, `builtins`, `libraries`, `string_if_invalid`, `debug` and
+`autoescape`, leaves your own entries after it unchanged, and does nothing if the
+djust backend is already listed. It edits only a `TEMPLATES` it can read with
+certainty (a list of dict literals with a `DjangoTemplates` entry, assigned once);
+otherwise it reports ATTENTION and prints the entry above. Remove the block to
+undo it: a rerun without `--templates` never adds it back.
 
 Keep `django.contrib.staticfiles` installed and `STATIC_URL = "static/"`.
 Both are included by Django's `startproject`. For local development, keep

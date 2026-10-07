@@ -223,7 +223,7 @@ to run before `make dev`.
 
 `djust init` adds djust to the Django project in the current directory: a
 marked settings block (apps, `ASGI_APPLICATION`, and a channel layer; it does
-not change `TEMPLATES`), a djust `asgi.py` (only when the existing one is
+not edit `TEMPLATES` unless you pass `--templates`), a djust `asgi.py` (only when the existing one is
 Django's default for the same settings module), the `djust`, `channels`, and
 `uvicorn[standard]` packages, and a final `manage.py check`. A package the
 project already declares keeps its specifier: on a uv project `init` runs
@@ -241,11 +241,12 @@ file (`-r base.txt`) is never edited.
 | `--dry-run` | Print the diff and the install command without changing anything |
 | `--no-install` | Edit files only; skip installing packages and the check |
 | `--force` | Edit files even if they have uncommitted changes in git |
+| `--templates` | Also append a block that puts `DjustTemplateBackend` first in `TEMPLATES` (default: only report it). Read the [known differences](../getting-started/installation.md#rendering-your-other-templates-with-djust) first |
 | `--settings MODULE` | Settings module to edit when `manage.py` does not name it |
 
 Exit status is `0` on success, `1` when `init` refused before writing, and
 `2` when files were written but a step needs attention (a customized
-`asgi.py`, a failed install, or a failed check). The
+`asgi.py`, a `TEMPLATES` that `--templates` could not edit, a failed install, or a failed check). The
 [installation guide](../getting-started/installation.md#add-djust-to-an-existing-project)
 describes each change.
 

@@ -23,7 +23,7 @@ from django.utils.html import conditional_escape, escapejs
 from django.utils.safestring import SafeString
 
 from ._registry import safe_url
-from djust.components.utils import rich_html, url_attr
+from djust.components.utils import rich_html, unique_ids as _unique_ids, url_attr
 from django.utils.safestring import mark_safe
 
 
@@ -9311,11 +9311,13 @@ class SortableListNode(template.Node):
         if not isinstance(items, list):
             items = []
 
+        keyed = _unique_ids(items)
         items_html = []
         for item in items:
             if not isinstance(item, dict):
                 continue
             item_id = conditional_escape(str(item.get("id", "")))
+            key_attr = f' data-key="{item_id}"' if keyed else ""
             label = conditional_escape(str(item.get("label", "")))
             handle_html = (
                 '<span class="dj-sortable-list__handle" aria-hidden="true">&#x2630;</span> '
@@ -9324,7 +9326,7 @@ class SortableListNode(template.Node):
             )
             drag_attr = ' draggable="true"' if not disabled else ""
             items_html.append(
-                f'<li class="dj-sortable-list__item" data-id="{item_id}"{drag_attr} '
+                f'<li class="dj-sortable-list__item" data-id="{item_id}"{key_attr}{drag_attr} '
                 f'role="listitem">'
                 f"{handle_html}"
                 f'<span class="dj-sortable-list__label">{label}</span></li>'
@@ -9383,11 +9385,13 @@ class SortableGridNode(template.Node):
         except (ValueError, TypeError):
             cols = 3
 
+        keyed = _unique_ids(items)
         items_html = []
         for item in items:
             if not isinstance(item, dict):
                 continue
             item_id = conditional_escape(str(item.get("id", "")))
+            key_attr = f' data-key="{item_id}"' if keyed else ""
             label = conditional_escape(str(item.get("label", "")))
             thumbnail = item.get("thumbnail", "")
             thumb_html = ""
@@ -9399,7 +9403,7 @@ class SortableGridNode(template.Node):
                 )
             drag_attr = ' draggable="true"' if not disabled else ""
             items_html.append(
-                f'<div class="dj-sortable-grid__item" data-id="{item_id}"{drag_attr}>'
+                f'<div class="dj-sortable-grid__item" data-id="{item_id}"{key_attr}{drag_attr}>'
                 f"{thumb_html}"
                 f'<span class="dj-sortable-grid__label">{label}</span></div>'
             )
@@ -9716,7 +9720,7 @@ class LightboxNode(template.Node):
             f'data-close-event="{e_close}" data-navigate-event="{e_nav}" '
             f'role="dialog" aria-modal="true">'
             f'<div class="dj-lightbox__backdrop" dj-click="{e_close}"></div>'
-            f'<button class="dj-lightbox__close" dj-click="{e_close}" '
+            f'<button class="dj-lightbox__close" data-dj-close dj-click="{e_close}" '
             f'aria-label="Close">&times;</button>'
             f"{prev_btn}"
             f'<div class="dj-lightbox__stage">{img_html}{caption_html}</div>'

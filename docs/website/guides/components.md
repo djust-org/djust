@@ -1091,10 +1091,46 @@ and djust's Rust engine (the one that renders LiveView templates). They are
 also available as context-string variables (`{{ theme_head }}`,
 `{{ theme_switcher }}`, `{{ theme_panel }}`, `{{ theme_mode_toggle }}`,
 `{{ theme_preset_selector }}`) for the default-args case. Prefer the
-`{{ ... }}` form when a tag appears multiple times on a page (it pre-renders
+`{{ ... }}` form when a tag appears multiple times on a page (it renders
 once per request); use the `{% theme_X %}` tag form when you need
 customization-with-args, e.g. `{% theme_panel show_packs=False %}` or
 `{% theme_preset_selector layout="grid" %}`.
+
+The processor is cheap on a page that does not use them. The five HTML
+variables render **on first read**, so a JSON view, a redirect, the admin or a
+page that uses only the `{% theme_X %}` tags pays for none of them. The settings
+variables (`theme_preset`, `theme_mode`, `theme_resolved_mode`, `theme_pack`,
+`theme_presets`, `components_gallery_url`) are plain values computed up front.
+A template that reads an HTML variable gets the same text it always did.
+
+The HTML variables are not `str` instances: they are lazy trusted-HTML objects
+(`isinstance(theme_head, str)` is `False`). `{{ ... }}`, `|safe`, `|length`,
+`|default`, `|slice`, `{% if theme_head %}`, `==` against a string and
+`str(...)` all work, and each of them renders the chunk. Code that needs a real
+`str` should call `str(...)`. Each chunk is built for its own request and held
+on that request, so a CSP nonce or a user's preset never reaches another
+request.
+
+What a chunk is not, because it is not a `str`:
+
+- Python that needs a real `str` raises `TypeError` on it: `"".join(...)`,
+  `sorted(...)` / `<`, `chunk * 2`, `re.search(...)`, `"x".startswith(chunk)`,
+  `"x".replace(chunk, ...)`, `os.fspath(...)`, `textwrap.dedent(...)` and plain
+  `json.dumps(...)`. Call `str(chunk)` first. Django's own JSON encoder
+  (`|json_script`, `JsonResponse`) accepts it.
+- The `|pluralize`, `|divisibleby` and `|get_digit` filters see a non-`str`
+  value and answer differently from a string; no template should apply them to
+  theme HTML. `mark_safe(chunk)`, `escape(chunk)` and `strip_tags(chunk)` return
+  lazy proxies with the same text.
+- Reading any attribute that does not start with an underscore (`hasattr`,
+  `.strip()`, a debug toolbar listing the context) renders the chunk.
+- `copy.copy` and `copy.deepcopy` return the same chunk. Pickling an
+  unevaluated chunk renders it and stores the text as a plain `SafeString`.
+- The `theme_panel`, `theme_mode_toggle` and `theme_preset_selector` chunks
+  keep the old trust rule: if the tag returns a plain `str` (a tag you
+  shadowed), it is escaped when the chunk renders, so `|safe` and
+  `{% autoescape off %}` cannot un-escape it. `theme_head` and `theme_switcher`
+  were always trusted.
 
 ### Component tags: bindings, attributes, selects and alerts
 

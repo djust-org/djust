@@ -355,14 +355,14 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     }
 
     // A view mounted beside the page view (lazy hydration, mount_batch, #3252)
-    // lives on the WebSocket only: the HTTP fallback posts to the page's own
-    // URL, where the page view would run the event. Refuse it rather than run
-    // it on the wrong view.
+    // lives on a WebSocket or an SSE session: the HTTP fallback posts to the
+    // page's own URL, where the page view would run the event. Refuse it rather
+    // than run it on the wrong view.
     const slotId = teardown ? null : (params._slotId || slotIdFor(triggerElement));
     if (slotId) {
         if (!skipLoading) globalLoadingManager.stopLoading(eventName, triggerElement);
         window.dispatchEvent(new CustomEvent('djust:error', {detail: {
-            error: `Event "${eventName}" was not sent: its view needs the WebSocket transport.`,
+            error: `Event "${eventName}" was not sent: its view needs the WebSocket or SSE transport.`,
             code: 'view_unavailable',
             traceback: null,
         }}));
@@ -459,6 +459,9 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
                             error: body.error,
                             // Stable refusal code (#3319), e.g. 'permission_denied'.
                             code: typeof body.code === 'string' ? body.code : null,
+                            transient: body.transient === true,
+                            view: typeof body.view === 'string' ? body.view : (_localEventTransport.primaryViewPath || null),
+                            target_id: typeof body.target_id === 'string' ? body.target_id : null,
                             traceback: body.traceback || null,
                         };
                     }

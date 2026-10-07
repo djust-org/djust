@@ -1,0 +1,400 @@
+"""The ``theme_context`` processor as it was before #3028: every chunk rendered eagerly.
+
+A VERBATIM copy of ``djust.theming.context_processors`` at ``b44f7905a`` (only the
+relative imports are made absolute), kept as a test oracle. The tests in
+``test_theming_lazy_context_3028.py`` and ``test_theming_lazy_paths_3028.py`` render a
+page through this processor and through the lazy one and require the same bytes.
+Do not "fix" it: its job is to stay the old behaviour.
+"""
+
+import logging
+from functools import lru_cache
+from typing import Any, Callable
+
+from django.contrib.staticfiles.storage import staticfiles_storage
+from django.http import HttpRequest
+from django.utils.safestring import mark_safe
+
+from djust.theming.manager import (
+    ThemeMode,
+    ThemeState,
+    generate_css_for_state,
+    get_css_prefix,
+    get_theme_manager,
+)
+
+logger = logging.getLogger(__name__)
+
+# Anti-FOUC script — static; defined at module load (NOT per-request).
+#
+# SUPERSEDED — do not fix this copy. `theme_head_html` built from this constant
+# is discarded by `theme_context` (see `_theme_head_only_unused` below): the
+# canonical anti-FOUC script lives in `djust_theming/theme_head.html` and is
+# rendered by the `{% theme_head %}` tag. This copy also hardcodes the
+# `'system'` fallback the tag no longer uses, so editing it would silently
+# change nothing. It is kept only because `theme_switcher` is still rendered
+# from this function; delete the constant when that moves too.
+_ANTI_FOUC_SCRIPT = """<script>
+(function() {
+    var storageKey = 'djust-theme-mode';
+    var storedMode = localStorage.getItem(storageKey);
+    var mode = storedMode || 'system';
+    var resolvedMode = mode;
+    if (mode === 'system') {
+        resolvedMode = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+    document.documentElement.setAttribute('data-theme', resolvedMode);
+    document.documentElement.setAttribute('data-theme-mode', mode);
+})();
+</script>"""
+
+
+@lru_cache(maxsize=512)
+def _render_theme_outputs(
+    theme: str,
+    preset: str,
+    pack: str | None,
+    mode: ThemeMode,
+    resolved_mode: str,
+    layout: str,
+    presets_key: Any,
+) -> tuple[str, str]:
+    """Pure-function render of (theme_head_html, theme_switcher_html).
+
+    Cached because the output is byte-identical for the same theme
+    `(theme, preset, pack, mode, resolved_mode, layout)` tuple on a
+    given preset list. djust's whole catalog is ~60 presets × 2 modes
+    × handful of packs = a few hundred unique keys, well under
+    maxsize=512.
+
+    `presets_key` is a hashable digest of the available-presets list.
+    The list itself is unhashable (list of dicts), so the caller
+    passes a tuple-of-tuples representation as the cache key and the
+    rebuild reconstructs presets from that tuple.
+
+    Per #1437: ~1-3 ms per request → ~5-10 µs (dict lookup) post-warmup
+    on every template-rendering request. The cache is per-process;
+    that's fine because the function is genuinely a pure function —
+    no request data leaks in.
+    """
+    state = ThemeState(
+        theme=theme,
+        preset=preset,
+        mode=mode,
+        resolved_mode=resolved_mode,
+        pack=pack,
+        layout=layout,
+    )
+    css = generate_css_for_state(state, css_prefix=get_css_prefix())
+    js_url = staticfiles_storage.url("djust_theming/js/theme.js")
+    theme_head = (
+        f"{_ANTI_FOUC_SCRIPT}\n"
+        f"<style data-djust-theme>{css}</style>\n"
+        f'<script src="{js_url}" defer></script>'
+    )
+    presets = [dict(t) for t in presets_key]
+    theme_switcher = _render_theme_switcher(state, presets)
+    return theme_head, theme_switcher
+
+
+def _presets_to_cache_key(presets: list[dict]) -> tuple:
+    """Convert the available-presets list (list of dicts) into a
+    hashable tuple-of-tuples for use as an `lru_cache` key. Only the
+    fields actually consumed by `_render_theme_switcher` are kept."""
+    return tuple(
+        tuple(sorted((k, v) for k, v in p.items() if k in {"name", "display_name", "is_active"}))
+        for p in presets
+    )
+
+
+def clear_theme_context_cache() -> None:
+    """Drop the per-process render cache.
+
+    Call this on theme-pack reload, or in tests that mutate theme state
+    between assertions. Cheap; the cache rebuilds lazily.
+    """
+    _render_theme_outputs.cache_clear()
+
+
+def _components_gallery_url() -> str:
+    """URL of the component gallery, or ``""`` when it is not available.
+
+    ``djust/theming/urls.py`` registers the route only when the optional
+    ``djust.components`` app is installed, so ``reverse`` can legitimately
+    fail. Returning ``""`` lets a template omit the link instead of rendering
+    a dead one — the topbar used to hardcode ``/components/``, a path that
+    belongs to whichever project hosted the gallery and 404s everywhere else.
+    """
+    try:
+        from django.urls import reverse
+
+        return str(reverse("djust_theming:gallery-index"))
+    except Exception:  # noqa: BLE001 — an absent optional app is not an error
+        return ""
+
+
+def theme_context(request: HttpRequest) -> dict:
+    """
+    Add theme CSS and state to template context.
+
+    Injects theme CSS and state directly into the template context.
+
+    Pre-renders the heavy theme HTML chunks as ``mark_safe`` strings so
+    templates can use ``{{ theme_head }}`` / ``{{ theme_panel }}`` etc.
+    instead of ``{% theme_head %}`` / ``{% theme_panel %}`` (#1435).
+    The latter forms still work — they're how customization-with-args
+    is supported — but consumers using the default shape pay
+    once-per-request rather than once-per-tag-invocation.
+
+    Usage in templates:
+        {{ theme_head }}                  (replaces {% theme_head %})
+        {{ theme_switcher }}              (replaces {% theme_switcher %})
+        {{ theme_panel }}                 (replaces {% theme_panel %})
+        {{ theme_mode_toggle }}           (replaces {% theme_mode_toggle %})
+        {{ theme_preset_selector }}       (replaces {% theme_preset_selector %})
+    """
+    manager = get_theme_manager(request)
+    state = manager.get_state()
+    presets = manager.get_available_presets()
+    presets_key = _presets_to_cache_key(presets)
+
+    # `theme_switcher` is the simple state-only render — keep it cached.
+    # `theme_head` MUST go through the existing simple_tag (#1452): the
+    # classic-tag template emits a strict superset of what
+    # `_render_theme_outputs` was building (component-CSS link,
+    # print.css link, components.js script, deferred-CSS preload, RTL
+    # direction, cookie-namespace JS prefix). A hand-built string drops
+    # silently — production saw unstyled theme panels because the
+    # `<link>` to `djust_theming/css/components.css` was missing.
+    # Pin `{{ theme_head }}` ≡ `{% theme_head %}` for the default args.
+    _theme_head_only_unused, theme_switcher = _render_theme_outputs(
+        state.theme,
+        state.preset,
+        state.pack,
+        state.mode,
+        state.resolved_mode,
+        state.layout,
+        presets_key,
+    )
+
+    # Pre-render every tag's output by calling the existing simple_tag
+    # bodies once. The work runs once per request instead of once per
+    # `{% theme_X %}` invocation in the template — a meaningful savings
+    # when the same tag appears multiple times on a page.
+    # Customization-with-args (`{% theme_panel show_packs=False %}`)
+    # remains available via the existing template tags.
+    #
+    # Per-tag fail-soft: a broken manifest in ONE tag (e.g.,
+    # theme_panel) must not blank the OTHER pre-renders. Each tag is
+    # independently wrapped so a failure leaves only that string empty;
+    # the template falls back to `{% theme_X %}` for that one.
+    from djust.theming.templatetags.theme_tags import (
+        theme_head as _theme_head_tag,
+        theme_mode_toggle as _theme_mode_toggle_tag,
+        theme_panel as _theme_panel_tag,
+        theme_preset_selector as _theme_preset_selector_tag,
+    )
+
+    tag_context = {"request": request}
+
+    def _safe_render(fn: Callable[..., Any]) -> str:
+        try:
+            return fn(tag_context) or ""
+        except Exception:
+            return ""
+
+    # Request-scoped memoization of the four tag bodies (#1727).
+    #
+    # `_apply_context_processors` runs `theme_context` on EVERY WebSocket
+    # event (rust_bridge.py — completes #1722). Without memoization the
+    # four `_safe_render` calls below re-render four uncached tag bodies
+    # per event (`_render_theme_outputs` is already `@lru_cache`'d; these
+    # were not). We cache the four outputs ON THE REQUEST, keyed on the
+    # resolved theme-state tuple (the same shape `_render_theme_outputs`
+    # keys on). When theme state is unchanged across events the cache
+    # serves the four strings; when state changes (a live theme/mode/
+    # preset switch) the key differs and they recompute, so dynamic
+    # switching is preserved — we do NOT first-sync-gate (CLAUDE.md v1.0.2
+    # canon: per-event work feeding change-detection must be memoized, not
+    # skipped on later syncs).
+    #
+    # Scope is request-level (not a cross-request module cache) by design:
+    # `theme_head` embeds a per-request CSP nonce (`request.csp_nonce`, #3284),
+    # and a request-scoped cache cannot leak that value across requests. (A
+    # cross-request cache would have to key on the nonce, or drop it.) On the WS path `request` is a
+    # long-lived instance attr set once in `handle_connect`, so the cache
+    # naturally spans all events of a connection and is invalidated by the
+    # state key changing on a theme switch.
+    state_key = (
+        state.theme,
+        state.preset,
+        state.pack,
+        state.mode,
+        state.resolved_mode,
+        state.layout,
+        presets_key,
+    )
+    cached = getattr(request, "_djust_theme_ctx_cache", None)
+    if cached is not None and cached[0] == state_key:
+        (
+            theme_head_html,
+            theme_panel_html,
+            theme_mode_toggle_html,
+            theme_preset_selector_html,
+        ) = cached[1]
+    else:
+        theme_head_html = _safe_render(_theme_head_tag)
+        theme_panel_html = _safe_render(_theme_panel_tag)
+        theme_mode_toggle_html = _safe_render(_theme_mode_toggle_tag)
+        theme_preset_selector_html = _safe_render(_theme_preset_selector_tag)
+        # Store on the request. Some request objects can't hold arbitrary
+        # attributes (e.g. a `__slots__` object in tests / exotic callers);
+        # in that case skip caching — correctness over the micro-optimization.
+        try:
+            request._djust_theme_ctx_cache = (
+                state_key,
+                (
+                    theme_head_html,
+                    theme_panel_html,
+                    theme_mode_toggle_html,
+                    theme_preset_selector_html,
+                ),
+            )
+        except (AttributeError, TypeError) as exc:
+            # Some request objects can't hold arbitrary attributes
+            # (a `__slots__` object in tests / exotic callers). Caching is a
+            # micro-optimization, so we skip it — but log at debug so the
+            # swallowed write is observable rather than silently dropped.
+            logger.debug(
+                "skipping theme-context cache write on %s request: %s",
+                type(request).__name__,
+                exc,
+            )
+
+    return {
+        "theme_head": mark_safe(theme_head_html) if theme_head_html else "",
+        "theme_switcher": mark_safe(theme_switcher),
+        "theme_panel": theme_panel_html,
+        "theme_mode_toggle": theme_mode_toggle_html,
+        "theme_preset_selector": theme_preset_selector_html,
+        "theme_preset": state.preset,
+        "theme_mode": state.mode,
+        "theme_resolved_mode": state.resolved_mode,
+        "theme_pack": state.pack,
+        "theme_presets": presets,
+        # "" when the optional component gallery app is absent or unrouted.
+        "components_gallery_url": _components_gallery_url(),
+    }
+
+
+def _render_theme_switcher(state: ThemeState, presets: list[dict]) -> str:
+    """Render the theme switcher HTML inline."""
+    # Mode buttons
+    mode_buttons = ""
+    for mode, icon, label in [
+        ("light", _sun_icon(), "Light"),
+        ("dark", _moon_icon(), "Dark"),
+        ("system", _monitor_icon(), "System"),
+    ]:
+        active = "active" if state.mode == mode else ""
+        mode_buttons += f"""
+        <button type="button"
+                class="theme-mode-btn {active}"
+                onclick="window.djustTheme && window.djustTheme.setMode('{mode}')"
+                aria-label="{label} mode"
+                title="{label} mode">
+            {icon}
+        </button>"""
+
+    # Preset options
+    preset_options = ""
+    for preset in presets:
+        selected = "selected" if preset["is_active"] else ""
+        preset_options += (
+            f'<option value="{preset["name"]}" {selected}>{preset["display_name"]}</option>'
+        )
+
+    return f"""<div class="theme-switcher">
+    <div class="theme-mode-controls">
+        {mode_buttons}
+    </div>
+    <select class="theme-preset-select"
+            onchange="window.djustTheme && window.djustTheme.setPreset(this.value)"
+            aria-label="Select theme">
+        {preset_options}
+    </select>
+</div>
+<style>
+.theme-switcher {{
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}}
+.theme-mode-controls {{
+    display: flex;
+    background-color: hsl(var(--muted));
+    border-radius: var(--radius);
+    padding: 0.25rem;
+    gap: 0.125rem;
+}}
+.theme-mode-btn {{
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.375rem 0.5rem;
+    border: none;
+    background: transparent;
+    color: hsl(var(--muted-foreground));
+    border-radius: calc(var(--radius) - 0.125rem);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}}
+.theme-mode-btn:hover {{
+    color: hsl(var(--foreground));
+    background-color: hsl(var(--background));
+}}
+.theme-mode-btn.active {{
+    color: hsl(var(--foreground));
+    background-color: hsl(var(--background));
+    box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+}}
+.theme-preset-select {{
+    padding: 0.375rem 2rem 0.375rem 0.75rem;
+    border: 1px solid hsl(var(--border));
+    border-radius: var(--radius);
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    color-scheme: light;
+    font-size: 0.875rem;
+    cursor: pointer;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23666' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.5rem center;
+}}
+[data-theme="dark"] .theme-preset-select {{
+    color-scheme: dark;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23aaa' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}}
+.theme-preset-select:hover {{
+    border-color: hsl(var(--ring));
+}}
+.theme-preset-select:focus {{
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+    border-color: hsl(var(--ring));
+    box-shadow: 0 0 0 2px hsl(var(--ring) / 0.2);
+}}
+</style>"""
+
+
+def _sun_icon() -> str:
+    return """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>"""
+
+
+def _moon_icon() -> str:
+    return """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>"""
+
+
+def _monitor_icon() -> str:
+    return """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>"""

@@ -343,7 +343,6 @@ def serve(app: Any, *, loops: int = 1, allow_gil: bool = False, **uvicorn_kwargs
         )
     _check_pool(loops)
 
-    sock = config.bind_socket()
     runners: List[_Runner] = []
     received: List[int] = []
 
@@ -357,17 +356,33 @@ def serve(app: Any, *, loops: int = 1, allow_gil: bool = False, **uvicorn_kwargs
         _signal_all(runners, force=force)
 
     previous: dict = {}
+    sock: Optional[socket.socket] = None
     try:
-        sock.listen(config.backlog)
-        _loop_count = loops
-        # Each server gets its own descriptor for the one listening socket:
-        # uvicorn closes the sockets it was given when it shuts down.
-        for i in range(loops):
-            runners.append(_Runner(i, uvicorn.Server(config), sock.dup()))
+        # The handlers go in BEFORE the socket is bound. ``bind_socket()`` creates
+        # the --uds file; a SIGTERM between that and a later install took the
+        # default action, so the process died with status -15 and the file stayed
+        # behind, and uvicorn (which does not unlink an existing path) then failed
+        # the next start with "address in use". A signal that arrives before the
+        # loops exist is recorded in ``received`` and acted on below.
         previous = {sig: signal.signal(sig, on_signal) for sig in (signal.SIGINT, signal.SIGTERM)}
-        logger.info("djust serve: starting %d event loops on one socket", loops)
-        for runner in runners:
-            runner.thread.start()
+        if not received:
+            sock = config.bind_socket()
+            sock.listen(config.backlog)
+            _loop_count = loops
+            # Each server gets its own descriptor for the one listening socket:
+            # uvicorn closes the sockets it was given when it shuts down.
+            for i in range(loops):
+                runners.append(_Runner(i, uvicorn.Server(config), sock.dup()))
+            logger.info("djust serve: starting %d event loops on one socket", loops)
+        # Before and after the threads start: a signal that came while the socket
+        # was being bound, or while the servers were built, finds no running loop
+        # to stop. Starting none is the clean shutdown (the ``finally`` removes the
+        # socket file); one that comes later reaches the loops through on_signal.
+        if not received:
+            for runner in runners:
+                runner.thread.start()
+        if received:
+            _signal_all(runners, force=False)
         stopping = False
         while any(r.thread.is_alive() for r in runners):
             if forced_at and time.monotonic() - forced_at[0] > FORCE_EXIT_GRACE:
@@ -390,10 +405,14 @@ def serve(app: Any, *, loops: int = 1, allow_gil: bool = False, **uvicorn_kwargs
                     runner.sock.close()  # never started: its descriptor is still open
                 except OSError:  # pragma: no cover
                     pass
-        sock.close()
+        if sock is not None:
+            sock.close()
         _loop_count = 0
-        # uvicorn.run removes its UNIX socket file on exit; so does this.
-        if config.uds and os.path.exists(config.uds):
+        # uvicorn.run removes its UNIX socket file on exit; so does this. Never a
+        # path it did not create: after a failed bind the path is another server's.
+        # (If bind() succeeds and uvicorn's chmod then fails, the file stays, as
+        # it always did.)
+        if sock is not None and config.uds and os.path.exists(config.uds):
             os.remove(config.uds)
 
     # A server that never started because a signal stopped it first is not a

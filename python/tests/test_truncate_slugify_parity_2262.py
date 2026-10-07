@@ -373,18 +373,71 @@ class TestTitleExhaustive:
     `Nd`-vs-`N*` distinction reliably — those are single codepoints among a
     million. This walks all of them.
 
-    The only permitted divergences are codepoints for which THIS CPython knows
-    no case mapping at all (`c.upper() == c.lower() == c.title() == c`) while
-    Rust's newer Unicode tables do. That covers both characters CPython leaves
-    unassigned and ones it assigns without a mapping — U+019B gained an
-    uppercase in Unicode 16, and CPython 3.12 ships 15.0. It is data-version
-    skew, not an algorithm difference, and it is asserted to be the ONLY
-    residue: anything else fails the test.
+    The only permitted divergences are data-version skew, in either direction,
+    and it is asserted to be the ONLY residue: anything else fails the test.
+
+    * **Rust's tables are newer than this CPython** — codepoints for which THIS
+      CPython knows no case mapping at all (`c.upper() == c.lower() ==
+      c.title() == c`) while Rust's newer Unicode tables do. That covers both
+      characters CPython leaves unassigned and ones it assigns without a
+      mapping — U+019B gained an uppercase in Unicode 16, and CPython 3.12
+      ships 15.0.
+    * **This CPython is newer than djust's tables** — `CASED_RANGES` and its
+      siblings in `truncate.rs` were captured from CPython 3.12/3.13 (Unicode
+      15.x), so the 52 codepoints Unicode 16.0 made cased
+      (`_CASED_NEW_IN_UNICODE_16`) are unknown to them. CPython 3.14 ships
+      16.0 and knows them, so the sweep diverges there for exactly those
+      codepoints (CI run 37169161029). That is the residual #2330 documents — a codepoint
+      assigned after the table's Unicode version — and it is pinned rather
+      than waved through: only the listed codepoints, only on an interpreter
+      whose Unicode data is 16.0 or later. The next Unicode release adds
+      codepoints that are NOT listed, so a CPython bump past 16.0 fails here
+      and names them, which is the signal to either regenerate the tables or
+      extend the pin.
     """
+
+    # Codepoints whose `Cased` property first appears in Unicode 16.0: Cyrillic
+    # Tje (U+1C89..U+1C8A), the Latin additions (U+A7CB..U+A7CD,
+    # U+A7DA..U+A7DC) and the Garay capitals and small letters (U+10D50..
+    # U+10D65, U+10D70..U+10D85). `truncate.rs`'s tables stop at 15.1.
+    _CASED_NEW_IN_UNICODE_16 = (
+        (0x1C89, 0x1C8A),
+        (0xA7CB, 0xA7CD),
+        (0xA7DA, 0xA7DC),
+        (0x10D50, 0x10D65),
+        (0x10D70, 0x10D85),
+    )
+
+    @staticmethod
+    def _interpreter_unicode() -> tuple[int, ...]:
+        return tuple(int(part) for part in unicodedata.unidata_version.split("."))
+
+    @classmethod
+    def _cased_new_in_unicode_16(cls) -> set[int]:
+        return {cp for lo, hi in cls._CASED_NEW_IN_UNICODE_16 for cp in range(lo, hi + 1)}
 
     @staticmethod
     def _cpython_knows_no_case(char: str) -> bool:
         return char.upper() == char and char.lower() == char and char.title() == char
+
+    def test_the_unicode_16_pin_is_what_it_claims(self) -> None:
+        """The pin may only excuse codepoints that really are 16.0 additions.
+
+        Below 16.0 they must be unassigned (so a pinned codepoint cannot be an
+        old character hiding a real divergence), and from 16.0 on they must be
+        cased letters, which is what makes `title` treat the next letter as
+        mid-word.
+        """
+        pinned = self._cased_new_in_unicode_16()
+        assert len(pinned) == 52, len(pinned)
+        categories = {unicodedata.category(chr(cp)) for cp in pinned}
+        if self._interpreter_unicode() < (16, 0):
+            assert categories == {"Cn"}, categories
+        else:
+            assert categories <= {"Lu", "Ll"}, categories
+            assert all(chr(cp).isupper() or chr(cp).islower() for cp in pinned), (
+                "a pinned codepoint is not cased on this interpreter"
+            )
 
     # None of the one-codepoint probes (at most three characters) can contain
     # this delimiter. Split and count both outputs so an omitted/extra result
@@ -432,6 +485,11 @@ class TestTitleExhaustive:
         unexpected = []
         skew = 0
         checked = 0
+        # Only an interpreter whose Unicode data is 16.0+ can know these.
+        newer_than_tables = (
+            self._cased_new_in_unicode_16() if self._interpreter_unicode() >= (16, 0) else set()
+        )
+        newer_residue: set[int] = set()
         # Render the same four probes for EVERY Unicode scalar, in bounded
         # batches. Both engines still execute their template title filter and
         # autoescape for each probe; only per-render setup is shared.
@@ -471,11 +529,23 @@ class TestTitleExhaustive:
                 if self._cpython_knows_no_case(chr(cp)):
                     skew += 1
                     continue
+                if cp in newer_than_tables:
+                    newer_residue.add(cp)
+                    continue
                 unexpected.append(f"  U+{cp:04X} {probe!r}: django={dj_o!r} djust={dj_u!r}")
         assert checked == 4 * (0x110000 - 0x800), checked
         assert not unexpected, (
             f"{len(unexpected)} codepoints diverge for a reason other than "
             f"Unicode-version skew:\n" + "\n".join(unexpected[:20])
+        )
+        # The pin must stay exact: if the tables learn these codepoints (or the
+        # sweep stops reaching them) the pin is stale and should be deleted
+        # rather than left as a standing excuse.
+        assert newer_residue == newer_than_tables, (
+            f"{len(newer_than_tables - newer_residue)} pinned Unicode 16.0 codepoints no "
+            f"longer diverge (first: "
+            f"{[hex(cp) for cp in sorted(newer_than_tables - newer_residue)[:5]]}); "
+            f"the tables in `truncate.rs` caught up, so delete the pin"
         )
         # Skew is expected to be tiny; a large number would mean the tables in
         # `truncate.rs` were generated against the wrong interpreter.

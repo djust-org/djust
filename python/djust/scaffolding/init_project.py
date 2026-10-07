@@ -20,6 +20,7 @@ from typing import List, Mapping, Optional, Tuple
 from . import templates as T
 
 SETTINGS_MARKER = "# --- djust (added by djust init) ---"
+TEMPLATES_MARKER = T.TEMPLATES_MARKER
 
 DONE = "done"
 UNCHANGED = "unchanged"
@@ -162,6 +163,163 @@ def plan_settings(project: Project) -> Tuple[Optional[FileChange], Step]:
     )
 
 
+_DJUST_BACKEND = "djust.template_backend.DjustTemplateBackend"
+_DJANGO_BACKEND = "django.template.backends.django.DjangoTemplates"
+# Methods that change a list in place: a TEMPLATES edited like this is not the
+# literal the file shows.
+_LIST_MUTATORS = frozenset(
+    {"append", "extend", "insert", "pop", "remove", "clear", "sort", "reverse", "__setitem__"}
+)
+
+
+@dataclass
+class TemplatesPlan:
+    """What ``djust init`` does about ``TEMPLATES``: ``kind`` is one of
+    ``add`` (append the block), ``present`` (djust is already configured),
+    ``misordered`` or ``unrecognised`` (reported, not edited)."""
+
+    kind: str
+    detail: str
+
+
+def _templates_literal(tree: ast.Module) -> Tuple[Optional[List[str]], str]:
+    """The BACKEND of each entry of the file's TEMPLATES literal, in order.
+
+    Returns ``(None, reason)`` unless TEMPLATES is assigned exactly once, at
+    the top level, to a list or tuple of dict literals that each name a string
+    BACKEND, and is never reassigned, augmented or mutated in place.
+    """
+    assigns = []
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            if any(isinstance(t, ast.Name) and t.id == "TEMPLATES" for t in node.targets):
+                assigns.append(node)
+        elif isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name) and node.target.id == "TEMPLATES" and node.value:
+                assigns.append(node)
+    if not assigns:
+        return None, "TEMPLATES is not assigned in this file"
+    if len(assigns) > 1:
+        return None, "TEMPLATES is assigned more than once"
+    assign = assigns[0]
+    simple_targets = {
+        id(t)
+        for t in (assign.targets if isinstance(assign, ast.Assign) else [assign.target])
+        if isinstance(t, ast.Name)
+    }
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id == "TEMPLATES":
+            if isinstance(node.ctx, (ast.Store, ast.Del)) and id(node) not in simple_targets:
+                return None, "TEMPLATES is changed after its assignment"
+        elif (
+            isinstance(node, ast.Attribute)
+            and node.attr in _LIST_MUTATORS
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "TEMPLATES"
+        ):
+            return None, "TEMPLATES is changed after its assignment"
+    value = assign.value
+    if not isinstance(value, (ast.List, ast.Tuple)):
+        return None, "TEMPLATES is not a list literal"
+    backends = []
+    for entry in value.elts:
+        if not isinstance(entry, ast.Dict) or None in entry.keys:
+            return None, "a TEMPLATES entry is not a plain dict literal"
+        backend = None
+        for key, val in zip(entry.keys, entry.values):
+            if isinstance(key, ast.Constant) and key.value == "BACKEND":
+                if isinstance(val, ast.Constant) and isinstance(val.value, str):
+                    backend = val.value
+        if backend is None:
+            return None, "a TEMPLATES entry has no literal BACKEND"
+        backends.append(backend)
+    return backends, ""
+
+
+def _names_djust_backend(tree: ast.Module) -> bool:
+    return any(
+        isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and "DjustTemplateBackend" in node.value
+        for node in ast.walk(tree)
+    )
+
+
+def classify_templates(source: str) -> TemplatesPlan:
+    """Decide what to do about the TEMPLATES in ``source`` without running it."""
+    try:
+        # A UTF-8 byte order mark is valid in a Python file, not in ast.parse's text.
+        tree = ast.parse(source.lstrip("\ufeff"))
+    except SyntaxError:
+        return TemplatesPlan("unrecognised", "the settings file does not parse")
+    backends, reason = _templates_literal(tree)
+    if _names_djust_backend(tree):
+        if backends is not None:
+            djust_at = next(
+                (i for i, b in enumerate(backends) if "DjustTemplateBackend" in b), None
+            )
+            if djust_at is not None and _DJANGO_BACKEND in backends[:djust_at]:
+                return TemplatesPlan(
+                    "misordered",
+                    "DjangoTemplates comes before DjustTemplateBackend",
+                )
+        return TemplatesPlan("present", "DjustTemplateBackend already configured")
+    if backends is None:
+        return TemplatesPlan("unrecognised", reason)
+    if _DJANGO_BACKEND not in backends:
+        return TemplatesPlan("unrecognised", "no DjangoTemplates entry to build on")
+    return TemplatesPlan("add", "")
+
+
+def plan_templates(
+    project: Project, source: str, opt_in: bool = False
+) -> Tuple[Optional[str], Step, Optional[str]]:
+    """The TEMPLATES block to append to ``source`` (or None), its step, and a
+    note with the snippet to add by hand.
+
+    TEMPLATES is only edited when ``opt_in`` (``djust init --templates``) and
+    the setting is one init can read with certainty. Otherwise the step is
+    informational (``skipped``, exit code 0); it is ATTENTION only when the
+    user asked for the edit and it could not be done.
+    """
+    name = "TEMPLATES"
+    if TEMPLATES_MARKER in source:
+        return None, Step(name, UNCHANGED, "djust block already present"), None
+    plan = classify_templates(source)
+    if plan.kind == "present":
+        return None, Step(name, UNCHANGED, plan.detail), None
+    if opt_in and plan.kind == "add":
+        return (
+            T.TEMPLATES_BLOCK,
+            Step(name, DONE, "DjustTemplateBackend added first", "add DjustTemplateBackend first"),
+            None,
+        )
+    settings_name = project.settings_path.relative_to(project.root)
+    if plan.kind == "misordered":
+        detail = "%s; not reordered" % plan.detail
+        note = (
+            "%s lists DjangoTemplates before DjustTemplateBackend, so Django renders every "
+            "template it finds (djust.C016). djust init never reorders a TEMPLATES; move the "
+            "DjustTemplateBackend entry first by hand if you want djust's engine to render "
+            "your templates." % settings_name
+        )
+    else:
+        if plan.kind == "add":
+            detail = "not edited; --templates adds DjustTemplateBackend first"
+            why = "djust init does not edit TEMPLATES unless you pass --templates"
+        else:
+            detail = "%s; not edited" % plan.detail
+            why = "djust init cannot edit it (%s)" % plan.detail
+        note = (
+            "%s TEMPLATES was not changed: %s. LiveViews render with djust's engine whatever "
+            "TEMPLATES says. To render your other templates with djust's engine too, put the "
+            "djust entry first (read what djust's engine does not render like Django's in "
+            'the installation guide, section "Rendering your other templates with '
+            'djust": %s):\n\n%s' % (settings_name, why, INSTALLATION_URL, T.TEMPLATES_ENTRY_SNIPPET)
+        )
+    return None, Step(name, ATTENTION if opt_in else SKIPPED, detail), note
+
+
 def render_asgi(project: Project) -> str:
     return T.ASGI_PY % {
         "project_name": project.package or project.settings_module,
@@ -236,6 +394,7 @@ _INCLUDE_RE = re.compile(r"^\s*(?:-r|--requirement)[\s=]+(\S+)")
 _ALREADY_DECLARED = "djust, channels and uvicorn already declared in pyproject.toml"
 _NOTHING_FOR_UV = "nothing for uv to add (see the pyproject.toml step)"
 FIRST_LIVEVIEW_URL = "https://docs.djust.org/getting-started/first-liveview/"
+INSTALLATION_URL = "https://docs.djust.org/getting-started/installation/"
 
 
 def requirements() -> List[str]:
@@ -675,6 +834,7 @@ def init_project(
     dry_run: bool = False,
     install: bool = True,
     force: bool = False,
+    templates: bool = False,
 ) -> InitResult:
     project = detect_project(root, settings_module)
     python = find_project_python(root, os.environ)
@@ -683,6 +843,20 @@ def init_project(
 
     settings_change, step = plan_settings(project)
     result.steps.append(step)
+    # Plan TEMPLATES against the file as it will be after the block above, and
+    # fold both blocks into the one FileChange for settings.py.
+    settings_text = settings_change.new if settings_change else _read(project.settings_path)
+    templates_block, step, templates_note = plan_templates(project, settings_text, opt_in=templates)
+    result.steps.append(step)
+    if templates_note:
+        result.notes.append(templates_note)
+    if templates_block:
+        newline = "\r\n" if "\r\n" in settings_text else "\n"
+        base = settings_change.old if settings_change else settings_text
+        joined = settings_text.rstrip("\r\n") + newline * 3
+        settings_change = FileChange(
+            project.settings_path, base, joined + templates_block.replace("\n", newline)
+        )
     asgi_change, step, snippet = plan_asgi(project)
     result.steps.append(step)
     if snippet:

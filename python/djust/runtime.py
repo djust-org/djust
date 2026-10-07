@@ -153,6 +153,29 @@ class ExplicitSaveDeferred(Exception):
     work: "Optional[asyncio.Future[None]]" = None
 
 
+async def _await_save(work: "asyncio.Future[None]", timeout: float) -> None:
+    """Wait up to ``timeout`` for ``work`` without cancelling it.
+
+    Raises ``asyncio.TimeoutError`` when it is still running at the deadline
+    and re-raises whatever it raised when it finished in time.
+
+    This is the ``wait_for(shield(work))`` shape minus ``shield``. Since
+    Python 3.14 a shield whose waiter has gone adds a done callback to the
+    inner future that hands its exception to the loop's exception handler, and
+    the ``asyncio`` logger then writes that exception's message and traceback
+    at ERROR (``OSError exception in shielded future``). A save that outruns
+    its deadline and then fails is exactly that case, and a storage exception
+    can carry server-only values: this module reports the failure without them
+    (:func:`_log_unobserved_save_failure`) and must be the only reporter.
+    ``asyncio.wait`` leaves ``work`` alone on timeout and on cancellation, so
+    the save keeps running and nothing else observes its failure.
+    """
+    done, _pending = await asyncio.wait({work}, timeout=timeout)
+    if not done:
+        raise asyncio.TimeoutError
+    work.result()
+
+
 def _log_unobserved_save_failure(work: "asyncio.Future[None]") -> None:
     """Report a save failure nobody is waiting for any more (value-free)."""
     if work.cancelled() or work.exception() is None:
@@ -420,7 +443,7 @@ async def _run_explicit_save(
     previous = getattr(owner, "_explicit_save_pending", None)
     if previous is not None and not previous.done():
         try:
-            await asyncio.wait_for(asyncio.shield(previous), timeout=deadline)
+            await _await_save(previous, deadline)
         except asyncio.TimeoutError:
             if not previous.done():
                 raise ExplicitSaveDeferred("Previous explicit save still running") from None
@@ -457,7 +480,7 @@ async def _run_explicit_save(
         )
         if not started.done() and not work.done():
             raise asyncio.TimeoutError
-        await asyncio.wait_for(asyncio.shield(work), timeout=deadline)
+        await _await_save(work, deadline)
     except asyncio.TimeoutError:
         if work.done():
             raise  # the save's own TimeoutError (a backend timeout): a failure
@@ -2739,12 +2762,18 @@ class SSESessionTransport:
     # ------------------------------------------------------------------ #
 
     def on_view_instantiated(self, view: Any) -> None:
-        """No-op for SSE (#1915, Finding B).
+        """Stamp the slot a view mounted beside the page view lives in (#3252).
 
         SSE has no WS consumer to back-reference; the SSE-transport identity
         stamp (``_sse_session_id`` / ``_sse_session`` / query string) already
-        lands in :meth:`on_view_mounted`. Nothing to do here."""
-        return None
+        lands in :meth:`on_view_mounted`. The page view has no slot."""
+        slot_target = getattr(self._session, "target_id", None)
+        if isinstance(slot_target, str) and slot_target:
+            view._djust_slot_target = slot_target
+
+    def hosts_other_views(self) -> bool:
+        """Whether this session has hosted views besides one (#3252); sticky."""
+        return bool(getattr(self._session, "_hosted_several_views", False))
 
     def uses_actors_for_mount(self, view: Any) -> bool:
         """SSE never mounts through actors (#1915, Finding D).
@@ -3331,6 +3360,12 @@ class ViewRuntime:
 
         # ---- Build request ----
         request = await self._build_request(page_url=page_url, params=params)
+        # A view mounted beside the page view (#3252) is addressed by its slot
+        # wherever the request is bound to an identity (explicit saved state,
+        # client snapshots, event authorization).
+        slot_target = getattr(view_instance, "_djust_slot_target", None)
+        if slot_target:
+            request._djust_slot_target = slot_target
 
         from ._exposure import uses_legacy_exposure
 
@@ -3551,7 +3586,9 @@ class ViewRuntime:
             state_snapshot = data.get("state_snapshot")
             # Fix #11 — operator-level master switch (WS websocket.py:2499).
             state_master_on = getattr(settings, "DJUST_STATE_SNAPSHOT_ENABLED", True)
-            if state_master_on and state_snapshot and opt_in:
+            # A view beside the page view (#3252) takes no navigation snapshot:
+            # the client's token is the page view's, and mints none for it.
+            if state_master_on and state_snapshot and opt_in and not slot_target:
                 snapshot_slug = state_snapshot.get("view_slug", "")
                 if snapshot_slug == view_path:
                     state_dict = None
@@ -3694,6 +3731,7 @@ class ViewRuntime:
                     incoming = data.get("state_snapshot")
                     if (
                         getattr(settings, "DJUST_STATE_SNAPSHOT_ENABLED", True)
+                        and not slot_target
                         and type(incoming) is dict
                         and incoming.get("view_slug") == view_path
                         and await sync_to_async(view_instance._should_restore_snapshot)(request)
@@ -3821,6 +3859,30 @@ class ViewRuntime:
                 view_class=view_path,
                 logger=logger,
                 log_message=f"Error in {sanitize_for_log(view_path)}.handle_params()",
+                expose_details=_diagnostics_policy_allows(view_instance),
+            )
+            await self.transport.send(response)
+            await self._on_mount_failed(view_instance)
+            return
+
+        # ---- connected() view hook (#3007) ----
+        # The live mount only: the view is admitted, set up (mount() or a
+        # restore) and its URL state applied, and has not rendered yet, so
+        # state the hook sets is in the first frame. A failure fails the mount
+        # like one from mount(); the view still gets its disconnected().
+        try:
+            from ._child_lifecycle import begin_live_connection
+
+            connected_hook = begin_live_connection(view_instance)
+            if connected_hook is not None:
+                await sync_to_async(connected_hook)()
+        except Exception as exc:
+            response = handle_exception(
+                exc,
+                error_type="mount",
+                view_class=view_path,
+                logger=logger,
+                log_message=f"Error in {sanitize_for_log(view_path)}.connected()",
                 expose_details=_diagnostics_policy_allows(view_instance),
             )
             await self.transport.send(response)
@@ -4093,6 +4155,13 @@ class ViewRuntime:
                 "Failed to emit state_snapshot_signed for %s; proceeding without snapshot",
                 sanitize_for_log(view_path),
             )
+
+        # A view beside the page view (#3252) ships no navigation snapshot, not
+        # even the null that clears one: the client keeps one token per view
+        # class for the page view, which a sibling of that class would overwrite
+        # or revoke.
+        if slot_target:
+            mount_msg.pop("state_snapshot_signed", None)
 
         # ADR-038 D-b / D-n: value-free service-worker cache signals — an
         # ineligibility marker for explicit pages, an HMAC identity marker the
@@ -6791,6 +6860,8 @@ class ViewRuntime:
         """
         from .security.state_snapshot import legacy_snapshot_fields
 
+        if getattr(view, "_djust_slot_target", None):
+            return {}  # a view beside the page view mints none (#3252)
         return await sync_to_async(legacy_snapshot_fields)(
             view,
             getattr(view, "_djust_mount_view_path", None),
@@ -6813,8 +6884,8 @@ class ViewRuntime:
         from ._exposure_sessions import request_binding
         from ._exposure_snapshots import snapshot_codec
 
-        if uses_legacy_exposure(view):
-            return {}
+        if uses_legacy_exposure(view) or getattr(view, "_djust_slot_target", None):
+            return {}  # a view beside the page view mints none (#3252)
         fields: Dict[str, Any] = {
             "view": view._djust_mount_view_path,
             "state_snapshot_signed": None,
@@ -6874,7 +6945,7 @@ class ViewRuntime:
         closed (#3250 review L1): nulling it alone left its background work,
         waiters and live handles to a disconnect that no longer saw it.
         """
-        from ._child_lifecycle import release_root_view
+        from ._child_lifecycle import fire_view_disconnected, release_root_view
 
         view = self.view_instance
         self.view_instance = None
@@ -6884,7 +6955,10 @@ class ViewRuntime:
         )
         await self.transport.close(code=4403)
         if view is not None:
-            release_root_view(view, navigation=False, reason="view_disconnect")
+            try:
+                await fire_view_disconnected(view)
+            finally:
+                release_root_view(view, navigation=False, reason="view_disconnect")
 
     def _save_explicit_root(self, view: Any, request: Any) -> None:
         """Sync body of the root save: the binding check, projection and write.
@@ -6996,7 +7070,11 @@ class ViewRuntime:
         if async_batch:
             extra["async_batch"] = async_batch
         view_path = getattr(view, "_djust_mount_view_path", None)
-        if isinstance(view_path, str) and view_path:
+        if (
+            isinstance(view_path, str)
+            and view_path
+            and not getattr(view, "_djust_slot_target", None)
+        ):
             # The withheld success frame would have refreshed or revoked the
             # client's signed snapshot; the error revokes it instead, so a
             # token captured before this turn cannot outlive the failed save.

@@ -94,7 +94,7 @@ class TestThemeContextMemoize1727:
         exactly ONCE total (memoized on the 2nd call), and both calls
         return identical output. This is the #1727 acceptance criterion.
         """
-        from djust.theming.context_processors import theme_context
+        from djust.tests._eager_theme_context import eager_theme_context as theme_context
 
         mgr = _make_manager()
         spies = _tag_spies()
@@ -119,7 +119,7 @@ class TestThemeContextMemoize1727:
         """A live theme switch (mode/preset change) on the SAME request
         MUST recompute the tag bodies and yield UPDATED output — dynamic
         switching is preserved (NOT first-sync-gated)."""
-        from djust.theming.context_processors import theme_context
+        from djust.tests._eager_theme_context import eager_theme_context as theme_context
 
         request = MagicMock()
         spies = _tag_spies()
@@ -164,7 +164,7 @@ class TestThemeContextMemoize1727:
         their own render (no cross-request sharing). Even with identical
         theme state, the cache lives on the request, so a per-request value
         (a future nonce) could never leak. Each request renders its tags."""
-        from djust.theming.context_processors import theme_context
+        from djust.tests._eager_theme_context import eager_theme_context as theme_context
 
         mgr = _make_manager()
         spies = _tag_spies()
@@ -192,7 +192,7 @@ class TestThemeContextMemoize1727:
         the same non-tag keys too (theme_switcher, theme_preset, etc.) —
         memoization only short-circuits the four tag bodies, not the rest
         of the processor's contract."""
-        from djust.theming.context_processors import theme_context
+        from djust.tests._eager_theme_context import eager_theme_context as theme_context
 
         mgr = _make_manager()
         spies = _tag_spies()
@@ -209,7 +209,7 @@ class TestThemeContextMemoize1727:
     def test_no_request_attr_does_not_crash(self):
         """A request object that cannot hold attributes (edge case) must
         not crash theme_context — it falls back to rendering each call."""
-        from djust.theming.context_processors import theme_context
+        from djust.tests._eager_theme_context import eager_theme_context as theme_context
 
         mgr = _make_manager()
         spies = _tag_spies()

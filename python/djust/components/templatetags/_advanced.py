@@ -90,7 +90,7 @@ class TourNode(template.Node):
         skip_btn = ""
         if show_skip and idx < total - 1:
             skip_btn = (
-                f'<button class="dj-tour__skip" type="button" '
+                f'<button class="dj-tour__skip" data-dj-close type="button" '
                 f'dj-click="{e_event}" data-value="skip">Skip tour</button>'
             )
 
@@ -1284,6 +1284,8 @@ class ActivityFeedNode(template.Node):
         if e_stream:
             attrs.append(f'data-stream-event="{e_stream}"')
             attrs.append('dj-hook="ActivityFeed"')
+            # What the hook needs to keep a streamed feed to the same length.
+            attrs.append(f'data-max-items="{max_items}"')
 
         visible = events[:max_items]
 

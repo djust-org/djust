@@ -673,6 +673,17 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
             if (globalThis.djustDebug && !data._navigation) console.warn('[LiveView] Response has neither patches nor html!', data);
         }
 
+        // A deferred save's catch-up (or a later committed turn) has reached
+        // this owner's DOM. Do not clear saving status for rejected, malformed
+        // or broadcast frames, which do not confirm this owner's state.
+        if (!data.broadcast && data.source !== 'broadcast' &&
+            ((Array.isArray(data.patches)) || data.html)) {
+            window.dispatchEvent(new CustomEvent('djust:rendered', {detail: {
+                view: typeof data.view === 'string' ? data.view : (transport?.primaryViewPath || null),
+                target_id: typeof data.target_id === 'string' ? data.target_id : null,
+            }}));
+        }
+
         // Handle form reset
         if (data.reset_form) {
             if (globalThis.djustDebug) console.log('[LiveView] Resetting form');
@@ -1094,6 +1105,10 @@ function _warnDeadScripts(root) {
 }
 
 function storeSignedSnapshot(data, primaryViewPath) {
+    // A view mounted beside the page view (#3252) shares the page's route and
+    // its view class: its frames must neither replace nor revoke the page
+    // view's token. The server ships none for it either.
+    if (typeof data.target_id === 'string' && data.target_id) return;
     // Mounts, successful primary-view event acknowledgements and primary-view
     // server-turn frames carry navigation state. Child frames cannot replace
     // it, and error frames may only revoke it.
@@ -1129,11 +1144,21 @@ function storeSignedSnapshot(data, primaryViewPath) {
 // mount-context state (per-connection values, and ADR-034's per-instance
 // component identities) reaches the page. Shared by the WebSocket and SSE
 // mount paths (#1646: one path, not two).
-function _morphPrerenderedMount(container, html, formRecoverySnapshot) {
+function _morphPrerenderedMount(container, html, formRecoverySnapshot, restoreDraft) {
     const temp = document.createElement('div');
     // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
     temp.innerHTML = html;
     morphChildren(container, temp);
+    // The morph resets form fields to the server's values; put a saved draft
+    // back into this container before form recovery, which restores what the
+    // user had typed (#3351). Only a FIRST mount does: a reconnect's mount
+    // keeps the server's values, and recovery brings back what was typed.
+    // `restoreDraft` is the caller's answer for this mount (a view slot knows
+    // whether it mounted before); without one, the page view's own flag, which
+    // is set for exactly the page mount a reconnect makes.
+    if (restoreDraft === undefined ? !window.djust._isReconnect : restoreDraft) {
+        restoreDraftFields(container);
+    }
     if (formRecoverySnapshot) window.djust._restoreFormRecovery(formRecoverySnapshot);
     // #1813 (a): embedded-view wrappers carry NO `id`, so morphChildren can
     // only align them positionally. Reconcile them by the stable
@@ -2029,6 +2054,9 @@ class LiveViewWebSocket {
                         error: data.error,
                         // Stable machine-readable code (#3319), e.g. 'permission_denied'.
                         code: typeof data.code === 'string' ? data.code : null,
+                        transient: data.transient === true,
+                        view: typeof data.view === 'string' ? data.view : (this.primaryViewPath || null),
+                        target_id: typeof data.target_id === 'string' ? data.target_id : null,
                         traceback: data.traceback || null,
                         event: data.event || this.lastEventName || null,
                         validation_details: data.validation_details || null
@@ -2755,6 +2783,11 @@ window.addEventListener('pageshow', (event) => {
 //   - No presence tracking
 //   - No actor-based state management
 //   - No MessagePack binary encoding
+//
+// Views mounted beside the page view (dj-lazy containers, #3252) are independent
+// views of the session, as on the WebSocket: each mounts with a `mount` frame
+// that names its container (`target_id`), the server addresses every frame of it
+// the same way, and the shared slot code in 13b-view-slots.js applies them.
 // ============================================================================
 
 class LiveViewSSE {
@@ -2763,6 +2796,9 @@ class LiveViewSSE {
         this.eventSource = null;
         this.sseBaseUrl = null;
         this.enabled = true;
+        // Lets the lazy-hydration manager (13-lazy-hydration.js) tell this
+        // transport from the WebSocket one without referencing either class.
+        this.transportName = 'sse';
         this.viewMounted = false;
         this.primaryViewPath = null;
         this._hasConnectedBefore = false;
@@ -2972,14 +3008,26 @@ class LiveViewSSE {
      * 02-response-handler.js and all other message-handling modules work
      * without modification.
      */
-    async _handleMessageImpl(data) {
-        if (globalThis.djustDebug) console.log('[SSE] Received:', data.type, data);
-        // #3036: a live navigation to a page with a different page shell is a
-        // full page load; the destination's root is not applied.
-        if (window.djust.fallBackToFullLoadOnShellChange?.(data)) return;
-        // ADR-038 D-n: compared before anything from this mount is cached.
-        if (window.djust._sw) window.djust._sw.applyMountMetadata(data);
-        storeSignedSnapshot(data, this.primaryViewPath);
+    async _handleMessageImpl(data, inSlot = false) {
+        // `inSlot`: the frame was already received; this is its application in
+        // the context of the view it is addressed to (`_handleSlotFrame`).
+        if (!inSlot) {
+            if (globalThis.djustDebug) console.log('[SSE] Received:', data.type, data);
+            // #3036: a live navigation to a page with a different page shell is a
+            // full page load; the destination's root is not applied.
+            if (window.djust.fallBackToFullLoadOnShellChange?.(data)) return;
+            // ADR-038 D-n: compared before anything from this mount is cached.
+            if (window.djust._sw) window.djust._sw.applyMountMetadata(data);
+            storeSignedSnapshot(data, this.primaryViewPath);
+
+            // A frame addressed to a view mounted beside the page view (#3252)
+            // is applied to that view's container, in its own context.
+            if (typeof data.target_id === 'string' && data.target_id &&
+                _SLOT_FRAME_TYPES.has(data.type)) {
+                await this._handleSlotFrame(data);
+                return;
+            }
+        }
 
         switch (data.type) {
 
@@ -3046,6 +3094,15 @@ class LiveViewSSE {
                     }
                 }
                 this._replacingView = false;
+                // The views hydrated beside the page view lived on the session
+                // that closed (a reconnect, a fresh-id retry): mount them on this
+                // one (#3252). None are registered on the first mount, and a
+                // navigation cleared them.
+                this.remountSlots();
+                // The lazy views that were waiting for the page view to mount (#3252).
+                if (window.djust.lazyHydration && window.djust.lazyHydration.pendingMounts.length) {
+                    window.djust.lazyHydration.processPendingMounts();
+                }
                 // Trigger form recovery and dj-auto-recover after reconnect mount
                 if (window.djust._isReconnect) {
                     if (typeof window.djust._processFormRecovery === 'function') {
@@ -3071,10 +3128,19 @@ class LiveViewSSE {
 
             case 'error':
                 console.error('[SSE] Server error:', data.error);
+                // The view that frame names is not mounted on the server (its
+                // session was replaced, or it was refused): drop the client's
+                // registration so a reconnect does not mount it again (#3252).
+                if (data.code === 'view_unavailable' && typeof data.target_id === 'string') {
+                    forgetSlot(data.target_id);
+                }
                 window.dispatchEvent(new CustomEvent('djust:error', {
                     detail: {
                         error: data.error,
                         code: typeof data.code === 'string' ? data.code : null,
+                        transient: data.transient === true,
+                        view: typeof data.view === 'string' ? data.view : (this.primaryViewPath || null),
+                        target_id: typeof data.target_id === 'string' ? data.target_id : null,
                         traceback: data.traceback || null
                     }
                 }));
@@ -3176,6 +3242,10 @@ class LiveViewSSE {
     liveRedirectMount(outgoing) {
         if (!this.enabled || !this.viewMounted) return false;
         cancelPendingRateLimits();
+        // The server tears down every view of the session, the ones hydrated
+        // beside the page view too (#3252); the destination's own lazy
+        // containers are not hydrated yet.
+        clearSlots();
         // has_ids describes the incoming markup, not whether the current DOM
         // already represents it. Navigation must replace the previous page.
         this._replacingView = true;
@@ -3207,15 +3277,22 @@ class LiveViewSSE {
      * @param {string}      eventName      Handler name on the LiveView
      * @param {Object}      params         Event parameters
      * @param {Element|null} triggerElement DOM element that triggered the event
+     * @param {string|null}  slotId        Container address of the view the event
+     *                                     belongs to (#3252); null for the page view
      */
-    sendEvent(eventName, params = {}, triggerElement = null, keepalive = false) {
+    sendEvent(eventName, params = {}, triggerElement = null, slotId = null) {
         if (!this.enabled || !this.viewMounted) {
             return false;
         }
 
         const request = registerEventRequest(this, eventName, triggerElement);
         try {
-            if (!this.sendMessage({ type: 'event', event: eventName, params, ref: request.ref }, keepalive)) {
+            // An event from inside a view mounted beside the page view runs on
+            // that view (#3252); the page view's carries no address.
+            if (!this.sendMessage({
+                type: 'event', event: eventName, params, ref: request.ref,
+                ...slotFrameFields(slotId || slotIdFor(triggerElement)),
+            })) {
                 cancelEventRequests(this, request.ref);
             }
         } catch (error) {
@@ -3223,6 +3300,83 @@ class LiveViewSSE {
             throw error;
         }
         return request.promise;
+    }
+
+    /**
+     * Apply a frame the server addressed to a view mounted beside the page view
+     * (``target_id``, #3252): a ``mount`` reply fills the view's container, any
+     * other frame is handled by the code that handles the page view's frames,
+     * run in the view's context (``withSlot``).
+     */
+    async _handleSlotFrame(data) {
+        if (data.type === 'mount') {
+            const container = slotContainer(data.target_id);
+            const hadContent = !!container && container.innerHTML.trim().length > 0;
+            applySlotMount(this, data, { html: hadContent ? 'morph' : 'replace' });
+            document.querySelectorAll('[dj-cloak]').forEach(el => el.removeAttribute('dj-cloak'));
+            return;
+        }
+        const applied = await withSlot(data.target_id, () => this._handleMessageImpl(data, true));
+        if (applied === undefined) {
+            // The container is gone (the page replaced it): its frames have
+            // nowhere to go, but an event reply must still settle its request.
+            const event = acknowledgeEventRequest(this, data);
+            if (event && event.eventName) globalLoadingManager.stopLoading(event.eventName, event.trigger);
+        }
+    }
+
+    /**
+     * Mount a view beside the page view (lazy hydration, #3252): the frame names
+     * the container the view fills, so the server adds it to the session instead
+     * of replacing the page view.
+     *
+     * @param {string} viewPath  Dotted view path.
+     * @param {Object} params    Initial mount kwargs.
+     * @param {Object} options   ``{targetId}`` the container's address,
+     *                           ``{hasPrerendered}`` whether it holds server HTML.
+     */
+    mount(viewPath, params = {}, options = {}) {
+        if (!this.enabled || !this.viewMounted || !options.targetId) return false;
+        let clientTimezone = null;
+        try { clientTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { /* noop */ }
+        return this.sendMessage({
+            type: 'mount',
+            view: viewPath,
+            params,
+            url: window.location.pathname,
+            has_prerendered: options.hasPrerendered ?? false,
+            client_timezone: clientTimezone,
+            target_id: options.targetId,
+        });
+    }
+
+    /**
+     * Mount again every view hydrated beside the page view on a new session
+     * (the stream reconnected): the server holds no view for a stream that
+     * closed.
+     */
+    remountSlots() {
+        if (!this.enabled || !this.viewMounted) return;
+        const urlParams = Object.fromEntries(new URLSearchParams(window.location.search));
+        for (const [targetId, slot] of Array.from(_mountedSlots.entries())) {
+            if (!slotContainer(targetId)) {
+                forgetSlot(targetId);
+                continue;
+            }
+            _slotVersions.set(targetId, null);
+            this.mount(slot.viewPath, urlParams, { targetId: targetId, hasPrerendered: true });
+        }
+    }
+
+    /**
+     * Tell the server a view hydrated beside the page view is gone (its
+     * container was removed). The page view and the other views stay live.
+     */
+    unmountView(targetId) {
+        if (!_mountedSlots.has(targetId)) return false;
+        forgetSlot(targetId);
+        if (!this.enabled || !this.viewMounted) return false;
+        return this.sendMessage({ type: 'unmount', target_id: targetId });
     }
 
     sendTeardownEvent(eventName, params, _triggerElement) {
@@ -4049,6 +4203,10 @@ window.djust.flushHandlerRateLimit = flushHandlerRateLimit;
 class DraftManager {
     constructor() {
         this.saveTimers = new Map();
+        // Latest data handed to saveDraft() whose debounced write has not run
+        // yet: a field restored in that window must see it, not the older
+        // stored copy (#3351).
+        this.pendingData = new Map();
         this.saveDelay = 500;
     }
 
@@ -4057,7 +4215,9 @@ class DraftManager {
             clearTimeout(this.saveTimers.get(draftKey));
         }
 
+        this.pendingData.set(draftKey, data);
         const timerId = setTimeout(() => {
+            this.pendingData.delete(draftKey);
             try {
                 const draftData = {
                     data,
@@ -4103,6 +4263,7 @@ class DraftManager {
             clearTimeout(this.saveTimers.get(draftKey));
             this.saveTimers.delete(draftKey);
         }
+        this.pendingData.delete(draftKey);
 
         try {
             localStorage.removeItem(`djust_draft_${draftKey}`);
@@ -4142,6 +4303,162 @@ class DraftManager {
 
 const globalDraftManager = new DraftManager();
 
+// Draft fields are tracked per element with JS-side state, never DOM
+// attributes: a morph rewrites an element's attributes to the server's markup,
+// so a marker kept there is lost and the next pass would treat the field as new.
+//
+// _draftRestored: field -> the name it was restored under. A field the page
+//   renders after init (a patch, a lazily hydrated view, a live_redirect) is
+//   restored once when it first shows up, and never again for as long as the
+//   element lives. A morph can keep an element and change its name (a wizard
+//   step reusing the input), which makes it a new field: a new name restores
+//   again.
+// _draftEdited: field -> the name the user typed it under. A restore never
+//   overwrites an edited field. A rename forgets it (a new field).
+const _draftRestored = new WeakMap();
+const _draftEdited = new WeakMap();
+
+// Saving is ONE delegated listener per event type on the document, installed
+// once. Binding per field closed over the fields present at init, so a field
+// inserted later saved nothing, a field replaced by a new element stopped
+// saving, and a draft root inside a lazily hydrated view was never wired
+// (#3351). `input` and `change` both bubble.
+let _draftListenersInstalled = false;
+
+/**
+ * Where `field` saves to: the draft root it sits in (its fields are collected
+ * from that root alone), else, for a marker placed away from its fields, the
+ * page's first draft root with every field in the document.
+ */
+function _draftTargetFor(field) {
+    const own = field.closest('[data-draft-enabled]');
+    if (own) return { root: own, scope: own };
+    const first = document.querySelector('[data-draft-enabled]');
+    return first ? { root: first, scope: document } : null;
+}
+
+function _collectDraftData(scope) {
+    const draftData = {};
+    scope.querySelectorAll('[data-draft="true"]').forEach(f => {
+        // Prevent prototype pollution attacks. A file input has no value a
+        // draft could put back (setting one throws).
+        if (f.name && !UNSAFE_KEYS.includes(f.name) && f.type !== 'file') {
+            if (f.type === 'checkbox') {
+                draftData[f.name] = f.checked;
+            } else {
+                draftData[f.name] = f.value;
+            }
+        }
+    });
+    return draftData;
+}
+
+/**
+ * The draft to store: what is on the page now over what is already stored for
+ * the key (the unwritten save if one is pending, else storage). A name the
+ * page does not hold at the moment, such as a wizard's earlier step, keeps its
+ * saved value until `clear_draft()` removes the draft.
+ */
+function _mergeDraftData(draftKey, current) {
+    const previous = globalDraftManager.pendingData.get(draftKey) || globalDraftManager.loadDraft(draftKey);
+    const merged = {};
+    if (previous && typeof previous === 'object') {
+        Object.keys(previous).forEach(name => {
+            // eslint-disable-next-line security/detect-object-injection
+            if (!UNSAFE_KEYS.includes(name)) merged[name] = previous[name];
+        });
+    }
+    Object.keys(current).forEach(name => {
+        // eslint-disable-next-line security/detect-object-injection
+        merged[name] = current[name];
+    });
+    return merged;
+}
+
+function _onDraftFieldChange(event) {
+    const target = event.target;
+    if (!target || typeof target.closest !== 'function') return;
+    const field = target.closest('[data-draft="true"]');
+    if (!field) return;
+    const place = _draftTargetFor(field);
+    if (!place) return;
+    const draftKey = place.root.getAttribute('data-draft-key');
+    if (!draftKey) return;
+    _draftEdited.set(field, field.name);
+    globalDraftManager.saveDraft(draftKey, _mergeDraftData(draftKey, _collectDraftData(place.scope)));
+}
+
+function _installDraftListeners() {
+    if (_draftListenersInstalled) return;
+    _draftListenersInstalled = true;
+    document.addEventListener('input', _onDraftFieldChange);
+    document.addEventListener('change', _onDraftFieldChange);
+}
+
+/**
+ * Wire and restore the draft fields currently on the page. Safe to call after
+ * every DOM update (reinitAfterDOMUpdate, #3351): the listeners are installed
+ * once and each field is restored once, when it first appears.
+ *
+ * A field that appears after init is never given a saved value over what the
+ * user is typing: one that is focused or already edited is skipped (and still
+ * counts as restored, so a saved value cannot land on it later). `atInit`
+ * restores every field, as the page-load restore always did.
+ */
+function syncDraftFields(atInit) {
+    if (!document.querySelector('[data-draft-enabled]')) return;
+    _installDraftListeners();
+    const savedByKey = new Map();
+    document.querySelectorAll('[data-draft="true"]').forEach(field => {
+        if (_draftRestored.get(field) === field.name) return;
+        // Renamed since it was last seen: a new field, so what the user typed
+        // under the old name says nothing about this one.
+        if (_draftRestored.has(field)) _draftEdited.delete(field);
+        _draftRestored.set(field, field.name);
+        const place = _draftTargetFor(field);
+        const draftKey = place && place.root.getAttribute('data-draft-key');
+        if (!draftKey || !field.name || UNSAFE_KEYS.includes(field.name)) return;
+        if (field.type === 'file') return;
+        if (!savedByKey.has(draftKey)) {
+            // A debounced save still waiting to be written is newer than storage.
+            savedByKey.set(
+                draftKey,
+                globalDraftManager.pendingData.get(draftKey) || globalDraftManager.loadDraft(draftKey)
+            );
+        }
+        const saved = savedByKey.get(draftKey);
+        if (!saved || !Object.prototype.hasOwnProperty.call(saved, field.name)) return;
+        if (!atInit && (_draftEdited.get(field) === field.name || field === document.activeElement)) return;
+        if (field.type === 'checkbox') {
+            field.checked = saved[field.name];
+        } else {
+            field.value = saved[field.name];
+        }
+    });
+}
+
+/**
+ * Restore the saved draft again into the fields of `scope` that were already
+ * restored.
+ *
+ * A page-load mount morphs the HTTP-prerendered DOM against the server's HTML
+ * (#1610), and that morph writes the server's value into every field the user
+ * is not in, so a restore done at init is undone by it. Called right after that
+ * morph, this puts the draft back. It is scoped to the container the morph
+ * rewrote: a draft is applied when a field first appears or at page load, never
+ * again to fields of an unrelated container (a lazy view mounting later must not
+ * revert a value the server has set since). A field the user has already typed
+ * in or is focused in keeps its value.
+ */
+function restoreDraftFields(scope) {
+    if (!scope || typeof scope.querySelectorAll !== 'function') return;
+    if (!document.querySelector('[data-draft-enabled]')) return;
+    const fields = scope.querySelectorAll('[data-draft="true"]');
+    if (fields.length === 0) return;
+    fields.forEach(field => _draftRestored.delete(field));
+    syncDraftFields(false);
+}
+
 function initDraftMode() {
     // Check if draft mode is enabled on this page
     const draftRoot = document.querySelector('[data-draft-enabled]');
@@ -4155,47 +4472,8 @@ function initDraftMode() {
 
     if (globalThis.djustDebug) console.log(`[DraftMode] Initializing draft mode with key: ${draftKey}`);
 
-    // Load existing draft on page load
-    const savedDraft = globalDraftManager.loadDraft(draftKey);
-    if (savedDraft) {
-        // Restore field values from draft
-        Object.keys(savedDraft).forEach(fieldName => {
-            const field = document.querySelector(`[name="${fieldName}"]`);
-            if (field) {
-                if (field.type === 'checkbox') {
-                    // eslint-disable-next-line security/detect-object-injection
-                    field.checked = savedDraft[fieldName];
-                } else {
-                    // eslint-disable-next-line security/detect-object-injection
-                    field.value = savedDraft[fieldName];
-                }
-            }
-        });
-    }
-
-    // Monitor all fields with data-draft="true" for changes
-    const draftFields = document.querySelectorAll('[data-draft="true"]');
-    draftFields.forEach(field => {
-        const saveDraft = () => {
-            // Collect all draft field values
-            const draftData = {};
-            draftFields.forEach(f => {
-                // Prevent prototype pollution attacks
-                if (f.name && !UNSAFE_KEYS.includes(f.name)) {
-                    if (f.type === 'checkbox') {
-                        draftData[f.name] = f.checked;
-                    } else {
-                        draftData[f.name] = f.value;
-                    }
-                }
-            });
-            globalDraftManager.saveDraft(draftKey, draftData);
-        };
-
-        // Attach input listeners with debouncing built into DraftManager
-        field.addEventListener('input', saveDraft);
-        field.addEventListener('change', saveDraft);
-    });
+    // Restore the saved draft into the fields and save from here on
+    syncDraftFields(true);
 
     // Check for draft clear flag
     if (draftRoot.hasAttribute('data-draft-clear')) {
@@ -4570,6 +4848,9 @@ function extractTypedParams(element) {
             attr.name.startsWith('data-djust') ||
             attr.name === 'dj-id' ||
             attr.name === 'data-loading' ||
+            // Marks a dialog's explicit close control (51-keyboard-nav); a
+            // marker, not an argument: it must not reach the handler as `close`.
+            attr.name === 'data-dj-close' ||
             attr.name === 'data-component-id') {
             continue;
         }
@@ -7379,6 +7660,9 @@ function reinitAfterDOMUpdate(scope) {
     bindLiveViewEvents(scope);
     // A clear_draft() from an event handler arrives in a patch (#2971).
     applyDraftClearFlag();
+    // A data-draft field this update inserted is restored and saved from its
+    // first render, not only the ones present at init (#3351).
+    syncDraftFields();
     // Extract any new colocated hook definitions (<script type="djust/hook">)
     // from the freshly-patched DOM BEFORE we mount/update hooks so definitions
     // are visible to mountHooks().
@@ -8302,14 +8586,14 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     }
 
     // A view mounted beside the page view (lazy hydration, mount_batch, #3252)
-    // lives on the WebSocket only: the HTTP fallback posts to the page's own
-    // URL, where the page view would run the event. Refuse it rather than run
-    // it on the wrong view.
+    // lives on a WebSocket or an SSE session: the HTTP fallback posts to the
+    // page's own URL, where the page view would run the event. Refuse it rather
+    // than run it on the wrong view.
     const slotId = teardown ? null : (params._slotId || slotIdFor(triggerElement));
     if (slotId) {
         if (!skipLoading) globalLoadingManager.stopLoading(eventName, triggerElement);
         window.dispatchEvent(new CustomEvent('djust:error', {detail: {
-            error: `Event "${eventName}" was not sent: its view needs the WebSocket transport.`,
+            error: `Event "${eventName}" was not sent: its view needs the WebSocket or SSE transport.`,
             code: 'view_unavailable',
             traceback: null,
         }}));
@@ -8406,6 +8690,9 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
                             error: body.error,
                             // Stable refusal code (#3319), e.g. 'permission_denied'.
                             code: typeof body.code === 'string' ? body.code : null,
+                            transient: body.transient === true,
+                            view: typeof body.view === 'string' ? body.view : (_localEventTransport.primaryViewPath || null),
+                            target_id: typeof body.target_id === 'string' ? body.target_id : null,
                             traceback: body.traceback || null,
                         };
                     }
@@ -11455,9 +11742,31 @@ const lazyHydrationManager = {
 
         if (globalThis.djustDebug) console.log(`[LiveView:lazy] Hydrating: ${viewPath}`);
 
+        // Over SSE the view mounts with a frame of its own beside the page
+        // view, once the page view is mounted (#3252): the stream is the
+        // session's, there is no socket to connect.
+        if (liveViewWS && liveViewWS.transportName === 'sse' && liveViewWS.enabled) {
+            if (liveViewWS.viewMounted) {
+                this.mountElement(element, viewPath);
+            } else {
+                this.pendingMounts.push({ element, viewPath });
+            }
+            return;
+        }
+
         // Ensure WebSocket is connected (skip in HTTP-only mode)
         if (window.DJUST_USE_WEBSOCKET === false) {
-            if (globalThis.djustDebug) console.log('[LiveView:lazy] HTTP-only mode — skipping WebSocket for lazy element');
+            // No stream either (a browser without EventSource, or a page with no
+            // page view for a session to mount): the view cannot go live. Say
+            // so rather than leave a container that looks interactive and is
+            // not (#3252).
+            if (globalThis.djustDebug) console.log('[LiveView:lazy] HTTP-only mode — a lazy view cannot hydrate');
+            this.hydratedElements.delete(elementId);
+            window.dispatchEvent(new CustomEvent('djust:error', {detail: {
+                error: `The lazy view "${viewPath}" was not mounted: it needs the WebSocket or SSE transport.`,
+                code: 'view_unavailable',
+                traceback: null,
+            }}));
             return;
         }
         if (!liveViewWS || !liveViewWS.enabled) {
@@ -11637,6 +11946,12 @@ const _SLOT_FRAME_TYPES = new Set([
     'mount', 'patch', 'html_update', 'html_recovery', 'embedded_update', 'child_update', 'sticky_update',
 ]);
 
+// Slots that have had a mount and are still around, kept across a reconnect (a
+// reconnect re-mounts them over their existing container). Dropped with the
+// slot (forgetSlot / clearSlots), so a container inserted later under the same
+// id mounts as new.
+const _slotsMountedBefore = new Set();
+
 function _slotSelector(targetId) {
     const escaped = (typeof CSS !== 'undefined' && typeof CSS.escape === 'function')
         ? CSS.escape(targetId)
@@ -11752,12 +12067,16 @@ function watchSlotContainers() {
 }
 
 function forgetSlot(targetId) {
+    // Gone for good, not reconnecting: a container later inserted under the same
+    // id is a first mount again (it restores its draft).
+    _slotsMountedBefore.delete(targetId);
     _mountedSlots.delete(targetId);
     _slotVersions.delete(targetId);
 }
 
 /** Forget every slot (the page is replaced, or the socket is gone). */
 function clearSlots() {
+    _slotsMountedBefore.clear();
     _mountedSlots.clear();
     _slotVersions.clear();
     _activeSlot = null;
@@ -11823,6 +12142,10 @@ function applySlotMount(transport, data, options = {}) {
         }
         return false;
     }
+    // A slot's draft is restored by its first mount only: a later one (the
+    // server re-mounting every view after a reconnect) keeps the server's values.
+    const mountedBefore = _slotsMountedBefore.has(data.target_id);
+    _slotsMountedBefore.add(data.target_id);
     registerSlot(data.target_id, data.view || container.getAttribute('dj-view'), data.version);
     installAdditionalMountEventConfig(data);
     if (typeof data.view === 'string' && data.view) {
@@ -11840,7 +12163,7 @@ function applySlotMount(transport, data, options = {}) {
     const htmlMode = options.html || 'replace';
     if (typeof data.html === 'string' && htmlMode !== 'none') {
         if (htmlMode === 'morph' && data.has_ids === true) {
-            _morphPrerenderedMount(container, data.html);
+            _morphPrerenderedMount(container, data.html, undefined, !mountedBefore);
         } else {
             // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
             container.innerHTML = data.html;
@@ -14536,17 +14859,22 @@ function _createHookInstance(hookDef, el) {
 
     // pushEvent: send a custom event to the server
     instance.pushEvent = function(event, payload = {}) {
-        if (window.djust.liveViewInstance && window.djust.liveViewInstance.ws) {
-            window.djust.liveViewInstance.ws.send(JSON.stringify({
-                type: 'event',
-                event: event,
-                params: payload,
-                // A hook inside a view mounted beside the page view talks to
-                // that view, not the page view (#3252).
-                ...slotFrameFields(slotIdFor(el)),
-            }));
+        const transport = window.djust.liveViewInstance;
+        const frame = {
+            type: 'event',
+            event: event,
+            params: payload,
+            // A hook inside a view mounted beside the page view talks to
+            // that view, not the page view (#3252).
+            ...slotFrameFields(slotIdFor(el)),
+        };
+        if (transport && transport.ws) {
+            transport.ws.send(JSON.stringify(frame));
+        } else if (transport && transport.transportName === 'sse' && transport.viewMounted) {
+            // The SSE transport posts the frame, as it does for every event.
+            transport.sendMessage(frame);
         } else {
-            console.warn(`[dj-hook] Cannot pushEvent "${event}" — no WebSocket connection`);
+            console.warn(`[dj-hook] Cannot pushEvent "${event}" — no live connection`);
         }
     };
 
@@ -14876,6 +15204,11 @@ Object.defineProperty(window.djust, '_activeHooks', {
 //   dj-model.lazy="field_name"         — sync on 'change' event (blur)
 //   dj-model.debounce-300="field_name" — debounce by 300ms
 //
+// The bound element is a form control (input, textarea, select) or a
+// contenteditable element, whose text is the value. Any other element is bound
+// by the plain and unnumbered forms only (dj-model, dj-model.lazy,
+// dj-model.debounce).
+//
 // The server-side ModelBindingMixin handles the 'update_model' event
 // and sets the attribute on the view instance.
 //
@@ -14892,6 +15225,7 @@ function _parseModelAttr(el) {
     // Check for dj-model.lazy and dj-model.debounce-N
     const attrs = el.attributes;
     let field = null;
+    let source = null;
     let lazy = false;
     let debounce = 0;
 
@@ -14901,25 +15235,41 @@ function _parseModelAttr(el) {
         if (name === 'dj-model') {
             // eslint-disable-next-line security/detect-object-injection
             field = attrs[i].value;
+            source = name;
         } else if (name === 'dj-model.lazy') {
             // eslint-disable-next-line security/detect-object-injection
             field = attrs[i].value;
+            source = name;
             lazy = true;
         } else if (name.startsWith('dj-model.debounce')) {
             // eslint-disable-next-line security/detect-object-injection
             field = attrs[i].value;
+            source = name;
             const match = name.match(/debounce-?(\d+)/);
             debounce = match ? parseInt(match[1], 10) : 300;
         }
     }
 
-    return { field, lazy, debounce };
+    return { field, lazy, debounce, source };
 }
 
 /**
  * Get the current value from a form element.
  */
+function _isContentEditable(el) {
+    // A control inside an editable container reports isContentEditable too, but
+    // its value is its own.
+    if (el.matches('input, textarea, select')) return false;
+    if (el.isContentEditable === true) return true;
+    const attr = el.getAttribute('contenteditable');
+    return attr !== null && attr.toLowerCase() !== 'false';
+}
+
 function _getElementValue(el) {
+    if (_isContentEditable(el)) {
+        // innerText keeps the line breaks the user typed; jsdom has none.
+        return typeof el.innerText === 'string' ? el.innerText : el.textContent;
+    }
     if (el.type === 'checkbox') {
         return el.checked;
     }
@@ -14952,10 +15302,25 @@ function _sendModelUpdate(field, value, el) {
 }
 
 /**
+ * True when `el` is bound and its dj-model attribute is as it was at bind time,
+ * so re-parsing it would change nothing. Two property reads and one attribute
+ * lookup instead of the attribute walk _bindModel does; anything that does not
+ * match (a changed value, a renamed or removed attribute, an attribute added)
+ * falls through to _bindModel, which rebuilds the handler (#2858).
+ */
+function _modelUnchanged(el) {
+    const source = el._djustModelSource;
+    return el._djustModelBound === true
+        && typeof source === 'string'
+        && el.attributes.length === el._djustModelAttrCount
+        && el.getAttribute(source) === el._djustModelSourceValue;
+}
+
+/**
  * Bind dj-model to a single element.
  */
 function _bindModel(el) {
-    const { field, lazy, debounce } = _parseModelAttr(el);
+    const { field, lazy, debounce, source } = _parseModelAttr(el);
 
     // #2858 — the handler closure captures field / lazy / debounce parsed
     // from the attribute NAME + VALUE at bind time, and an element that
@@ -14966,7 +15331,11 @@ function _bindModel(el) {
     // attrs otherwise. Re-mark unconditionally after the eviction branch.
     const boundKey = (field || '') + '\u0000' + (lazy ? 'lazy' : '') + '\u0000' + debounce;
     if (el._djustModelBound) {
-        if (el._djustModelBoundKey === boundKey) return;
+        if (el._djustModelBoundKey === boundKey) {
+            // Same binding; an unrelated attribute came or went.
+            el._djustModelAttrCount = el.attributes.length;
+            return;
+        }
         if (el._djustModelHandler) {
             const staleTypes = el._djustModelEventTypes || [];
             for (const t of staleTypes) {
@@ -14976,15 +15345,24 @@ function _bindModel(el) {
     }
     el._djustModelBound = true;
     el._djustModelBoundKey = boundKey;
+    // What _modelUnchanged() compares against.
+    el._djustModelSource = source;
+    el._djustModelSourceValue = field;
+    el._djustModelAttrCount = el.attributes.length;
     if (!field) return;
 
-    const eventType = lazy ? 'change' : 'input';
+    // A contenteditable element fires `input` as it is typed in but no
+    // `change`; leaving it is its commit point.
+    const eventType = lazy ? (_isContentEditable(el) ? 'focusout' : 'change') : 'input';
 
     const handler = () => {
         const value = _getElementValue(el);
 
         if (debounce > 0) {
-            const timerKey = `model:${field}`;
+            // Keyed by the view the element lives in as well as the field: two
+            // views binding the same field name must not drop each other's
+            // pending update (#3355).
+            const timerKey = `model:${slotIdFor(el) || ''}:${field}`;
             if (_modelDebounceTimers.has(timerKey)) {
                 clearTimeout(_modelDebounceTimers.get(timerKey));
             }
@@ -15008,23 +15386,42 @@ function _bindModel(el) {
     }
 }
 
+// The spellings a selector can name outright. Queried one selector at a time:
+// a comma group is several times slower than its parts in some selector engines
+// (jsdom's), and this runs after every DOM update.
+const _MODEL_EXACT = ['[dj-model]', '[dj-model\\.lazy]', '[dj-model\\.debounce]'];
+// `dj-model.debounce-N` carries its N in the attribute NAME, which no selector
+// can match, so these elements are searched by attribute name instead.
+const _MODEL_NUMBERED_CANDIDATES = ['input', 'textarea', 'select', '[contenteditable]'];
+
 /**
  * Scan and bind all dj-model elements.
+ *
+ * Runs after every DOM update (#3334), so the common case must be cheap: a page
+ * of already-bound inputs costs the native selector matches and a few property
+ * reads per element, not an attribute walk (#3355).
  */
 function bindModelElements(root) {
     root = root || document;
-    const elements = root.querySelectorAll('[dj-model], [dj-model\\.lazy], [dj-model\\.debounce]');
-    elements.forEach(_bindModel);
+    _MODEL_EXACT.forEach(selector => {
+        root.querySelectorAll(selector).forEach(el => {
+            if (!_modelUnchanged(el)) _bindModel(el);
+        });
+    });
 
-    // Also check for dj-model with modifiers via attribute prefix
-    root.querySelectorAll('input, textarea, select').forEach(el => {
-        for (let i = 0; i < el.attributes.length; i++) {
-            // eslint-disable-next-line security/detect-object-injection
-            if (el.attributes[i].name.startsWith('dj-model')) {
-                _bindModel(el);
-                break;
+    // dj-model.debounce-N on a control (or contenteditable element)
+    _MODEL_NUMBERED_CANDIDATES.forEach(selector => {
+        root.querySelectorAll(selector).forEach(el => {
+            if (_modelUnchanged(el)) return;
+            const names = el.getAttributeNames();
+            for (let i = 0; i < names.length; i++) {
+                // eslint-disable-next-line security/detect-object-injection
+                if (names[i].startsWith('dj-model')) {
+                    _bindModel(el);
+                    break;
+                }
             }
-        }
+        });
     });
 }
 
@@ -18507,7 +18904,9 @@ globalThis.djust.djDialog = {
  * an in-browser panel with the error message, triggering event, Python
  * traceback, hint, and validation details when present.
  *
- * Only active when `window.DEBUG_MODE === true` (set by the `djust_tags`
+ * Deferred state saves use a nonblocking status in every mode; a successful
+ * render of the same view/target clears it. Persistent error overlays are
+ * only active when `window.DEBUG_MODE === true` (set by the `djust_tags`
  * template tag when Django DEBUG=True). Production builds receive no
  * overlay at all — the server strips `traceback` / `debug_detail` / `hint`
  * in non-DEBUG mode, so the overlay would have nothing interesting to show.
@@ -18520,6 +18919,47 @@ globalThis.djust.djDialog = {
 (function initErrorOverlay() {
     const OVERLAY_ID = 'djust-error-overlay';
     const STYLE_ID = 'djust-error-overlay-style';
+    const STATUS_ID = 'djust-save-status';
+    const saving = new Map();
+
+    function _owner(detail) {
+        return JSON.stringify([
+            typeof detail.view === 'string' ? detail.view : null,
+            typeof detail.target_id === 'string' ? detail.target_id : null,
+        ]);
+    }
+
+    function _clearSaving(detail) {
+        const key = _owner(detail);
+        const entry = saving.get(key);
+        if (!entry) return;
+        entry.remove();
+        saving.delete(key);
+        if (!saving.size) document.getElementById(STATUS_ID)?.remove();
+    }
+
+    function _showSaving(detail) {
+        let status = document.getElementById(STATUS_ID);
+        if (!status) {
+            status = document.createElement('div');
+            status.id = STATUS_ID;
+            status.setAttribute('role', 'status');
+            status.setAttribute('aria-live', 'polite');
+            status.style.cssText = 'position:fixed;bottom:16px;right:16px;z-index:99998;' +
+                'pointer-events:none;padding:12px;background:#1e293b;color:#fff;border-radius:8px;';
+            document.body.appendChild(status);
+        }
+        const key = _owner(detail);
+        let entry = saving.get(key);
+        if (!entry) {
+            entry = document.createElement('div');
+            saving.set(key, entry);
+            status.appendChild(entry);
+        }
+        // Only the message, never traceback or HTML. The server's literal
+        // boolean distinguishes a deferred save from a persistent error.
+        entry.textContent = typeof detail.error === 'string' ? detail.error : 'Saving your change…';
+    }
 
     function _escape(s) {
         if (s == null) return '';
@@ -18667,13 +19107,24 @@ globalThis.djust.djDialog = {
     }
 
     function _onError(e) {
-        if (!window.DEBUG_MODE) return;
         const detail = (e && e.detail) || {};
-        _render(detail);
+        if (detail.code === 'state_error' && detail.transient === true) {
+            _showSaving(detail);
+            return;
+        }
+        _clearSaving(detail);
+        if (window.DEBUG_MODE) _render(detail);
     }
 
     if (typeof window !== 'undefined') {
         window.addEventListener('djust:error', _onError);
+        window.addEventListener('djust:rendered', e => _clearSaving(e.detail || {}));
+        for (const event of ['djust:before-navigate', 'pagehide']) {
+            window.addEventListener(event, () => {
+                saving.clear();
+                document.getElementById(STATUS_ID)?.remove();
+            });
+        }
         window.addEventListener('keydown', _onKeyDown);
         // Expose for tests and for manual triggering from devtools.
         window.djustErrorOverlay = {
@@ -21425,10 +21876,35 @@ globalThis.djust.djTransitionGroup = {
 
     // Esc inside a modal — dispatch the modal's configured close event so
     // server state stays in sync (mirrors 35-dj-dialog.js reverse-sync).
+    //
+    // Only an EXPLICIT close control counts: the stock modal's
+    // `.dj-modal__close`, or any `[dj-click]` an app marks `data-dj-close`.
+    // This used to fall back to the first `[dj-click]` in the dialog, which
+    // is whatever control happens to come first (a Delete or Confirm button,
+    // or a Next button that needs its value) and fired it on Escape.
+    let _warnedNoCloser = false;
     function _closeModal(dialog) {
         const closer = dialog.querySelector('.dj-modal__close[dj-click]') ||
-            dialog.querySelector('[dj-click]');
-        return _dispatchFrom(closer);
+            dialog.querySelector('[data-dj-close][dj-click]');
+        if (closer) {
+            // Press it, so the event carries exactly what a click on it sends
+            // (its data-value / dj-value-* arguments, strict-handler binding,
+            // dj-confirm, locks); a bare handleEvent(name) sent none of that.
+            closer.click();
+            return true;
+        }
+        if (!_warnedNoCloser && dialog.querySelector('[dj-click]')) {
+            // Migration signal for dialogs that relied on the old fallback:
+            // Escape now does nothing here instead of pressing a control that
+            // might be destructive. Once per page.
+            _warnedNoCloser = true;
+            console.warn(
+                '[djust] Escape in a role="dialog" no longer clicks its first dj-click ' +
+                'control. Mark the control that closes it with data-dj-close ' +
+                '(or use .dj-modal__close) to keep Escape-to-close.'
+            );
+        }
+        return false;
     }
 
     // -----------------------------------------------------------------------
@@ -21562,6 +22038,12 @@ globalThis.djust.djTransitionGroup = {
             const innerDropdown = target.closest('.dj-dropdown');
             const dropdownInDialog =
                 innerDropdown && dialog.contains(innerDropdown);
+            // A handler closer to the target already took Tab or Escape (a
+            // hook that runs its own dialog handling calls preventDefault):
+            // do not act on it a second time. Only these two keys: the roving
+            // below (and the dropdown, tablist and accordion handlers) keep
+            // running after an earlier preventDefault, as before.
+            if ((e.key === 'Tab' || e.key === 'Escape') && e.defaultPrevented) return;
             // Tab is handled FIRST and returned — the focus trap is always
             // dialog-scoped and must never fall through to the dropdown.
             if (e.key === 'Tab') {

@@ -4720,21 +4720,40 @@ fn skip_raw_text_region(bytes: &[u8], i: usize) -> Option<usize> {
     None
 }
 
-/// True when an open tag's body (the bytes between `<` and `>`) carries a
-/// `dj-root` or `dj-view` ATTRIBUTE NAME: preceded by ASCII
-/// whitespace, followed by whitespace, `=`, `/` or the end of the tag, and NOT
-/// inside a quoted attribute value (`value="x dj-root y"` is text). A bare
-/// prefix match also accepted `dj-view-transitions` (a `<body>` attribute) and
-/// `dj-viewport-top`, and missed a tab or newline before the name. This is the
-/// twin of the Python `mixins/template.py::_DJ_ROOT_RE` / `_DJ_VIEW_RE`
-/// (#2892, #2981, #1646).
-fn tag_has_root_marker(tag_body: &[u8]) -> bool {
-    scan_tag_body(tag_body, 0).is_some_and(|(_, attrs)| {
-        attrs.iter().any(|&(start, end)| {
-            tag_body[start..end].eq_ignore_ascii_case(b"dj-root")
-                || tag_body[start..end].eq_ignore_ascii_case(b"dj-view")
-        })
-    })
+/// Which root-relevant ATTRIBUTE NAMES an open tag's body (the bytes between
+/// `<` and `>`) carries: preceded by ASCII whitespace, followed by whitespace,
+/// `=`, `/` or the end of the tag, and NOT inside a quoted attribute value
+/// (`value="x dj-root y"` is text). A bare prefix match also accepted
+/// `dj-view-transitions` (a `<body>` attribute) and `dj-viewport-top`, and
+/// missed a tab or newline before the name. This is the twin of the Python
+/// `mixins/template.py::_DJ_ROOT_RE` / `_DJ_VIEW_RE` (#2892, #2981, #1646).
+#[derive(Default, Clone, Copy)]
+struct RootAttrs {
+    root: bool,
+    view: bool,
+    embedded: bool,
+}
+
+impl RootAttrs {
+    /// An embedded `{% live_render %}` child's wrapper: `dj-view` together
+    /// with `data-djust-embedded` (sticky or not). Its subtree belongs to the
+    /// child, so it is never claimed as the parent's root (#3031).
+    fn is_embedded_wrapper(self) -> bool {
+        self.view && self.embedded
+    }
+}
+
+fn root_attrs(tag_body: &[u8]) -> RootAttrs {
+    let mut found = RootAttrs::default();
+    if let Some((_, attrs)) = scan_tag_body(tag_body, 0) {
+        for &(start, end) in &attrs {
+            let name = &tag_body[start..end];
+            found.root |= name.eq_ignore_ascii_case(b"dj-root");
+            found.view |= name.eq_ignore_ascii_case(b"dj-view");
+            found.embedded |= name.eq_ignore_ascii_case(b"data-djust-embedded");
+        }
+    }
+    found
 }
 
 /// HTML attribute states shared by the opening and balancing walks (#3054).
@@ -4798,8 +4817,14 @@ fn find_open_tag_end(bytes: &[u8], i: usize) -> Result<usize, usize> {
 }
 
 /// Locate the byte offset in `html` immediately after the opening tag
-/// of the first element bearing a `dj-root` or `dj-view` attribute, and the
-/// offset of its closing tag. Returns None if no such element is found.
+/// of the LiveView root element, and the offset of its closing tag. Returns
+/// None if no such element is found.
+///
+/// WHICH element is the root is one rule shared with the VDOM parser
+/// (`djust_vdom::parser::find_liveview_root`) and the Python twin
+/// (`mixins/template.py::_search_dj_root_open`) (#3031): an element inside an
+/// embedded child's wrapper is never the root, and the first `dj-root` wins
+/// over the first `dj-view`. See [`find_root_open`].
 ///
 /// `<script>` / `<style>` bodies and HTML comments are skipped wholesale
 /// in BOTH the locating scan and the balancing walk (#2663) — a tag-like
@@ -4818,18 +4843,22 @@ fn find_dj_root_content_range(html: &str) -> Option<(usize, usize)> {
     find_root_close(bytes, open_end, &tag_name).map(|close| (open_end, close))
 }
 
-/// `(offset just past its `>`, lowercased tag name)` of the first open tag
-/// carrying `dj-root` or `dj-view`, walking `bytes` tag by tag.
+/// `(offset just past its `>`, lowercased tag name)` of the root's open tag,
+/// walking `bytes` tag by tag: the first `dj-root`, else the first `dj-view`,
+/// outside every embedded child's wrapper (#3031).
 ///
 /// A tag starts at `<` followed by an ASCII letter, `/` or `!`, as in the
 /// HTML tokenizer; any other `<` is text (#3030 — the Python walker applies
 /// the same rule). Quoted attribute values are skipped whole, so a
-/// `<section dj-root>` inside `data-h="…"` is never a candidate.
+/// `<section dj-root>` inside `data-h="…"` is never a candidate. An embedded
+/// wrapper is skipped through its balancing close tag (to the end of the
+/// document when it has none, as the Python twin does).
 fn find_root_open(bytes: &[u8]) -> Option<(usize, Vec<u8>)> {
+    let mut first_view: Option<(usize, Vec<u8>)> = None;
     let mut i = 0;
     loop {
         if i >= bytes.len() {
-            return None;
+            return first_view;
         }
         if bytes[i] != b'<' {
             i += 1;
@@ -4852,14 +4881,15 @@ fn find_root_open(bytes: &[u8]) -> Option<(usize, Vec<u8>)> {
                 i = k;
                 continue;
             }
-            Err(_) => return None,
+            Err(_) => return first_view,
         };
         let tag_body = &bytes[i + 1..j];
         if tag_body.is_empty() || tag_body[0] == b'/' || tag_body[0] == b'!' {
             i = j + 1;
             continue;
         }
-        if !tag_has_root_marker(tag_body) {
+        let marks = root_attrs(tag_body);
+        if !marks.root && !marks.view {
             i = j + 1;
             continue;
         }
@@ -4875,7 +4905,26 @@ fn find_root_open(bytes: &[u8]) -> Option<(usize, Vec<u8>)> {
             i = j + 1;
             continue;
         }
-        return Some((j + 1, name));
+        if marks.is_embedded_wrapper() {
+            // The child's wrapper and its whole subtree are not ours.
+            match find_root_close(bytes, j + 1, &name) {
+                Some(close) => match find_open_tag_end(bytes, close) {
+                    Ok(end) => {
+                        i = end + 1;
+                        continue;
+                    }
+                    Err(_) => return first_view,
+                },
+                None => return first_view,
+            }
+        }
+        if marks.root {
+            return Some((j + 1, name));
+        }
+        if first_view.is_none() {
+            first_view = Some((j + 1, name));
+        }
+        i = j + 1;
     }
 }
 
@@ -5396,6 +5445,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // review). It has no `#[new]`, so registering exposes a NAME, not a
     // constructor: only `value_into_handler_pyobject` builds one.
     m.add_class::<djust_core::TemplateObject>()?;
+    m.add_class::<djust_core::LazyBlock>()?;
     m.add_function(wrap_pyfunction!(render_template, m)?)?;
     m.add_function(wrap_pyfunction!(render_template_with_dirs, m)?)?;
     m.add_function(wrap_pyfunction!(compile_template, m)?)?;
@@ -5615,6 +5665,133 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod dj_root_selection_3031 {
+    //! One root-selection rule on every Rust locator (#3031), pinned against
+    //! the corpus the Python locator and VDOM tests read too
+    //! (`python/tests/fixtures/root_selection_3031.json`): the element
+    //! carrying `data-expect-root` is the root, and `root: null` means none.
+    //!
+    //! The rule: a root belongs to the view that rendered it, so an embedded
+    //! child's wrapper (`dj-view` + `data-djust-embedded`) and its subtree are
+    //! never the parent's root; among the rest, the first `dj-root` beats the
+    //! first `dj-view`.
+    use super::{find_dj_root_content_range, find_root_open, parse_html};
+    use serde_json::Value;
+
+    const MARK: &str = "data-expect-root";
+
+    fn corpus() -> Vec<Value> {
+        let raw = include_str!("../../../python/tests/fixtures/root_selection_3031.json");
+        let doc: Value = serde_json::from_str(raw).expect("corpus is valid JSON");
+        doc["cases"].as_array().expect("cases").clone()
+    }
+
+    /// Locators the corpus marks as known NOT to reach the expected root on a page.
+    fn diverges(case: &Value, locator: &str) -> bool {
+        case["diverges"]
+            .as_array()
+            .is_some_and(|l| l.iter().any(|v| v == locator))
+    }
+
+    /// The open tag that ends just before byte `open_end`.
+    fn open_tag_before(html: &str, open_end: usize) -> &str {
+        let start = html[..open_end].rfind('<').expect("an open tag");
+        &html[start..open_end]
+    }
+
+    #[test]
+    fn the_text_scanner_picks_the_corpus_root() {
+        for case in corpus() {
+            let name = case["name"].as_str().unwrap();
+            let html = case["html"].as_str().unwrap();
+            let picked = find_root_open(html.as_bytes()).map(|(end, _)| open_tag_before(html, end));
+            let expects_root = case["root"].as_bool().unwrap_or(false);
+            let got_expected = if expects_root {
+                picked.is_some_and(|tag| tag.contains(MARK))
+            } else {
+                picked.is_none() && find_dj_root_content_range(html).is_none()
+            };
+            if diverges(&case, "scanner") {
+                // A known leftover that predates #3031, pinned so a change is noticed.
+                assert!(!got_expected, "{name}: now agrees, drop it from `diverges`");
+            } else {
+                assert!(got_expected, "{name}: picked {picked:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_vdom_picks_the_corpus_root() {
+        for case in corpus() {
+            let name = case["name"].as_str().unwrap();
+            let html = case["html"].as_str().unwrap();
+            if html.is_empty() {
+                continue;
+            }
+            let root = parse_html(html).unwrap_or_else(|e| panic!("{name}: {e}"));
+            if case["root"].as_bool().unwrap_or(false) {
+                assert!(
+                    root.attrs.contains_key(MARK),
+                    "{name}: rooted at <{}> {:?}",
+                    root.tag,
+                    root.attrs
+                );
+            } else {
+                // No root: the documented fallback, the first element child of <body>.
+                assert!(!root.attrs.contains_key(MARK), "{name}");
+                assert_eq!(
+                    root.tag,
+                    case["vdom_fallback_tag"].as_str().unwrap(),
+                    "{name}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_scanner_range_and_the_vdom_cover_the_same_element() {
+        // The text fast path pairs the scanner's byte range with the VDOM's
+        // text nodes one to one; both must be about the same element.
+        let html = "<nav dj-view=\"a.B\">NAV</nav><main dj-root>MAIN</main>";
+        let (from, to) = find_dj_root_content_range(html).unwrap();
+        assert_eq!(&html[from..to], "MAIN");
+        let root = parse_html(html).unwrap();
+        assert_eq!(root.tag, "main");
+        assert_eq!(root.children[0].text.as_deref(), Some("MAIN"));
+
+        let page = "<div dj-view=\"p.P\">P<div dj-view data-djust-embedded=\"c\"><div dj-root>C</div></div>Q</div>";
+        let (from, to) = find_dj_root_content_range(page).unwrap();
+        assert!(page[from..to].starts_with("P<div dj-view data-djust-embedded"));
+        assert_eq!(
+            parse_html(page).unwrap().attrs.get("dj-view").unwrap(),
+            "p.P"
+        );
+    }
+
+    #[test]
+    fn a_page_that_is_only_embedded_children_has_no_root() {
+        let html = "<p>x</p><div dj-view data-djust-embedded=\"c\"><div dj-root>C</div></div>";
+        assert_eq!(find_root_open(html.as_bytes()), None);
+        assert_eq!(find_dj_root_content_range(html), None);
+    }
+
+    #[test]
+    fn many_embedded_children_scan_in_linear_time() {
+        let mut html = String::from("<div dj-view=\"p.P\">");
+        for i in 0..4000 {
+            html.push_str(&format!(
+                "<div dj-view data-djust-embedded=\"c{i}\"><div><div dj-root>c</div></div></div>"
+            ));
+        }
+        html.push_str("</div>");
+        let started = std::time::Instant::now();
+        let (open_end, _) = find_root_open(html.as_bytes()).unwrap();
+        assert_eq!(open_end, "<div dj-view=\"p.P\">".len());
+        assert!(started.elapsed().as_secs() < 2);
+    }
 }
 
 #[cfg(test)]

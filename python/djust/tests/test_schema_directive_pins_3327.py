@@ -55,6 +55,19 @@ def _between(text: str, start: str, end: str) -> str:
     return text[i : text.index(end, i + len(start))]
 
 
+def _slice_or_fail(text: str, start: str, end: str, guidance: str) -> str:
+    """`_between`, but a refactor of the client fails with guidance, not a ValueError."""
+    try:
+        return _between(text, start, end)
+    except ValueError:
+        pytest.fail(f"could not find {start!r} ... {end!r} in the client source: {guidance}")
+
+
+def _doc(name: str) -> Path:
+    """`name` under docs/, or the repo root for the few root-level markdown files."""
+    return ROOT / name if name.endswith("PROPOSAL.md") else ROOT / "docs" / name
+
+
 def _has(pattern: str, text: str) -> bool:
     return re.search(pattern, text, re.S) is not None
 
@@ -250,9 +263,11 @@ def test_dj_key_description_matches_the_parser_and_the_differ() -> None:
     assert "DJE-051" in (GUIDES / "error-codes.md").read_text(encoding="utf-8")
 
 
-#: Categories `djust_ai_context._section_directives` actually emits. dj-prefetch
-#: and dj-key are in "performance", which it does not list, so they never reach
-#: the generated files (reported on #3327); their pins above read `DIRECTIVES`.
+#: `djust_ai_context._section_directives` emits every category in `DIRECTIVES`
+#: (#3353; it used to skip performance, animation and recovery, so the corrected
+#: dj-prefetch / dj-key text never reached the generated files). Phrases from
+#: those categories are pinned here beside the others, in the three generated
+#: formats.
 EMITTED_PHRASES = (
     "It does not disable anything.",
     "within the same LiveView or component",
@@ -261,12 +276,20 @@ EMITTED_PHRASES = (
     "dj-navigate ignores it",
     '<form id="checkout-form"',
     "INERT: dj-target is dropped before the event is sent",
+    # performance (omitted from the generated files before #3353)
+    "65 ms",
+    "'false' opts a link out of both prefetch layers",
+    "positional diffing",
+    "stay with the position instead of following the item",
+    # event: dj-input (#3356)
+    "debounced 300ms by default",
 )
 
-#: The pre-#3291 / pre-#3327 sentences, each of which taught something false.
-#: Only entries in emitted categories: the dj-prefetch and dj-key stale sentences
-#: are pinned absent from `DIRECTIVES` in their own tests above.
+#: The pre-#3291 / pre-#3327 / pre-#3356 sentences, each of which taught something false.
 STALE_PHRASES = (
+    "via the service worker when the user hovers",
+    "destroying and rebuilding",
+    "Send event on every keystroke",
     "e.target.reset()",
     "Scope the server re-render to a specific element",
     "in flight anywhere on the page",
@@ -288,3 +311,98 @@ def test_generated_ai_context_carries_the_corrected_wording_and_none_of_the_old(
         assert phrase in content, f"{fmt} context lost corrected wording: {phrase!r}"
     for stale in STALE_PHRASES:
         assert stale not in content, f"{fmt} context still teaches: {stale!r}"
+
+
+def test_dj_input_is_documented_as_debounced_and_the_client_debounces() -> None:
+    """#3356: the cheatsheet said 'Every keystroke'; text fields wait 300 ms by default."""
+    _assert_phrases(
+        "dj-input",
+        [
+            "input event",
+            "text, search, email, url, tel, password, textarea",
+            "debounced 300ms by default",
+            "range and color are throttled 150ms, number 100ms",
+            "checkbox, radio and select send immediately",
+            "any other input type",
+            "date, time, datetime-local, month, week, file, custom elements",
+            "falls back to a 300ms debounce",
+            "dj-debounce",
+            'dj-debounce="0"',
+        ],
+    )
+    assert "on every keystroke" not in _text("dj-input")
+
+    parsing = _js("08-event-parsing.js")
+    limits = _slice_or_fail(
+        parsing,
+        "const DEFAULT_RATE_LIMITS = {",
+        "};",
+        "the client's DEFAULT_RATE_LIMITS table moved or was wrapped (e.g. Object.freeze); "
+        "point this pin at its new shape",
+    )
+
+    def rate(kind: str) -> str:
+        m = re.search(r"'%s':\s*\{([^}]*)\}" % re.escape(kind), limits)
+        assert m, f"DEFAULT_RATE_LIMITS lost its {kind!r} entry; re-check dj-input's description"
+        return " ".join(m.group(1).split())
+
+    for kind in ("text", "search", "email", "url", "tel", "password", "textarea"):
+        assert rate(kind) == "type: 'debounce', ms: 300", (kind, rate(kind))
+    assert rate("range") == "type: 'throttle', ms: 150"
+    assert rate("color") == "type: 'throttle', ms: 150"
+    assert rate("number") == "type: 'throttle', ms: 100"
+    for kind in ("radio", "checkbox", "select-one", "select-multiple"):
+        assert rate(kind) == "type: 'passthrough'", (kind, rate(kind))
+
+    binding = _js("09-event-binding.js")
+    handler = _slice_or_fail(
+        binding,
+        "on('input', function(e) {",
+        "on('keydown'",
+        "the dj-input listener in 09-event-binding.js moved or was reshaped; point this pin at it",
+    )
+    # An input type the table does not list is debounced 300 ms too, and the
+    # element-level attributes override the default, 0 included.
+    assert _has(r"\{\s*type:\s*'debounce',\s*ms:\s*300\s*\}", handler)
+    assert _has(r"hasAttribute\('dj-debounce'\).*?hasAttribute\('dj-throttle'\)", handler)
+    assert _has(r"rateLimit\.ms\s*=\s*parseInt\(djVal,\s*10\)", handler), (
+        'dj-debounce="0" is no longer read as a 0 ms delay; re-check dj-input\'s description'
+    )
+
+
+#: (file under docs/, sentence that said dj-input fires per keystroke). #3356.
+DJ_INPUT_STALE_DOC_SENTENCES = (
+    ("website/guides/template-cheatsheet.md", "| Every keystroke |"),
+    ("website/guides/dj-paste.md", "`dj-input`** fires on every keystroke"),
+    ("website/guides/live-input.md", "Per-keystroke. Pair with `debounce=`"),
+    ("website/guides/BEST_PRACTICES.md", "Text input (fires on every keystroke)"),
+    ("website/guides/BEST_PRACTICES.md", "Fires on EVERY keystroke"),
+    ("website/guides/BEST_PRACTICES.md", "Database query every keystroke!"),
+    ("NAMING_CONVENTION_PROPOSAL.md", "Input events (every keystroke)"),
+    ("llms-full.txt", "Text input (fires on every keystroke)"),
+    ("ai/templates.md", "Text input (fires on every keystroke)"),
+    ("ai/templates.md", "to handler on each keystroke"),
+)
+
+#: Docs that state the dj-input default and must keep saying 300 ms.
+DJ_INPUT_DEBOUNCE_DOCS = (
+    "website/guides/template-cheatsheet.md",
+    "website/getting-started/core-concepts.md",
+    "website/core-concepts/events.md",
+    "ai/templates.md",
+    "llms-full.txt",
+)
+
+
+@pytest.mark.parametrize(("name", "stale"), DJ_INPUT_STALE_DOC_SENTENCES)
+def test_docs_do_not_say_dj_input_fires_on_every_keystroke(name: str, stale: str) -> None:
+    text = " ".join(_doc(name).read_text(encoding="utf-8").split())
+    assert stale not in text, f"docs/{name} again says dj-input fires per keystroke: {stale!r}"
+
+
+@pytest.mark.parametrize("name", DJ_INPUT_DEBOUNCE_DOCS)
+def test_docs_state_the_dj_input_debounce(name: str) -> None:
+    text = " ".join(_doc(name).read_text(encoding="utf-8").split())
+    assert re.search(r"dj-input[^\n]{0,200}300 ?ms|300 ?ms[^\n]{0,200}dj-input", text), (
+        f"docs/{name} no longer says text fields are debounced 300 ms on dj-input"
+    )

@@ -796,6 +796,7 @@ module = [
     "djust.theming._builtin_presets",
     "djust.theming._config",
     "djust.theming._constants",
+    "djust.theming._lazy_html",
     "djust.theming._registry_accessor",
     "djust.theming._types",
     "djust.theming.accessibility",

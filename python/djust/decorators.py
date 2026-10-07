@@ -9,6 +9,7 @@ import asyncio
 import functools
 import logging
 import threading
+import types
 from typing import Callable, Any, TypeVar, Union, cast, List, Optional, Literal, overload
 
 from ._deprecation import warn_deprecated
@@ -23,6 +24,30 @@ logger = logging.getLogger(__name__)
 F = TypeVar("F", bound=Callable[..., Any])
 
 
+#: Decorators whose effect is browser-side or per-browser-event. Server push
+#: enforces none of them, so on a ``@push_handler`` method they would be inert
+#: and read as protection that is not there.
+_PUSH_INERT_DECORATORS = frozenset(
+    {
+        "permission_required",
+        "rate_limit",
+        "debounce",
+        "throttle",
+        "cache",
+        "optimistic",
+        "client_state",
+    }
+)
+
+
+def _inert_on_push_message(key: str, name: str) -> str:
+    return (
+        f"@{key} cannot be combined with @push_handler on {name!r}: server push "
+        f"enforces no permission, rate limit or client-side behaviour, so it "
+        f"would have no effect. Check authorization inside the handler instead."
+    )
+
+
 def _add_decorator_metadata(func: Callable, key: str, value: Any) -> None:
     """
     Add decorator metadata to function.
@@ -35,6 +60,8 @@ def _add_decorator_metadata(func: Callable, key: str, value: Any) -> None:
         key: Decorator name (e.g., 'debounce', 'cache')
         value: Decorator configuration (dict, bool, etc.)
     """
+    if key in _PUSH_INERT_DECORATORS and getattr(func, "_djust_decorators", {}).get("push_handler"):
+        raise TypeError(_inert_on_push_message(key, getattr(func, "__name__", repr(func))))
     if not hasattr(func, "_djust_decorators"):
         func._djust_decorators = {}  # type: ignore
     func._djust_decorators[key] = value  # type: ignore
@@ -191,6 +218,15 @@ def event_handler(
                 f"{getattr(func, '__name__', repr(func))!r}. A function cannot "
                 f"be both an @event_handler (WebSocket/re-render) and an "
                 f"@server_function (RPC/no-re-render). Pick one."
+            )
+
+        # A push handler is callable by server push and NEVER by a browser
+        # event; @event_handler is what makes a method a browser event target.
+        if getattr(func, "_djust_decorators", {}).get("push_handler"):
+            raise TypeError(
+                f"@event_handler cannot be combined with @push_handler on "
+                f"{getattr(func, '__name__', repr(func))!r}. A push handler is "
+                f"never callable from a browser event. Pick one."
             )
 
         # Extract comprehensive signature information
@@ -573,6 +609,13 @@ def server_function(
                 f"@server_function (RPC/no-re-render). Pick one."
             )
 
+        if getattr(func, "_djust_decorators", {}).get("push_handler"):
+            raise TypeError(
+                f"@server_function cannot be combined with @push_handler on "
+                f"{getattr(func, '__name__', repr(func))!r}. A push handler is "
+                f"never callable from a browser. Pick one."
+            )
+
         sig_info = get_handler_signature_info(
             func, parameter_policy=parameter_policy, for_declaration=True
         )
@@ -611,6 +654,141 @@ def is_server_function(func: Any) -> bool:
         True if the function has server_function metadata.
     """
     return bool(getattr(func, "_djust_decorators", {}).get("server_function"))
+
+
+@overload
+def push_handler(func: F) -> F: ...
+
+
+@overload
+def push_handler() -> Callable[[F], F]: ...
+
+
+def push_handler(func: Optional[F] = None) -> Any:
+    """
+    Mark a method as callable by server push only, never by a browser event.
+
+    ``push_to_view(..., handler="name")`` / ``server_push`` call a method when
+    it is ``handle_*``-prefixed or an ``@event_handler``. Neither fits a
+    handler that only the server may trigger: ``@event_handler`` makes it a
+    browser event target, and an undecorated ``handle_*`` method is refused to
+    browsers only under ``event_security = "strict"`` (``"warn"`` and
+    ``"open"`` let a browser call it). ``@push_handler`` is the explicit
+    marker. A marked method:
+
+    * is a valid server-push target under ANY name (``handle_*`` prefix not
+      required);
+    * is refused to a browser event in every ``event_security`` mode, on every
+      transport (WebSocket, SSE, HTTP POST fallback, HTTP API), exactly as if
+      the method did not exist;
+    * is not an event handler: it is not listed in the view schema, audit or
+      API, and ``djust.V004`` does not suggest decorating it.
+
+    **The marker is inherited by overrides.** The guarantee belongs to the
+    method NAME: if any class in the view's MRO defines the name with
+    ``@push_handler``, an override that forgets the marker (or a mixin's
+    marked method shadowed by an unmarked one) is still push-only. This fails
+    closed. ``djust.V021`` reports such an override so it is not a surprise;
+    re-apply ``@push_handler`` on the override to silence it. An override
+    that adds ``@event_handler`` does NOT make the name browser-callable; V021
+    reports that as a conflict.
+
+    It cannot be combined with ``@event_handler`` or ``@server_function``
+    (``TypeError`` at decoration time). It also cannot be combined with
+    ``@permission_required``, ``@rate_limit``, ``@debounce``, ``@throttle``,
+    ``@cache``, ``@optimistic`` or ``@client_state`` (``TypeError``): server
+    push enforces none of them, so on a push handler they would be inert and
+    would read as protection that is not there. ``@background`` is allowed.
+
+    Placement: it may sit above or below ``@staticmethod`` / ``@classmethod``
+    (it marks the underlying function). Put it topmost among ordinary
+    decorators: one that wraps the method without ``functools.wraps`` and sits
+    above it hides the marker on the wrapper, and only the name-level rule
+    above (a marked definition elsewhere in the MRO) would still cover it.
+
+    Usage:
+        from djust.decorators import push_handler
+
+        class RoomView(LiveView):
+            @push_handler
+            def refresh_room(self, room: str = "", **kwargs):
+                self.rooms = load_rooms(room)
+
+        # elsewhere (a Celery task, a signal, a management command):
+        push_to_view("games.views.RoomView", handler="refresh_room",
+                     payload={"room": "a"})
+    """
+
+    def decorator(target: F) -> F:
+        # ``@push_handler`` above ``@staticmethod`` / ``@classmethod`` receives
+        # the descriptor; ``getattr(view, name)`` returns the function inside
+        # it, so that is what carries the marker.
+        function = target.__func__ if isinstance(target, (staticmethod, classmethod)) else target
+        decorators = getattr(function, "_djust_decorators", {})
+        name = getattr(function, "__name__", repr(function))
+        for conflicting in ("event_handler", "server_function"):
+            if decorators.get(conflicting):
+                raise TypeError(
+                    f"@push_handler cannot be combined with @{conflicting} on "
+                    f"{name!r}. A push handler is never callable from a browser. "
+                    f"Pick one."
+                )
+        for inert in sorted(_PUSH_INERT_DECORATORS & set(decorators)):
+            raise TypeError(_inert_on_push_message(inert, name))
+        _add_decorator_metadata(function, "push_handler", True)
+        return target
+
+    # Support both @push_handler and @push_handler().
+    if func is not None:
+        return decorator(func)
+    return decorator
+
+
+def _unwrap_method(member: Any) -> Any:
+    """The function inside a staticmethod, classmethod or bound method."""
+    if isinstance(member, (staticmethod, classmethod, types.MethodType)):
+        return member.__func__
+    return member
+
+
+def is_push_handler(func: Any) -> bool:
+    """
+    Check if a function has been decorated with @push_handler.
+
+    This looks at ONE function. To decide whether a method NAME on a view is
+    push-only (the rule dispatch applies, which also covers an unmarked
+    override of a marked method) use :func:`is_push_only`.
+
+    Args:
+        func: The function (or bound method, staticmethod, classmethod) to check.
+
+    Returns:
+        True if the function has push_handler metadata.
+    """
+    # Strict on purpose: this gate refuses browser events, so a test double
+    # whose every attribute is truthy (a MagicMock) must not read as marked.
+    decorators = getattr(_unwrap_method(func), "_djust_decorators", None)
+    return isinstance(decorators, dict) and decorators.get("push_handler") is True
+
+
+def is_push_only(owner: Any, name: str, handler: Any = None) -> bool:
+    """
+    Whether the method ``name`` of ``owner`` (an instance or a class) is push-only.
+
+    True when the resolved ``handler`` is marked with ``@push_handler`` OR any
+    class in the owner's MRO defines ``name`` with the marker, so an unmarked
+    override of a marked method stays push-only (fail closed). Every gate that
+    keeps browsers away from a push handler calls this one function.
+    """
+    if handler is not None and is_push_handler(handler):
+        return True
+    cls = owner if isinstance(owner, type) else type(owner)
+    for klass in getattr(cls, "__mro__", ()):
+        # A single lookup: atomic on a class namespace (no iteration, #3151).
+        member = klass.__dict__.get(name)
+        if member is not None and is_push_handler(member):
+            return True
+    return False
 
 
 class _ReactiveProperty:
@@ -1228,6 +1406,8 @@ __all__ = [
     "is_event_handler",
     "server_function",
     "is_server_function",
+    "push_handler",
+    "is_push_handler",
     "permission_required",
     "rate_limit",
     "reactive",
