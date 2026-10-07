@@ -544,6 +544,25 @@ describe('data-event', () => {
         expect(env.sent).toHaveLength(1);
     });
 
+    it('routes a notification to the nearest component and embedded child', async () => {
+        const env = await boot('<div data-component-id="outer" data-djust-embedded="outer-view">' +
+            '<div data-component-id="upload-component" data-djust-embedded="upload-child">' +
+            UP({ slot: '' }) + '</div></div>');
+        env.choose([file(env.window, 'a.png')]);
+        expect(env.sent).toEqual([{ name: 'photos_uploaded', params: {
+            count: 1, component_id: 'upload-component', view_id: 'upload-child',
+        } }]);
+    });
+
+    it('supplies element context to strict notification bindings', async () => {
+        const env = await boot(UP({ slot: '' }));
+        env.window.djust._strictBinding = vi.fn(() => ({ count: 1, component_id: 'strict-component' }));
+        env.choose([file(env.window, 'a.png')]);
+        const root = env.$('[dj-hook="ImageUploadPreview"]');
+        expect(env.window.djust._strictBinding).toHaveBeenCalledWith(root, 'photos_uploaded', { count: 1 }, [], root);
+        expect(env.sent[0].params.component_id).toBe('strict-component');
+    });
+
     it('goes through the strict-parameter gate like dj-click, and honours a veto', async () => {
         const env = await boot(UP({ slot: '' }));
         env.window.djust._strictBinding = vi.fn(() => false);

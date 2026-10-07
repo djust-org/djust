@@ -58,6 +58,15 @@
     return (bytes / (1024 * 1024)).toFixed(1) + " MB";
   }
 
+  // Match the ancestry context carried by ordinary dj-* bindings.
+  function addContext(params, el) {
+    for (var node = el; node && node !== document.body; node = node.parentElement) {
+      var ds = node.dataset || {};
+      if (params.component_id === undefined && ds.componentId) params.component_id = ds.componentId;
+      if (params.view_id === undefined && ds.djustEmbedded) params.view_id = ds.djustEmbedded;
+    }
+  }
+
   // Same public entry point dj-click and dj-viewport use, so the event works
   // over WebSocket, SSE and HTTP-only, honours strict parameter contracts and
   // reaches the right view when several are mounted. Falls back to the hook's
@@ -67,13 +76,15 @@
     if (d && typeof d.handleEvent === "function") {
       var sent = params;
       if (typeof d._strictBinding === "function") {
-        var strict = d._strictBinding(root, eventName, params, []);
+        var strict = d._strictBinding(root, eventName, params, [], root);
         if (strict === false) return;
         if (strict) sent = strict;
       }
+      if (sent === params) addContext(sent, root);
       if (typeof d._markSlotOf === "function") d._markSlotOf(sent, root);
       d.handleEvent(eventName, sent);
     } else if (typeof hook.pushEvent === "function") {
+      addContext(params, root);
       hook.pushEvent(eventName, params);
     }
   }
