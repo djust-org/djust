@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import inspect
 
 import pytest
 
@@ -174,7 +175,7 @@ def test_assign_async_accepts_async_loader():
     callback, args, kwargs = view._async_tasks.pop("assign_async:async_metric")
     # The wrapper itself must be a coroutine function so the websocket consumer
     # awaits it natively (rather than running it in a worker thread).
-    assert asyncio.iscoroutinefunction(callback)
+    assert inspect.iscoroutinefunction(callback)
 
     # Run the async wrapper to completion to verify result propagation.
     asyncio.new_event_loop().run_until_complete(callback(*args, **kwargs))

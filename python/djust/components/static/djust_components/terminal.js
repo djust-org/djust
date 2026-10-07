@@ -27,7 +27,8 @@
  *   600 ms (or while the pointer is held, as in a scrollbar drag) by the
  *   position moving up. A scroll that moves up with no such input, such as
  *   the browser clamping the position when old lines are trimmed or code
- *   setting ``scrollTop``, does not stop the follow.
+ *   setting ``scrollTop``, does not stop the follow. ``auto_scroll=False``
+ *   (data-auto-scroll="false") turns the follow off altogether.
  * - Accessibility: the output is a role=log region named by the title, kept
  *   aria-live=off so a build log does not flood a screen reader; the scrolling
  *   body is focusable for keyboard scrolling.
@@ -115,7 +116,7 @@
       this._pinned = true;
       this._bindScroll();
       this._enhance();
-      this._follow();
+      if (this._autoScroll()) this._follow();
       this._lastTop = scroller(this.el).scrollTop;
       var eventName = this.el.getAttribute("data-stream-event");
       if (eventName) {
@@ -133,7 +134,7 @@
       // A re-render redraws the rendered lines; count again from them.
       this._count = undefined;
       this._enhance();
-      if (this._pinned !== false) this._follow();
+      if (this._autoScroll() && this._pinned !== false) this._follow();
       this._lastTop = scroller(this.el).scrollTop;
     },
 
@@ -172,7 +173,7 @@
         if (atBottom(e.target)) self._pinned = true;
         else if (
           top < (self._lastTop === undefined ? top : self._lastTop) - 1 &&
-          (self._held || Date.now() - self._intent < INTENT_MS)
+          (self._held || Math.abs(e.timeStamp - self._intent) < INTENT_MS)
         ) {
           // Only the reader moving UP leaves the bottom, and only the reader
           // can: a drop nobody asked for (the browser clamping scrollTop when
@@ -180,17 +181,20 @@
           // wheel, touch, key or pointer input just before it.
           self._pinned = false;
         }
-        if (self._held) self._intent = Date.now();
+        if (self._held) self._intent = e.timeStamp;
         self._lastTop = top;
       };
       this._intent = -Infinity;
       this._held = false;
-      var mark = function () {
-        self._intent = Date.now();
+      // The events' own timestamps, not the clock when a handler runs: a
+      // wheel or touch scroll is stamped when it happens, so a main-thread
+      // stall between the two handlers does not separate them.
+      var mark = function (ev) {
+        self._intent = ev.timeStamp;
       };
-      var hold = function () {
+      var hold = function (ev) {
         self._held = true;
-        mark();
+        mark(ev);
       };
       var release = function () {
         self._held = false;
@@ -226,6 +230,11 @@
       this._onScroll = null;
     },
 
+    // data-auto-scroll="false" (the component's ``auto_scroll=False``): never follow.
+    _autoScroll: function () {
+      return this.el.getAttribute("data-auto-scroll") !== "false";
+    },
+
     _follow: function () {
       var body = scroller(this.el);
       body.scrollTop = body.scrollHeight;
@@ -250,7 +259,7 @@
       if (!lines.length) return;
       var root = this.el;
       var body = scroller(root);
-      var pinned = this._pinned !== false;
+      var pinned = this._autoScroll() && this._pinned !== false;
       var showNumbers = root.getAttribute("data-line-numbers") === "true";
       var max = parseInt(root.getAttribute("data-max-lines"), 10) || 0;
       if (this._count === undefined) {

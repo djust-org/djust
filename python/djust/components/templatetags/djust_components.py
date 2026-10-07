@@ -9470,20 +9470,26 @@ class ImageCropperNode(template.Node):
         except (ValueError, TypeError):
             min_h = 50
 
+        from djust.components.components.image_cropper import cropper_extras
+
+        extras = cropper_extras()
+        e_alt = conditional_escape(str(kw.get("alt", "Image to crop")))
+
         return mark_safe(
             f'<div class="{class_str}" dj-hook="ImageCropper" '
             f'data-crop-event="{e_event}" '
             f'data-min-width="{min_w}" '
             f'data-min-height="{min_h}"{ratio_attr}>'
             f'<div class="dj-image-cropper__canvas">'
-            f'<img class="dj-image-cropper__image" src="{e_src}" alt="Image to crop" draggable="false">'
+            f'<img class="dj-image-cropper__image" src="{e_src}" alt="{e_alt}" draggable="false">'
             f'<div class="dj-image-cropper__overlay"></div>'
-            f'<div class="dj-image-cropper__selection"></div>'
+            f'<div class="dj-image-cropper__selection"{extras.selection_attrs}>{extras.handles}</div>'
             f"</div>"
             f'<div class="dj-image-cropper__actions">'
             f'<button class="dj-image-cropper__crop-btn" type="button">Crop</button>'
             f'<button class="dj-image-cropper__reset-btn" type="button">Reset</button>'
             f"</div>"
+            f"{extras.status}"
             f"</div>"
         )
 

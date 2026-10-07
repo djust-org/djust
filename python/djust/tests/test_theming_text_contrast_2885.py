@@ -10,9 +10,10 @@ fails on a stale exemption. This file adds the guarantees specific to the
    message names the command that proposes the fix.
 2. The number of exempted text pairs is pinned EXACTLY: a fix must lower the
    pin in the same change (so slack cannot be re-spent on a regression), and
-   an added exemption fails. What remains are the polarity flips, large moves
-   and documented-hex tokens, which ``scripts/fix_theme_text_contrast.py
-   --proposals`` lists and which wait for the owner's review.
+   an added exemption fails. The polarity flips and large moves were approved
+   and applied (2026-10-06); what remains are the documented-hex tokens and the
+   fill-painted ``accent_foreground``, which ``scripts/fix_theme_text_contrast.py
+   --proposals --include-substantial`` lists and which wait for the owner.
 3. ``link_hover`` is not in ``CONTRAST_PAIRS`` (that would change W001 for
    user presets) but it must not regress: it keeps the side of the resting link
    it started on, and a hover that is moved is moved together with its link.
@@ -24,6 +25,7 @@ import os
 import shutil
 import sys
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -42,7 +44,7 @@ _spec.loader.exec_module(fix)
 
 #: Exempted text pairs (``*_foreground`` labels and ``link``) at the #2885
 #: remediation. EXACT: lower it when a pair is fixed.
-PENDING_TEXT_PAIR_EXEMPTIONS = 409
+PENDING_TEXT_PAIR_EXEMPTIONS = 27
 
 _validator = AccessibilityValidator()
 
@@ -91,6 +93,83 @@ class TestTextContrastStaysFixed:
                 )
 
 
+class TestApprovedMovesAreApplied:
+    """John approved the label/link polarity flips and large moves on 2026-10-06 (#2885);
+    only the tokens he did not approve are still open."""
+
+    HELD = {
+        "documented hex",
+        "paired with a documented-hex move",
+        "painted as a fill (.status-badge-accent)",
+        "would read worse on code surface",
+    }
+
+    def test_nothing_approved_is_left_unapplied(self):
+        left = [m for m in fix.collect_moves(approve_substantial=True) if not m.hold]
+        assert not left, [(m.preset, m.mode, m.token) for m in left]
+
+    def test_only_the_documented_holds_remain(self):
+        reasons = {m.hold for m in fix.collect_moves(approve_substantial=True)}
+        assert reasons == self.HELD
+
+    def test_the_brand_hex_tokens_and_fill_painted_accent_foreground_stay_held(self):
+        held = {(m.preset, m.mode, m.token) for m in fix.collect_moves(approve_substantial=True)}
+        for key in (
+            ("monokai", "light", "link"),
+            ("monokai", "dark", "link"),
+            ("stripe", "light", "link"),
+            ("stripe", "light", "muted_foreground"),
+            ("github", "light", "muted_foreground"),
+            ("monokai", "light", "link_hover"),
+            ("dracula", "light", "accent_foreground"),
+        ):
+            assert key in held, key
+
+    def test_a_flip_is_written_only_when_approved(self):
+        before = fix.ColorScale(0, 0, 100)
+        flip = fix.Move("x", "light", "primary_foreground", before, 10, True)
+        assert not flip.is_nudge(fix.DEFAULT_MAX_DELTA)  # not a nudge, but not held either
+        assert not flip.hold
+
+
+class TestDeliberateExemptions:
+    """Two groups are exempt by the owner's decision (2026-10-06), not as debt: they carry
+    their own reason, and everything else in the exemption list is the undecided rest."""
+
+    def test_every_input_border_row_says_it_is_a_non_text_component(self):
+        rows = {k: v for k, v in A11Y_EXEMPTIONS.items() if (k[2], k[3]) == ("input", "background")}
+        assert len(rows) == 131
+        for key, reason in rows.items():
+            assert "non-text UI components" in reason and "revisit on request" in reason, key
+            assert "grandfathered" not in reason, key
+
+    def test_the_brand_hex_rows_name_the_hex_their_source_documents(self):
+        from djust.theming.a11y_exemptions import BRAND_HEX_EXEMPTIONS
+
+        assert len(BRAND_HEX_EXEMPTIONS) == 6
+        for (preset, _mode, _fg, _bg), hex_ in BRAND_HEX_EXEMPTIONS.items():
+            source = (Path(fix.THEMES_DIR) / f"{preset}.py").read_text().lower()
+            assert hex_.lower() in source, f"{preset} no longer documents {hex_}"
+            reason = A11Y_EXEMPTIONS[(preset, _mode, _fg, _bg)]
+            assert hex_ in reason and "not debt" in reason
+
+    def test_the_label_and_link_rows_left_are_the_brand_hex_code_surface_and_accent_ones(self):
+        from djust.theming.a11y_exemptions import BRAND_HEX_EXEMPTIONS, CODE_SURFACE_EXEMPTIONS
+
+        label_rows = {k for k in A11Y_EXEMPTIONS if k[2] in fix.LABEL_TOKENS}
+        code_rows = {
+            (p, m, "muted_foreground", s)
+            for p, m in CODE_SURFACE_EXEMPTIONS
+            for s in ("muted", "background")
+        }
+        assert code_rows <= label_rows and set(BRAND_HEX_EXEMPTIONS) <= label_rows
+        rest = label_rows - set(BRAND_HEX_EXEMPTIONS) - code_rows
+        assert rest and all(k[2] == "accent_foreground" for k in rest)
+        assert (
+            len(rest) + len(BRAND_HEX_EXEMPTIONS) + len(code_rows) == PENDING_TEXT_PAIR_EXEMPTIONS
+        )
+
+
 class TestLinkHover:
     def test_no_nudgeable_hover_is_left_failing(self):
         pending = [
@@ -118,7 +197,13 @@ class TestLinkHover:
             assert _validator.calculate_contrast_ratio(hover_after, surface) >= 4.5
 
     def test_a_pair_is_held_together_when_the_hover_is_not_a_nudge(self):
+        # sunrise light as it was before #2885: link L52 fails, its hover L48 needs 18 points.
         tokens = THEME_PRESETS["sunrise"].light
+        tokens = replace(
+            tokens,
+            link=fix.ColorScale(tokens.link.h, tokens.link.s, 52),
+            link_hover=fix.ColorScale(tokens.link_hover.h, tokens.link_hover.s, 48),
+        )
         moves = {m.token: m for m in fix.moves_for_mode("sunrise", "light", tokens, lambda _t: "")}
         assert not moves["link_hover"].is_nudge(fix.DEFAULT_MAX_DELTA)
         assert moves["link"].delta <= fix.DEFAULT_MAX_DELTA and not moves["link"].flip

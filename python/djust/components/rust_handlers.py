@@ -7300,20 +7300,26 @@ class ImageCropperHandler:
         except (ValueError, TypeError):
             min_h = 50
 
+        from djust.components.components.image_cropper import cropper_extras
+
+        extras = cropper_extras()
+        e_alt = conditional_escape(str(kw.get("alt", "Image to crop")))
+
         return _safe(
             f'<div class="{class_str}" dj-hook="ImageCropper" '
             f'data-crop-event="{e_event}" '
             f'data-min-width="{min_w}" '
             f'data-min-height="{min_h}"{ratio_attr}>'
             f'<div class="dj-image-cropper__canvas">'
-            f'<img class="dj-image-cropper__image" src="{e_src}" alt="Image to crop" draggable="false">'
+            f'<img class="dj-image-cropper__image" src="{e_src}" alt="{e_alt}" draggable="false">'
             f'<div class="dj-image-cropper__overlay"></div>'
-            f'<div class="dj-image-cropper__selection"></div>'
+            f'<div class="dj-image-cropper__selection"{extras.selection_attrs}>{extras.handles}</div>'
             f"</div>"
             f'<div class="dj-image-cropper__actions">'
             f'<button class="dj-image-cropper__crop-btn" type="button">Crop</button>'
             f'<button class="dj-image-cropper__reset-btn" type="button">Reset</button>'
             f"</div>"
+            f"{extras.status}"
             f"</div>"
         )
 
@@ -8625,6 +8631,7 @@ class TerminalHandler:
         wrap = kw.get("wrap", False)
         custom_class = kw.get("class", "")
         max_lines = kw.get("max_lines", 0)
+        auto_scroll = kw.get("auto_scroll", True)
 
         e_class = conditional_escape(str(custom_class))
         classes = ["dj-terminal"]
@@ -8676,6 +8683,8 @@ class TerminalHandler:
             max_lines = 0
         if max_lines > 0:
             hook_attrs += f' data-max-lines="{max_lines}"'
+        if not auto_scroll:
+            hook_attrs += ' data-auto-scroll="false"'
 
         return _safe(
             f'<div class="{class_str}" dj-hook="Terminal"{stream_attr}{hook_attrs}>'
@@ -10488,15 +10497,21 @@ class VoiceInputHandler:
 
         cont = "true" if continuous else "false"
 
+        from djust.components.components.voice_input import voice_extras
+
+        extras = voice_extras(kw.get("disclosure"), kw.get("max_seconds", 60))
+
         return _safe(
+            f"{extras.wrap_open}"
             f'<button type="button" class="{cls}" '
             f'dj-hook="VoiceInput" '
             f'data-event="{e_event}" data-lang="{e_lang}" '
-            f'data-continuous="{cont}" '
+            f'data-continuous="{cont}"{extras.button_attrs} '
             f'aria-label="Voice input" aria-pressed="false">'
             f"{mic_svg}"
             f'<span class="dj-voice-input__pulse"></span>'
             f"</button>"
+            f"{extras.disclosure}{extras.interim}{extras.status}{extras.wrap_close}"
         )
 
 

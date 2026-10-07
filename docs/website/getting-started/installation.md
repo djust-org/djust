@@ -28,6 +28,12 @@ already have with another. Both paths set up the pieces described in
 - Python 3.11 or newer. djust 1.3 dropped Python 3.10; apps that must stay on
   3.10 can stay on the djust 1.2 line (`djust>=1.2,<1.3`), which keeps
   receiving fixes.
+- As of the October 5, 2026 wheel evaluation, Python 3.15 release candidates
+  were tested in CI and the published wheel matrix covered 3.11 to 3.14.
+  Installing 3.15 from the source distribution needs a Rust toolchain and a
+  C compiler for the `daphne` dependencies. See the
+  [dated wheel evaluation](../../performance/python-3.15-and-abi3-wheels-2026-10-05.md)
+  for tested platforms and the pending release-wheel decision.
 - [uv](https://docs.astral.sh/uv/getting-started/installation/) for environment and package management.
 - Django and Channels are installed with djust; you do not need to install
   Django globally first.

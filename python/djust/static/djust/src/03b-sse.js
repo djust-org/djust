@@ -367,6 +367,9 @@ class LiveViewSSE {
                     detail: {
                         error: data.error,
                         code: typeof data.code === 'string' ? data.code : null,
+                        transient: data.transient === true,
+                        view: typeof data.view === 'string' ? data.view : (this.primaryViewPath || null),
+                        target_id: typeof data.target_id === 'string' ? data.target_id : null,
                         traceback: data.traceback || null
                     }
                 }));

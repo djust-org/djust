@@ -1610,15 +1610,21 @@ class VoiceInputNode(template.Node):
 
         cont = "true" if continuous else "false"
 
+        from djust.components.components.voice_input import voice_extras
+
+        extras = voice_extras(kw.get("disclosure"), kw.get("max_seconds", 60))
+
         return mark_safe(
+            f"{extras.wrap_open}"
             f'<button type="button" class="{cls}" '
             f'dj-hook="VoiceInput" '
             f'data-event="{e_event}" data-lang="{e_lang}" '
-            f'data-continuous="{cont}" '
+            f'data-continuous="{cont}"{extras.button_attrs} '
             f'aria-label="Voice input" aria-pressed="false">'
             f"{mic_svg}"
             f'<span class="dj-voice-input__pulse"></span>'
             f"</button>"
+            f"{extras.disclosure}{extras.interim}{extras.status}{extras.wrap_close}"
         )
 
 
