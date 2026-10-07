@@ -35,6 +35,7 @@ failures. Not part of the CI suite (see README.md).
 
 import base64
 import os
+import json
 import random
 import socket
 import struct
@@ -322,6 +323,29 @@ class Run:
         args = {"viewport": {"width": 1000, "height": 1300}, **context_args}
         self.context = browser.new_context(**args)
         self.page = self.context.new_page()
+        self.frames = []
+
+        def record(direction, payload):
+            try:
+                data = json.loads(payload)
+            except (ValueError, TypeError):
+                return
+            self.frames.append(
+                {
+                    "direction": direction,
+                    "type": data.get("type"),
+                    "ref": data.get("ref"),
+                    "error": data.get("error"),
+                    "bytes": len(payload),
+                    "version": data.get("version"),
+                }
+            )
+
+        def observe(socket):
+            socket.on("framesent", lambda payload: record("sent", payload))
+            socket.on("framereceived", lambda payload: record("received", payload))
+
+        self.page.on("websocket", observe)
         self.console = []
         self.page.on("console", lambda m: self.console.append((m.type, m.text)))
         self.page.on("pageerror", lambda e: self.console.append(("pageerror", str(e))))
@@ -624,12 +648,45 @@ def run_all(browser, base, shots, failures):
     r.shot("02-scribble")
 
     # ---- the default frame limit: "Message too large" ---------------------------------------------------------------------
-    r.load()
-    for pts in scribble(seed=3, strokes=60):
-        r.stroke(pts, section="a", steps=1)
-    first = page.evaluate(
-        f"""() => {{ const h = {r.hook()}; const made = h._export(h._cap(), 0); return made ? made.url.length : 0; }}"""
+    # Choose a fixture whose original frame is rejected but whose permitted
+    # smaller export fits; rasterizer differences must not assume that premise.
+    retryable = None
+    first = 0
+    for density in (60, 45, 30, 20, 15):
+        frame_start = len(r.frames)
+        r.load()
+        for pts in scribble(seed=3, strokes=density):
+            r.stroke(pts, section="a", steps=1)
+        exports = page.evaluate(
+            f"""() => {{ const h = {r.hook()}; const first = h._export(h._cap(), 0);
+                const small = first && h._export(48000, first.scale);
+                return {{ first: first ? first.url.length : 0, small: small ? small.url.length : 0 }}; }}"""
+        )
+        first = exports["first"]
+        if 65536 < first <= 204800 and exports["small"]:
+            retryable = exports
+            break
+        if 65536 < first <= 204800 and not exports["small"]:
+            page.click("#a .dj-signature-pad__save-btn")
+            r.wait_for(
+                "() => document.querySelector('#a .dj-signature-pad__status').textContent.includes('too detailed for the server')",
+                "a refused signature that cannot fit the permitted retry scale reports the limit",
+            )
+            page.wait_for_timeout(300)
+            r.check(r.text("#n") == "0", "an unexportable retry does not reach the server handler")
+            sent = [
+                frame
+                for frame in r.frames[frame_start:]
+                if frame["direction"] == "sent" and frame["type"] == "event"
+            ]
+            r.check(len(sent) == 1, "an unexportable retry sends no further frames")
+    r.check(
+        retryable is not None, "premise: a permitted smaller export fits the 48 KB retry target"
     )
+    if retryable is None:
+        print("retry fixture frames:", r.frames[-8:])
+        r.close()
+        return
     r.check(
         65536 < first <= 204800,
         f"premise: the best rendering ({first} chars) is over the 64 KiB frame limit and under 200 KB",
@@ -640,6 +697,10 @@ def run_all(browser, base, shots, failures):
         "the signature arrived (retried after the server's 'Message too large')",
         timeout=15000,
     )
+    if not r.text("#saved"):
+        print("frame retry diagnostic:", r.frames[-8:])
+        r.close()
+        return
     arrived = r.text("#saved").split(":")
     r.check(
         int(arrived[-1]) <= 48000 and arrived[1] != "800x400",

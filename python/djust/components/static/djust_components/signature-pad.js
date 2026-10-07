@@ -607,7 +607,7 @@
       wait.retried = true;
       var made = this._export(Math.min(this._cap(), FRAME_TARGET), wait.scale);
       if (!made) {
-        this._say("The server's message limit (" + Math.round(bytes / 1024) + " KB) is smaller than this signature. Clear it and draw a simpler one, or raise max_message_size");
+        this._say("This signature is too detailed for the server's message limit. Clear it and draw a simpler one.");
         return;
       }
       this._dataUrl = made.url;

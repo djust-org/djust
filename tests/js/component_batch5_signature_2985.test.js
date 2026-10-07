@@ -602,7 +602,7 @@ describe('"Message too large"', () => {
         env.click('save');
         tooLarge(env, 70100);
         expect(env.sent).toHaveLength(1);
-        expect(env.status()).toMatch(/message limit .* smaller than this signature/);
+        expect(env.status()).toMatch(/too detailed for the server's message limit/);
     });
 
     it('ignores a refusal that is not about this signature', async () => {
