@@ -798,7 +798,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # consumer), and uploads stopped because a busy view had no room for
         # more of them (#3252).
         self._pending_uploads: Dict[str, Any] = {}
-        self._aborted_uploads: Dict[str, None] = {}
+        self._aborted_uploads: Dict[str, Any] = {}
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
         """Run the consumer; guarantee ``disconnect()`` cleanup (#3000).
@@ -2935,8 +2935,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             return
         if queued:
             return
-        await getattr(consumer, handler)(data)
-        self._finish_queued_upload(handler, data, consumer)
+        try:
+            await getattr(consumer, handler)(data)
+        finally:
+            self._finish_queued_upload(handler, data, consumer)
 
     #: Uploads whose ``upload_register`` / ``upload_resume`` is queued on a view's
     #: lane remembered at most this many at a time (#3252).
@@ -2984,6 +2986,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         pending = getattr(self, "_pending_uploads", None) or {}
         for ref in [r for r, owner in pending.items() if owner is consumer]:
             pending.pop(ref, None)
+        aborted = getattr(self, "_aborted_uploads", None) or {}
+        for ref in [r for r, owner in aborted.items() if owner is consumer]:
+            aborted.pop(ref, None)
 
     def _upload_queue_budget(self) -> int:
         """Bytes of upload frames a busy view's lane may hold (#3252).
@@ -3057,8 +3062,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         handler, data = item
         try:
             if handler:
-                await getattr(self, handler)(data)
-                _real_consumer(self)._finish_queued_upload(handler, data, self)
+                try:
+                    await getattr(self, handler)(data)
+                finally:
+                    _real_consumer(self)._finish_queued_upload(handler, data, self)
             else:
                 await self._dispatch_runtime_owned(data)
         except Exception as e:
@@ -3764,9 +3771,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         """
         from .uploads import build_progress_message
 
-        aborted: Dict[str, None] = getattr(self, "_aborted_uploads", None) or {}
+        aborted: Dict[str, Any] = getattr(self, "_aborted_uploads", None) or {}
         self._aborted_uploads = aborted
-        aborted[ref] = None
+        aborted[ref] = owner
         while len(aborted) > self._MAX_PENDING_UPLOADS:
             aborted.pop(next(iter(aborted)))
         (getattr(self, "_pending_uploads", None) or {}).pop(ref, None)

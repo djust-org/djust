@@ -950,8 +950,9 @@ async def test_an_upload_past_the_lane_budget_is_stopped_visibly_not_dropped(mon
         await _spin_until(lambda: not lane.busy(), "the lane to drain")
         # The queued register ran and its upload was cancelled: it did not complete.
         entries = VIEWS["up"]._upload_manager._entries
-        assert ref not in entries or not entries[ref].complete
+        assert ref not in entries
         assert ref not in consumer._pending_uploads
+        assert lane.queued_bytes() == 0
     finally:
         RELEASE.set()
         await communicator.disconnect()
@@ -1003,6 +1004,81 @@ async def test_a_register_that_has_run_is_no_longer_remembered_as_pending():
         # Registered but neither completed nor cancelled: the manager knows it now.
         assert ref in VIEWS["up"]._upload_manager._entries
         assert consumer._pending_uploads == {}
+    finally:
+        RELEASE.set()
+        await communicator.disconnect()
+
+
+async def test_upload_byte_budgets_are_independent_for_two_busy_views(monkeypatch):
+    communicator = await _connect()
+    try:
+        await _mount(communicator, Page)
+        for target in ("up", "other"):
+            await _mount(communicator, Uploader, target)
+            await _send(communicator, "hold", target, ref=target)
+        await _spin_until(
+            lambda: all(("hold-start", target) in ORDER for target in ("up", "other")),
+            "both upload views to hold",
+        )
+        consumer = CONSUMERS[-1]
+        monkeypatch.setattr(type(consumer), "_upload_queue_budget", lambda self: 1000)
+        refs = {}
+        for target in ("up", "other"):
+            ref = refs[target] = str(uuid.uuid4())
+            await communicator.send_json_to(_register_frame(ref, target, size=300))
+            await communicator.send_to(bytes_data=_chunk(ref, 0, b"a" * 300))
+            await communicator.send_to(bytes_data=_complete(ref))
+        lanes = [consumer._slot_map()[target].facade._lane for target in refs]
+        await _spin_until(lambda: all(lane.queued() == 3 for lane in lanes), "both queues")
+        assert [lane.queued_bytes() for lane in lanes] == [812, 812]
+        RELEASE.set()
+        await _spin_until(lambda: all(not lane.busy() for lane in lanes), "both queues to drain")
+        for target, ref in refs.items():
+            assert VIEWS[target]._upload_manager._entries[ref].complete
+        assert [lane.queued_bytes() for lane in lanes] == [0, 0]
+    finally:
+        RELEASE.set()
+        await communicator.disconnect()
+
+
+async def test_a_raising_queued_register_forgets_its_pending_ref(monkeypatch):
+    communicator = await _connect()
+    try:
+        lane = await _busy_uploader(communicator)
+        consumer = CONSUMERS[-1]
+
+        async def fail_register(self, data):
+            raise RuntimeError("register failed")
+
+        monkeypatch.setattr(type(consumer), "_handle_upload_register", fail_register)
+        ref = str(uuid.uuid4())
+        await communicator.send_json_to(_register_frame(ref))
+        await _spin_until(lambda: lane.queued() == 1, "the register to queue")
+        RELEASE.set()
+        await _until(communicator, "error")
+        await _spin_until(lambda: not lane.busy(), "the failed register to drain")
+        assert consumer._pending_uploads == {}
+    finally:
+        RELEASE.set()
+        await communicator.disconnect()
+
+
+async def test_release_forgets_an_overflowed_upload_with_no_accepted_chunks(monkeypatch):
+    communicator = await _connect()
+    try:
+        lane = await _busy_uploader(communicator)
+        consumer = CONSUMERS[-1]
+        monkeypatch.setattr(type(consumer), "_upload_queue_budget", lambda self: 1)
+        ref = str(uuid.uuid4())
+        await communicator.send_json_to(_register_frame(ref))
+        await communicator.send_to(bytes_data=_chunk(ref, 0, b"abc"))
+        assert (await _until(communicator, "upload_progress"))[-1]["status"] == "error"
+        await communicator.send_json_to({"type": "unmount", "target_id": "up"})
+        await _spin_until(lambda: lane.queued() == 2, "the register and unmount")
+        RELEASE.set()
+        await _spin_until(lambda: "up" not in consumer._slot_map(), "the view's release")
+        assert consumer._pending_uploads == {}
+        assert consumer._aborted_uploads == {}
     finally:
         RELEASE.set()
         await communicator.disconnect()
