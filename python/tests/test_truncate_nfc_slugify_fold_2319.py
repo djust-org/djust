@@ -30,6 +30,7 @@ once a code point is assigned. Measured across CPython 3.10-3.14 (Unicode 13.0,
 14.0, 15.0, 15.1, 16.0):
 
     code points with non-zero combining class : 872, 912, 922, 922, 934
+    (CPython 3.15, Unicode 17.0: 968, and the same zero changes, #3255)
     combining class CHANGED for an existing point :   0
     canonical decomposition CHANGED for an existing point : 0
 
@@ -102,6 +103,10 @@ CCC_TOTALS = {
     "15.0.0": 922,  # CPython 3.12
     "15.1.0": 922,  # CPython 3.13
     "16.0.0": 934,  # CPython 3.14
+    # CPython 3.15 (#3255). Measured 3.14 -> 3.15: of the 292531 code points
+    # assigned in 16.0, the combining class, the NFC form and the NFKD form of
+    # ZERO changed; the 34 new combining marks are all 17.0 additions.
+    "17.0.0": 968,  # CPython 3.15
 }
 
 MAX_CODE_POINT = 0x110000
@@ -131,7 +136,7 @@ class TestTheStabilityClaimIsTrueOnThisInterpreter:
     `isprintable`. Checked, not asserted."""
 
     def test_the_combining_class_total_for_this_interpreter(self) -> None:
-        """The docstring's "872, 912, 922, 922, 934", recomputed."""
+        """The docstring's "872, 912, 922, 922, 934, 968", recomputed."""
         version = unicodedata.unidata_version
         assert version in CCC_TOTALS, (
             f"this interpreter carries Unicode {version}, which CCC_TOTALS does "

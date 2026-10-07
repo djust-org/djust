@@ -673,6 +673,17 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
             if (globalThis.djustDebug && !data._navigation) console.warn('[LiveView] Response has neither patches nor html!', data);
         }
 
+        // A deferred save's catch-up (or a later committed turn) has reached
+        // this owner's DOM. Do not clear saving status for rejected, malformed
+        // or broadcast frames, which do not confirm this owner's state.
+        if (!data.broadcast && data.source !== 'broadcast' &&
+            ((Array.isArray(data.patches)) || data.html)) {
+            window.dispatchEvent(new CustomEvent('djust:rendered', {detail: {
+                view: typeof data.view === 'string' ? data.view : (transport?.primaryViewPath || null),
+                target_id: typeof data.target_id === 'string' ? data.target_id : null,
+            }}));
+        }
+
         // Handle form reset
         if (data.reset_form) {
             if (globalThis.djustDebug) console.log('[LiveView] Resetting form');
@@ -1847,6 +1858,13 @@ class LiveViewWebSocket {
                 break;
             }
 
+            case 'view_refused':
+                // A view beside the page view is refused (login, permission, an
+                // `on_mount` redirect): its container shows it, the page does
+                // not navigate (#3252).
+                applyViewRefusal(data);
+                break;
+
             case 'mount_batch': {
                 // Mount-batch response (v0.6.0) — carries N per-view payloads.
                 // Apply each to [data-djust-target="<target_id>"] within a
@@ -1898,6 +1916,11 @@ class LiveViewWebSocket {
                     if (globalThis.djustDebug) {
                         console.warn('[LiveView] mount_batch failed: %s %o', String(f.view || ''), f);
                     }
+                }
+                // Views the user may not see: each one's container shows its own
+                // refusal, and nothing navigates (#3252).
+                for (const refused of (Array.isArray(data.refused) ? data.refused : [])) {
+                    applyViewRefusal(refused);
                 }
                 // Fix #4 — forward any navigate entries emitted by
                 // on_mount redirect hooks to the navigation dispatcher.
@@ -2086,6 +2109,9 @@ class LiveViewWebSocket {
                         error: data.error,
                         // Stable machine-readable code (#3319), e.g. 'permission_denied'.
                         code: typeof data.code === 'string' ? data.code : null,
+                        transient: data.transient === true,
+                        view: typeof data.view === 'string' ? data.view : (this.primaryViewPath || null),
+                        target_id: typeof data.target_id === 'string' ? data.target_id : null,
                         traceback: data.traceback || null,
                         event: data.event || this.lastEventName || null,
                         validation_details: data.validation_details || null
@@ -3167,6 +3193,9 @@ class LiveViewSSE {
                     detail: {
                         error: data.error,
                         code: typeof data.code === 'string' ? data.code : null,
+                        transient: data.transient === true,
+                        view: typeof data.view === 'string' ? data.view : (this.primaryViewPath || null),
+                        target_id: typeof data.target_id === 'string' ? data.target_id : null,
                         traceback: data.traceback || null
                     }
                 }));
@@ -3190,6 +3219,12 @@ class LiveViewSSE {
                 }
                 break;
             }
+
+            case 'view_refused':
+                // A view beside the page view is refused: its container shows it
+                // and the page does not navigate (#3252).
+                applyViewRefusal(data);
+                break;
 
             case 'async_complete':
                 completeAsyncBatch(this, data.async_batch);
@@ -8716,6 +8751,9 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
                             error: body.error,
                             // Stable refusal code (#3319), e.g. 'permission_denied'.
                             code: typeof body.code === 'string' ? body.code : null,
+                            transient: body.transient === true,
+                            view: typeof body.view === 'string' ? body.view : (_localEventTransport.primaryViewPath || null),
+                            target_id: typeof body.target_id === 'string' ? body.target_id : null,
                             traceback: body.traceback || null,
                         };
                     }
@@ -12311,6 +12349,77 @@ function applySlotMount(transport, data, options = {}) {
     return true;
 }
 
+// The words a refused view's container shows. The server names a reason, never
+// text: the application can restyle the container (`[data-djust-refused]`) or
+// replace the content from the `djust:view-refused` event.
+const _REFUSAL_TEXT = new Map([
+    ['login_required', 'Sign in to see this.'],
+    ['permission_denied', 'You do not have access to this.'],
+    ['redirect', 'This is not available here.'],
+]);
+const _REFUSAL_LINK_TEXT = new Map([
+    ['login_required', 'Sign in'],
+    ['redirect', 'Continue'],
+]);
+
+/**
+ * Show a refused view in its own container (#3252).
+ *
+ * A view mounted beside the page view that the user may not see answers with a
+ * `view_refused` frame addressed to its container. Only that container changes:
+ * the page view, the other views and the page's URL are untouched (no
+ * navigation, whatever sign-in URL the frame names; that URL becomes a link the
+ * user may follow). The view is forgotten, so a reconnect does not mount it
+ * again, and the event `djust:view-refused` tells the application, which may
+ * replace the default content.
+ *
+ * @param {Object} data  The `view_refused` frame, or an entry of a `mount_batch`
+ *                       reply's `refused[]`: `{target_id, reason, code, to?, view?}`.
+ * @returns {boolean} whether the view's container was found.
+ */
+function applyViewRefusal(data) {
+    const targetId = data && data.target_id;
+    if (typeof targetId !== 'string' || !targetId) {
+        // A batch entry that named no container: nowhere to show it.
+        if (globalThis.djustDebug) console.warn('[LiveView] view refused with no target: %o', data);
+        return false;
+    }
+    const container = slotContainer(targetId);
+    forgetSlot(targetId);
+    if (!container) return false;
+    const reason = _REFUSAL_TEXT.has(data.reason) ? data.reason : 'permission_denied';
+    const target = typeof data.to === 'string' && window.djust.safeNavigationTarget
+        ? window.djust.safeNavigationTarget(data.to) : null;
+
+    container.setAttribute('data-djust-refused', reason);
+    container.removeAttribute('dj-cloak');
+    container.textContent = '';
+    const box = document.createElement('div');
+    box.className = 'dj-view-refused';
+    box.setAttribute('role', 'alert');
+    const text = document.createElement('p');
+    text.textContent = _REFUSAL_TEXT.get(reason);
+    box.appendChild(text);
+    if (target && _REFUSAL_LINK_TEXT.has(reason)) {
+        const link = document.createElement('a');
+        link.setAttribute('href', target);
+        link.textContent = _REFUSAL_LINK_TEXT.get(reason);
+        box.appendChild(link);
+    }
+    container.appendChild(box);
+    window.dispatchEvent(new CustomEvent('djust:view-refused', {
+        detail: {
+            targetId: targetId,
+            view: typeof data.view === 'string' ? data.view : container.getAttribute('dj-view'),
+            reason: reason,
+            code: typeof data.code === 'string' ? data.code : 'permission_denied',
+            to: target,
+            container: container,
+        },
+    }));
+    return true;
+}
+
 window.djust._markSlotOf = markSlotOf;
 window.djust.viewSlots = {
     contextOf: () => _activeSlot,
@@ -12320,6 +12429,7 @@ window.djust.viewSlots = {
     version: (targetId) => (_slotVersions.has(targetId) ? _slotVersions.get(targetId) : null),
     withSlot: withSlot,
     clear: clearSlots,
+    refuse: applyViewRefusal,
 };
 
 // ============================================================================
@@ -19062,7 +19172,9 @@ globalThis.djust.djDialog = {
  * an in-browser panel with the error message, triggering event, Python
  * traceback, hint, and validation details when present.
  *
- * Only active when `window.DEBUG_MODE === true` (set by the `djust_tags`
+ * Deferred state saves use a nonblocking status in every mode; a successful
+ * render of the same view/target clears it. Persistent error overlays are
+ * only active when `window.DEBUG_MODE === true` (set by the `djust_tags`
  * template tag when Django DEBUG=True). Production builds receive no
  * overlay at all — the server strips `traceback` / `debug_detail` / `hint`
  * in non-DEBUG mode, so the overlay would have nothing interesting to show.
@@ -19075,6 +19187,47 @@ globalThis.djust.djDialog = {
 (function initErrorOverlay() {
     const OVERLAY_ID = 'djust-error-overlay';
     const STYLE_ID = 'djust-error-overlay-style';
+    const STATUS_ID = 'djust-save-status';
+    const saving = new Map();
+
+    function _owner(detail) {
+        return JSON.stringify([
+            typeof detail.view === 'string' ? detail.view : null,
+            typeof detail.target_id === 'string' ? detail.target_id : null,
+        ]);
+    }
+
+    function _clearSaving(detail) {
+        const key = _owner(detail);
+        const entry = saving.get(key);
+        if (!entry) return;
+        entry.remove();
+        saving.delete(key);
+        if (!saving.size) document.getElementById(STATUS_ID)?.remove();
+    }
+
+    function _showSaving(detail) {
+        let status = document.getElementById(STATUS_ID);
+        if (!status) {
+            status = document.createElement('div');
+            status.id = STATUS_ID;
+            status.setAttribute('role', 'status');
+            status.setAttribute('aria-live', 'polite');
+            status.style.cssText = 'position:fixed;bottom:16px;right:16px;z-index:99998;' +
+                'pointer-events:none;padding:12px;background:#1e293b;color:#fff;border-radius:8px;';
+            document.body.appendChild(status);
+        }
+        const key = _owner(detail);
+        let entry = saving.get(key);
+        if (!entry) {
+            entry = document.createElement('div');
+            saving.set(key, entry);
+            status.appendChild(entry);
+        }
+        // Only the message, never traceback or HTML. The server's literal
+        // boolean distinguishes a deferred save from a persistent error.
+        entry.textContent = typeof detail.error === 'string' ? detail.error : 'Saving your change…';
+    }
 
     function _escape(s) {
         if (s == null) return '';
@@ -19222,13 +19375,24 @@ globalThis.djust.djDialog = {
     }
 
     function _onError(e) {
-        if (!window.DEBUG_MODE) return;
         const detail = (e && e.detail) || {};
-        _render(detail);
+        if (detail.code === 'state_error' && detail.transient === true) {
+            _showSaving(detail);
+            return;
+        }
+        _clearSaving(detail);
+        if (window.DEBUG_MODE) _render(detail);
     }
 
     if (typeof window !== 'undefined') {
         window.addEventListener('djust:error', _onError);
+        window.addEventListener('djust:rendered', e => _clearSaving(e.detail || {}));
+        for (const event of ['djust:before-navigate', 'pagehide']) {
+            window.addEventListener(event, () => {
+                saving.clear();
+                document.getElementById(STATUS_ID)?.remove();
+            });
+        }
         window.addEventListener('keydown', _onKeyDown);
         // Expose for tests and for manual triggering from devtools.
         window.djustErrorOverlay = {

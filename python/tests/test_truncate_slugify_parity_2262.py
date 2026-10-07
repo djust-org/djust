@@ -393,7 +393,9 @@ class TestTitleExhaustive:
       whose Unicode data is 16.0 or later. The next Unicode release adds
       codepoints that are NOT listed, so a CPython bump past 16.0 fails here
       and names them, which is the signal to either regenerate the tables or
-      extend the pin.
+      extend the pin. CPython 3.15 ships Unicode 17.0, which made 54 more
+      codepoints cased (`_CASED_NEW_IN_UNICODE_17`, #3255); they are pinned the
+      same way, only on an interpreter whose Unicode data is 17.0 or later.
     """
 
     # Codepoints whose `Cased` property first appears in Unicode 16.0: Cyrillic
@@ -408,6 +410,21 @@ class TestTitleExhaustive:
         (0x10D70, 0x10D85),
     )
 
+    # Codepoints whose `Cased` property first appears in Unicode 17.0 (CPython
+    # 3.15, #3255): the Latin additions U+A7CE, U+A7CF, U+A7D2 and U+A7D4 and
+    # the Beria Erfe capitals and small letters (U+16EA0..U+16EB8,
+    # U+16EBB..U+16ED3). Derived as "has a case mapping on 3.15, unassigned on
+    # 3.14". U+A7D3 and U+A7D5 also gained a case mapping in 17.0 but were
+    # already cased small letters (`Ll`), which `truncate.rs`'s tables hold, so
+    # they are not here: only genuinely new codepoints diverge.
+    _CASED_NEW_IN_UNICODE_17 = (
+        (0xA7CE, 0xA7CF),
+        (0xA7D2, 0xA7D2),
+        (0xA7D4, 0xA7D4),
+        (0x16EA0, 0x16EB8),
+        (0x16EBB, 0x16ED3),
+    )
+
     @staticmethod
     def _interpreter_unicode() -> tuple[int, ...]:
         return tuple(int(part) for part in unicodedata.unidata_version.split("."))
@@ -415,6 +432,21 @@ class TestTitleExhaustive:
     @classmethod
     def _cased_new_in_unicode_16(cls) -> set[int]:
         return {cp for lo, hi in cls._CASED_NEW_IN_UNICODE_16 for cp in range(lo, hi + 1)}
+
+    @classmethod
+    def _cased_new_in_unicode_17(cls) -> set[int]:
+        return {cp for lo, hi in cls._CASED_NEW_IN_UNICODE_17 for cp in range(lo, hi + 1)}
+
+    @classmethod
+    def _cased_newer_than_the_tables(cls) -> set[int]:
+        """The pinned codepoints THIS interpreter knows and `truncate.rs` does not."""
+        version = cls._interpreter_unicode()
+        pinned: set[int] = set()
+        if version >= (16, 0):
+            pinned |= cls._cased_new_in_unicode_16()
+        if version >= (17, 0):
+            pinned |= cls._cased_new_in_unicode_17()
+        return pinned
 
     @staticmethod
     def _cpython_knows_no_case(char: str) -> bool:
@@ -432,6 +464,20 @@ class TestTitleExhaustive:
         assert len(pinned) == 52, len(pinned)
         categories = {unicodedata.category(chr(cp)) for cp in pinned}
         if self._interpreter_unicode() < (16, 0):
+            assert categories == {"Cn"}, categories
+        else:
+            assert categories <= {"Lu", "Ll"}, categories
+            assert all(chr(cp).isupper() or chr(cp).islower() for cp in pinned), (
+                "a pinned codepoint is not cased on this interpreter"
+            )
+
+    def test_the_unicode_17_pin_is_what_it_claims(self) -> None:
+        """Same contract as the 16.0 pin: unassigned before 17.0, cased from it."""
+        pinned = self._cased_new_in_unicode_17()
+        assert len(pinned) == 54, len(pinned)
+        assert not pinned & self._cased_new_in_unicode_16()
+        categories = {unicodedata.category(chr(cp)) for cp in pinned}
+        if self._interpreter_unicode() < (17, 0):
             assert categories == {"Cn"}, categories
         else:
             assert categories <= {"Lu", "Ll"}, categories
@@ -485,10 +531,8 @@ class TestTitleExhaustive:
         unexpected = []
         skew = 0
         checked = 0
-        # Only an interpreter whose Unicode data is 16.0+ can know these.
-        newer_than_tables = (
-            self._cased_new_in_unicode_16() if self._interpreter_unicode() >= (16, 0) else set()
-        )
+        # Only an interpreter whose Unicode data is 16.0+ (17.0+) can know these.
+        newer_than_tables = self._cased_newer_than_the_tables()
         newer_residue: set[int] = set()
         # Render the same four probes for EVERY Unicode scalar, in bounded
         # batches. Both engines still execute their template title filter and
@@ -542,7 +586,7 @@ class TestTitleExhaustive:
         # sweep stops reaching them) the pin is stale and should be deleted
         # rather than left as a standing excuse.
         assert newer_residue == newer_than_tables, (
-            f"{len(newer_than_tables - newer_residue)} pinned Unicode 16.0 codepoints no "
+            f"{len(newer_than_tables - newer_residue)} pinned Unicode 16.0/17.0 codepoints no "
             f"longer diverge (first: "
             f"{[hex(cp) for cp in sorted(newer_than_tables - newer_residue)[:5]]}); "
             f"the tables in `truncate.rs` caught up, so delete the pin"

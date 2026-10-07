@@ -121,7 +121,7 @@ async def run_sse(browser, failures):
     await settled(page, zero, "sse: after hydration", failures)
 
     mounts = [p for p in posts if p.get("type") == "mount" and p.get("target_id")]
-    if sorted(m["target_id"] for m in mounts) != ["uploader", "widget-a", "widget-b"]:
+    if sorted(m["target_id"] for m in mounts) != ["guarded", "uploader", "widget-a", "widget-b"]:
         failures.append("sse: lazy mounts were %r" % ([m.get("target_id") for m in mounts],))
     if any(p.get("type") == "mount_batch" for p in posts):
         failures.append("sse: a mount_batch was sent over SSE")

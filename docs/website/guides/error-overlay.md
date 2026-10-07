@@ -18,10 +18,24 @@ The overlay is modeled on the Next.js / Vite dev overlays: full-screen dim, clos
 Three pieces cooperate:
 
 1. **Server** — Event-handler exceptions are turned into an error frame by the runtime's safe-error path. In `DEBUG=True` the frame carries a prefixed message (`Error in View.handler(): ExcType: message`) and the full Python `traceback`. Other server errors go through `djust.websocket.send_error`, which in `DEBUG=True` adds `traceback` (last three frames only). In production, the traceback is omitted.
-2. **Transport (`djust:error` CustomEvent)** — `03-websocket.js` dispatches this event on the `window` carrying `{error, code, traceback, event, validation_details}`; `03b-sse.js` dispatches `{error, code, traceback}`. `code` is the frame's stable machine-readable code (for example `permission_denied`, see [Refusal codes](authentication.md#refusal-codes)) or `null`.
-3. **Overlay (`36-error-overlay.js`)** — Listens for `djust:error`, renders a full-screen panel when `window.DEBUG_MODE === true`, no-ops otherwise.
+2. **Transport (`djust:error` CustomEvent)** — `03-websocket.js` dispatches this event on the `window` carrying `{error, code, transient, view, target_id, traceback, event, validation_details}`; `03b-sse.js` dispatches `{error, code, transient, view, target_id, traceback}`. `code` is the frame's stable machine-readable code (for example `permission_denied`, see [Refusal codes](authentication.md#refusal-codes)) or `null`.
+3. **Display (`36-error-overlay.js`)** — Listens for `djust:error`. A deferred save (`code: "state_error"`, `transient: true`) shows a nonblocking saving status in every mode. Other errors render a full-screen panel when `window.DEBUG_MODE === true`.
 
 `window.DEBUG_MODE` is written into the config `<script>` that djust injects into every LiveView page, based on Django's `DEBUG` setting, so production deployments automatically get zero overlay code paths.
+
+## Deferred state saves
+
+When storage exceeds the interactive save deadline, the server keeps saving and
+schedules a catch-up render. The client shows the error message as a text-only
+status with `role="status"`, without a modal or traceback. A successful render
+for the same view and target clears that status; a persistent failure restores
+the development error overlay. Navigation also clears outgoing saving status.
+
+Every error remains observable through `djust:error`, including deferred saves.
+The transport sets `transient` to `true` only for the literal server boolean;
+strings and other truthy values do not change the display. The
+`djust:rendered` event identifies the successfully rendered `view` and
+`target_id`; rejected and broadcast responses do not announce recovery.
 
 ## What the overlay shows
 
@@ -47,7 +61,7 @@ Close the overlay with the `×` button, Escape, or by clicking the backdrop.
 
 ## Dismissing and re-opening
 
-The overlay is non-blocking — the app keeps working behind it. A second error replaces the current overlay rather than stacking a new one, so you always see the latest failure.
+The overlay blocks pointer interaction until dismissed. A second error replaces the current overlay rather than stacking a new one, so you always see the latest failure.
 
 For devtools work you can trigger the overlay manually:
 

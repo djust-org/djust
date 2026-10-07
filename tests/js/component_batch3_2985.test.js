@@ -605,6 +605,29 @@ describe('Terminal', () => {
             expect(top()).toBe(10);
         });
 
+        it('data-auto-scroll="false" never follows: not at mount, not on a stream, not on a re-render', async () => {
+            const env = createEnv(TERM({ attrs: ' data-stream-event="term_out" data-auto-scroll="false"' }));
+            const body = env.window.document.querySelector('.dj-terminal__body');
+            const st = { height: 1000, top: 900, writes: 0 };
+            stub(body, st);
+            env.window.eval(read('terminal.js'));
+            env.window.djust.mountHooks();
+            expect(st.writes).toBe(0);
+            for (let i = 0; i < 5; i++) env.window.djust.dispatchPushEventToHooks('term_out', { line: 'x' + i });
+            await frame(env);
+            env.window.djust.updateHooks();
+            expect(st.writes).toBe(0);
+            expect(st.top).toBe(900);
+        });
+
+        it('without data-auto-scroll (the default) it follows, as before', async () => {
+            const { env, st } = setup();
+            st.writes = 0;
+            env.push('term_out', { line: 'x' });
+            await frame(env);
+            expect(st.writes).toBe(1);
+        });
+
         describe('only the reader leaves the bottom (input, not the drop alone)', () => {
             const drop = (env, body, st, top) => { st.top = top; body.dispatchEvent(new env.window.Event('scroll')); }; // no input
             const clock = (env, t) => { env.window.Date.now = () => t.now; };
@@ -632,36 +655,71 @@ describe('Terminal', () => {
                 });
             }
 
+            // events with a given timestamp (the hook compares the events' own times)
+            const stamped = (env, type, ts) => {
+                const e = new env.window.Event(type, { bubbles: true });
+                Object.defineProperty(e, 'timeStamp', { value: ts });
+                return e;
+            };
+            const dropAt = (env, body, st, top, ts) => { st.top = top; body.dispatchEvent(stamped(env, 'scroll', ts)); };
+
             it('a drop more than 600 ms after the last input does not unpin', async () => {
+                const { env, body, st } = setup();
+                drop(env, body, st, 900);
+                body.dispatchEvent(stamped(env, 'wheel', 1000));
+                dropAt(env, body, st, 300, 1700);
+                expect(await stillFollows(env, st)).toBe(true);
+            });
+
+            it('a main-thread stall between the input and the scroll handlers does not separate them (event times, not the clock at handling)', async () => {
                 const { env, body, st } = setup();
                 const t = { now: 1000 };
                 clock(env, t);
-                drop(env, body, st, 900); // at the bottom
-                body.dispatchEvent(new env.window.Event('wheel', { bubbles: true }));
-                t.now += 700;
-                drop(env, body, st, 300);
-                expect(await stillFollows(env, st)).toBe(true);
+                drop(env, body, st, 900);
+                body.dispatchEvent(stamped(env, 'wheel', 1000));
+                t.now += 5000; // the page was busy for 5 s before the scroll event was handled
+                dropAt(env, body, st, 300, 1030); // but the scroll happened 30 ms after the wheel
+                expect(await stillFollows(env, st)).toBe(false);
             });
 
             it('a held pointer (a scrollbar drag) counts however long it is held, and ends on release', async () => {
                 const { env, body, st } = setup();
-                const t = { now: 1000 };
-                clock(env, t);
-                drop(env, body, st, 900); // at the bottom
-                body.dispatchEvent(new env.window.Event('pointerdown', { bubbles: true }));
-                t.now += 5000;
-                drop(env, body, st, 300);
+                drop(env, body, st, 900);
+                body.dispatchEvent(stamped(env, 'pointerdown', 1000));
+                dropAt(env, body, st, 300, 6000);
                 expect(await stillFollows(env, st)).toBe(false);
 
                 const second = setup();
-                const t2 = { now: 1000 };
-                clock(second.env, t2);
                 drop(second.env, second.body, second.st, 900);
-                second.body.dispatchEvent(new second.env.window.Event('pointerdown', { bubbles: true }));
+                second.body.dispatchEvent(stamped(second.env, 'pointerdown', 1000));
                 second.env.window.document.dispatchEvent(new second.env.window.Event('pointerup', { bubbles: true }));
-                t2.now += 5000;
-                drop(second.env, second.body, second.st, 300);
+                dropAt(second.env, second.body, second.st, 300, 6000);
                 expect(await stillFollows(second.env, second.st)).toBe(true);
+            });
+
+            it('destroying the hook removes every listener it added (element and document)', () => {
+                const env = createEnv(TERM());
+                const doc = env.window.document;
+                const root = doc.querySelector('.dj-terminal');
+                const live = new Set();
+                const track = (target) => {
+                    const add = target.addEventListener.bind(target);
+                    const remove = target.removeEventListener.bind(target);
+                    target.addEventListener = (type, fn, opts) => { live.add({ target, type, fn, cap: !!(opts === true || (opts && opts.capture)) }); return add(type, fn, opts); };
+                    target.removeEventListener = (type, fn, opts) => {
+                        for (const l of [...live]) if (l.target === target && l.type === type && l.fn === fn && l.cap === !!(opts === true || (opts && opts.capture))) live.delete(l);
+                        return remove(type, fn, opts);
+                    };
+                };
+                track(doc);
+                track(root);
+                env.window.eval(read('terminal.js'));
+                env.window.djust.mountHooks();
+                expect(live.size).toBeGreaterThan(0);
+                expect([...live].some((l) => l.target === doc && l.type === 'pointerup')).toBe(true);
+                expect([...live].some((l) => l.target === root && l.type === 'wheel')).toBe(true);
+                env.window.djust.destroyAllHooks();
+                expect([...live].map((l) => `${l.target === doc ? 'document' : 'root'}:${l.type}`)).toEqual([]);
             });
 
             it('input outside the log is not the reader scrolling it', async () => {
@@ -927,14 +985,26 @@ describe('Tour', () => {
             expect(log).toEqual([]);
         });
 
-        it('Escape does not reach djust\'s own modal handler (which would click the first dj-click control with no value)', () => {
+        it('Escape is consumed by the tour rather than propagated to page shortcuts', () => {
             for (const markup of [TOUR({ step: 1 }), TOUR({ step: 0 }).replace(/<button class="dj-tour__skip".*?<\/button>/, '')]) {
                 const env = tourEnv(markup);
                 const reached = [];
-                env.window.document.addEventListener('keydown', (e) => reached.push(e.key));
+                env.window.document.addEventListener('keydown', (e) => reached.push([e.key, e.defaultPrevented]));
                 key(env.window, pop(env), 'Escape');
                 expect(reached).toEqual([]);
             }
+        });
+
+        it('a wrapping Tab is marked handled; a Tab inside the popover is left to the browser', () => {
+            const env = tourEnv(TOUR({ step: 1 }));
+            const reached = [];
+            env.window.document.addEventListener('keydown', (e) => reached.push([e.key, e.defaultPrevented]));
+            const buttons = env.$$('.dj-tour__popover button');
+            buttons[buttons.length - 1].focus();
+            key(env.window, buttons[buttons.length - 1], 'Tab'); // wraps to the first
+            buttons[0].focus();
+            key(env.window, buttons[0], 'Tab'); // moves on inside
+            expect(reached).toEqual([['Tab', true], ['Tab', false]]);
         });
 
         it('no Back on the first step: ArrowLeft does nothing', () => {

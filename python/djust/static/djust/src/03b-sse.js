@@ -367,6 +367,9 @@ class LiveViewSSE {
                     detail: {
                         error: data.error,
                         code: typeof data.code === 'string' ? data.code : null,
+                        transient: data.transient === true,
+                        view: typeof data.view === 'string' ? data.view : (this.primaryViewPath || null),
+                        target_id: typeof data.target_id === 'string' ? data.target_id : null,
                         traceback: data.traceback || null
                     }
                 }));
@@ -390,6 +393,12 @@ class LiveViewSSE {
                 }
                 break;
             }
+
+            case 'view_refused':
+                // A view beside the page view is refused: its container shows it
+                // and the page does not navigate (#3252).
+                applyViewRefusal(data);
+                break;
 
             case 'async_complete':
                 completeAsyncBatch(this, data.async_batch);

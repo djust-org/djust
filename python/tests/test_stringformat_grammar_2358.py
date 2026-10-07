@@ -78,6 +78,7 @@ from __future__ import annotations
 
 import itertools
 import random
+import sys
 from decimal import Decimal
 
 import pytest
@@ -402,10 +403,6 @@ class TestTheRaiseResidueIsNamed:
     @pytest.mark.parametrize(
         ("value", "spec"),
         [
-            # `*` reads its width from the argument list; a value past `isize`
-            # overflows the read before the conversion char is even checked.
-            (2**70, "*d"),
-            (-(2**70), "*s"),
             # `%d` cannot make an integer of an infinity.
             (float("inf"), "d"),
             (float("-inf"), "i"),
@@ -417,6 +414,25 @@ class TestTheRaiseResidueIsNamed:
     def test_django_raises_and_djust_renders_empty(self, value, spec: str) -> None:
         d, r = both(value, spec)
         assert d.startswith("<<EXC "), f"Django no longer raises for {spec!r}: {d!r}"
+        assert r == "", f"{spec!r} on {value!r} now renders {r!r}"
+
+    @pytest.mark.parametrize(("value", "spec"), [(2**70, "*d"), (-(2**70), "*s")])
+    def test_a_star_width_past_isize(self, value, spec: str) -> None:
+        """`*` reads its width from the argument list, and Django passes the
+        value bare, not as a tuple.
+
+        Up to CPython 3.14 a width past `isize` overflows the read before the
+        argument count is checked: an ``OverflowError``, which Django's filter
+        does not catch, so it is in the raise residue. CPython 3.15 checks the
+        count first and raises a ``TypeError``, which the filter DOES catch, so
+        Django renders ``""`` and the residue closes (#3255). djust renders
+        ``""`` on every interpreter.
+        """
+        d, r = both(value, spec)
+        if sys.version_info >= (3, 15):
+            assert d == "", f"Django moved: {spec!r} on {value!r} is now {d!r}"
+        else:
+            assert d.startswith("<<EXC "), f"Django no longer raises for {spec!r}: {d!r}"
         assert r == "", f"{spec!r} on {value!r} now renders {r!r}"
 
     def test_a_nan_is_NOT_in_the_residue(self) -> None:

@@ -953,6 +953,13 @@ class LiveViewWebSocket {
                 break;
             }
 
+            case 'view_refused':
+                // A view beside the page view is refused (login, permission, an
+                // `on_mount` redirect): its container shows it, the page does
+                // not navigate (#3252).
+                applyViewRefusal(data);
+                break;
+
             case 'mount_batch': {
                 // Mount-batch response (v0.6.0) — carries N per-view payloads.
                 // Apply each to [data-djust-target="<target_id>"] within a
@@ -1004,6 +1011,11 @@ class LiveViewWebSocket {
                     if (globalThis.djustDebug) {
                         console.warn('[LiveView] mount_batch failed: %s %o', String(f.view || ''), f);
                     }
+                }
+                // Views the user may not see: each one's container shows its own
+                // refusal, and nothing navigates (#3252).
+                for (const refused of (Array.isArray(data.refused) ? data.refused : [])) {
+                    applyViewRefusal(refused);
                 }
                 // Fix #4 — forward any navigate entries emitted by
                 // on_mount redirect hooks to the navigation dispatcher.
@@ -1192,6 +1204,9 @@ class LiveViewWebSocket {
                         error: data.error,
                         // Stable machine-readable code (#3319), e.g. 'permission_denied'.
                         code: typeof data.code === 'string' ? data.code : null,
+                        transient: data.transient === true,
+                        view: typeof data.view === 'string' ? data.view : (this.primaryViewPath || null),
+                        target_id: typeof data.target_id === 'string' ? data.target_id : null,
                         traceback: data.traceback || null,
                         event: data.event || this.lastEventName || null,
                         validation_details: data.validation_details || null
