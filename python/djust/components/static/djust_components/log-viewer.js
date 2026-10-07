@@ -10,7 +10,8 @@
  *   followed within 600 ms (or while the pointer is held, as in a scrollbar
  *   drag) by the position moving up: a scroll that moves up with no such
  *   input (the browser clamping the position when old lines are trimmed, or
- *   code setting ``scrollTop``) does not stop the follow.
+ *   code setting ``scrollTop``) does not stop the follow. An app that wants
+ *   the log not to follow at all renders it with ``auto_scroll=False``.
  * - Stream: with data-stream-event (the component's ``stream_event``) the
  *   hook listens for that server push_event and appends the lines it carries,
  *   coloured by level like the rendered ones. The payload is
@@ -120,7 +121,7 @@
         if (atBottom(e.target)) self._pinned = true;
         else if (
           top < (self._lastTop === undefined ? top : self._lastTop) - 1 &&
-          (self._held || Date.now() - self._intent < INTENT_MS)
+          (self._held || Math.abs(e.timeStamp - self._intent) < INTENT_MS)
         ) {
           // Only the reader moving UP leaves the bottom, and only the reader
           // can: a drop nobody asked for (the browser clamping scrollTop when
@@ -128,17 +129,20 @@
           // wheel, touch, key or pointer input just before it.
           self._pinned = false;
         }
-        if (self._held) self._intent = Date.now();
+        if (self._held) self._intent = e.timeStamp;
         self._lastTop = top;
       };
       this._intent = -Infinity;
       this._held = false;
-      var mark = function () {
-        self._intent = Date.now();
+      // The events' own timestamps, not the clock when a handler runs: a
+      // wheel or touch scroll is stamped when it happens, so a main-thread
+      // stall between the two handlers does not separate them.
+      var mark = function (ev) {
+        self._intent = ev.timeStamp;
       };
-      var hold = function () {
+      var hold = function (ev) {
         self._held = true;
-        mark();
+        mark(ev);
       };
       var release = function () {
         self._held = false;

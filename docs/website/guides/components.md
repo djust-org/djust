@@ -1525,3 +1525,60 @@ yields `assigns["slots"]["col"]` as a 3-element list. The inline tag `{% render_
 See the [Markdown Editor guide](markdown-editor.md) for optional Visual/Markdown editing,
 native form integration, asset loading, table actions, the `bubble_menu` and `floating_menu`
 options, theme variables and editing limitations.
+
+## Voice input
+
+`VoiceInput` uses the browser's speech recognition API. Include its script after
+`djust/client.js`, alongside the component CSS:
+
+```html
+{% load static djust_components %}
+<script src="{% static 'djust_components/voice-input.js' %}" defer></script>
+{% voice_input event="transcribe" lang="en-US" continuous=True max_seconds=60 %}
+```
+
+The button starts recognition only after a user presses it. Each final
+transcript sends `{text}` to the named event; interim text is displayed without
+sending it. Recognition stops when focus leaves the component, the window loses
+focus, the tab becomes hidden, navigation begins, the component is removed, or
+the time limit expires. Pressing the microphone again stops recognition while
+allowing the phrase in progress to finish. `max_seconds` defaults to 60 and is
+bounded to 1–600. Without the API, the button is disabled and explains that voice
+input is unsupported. Permission and recognition errors appear in the status
+region. Existing application hooks named `VoiceInput` take precedence.
+
+Speech recognition may send audio to a browser vendor's service; see
+[Chrome's speech privacy documentation](https://www.google.com/chrome/privacy/whitepaper.html#speech)
+and [Microsoft Edge's speech privacy documentation](https://learn.microsoft.com/en-us/legal/microsoft-edge/privacy#speech-recognition).
+The component displays this disclosure beside the button. `disclosure` can
+supply translated or application-specific text; a blank value restores the
+default notice. The component itself does not record or store audio and sends
+only final transcripts to djust. It does not require recognition to happen on
+the device; the browser controls that choice. Your application controls how
+transcripts are stored and used.
+
+Treat transcripts as untrusted input. The client removes control characters,
+bidirectional formatting characters and invalid Unicode surrogates, collapses
+whitespace, and caps text at 2,000 Unicode characters. Validate again on the
+server and render text with normal template escaping:
+
+```python
+from djust.components.components.voice_input import clean_transcript
+from djust.decorators import event_handler
+
+@event_handler()
+def transcribe(self, text: str = "", **kwargs):
+    transcript = clean_transcript(text, max_length=500)
+    if transcript:
+        self.transcript = transcript
+```
+
+```html
+<p>{{ transcript }}</p>
+```
+
+Cleaning a transcript does not authorize an action or make it safe HTML. Keep
+ordinary application validation and authorization for any operation that uses
+it. Browser regression tests simulate speech callbacks and verify real server
+delivery; actual microphone permissions, recognition accuracy and vendor
+service availability require testing on the browsers and devices you support.

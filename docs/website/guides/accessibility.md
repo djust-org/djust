@@ -448,6 +448,20 @@ colour cannot clear all of them.
 Until that is done, put error text on the page or a card, or override
 `--destructive-text` for the surface.
 
+### Label colours on solid fills
+
+A `--*-foreground` label sits on its fill (`--primary-foreground` on `--primary`, ...), and
+`W001` measures every such pair at 4.5:1. Where a shipped preset's label missed it
+(white on a bright button, most often), the label token was moved in lightness only, hue
+and saturation kept, to the nearest lightness that reads: usually to dark ink on a bright
+fill. No fill, background or border token moved: only the label tokens and `link` / `link_hover` changed. `--muted-foreground` is also drawn as dots, switch tracks and scrollbar thumbs, which follow its move (away from the page). A label is only painted on the fill it belongs to; a test scans every rule that sets `color` from a `--*-foreground` token and requires the same rule's background to be that fill. A move must also not make its label read worse where else it is painted (a solid button's hover fill, the `--code` surface behind syntax comments): the solver keeps those, and a move that cannot is held and documented.
+Some pairs are documented exemptions in `djust.theming.a11y_exemptions` on purpose:
+tokens whose source documents a brand hex that the palette keeps (monokai and stripe
+`link`, github and stripe muted text), and the `--input` border, which is a non-text UI
+component whose 3:1 (WCAG 1.4.11) is not applied to the shipped presets (revisit on
+request). User-authored presets are still measured on all of them. `accent_foreground`
+is the one label still open, because `.status-badge-accent` paints it as a background.
+
 ### Primary and status colours as text use `--primary-text`, `--info-text`, `--success-text`, `--warning-text`
 
 `--primary`, `--brand`, `--info`, `--success` and `--warning` are **fills** too: they sit under a

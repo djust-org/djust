@@ -258,7 +258,20 @@ class TestClientNeedsAreStated:
             "hook_shipped": True,
         }
 
-    def test_a_hook_nothing_ships_is_reported_as_such(self):
+    @pytest.fixture
+    def nothing_ships(self, monkeypatch, tmp_path):
+        """The catalogue as it reads for a hook that has no shipped script.
+
+        A fixture, not a component that happens to be unfinished: every
+        component with a hook gets its script eventually, and this contract
+        (what the catalogue says when none exists) must outlive that.
+        """
+        from djust.theming.gallery import component_registry
+
+        monkeypatch.setattr(component_registry, "_components_static_dir", lambda: tmp_path)
+        monkeypatch.setattr(component_registry, "_client_hook_sources", lambda: "")
+
+    def test_a_hook_nothing_ships_is_reported_as_such(self, nothing_ships):
         from djust.theming.gallery.component_registry import component_client
 
         client = component_client("signature_pad")
@@ -277,7 +290,7 @@ class TestClientNeedsAreStated:
         assert ctx["client_script_url"].endswith("djust_components/countdown.js")
         assert ctx["client_hook"] == ""
 
-    def test_the_detail_page_warns_about_an_unshipped_hook(self, client):
+    def test_the_detail_page_warns_about_an_unshipped_hook(self, client, nothing_ships):
         assert _detail("signature_pad")._base_ctx["client_hook"] == "SignaturePad"
         body = client.get("/theme/components/signature_pad/").content.decode()
         assert "Needs a client hook djust does not ship" in body

@@ -27,6 +27,7 @@ Nothing here changes a page that has no sibling views: the page view is the
 consumer itself, its frames carry no ``target_id``, and no slot is created.
 """
 
+import asyncio
 import inspect
 import logging
 import types
@@ -100,6 +101,16 @@ PER_VIEW_ATTRS: Dict[str, Callable[[], Any]] = {
     # passed FOR THIS VIEW: each view re-checks its own authority, so one view's
     # pass must never cover a sibling with different permissions.
     "_server_turn_reauth_at": lambda: None,
+    # What serializes one view's renders, and what the view's tick and pushes
+    # consult: a view's own, so a slow turn in one view does not hold up the
+    # renders of another (#3252). The page view's are the consumer's own.
+    "_render_lock": asyncio.Lock,
+    "_processing_user_event": lambda: False,
+    "_deferred_pushes": lambda: None,
+    "_push_drain_task": lambda: None,
+    # The queue its inbound frames run on while the connection hosts several
+    # views (``_view_lanes``); created when the first frame is queued.
+    "_lane": lambda: None,
 }
 
 #: Frames whose effect is the page's, not one container's: the client acts on
@@ -152,7 +163,6 @@ _CONSUMER_METHODS = frozenset(
         "_release_slot",
         "_mount_slot",
         "_cancel_deferred_pushes",
-        "_drain_deferred_pushes",
         "_flush_deferred_presence_untrack",
         "_defer_presence_untrack",
         "_take_deferred_presence_untrack",
