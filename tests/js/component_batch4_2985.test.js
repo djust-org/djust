@@ -347,7 +347,7 @@ describe('CursorsOverlay', () => {
 describe('CollabSelection', () => {
     const DOC = '<p id="doc">Hello brave <b>new</b> world</p>';
     // The CSS Custom Highlight API and layout, which jsdom has neither of.
-    const anchored = (users, { target = '#doc', rect = { left: 100, top: 50, width: 40, height: 12 }, targetRect = { left: 0, top: 0, right: 600, bottom: 400 }, highlights = true, doc = DOC } = {}) => {
+    const anchored = (users, { target = '#doc', rect = { left: 100, top: 50, width: 40, height: 12 }, targetRect = { left: 0, top: 0, right: 600, bottom: 400 }, highlights = true, doc = DOC, before = null } = {}) => {
         const env = createEnv(doc + COLLAB(users, target));
         const w = env.window;
         const registry = new Map();
@@ -360,6 +360,7 @@ describe('CollabSelection', () => {
         let targetEl = null;
         try { targetEl = w.document.querySelector(target); } catch (_e) { /* an invalid selector, on purpose */ }
         if (targetEl) targetEl.getBoundingClientRect = () => ({ ...targetRect, width: targetRect.right - targetRect.left, height: targetRect.bottom - targetRect.top });
+        if (before) before(w);
         w.eval(read('collab-selection.js'));
         w.djust.mountHooks();
         env.registry = registry;
@@ -661,6 +662,64 @@ describe('CollabSelection', () => {
             expect(calls).toBe(0);
         });
 
+        describe('where the highlight rules go (style policies)', () => {
+            const sheets = (w) => {
+                const added = [];
+                w.CSSStyleSheet = class { replaceSync(css) { this.css = css; } };
+                Object.defineProperty(w.document, 'adoptedStyleSheets', { value: added, writable: true, configurable: true });
+                return added;
+            };
+
+            it('uses a constructed stylesheet (not an inline <style>, which a style policy can refuse) and removes it with the hook', async () => {
+                let adopted;
+                const env = anchored(undefined, { before: (w) => { adopted = sheets(w); } });
+                await frame(env);
+                expect(env.window.document.adoptedStyleSheets).toHaveLength(1);
+                expect(env.window.document.adoptedStyleSheets[0].css).toMatch(/::highlight\(dj-collab-\d+-0\)/);
+                expect(env.$('style[data-dj-collab-sel]')).toBeNull();
+                // a redraw replaces it, it does not pile up
+                env.$('.dj-collab-sel').setAttribute('data-target', '#doc');
+                env.window.djust.updateHooks();
+                await frame(env);
+                expect(env.window.document.adoptedStyleSheets).toHaveLength(1);
+                env.window.djust.destroyAllHooks();
+                expect(env.window.document.adoptedStyleSheets).toHaveLength(0);
+                expect(adopted).toBeDefined();
+            });
+
+            it('leaves other adopted stylesheets alone', async () => {
+                const env = anchored(undefined, { before: (w) => { sheets(w).push({ css: 'mine' }); } });
+                await frame(env);
+                expect(env.window.document.adoptedStyleSheets).toHaveLength(2);
+                env.window.djust.destroyAllHooks();
+                expect(env.window.document.adoptedStyleSheets.map((x) => x.css)).toEqual(['mine']);
+            });
+
+            it('falls back to a <style> element when a constructed sheet cannot be made', async () => {
+                const env = anchored(undefined, { before: (w) => { sheets(w); w.CSSStyleSheet = class { replaceSync() { throw new Error('no'); } }; } });
+                await frame(env);
+                expect(env.$('style[data-dj-collab-sel]')).not.toBeNull();
+                expect(env.$('.dj-collab-sel').classList.contains('dj-collab-sel--anchored')).toBe(true);
+            });
+
+            it('rules a style policy refused (a <style> element with no sheet) mean no highlight and the inline text stays', async () => {
+                const env = anchored(undefined, {
+                    before: (w) => {
+                        const create = w.document.createElement.bind(w.document);
+                        w.document.createElement = (tag, ...rest) => {
+                            const el = create(tag, ...rest);
+                            if (String(tag).toLowerCase() === 'style') Object.defineProperty(el, 'sheet', { get: () => null });
+                            return el;
+                        };
+                    },
+                });
+                await frame(env);
+                expect(env.registry.size).toBe(0);
+                expect(env.$('style[data-dj-collab-sel]')).toBeNull();
+                expect(env.$('.dj-collab-sel').classList.contains('dj-collab-sel--anchored')).toBe(false);
+            });
+        });
+
         it('two instances do not share highlight names', async () => {
             const env = createEnv(DOC + COLLAB([['Alice', 0, 5, 'Hello']], '#doc') + COLLAB([['Bob', 6, 11, 'brave']], '#doc'));
             const w = env.window;
@@ -697,6 +756,7 @@ describe('MentionsInput', () => {
         env.shown = () => env.rows().filter((r) => r.style.display !== 'none').map((r) => r.getAttribute('data-user-name'));
         env.type = (text, caret = text.length) => {
             input.focus();
+            input.dispatchEvent(new env.window.Event('beforeinput', { bubbles: true, cancelable: true }));
             input.value = text;
             input.setSelectionRange(caret, caret);
             input.dispatchEvent(new env.window.Event('input', { bubbles: true }));
@@ -982,17 +1042,24 @@ describe('MentionsInput', () => {
         it('lists the ids in the order they appear in the text, each once', () => {
             const env = setup();
             env.type('@bo');
-            env.key('Enter');
-            env.type(env.input.value + '@al');
-            env.key('Enter');
+            env.key('Enter'); // "@Bob "
+            env.type('@al@Bob ', 3); // a mention typed before it
+            env.key('Enter'); // "@Alice Cooper @Bob "
+            expect(env.input.value).toBe('@Alice Cooper @Bob ');
             env.type(env.input.value + '@bo');
-            env.key('Enter'); // Bob again
+            env.key('Enter'); // Bob again, at the end
             submit(env);
-            expect(env.sent[0][1].mentions).toEqual(['2', '1']);
+            expect(env.sent[0][1].mentions).toEqual(['1', '2']);
+        });
+
+        it('text that replaces everything is not a mention, even if it spells one', () => {
+            const env = setup();
+            env.type('@bo');
+            env.key('Enter');
             env.sent.length = 0;
             env.type('@Alice Cooper first, then @Bob ');
             submit(env);
-            expect(env.sent[0][1].mentions).toEqual(['1', '2']);
+            expect(env.sent[0][1].mentions).toEqual([]);
         });
 
         it('drops a mention whose text was edited away, and one that is only a prefix of a longer word', () => {
@@ -1079,6 +1146,195 @@ describe('MentionsInput', () => {
             submit(env);
             expect(pushed[0][0]).toBe('send_message');
             expect(pushed[0][1].text).toBe('hello');
+        });
+    });
+
+    describe('mentions are tracked by position', () => {
+        const DUP = [{ id: '1', name: 'Alex' }, { id: '2', name: 'Alex' }, { id: '3', name: 'Bob' }];
+        const choose = (env, query, ...downs) => {
+            env.type(env.input.value + query);
+            downs.forEach(() => env.key('ArrowDown'));
+            env.key('Enter');
+        };
+        const submit = (env) => env.key('Enter');
+
+        it('two people with one name are two mentions', () => {
+            const env = setup(MENTIONS(DUP));
+            choose(env, '@al'); // Alex #1
+            choose(env, '@al', 1); // Alex #2
+            expect(env.input.value).toBe('@Alex @Alex ');
+            submit(env);
+            expect(env.sent[0][1].mentions).toEqual(['1', '2']);
+        });
+
+        it('delete the first Alex and choose the second: only the second is mentioned', () => {
+            const env = setup(MENTIONS(DUP));
+            choose(env, '@al'); // Alex #1
+            env.type(''); // all of it deleted
+            choose(env, '@al', 1); // Alex #2
+            submit(env);
+            expect(env.input.value).toBe('@Alex ');
+            expect(env.sent[0][1].mentions).toEqual(['2']);
+        });
+
+        it('deleting the first of two identical tokens, caret where it was, drops that one and keeps the other', () => {
+            const env = setup(MENTIONS(DUP));
+            choose(env, '@al'); // Alex #1
+            choose(env, '@al', 1); // Alex #2
+            env.type('@Alex ', 0); // the first token (6 chars) deleted, caret at 0
+            submit(env);
+            expect(env.sent[0][1].mentions).toEqual(['2']);
+        });
+
+        it('typing before a token moves it, it is still a mention', () => {
+            const env = setup(MENTIONS(DUP));
+            choose(env, '@bo');
+            env.type('hello there @Bob ', 12);
+            submit(env);
+            expect(env.sent[0][1].mentions).toEqual(['3']);
+        });
+
+        it('an edit inside a token, or right after it making it a longer word, drops it', () => {
+            const env = setup(MENTIONS(DUP));
+            choose(env, '@bo');
+            env.type('@Bxb ');
+            submit(env);
+            expect(env.sent[0][1].mentions).toEqual([]);
+            env.sent.length = 0;
+            choose(env, '@bo');
+            env.type(env.input.value.replace('@Bob ', '@Bobby '));
+            submit(env);
+            expect(env.sent[0][1].mentions).toEqual([]);
+        });
+
+        it('a record whose text moved without an edit the hook saw is checked against the text at submit', () => {
+            const env = setup(MENTIONS(DUP));
+            choose(env, '@bo');
+            env.input.value = 'Rob  rest'; // set by code (a re-render, an app), no input event
+            submit(env);
+            expect(env.sent[0][1].mentions).toEqual([]);
+        });
+
+        it('records of tokens that are gone are forgotten (no growth for the life of the input)', () => {
+            const env = setup();
+            for (let i = 0; i < 20; i++) {
+                choose(env, '@bo');
+                env.type('');
+            }
+            const entry = [...env.window.djust._activeHooks.values()].find((h) => h.instance && h.instance._mentions);
+            expect(entry.instance._mentions).toEqual([]);
+        });
+
+        it('inserts with the browser\'s own edit (undo-friendly) when it has one, and falls back to setRangeText', () => {
+            const env = setup();
+            const calls = [];
+            env.window.document.execCommand = (cmd, _ui, value) => {
+                calls.push([cmd, value]);
+                const i = env.input;
+                i.setRangeText(value, i.selectionStart, i.selectionEnd, 'end');
+                i.dispatchEvent(new env.window.Event('input', { bubbles: true }));
+                return true;
+            };
+            env.type('hi @bo');
+            env.key('Enter');
+            expect(calls).toEqual([['insertText', '@Bob ']]);
+            expect(env.input.value).toBe('hi @Bob ');
+            env.window.document.execCommand = () => false; // refused: the fallback still inserts
+            env.type(env.input.value + '@al');
+            env.key('Enter');
+            expect(env.input.value).toBe('hi @Bob @Alice Cooper ');
+            submit(env);
+            expect(env.sent[0][1].mentions).toEqual(['2', '1']);
+        });
+    });
+
+    describe('input method composition', () => {
+        it('Enter that commits a composition is not a submit: it does not reach the plain binding, and is not prevented', () => {
+            const env = setup();
+            const reached = [];
+            env.$('[dj-root]').addEventListener('keydown', (e) => reached.push(e.key));
+            env.type('にほん');
+            const e = env.key('Enter', { isComposing: true });
+            expect(reached).toEqual([]);
+            expect(e.defaultPrevented).toBe(false);
+            expect(env.sent).toEqual([]);
+        });
+
+        it('the same for the keyCode 229 Enter some browsers send after compositionend', () => {
+            const env = setup();
+            const reached = [];
+            env.$('[dj-root]').addEventListener('keydown', (e) => reached.push(e.key));
+            env.type('にほん');
+            const ev = new env.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, keyCode: 229 });
+            env.input.dispatchEvent(ev);
+            expect(reached).toEqual([]);
+            expect(ev.defaultPrevented).toBe(false);
+            expect(env.sent).toEqual([]);
+        });
+
+        it('other keys during composition still reach the page (the hook only holds Enter)', () => {
+            const env = setup();
+            const reached = [];
+            env.$('[dj-root]').addEventListener('keydown', (e) => reached.push(e.key));
+            env.key('a', { isComposing: true });
+            expect(reached).toEqual(['a']);
+        });
+
+        it('the Enter after the composition ended submits as usual', () => {
+            const env = setup();
+            env.type('日本語');
+            env.key('Enter');
+            expect(env.sent).toHaveLength(1);
+            expect(env.sent[0][1].text).toBe('日本語');
+        });
+    });
+
+    describe('routing: the event goes where a plain binding\'s would', () => {
+        const wrapped = (attrs) => `<div ${attrs}>${MENTIONS()}</div>`;
+
+        it('inside a LiveComponent it carries component_id', () => {
+            const env = setup(wrapped('data-component-id="chat"'));
+            env.type('hi');
+            env.key('Enter');
+            expect(env.sent[0][1].component_id).toBe('chat');
+            expect(env.sent[0][1].view_id).toBeUndefined();
+        });
+
+        it('inside an embedded child view it carries view_id', () => {
+            const env = setup(wrapped('data-djust-embedded="child1"'));
+            env.type('hi');
+            env.key('Enter');
+            expect(env.sent[0][1].view_id).toBe('child1');
+        });
+
+        it('on the page it carries neither', () => {
+            const env = setup();
+            env.type('hi');
+            env.key('Enter');
+            expect(env.sent[0][1].component_id).toBeUndefined();
+            expect(env.sent[0][1].view_id).toBeUndefined();
+        });
+
+        it('a strict handler contract gets the input as the routing context', () => {
+            const env = setup(wrapped('data-component-id="chat"'));
+            const calls = [];
+            env.window.djust._strictBinding = (...a) => { calls.push(a); return { text: 'hi', component_id: 'chat' }; };
+            env.type('hi');
+            env.key('Enter');
+            expect(calls[0][4]).toBe(env.input);
+            expect(env.sent[0][1]).toEqual({ text: 'hi', component_id: 'chat' });
+        });
+
+        it('with no client API it falls back to pushEvent, with the ids', () => {
+            const env = setup(wrapped('data-component-id="chat" data-djust-embedded="kid"'));
+            env.window.djust.handleEvent = undefined;
+            const pushed = [];
+            const entry = [...env.window.djust._activeHooks.values()].find((h) => h.instance && h.instance._mentions);
+            entry.instance.pushEvent = (n, p) => pushed.push([n, p]);
+            env.type('hi');
+            env.key('Enter');
+            expect(pushed[0][1].component_id).toBe('chat');
+            expect(pushed[0][1].view_id).toBe('kid');
         });
     });
 

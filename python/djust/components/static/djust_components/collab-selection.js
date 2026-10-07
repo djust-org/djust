@@ -10,15 +10,22 @@
  * - Anchoring (data-target, the component's ``target`` selector): ``start``
  *   and ``end`` are character offsets into the text of the element the
  *   selector picks (UTF-16 code units over its ``textContent``, ``start``
- *   inclusive, ``end`` exclusive; text inside this component is not counted).
+ *   inclusive, ``end`` exclusive; text inside this component, and the text of
+ *   ``<script>`` and ``<style>`` elements in the target, is not counted: they
+ *   are in ``textContent`` but are not text a reader sees or selects).
  *   The hook highlights those ranges in the text itself with the CSS Custom
  *   Highlight API (the page's own nodes are not touched) and puts each user's
  *   name above the start of their range. It follows scrolling, resizing and
  *   edits of the target's text. The offsets are clamped to the text, and an
  *   empty or reversed range draws nothing. Where the browser has no
- *   ``CSS.highlights``, or the selector matches nothing, the component shows
- *   each selection's own ``text`` where it is rendered, as it does without a
- *   target.
+ *   ``CSS.highlights``, the selector matches nothing (the target is looked up
+ *   in the document: an element inside a shadow root is not found), or the
+ *   page's style policy refuses the highlight rules, the component shows each
+ *   selection's own ``text`` where it is rendered, as it does without a
+ *   target. The rules are put in a constructed stylesheet, which a policy that
+ *   forbids inline ``<style>`` elements (``style-src`` without
+ *   ``'unsafe-inline'``) does not block; a ``<style>`` element is the fallback
+ *   where those are unsupported.
  * - Accessibility: each selection is a group named "<name> selected: <text>"
  *   (the visible label and highlight are decoration for assistive tech), and
  *   someone's selection appearing or disappearing is announced in a polite
@@ -178,6 +185,43 @@
     return box;
   }
 
+  // Put the highlight rules where the page's style policy allows them. A
+  // constructed stylesheet is not an inline <style> element, so a policy
+  // without 'unsafe-inline' for style elements does not refuse it; a <style>
+  // element is the fallback, and one the policy refused has no sheet. Returns
+  // what to remove later, or null when the rules could not be applied.
+  function installRules(css, id) {
+    if (typeof window.CSSStyleSheet === "function" && "adoptedStyleSheets" in document) {
+      try {
+        var sheet = new window.CSSStyleSheet();
+        sheet.replaceSync(css);
+        document.adoptedStyleSheets = Array.prototype.concat.call(document.adoptedStyleSheets, [sheet]);
+        return { sheet: sheet };
+      } catch (_err) {
+        // fall through to a style element
+      }
+    }
+    var style = document.createElement("style");
+    style.setAttribute("data-dj-collab-sel", String(id));
+    style.textContent = css;
+    document.head.appendChild(style);
+    if (!style.sheet) {
+      if (style.parentNode) style.parentNode.removeChild(style);
+      return null;
+    }
+    return { style: style };
+  }
+
+  function removeRules(installed) {
+    if (!installed) return;
+    if (installed.sheet) {
+      document.adoptedStyleSheets = Array.prototype.filter.call(document.adoptedStyleSheets, function (s) {
+        return s !== installed.sheet;
+      });
+    }
+    if (installed.style && installed.style.parentNode) installed.style.parentNode.removeChild(installed.style);
+  }
+
   var collabSelection = {
     mounted: function () {
       this._id = ++nextId;
@@ -315,8 +359,8 @@
         if (registry) registry.delete(name);
       });
       this._highlightNames = [];
-      if (this._style && this._style.parentNode) this._style.parentNode.removeChild(this._style);
-      this._style = null;
+      removeRules(this._rules);
+      this._rules = null;
       this._items = null;
     },
 
@@ -354,12 +398,18 @@
         this._unanchor();
         return;
       }
-      if (redraw) this._draw(target, registry, Highlight);
+      if (redraw && !this._draw(target, registry, Highlight)) {
+        // The rules could not be applied (a style policy refused them): the
+        // component's own inline text is all there is to show.
+        this._unanchor();
+        return;
+      }
       this._place(target);
       root.classList.add(ANCHORED);
     },
 
-    // Highlight every selection at its offsets in the target's text, from scratch.
+    // Highlight every selection at its offsets in the target's text, from
+    // scratch. False when the highlight rules could not be applied.
     _draw: function (target, registry, Highlight) {
       var root = this.el;
       this._clearHighlights();
@@ -402,12 +452,13 @@
       this._highlightNames = created;
       this._items = items;
       if (rules.length) {
-        var style = document.createElement("style");
-        style.setAttribute("data-dj-collab-sel", String(id));
-        style.textContent = rules.join("\n");
-        document.head.appendChild(style);
-        this._style = style;
+        this._rules = installRules(rules.join("\n"), id);
+        if (!this._rules) {
+          this._clearHighlights();
+          return false;
+        }
       }
+      return true;
     },
 
     // Put each name above the start of its range, where that text is now.

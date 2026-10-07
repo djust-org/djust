@@ -38,8 +38,13 @@ class CollabSelection(Component):
     exclusive), the numbers a selection in the page gives. With a ``target`` the
     client highlights those ranges in the text itself and puts each user's name
     beside the start of their range. Without one, each selection shows its own
-    ``text`` where the component is rendered, as before. The offsets come from
-    other users: treat them as untrusted and clamp them on the server.
+    ``text`` where the component is rendered, as before (also where the browser
+    lacks the CSS Custom Highlight API: Chromium 105+, Safari 17.2+, Firefox
+    140+; where the selector matches nothing, which includes an element inside
+    a shadow root; and where a ``Content-Security-Policy`` refuses the
+    highlight rules). Text of ``<script>`` and ``<style>`` elements inside the
+    target is skipped when counting. The offsets come from other users: treat
+    them as untrusted and clamp them on the server.
 
     Args:
         users: List of user dicts with name, color, and selection data.

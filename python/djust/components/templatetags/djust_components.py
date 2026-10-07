@@ -24,6 +24,7 @@ from django.utils.safestring import SafeString
 
 from ._registry import safe_url
 from djust.components.utils import rich_html, unique_ids as _unique_ids, url_attr
+from djust.components.components.dashboard_grid import clamp_cells, clamp_columns
 from django.utils.safestring import mark_safe
 
 
@@ -9769,7 +9770,7 @@ class DashboardGridNode(template.Node):
         class_str = " ".join(classes)
 
         try:
-            cols = int(columns)
+            cols = clamp_columns(columns)
         except (ValueError, TypeError):
             cols = 4
 
@@ -9786,22 +9787,16 @@ class DashboardGridNode(template.Node):
             pid = conditional_escape(str(panel.get("id", "")))
             title = conditional_escape(str(panel.get("title", "")))
             content = conditional_escape(panel.get("content", ""))
-            try:
-                col = int(panel.get("col", 1))
-            except (ValueError, TypeError):
-                col = 1
-            try:
-                row = int(panel.get("row", 1))
-            except (ValueError, TypeError):
-                row = 1
-            try:
-                w = int(panel.get("width", 1))
-            except (ValueError, TypeError):
-                w = 1
-            try:
-                h = int(panel.get("height", 1))
-            except (ValueError, TypeError):
-                h = 1
+
+            def _whole(key: str) -> int:
+                try:
+                    return int(panel.get(key, 1))
+                except (ValueError, TypeError):
+                    return 1
+
+            col, row, w, h = clamp_cells(
+                cols, _whole("col"), _whole("row"), _whole("width"), _whole("height")
+            )
 
             style = f"grid-column:{col}/span {w};grid-row:{row}/span {h}"
 

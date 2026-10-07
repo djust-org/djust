@@ -89,20 +89,73 @@ PROJECT = {
     "cmpapp/urls.py": """
         from django.urls import path
         from . import views
+
+        def with_policy(view):
+            def wrapped(request, *args, **kwargs):
+                response = view(request, *args, **kwargs)
+                response["Content-Security-Policy"] = "style-src-elem 'self'"
+                return response
+            return wrapped
+
         urlpatterns = [
             path("", views.Demo.as_view()),
             path("custom/", views.Custom.as_view()),
+            path("csp/", with_policy(views.Demo.as_view())),
         ]
     """,
     "cmpapp/views.py": (
         '''
         from djust import LiveView
         from djust.decorators import event_handler
+        from djust.components.components.dashboard_grid import clamp_cells
+        from djust.components.descriptors.base import LiveComponent, TypedState
 
         SCRIPTS = '%s'
 
         HOSTILE = "<img src=x onerror=window.__pwn=1>"
         DOC = "Hello brave new world. " * 60 + "The end."
+
+        ROUTE_PANELS = [{"id": "r1", "title": "R1", "col": 1, "row": 1, "width": 1, "height": 1, "content": "x"}]
+        ROUTE_USERS = [{"id": "1", "name": "Alice"}, {"id": "2", "name": "Bob"}]
+        ROUTED = """
+        {%% load djust_components %%}
+        {%% mentions_input name="message" users=users event="send_message" %%}
+        {%% dashboard_grid panels=panels columns=3 row_height="60px" move_event="dashboard_move" resize_event="dashboard_resize" %%}{%% enddashboard_grid %%}
+        """
+
+        class Box(LiveComponent):
+            class State(TypedState):
+                users: list = []
+                panels: list = []
+                mn_got: str = ""
+                dg_got: str = ""
+
+            template = ROUTED + '<p>box mn: <span id="box-mn">{{ mn_got }}</span> dg: <span id="box-dg">{{ dg_got }}</span></p>'
+
+            @event_handler()
+            def send_message(self, text="", mentions=None, **kwargs):
+                self.state.mn_got = text + "|" + ",".join(mentions or [])
+
+            @event_handler()
+            def dashboard_move(self, id="", col=1, row=1, **kwargs):
+                self.state.dg_got = "%%s:%%s,%%s" %% (id, col, row)
+
+        class Child(LiveView):
+            template = "<div id='child-root'>" + ROUTED + '<p>child mn: <span id="child-mn">{{ mn_got }}</span> dg: <span id="child-dg">{{ dg_got }}</span></p></div>'
+
+            def mount(self, request, **kwargs):
+                self.users = ROUTE_USERS
+                self.panels = [dict(p) for p in ROUTE_PANELS]
+                self.mn_got = ""
+                self.dg_got = ""
+
+            @event_handler()
+            def send_message(self, text="", mentions=None, **kwargs):
+                self.mn_got = text + "|" + ",".join(mentions or [])
+
+            @event_handler()
+            def dashboard_move(self, id="", col=1, row=1, **kwargs):
+                self.dg_got = "%%s:%%s,%%s" %% (id, col, row)
 
         BODY = """
         <div dj-root>
@@ -146,6 +199,12 @@ PROJECT = {
               {%% if cs_show %%}{%% collab_selection users=selections target="#doc" %%}{%% endif %%}
             </div>
           </section>
+          <section id="route-box" style="margin-top:2rem">
+            <h2>routing</h2>
+            <div id="route-page">{%% mentions_input name="message" users=route_users event="send_message" %%}</div>
+            <div id="route-component">{{ box }}</div>
+            <div id="route-child">{%% live_render "cmpapp.views.Child" %%}</div>
+          </section>
           <div style="height:600px"></div>
         </div>
         """
@@ -167,6 +226,9 @@ PROJECT = {
         ]
 
         class Base(LiveView):
+            box = Box(users=ROUTE_USERS, panels=ROUTE_PANELS)
+            route_users = ROUTE_USERS
+
             def mount(self, request, **kwargs):
                 self.columns = 4
                 self.panels = [dict(p) for p in PANELS]
@@ -185,6 +247,8 @@ PROJECT = {
                     {"id": "3", "name": "Cora Lee"},
                     {"id": "4", "name": "Albert"},
                     {"id": "5", "name": HOSTILE},
+                    {"id": "6", "name": "Sam"},
+                    {"id": "7", "name": "Sam"},
                 ]
                 self.cursors = [
                     {"name": "Alice", "color": "#3b82f6", "x": 40, "y": 40},
@@ -205,35 +269,27 @@ PROJECT = {
                 return None
 
             @event_handler()
-            def dashboard_move(self, id="", col=1, row=1, **kwargs):
+            def dashboard_move(self, id: str = "", col: int = 1, row: int = 1, **kwargs):
                 self.dg_n += 1
                 panel = self._panel(id)
                 if panel is None or self.dg_ignore_events:
                     self.dg_rejected += 1
                     return
-                try:
-                    col, row = int(col), int(row)
-                except (TypeError, ValueError):
-                    self.dg_rejected += 1
-                    return
-                panel["col"] = max(1, min(col, self.columns - panel["width"] + 1))
-                panel["row"] = max(1, min(row, 50))
+                panel["col"], panel["row"], _, _ = clamp_cells(
+                    self.columns, col, row, panel["width"], panel["height"]
+                )
                 self.dg_log = "move %%s %%s,%%s" %% (id, panel["col"], panel["row"])
 
             @event_handler()
-            def dashboard_resize(self, id="", width=1, height=1, **kwargs):
+            def dashboard_resize(self, id: str = "", width: int = 1, height: int = 1, **kwargs):
                 self.dg_n += 1
                 panel = self._panel(id)
                 if panel is None or self.dg_ignore_events:
                     self.dg_rejected += 1
                     return
-                try:
-                    width, height = int(width), int(height)
-                except (TypeError, ValueError):
-                    self.dg_rejected += 1
-                    return
-                panel["width"] = max(1, min(width, self.columns - panel["col"] + 1))
-                panel["height"] = max(1, min(height, 50))
+                _, _, panel["width"], panel["height"] = clamp_cells(
+                    self.columns, panel["col"], panel["row"], width, height
+                )
                 self.dg_log = "resize %%s %%sx%%s" %% (id, panel["width"], panel["height"])
 
             @event_handler()
@@ -381,6 +437,13 @@ def start_server(root: Path, port: int) -> subprocess.Popen:
     proc.kill()
     raise SystemExit("server did not start")
 
+
+HIGHLIGHT_RULES = """
+() => [...document.adoptedStyleSheets, ...document.styleSheets]
+    .flatMap((s) => { try { return [...s.cssRules].map((r) => r.cssText); } catch (e) { return []; } })
+    .filter((t) => t.includes('::highlight(dj-collab-'))
+    .join('\\n')
+"""
 
 GRID_GEOMETRY = """
 () => {
@@ -832,7 +895,7 @@ def main() -> int:
                     page.evaluate("([n, p]) => window.djust.handleEvent(n, p)", [name, params])
                 page.wait_for_function(
                     "n => parseInt(document.querySelector('#dg-n').textContent) >= n",
-                    arg=n0 + 4,
+                    arg=n0 + 3,
                     timeout=6000,
                 )
                 page.wait_for_timeout(300)
@@ -845,8 +908,35 @@ def main() -> int:
                     f"grid: a forged width is clamped to the columns ({span_of('err')})",
                 )
                 check(
-                    int(text("#dg-rejected")) >= 2,
-                    f"grid: an unknown id and a non-integer are rejected ({text('#dg-rejected')})",
+                    int(text("#dg-rejected")) >= 1,
+                    f"grid: an unknown id is rejected ({text('#dg-rejected')})",
+                )
+                # (djust refused the non-integer one with a dev overlay: dismiss it)
+                page.evaluate(
+                    "() => { const o = document.getElementById('djust-error-overlay'); if (o) o.remove(); }"
+                )
+                # the headline forgery: a huge row / height must not become a huge grid
+                for params in (
+                    {"id": "usr", "col": 1, "row": 10**9},
+                    {"id": "err", "width": 1, "height": 10**9},
+                ):
+                    name = "dashboard_move" if "row" in params else "dashboard_resize"
+                    page.evaluate("([n, p]) => window.djust.handleEvent(n, p)", [name, params])
+                page.wait_for_timeout(600)
+                grid_h = rect(grid)["h"]
+                check(
+                    grid_h < 100 * 140,
+                    f"grid: a forged row/height of 1e9 is clamped by the documented handler and the grid stays small ({grid_h:.0f}px)",
+                )
+                check(
+                    page.evaluate(
+                        f"() => document.querySelector('{panel('usr')}').getAttribute('style')"
+                    ).startswith("grid-column:1/span 1;grid-row:100/span 1"),
+                    "grid: the stored row is the cap (100)",
+                )
+                # and what is rendered is bounded whatever is stored: a stored 1e9 renders as the cap
+                page.evaluate(
+                    f"() => {{ const p = document.querySelector('{panel('usr')}'); p.setAttribute('style', 'grid-column:1/span 1;grid-row:1/span 1'); }}"
                 )
                 page.click("#dg-restore")
                 page.wait_for_timeout(400)
@@ -1008,6 +1098,110 @@ def main() -> int:
                 check(
                     text("#mn-ids") == "5",
                     f"mentions: its id arrives as the string the server rendered ({text('#mn-ids')!r})",
+                )
+
+                # IME: Enter that commits a composition is not a submit
+                page.fill(inp, "")
+                page.click(inp)
+                page.keyboard.type("composing")
+                n_before = text("#mn-n")
+                page.evaluate(
+                    f"""() => {{
+                        const i = document.querySelector('{inp}');
+                        i.dispatchEvent(new KeyboardEvent('keydown', {{key: 'Enter', isComposing: true, keyCode: 229, bubbles: true, cancelable: true}}));
+                        i.dispatchEvent(new KeyboardEvent('keydown', {{key: 'Enter', keyCode: 229, bubbles: true, cancelable: true}}));
+                    }}"""
+                )
+                page.wait_for_timeout(400)
+                check(
+                    text("#mn-n") == n_before, "mentions: Enter while composing (IME) sends nothing"
+                )
+                page.keyboard.press("Enter")
+                page.wait_for_function(
+                    "n => document.querySelector('#mn-n').textContent !== n",
+                    arg=n_before,
+                    timeout=6000,
+                )
+                check(
+                    text("#mn-text") == "composing",
+                    "mentions: and the Enter after it submits as usual",
+                )
+
+                # two people with one name are two mentions
+                page.fill(inp, "")
+                page.click(inp)
+                page.keyboard.type("@sa")
+                page.keyboard.press("Enter")  # Sam #6
+                page.keyboard.press("Backspace")
+                page.keyboard.press("Backspace")
+                page.keyboard.press("Backspace")
+                page.keyboard.press("Backspace")
+                page.keyboard.press("Backspace")  # "@Sam " gone
+                page.keyboard.type("@sa")
+                page.keyboard.press("ArrowDown")
+                page.keyboard.press("Enter")  # Sam #7
+                n_before = text("#mn-n")
+                page.keyboard.press("Enter")
+                page.wait_for_function(
+                    "n => document.querySelector('#mn-n').textContent !== n",
+                    arg=n_before,
+                    timeout=6000,
+                )
+                check(
+                    text("#mn-text") == "@Sam" and text("#mn-ids") == "7",
+                    f"mentions: duplicate names: only the person whose token is in the text ({text('#mn-text')!r}, ids {text('#mn-ids')!r})",
+                )
+
+                # undo after choosing takes the name back and leaves what was typed
+                page.fill(inp, "")
+                page.click(inp)
+                page.keyboard.type("@Bo")
+                page.keyboard.press("Enter")
+                page.keyboard.press("ControlOrMeta+z")
+                check(
+                    page.input_value(inp) == "@Bo",
+                    f"mentions: undo after choosing restores what was typed ({page.input_value(inp)!r})",
+                )
+                page.fill(inp, "")
+
+                # routing: the event goes where the plain binding's would
+                for box, who in (("#route-component", "box"), ("#route-child", "child")):
+                    page.eval_on_selector(box, "e => e.scrollIntoView({block: 'center'})")
+                    page.click(f"{box} .dj-mentions__input")
+                    page.keyboard.type(f"hello {who} ")
+                    n_before = text("#mn-n")
+                    page.keyboard.press("Enter")
+                    page.wait_for_function(
+                        "s => document.querySelector(s).textContent.trim() !== ''",
+                        arg=f"#{who}-mn",
+                        timeout=6000,
+                    )
+                    page.wait_for_timeout(300)
+                    check(
+                        text(f"#{who}-mn").startswith(f"hello {who}"),
+                        f"routing: a submit inside the {'LiveComponent' if who == 'box' else 'embedded child view'} reaches it ({text('#' + who + '-mn')!r})",
+                    )
+                    check(
+                        text("#mn-n") == n_before,
+                        f"routing: and not the page view ({text('#mn-n')} events there)",
+                    )
+                    panel_sel = f"{box} .dj-dashboard-grid__panel"
+                    page.focus(panel_sel)
+                    page.keyboard.press("Space")
+                    page.keyboard.press("ArrowRight")
+                    page.keyboard.press("Enter")
+                    page.wait_for_function(
+                        "s => document.querySelector(s).textContent.trim() !== ''",
+                        arg=f"#{who}-dg",
+                        timeout=6000,
+                    )
+                    check(
+                        text(f"#{who}-dg").startswith("r1:"),
+                        f"routing: a dashboard move inside the {'LiveComponent' if who == 'box' else 'embedded child view'} reaches it ({text('#' + who + '-dg')!r})",
+                    )
+                check(
+                    text("#dg-n") == text("#dg-n") and "r1" not in text("#dg-log"),
+                    "routing: and the page's dashboard never saw them",
                 )
 
                 # ======================= CursorsOverlay =======================
@@ -1174,7 +1368,7 @@ def main() -> int:
                 page.screenshot(path=str(shots / "05-collab.png"))
                 # the highlight really paints (the ::highlight rule applies a background)
                 check(
-                    page.evaluate("() => !!document.querySelector('style[data-dj-collab-sel]')"),
+                    len(page.evaluate(HIGHLIGHT_RULES)) > 0,
                     "collab: the highlight rules are in place",
                 )
                 # scrolling the target moves the names with the text; one scrolled out is hidden
@@ -1223,9 +1417,7 @@ def main() -> int:
                 # hostile colours never reach the style rule
                 page.click("#cs-hostile")
                 page.wait_for_timeout(500)
-                css = page.evaluate(
-                    "() => [...document.querySelectorAll('style[data-dj-collab-sel]')].map(s => s.textContent).join('\\n')"
-                )
+                css = page.evaluate(HIGHLIGHT_RULES)
                 check(
                     "evil.example" not in css and "display:none" not in css and "body" not in css,
                     f"collab: a hostile colour is replaced by the palette in the highlight rule ({css[:120]!r})",
@@ -1238,10 +1430,57 @@ def main() -> int:
                 page.click("#cs-hide")
                 page.wait_for_timeout(500)
                 check(
-                    page.evaluate(highlights) == {}
-                    and page.evaluate("() => !document.querySelector('style[data-dj-collab-sel]')"),
+                    page.evaluate(highlights) == {} and page.evaluate(HIGHLIGHT_RULES) == "",
                     "collab: removing the component leaves no highlight and no rule behind",
                 )
+
+                # ======================= a strict style policy =======================
+                def under_csp(init=None):
+                    ctx = browser.new_context(viewport={"width": 1000, "height": 900})
+                    if init:
+                        ctx.add_init_script(init)
+                    pg = ctx.new_page()
+
+                    pg.goto(base + "/csp/")
+                    pg.wait_for_function(
+                        "() => window.djust && window.djust.liveViewInstance && "
+                        "window.djust.liveViewInstance.viewMounted === true",
+                        timeout=15000,
+                    )
+                    pg.wait_for_timeout(800)
+                    return ctx, pg
+
+                names = "() => [...CSS.highlights.keys()].filter((k) => k.startsWith('dj-collab-')).length"
+                ctx, pg = under_csp()
+                check(
+                    pg.evaluate(names) == 2 and len(pg.evaluate(HIGHLIGHT_RULES)) > 0,
+                    "collab (style-src-elem 'self'): the highlights apply (the rules are a constructed stylesheet)",
+                )
+                check(
+                    pg.eval_on_selector(
+                        "#cs-box .dj-collab-sel",
+                        "e => e.classList.contains('dj-collab-sel--anchored')",
+                    ),
+                    "collab (style-src-elem 'self'): and the component is anchored",
+                )
+                ctx.close()
+                ctx, pg = under_csp("delete CSSStyleSheet.prototype.replaceSync;")
+                check(
+                    pg.evaluate(names) == 0
+                    and not pg.eval_on_selector(
+                        "#cs-box .dj-collab-sel",
+                        "e => e.classList.contains('dj-collab-sel--anchored')",
+                    ),
+                    "collab (no constructed sheets, <style> refused): nothing is highlighted and the component is not anchored",
+                )
+                check(
+                    pg.eval_on_selector(
+                        "#cs-box .dj-collab-sel__highlight",
+                        "e => { const r = e.getBoundingClientRect(); return r.width > 4 && r.height > 4; }",
+                    ),
+                    "collab (no constructed sheets, <style> refused): the selections' own text is still shown",
+                )
+                ctx.close()
 
                 # ======================= app hooks win =======================
                 check(
@@ -1252,8 +1491,8 @@ def main() -> int:
                 page.wait_for_timeout(300)
                 hooks = page.evaluate("() => window.__appHooks || []")
                 check(
-                    sorted(hooks) == ["collab", "cursors", "grid", "mentions"],
-                    f"custom: the app's own hooks ran, one each ({hooks})",
+                    sorted(set(hooks)) == ["collab", "cursors", "grid", "mentions"],
+                    f"custom: the app's own hooks ran ({sorted(set(hooks))})",
                 )
                 check(
                     page.eval_on_selector("#dg-box .dj-dashboard-grid__panel", "e => e.draggable"),

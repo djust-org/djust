@@ -19,9 +19,11 @@
  *     {text: "Thanks @Alice!", mentions: ["1"], value: "Thanks @Alice!",
  *      field: "message", key: "Enter", code: "Enter"}
  *
- * ``mentions`` are the ``id``s of the people whose ``@Name`` is still in the
- * text (a mention whose text was edited away is dropped), in the order they
- * first appear, without repeats. ``value``, ``field``, ``key`` and ``code`` are
+ * ``mentions`` are the ``id``s of the people whose ``@Name`` token (the one
+ * inserted for them) is still in the text, in the order they appear, without
+ * repeats: tokens are tracked by position through every edit, so two people
+ * with the same name are told apart, and a token that is edited, cut or
+ * overtyped is dropped. ``value``, ``field``, ``key`` and ``code`` are
  * what the plain ``dj-keydown.enter`` input event sends and are kept so an
  * existing handler keeps working; ``text`` is the same string as ``value``.
  * Everything in the payload is client-supplied and therefore untrusted:
@@ -66,28 +68,60 @@
     live.textContent = live.textContent === message ? message + " " : message;
   }
 
+  // The routing context a plain dj-* event carries: the nearest LiveComponent
+  // (data-component-id) and embedded child view (data-djust-embedded) above
+  // the element. Without it an event sent from inside either would reach the
+  // page view instead.
+  function addContext(params, el) {
+    for (var node = el; node && node !== document.body; node = node.parentElement) {
+      var ds = node.dataset || {};
+      if (params.component_id === undefined && ds.componentId) params.component_id = ds.componentId;
+      if (params.view_id === undefined && ds.djustEmbedded) params.view_id = ds.djustEmbedded;
+    }
+  }
+
   // Same public entry point dj-click and dj-viewport use, so the event works
-  // over WebSocket, SSE and HTTP-only, honours strict parameter contracts and
-  // reaches the right view when several are mounted. Falls back to the hook's
-  // own pushEvent when the client API is absent.
+  // over WebSocket, SSE and HTTP-only, honours strict parameter contracts,
+  // reaches the right view when several are mounted, and carries the same
+  // component_id / view_id routing a plain binding on this element would.
+  // Falls back to the hook's own pushEvent when the client API is absent.
   function send(hook, element, eventName, params) {
     var d = window.djust;
     if (d && typeof d.handleEvent === "function") {
       var sent = params;
       if (typeof d._strictBinding === "function") {
-        var strict = d._strictBinding(element, eventName, params, []);
+        var strict = d._strictBinding(element, eventName, params, [], element);
         if (strict === false) return;
         if (strict) sent = strict;
       }
+      if (sent === params) addContext(sent, element);
       if (typeof d._markSlotOf === "function") d._markSlotOf(sent, element);
       d.handleEvent(eventName, sent);
     } else if (typeof hook.pushEvent === "function") {
+      addContext(params, element);
       hook.pushEvent(eventName, params);
     }
   }
 
-  function escapeRegExp(text) {
-    return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Where a text edit happened: the part before ``start`` and after
+  // ``removedEnd`` (in the old text) is unchanged, ``delta`` is how much the
+  // text grew. The caret after the edit says where it ended, which settles the
+  // ambiguity of repeated text ("@Bob @Bob" with the first one deleted).
+  function editOf(before, after, caret) {
+    var tail = typeof caret === "number" ? after.length - caret : -1;
+    if (tail < 0 || tail > before.length || before.slice(before.length - tail) !== after.slice(after.length - tail)) {
+      tail = 0;
+      var limit = Math.min(before.length, after.length);
+      while (tail < limit && before.charAt(before.length - 1 - tail) === after.charAt(after.length - 1 - tail)) tail++;
+    }
+    var head = 0;
+    var room = Math.min(before.length - tail, after.length - tail);
+    while (head < room && before.charAt(head) === after.charAt(head)) head++;
+    return { start: head, removedEnd: before.length - tail, delta: after.length - before.length };
+  }
+
+  function isWordChar(ch) {
+    return !!ch && /[\p{L}\p{N}_]/u.test(ch);
   }
 
   // The mention being typed: an "@" at the start of the text or after
@@ -128,7 +162,10 @@
   var mentionsInput = {
     mounted: function () {
       this._id = ++nextId;
+      // The people chosen so far: {id, name, start}, ``start`` being where the
+      // "@Name" token is in the text. Kept in step with every edit (_track).
       this._mentions = [];
+      this._prev = "";
       this._open = false;
       this._activeId = null;
       this._bind();
@@ -202,8 +239,14 @@
       var root = this.el;
       this._boundEl = root;
       var h = {
+        // The text as it is just before an edit (typing, paste, cut, drop, IME).
+        beforeinput: function (e) {
+          if (e.target === self._input()) self._prev = e.target.value;
+        },
         input: function (e) {
-          if (e.target === self._input()) self._refresh();
+          if (e.target !== self._input()) return;
+          self._track();
+          self._refresh();
         },
         keyup: function (e) {
           if (e.target !== self._input()) return;
@@ -228,7 +271,13 @@
         },
         keydown: function (e) {
           if (e.target !== self._input() || self._disabled()) return;
-          if (e.isComposing || e.keyCode === 229) return;
+          if (e.isComposing || e.keyCode === 229) {
+            // Choosing a candidate with Enter ends the composition; it is not a
+            // submit. djust's own Enter binding has no composition guard, so stop
+            // the key here (without preventDefault: the composition must commit).
+            if (e.key === "Enter") e.stopPropagation();
+            return;
+          }
           self._keydown(e);
         },
       };
@@ -389,31 +438,75 @@
         this._close();
         return;
       }
-      input.setRangeText("@" + name + " ", trigger.at, trigger.caret, "end");
-      this._mentions.push({ id: id, name: name });
-      this._close();
-      input.dispatchEvent(new Event("input", { bubbles: true }));
+      var token = "@" + name + " ";
       input.focus();
+      this._prev = input.value;
+      input.setSelectionRange(trigger.at, trigger.caret);
+      // An edit the browser makes itself joins its undo stack (undo takes the
+      // name back and leaves what was typed); setRangeText does not.
+      var done = false;
+      if (typeof document.execCommand === "function") {
+        try {
+          done = document.execCommand("insertText", false, token);
+        } catch (_err) {
+          done = false;
+        }
+      }
+      if (!done || input.value.slice(trigger.at, trigger.at + token.length) !== token) {
+        this._prev = input.value;
+        input.setRangeText(token, trigger.at, trigger.caret, "end");
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+      this._mentions.push({ id: id, name: name, start: trigger.at });
+      this._close();
       announce(name + " mentioned");
     },
 
-    // The ids of the people whose "@Name" is still in the text, in the order
-    // they first appear, each once.
+    // Move every recorded mention with the edit that just happened: unchanged
+    // before it, shifted after it, forgotten if the edit touched it.
+    _track: function () {
+      var input = this._input();
+      var now = input.value;
+      var before = this._prev;
+      this._prev = now;
+      if (before === now || !this._mentions.length) return;
+      var edit = editOf(before, now, input.selectionStart);
+      this._mentions = this._mentions.filter(function (m) {
+        var end = m.start + 1 + m.name.length;
+        if (end <= edit.start) return true;
+        if (m.start >= edit.removedEnd) {
+          m.start += edit.delta;
+          return true;
+        }
+        return false;
+      });
+    },
+
+    // The ids of the people whose "@Name" token is still where it was put, in
+    // the order they appear in the text, each once. People are told apart by
+    // where their token is, not by name: two people called Alex are two tokens.
     _mentioned: function (text) {
-      var found = [];
-      this._mentions.forEach(function (m) {
-        var re = new RegExp("(?:^|\\s)@" + escapeRegExp(m.name) + "(?![\\p{L}\\p{N}_])", "u");
-        var hit = re.exec(text);
-        if (!hit) return;
-        if (found.some(function (f) { return f.id === m.id; })) return;
-        found.push({ id: m.id, at: hit.index });
-      });
-      found.sort(function (a, b) {
-        return a.at - b.at;
-      });
-      return found.map(function (f) {
-        return f.id;
-      });
+      var seen = Object.create(null);
+      return this._mentions
+        .filter(function (m) {
+          var token = "@" + m.name;
+          return (
+            text.substr(m.start, token.length) === token &&
+            (m.start === 0 || /\s/.test(text.charAt(m.start - 1))) &&
+            !isWordChar(text.charAt(m.start + token.length))
+          );
+        })
+        .sort(function (a, b) {
+          return a.start - b.start;
+        })
+        .map(function (m) {
+          return m.id;
+        })
+        .filter(function (id) {
+          if (seen[id]) return false;
+          seen[id] = true;
+          return true;
+        });
     },
 
     _submit: function (e) {

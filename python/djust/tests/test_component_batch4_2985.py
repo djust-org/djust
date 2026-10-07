@@ -269,8 +269,70 @@ class TestDashboardGridMarkup:
     def test_a_non_integer_position_renders_as_one(self):
         panels = [{"id": "p", "title": "t", "col": "x", "row": None, "width": "y", "height": 0.5}]
         html = _tag("{% dashboard_grid panels=panels %}{% enddashboard_grid %}", panels=panels)
-        # (a height of 0 is what the server has always rendered for 0.5; the hook reads it as one cell)
-        assert 'style="grid-column:1/span 1;grid-row:1/span 0"' in html
+        # a height of 0.5 used to render ``span 0`` (not a placement at all); it is one cell now
+        assert 'style="grid-column:1/span 1;grid-row:1/span 1"' in html
+
+
+class TestDashboardGridBounds:
+    """A stored or forged number cannot ask the browser for a huge grid."""
+
+    def _render_all(self, panels, columns=4):
+        return {
+            "class": DashboardGrid(panels=panels, columns=columns).render(),
+            "tag": _tag(
+                "{% dashboard_grid panels=panels columns=columns %}{% enddashboard_grid %}",
+                panels=panels,
+                columns=columns,
+            ),
+            "handler": str(
+                rh.DashboardGridHandler().render(
+                    ["panels=panels", "columns=columns"], "", {"panels": panels, "columns": columns}
+                )
+            ),
+        }
+
+    def test_rows_and_heights_are_capped_on_every_path(self):
+        panels = [{"id": "p", "col": 1, "row": 10**9, "width": 1, "height": 10**9}]
+        for path, html in self._render_all(panels).items():
+            assert "grid-row:100/span 1" in html, path
+        panels = [{"id": "p", "col": 1, "row": 3, "width": 1, "height": 10**9}]
+        for path, html in self._render_all(panels).items():
+            assert "grid-row:3/span 98" in html, path  # rows 3..100
+
+    def test_columns_are_capped_and_a_panel_stays_inside_them(self):
+        for path, html in self._render_all(
+            [{"id": "p", "col": 10**9, "row": 1, "width": 10**9, "height": 1}], columns=10**9
+        ).items():
+            assert 'data-columns="48"' in html and "repeat(48,1fr)" in html, path
+            assert "grid-column:48/span 1" in html, path
+        for path, html in self._render_all(
+            [{"id": "p", "col": 3, "row": 1, "width": 9, "height": 1}], columns=4
+        ).items():
+            assert "grid-column:3/span 2" in html, path
+
+    def test_zero_and_negative_numbers_are_one(self):
+        for path, html in self._render_all(
+            [{"id": "p", "col": 0, "row": -4, "width": 0, "height": -1}], columns=0
+        ).items():
+            assert 'data-columns="1"' in html, path
+            assert 'style="grid-column:1/span 1;grid-row:1/span 1"' in html, path
+
+    def test_in_range_values_are_untouched(self):
+        for path, html in _dashboard_paths().items():
+            assert 'style="grid-column:1/span 2;grid-row:1/span 1"' in html, path
+            assert 'style="grid-column:3/span 1;grid-row:1/span 2"' in html, path
+
+    def test_the_helper_the_docstring_handlers_use_clamps_every_field(self):
+        from djust.components.components.dashboard_grid import MAX_COLUMNS, MAX_ROWS, clamp_cells
+
+        assert clamp_cells(4, 2, 3, 1, 1) == (2, 3, 1, 1)
+        assert clamp_cells(4, 10**9, 10**9, 10**9, 10**9) == (4, MAX_ROWS, 1, 1)
+        assert clamp_cells(4, 1, 1, 10**9, 10**9) == (1, 1, 4, MAX_ROWS)
+        assert clamp_cells(4, -5, -5, -5, -5) == (1, 1, 1, 1)
+        assert clamp_cells(10**9, 1, 1, 10**9, 1)[2] == MAX_COLUMNS
+        for bad in ("x", None, [], {}, float("inf")):
+            with pytest.raises((ValueError, TypeError, OverflowError)):
+                clamp_cells(4, bad, 1, 1, 1)
 
 
 @pytest.mark.parametrize(

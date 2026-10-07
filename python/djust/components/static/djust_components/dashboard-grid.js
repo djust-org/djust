@@ -15,8 +15,11 @@
  * These payloads come from the browser, so treat them as untrusted: check that
  * ``id`` is a panel of this dashboard the user may change, that the numbers
  * are integers, and clamp them to the grid (``1 <= col``, ``col + width - 1
- * <= columns``, ``1 <= row``) before using them; the docstring of the
- * component has a handler that does.
+ * <= columns``, ``1 <= row``, ``row + height - 1 <= 100``: a forged
+ * ``row=1000000000`` stored as it is would ask every viewer's browser for a
+ * grid millions of tracks tall) before using them; ``clamp_cells`` in
+ * dashboard_grid.py does, and the component's docstring has handlers that use
+ * it. The component renders at most 48 columns and 100 rows whatever is stored.
  *
  * Pointer (mouse, touch, pen): drag a panel by its header to move it, drag the
  * handle at its bottom edge to resize it. A dashed cell shows where it will
@@ -55,6 +58,10 @@
   var RESIZE = "dj-dashboard-grid__panel-resize";
   var DRAGGING = "dj-dashboard-grid__panel--dragging";
   var THRESHOLD = 4;
+  // The largest grid the component renders (MAX_COLUMNS and MAX_ROWS in
+  // dashboard_grid.py); the hook never asks for more.
+  var MAX_COLUMNS = 48;
+  var MAX_ROWS = 100;
   var INTERACTIVE = "a,button,input,select,textarea,label,summary,[contenteditable],[role=button]";
 
   function announce(message) {
@@ -73,22 +80,37 @@
     live.textContent = live.textContent === message ? message + " " : message;
   }
 
+  // The routing context a plain dj-* event carries: the nearest LiveComponent
+  // (data-component-id) and embedded child view (data-djust-embedded) above
+  // the element. Without it an event sent from inside either would reach the
+  // page view instead.
+  function addContext(params, el) {
+    for (var node = el; node && node !== document.body; node = node.parentElement) {
+      var ds = node.dataset || {};
+      if (params.component_id === undefined && ds.componentId) params.component_id = ds.componentId;
+      if (params.view_id === undefined && ds.djustEmbedded) params.view_id = ds.djustEmbedded;
+    }
+  }
+
   // Same public entry point dj-click and dj-viewport use, so the event works
-  // over WebSocket, SSE and HTTP-only, honours strict parameter contracts and
-  // reaches the right view when several are mounted. Falls back to the hook's
-  // own pushEvent when the client API is absent.
+  // over WebSocket, SSE and HTTP-only, honours strict parameter contracts,
+  // reaches the right view when several are mounted, and carries the same
+  // component_id / view_id routing a plain binding on this element would.
+  // Falls back to the hook's own pushEvent when the client API is absent.
   function send(hook, root, eventName, params) {
     var d = window.djust;
     if (d && typeof d.handleEvent === "function") {
       var sent = params;
       if (typeof d._strictBinding === "function") {
-        var strict = d._strictBinding(root, eventName, params, []);
+        var strict = d._strictBinding(root, eventName, params, [], root);
         if (strict === false) return;
         if (strict) sent = strict;
       }
+      if (sent === params) addContext(sent, root);
       if (typeof d._markSlotOf === "function") d._markSlotOf(sent, root);
       d.handleEvent(eventName, sent);
     } else if (typeof hook.pushEvent === "function") {
+      addContext(params, root);
       hook.pushEvent(eventName, params);
     }
   }
@@ -122,7 +144,7 @@
 
   function columnsOf(root) {
     var n = parseInt(root.getAttribute("data-columns"), 10);
-    return n > 0 ? n : 1;
+    return n > 0 ? Math.min(n, MAX_COLUMNS) : 1;
   }
 
   // The numbers the server wrote into the panel's style:
@@ -157,7 +179,7 @@
   // Where a cell may go. A panel may be put one row below the lowest one
   // (that is how a dashboard grows); the server has the last word.
   function limits(root) {
-    return { columns: columnsOf(root), rows: rowCount(root) + 1 };
+    return { columns: columnsOf(root), rows: Math.min(rowCount(root) + 1, MAX_ROWS) };
   }
 
   function fitMove(root, cells, col, row) {
