@@ -1,12 +1,13 @@
 """The `htmlparser.rs` header's version claim and figures must stay true (#2289).
 
 The header used to read "a transcription of CPython 3.12's `html/parser.py`".
-Imprecise in a way that misleads: the HTML5-spec rewrite landed in **3.12.10**,
+Imprecise in a way that misleads: the HTML5-spec rewrite landed in **3.12.12**,
 so 3.12.9 *is* a CPython 3.12 and djust differs from it on a quarter of the
 corpus. A reader on 3.12.9 taking that at its word would expect a match.
 
-The body of the file always got this right — there are 16 separate `3.12.10`
-citations in it. Only the header generalised.
+The original #2289 correction named 3.12.10 in both the header and body.
+#3389 corrects the rewrite release to 3.12.12 and qualifies the older
+3.10/3.11 lines by patch release.
 
 A corrected header is worth little if nothing keeps it correct, so these tests
 recompute the header's own figures and fail when it goes stale. This is the
@@ -44,10 +45,12 @@ def test_the_header_names_the_patch_release_not_the_minor() -> None:
     """The claim the issue is about."""
     text = _header_text()
     assert "CPython 3.12's" not in text, (
-        "the header generalised to 'CPython 3.12' again — 3.12.9 and 3.12.10 "
+        "the header generalised to 'CPython 3.12' again — 3.12.11 and 3.12.12 "
         "are different parsers and djust matches only the latter"
     )
-    assert "3.12.10+" in text
+    assert "3.12.12+" in text
+    assert "3.12.10" not in text
+    assert "before 3.10.19 and 3.11.14" in text
 
 
 def test_the_header_says_the_behaviour_is_pinned_not_host_dependent() -> None:
