@@ -549,6 +549,21 @@ describe('Crop', () => {
         expect(env.sent).toEqual([]);
     });
 
+    it('preserves component and embedded view routing for legacy bindings', async () => {
+        const env = await boot('<section data-djust-embedded="photos"><div data-component-id="editor">' + CROP() + '</div></section>');
+        delete env.window.djust._strictBinding;
+        env.btn('crop').click();
+        expect(env.sent[0].params).toMatchObject({ component_id: 'editor', view_id: 'photos' });
+    });
+
+    it('passes the crop root to strict binding so routing survives parameter filtering', async () => {
+        const env = await boot(CROP());
+        env.window.djust._strictBinding = vi.fn((_el, _event, params, _required, context) => ({ ...params, view_id: context === env.root ? 'photos' : undefined }));
+        env.btn('crop').click();
+        expect(env.sent[0].params.view_id).toBe('photos');
+        expect(env.window.djust._strictBinding.mock.calls[0][4]).toBe(env.root);
+    });
+
     it('falls back to the hook pushEvent when the client API is absent', async () => {
         const env = await boot(CROP(), { image: { nw: 1600, nh: 900, shown: 400 } });
         delete env.window.djust.handleEvent;
