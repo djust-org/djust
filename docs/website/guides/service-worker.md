@@ -271,7 +271,8 @@ Pages that render multiple `dj-lazy` LiveViews used to fire one
 those into a single `mount_batch` frame; the server replies with one
 `mount_batch` carrying every rendered view, and per-view failures are
 isolated in a `failed[]` array — one bad view no longer kills the
-batch.
+batch. A view the user may not see is reported in a `refused[]` array and
+shown in its own container; the page does not navigate.
 
 Each batched view is a LiveView of its own beside the page view and the
 other views: see [Several LiveViews on One Page](multiple-views.md).

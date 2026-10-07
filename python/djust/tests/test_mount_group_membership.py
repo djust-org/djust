@@ -153,7 +153,7 @@ async def test_batch_refused_view_joins_no_groups_and_gets_no_presence_events():
             )
             batch = await _receive_type(communicator, "mount_batch")
             assert [v["target_id"] for v in batch["views"]] == ["b"]
-            assert [n["target_id"] for n in batch.get("navigate", [])] == ["a"]
+            assert [n["target_id"] for n in batch.get("refused", [])] == ["a"]
 
             assert _members(_presence_group(_GatedPresenceView)) == []
             assert _members(_view_group(_GatedPresenceView)) == []
@@ -180,7 +180,7 @@ async def test_batch_object_refusal_leaves_groups_joined_before_mount():
             )
             batch = await _receive_type(communicator, "mount_batch")
             assert [v["target_id"] for v in batch["views"]] == ["b"]
-            assert [f["target_id"] for f in batch["failed"]] == ["a"]
+            assert [f["target_id"] for f in batch["refused"]] == ["a"]
 
             assert _members(_presence_group(_ObjectGatedPresenceView)) == []
             assert _members(_view_group(_ObjectGatedPresenceView)) == []

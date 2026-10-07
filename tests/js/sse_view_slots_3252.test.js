@@ -276,3 +276,21 @@ describe('the page view\'s navigation snapshot', () => {
         expect(page.win.djust._clientState['app.Page']).toBe('page-token');
     });
 });
+
+
+describe('a refused view', () => {
+    it('shows the refusal in its own container, forgets the view and navigates nothing', async () => {
+        const page = await mountedPage();
+        await hydrated(page, 'w1', 'w2');
+        const before = page.win.location.href;
+        await serve(page, {
+            type: 'view_refused', target_id: 'w1', reason: 'login_required',
+            code: 'permission_denied', to: '/accounts/login/',
+        });
+        expect(page.doc.querySelector('#w1 .dj-view-refused a').getAttribute('href'))
+            .toBe('/accounts/login/');
+        expect(page.doc.getElementById('page-text').textContent).toBe('page');
+        expect(page.win.location.href).toBe(before);
+        expect(page.win.djust.viewSlots.mounted()).toEqual(['w2']);
+    });
+});

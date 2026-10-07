@@ -147,6 +147,12 @@ LIVEVIEW_CONFIG = {
     "use_websocket": True,  # Use HTTP-only mode (disable WebSocket)
     "debug_vdom": False,  # Enable detailed VDOM patch logging
 }
+# Re-check a login_required / permission_required view's authority on every event.
+# Absent by default (the key must not exist, so tests can set it themselves);
+# tests/playwright/test_multi_view_refusal.py starts the demo server with
+# DJUST_DEMO_REAUTH_ON_EVENT=1 to revoke a user's permission mid-session.
+if os.environ.get("DJUST_DEMO_REAUTH_ON_EVENT") == "1":
+    LIVEVIEW_CONFIG["reauth_on_event"] = True
 
 # Security: Whitelist allowed modules for LiveView
 # Only views from these modules can be mounted via WebSocket
