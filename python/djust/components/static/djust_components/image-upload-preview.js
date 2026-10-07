@@ -397,7 +397,6 @@
     // --- one thumbnail --------------------------------------------------------
 
     _add: function (file, state, why) {
-      var self = this;
       var item = { id: ++this._seq, file: file, state: state, ref: "", progress: 0, url: "" };
       var li = el("li", "dj-img-upload__item");
       li.setAttribute("data-state", state);
