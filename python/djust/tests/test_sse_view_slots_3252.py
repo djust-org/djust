@@ -185,7 +185,7 @@ async def _post(session, key, body, *, status=200):
 async def _mount(session, key, stream, cls, target_id, **extra):
     frame = {"type": "mount", "view": MOD + "." + cls.__name__, "url": "/page/", "params": {}}
     await _post(session, key, {**frame, "target_id": target_id, **extra})
-    return await _frame(stream, "mount", "error", "navigate")
+    return await _frame(stream, "mount", "error", "navigate", "view_refused")
 
 
 async def _bump(session, key, stream, target_id=None, ref=1):
@@ -279,7 +279,8 @@ async def test_a_view_the_user_may_not_open_is_refused_on_its_own():
     session, key, stream = await _open()
     try:
         reply = await _mount(session, key, stream, Guarded, "g1")
-        assert reply["type"] in ("navigate", "error"), reply
+        # Refused in its own container (#3252): no navigate, no error for the page.
+        assert reply["type"] == "view_refused" and reply["target_id"] == "g1", reply
         assert "g1" not in session._slots
         # The page view and the session are untouched.
         assert session.view_instance is not None and session.active

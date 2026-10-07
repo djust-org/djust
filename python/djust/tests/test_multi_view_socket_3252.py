@@ -637,8 +637,13 @@ async def test_a_view_the_user_may_not_mount_is_refused_and_the_socket_stays_liv
                 "target_id": "guarded",
             }
         )
-        frames = await _frames_until(communicator, "navigate", "error")
-        assert frames[-1]["type"] == "navigate"
+        frames = await _frames_until(communicator, "view_refused", "navigate", "error")
+        # The refusal is that view's alone, shown in its container: no frame
+        # sends the whole page to the login page.
+        assert frames[-1]["type"] == "view_refused", frames
+        assert frames[-1]["target_id"] == "guarded"
+        assert frames[-1]["reason"] == "login_required"
+        assert not any(f["type"] in ("navigate", "error") for f in frames), frames
         assert not _members(_group(Guarded))
         assert CONSUMERS[-1]._slot_map() == {}
         # The page view is still live on the same socket, and the refused view's
@@ -667,7 +672,12 @@ async def test_a_batch_entry_the_user_may_not_mount_fails_alone():
         )
         reply = (await _frames_until(communicator, "mount_batch"))[-1]
         assert [v["target_id"] for v in reply["views"]] == ["ok"]
-        assert reply["navigate"][0]["target_id"] == "g"
+        # Reported for that view alone; nothing navigates the page.
+        assert "navigate" not in reply, reply
+        assert [(r["target_id"], r["reason"]) for r in reply["refused"]] == [
+            ("g", "login_required")
+        ]
+        assert reply["failed"] == []
         assert set(CONSUMERS[-1]._slot_map()) == {"ok"}
         assert (await _event(communicator, "click", target_id="ok"))["type"] != "error"
     finally:
@@ -706,9 +716,12 @@ async def test_an_explicit_view_in_a_slot_is_authorized_on_its_own():
         await communicator.send_json_to(
             {"type": "event", "event": "bump", "params": {}, "target_id": "explicit", "ref": 5}
         )
-        frames = await _frames_until(communicator, "error")
-        assert frames[-1]["code"] == "permission_denied"
-        assert frames[-1]["target_id"] == "explicit"
+        frames = await _frames_until(communicator, "view_refused")
+        errors = [f for f in frames if f["type"] == "error"]
+        assert errors and errors[-1]["code"] == "permission_denied"
+        assert errors[-1]["target_id"] == "explicit"
+        # The view's container shows its own refusal, too.
+        assert frames[-1]["target_id"] == "explicit" and frames[-1]["reason"] == "permission_denied"
         await _until(
             lambda: "explicit" not in CONSUMERS[-1]._slot_map(), "the refused view's teardown"
         )

@@ -96,3 +96,26 @@ class MultiViewUploader(UploadMixin, LiveView):
     def save(self, **kwargs):
         for entry in self.consume_uploaded_entries("doc"):
             self.saved.append("%s (%d bytes)" % (entry.client_name, entry.client_size))
+
+
+class MultiViewGuarded(LiveView):
+    """A lazy view only a signed-in user with a permission may open (#3252): for an anonymous
+    visitor it is refused in its own container; the rest of the page stays live.
+    For a signed-in user it answers a click, and when that user's authority is
+    revoked mid-session (``reauth_on_event`` is on in the demo settings) the next
+    click is refused in this container alone."""
+
+    login_required = True
+    permission_required = "auth.view_user"
+    template = (
+        '<div dj-root><p data-role="secret">members only</p>'
+        '<button data-role="ping" dj-click="ping">ping</button> '
+        '<b data-role="pings">{{ pings }}</b></div>'
+    )
+
+    def mount(self, request, **kwargs):
+        self.pings = 0
+
+    @event_handler
+    def ping(self, **kwargs):
+        self.pings += 1
