@@ -6,3 +6,8 @@
 # both sides' added lines; for an additive changelog that is exactly right.
 CHANGELOG.md merge=union
 RETRO.md merge=union
+
+# Vendored third-party files are hashed (Subresource Integrity, djust.cdx.json) and compared byte for
+# byte by `make vendor-check`: git must never rewrite their line endings, whatever core.autocrlf says.
+python/djust/components/static/djust_components/vendor/** -text
+python/djust/components/static/djust_components/vendor/**/*.LICENSE.txt -text

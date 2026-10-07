@@ -46,6 +46,7 @@ python tests/playwright/test_draft_mode.py
 - **test_embedded_directives.py** - ADR-037 row 20 / #3104: `dj-shortcut`, `dj-click-away`, `dj-paste` and `dj-click` inside an embedded `{% live_render %}` child reach the child over WebSocket, SSE and HTTP-only (`EMBEDDED_BASE`, default `http://localhost:18438`; standalone)
 - **test_cache_decorator.py** - Tests @cache decorator client-side caching
 - **test_draft_mode.py** - Tests DraftModeMixin functionality
+- **test_component_batch5_map_picker_2985.py** - #2985 batch 5 MapPicker hook and its vendored Leaflet in headless Chromium against a real LiveView over WebSocket: Leaflet loaded once and lazily with Subresource Integrity, click/tap/keyboard picking (marker under the pointer, also RTL), validated numbers reaching the server, server position/zoom/unrelated patches/a patch during a drag, resize, toggling the map five times without double-binding, unreachable and offline tiles, no tile request for `tile_url=""`, default OpenStreetMap tiles and attribution, a tampered Leaflet refused, a strict Content-Security-Policy, hostile attribution/label as text, an app's own hook keeping its place, and the same under `ManifestStaticFilesStorage` (hashed names, rewritten stylesheet images); self-contained (`DJUST_SERVER_PYTHON`, optional `CHROMIUM_EXECUTABLE` and `SHOTS_DIR`)
 
 ## Notes
 

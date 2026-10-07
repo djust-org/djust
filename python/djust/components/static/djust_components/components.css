@@ -2342,7 +2342,15 @@ button.rating-star:hover ~ .rating-star { color: hsl(var(--muted-foreground)); }
 
 /* --- Map Picker --- */
 .dj-map-picker { position: relative; border: 1px solid var(--dj-map-picker-border, hsl(var(--border, 214 32% 91%))); border-radius: var(--dj-map-picker-radius, 0.5rem); overflow: hidden; background: var(--dj-map-picker-bg, hsl(var(--muted, 210 40% 96%))); }
+.dj-map-picker { isolation: isolate; }
 .dj-map-picker__map { width: 100%; height: 100%; }
+.dj-map-picker__map:focus-visible { outline: 2px solid var(--dj-map-picker-focus, hsl(var(--ring, 221 83% 53%))); outline-offset: -2px; }
+.dj-map-picker__sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.dj-map-picker__notice { position: absolute; top: 0.5rem; left: 50%; transform: translateX(-50%); z-index: 1000; max-width: calc(100% - 1rem); padding: 0.25rem 0.625rem; border-radius: 0.25rem; background: var(--dj-map-picker-notice-bg, rgb(255 255 255 / 0.92)); color: var(--dj-map-picker-notice-text, #1f2937); font-size: 0.8125rem; line-height: 1.3; text-align: center; box-shadow: 0 1px 4px rgb(0 0 0 / 0.3); }
+.dj-map-picker__notice[hidden] { display: none; }
+.dj-map-picker__coords { direction: ltr; unicode-bidi: isolate; padding: 0.125rem 0.5rem; border-radius: 0.25rem; background: var(--dj-map-picker-notice-bg, rgb(255 255 255 / 0.92)); color: var(--dj-map-picker-notice-text, #1f2937); font: 0.75rem/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; font-variant-numeric: tabular-nums; box-shadow: 0 1px 4px rgb(0 0 0 / 0.3); }
+.dj-map-picker__coords--pending { outline: 2px dashed var(--dj-map-picker-focus, hsl(var(--ring, 221 83% 53%))); outline-offset: 1px; }
+.dj-map-picker__pin { box-sizing: border-box; width: 18px; height: 18px; border-radius: 50%; border: 3px solid #fff; background: var(--dj-map-picker-pin, #2563eb); box-shadow: 0 0 0 1px rgb(0 0 0 / 0.5), 0 1px 4px rgb(0 0 0 / 0.5); }
 
 /* --- Prompt Editor --- */
 .dj-prompt-editor { display: flex; flex-direction: column; gap: 0.75rem; }

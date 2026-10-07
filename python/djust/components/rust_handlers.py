@@ -10393,17 +10393,27 @@ class MapPickerHandler:
         e_class = conditional_escape(str(custom_class))
         e_event = conditional_escape(str(pick_event))
         e_height = conditional_escape(str(height))
+        e_label = conditional_escape(str(kw.get("label", "Map picker")))
 
         cls = "dj-map-picker"
         if e_class:
             cls += f" {e_class}"
 
+        from djust.components.components.map_picker import map_picker_attrs
+
+        extra = map_picker_attrs(
+            kw.get("tile_url"),
+            kw.get("attribution"),
+            kw.get("attribution_url"),
+            kw.get("max_zoom", 19),
+        )
+
         return _safe(
             f'<div class="{cls}" dj-hook="MapPicker" '
             f'data-lat="{lat}" data-lng="{lng}" '
-            f'data-zoom="{zoom}" data-pick-event="{e_event}" '
+            f'data-zoom="{zoom}" data-pick-event="{e_event}"{extra} '
             f'style="height:{e_height}" '
-            f'role="application" aria-label="Map picker">'
+            f'role="application" aria-label="{e_label}">'
             f'<div class="dj-map-picker__map"></div>'
             f"</div>"
         )

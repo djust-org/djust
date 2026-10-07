@@ -81,6 +81,25 @@
         }
       ]
     },
+    "leaflet": {
+      "files": [
+        {
+          "path": "djust_components/vendor/leaflet/leaflet.js",
+          "integrity": "sha384-RlDTp9ZTEa1w1dkAgp9JdVRzgM17EwpjnbZEZoyC8nij6p0/e/VSoJZltPbaAIsl"
+        },
+        {
+          "path": "djust_components/vendor/leaflet/leaflet.css",
+          "integrity": "sha384-Eg+NzzpxiHf8n8FR0ootH/p/s0a33ljAFe4AqhcVbsQfR/WmVsHNIR1Uh37E0omq"
+        }
+      ],
+      "license_file": "djust_components/vendor/leaflet/leaflet.LICENSE.txt",
+      "packages": [
+        {
+          "purl": "pkg:npm/leaflet@1.9.4",
+          "license": "BSD-2-Clause"
+        }
+      ]
+    },
     "markdown-visual": {
       "files": [
         {

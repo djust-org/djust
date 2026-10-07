@@ -13,7 +13,9 @@ PKG = Path(__file__).resolve().parents[1]
 
 
 def test_djust_assets_are_declared_and_clean():
-    assert {"markdown-visual", "highlight.js", "xterm", "admin-css"} <= set(get_registry().assets)
+    assert {"markdown-visual", "highlight.js", "xterm", "leaflet", "admin-css"} <= set(
+        get_registry().assets
+    )
     # The demo project declares no assets of its own, so every message would be djust's.
     assert check_asset_manifests(None) + check_asset_files(None) == []
 
