@@ -1,0 +1,1 @@
+- **Development dependency security:** Update `source-map-js` to 1.2.2, fixing CVE-2026-93749 (indexed source-map offsets can block the build/test event loop).
