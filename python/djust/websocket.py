@@ -3817,11 +3817,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             return pending
         return None
 
-    def _upload_owner(self, ref: Any) -> Any:
-        """The consumer-like whose view registered the upload ``ref`` (the default one if none did)."""
-        owner = self._known_upload_owner(ref)
-        return owner if owner is not None else self._default_consumer()
-
     async def _handle_upload_frame_for_view(self, frame: Dict[str, Any]) -> None:
         """Apply a parsed upload frame to the upload manager of the view ``self`` runs."""
         from .uploads import build_progress_message
