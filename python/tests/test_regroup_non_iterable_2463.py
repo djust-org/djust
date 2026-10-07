@@ -76,6 +76,7 @@ from django.template import Template as DjangoTemplate  # noqa: E402
 from djust import _rust  # noqa: E402
 from djust.mixins.rust_bridge import _collect_safe_keys  # noqa: E402
 from djust.template_tags import _registered_handlers as _LIVE_HANDLERS  # noqa: E402
+from tests.cpython_scalar_names import DECIMAL_TYPE_NAME  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 RENDERER = REPO / "crates" / "djust_templates" / "src" / "renderer.rs"
@@ -430,10 +431,13 @@ class TestWhatThisDeliberatelyDoesNOTClose:
         """Same conversion boundary, benign direction.
 
         A ``Decimal`` crosses the value channel as a JSON NUMBER, so the
-        handler refuses it as a ``float``. Both engines refuse — the verdict
-        agrees, only the type name does not — and #2385's pin explains why the
-        channel deliberately does not send it as a string.
+        handler may refuse it as a ``float``; where it keeps the ``Decimal``
+        the name is the one CPython itself uses, which carries the module only
+        with the C ``_decimal`` accelerator (#3255). Both engines refuse — the
+        verdict agrees, only the type name does not — and #2385's pin explains
+        why the channel deliberately does not send it as a string.
         """
         message = raised_message(REGROUP, {"p": decimal.Decimal("1.5")})
-        assert re.search(r"'(float|decimal\.Decimal)' object is not iterable", message), message
+        names = rf"float|{re.escape(DECIMAL_TYPE_NAME)}"
+        assert re.search(rf"'(?:{names})' object is not iterable", message), message
         assert dj(REGROUP, {"p": decimal.Decimal("1.5")}) == "<<REFUSED>>"
