@@ -9548,20 +9548,29 @@ class SignaturePadNode(template.Node):
 
         disabled_attr = " disabled" if disabled else ""
 
+        from djust.components.components.signature_pad import DEFAULT_MAX_BYTES, pad_extras
+
+        extras = pad_extras(
+            kw.get("max_bytes", DEFAULT_MAX_BYTES), kw.get("label"), kw.get("typed", True)
+        )
+
         return mark_safe(
             f'<div class="{class_str}" dj-hook="SignaturePad" '
             f'data-save-event="{e_event}" '
             f'data-pen-color="{e_color}" '
-            f'data-pen-width="{pw}">'
+            f'data-pen-width="{pw}"{extras.root}>'
             f'<canvas class="dj-signature-pad__canvas" '
             f'width="{w}" height="{h}"'
-            f"{disabled_attr}></canvas>"
+            f"{disabled_attr}{extras.canvas}></canvas>"
             f'<input type="hidden" name="{e_name}" class="dj-signature-pad__value">'
+            f"{extras.typed}"
             f'<div class="dj-signature-pad__actions">'
             f'<button class="dj-signature-pad__clear-btn" type="button">Clear</button>'
+            f"{extras.undo}{extras.toggle}"
             f'<button class="dj-signature-pad__save-btn" type="button"'
             f"{disabled_attr}>Save</button>"
             f"</div>"
+            f"{extras.status}"
             f"</div>"
         )
 

@@ -2007,8 +2007,17 @@ button.rating-star:hover ~ .rating-star { color: hsl(var(--muted-foreground)); }
 
 /* --- Signature Pad --- */
 .dj-signature-pad { display: flex; flex-direction: column; gap: 0.5rem; }
-.dj-signature-pad__canvas { border: 1px solid hsl(var(--border, 214 32% 91%)); border-radius: 0.25rem; cursor: crosshair; touch-action: none; }
-.dj-signature-pad__actions { display: flex; gap: 0.5rem; }
+.dj-signature-pad__canvas { display: block; max-width: 100%; border: 0; box-shadow: inset 0 0 0 1px hsl(var(--border, 214 32% 91%)); border-radius: 0.25rem; cursor: crosshair; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.dj-signature-pad__canvas--typing { cursor: default; }
+.dj-signature-pad__actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.dj-signature-pad__typed { display: block; }
+.dj-signature-pad__typed[hidden] { display: none; }
+.dj-signature-pad__typed-label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.8125rem; color: hsl(var(--muted-foreground, 215 16% 47%)); }
+.dj-signature-pad__typed-input { padding: 0.375rem 0.5rem; border: 1px solid hsl(var(--border, 214 32% 91%)); border-radius: 0.25rem; background: transparent; color: hsl(var(--foreground, 222 47% 11%)); font: inherit; font-size: 1rem; }
+.dj-signature-pad__undo-btn, .dj-signature-pad__mode-btn { padding: 0.375rem 0.75rem; border: 1px solid hsl(var(--border, 214 32% 91%)); border-radius: 0.25rem; background: none; color: inherit; font-size: 0.8125rem; cursor: pointer; }
+.dj-signature-pad__clear-btn:disabled, .dj-signature-pad__undo-btn:disabled, .dj-signature-pad__mode-btn:disabled, .dj-signature-pad__save-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.dj-signature-pad__clear-btn:focus-visible, .dj-signature-pad__undo-btn:focus-visible, .dj-signature-pad__mode-btn:focus-visible, .dj-signature-pad__save-btn:focus-visible, .dj-signature-pad__typed-input:focus-visible { outline: 2px solid var(--dj-signature-pad-focus, hsl(var(--ring, 221 83% 53%))); outline-offset: 2px; }
+.dj-signature-pad__status { min-height: 1.25rem; font-size: 0.8125rem; color: hsl(var(--muted-foreground, 215 16% 47%)); }
 .dj-signature-pad__clear-btn { padding: 0.375rem 0.75rem; border: 1px solid hsl(var(--border, 214 32% 91%)); border-radius: 0.25rem; background: none; font-size: 0.8125rem; cursor: pointer; }
 .dj-signature-pad__save-btn { padding: 0.375rem 0.75rem; border: none; border-radius: 0.25rem; background: hsl(var(--primary, 222 47% 11%)); color: hsl(var(--primary-foreground, 210 40% 98%)); font-size: 0.8125rem; cursor: pointer; }
 .dj-signature-pad--disabled .dj-signature-pad__canvas { cursor: not-allowed; opacity: 0.5; }
