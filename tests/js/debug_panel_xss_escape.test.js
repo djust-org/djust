@@ -220,9 +220,19 @@ describe('client-dev.js toast escapes the message', () => {
         'utf-8'
     );
 
+    beforeEach(() => {
+        // client-dev schedules hot-reload retries and toast dismissal. Keep
+        // those callbacks scoped to this test's window rather than allowing
+        // them to run after the DOM environment is torn down.
+        vi.useFakeTimers();
+    });
+
     afterEach(() => {
         delete window.__pwned;
         document.getElementById('djust-toast-container')?.remove();
+        vi.clearAllTimers();
+        vi.unstubAllGlobals();
+        vi.useRealTimers();
     });
 
     it('renders a djust:error message as text, not markup', () => {
