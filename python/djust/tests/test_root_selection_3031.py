@@ -18,9 +18,11 @@ rest, the first ``dj-root`` wins over the first ``dj-view``.
 element carrying ``data-expect-root`` is the root (``root: null`` means none).
 A page with ``diverges`` lists the locators known NOT to reach that answer,
 because of contexts html5ever reads as text or as a separate fragment
-(``<textarea>``, ``<title>``, ``<template>``, ``<noscript>``, ``<iframe>``,
+(``<title>``, ``<template>``, ``<noscript>``, ``<iframe>``,
 ``<xmp>``) or a void element used as a wrapper; those predate #3031 and are
 pinned as they are rather than fixed here.
+The textarea divergence was corrected in #3302: its RCDATA contents cannot
+declare an inner root, so Python/scanner now agree with browser/html5ever semantics.
 This file checks the Python locator and the Rust VDOM against it; the Rust text
 scanner is checked against the same file by ``cargo test -p djust_live``
 (``dj_root_selection_3031``).

@@ -4646,9 +4646,9 @@ fn find_ci(hay: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
         .map(|p| from + p)
 }
 
-/// If `bytes[i]` (a `<`) opens a region the HTML tokenizer treats as RAW
-/// TEXT — an HTML comment (`<!-- … -->`) or a `<script>` / `<style>`
-/// element — return the byte offset just past the END of that region.
+/// If `bytes[i]` (a `<`) opens an HTML comment, a script/style raw-text
+/// element, or a textarea RCDATA element (entities decode, but tags are text),
+/// return the byte offset just past the END of that region.
 /// Anything tag-shaped inside such a region is text, not markup: a
 /// JavaScript comment reading `<div dj-root>` must neither be selected as
 /// the root nor move the depth counter (#2663). Returns `None` when
@@ -4686,7 +4686,7 @@ fn skip_raw_text_region(bytes: &[u8], i: usize) -> Option<usize> {
                 .map_or(bytes.len(), |end| i + end + 1),
         );
     }
-    for name in [&b"script"[..], &b"style"[..]] {
+    for name in [&b"script"[..], &b"style"[..], &b"textarea"[..]] {
         let after = i + 1 + name.len();
         if after < bytes.len()
             && starts_with_ci(&bytes[i + 1..], name)
@@ -4696,26 +4696,31 @@ fn skip_raw_text_region(bytes: &[u8], i: usize) -> Option<usize> {
                 return Some(bytes.len());
             };
             let open_end = open_end + 1;
-            let mut close = b"</".to_vec();
-            close.extend_from_slice(name);
-            let mut search = open_end;
-            let close_start = loop {
-                let Some(candidate) = find_ci(bytes, search, &close) else {
-                    return Some(bytes.len());
-                };
-                if bytes
-                    .get(candidate + close.len())
-                    .is_some_and(|&c| html_space(c) || matches!(c, b'/' | b'>'))
-                {
-                    break candidate;
-                }
-                search = candidate + close.len();
+            let Some(close_start) = find_text_region_close(bytes, open_end, name) else {
+                return Some(bytes.len());
             };
             let Ok(close_end) = find_open_tag_end(bytes, close_start) else {
                 return Some(bytes.len());
             };
             return Some(close_end + 1);
         }
+    }
+    None
+}
+
+/// RCDATA/raw-text ends at the first matching end-tag token, not a nested tag.
+fn find_text_region_close(bytes: &[u8], from: usize, name: &[u8]) -> Option<usize> {
+    let mut close = b"</".to_vec();
+    close.extend_from_slice(name);
+    let mut search = from;
+    while let Some(candidate) = find_ci(bytes, search, &close) {
+        if bytes
+            .get(candidate + close.len())
+            .is_some_and(|&c| html_space(c) || matches!(c, b'/' | b'>'))
+        {
+            return Some(candidate);
+        }
+        search = candidate + close.len();
     }
     None
 }
@@ -4829,7 +4834,7 @@ fn find_open_tag_end(bytes: &[u8], i: usize) -> Result<usize, usize> {
 /// embedded child's wrapper is never the root, and the first `dj-root` wins
 /// over the first `dj-view`. See [`find_root_open`].
 ///
-/// `<script>` / `<style>` bodies and HTML comments are skipped wholesale
+/// `<script>` / `<style>` bodies, `<textarea>` RCDATA and HTML comments are skipped
 /// in BOTH the locating scan and the balancing walk (#2663) — a tag-like
 /// string inside them is raw text. This mirrors the Python twin
 /// (`mixins/template.py::_mask_for_root_search`), which owns the
@@ -4871,6 +4876,22 @@ fn find_root_open(bytes: &[u8]) -> Option<(usize, Vec<u8>)> {
             continue;
         }
         if let Some(next) = skip_raw_text_region(bytes, i) {
+            // Unlike script/style, textarea is itself a supported root candidate.
+            // Its contents still cannot declare another root.
+            if starts_with_ci(&bytes[i..], b"<textarea") {
+                if let Ok(end) = find_open_tag_end(bytes, i) {
+                    let tag_body = &bytes[i + 1..end];
+                    let marks = root_attrs(tag_body);
+                    if !marks.is_embedded_wrapper() {
+                        if marks.root {
+                            return Some((end + 1, b"textarea".to_vec()));
+                        }
+                        if marks.view && first_view.is_none() {
+                            first_view = Some((end + 1, b"textarea".to_vec()));
+                        }
+                    }
+                }
+            }
             i = next;
             continue;
         }
@@ -4946,6 +4967,9 @@ fn find_root_open(bytes: &[u8]) -> Option<(usize, Vec<u8>)> {
 /// The offset of the `<` of the closing tag that balances the root element
 /// opened just before `open_end`.
 fn find_root_close(bytes: &[u8], open_end: usize, tag_name: &[u8]) -> Option<usize> {
+    if tag_name.eq_ignore_ascii_case(b"textarea") {
+        return find_text_region_close(bytes, open_end, tag_name);
+    }
     // Now walk forward, balancing open/close tags of the same name, to
     // find the matching closing tag. Returns the byte offset of that
     // closing tag's `<`.
@@ -5738,6 +5762,32 @@ mod dj_root_selection_3031 {
                 assert!(got_expected, "{name}: picked {picked:?}");
             }
         }
+    }
+
+    #[test]
+    fn textarea_rcdata_cannot_select_or_close_the_body_root() {
+        for (open, close) in [
+            ("<textarea>", "</textarea>"),
+            ("<TEXTAREA data-note='>'>", "</TeXtArEa >"),
+            ("<textarea/>", "</textarea>"),
+        ] {
+            let html = format!(
+                "<body dj-root>{open}<section dj-root>fake</section></body></textareax>{close}<main>real</main></body>"
+            );
+            let (start, end) = find_dj_root_content_range(&html).expect("body root");
+            assert_eq!(
+                &html[start..end],
+                &html["<body dj-root>".len()..html.len() - "</body>".len()]
+            );
+        }
+        let html = "<body dj-root><textarea dj-root>literal <textarea> text</textarea></body>";
+        let (start, end) = find_dj_root_content_range(html).expect("textarea itself is a root");
+        assert_eq!(&html[start..end], "literal <textarea> text");
+        let html = "<body dj-root><textarea><section dj-root>fake</section>";
+        assert_eq!(
+            find_root_open(html.as_bytes()).expect("body fallback").1,
+            b"body"
+        );
     }
 
     #[test]

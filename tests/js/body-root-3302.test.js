@@ -11,7 +11,7 @@
  * The helpers under test are loaded from the built client bundle.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { JSDOM } from 'jsdom';
 import { readFileSync } from 'fs';
 
@@ -240,5 +240,22 @@ describe('a view container keeps the address the client gave it', () => {
         expect(el.hasAttribute('class')).toBe(false);
         // not a view container: the ordinary rule applies
         expect(el.hasAttribute('data-djust-target')).toBe(false);
+    });
+});
+
+
+describe('prerendered script diagnostics', () => {
+    it('does not warn or rerun a script that ran during page parsing', () => {
+        const w = load('dj-root', '<script dj-id="1">window.__parsedRuns = (window.__parsedRuns || 0) + 1</script>');
+        const own = w.document.querySelector('script');
+        w.djust.markBodyStamped();
+        w.DEBUG_MODE = true;
+        const errors = vi.spyOn(w.console, 'error').mockImplementation(() => {});
+        w.djust._runInsertedScripts(w.document.body, new Set([own]));
+        w.djust._warnDeadScripts(w.document.body);
+        expect(w.__parsedRuns).toBe(1);
+        expect(errors).not.toHaveBeenCalled();
+        errors.mockRestore();
+        w.close();
     });
 });

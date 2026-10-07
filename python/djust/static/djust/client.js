@@ -1024,7 +1024,12 @@ function _runInsertedScripts(container, alreadyRan) {
     for (const old of scripts) {
         // #3302: a script the browser already ran (the prerendered page's own)
         // is not run a second time.
-        if (alreadyRan && alreadyRan.has(old)) continue;
+        if (alreadyRan && alreadyRan.has(old)) {
+            // Share the execution marker with _warnDeadScripts: this node
+            // already executed during parsing, rather than being inserted inert.
+            old.setAttribute('data-djust-script-ran', '');
+            continue;
+        }
         // Skip already-executed scripts (idempotent on reconnect/re-mount)
         // and any djust-managed marker scripts.
         if (old.hasAttribute('data-djust-script-ran')) continue;

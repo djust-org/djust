@@ -243,13 +243,9 @@
   },
   {
    "name": "lookalike_in_textarea",
-   "why": "html5ever (and a browser) read this element's content as text; the Python mask and the text scanner only mask script/style/comments, so they see the lookalike (predates #3031)",
+   "why": "Corrected in #3302: textarea contents are browser RCDATA, not root markup; Python and the native text scanner now agree with html5ever.",
    "html": "<textarea><div dj-root></textarea><div dj-root data-expect-root>m</div>",
-   "root": true,
-   "diverges": [
-    "python",
-    "scanner"
-   ]
+   "root": true
   },
   {
    "name": "lookalike_in_title",

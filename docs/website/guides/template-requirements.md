@@ -56,6 +56,11 @@ When a page has more than one candidate, one rule picks the root, in the Python 
 
 #### A `<body>` root
 
+Literal markup inside a `<textarea>` is text, not an inner root. Python and
+the native root scanner ignore it, matching browser RCDATA parsing. This
+corrects the older `lookalike_in_textarea` corpus divergence; the remaining
+documented tokenizer divergences are unchanged.
+
 With the root on `<body>`, the view owns the elements djust rendered for it and leaves the other children of `<body>` alone: djust's own scripts and debug panel, a dev toolbar, the nodes a browser extension adds. The page's own scripts run once, when the page loads. A few rules follow from sharing `<body>`:
 
 - Put `dj-root` on `<body>` and djust adds the view path (`dj-view="..."`) for you, as it does for any `dj-root`. A valueless `<body dj-view>` has no view path and does not connect, as on any other element.

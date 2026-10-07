@@ -162,7 +162,9 @@ _HTML_SPACE = " \t\n\r\f"
 _COMMENT_CLOSE_RE = re.compile(r"--!?>")
 _RAW_CLOSE_RES = {
     name: re.compile(r"</" + name + r"(?=[ \t\n\r\f/>])", re.IGNORECASE)
-    for name in ("script", "style")
+    # Textarea is RCDATA: entities decode, but tag-shaped contents are text.
+    # For root selection/balancing it has the same closing-tag boundary.
+    for name in ("script", "style", "textarea")
 }
 
 
@@ -268,6 +270,7 @@ def _mask_for_root_search(html: str) -> str:
                         out[attr_end - 1] = " "
             name = re.match(r"</?([^ \t\n\r\f/>]+)", html[i:end])
             if name and name.group(1).lower() in _RAW_CLOSE_RES and nxt != "/":
+                content_start = end
                 raw_close = _RAW_CLOSE_RES[name.group(1).lower()].search(html, end)
                 if raw_close:
                     end, _ = _scan_html_tag(html, raw_close.start())
@@ -275,7 +278,15 @@ def _mask_for_root_search(html: str) -> str:
                         end = n
                 else:
                     end = n
-                out[i:end] = "\x00" * (end - i)
+                if name.group(1).lower() == "textarea":
+                    # The element itself may be a root; only its RCDATA is text.
+                    content_end = raw_close.start() if raw_close else n
+                    out[content_start:content_end] = "\x00" * (content_end - content_start)
+                    # Process the real end tag normally too, so quoted values
+                    # on a parse-error end tag cannot expose phantom roots.
+                    end = content_end
+                else:
+                    out[i:end] = "\x00" * (end - i)
         else:
             i = html.find("<", i + 1)
             continue
@@ -288,7 +299,7 @@ def _search_dj_root_open(html: str, *patterns: "re.Pattern[str]") -> "Optional[r
 
     Tries ``patterns`` in order against a masked copy (see
     :func:`_mask_for_root_search`), so a tag-like string inside
-    ``<script>``/``<style>``/``<!-- -->`` or inside a quoted attribute value
+    ``<script>``/``<style>``/``<textarea>``/``<!-- -->`` or a quoted attribute value
     is never selected. When none matches, ``<body>`` itself is the root if it
     carries the attribute (#3302). The returned match's ``start()``/``end()`` index the
     ORIGINAL string (the mask is length-preserving); do not read ``group()``
