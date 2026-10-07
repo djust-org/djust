@@ -313,6 +313,17 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
             if (globalThis.djustDebug && !data._navigation) console.warn('[LiveView] Response has neither patches nor html!', data);
         }
 
+        // A deferred save's catch-up (or a later committed turn) has reached
+        // this owner's DOM. Do not clear saving status for rejected, malformed
+        // or broadcast frames, which do not confirm this owner's state.
+        if (!data.broadcast && data.source !== 'broadcast' &&
+            ((Array.isArray(data.patches)) || data.html)) {
+            window.dispatchEvent(new CustomEvent('djust:rendered', {detail: {
+                view: typeof data.view === 'string' ? data.view : (transport?.primaryViewPath || null),
+                target_id: typeof data.target_id === 'string' ? data.target_id : null,
+            }}));
+        }
+
         // Handle form reset
         if (data.reset_form) {
             if (globalThis.djustDebug) console.log('[LiveView] Resetting form');
