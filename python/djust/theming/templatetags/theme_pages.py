@@ -30,7 +30,7 @@ from django.utils.safestring import SafeString, mark_safe
 
 from ..manager import get_theme_config
 from ..template_resolver import resolve_page_template
-from .theme_components import _check_url
+from .theme_components import _neutralise_url
 
 register = template.Library()
 
@@ -128,9 +128,9 @@ def theme_login_page(
         {% theme_login_page action="/auth/login/" forgot_password_url="/reset/" register_url="/register/" %}
     """
     slots, remaining_attrs = _extract_slots(attrs)
-    _check_url("action", action)
-    _check_url("forgot_password_url", forgot_password_url)
-    _check_url("register_url", register_url)
+    action = _neutralise_url("action", action)
+    forgot_password_url = _neutralise_url("forgot_password_url", forgot_password_url)
+    register_url = _neutralise_url("register_url", register_url)
     if form is not None:
         return _kit_card(context, form, "login", title, action, "Sign in", slots)
     request = context.get("request")
@@ -175,9 +175,9 @@ def theme_register_page(
         {% theme_register_page action="/auth/register/" login_url="/login/" terms_url="/terms/" %}
     """
     slots, remaining_attrs = _extract_slots(attrs)
-    _check_url("action", action)
-    _check_url("login_url", login_url)
-    _check_url("terms_url", terms_url)
+    action = _neutralise_url("action", action)
+    login_url = _neutralise_url("login_url", login_url)
+    terms_url = _neutralise_url("terms_url", terms_url)
     if form is not None:
         return _kit_card(context, form, "signup", title, action, "Create account", slots)
     request = context.get("request")
@@ -222,8 +222,8 @@ def theme_password_reset_page(
         {% theme_password_reset_page action="/auth/reset/" login_url="/login/" %}
     """
     slots, remaining_attrs = _extract_slots(attrs)
-    _check_url("action", action)
-    _check_url("login_url", login_url)
+    action = _neutralise_url("action", action)
+    login_url = _neutralise_url("login_url", login_url)
     if form is not None:
         return _kit_card(
             context, form, "password_reset", title, action, "Send reset instructions", slots
@@ -268,7 +268,7 @@ def theme_password_confirm_page(
         {% theme_password_confirm_page action="/auth/confirm/" %}
     """
     slots, remaining_attrs = _extract_slots(attrs)
-    _check_url("action", action)
+    action = _neutralise_url("action", action)
     if form is not None:
         return _kit_card(
             context, form, "password_reset_confirm", title, action, "Set password", slots
@@ -315,7 +315,7 @@ def theme_404_page(
     slots, remaining_attrs = _extract_slots(attrs)
     request = context.get("request")
     tmpl = resolve_page_template(request, "404")
-    _check_url("home_url", home_url)
+    home_url = _neutralise_url("home_url", home_url)
     ctx = {
         "title": title,
         "description": description,
@@ -352,8 +352,8 @@ def theme_500_page(
     slots, remaining_attrs = _extract_slots(attrs)
     request = context.get("request")
     tmpl = resolve_page_template(request, "500")
-    _check_url("home_url", home_url)
-    _check_url("retry_url", retry_url)
+    home_url = _neutralise_url("home_url", home_url)
+    retry_url = _neutralise_url("retry_url", retry_url)
     ctx = {
         "title": title,
         "description": description,
@@ -389,7 +389,7 @@ def theme_403_page(
     slots, remaining_attrs = _extract_slots(attrs)
     request = context.get("request")
     tmpl = resolve_page_template(request, "403")
-    _check_url("back_url", back_url)
+    back_url = _neutralise_url("back_url", back_url)
     ctx = {
         "title": title,
         "description": description,
@@ -462,7 +462,7 @@ def theme_empty_state_page(
     slots, remaining_attrs = _extract_slots(attrs)
     request = context.get("request")
     tmpl = resolve_page_template(request, "empty_state")
-    _check_url("cta_url", cta_url)
+    cta_url = _neutralise_url("cta_url", cta_url)
     ctx = {
         "title": title,
         "description": description,
