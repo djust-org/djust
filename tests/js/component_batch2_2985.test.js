@@ -888,14 +888,25 @@ describe('AnimatedNumber', () => {
     const text = (env) => env.$('.dj-animated-number__value').textContent;
     const wait = (env, ms) => new Promise((resolve) => env.window.setTimeout(resolve, ms));
 
-    it('counts up from zero and ends on the exact text the server rendered', async () => {
-        const env = boot(NUMBER({ duration: 120 }), 'animated-number.js');
-        expect(text(env)).toBe('0.0'); // the starting frame is shown at once, not the final number
-        await wait(env, 60);
+    it('counts up from zero and ends on the exact text the server rendered', () => {
+        const frames = [];
+        const env = boot(NUMBER({ duration: 120 }), 'animated-number.js', {
+            preRegister(window) {
+                window.requestAnimationFrame = (callback) => {
+                    frames.push(callback);
+                    return frames.length;
+                };
+            },
+        });
+        expect(text(env)).toBe('0.0');
+        // Supply animation timestamps directly; scheduling delays cannot turn
+        // the intermediate-frame assertion into a final-frame assertion.
+        frames.shift()(0);
+        frames.shift()(60);
         const mid = parseFloat(text(env).replace(/,/g, ''));
         expect(mid).toBeGreaterThan(0);
         expect(mid).toBeLessThan(1234.5);
-        await wait(env, 200);
+        frames.shift()(120);
         expect(text(env)).toBe('1,234.5');
     });
 
