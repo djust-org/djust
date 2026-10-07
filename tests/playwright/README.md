@@ -65,3 +65,5 @@ For automated testing, see:
 - `tests/e2e/` - E2E pytest tests (included in CI)
 - `tests/unit/` - Unit tests (included in CI)
 - `tests/js/` - JavaScript tests (included in CI)
+
+- `test_component_batch5_voice_2985.py`: VoiceInput browser UI and real LiveView/WebSocket transcript delivery. Simulates SpeechRecognition callbacks; does not open a microphone or validate vendor recognition services. Covers final/interim delivery, focus/teardown aborts, permission feedback, unsupported API, escaped transcripts and custom hooks.
