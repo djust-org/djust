@@ -316,6 +316,21 @@ describe('a click or tap picks a location', () => {
         expect(env.marker().lat).toBeCloseTo(10, 6);
     });
 
+    it('preserves component and embedded-view notification addresses', async () => {
+        const env = await boot('<section data-djust-embedded="child"><div data-component-id="map">' + MAP() + '</div></section>');
+        delete env.window.djust._strictBinding;
+        env.click(1, 2);
+        expect(env.sent[0].params).toMatchObject({ component_id: 'map', view_id: 'child' });
+    });
+
+    it('passes the map root to strict binding', async () => {
+        const env = await boot(MAP());
+        env.window.djust._strictBinding = vi.fn((_el, _event, params, _required, context) => ({ ...params, view_id: context === env.$('#m1') ? 'child' : undefined }));
+        env.click(1, 2);
+        expect(env.sent[0].params.view_id).toBe('child');
+        expect(env.window.djust._strictBinding.mock.calls[0][4]).toBe(env.$('#m1'));
+    });
+
     it('goes through the strict-parameter gate like dj-click, and honours a veto', async () => {
         const env = await boot(MAP());
         env.window.djust._strictBinding = vi.fn(() => false);
