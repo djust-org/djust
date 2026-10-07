@@ -53,6 +53,9 @@ class Terminal(Component):
         wrap: wrap long lines (default False)
         custom_class: additional CSS classes
         max_lines: keep at most this many lines when streaming (0 = unlimited)
+        auto_scroll: follow the newest line while streaming (default True; False
+            leaves the scroll position alone; the follow also stops by itself
+            when the reader scrolls up)
     """
 
     ANSI_RE = re.compile(r"\033\[([0-9;]*)m")
@@ -84,6 +87,7 @@ class Terminal(Component):
         wrap: bool = False,
         custom_class: str = "",
         max_lines: int = 0,
+        auto_scroll: bool = True,
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -94,6 +98,7 @@ class Terminal(Component):
             wrap=wrap,
             custom_class=custom_class,
             max_lines=max_lines,
+            auto_scroll=auto_scroll,
             **kwargs,
         )
         self.output = output or []
@@ -103,6 +108,7 @@ class Terminal(Component):
         self.wrap = wrap
         self.custom_class = custom_class
         self.max_lines = max_lines
+        self.auto_scroll = auto_scroll
 
     @classmethod
     def _ansi_to_html(cls, text: str) -> str:
@@ -184,6 +190,8 @@ class Terminal(Component):
             max_lines = 0
         if max_lines > 0:
             hook_attrs += f' data-max-lines="{max_lines}"'
+        if not self.auto_scroll:
+            hook_attrs += ' data-auto-scroll="false"'
 
         return (
             f'<div class="{class_str}" dj-hook="Terminal"{stream_attr}{hook_attrs}>'

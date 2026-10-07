@@ -5,12 +5,13 @@ These decorators make LiveView code more elegant and explicit by marking
 event handlers, reactive state, and computed properties.
 """
 
-import asyncio
 import functools
 import logging
 import threading
 import types
 from typing import Callable, Any, TypeVar, Union, cast, List, Optional, Literal, overload
+
+from asgiref.sync import iscoroutinefunction
 
 from ._deprecation import warn_deprecated
 from ._state import StateProperty as StateProperty
@@ -1370,7 +1371,7 @@ def background(func: F) -> F:
     failures.
     """
 
-    if asyncio.iscoroutinefunction(func):
+    if iscoroutinefunction(func):
         # Async handler: closure is itself async so _run_async_work can
         # detect it via iscoroutinefunction and await it directly.
         @functools.wraps(func)

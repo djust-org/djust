@@ -23,6 +23,7 @@ either; what a slot gets is its own mount, events, async work, saved state and
 teardown.
 """
 
+import asyncio
 import logging
 from typing import Any, Dict, Optional
 
@@ -47,6 +48,12 @@ class SSESlotSession:
         self._replacing_view = False
         #: True once the slot's ``mount`` frame has been sent.
         self.mount_sent = False
+        #: What serializes this view's renders (event turns, background
+        #: results); the view's own, so a slow turn in another view does not
+        #: hold it up (#3252).
+        self._render_lock = asyncio.Lock()
+        #: The POST request of the turn being dispatched for this view.
+        self._event_request: Optional[Any] = None
 
     # -- what differs for a slot -------------------------------------------
 
@@ -84,14 +91,6 @@ class SSESlotSession:
 
     # -- the session's own state, shared by every view on it ---------------
 
-    @property
-    def _event_request(self) -> Optional[Any]:
-        return self._parent._event_request
-
-    @_event_request.setter
-    def _event_request(self, value: Optional[Any]) -> None:
-        self._parent._event_request = value
-
     def __getattr__(self, name: str) -> Any:
         # Only called when normal lookup fails: the render lock, the rate
         # limiter, the client address, the owner binding, ... belong to the
@@ -102,12 +101,15 @@ class SSESlotSession:
 class SSESlot:
     """One view mounted on an SSE session besides the page view."""
 
-    __slots__ = ("target_id", "session", "runtime")
+    __slots__ = ("target_id", "session", "runtime", "dispatch_lock")
 
     def __init__(self, session: Any, target_id: str) -> None:
         from .runtime import SSESessionTransport, ViewRuntime
 
         self.target_id = target_id
+        #: One turn of this view at a time (its events, its unmount); other
+        #: views' turns run beside it.
+        self.dispatch_lock = asyncio.Lock()
         self.session = SSESlotSession(session, target_id)
         self.runtime = ViewRuntime(
             SSESessionTransport(self.session), rate_limiter=session._rate_limiter

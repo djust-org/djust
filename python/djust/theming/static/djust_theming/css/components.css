@@ -1071,7 +1071,7 @@
     font-size: 0.75rem;
     line-height: 1rem;
     white-space: nowrap;
-    color: hsl(var(--primary-foreground));
+    color: hsl(var(--background));
     background-color: hsl(var(--foreground));
     border-radius: var(--radius);
     pointer-events: none;

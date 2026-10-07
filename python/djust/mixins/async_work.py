@@ -27,7 +27,7 @@ import inspect
 import logging
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from asgiref.sync import sync_to_async
+from asgiref.sync import iscoroutinefunction, sync_to_async
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +101,7 @@ async def run_async_callback(
     if cancelled():
         raise asyncio.CancelledError
     try:
-        if asyncio.iscoroutinefunction(callback):
+        if iscoroutinefunction(callback):
             result = await callback(*args, **(kwargs or {}))
         else:
             result = await sync_to_async(callback)(*args, **(kwargs or {}))
