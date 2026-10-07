@@ -144,29 +144,74 @@ describe('LogViewer: only the reader leaves the bottom (input, not the drop alon
         });
     }
 
+    const stamped = (window, type, ts) => {
+        const e = new window.Event(type, { bubbles: true });
+        Object.defineProperty(e, 'timeStamp', { value: ts });
+        return e;
+    };
+    const dropAt = (body, st, window, top, ts) => { st.top = top; body.dispatchEvent(stamped(window, 'scroll', ts)); };
+
     it('a drop more than 600 ms after the last input does not unpin', async () => {
+        const { window, body, st, push, bottom, top, scroll } = boot();
+        push(['T1', 'T2', 'T3', 'T4']);
+        await frame(window);
+        scroll(bottom());
+        body.dispatchEvent(stamped(window, 'wheel', 1000));
+        await frame(window);
+        dropAt(body, st, window, 100, 1700);
+        expect(await follows(window, push, top, bottom)).toBe(true);
+    });
+
+
+    it('a main-thread stall between the input and the scroll handlers does not separate them (event times, not the clock at handling)', async () => {
         const { window, body, st, push, bottom, top, scroll } = boot();
         const t = { now: 1000 };
         window.Date.now = () => t.now;
         push(['T1', 'T2', 'T3', 'T4']);
         await frame(window);
         scroll(bottom());
-        input(window, body, 'wheel');
-        t.now += 700;
-        drop(body, st, window, 100);
-        expect(await follows(window, push, top, bottom)).toBe(true);
+        body.dispatchEvent(stamped(window, 'wheel', 1000));
+        await frame(window); // a frame has gone by: only the events' times can tie the two together
+        t.now += 5000; // the page was busy for 5 s before the scroll event was handled
+        dropAt(body, st, window, 100, 1030); // but the scroll happened 30 ms after the wheel
+        expect(await follows(window, push, top, bottom)).toBe(false);
     });
 
     it('a held pointer (a scrollbar drag) counts however long it is held', async () => {
         const { window, body, st, push, bottom, top, scroll } = boot();
-        const t = { now: 1000 };
-        window.Date.now = () => t.now;
         push(['T1', 'T2', 'T3', 'T4']);
         await frame(window);
         scroll(bottom());
-        input(window, body, 'pointerdown');
-        t.now += 5000;
-        drop(body, st, window, 100);
+        body.dispatchEvent(stamped(window, 'pointerdown', 1000));
+        dropAt(body, st, window, 100, 6000);
         expect(await follows(window, push, top, bottom)).toBe(false);
+    });
+
+    it('destroying the hook removes every listener it added (element and document)', () => {
+        const { window, body } = boot();
+        // boot() mounted already; count by wrapping before a second mount is not possible,
+        // so check behaviourally on the real registry: listeners added after tracking, removed on destroy
+        const doc = window.document;
+        const root = doc.querySelector('.dj-log-viewer');
+        const live = [];
+        const wrap = (target) => {
+            const add = target.addEventListener.bind(target);
+            const remove = target.removeEventListener.bind(target);
+            target.addEventListener = (type, fn, opts) => { live.push({ target, type, fn, cap: !!(opts === true || (opts && opts.capture)) }); return add(type, fn, opts); };
+            target.removeEventListener = (type, fn, opts) => {
+                const cap = !!(opts === true || (opts && opts.capture));
+                const i = live.findIndex((l) => l.target === target && l.type === type && l.fn === fn && l.cap === cap);
+                if (i >= 0) live.splice(i, 1);
+                return remove(type, fn, opts);
+            };
+        };
+        wrap(doc);
+        wrap(root);
+        window.djust.destroyAllHooks();
+        window.djust.mountHooks(); // adds its listeners through the wrapped targets
+        expect(live.some((l) => l.target === doc && l.type === 'pointerup')).toBe(true);
+        expect(live.some((l) => l.target === root && l.type === 'wheel')).toBe(true);
+        window.djust.destroyAllHooks();
+        expect(live.map((l) => `${l.target === doc ? 'document' : 'root'}:${l.type}`)).toEqual([]);
     });
 });

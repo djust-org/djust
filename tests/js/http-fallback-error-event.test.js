@@ -30,7 +30,7 @@ it('dispatches djust:error with the server error body', async () => {
         ok: false, status: 500,
         json: async () => ({error: 'Error in View.save(): RuntimeError: boom', traceback: 'tb'}),
     });
-    expect(errors).toEqual([{error: 'Error in View.save(): RuntimeError: boom', code: null, traceback: 'tb'}]);
+    expect(errors).toEqual([{error: 'Error in View.save(): RuntimeError: boom', code: null, transient: false, view: 'test.View', target_id: null, traceback: 'tb'}]);
 });
 
 it('falls back to the status when the body is not JSON', async () => {
@@ -43,4 +43,21 @@ it('falls back to the status when the body is not JSON', async () => {
 it('a successful response dispatches nothing', async () => {
     const errors = await failingEvent({ok: true, status: 200, json: async () => ({patches: []})});
     expect(errors).toEqual([]);
+});
+
+it('preserves only boolean transient metadata for server state errors', async () => {
+    for (const flag of [true, false, 'true', 1]) {
+        const errors = await failingEvent({ok: false, status: 503,
+            json: async () => ({error: 'still saving', code: 'state_error', transient: flag}),
+        });
+        expect(errors[0].transient).toBe(flag === true);
+    }
+});
+
+it('preserves the server view and target for HTTP errors', async () => {
+    const errors = await failingEvent({ok: false, status: 503,
+        json: async () => ({error: 'saving', code: 'state_error', transient: true,
+            view: 'other.View', target_id: 'child'}),
+    });
+    expect(errors[0]).toMatchObject({transient: true, view: 'other.View', target_id: 'child'});
 });

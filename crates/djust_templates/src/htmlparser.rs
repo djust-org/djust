@@ -13,15 +13,17 @@
 //!
 //! # Fidelity
 //!
-//! This is a transcription of the **CPython 3.12.10+ / 3.13** `html/parser.py`,
-//! including the parts that look like bugs.
+//! This is a transcription of the **CPython 3.12.12+ / 3.13** `html/parser.py`,
+//! including the parts that look like bugs, plus the RAWTEXT element expansion
+//! from 3.12.13.
 //!
 //! The precision matters, and "CPython 3.12" would not be precise enough to be
-//! true. The HTML5-spec rewrite landed in **3.12.10**, so 3.12.9 *is* a CPython
+//! true. The HTML5-spec rewrite landed in **3.12.12**, so 3.12.9 *is* a CPython
 //! 3.12 and djust differs from it on a quarter of the corpus — a reader on
 //! 3.12.9 taking a looser header at its word would expect a match and not get
-//! one. `requires-python` is `>=3.10`, so 3.10 and 3.11 are supported too and
-//! carry the same pre-rewrite parser.
+//! one. `requires-python` is `>=3.10`, so 3.10 and 3.11 are supported too;
+//! their patch releases before 3.10.19 and 3.11.14 carry the pre-rewrite parser.
+//! Those two releases received the same HTML5-spec rewrite backports.
 //!
 //! Measured over the 4000 values in the fixture named below, rendering
 //! `{{ p|striptags }}` and comparing against each interpreter's recorded answer
@@ -92,7 +94,7 @@ use crate::truncate::py_is_space;
 
 /// HTML5 "ASCII whitespace" — `[\t\n\r\f ]`.
 ///
-/// CPython's tag regexes used `\s` until the 3.12.10 spec alignment, which is
+/// CPython's tag regexes used `\s` until the 3.12.12 spec alignment, which is
 /// a WIDER set: it also matches `\v` and, on `str` patterns, every Unicode
 /// space. `py_is_space` is still correct for the two places CPython kept `\s`
 /// (`unescape`, and the `[\s;]` probe that became `[\t\n\r\f ;]`), so the
@@ -321,7 +323,7 @@ fn prev_char(s: &str, i: usize) -> Option<char> {
 /// `locatetagend.match(rawdata, pos)` -> `m.end()`, where `pos` is the offset
 /// of the tag NAME (after `<` or `</`).
 ///
-/// Replaces the pre-3.12.10 `locatestarttagend_tolerant`. The important
+/// Replaces the pre-3.12.12 `locatestarttagend_tolerant`. The important
 /// structural change is the trailing `>?`: the regex always matches (the tag
 /// name is already known to start with a letter), and the caller decides
 /// whether the tag was terminated by testing `rawdata[j-1] == '>'`, rather
@@ -449,7 +451,7 @@ fn tagfind(s: &str, pos: usize) -> Option<(String, usize)> {
         return None;
     }
     let mut p = pos + 1;
-    // `[^\t\n\r\f />]*` — `\x00` left the exclusion set in 3.12.10.
+    // `[^\t\n\r\f />]*` — `\x00` left the exclusion set in 3.12.12.
     while let Some(c) = char_at(s, p) {
         if is_html_space(c) || c == '/' || c == '>' {
             break;
@@ -464,7 +466,7 @@ fn tagfind(s: &str, pos: usize) -> Option<(String, usize)> {
 /// `parse_comment`'s close: `commentclose = --!?>` searched from `from`, and
 /// if that fails `commentabruptclose = -?>` ANCHORED at `from`.
 ///
-/// Before 3.12.10 this was `--\s*>`, so `<!-- x -- >` closed the comment and
+/// Before 3.12.12 this was `--\s*>`, so `<!-- x -- >` closed the comment and
 /// `<!-->` did not. Both flipped: whitespace between `--` and `>` no longer
 /// closes, and the abrupt forms `<!-->` / `<!--->` now do.
 fn comment_close(s: &str, from: usize) -> Option<usize> {
@@ -495,7 +497,7 @@ fn comment_close(s: &str, from: usize) -> Option<usize> {
 
 /// `HTMLParser.check_for_whole_start_tag`.
 ///
-/// Since 3.12.10 this is three lines: run `locatetagend` from the character
+/// Since 3.12.12 this is three lines: run `locatetagend` from the character
 /// after `<` and accept only if the match ends on a `>`. The old version's
 /// five-way lookahead (`=` and a letter meaning "incomplete", a bare
 /// character meaning "stop here") is gone, which is why an unterminated
@@ -539,10 +541,10 @@ fn parse_html_declaration(s: &str, i: usize) -> i64 {
     //
     // This replaces a port of `_markupbase.parse_marked_section`, which
     // raises `AssertionError` on an unrecognised section keyword — CPython
-    // dropped it in the 3.12.10 spec alignment, and djust's fail-soft stand-in
+    // dropped it in the 3.12.12 spec alignment, and djust's fail-soft stand-in
     // discarded the whole rest of the input rather than resuming after the
     // section. `strip_tags("x&&&one;<![</p>")` was `"x&&&one;<![</p>"` and is
-    // now `"x&&&one;"`, matching every CPython from 3.12.10 on.
+    // now `"x&&&one;"`, matching every CPython from 3.12.12 on.
     s[i + 2..]
         .find('>')
         .map(|o| (i + 2 + o + 1) as i64)
@@ -551,7 +553,7 @@ fn parse_html_declaration(s: &str, i: usize) -> i64 {
 
 /// `set_cdata_mode`'s `interesting`, searched: `</{elem}(?=[\t\n\r\f />])`.
 ///
-/// Before 3.12.10 this was `</\s*{elem}\s*>`, which required the `>` to be
+/// Before 3.12.12 this was `</\s*{elem}\s*>`, which required the `>` to be
 /// present and tolerated whitespace after `</`. Neither holds now, so
 /// `<style></b<<a href="a>b">` leaves CDATA mode at a different offset — the
 /// value that caught this port mid-way.
@@ -713,7 +715,7 @@ fn incomplete_match(s: &str, i: usize) -> Option<usize> {
 /// `HTMLParser.CDATA_CONTENT_ELEMENTS` — RAWTEXT: the body is text, and
 /// character references in it are NOT resolved.
 ///
-/// 3.12.10 widened this from `("script", "style")`.
+/// 3.12.13 widened this from `("script", "style")` (gh-137836).
 const RAWTEXT_ELEMENTS: [&str; 7] = [
     "script",
     "style",
@@ -740,7 +742,7 @@ pub(crate) struct Tokenizer<'a, S: Sink> {
     raw: &'a str,
     convert_charrefs: bool,
     /// `HTMLParser._escapable`: false only inside a RAWTEXT element. Was
-    /// `not self.cdata_elem` until 3.12.10 introduced RCDATA, where the body
+    /// `not self.cdata_elem` until 3.12.12 introduced RCDATA, where the body
     /// is opaque to markup but NOT to character references.
     escapable: bool,
     /// How much of `raw` a previous `goahead` consumed. CPython carries the
@@ -991,7 +993,7 @@ impl<'a, S: Sink> Tokenizer<'a, S> {
     /// The `if k < 0:` branch of `goahead(1)` — an unterminated construct at
     /// end of input.
     ///
-    /// Until CPython 3.12.10 this scanned forward for a `>` or a `<` and
+    /// Until CPython 3.12.12 this scanned forward for a `>` or a `<` and
     /// emitted whatever it spanned as **data**. It now dispatches on what the
     /// construct was trying to be, hands the fragment to that construct's
     /// handler, and consumes the rest of the input either way.
@@ -1073,7 +1075,7 @@ impl<'a, S: Sink> Tokenizer<'a, S> {
 
     /// `HTMLParser.parse_endtag`.
     ///
-    /// Rewritten in 3.12.10 against "13.2.5.7 End tag open state". Two
+    /// Rewritten in 3.12.12 against "13.2.5.7 End tag open state". Two
     /// behaviours the old version had are gone: it no longer emits a
     /// mismatched end tag as DATA while in CDATA mode (the CDATA
     /// `interesting` regex means only the matching element's tag gets here),
@@ -1431,7 +1433,7 @@ mod tests {
         assert_eq!(strip_tags("<i>&amp--</i>"), "&amp--;");
     }
 
-    /// GATE-OFF for `finish_incomplete_construct`: restore the pre-3.12.10
+    /// GATE-OFF for `finish_incomplete_construct`: restore the pre-3.12.12
     /// "scan to the next `>` or `<` and emit the span as data" recovery and
     /// every discard here reddens.
     ///
@@ -1441,7 +1443,7 @@ mod tests {
     /// single shape that is still data, and it is here so the discard cannot
     /// be implemented as an unconditional `Ok(())`.
     ///
-    /// Every expectation below is identical on CPython 3.12.10+, 3.13 and
+    /// Every expectation below is identical on CPython 3.12.12+, 3.13 and
     /// 3.14 — deliberately, since these run unconditionally on every runner.
     /// The shapes 3.13 and 3.14 disagree on are `&` / `&#` at END OF INPUT,
     /// and they are in the version-dependent fixture instead. Checked
@@ -1470,7 +1472,7 @@ mod tests {
 
     /// GATE-OFF for the comment-close rewrite: `commentclose` went from
     /// `--\s*>` to `--!?>`, and `commentabruptclose = -?>` was added, in the
-    /// 3.12.10 spec alignment. Removing the `!` or the abrupt fallback
+    /// 3.12.12 spec alignment. Removing the `!` or the abrupt fallback
     /// reddens a row here.
     ///
     /// Added because the gate-off found both mechanisms unreachable from the
@@ -1522,7 +1524,7 @@ mod tests {
     /// `parse_marked_section` port's `-1` and these reddens.
     ///
     /// That port refused unrecognised section keywords, which under
-    /// `goahead(1)` discarded the rest of the input; CPython 3.12.10 replaced
+    /// `goahead(1)` discarded the rest of the input; CPython 3.12.12 replaced
     /// `parse_marked_section` with "run to the next `>`", so parsing resumes
     /// after the section. It also removes the `AssertionError` that Django
     /// used to raise on these values — 496 cells of the #2273 differential

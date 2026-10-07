@@ -339,8 +339,15 @@ class TestTheDocCommentsCountsAreTrue:
             "not monotonic, so one of its numbers is wrong"
         )
         assert "**11130**" in doc
-        assert max(counts) - min(counts) == 11130, (
-            f"the doc claims a spread of 11130 but its own table spans {max(counts) - min(counts)}"
+        # 11130 is the 13.0 -> 16.0 spread (CPython 3.10-3.14). Later rows (3.15,
+        # Unicode 17.0, #3255) extend the table without changing that figure.
+        matrix = [
+            int(count)
+            for version, count in rows
+            if tuple(int(part) for part in version.split(".")) <= (16, 0, 0)
+        ]
+        assert max(matrix) - min(matrix) == 11130, (
+            f"the doc claims a spread of 11130 but its own table spans {max(matrix) - min(matrix)}"
         )
 
 

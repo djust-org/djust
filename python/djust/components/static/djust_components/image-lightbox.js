@@ -167,9 +167,8 @@
         if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey) return;
         if (e.key === "Escape") {
           e.preventDefault();
-          // djust's own modal handling (keyboard-nav) would also react to
-          // Escape in a role=dialog by clicking the first dj-click control it
-          // finds (here the backdrop): the close event would be sent twice.
+          // Only the top dialog owns Escape; ancestor and window shortcuts
+          // must not act on the same consumed key.
           e.stopPropagation();
           self._press("dj-lightbox__close");
         } else if (e.key === "ArrowLeft") {
@@ -184,7 +183,6 @@
           });
           if (!items.length) {
             e.preventDefault();
-            e.stopPropagation();
             self._focus(root);
             return;
           }
@@ -193,11 +191,9 @@
           var active = document.activeElement;
           if (e.shiftKey && (active === first || active === root || !root.contains(active))) {
             e.preventDefault();
-            e.stopPropagation();
             self._focus(last);
           } else if (!e.shiftKey && (active === last || !root.contains(active))) {
             e.preventDefault();
-            e.stopPropagation();
             self._focus(first);
           }
         }
