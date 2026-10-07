@@ -107,6 +107,7 @@ from django.template import Context as DjangoContext  # noqa: E402
 from django.template import Template as DjangoTemplate  # noqa: E402
 
 from djust import _rust  # noqa: E402
+from tests.cpython_scalar_names import DECIMAL_TYPE_NAME  # noqa: E402
 
 XSS = "<img src=x onerror=alert(1)>"
 
@@ -425,7 +426,8 @@ class TestIteratingANonIterableIsRefusedByBoth:
             (0, "int"),
             (12345678901234567890, "int"),
             (1.5, "float"),
-            (Decimal("2.5"), "decimal.Decimal"),
+            # Derived, not literal — see `DECIMAL_TYPE_NAME` (#3255).
+            (Decimal("2.5"), DECIMAL_TYPE_NAME),
         ],
     )
     def test_the_message_is_djangos_own(self, value, type_name) -> None:

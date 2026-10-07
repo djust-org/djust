@@ -72,6 +72,7 @@ from django.template import Context as DjangoContext
 from django.template import Template as DjangoTemplate
 
 from djust import _rust
+from tests.cpython_scalar_names import DECIMAL_TYPE_NAME
 
 SRC = "{% for x in p %}[{{ x }}]{% empty %}E{% endfor %}"
 
@@ -186,16 +187,17 @@ class TestBothEnginesRefuseANonIterable:
         )
 
     def test_the_type_name_is_pythons_not_the_rust_variants(self) -> None:
-        """Four Rust variants, four Python names — and two of the four spell
+        """Four Rust variants, four Python names — and one of the four spells
         something the variant's own name does not: a `Value::BigInt` is a
-        Python `int`, and a `Decimal` is qualified because `decimal` is not a
-        builtin."""
+        Python `int`. `Decimal`'s spelling is ASKED of CPython rather than
+        listed, because it carries its module only when the C `_decimal`
+        accelerator is installed (#3255)."""
         expected = {
             True: "bool",
             42: "int",
             12345678901234567890: "int",
             1.5: "float",
-            decimal.Decimal("2.5"): "decimal.Decimal",
+            decimal.Decimal("2.5"): DECIMAL_TYPE_NAME,
         }
         for value, type_name in expected.items():
             out = djust_out({"p": value})
