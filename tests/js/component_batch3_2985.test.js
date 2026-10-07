@@ -927,13 +927,13 @@ describe('Tour', () => {
             expect(log).toEqual([]);
         });
 
-        it('Escape is marked handled (preventDefault), which is how djust\'s own modal handler knows to skip it', () => {
+        it('Escape is consumed by the tour rather than propagated to page shortcuts', () => {
             for (const markup of [TOUR({ step: 1 }), TOUR({ step: 0 }).replace(/<button class="dj-tour__skip".*?<\/button>/, '')]) {
                 const env = tourEnv(markup);
                 const reached = [];
                 env.window.document.addEventListener('keydown', (e) => reached.push([e.key, e.defaultPrevented]));
                 key(env.window, pop(env), 'Escape');
-                expect(reached).toEqual([['Escape', true]]);
+                expect(reached).toEqual([]);
             }
         });
 

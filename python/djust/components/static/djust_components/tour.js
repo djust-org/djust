@@ -338,6 +338,9 @@
       var last = step === total - 1;
       if (e.key === "Escape") {
         e.preventDefault();
+          // Only the top dialog owns Escape; ancestor and window shortcuts
+          // must not act on the same consumed key.
+          e.stopPropagation();
         if (child(root, "dj-tour__skip")) this._press("dj-tour__skip");
         else if (last) this._press("dj-tour__next");
       } else if (e.key === "ArrowRight") {

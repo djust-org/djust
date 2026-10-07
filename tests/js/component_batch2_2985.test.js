@@ -368,7 +368,7 @@ describe('ImageLightbox', () => {
         expect(env.window.document.body.style.overflow).toBe('auto');
     });
 
-    it('Escape and a wrapping Tab are marked handled (preventDefault), which is how djust\'s own modal handler knows to skip them', () => {
+    it('Escape belongs to the top dialog while a wrapping Tab may propagate', () => {
         const env = boot('<button id="behind">b</button>' + LIGHTBOX(), 'image-lightbox.js');
         const reached = [];
         env.window.document.addEventListener('keydown', (e) => reached.push([e.key, e.defaultPrevented]));
@@ -378,7 +378,20 @@ describe('ImageLightbox', () => {
         key(env.window, next, 'Tab'); // wraps
         env.$('.dj-lightbox__prev').focus();
         key(env.window, env.$('.dj-lightbox__prev'), 'Tab'); // inside: left to the browser (and core)
-        expect(reached).toEqual([['Escape', true], ['Tab', true], ['Tab', false]]);
+        expect(reached).toEqual([['Tab', true], ['Tab', false]]);
+    });
+
+    it('does not deliver consumed Escape to ancestor or window shortcut listeners', () => {
+        const env = boot('<section id="outer">' + LIGHTBOX() + '</section>', 'image-lightbox.js');
+        const close = clicks(env);
+        const outer = vi.fn();
+        const shortcut = vi.fn();
+        env.$('#outer').addEventListener('keydown', outer);
+        env.window.addEventListener('keydown', shortcut);
+        key(env.window, env.$('.dj-lightbox__close'), 'Escape');
+        expect(close).toEqual(['close']);
+        expect(outer).not.toHaveBeenCalled();
+        expect(shortcut).not.toHaveBeenCalled();
     });
 
     it('does not double-bind after repeated patches', () => {
@@ -886,14 +899,25 @@ describe('AnimatedNumber', () => {
     const text = (env) => env.$('.dj-animated-number__value').textContent;
     const wait = (env, ms) => new Promise((resolve) => env.window.setTimeout(resolve, ms));
 
-    it('counts up from zero and ends on the exact text the server rendered', async () => {
-        const env = boot(NUMBER({ duration: 120 }), 'animated-number.js');
-        expect(text(env)).toBe('0.0'); // the starting frame is shown at once, not the final number
-        await wait(env, 60);
+    it('counts up from zero and ends on the exact text the server rendered', () => {
+        const frames = [];
+        const env = boot(NUMBER({ duration: 120 }), 'animated-number.js', {
+            preRegister(window) {
+                window.requestAnimationFrame = (callback) => {
+                    frames.push(callback);
+                    return frames.length;
+                };
+            },
+        });
+        expect(text(env)).toBe('0.0');
+        // Supply animation timestamps directly; scheduling delays cannot turn
+        // the intermediate-frame assertion into a final-frame assertion.
+        frames.shift()(0);
+        frames.shift()(60);
         const mid = parseFloat(text(env).replace(/,/g, ''));
         expect(mid).toBeGreaterThan(0);
         expect(mid).toBeLessThan(1234.5);
-        await wait(env, 200);
+        frames.shift()(120);
         expect(text(env)).toBe('1,234.5');
     });
 

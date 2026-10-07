@@ -167,6 +167,9 @@
         if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey) return;
         if (e.key === "Escape") {
           e.preventDefault();
+          // Only the top dialog owns Escape; ancestor and window shortcuts
+          // must not act on the same consumed key.
+          e.stopPropagation();
           self._press("dj-lightbox__close");
         } else if (e.key === "ArrowLeft") {
           e.preventDefault();
