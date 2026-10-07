@@ -24,7 +24,7 @@ function findPageViewContainer() {
     // Not a view that hydrates beside the page view (`dj-lazy`, or mounted at a
     // `data-djust-target`, #3252): it is not the page.
     return document.querySelector(
-        '[dj-view]:not([dj-sticky-root]):not([data-djust-embedded]):not([dj-lazy]):not([data-djust-target])');
+        '[dj-view]:not(html):not(head):not([dj-sticky-root]):not([data-djust-embedded]):not([dj-lazy]):not([data-djust-target])');
 }
 
 /**
@@ -78,6 +78,21 @@ function _stampEmbeddedWrapperDjIds(liveContainer, serverTemplate) {
 }
 
 /**
+ * The scripts inside `container`. For a `<body>` root (#3302) the scripts of
+ * its foreign children (djust's own client scripts, extension nodes) are not
+ * the view's: they ran when the page loaded and must not run again.
+ */
+function _containerScripts(container) {
+    const scripts = Array.from(container.querySelectorAll('script'));
+    if (container !== document.body || !pageRootIsBody()) return scripts;
+    return scripts.filter((el) => {
+        let top = el;
+        while (top.parentNode && top.parentNode !== document.body) top = top.parentNode;
+        return !isForeignBodyChild(top);
+    });
+}
+
+/**
  * #1848: re-execute classic <script> tags inside a freshly-mounted/morphed
  * container so inline page JS inside the dj-root actually runs.
  *
@@ -104,15 +119,26 @@ function _stampEmbeddedWrapperDjIds(liveContainer, serverTemplate) {
  *
  * @param {Element} container - the mounted/morphed container to scan.
  */
-function _runInsertedScripts(container) {
+// Presence before a body mount establishes retention, not execution. Keep
+// this distinct from the marker on scripts djust actually reinserted to run.
+const _retainedMountScripts = new WeakSet();
+
+function _runInsertedScripts(container, retainedBefore) {
     if (!container || typeof container.querySelectorAll !== 'function') return;
     let scripts;
     try {
-        scripts = container.querySelectorAll('script');
+        scripts = _containerScripts(container);
     } catch (_err) {
         return;
     }
     for (const old of scripts) {
+        // #3302: retain these nodes without executing them. They may have run
+        // during parsing OR been inserted inert before the mount.
+        if (retainedBefore && retainedBefore.has(old)) {
+            _retainedMountScripts.add(old);
+            continue;
+        }
+        if (_retainedMountScripts.has(old)) continue;
         // Skip already-executed scripts (idempotent on reconnect/re-mount)
         // and any djust-managed marker scripts.
         if (old.hasAttribute('data-djust-script-ran')) continue;
@@ -153,6 +179,8 @@ function _runInsertedScripts(container) {
  *  - Scripts already re-executed by `_runInsertedScripts()` — marked
  *    `data-djust-script-ran` (the mount / `live_redirect` re-execution path
  *    documented above, #1635/#1650 lineage).
+ *  - Retained body-mount scripts get an honest unknown-status warning instead:
+ *    DOM presence does not establish whether the browser executed them.
  *  - `type="djust/hook"` colocated-hook payload scripts — extracted (never
  *    meant to run as a script) by `extractColocatedHooks()` in
  *    32-colocated-hooks.js.
@@ -170,7 +198,7 @@ function _warnDeadScripts(root) {
     if (!root || typeof root.querySelectorAll !== 'function') return;
     let scripts;
     try {
-        scripts = root.querySelectorAll('script');
+        scripts = _containerScripts(root);
     } catch (_err) {
         return;
     }
@@ -189,6 +217,16 @@ function _warnDeadScripts(root) {
         const label = el.getAttribute('src')
             || (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 60)
             || '(empty inline script)';
+        if (_retainedMountScripts.has(el)) {
+            console.warn(
+                '[djust] Retained <script> execution status is unknown (%s). ' +
+                'It was present before the mount and was not rerun: parser-created scripts ' +
+                'may have executed, while innerHTML-created scripts remain inert. ' +
+                'Use a {% colocated_hook %} for initialization after DOM updates.',
+                label
+            );
+            continue;
+        }
         console.error(
             '[djust] <script> inserted by a DOM morph/patch will NOT execute (%s). ' +
             'Browsers treat innerHTML/morph-inserted <script> tags as inert. ' +
@@ -243,7 +281,12 @@ function _morphPrerenderedMount(container, html, formRecoverySnapshot, restoreDr
     const temp = document.createElement('div');
     // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
     temp.innerHTML = html;
+    // #3302: scripts retained from the body must not be rerun. DOM presence
+    // alone cannot distinguish parser-executed scripts from inert ones.
+    const retainedBefore = (container === document.body && pageRootIsBody())
+        ? new Set(_containerScripts(container)) : null;
     morphChildren(container, temp);
+    if (retainedBefore) markBodyStamped();
     // The morph resets form fields to the server's values; put a saved draft
     // back into this container before form recovery, which restores what the
     // user had typed (#3351). Only a FIRST mount does: a reconnect's mount
@@ -262,7 +305,7 @@ function _morphPrerenderedMount(container, html, formRecoverySnapshot, restoreDr
     _stampEmbeddedWrapperDjIds(container, temp);
     // #1848: morphChildren re-creates inline <script> nodes inert. Re-run
     // classic page scripts inside the dj-root so their init runs on mount.
-    _runInsertedScripts(container);
+    _runInsertedScripts(container, retainedBefore);
     // #2058: anything _runInsertedScripts() didn't re-execute gets a loud
     // DEBUG-mode warning instead of silently staying dead.
     _warnDeadScripts(container);
@@ -751,7 +794,7 @@ class LiveViewWebSocket {
                     // path (~line 641).
                     if (hasDataDjAttrs && data.html) {
                         const _morphContainer = findPageViewContainer()
-                                            || document.querySelector('[dj-root]');
+                                            || document.querySelector('[dj-root]:not(html):not(head)');
                         if (_morphContainer) {
                             _morphPrerenderedMount(_morphContainer, data.html, formRecoverySnapshot);
                             if (globalThis.djustDebug) console.log('[LiveView] Morphed pre-rendered DOM against WS-mount HTML (#1610)');
@@ -873,11 +916,11 @@ class LiveViewWebSocket {
                     // selection via the shared helper (#2632).
                     let container = findPageViewContainer();
                     if (!container) {
-                        container = document.querySelector('[dj-root]');
+                        container = document.querySelector('[dj-root]:not(html):not(head)');
                     }
                     if (container) {
                         // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
-                        container.innerHTML = data.html;
+                        replaceContainerHtml(container, data.html);
                         if (formRecoverySnapshot) window.djust._restoreFormRecovery(formRecoverySnapshot);
                         // #1848: innerHTML never executes inserted <script>.
                         // Re-run classic page scripts inside the dj-root so

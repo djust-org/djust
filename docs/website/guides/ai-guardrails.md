@@ -231,7 +231,7 @@ Templates:
 | `djust.T015` | Warning | `legacy '<attribute>' attribute detected.` | Yes |
 | `djust.T018` | Warning | `template references undefined variable '<name>' at line <line> (<template>) -- it resolves to nothing and renders as empty string, with no error.` | Yes |
 | `djust.T024` | Warning | `` `<path>` is always empty in a LiveView template: djust never serializes `<field>`. `` | No (main) |
-| `djust.T025` | Warning | `'<attribute>' is on <<tag>>. The HTTP render is complete, but the WebSocket mount keeps only the first element inside <body>, so the live page silently loses the rest.` | No (main) |
+| `djust.T025` | Warning | `'<attribute>' is on <<tag>>, which is not supported and is ignored: no live view is mounted and the page stays a plain HTTP page. Put it on <body> or a <div>.` | No (main) |
 
 Event bindings compare every literal `dj-*` binding in a template with the handler it names:
 
@@ -254,7 +254,7 @@ Authentication and exposure:
 | `djust.S012` | Error | `LiveView <name> gates auth via @method_decorator(..., name='dispatch'); this is NOT enforced over WebSocket (only on the HTTP GET).` | Yes |
 | `djust.S013` | Warning | `<view> lets any user who can open the view edit any <model> by its id.` | No (1.3) |
 
-`T024` reports `request.user.is_staff`, `is_superuser` and `password` (and a `{% with %}` alias of a user) in a template a LiveView renders. djust never serializes those three fields, so the expression is always empty and a `{% if request.user.is_staff %}` block never shows. It looks only at paths through a `user` variable, so a form field named `password` is not reported. `T025` reports `dj-root` or `dj-view` on `<html>`, `<head>` or `<body>`. The HTTP render of such a page is complete, but over the WebSocket only the first element inside `<body>` mounts.
+`T024` reports `request.user.is_staff`, `is_superuser` and `password` (and a `{% with %}` alias of a user) in a template a LiveView renders. djust never serializes those three fields, so the expression is always empty and a `{% if request.user.is_staff %}` block never shows. It looks only at paths through a `user` variable, so a form field named `password` is not reported. `T025` reports `dj-root` or `dj-view` on `<html>` or `<head>`. Neither can be a root, so djust ignores it: the page renders as usual, no live view is mounted, and it stays a plain HTTP page; `<body>` is a supported root.
 
 The binding checks (`T019` to `T022`) read templates through a Django template engine. In 1.3.0rc6 and earlier, a project whose `TEMPLATES` setting listed only `DjustTemplateBackend` (the layout `djust new` writes) got no binding findings. From **main** the scan builds a compile-only engine from the Djust backend's directories, libraries and builtins, so that layout is checked too. If neither a `DjangoTemplates` nor a Djust backend gives an engine, or the engine cannot be built, the checks do not run and `djust.T023` says so at info level. What the checks cannot decide from the source is reported as dynamic or unsupported in the coverage object of `manage.py djust_check --format json`, not guessed. A single finding can be silenced with a `{# noqa: T019 -- reason #}` comment, and the comment needs a reason. `T024` and `T025` take the same comment.
 

@@ -255,8 +255,9 @@ class TestEveryRootLocatorUsesTheMaskedSearch:
         src = self._source()
         calls = src.count("_search_dj_root_open(") - src.count("def _search_dj_root_open(")
         # get_template's source pick, arender_chunks, the streaming splitter,
-        # render_full_template step 3, and the four extraction helpers.
-        assert calls == 8, calls
+        # render_full_template step 3, the four extraction helpers, and
+        # `_stamp_dj_view`, which asks it whether `<body>` is the root (#3302).
+        assert calls == 9, calls
 
     def test_the_depth_walk_ignores_markup_owned_by_values_and_comments(self):
         for tag in ("div", "main"):

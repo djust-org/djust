@@ -243,13 +243,30 @@
   },
   {
    "name": "lookalike_in_textarea",
-   "why": "html5ever (and a browser) read this element's content as text; the Python mask and the text scanner only mask script/style/comments, so they see the lookalike (predates #3031)",
+   "why": "Corrected in #3302: textarea contents are browser RCDATA, not root markup; Python and the native text scanner now agree with html5ever.",
    "html": "<textarea><div dj-root></textarea><div dj-root data-expect-root>m</div>",
+   "root": true
+  },
+  {
+   "name": "textarea_incomplete_end_token",
+   "why": "An end-tag name plus whitespace at EOF is not a complete token; the root exists but its content range is unavailable.",
+   "html": "<textarea dj-root data-expect-root>text</textarea ",
    "root": true,
-   "diverges": [
-    "python",
-    "scanner"
-   ]
+   "content": null
+  },
+  {
+   "name": "textarea_unterminated_end_attribute",
+   "why": "An unterminated quoted end-tag attribute discards the token at EOF; Python and the native scanner reject its closing range.",
+   "html": "<textarea dj-root data-expect-root>text</textarea x='unfinished",
+   "root": true,
+   "content": null
+  },
+  {
+   "name": "textarea_complete_end_attribute",
+   "why": "Parsed control: ignored end-tag attributes do not invalidate a complete closing token.",
+   "html": "<textarea dj-root data-expect-root>text</textarea x='ignored'>",
+   "root": true,
+   "content": "text"
   },
   {
    "name": "lookalike_in_title",
@@ -365,10 +382,9 @@
   },
   {
    "name": "body_dj_root",
-   "why": "#3302: a root on <body> is not a root",
-   "html": "<html><head></head><body dj-root><header>H</header><main>M</main></body></html>",
-   "root": null,
-   "vdom_fallback_tag": "header"
+   "why": "#3302: <body> is a root; its children are the page's top-level siblings",
+   "html": "<html><head></head><body dj-root data-expect-root><header>H</header><main>M</main></body></html>",
+   "root": true
   },
   {
    "name": "head_dj_view",
@@ -399,6 +415,92 @@
    "name": "lt_before_non_tag_char",
    "why": "'<' not followed by a letter, '/' or '!' is text (#3030)",
    "html": "<p>a < b</p><div dj-root data-expect-root>m</div>",
+   "root": true
+  },
+  {
+   "name": "body_dj_view_is_a_root",
+   "why": "#3302: <body dj-view> is a root",
+   "html": "<html><head></head><body dj-view=\"a.B\" data-expect-root><header>H</header><main>M</main></body></html>",
+   "root": true
+  },
+  {
+   "name": "body_dj_view_loses_to_an_inner_dj_root",
+   "why": "an inner dj-root still beats a <body dj-view>, so pages that already work keep their root",
+   "html": "<html><head></head><body dj-view=\"a.B\"><header>H</header><main dj-root data-expect-root>M</main></body></html>",
+   "root": true
+  },
+  {
+   "name": "an_inner_dj_root_beats_a_body_dj_root",
+   "why": "<body> is the root of last resort: a root inside it wins, so a page that already works keeps its root",
+   "html": "<html><head></head><body dj-root><main dj-root data-expect-root>M</main></body></html>",
+   "root": true
+  },
+  {
+   "name": "an_inner_dj_view_beats_a_body_dj_view",
+   "why": "same for dj-view",
+   "html": "<html><head></head><body dj-view=\"a.B\"><main dj-view=\"c.D\" data-expect-root>M</main></body></html>",
+   "root": true
+  },
+  {
+   "name": "body_root_with_embedded_child",
+   "why": "a body root does not claim the embedded child's boundary (#3031 ownership)",
+   "html": "<html><head></head><body dj-view=\"a.B\" data-expect-root><header>H</header><div dj-view data-djust-embedded=\"c1\"><div dj-root>C</div></div></body></html>",
+   "root": true
+  },
+  {
+   "name": "body_root_fragment_without_html_wrapper",
+   "why": "the extracted <body> element on its own",
+   "html": "<body dj-root data-expect-root><p>a</p><p>b</p></body>",
+   "root": true
+  },
+  {
+   "name": "body_with_lookalike_attributes",
+   "why": "body attributes that merely contain the words are not roots",
+   "html": "<html><head></head><body dj-view-transitions class=\"dj-root\" title=\"dj-view\"><header>H</header></body></html>",
+   "root": null,
+   "vdom_fallback_tag": "header"
+  },
+  {
+   "name": "html_dj_root_with_body_root",
+   "why": "an <html> root is ignored; the <body> root is found",
+   "html": "<html dj-root><head></head><body dj-view=\"a.B\" data-expect-root><header>H</header></body></html>",
+   "root": true
+  },
+  {
+   "name": "body_dj_root_with_an_inner_dj_view",
+   "why": "an inner dj-view beats <body dj-root> too: the page that worked before keeps its root",
+   "html": "<html><head></head><body dj-root><main dj-view=\"c.D\" data-expect-root>M</main></body></html>",
+   "root": true
+  },
+  {
+   "name": "body_root_with_lazy_views",
+   "why": "a lazy view is another view's container: it does not take the page's root from <body>",
+   "html": "<html><head></head><body dj-root data-expect-root><header>H</header><div id=\"w1\" dj-view=\"a.W\" dj-lazy=\"idle\"></div><div id=\"w2\" dj-view=\"a.W\" dj-lazy></div></body></html>",
+   "root": true
+  },
+  {
+   "name": "page_root_with_lazy_views",
+   "why": "lazy views beside the page root",
+   "html": "<div dj-view=\"p.P\" data-expect-root>P</div><div dj-view=\"a.W\" dj-lazy=\"click\"><p>click</p></div>",
+   "root": true
+  },
+  {
+   "name": "lazy_view_before_the_page_root",
+   "why": "a lazy view that precedes the root is not the root",
+   "html": "<div dj-view=\"a.W\" dj-lazy=\"idle\"></div><div dj-root data-expect-root>P</div>",
+   "root": true
+  },
+  {
+   "name": "only_a_lazy_view_has_no_root",
+   "why": "a lazy container alone is not a page root",
+   "html": "<p>x</p><div dj-view=\"a.W\" dj-lazy=\"idle\"></div>",
+   "root": null,
+   "vdom_fallback_tag": "p"
+  },
+  {
+   "name": "lazy_marker_in_an_attribute_value",
+   "why": "the word inside a value is text",
+   "html": "<div dj-view=\"p.P\" title=\"dj-lazy\" data-expect-root>P</div>",
    "root": true
   }
  ]

@@ -29,7 +29,7 @@ They share one connection, a WebSocket or (when WebSocket is off or blocked) an 
 <div id="chat" dj-view="myapp.views.ChatWidget" dj-lazy="click"></div>
 ```
 
-Put a lazy container **beside** the page view's `dj-root`, as in the example, not inside it. A page mount morphs the root's content and strips the `data-djust-target` the client set on a container inside it, so the lazy view's mount reply finds no target (the client logs `mount: target not found` and unmounts it).
+Put a lazy container **beside** the page view's `dj-root`, as in the example, where the layout allows it. A container inside the root also works (the client keeps the `data-djust-target` it set when a page mount morphs the root's content), which is what a [`<body>` root](template-requirements.md#a-body-root) needs: every lazy view is inside `<body>`. Before 1.3 a page mount stripped that address from a container inside the root, so the lazy view's mount reply found no target (the client logged `mount: target not found` and unmounted it).
 
 ## What each view gets
 

@@ -170,3 +170,49 @@ def test_unicode_casefold_does_not_make_text_into_an_html_tag():
     assert match.start() == len(prefix)
     assert TemplateMixin()._extract_liveview_content(html) == "real"
     assert TemplateMixin._stamp_dj_view(html, "views.Page").startswith(prefix)
+
+
+@pytest.mark.parametrize(
+    "opening,closing",
+    [
+        ("<textarea>", "</textarea>"),
+        ("<TEXTAREA data-note='>'>", "</TeXtArEa >"),
+        ("<textarea/>", "</textarea>"),
+    ],
+)
+def test_body_root_ignores_textarea_fake_roots(opening, closing):
+    html = (
+        "<body dj-root>"
+        + opening
+        + "<section dj-root>fake</section></textareax>"
+        + closing
+        + "<main>real</main></body>"
+    )
+    match = _search_dj_root_open(html, _DJ_ROOT_RE, _DJ_VIEW_RE)
+    assert match is not None and match.start() == 0
+    stamped = TemplateMixin._stamp_dj_view(html, "views.Page")
+    assert stamped == html.replace("<body dj-root>", '<body dj-root dj-view="views.Page">', 1)
+
+
+def test_unterminated_textarea_contains_no_real_inner_root():
+    html = "<body dj-root><textarea><section dj-root>fake</section>"
+    match = _search_dj_root_open(html, _DJ_ROOT_RE, _DJ_VIEW_RE)
+    assert match is not None and match.start() == 0
+    assert TemplateMixin._stamp_dj_view(html, "views.Page") == html.replace(
+        "<body dj-root>", '<body dj-root dj-view="views.Page">', 1
+    )
+
+
+def test_textarea_itself_remains_a_root_candidate():
+    html = "<body dj-root><textarea dj-root>literal <textarea> text</textarea></body>"
+    match = _search_dj_root_open(html, _DJ_ROOT_RE, _DJ_VIEW_RE)
+    assert match is not None and html[match.start() : match.end()] == "<textarea dj-root>"
+    assert TemplateMixin()._extract_liveview_content(html) == "literal <textarea> text"
+
+
+def test_textarea_end_tag_attributes_do_not_expose_a_phantom_root():
+    html = (
+        '<body dj-root><textarea>text</textarea title="<section dj-root>"><main>real</main></body>'
+    )
+    match = _search_dj_root_open(html, _DJ_ROOT_RE, _DJ_VIEW_RE)
+    assert match is not None and match.start() == 0

@@ -18,9 +18,11 @@ rest, the first ``dj-root`` wins over the first ``dj-view``.
 element carrying ``data-expect-root`` is the root (``root: null`` means none).
 A page with ``diverges`` lists the locators known NOT to reach that answer,
 because of contexts html5ever reads as text or as a separate fragment
-(``<textarea>``, ``<title>``, ``<template>``, ``<noscript>``, ``<iframe>``,
+(``<title>``, ``<template>``, ``<noscript>``, ``<iframe>``,
 ``<xmp>``) or a void element used as a wrapper; those predate #3031 and are
 pinned as they are rather than fixed here.
+The textarea divergence was corrected in #3302: its RCDATA contents cannot
+declare an inner root, so Python/scanner now agree with browser/html5ever semantics.
 This file checks the Python locator and the Rust VDOM against it; the Rust text
 scanner is checked against the same file by ``cargo test -p djust_live``
 (``dj_root_selection_3031``).
@@ -37,7 +39,7 @@ from django.test import override_settings
 
 from djust import LiveView
 from djust._rust import RustLiveView
-from djust.mixins.template import _DJ_ROOT_RE, _DJ_VIEW_RE, _search_dj_root_open
+from djust.mixins.template import _DJ_ROOT_RE, _DJ_VIEW_RE, _find_root_close, _search_dj_root_open
 
 _CORPUS = json.loads(
     (Path(__file__).resolve().parents[2] / "tests/fixtures/root_selection_3031.json").read_text()
@@ -99,6 +101,18 @@ def test_python_and_rust_agree_on_every_corpus_page(case):
         assert py.lower().startswith("<" + name)
     else:
         assert _MARK not in attrs
+
+
+@pytest.mark.parametrize("case", [c for c in _CORPUS if "content" in c], ids=lambda c: c["name"])
+def test_corpus_root_content_requires_a_complete_end_token(case):
+    html = case["html"]
+    opening = _search_dj_root_open(html, _DJ_ROOT_RE, _DJ_VIEW_RE)
+    assert opening is not None
+    start, end = _find_root_close(html, opening)
+    if case["content"] is None:
+        assert (start, end) == (None, None)
+    else:
+        assert html[opening.end() : start] == case["content"]
 
 
 class TestIssue3031Scenario:

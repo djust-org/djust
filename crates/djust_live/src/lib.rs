@@ -4646,9 +4646,9 @@ fn find_ci(hay: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
         .map(|p| from + p)
 }
 
-/// If `bytes[i]` (a `<`) opens a region the HTML tokenizer treats as RAW
-/// TEXT — an HTML comment (`<!-- … -->`) or a `<script>` / `<style>`
-/// element — return the byte offset just past the END of that region.
+/// If `bytes[i]` (a `<`) opens an HTML comment, a script/style raw-text
+/// element, or a textarea RCDATA element (entities decode, but tags are text),
+/// return the byte offset just past the END of that region.
 /// Anything tag-shaped inside such a region is text, not markup: a
 /// JavaScript comment reading `<div dj-root>` must neither be selected as
 /// the root nor move the depth counter (#2663). Returns `None` when
@@ -4686,7 +4686,7 @@ fn skip_raw_text_region(bytes: &[u8], i: usize) -> Option<usize> {
                 .map_or(bytes.len(), |end| i + end + 1),
         );
     }
-    for name in [&b"script"[..], &b"style"[..]] {
+    for name in [&b"script"[..], &b"style"[..], &b"textarea"[..]] {
         let after = i + 1 + name.len();
         if after < bytes.len()
             && starts_with_ci(&bytes[i + 1..], name)
@@ -4696,26 +4696,31 @@ fn skip_raw_text_region(bytes: &[u8], i: usize) -> Option<usize> {
                 return Some(bytes.len());
             };
             let open_end = open_end + 1;
-            let mut close = b"</".to_vec();
-            close.extend_from_slice(name);
-            let mut search = open_end;
-            let close_start = loop {
-                let Some(candidate) = find_ci(bytes, search, &close) else {
-                    return Some(bytes.len());
-                };
-                if bytes
-                    .get(candidate + close.len())
-                    .is_some_and(|&c| html_space(c) || matches!(c, b'/' | b'>'))
-                {
-                    break candidate;
-                }
-                search = candidate + close.len();
+            let Some(close_start) = find_text_region_close(bytes, open_end, name) else {
+                return Some(bytes.len());
             };
             let Ok(close_end) = find_open_tag_end(bytes, close_start) else {
                 return Some(bytes.len());
             };
             return Some(close_end + 1);
         }
+    }
+    None
+}
+
+/// RCDATA/raw-text ends at the first matching end-tag token, not a nested tag.
+fn find_text_region_close(bytes: &[u8], from: usize, name: &[u8]) -> Option<usize> {
+    let mut close = b"</".to_vec();
+    close.extend_from_slice(name);
+    let mut search = from;
+    while let Some(candidate) = find_ci(bytes, search, &close) {
+        if bytes
+            .get(candidate + close.len())
+            .is_some_and(|&c| html_space(c) || matches!(c, b'/' | b'>'))
+        {
+            return Some(candidate);
+        }
+        search = candidate + close.len();
     }
     None
 }
@@ -4732,14 +4737,16 @@ struct RootAttrs {
     root: bool,
     view: bool,
     embedded: bool,
+    lazy: bool,
 }
 
 impl RootAttrs {
-    /// An embedded `{% live_render %}` child's wrapper: `dj-view` together
-    /// with `data-djust-embedded` (sticky or not). Its subtree belongs to the
-    /// child, so it is never claimed as the parent's root (#3031).
+    /// A container of ANOTHER view: an embedded `{% live_render %}` child's
+    /// wrapper (`dj-view` + `data-djust-embedded`, sticky or not) or a lazy
+    /// view's container (`dj-view` + `dj-lazy`). Its subtree belongs to that
+    /// view, so it is never claimed as the parent's root (#3031, #3302).
     fn is_embedded_wrapper(self) -> bool {
-        self.view && self.embedded
+        self.view && (self.embedded || self.lazy)
     }
 }
 
@@ -4751,6 +4758,7 @@ fn root_attrs(tag_body: &[u8]) -> RootAttrs {
             found.root |= name.eq_ignore_ascii_case(b"dj-root");
             found.view |= name.eq_ignore_ascii_case(b"dj-view");
             found.embedded |= name.eq_ignore_ascii_case(b"data-djust-embedded");
+            found.lazy |= name.eq_ignore_ascii_case(b"dj-lazy");
         }
     }
     found
@@ -4826,7 +4834,7 @@ fn find_open_tag_end(bytes: &[u8], i: usize) -> Result<usize, usize> {
 /// embedded child's wrapper is never the root, and the first `dj-root` wins
 /// over the first `dj-view`. See [`find_root_open`].
 ///
-/// `<script>` / `<style>` bodies and HTML comments are skipped wholesale
+/// `<script>` / `<style>` bodies, `<textarea>` RCDATA and HTML comments are skipped
 /// in BOTH the locating scan and the balancing walk (#2663) — a tag-like
 /// string inside them is raw text. This mirrors the Python twin
 /// (`mixins/template.py::_mask_for_root_search`), which owns the
@@ -4845,7 +4853,8 @@ fn find_dj_root_content_range(html: &str) -> Option<(usize, usize)> {
 
 /// `(offset just past its `>`, lowercased tag name)` of the root's open tag,
 /// walking `bytes` tag by tag: the first `dj-root`, else the first `dj-view`,
-/// outside every embedded child's wrapper (#3031).
+/// outside every other view's container (an embedded child's wrapper or a lazy
+/// view, #3031), else `<body>` when it carries either attribute (#3302).
 ///
 /// A tag starts at `<` followed by an ASCII letter, `/` or `!`, as in the
 /// HTML tokenizer; any other `<` is text (#3030 — the Python walker applies
@@ -4855,16 +4864,34 @@ fn find_dj_root_content_range(html: &str) -> Option<(usize, usize)> {
 /// document when it has none, as the Python twin does).
 fn find_root_open(bytes: &[u8]) -> Option<(usize, Vec<u8>)> {
     let mut first_view: Option<(usize, Vec<u8>)> = None;
+    // `<body>` carrying a root attribute: the root of last resort (#3302).
+    let mut body_root: Option<(usize, Vec<u8>)> = None;
     let mut i = 0;
     loop {
         if i >= bytes.len() {
-            return first_view;
+            return first_view.or(body_root);
         }
         if bytes[i] != b'<' {
             i += 1;
             continue;
         }
         if let Some(next) = skip_raw_text_region(bytes, i) {
+            // Unlike script/style, textarea is itself a supported root candidate.
+            // Its contents still cannot declare another root.
+            if starts_with_ci(&bytes[i..], b"<textarea") {
+                if let Ok(end) = find_open_tag_end(bytes, i) {
+                    let tag_body = &bytes[i + 1..end];
+                    let marks = root_attrs(tag_body);
+                    if !marks.is_embedded_wrapper() {
+                        if marks.root {
+                            return Some((end + 1, b"textarea".to_vec()));
+                        }
+                        if marks.view && first_view.is_none() {
+                            first_view = Some((end + 1, b"textarea".to_vec()));
+                        }
+                    }
+                }
+            }
             i = next;
             continue;
         }
@@ -4881,7 +4908,7 @@ fn find_root_open(bytes: &[u8]) -> Option<(usize, Vec<u8>)> {
                 i = k;
                 continue;
             }
-            Err(_) => return first_view,
+            Err(_) => return first_view.or(body_root),
         };
         let tag_body = &bytes[i + 1..j];
         if tag_body.is_empty() || tag_body[0] == b'/' || tag_body[0] == b'!' {
@@ -4898,24 +4925,33 @@ fn find_root_open(bytes: &[u8]) -> Option<(usize, Vec<u8>)> {
             .position(|&c| html_space(c) || c == b'/' || c == b'>')
             .unwrap_or(tag_body.len());
         let name = tag_body[..name_end].to_ascii_lowercase();
-        // A root on <html>/<head>/<body> is not a root the VDOM's
-        // `find_root` (which searches INSIDE <body>) can agree on; the Python
-        // twin (`mixins/template.py::_DJ_ROOT_RE`) skips them too (#2892).
-        if matches!(name.as_slice(), b"html" | b"head" | b"body") {
+        // A root on <html> or <head> is not a root the VDOM's `find_root`
+        // (which starts at <body>) can agree on; the Python twin
+        // (`mixins/template.py::_DJ_ROOT_RE`) skips them too (#2892).
+        if matches!(name.as_slice(), b"html" | b"head") {
+            i = j + 1;
+            continue;
+        }
+        // `<body>` is the root only when nothing inside it declares one, so a
+        // page that already has a root keeps it (#3302).
+        if name == b"body" {
+            if body_root.is_none() {
+                body_root = Some((j + 1, name));
+            }
             i = j + 1;
             continue;
         }
         if marks.is_embedded_wrapper() {
-            // The child's wrapper and its whole subtree are not ours.
+            // The other view's container and its whole subtree are not ours.
             match find_root_close(bytes, j + 1, &name) {
                 Some(close) => match find_open_tag_end(bytes, close) {
                     Ok(end) => {
                         i = end + 1;
                         continue;
                     }
-                    Err(_) => return first_view,
+                    Err(_) => return first_view.or(body_root),
                 },
-                None => return first_view,
+                None => return first_view.or(body_root),
             }
         }
         if marks.root {
@@ -4931,6 +4967,10 @@ fn find_root_open(bytes: &[u8]) -> Option<(usize, Vec<u8>)> {
 /// The offset of the `<` of the closing tag that balances the root element
 /// opened just before `open_end`.
 fn find_root_close(bytes: &[u8], open_end: usize, tag_name: &[u8]) -> Option<usize> {
+    if tag_name.eq_ignore_ascii_case(b"textarea") {
+        let close = find_text_region_close(bytes, open_end, tag_name)?;
+        return find_open_tag_end(bytes, close).ok().map(|_| close);
+    }
     // Now walk forward, balancing open/close tags of the same name, to
     // find the matching closing tag. Returns the byte offset of that
     // closing tag's `<`.
@@ -5677,7 +5717,9 @@ mod dj_root_selection_3031 {
     //! The rule: a root belongs to the view that rendered it, so an embedded
     //! child's wrapper (`dj-view` + `data-djust-embedded`) and its subtree are
     //! never the parent's root; among the rest, the first `dj-root` beats the
-    //! first `dj-view`.
+    //! first `dj-view`. `<body>` carrying either attribute is the root of last
+    //! resort (#3302): used only when nothing inside it declares a root.
+    //! `<html>` and `<head>` never are.
     use super::{find_dj_root_content_range, find_root_open, parse_html};
     use serde_json::Value;
 
@@ -5720,7 +5762,45 @@ mod dj_root_selection_3031 {
             } else {
                 assert!(got_expected, "{name}: picked {picked:?}");
             }
+            if let Some(content) = case.get("content") {
+                let range = find_dj_root_content_range(html);
+                if content.is_null() {
+                    assert!(
+                        range.is_none(),
+                        "{name}: incomplete end token accepted: {range:?}"
+                    );
+                } else {
+                    let (start, end) = range.expect("complete end token");
+                    assert_eq!(&html[start..end], content.as_str().unwrap(), "{name}");
+                }
+            }
         }
+    }
+
+    #[test]
+    fn textarea_rcdata_cannot_select_or_close_the_body_root() {
+        for (open, close) in [
+            ("<textarea>", "</textarea>"),
+            ("<TEXTAREA data-note='>'>", "</TeXtArEa >"),
+            ("<textarea/>", "</textarea>"),
+        ] {
+            let html = format!(
+                "<body dj-root>{open}<section dj-root>fake</section></body></textareax>{close}<main>real</main></body>"
+            );
+            let (start, end) = find_dj_root_content_range(&html).expect("body root");
+            assert_eq!(
+                &html[start..end],
+                &html["<body dj-root>".len()..html.len() - "</body>".len()]
+            );
+        }
+        let html = "<body dj-root><textarea dj-root>literal <textarea> text</textarea></body>";
+        let (start, end) = find_dj_root_content_range(html).expect("textarea itself is a root");
+        assert_eq!(&html[start..end], "literal <textarea> text");
+        let html = "<body dj-root><textarea><section dj-root>fake</section>";
+        assert_eq!(
+            find_root_open(html.as_bytes()).expect("body fallback").1,
+            b"body"
+        );
     }
 
     #[test]
@@ -6010,8 +6090,21 @@ mod dj_root_content_range_2663 {
     }
 
     #[test]
-    fn root_on_body_is_not_selected() {
-        assert_eq!(inner("<body dj-root><p>a</p></body>"), None);
+    fn root_on_body_is_selected_3302() {
+        assert_eq!(inner("<body dj-root><p>a</p></body>"), Some("<p>a</p>"));
+        assert_eq!(
+            inner("<body dj-view=\"a.B\"><p>a</p></body>"),
+            Some("<p>a</p>")
+        );
+    }
+
+    #[test]
+    fn root_on_html_or_head_is_not_selected() {
+        assert_eq!(inner("<html dj-root><body><p>a</p></body></html>"), None);
+        assert_eq!(
+            inner("<html><head dj-view=\"a.B\"></head><body><p>a</p></body></html>"),
+            None
+        );
     }
 
     #[test]

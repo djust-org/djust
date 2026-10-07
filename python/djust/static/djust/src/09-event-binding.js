@@ -174,7 +174,7 @@ let _scopedGovernorRoots = [];
  * the scanned root was neither refreshed nor evicted — exactly the #2110 bug.
  */
 function _refreshScopedGovernorRoots() {
-    const allRoots = document.querySelectorAll('[dj-view], [dj-root]');
+    const allRoots = document.querySelectorAll('[dj-view]:not(html):not(head), [dj-root]:not(html):not(head)');
     const roots = [];
     allRoots.forEach(function(r) {
         if (roots.length && roots[roots.length - 1].contains(r)) return;
@@ -1639,7 +1639,7 @@ function bindLiveViewEvents(scope) {
     // Only install on actual [dj-view]/[dj-root] elements, NOT on document.body
     // fallback — body persists across TurboNav page swaps, causing duplicate
     // events when navigating away from a LiveView page and back.
-    const liveRoot = findPageViewContainer() || document.querySelector('[dj-root]'); // #2632
+    const liveRoot = findPageViewContainer() || document.querySelector('[dj-root]:not(html):not(head)'); // #2632
     if (liveRoot) installDelegatedListeners(liveRoot);
 
     // Bind upload handlers (dj-upload, dj-upload-drop, dj-upload-preview)
@@ -2297,7 +2297,7 @@ function getLiveViewRoot() {
     // While a frame for a view mounted beside the page view is applied, that
     // view's container is the root (#3252).
     if (_activeSlot) return _activeSlot.root;
-    return findPageViewContainer() || document.querySelector('[dj-root]') || document.body;
+    return findPageViewContainer() || document.querySelector('[dj-root]:not(html):not(head)') || document.body;
 }
 
 // Helper: Clear optimistic state
@@ -2485,7 +2485,7 @@ function _formRecoveryKey(field, root) {
 // Capture before mount mutates the DOM. Keep defaults in the NEW markup so
 // the normal recovery scanner can still compare the draft with server state.
 function _captureFormRecovery() {
-    const root = findPageViewContainer() || document.querySelector('[dj-root]');
+    const root = findPageViewContainer() || document.querySelector('[dj-root]:not(html):not(head)');
     if (!root) return null;
     const values = new Map();
     for (const field of _formRecoveryFields(root)) {
@@ -2501,7 +2501,7 @@ function _captureFormRecovery() {
 
 function _restoreFormRecovery(snapshot) {
     if (!snapshot) return;
-    const root = findPageViewContainer() || document.querySelector('[dj-root]');
+    const root = findPageViewContainer() || document.querySelector('[dj-root]:not(html):not(head)');
     if (!root || root.getAttribute('dj-view') !== snapshot.view) return;
     for (const field of _formRecoveryFields(root)) {
         const values = snapshot.values.get(_formRecoveryKey(field, root));
@@ -2521,7 +2521,7 @@ function _processFormRecovery() {
     if (!window.djust._isReconnect) return;
 
     let root = findPageViewContainer(); // #2632
-    if (!root) root = document.querySelector('[dj-root]');
+    if (!root) root = document.querySelector('[dj-root]:not(html):not(head)');
     if (!root) return;
 
     // Collect fields to recover

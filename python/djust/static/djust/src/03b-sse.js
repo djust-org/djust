@@ -297,7 +297,7 @@ class LiveViewSSE {
                     // #2632: the PAGE container — a sticky/embedded root
                     // with a valueless dj-view must not receive the page.
                     let container = findPageViewContainer();
-                    if (!container) container = document.querySelector('[dj-root]');
+                    if (!container) container = document.querySelector('[dj-root]:not(html):not(head)');
                     if (container) {
                         if (typeof data.view === 'string') container.setAttribute('dj-view', data.view);
                         const hasDataDjAttrs = data.has_ids === true;
@@ -309,7 +309,7 @@ class LiveViewSSE {
                             _morphPrerenderedMount(container, data.html, null);
                         } else {
                             // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
-                            container.innerHTML = data.html;
+                            replaceContainerHtml(container, data.html);
                             // #2058: the SSE mount path never calls
                             // _runInsertedScripts() (WS-only fix) — a classic
                             // <script> is silently dead here exactly like

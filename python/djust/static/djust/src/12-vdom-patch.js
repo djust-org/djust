@@ -59,6 +59,75 @@ function isDjIfComment(text) {
 }
 
 /**
+ * #3302: a view whose root is `<body>` (`<body dj-view>` / `<body dj-root>`
+ * with no root declared inside it).
+ * Its VDOM children are the page's top-level siblings, but the live `<body>`
+ * also holds nodes the server never rendered for this view: djust's own
+ * injected scripts and debug panel, browser-extension and dev-toolbar nodes.
+ * Those are "foreign": a body child element with no `dj-id` once the view has
+ * been mounted (the server stamps every element it renders). Morphs, path
+ * resolution and content replacement must leave them alone.
+ */
+function pageRootIsBody() {
+    const body = document.body;
+    if (!body || !(body.hasAttribute('dj-view') || body.hasAttribute('dj-root'))) return false;
+    // <body> is the root of LAST RESORT, as on the server: any root inside it
+    // wins (a page that already works keeps its root). The containers of other
+    // views (an embedded child, a lazy view before or after it hydrates) do not
+    // count.
+    for (const el of body.querySelectorAll('[dj-root], [dj-view]')) {
+        if (el.closest('[data-djust-embedded], [dj-view][dj-lazy], [dj-view][data-djust-target]')) continue;
+        return false;
+    }
+    return true;
+}
+
+function isForeignBodyChild(node) {
+    return !!node && node.nodeType === Node.ELEMENT_NODE &&
+        node.parentNode === document.body &&
+        !node.hasAttribute('dj-id') &&
+        bodyHasStampedChildren() &&
+        pageRootIsBody();
+}
+
+/**
+ * Have the server's elements under `<body>` been stamped with their dj-id (a
+ * WebSocket/SSE mount or a content replacement did it)? Before that, and for
+ * the whole life of an HTTP-only page (patches insert a few stamped nodes, the
+ * rest never are), "no dj-id" cannot tell a server-rendered element from a
+ * foreign one (see `_morphChildrenInner`).
+ */
+function bodyHasStampedChildren() {
+    return !!(window.djust && window.djust._bodyStamped === true);
+}
+
+/** Record that the server's elements under `<body>` now carry their dj-id. */
+function markBodyStamped() {
+    if (window.djust) window.djust._bodyStamped = true;
+}
+
+/**
+ * Replace a container's content with server HTML (`innerHTML` semantics: the
+ * inserted scripts stay inert). For `<body>` the foreign children survive, in
+ * place, and the server's nodes land before any trailing foreign ones.
+ */
+function replaceContainerHtml(container, html) {
+    if (container !== document.body || !pageRootIsBody()) {
+        container.innerHTML = html;
+        return;
+    }
+    const all = Array.from(container.childNodes);
+    const owned = all.filter((n) => !isForeignBodyChild(n));
+    const lastOwned = owned.length ? all.indexOf(owned[owned.length - 1]) : -1;
+    const anchor = all.slice(lastOwned + 1).find((n) => isForeignBodyChild(n)) || null;
+    owned.forEach((n) => container.removeChild(n));
+    const tpl = document.createElement('template');
+    tpl.innerHTML = html;
+    container.insertBefore(tpl.content, anchor);
+    if (/\sdj-id=/.test(html)) markBodyStamped();
+}
+
+/**
  * Single source of truth for "does this child node count toward VDOM child
  * indices" (#1655). Both the path walker (``getNodeByPath``) and the index
  * resolver (``getSignificantChildren``) MUST agree, or index-based patches
@@ -85,6 +154,8 @@ function isDjIfComment(text) {
  * @returns {boolean}
  */
 function isSignificantChild(child, preserveWhitespace = false) {
+    // #3302: a <body> root's foreign children are not part of the VDOM.
+    if (isForeignBodyChild(child)) return false;
     if (child.nodeType === Node.ELEMENT_NODE) return true;
     if (child.nodeType === Node.TEXT_NODE) {
         if (preserveWhitespace) return true;
@@ -829,8 +900,40 @@ function morphChildren(existing, desired) {
 }
 
 function _morphChildrenInner(existing, desired) {
-    const existingNodes = Array.from(existing.childNodes);
+    let existingNodes = Array.from(existing.childNodes);
     const desiredNodes = Array.from(desired.childNodes);
+
+    // #3302: `<body>` as the root holds nodes the server did not render
+    // (injected scripts, debug UI, extension nodes). Once the server's elements
+    // carry a dj-id, a body child without one is foreign: left out of the
+    // alignment and never removed. Before the first mount nothing is stamped,
+    // so the prerendered DOM is aligned as usual and unmatched ELEMENTS are
+    // kept instead of removed (the foreign ones follow the template's content).
+    let keepUnmatchedElements = false;
+    let tailAnchor = null;
+    if (existing === document.body && pageRootIsBody()) {
+        if (bodyHasStampedChildren()) {
+            const owned = existingNodes.filter((n) => !isForeignBodyChild(n));
+            const lastOwned = owned.length ? existingNodes.indexOf(owned[owned.length - 1]) : -1;
+            tailAnchor = existingNodes.slice(lastOwned + 1).find((n) => isForeignBodyChild(n)) || null;
+            existingNodes = owned;
+        } else {
+            // Not stamped yet: an existing element is plausibly the server's
+            // when the server renders an element it could be (same id, or same
+            // tag where neither has an id). Anything else (an extension's node
+            // with its own id, a dev toolbar) is foreign and stays where it is.
+            const ids = new Set();
+            const tags = new Set();
+            for (const d of desiredNodes) {
+                if (d.nodeType !== Node.ELEMENT_NODE) continue;
+                if (d.id) ids.add(d.id); else tags.add(d.tagName);
+            }
+            existingNodes = existingNodes.filter((n) =>
+                n.nodeType !== Node.ELEMENT_NODE ||
+                (n.id ? ids.has(n.id) : tags.has(n.tagName)));
+            keepUnmatchedElements = true;
+        }
+    }
 
     // #1724: whether this parent preserves whitespace (<pre>/<code>/<textarea>
     // /<script>/<style>). Inside such elements EVERY text node is significant
@@ -905,7 +1008,7 @@ function _morphChildrenInner(existing, desired) {
                 matched.add(eNode);
                 eIdx++;
             } else {
-                existing.insertBefore(document.createTextNode(dNode.textContent), eNode);
+                existing.insertBefore(document.createTextNode(dNode.textContent), eNode || tailAnchor);
             }
             continue;
         }
@@ -919,7 +1022,7 @@ function _morphChildrenInner(existing, desired) {
                 matched.add(eNode);
                 eIdx++;
             } else {
-                existing.insertBefore(document.createComment(dNode.textContent), eNode);
+                existing.insertBefore(document.createComment(dNode.textContent), eNode || tailAnchor);
             }
             continue;
         }
@@ -938,7 +1041,7 @@ function _morphChildrenInner(existing, desired) {
             matched.add(match);
             if (match !== eNode) {
                 // Move keyed element into correct position
-                existing.insertBefore(match, eNode);
+                existing.insertBefore(match, eNode || tailAnchor);
             } else {
                 eIdx++;
             }
@@ -957,12 +1060,13 @@ function _morphChildrenInner(existing, desired) {
         }
 
         // Strategy 3: No match — clone desired child and insert
-        existing.insertBefore(dNode.cloneNode(true), eNode);
+        existing.insertBefore(dNode.cloneNode(true), eNode || tailAnchor);
     }
 
     // Remove unmatched existing children
     for (const node of existingNodes) {
         if (!matched.has(node) && node.parentNode === existing) {
+            if (keepUnmatchedElements && node.nodeType === Node.ELEMENT_NODE) continue;
             if (node.nodeType === Node.ELEMENT_NODE
                 && globalThis.djust
                 && typeof globalThis.djust.maybeDeferRemoval === 'function'
@@ -1043,6 +1147,10 @@ function _morphElementInner(existing, desired) {
         const name = existing.attributes[i].name;
         if (!desired.hasAttribute(name)) {
             if (isCanvas && (name === 'width' || name === 'height')) continue;
+            // The address the client gave a view's container is not the
+            // server's to remove: a page mount that morphs the container's
+            // ancestors (a `<body>` root holds every lazy view) must keep it.
+            if (name === 'data-djust-target' && existing.hasAttribute('dj-view')) continue;
             if (_isIgnored && _isIgnored(existing, name)) continue;
             existing.removeAttribute(name);
         }
@@ -1262,7 +1370,7 @@ function _applyDjUpdateElementsInner(existingRoot, newRoot) {
 function _stampDjIds(serverHtml, container) {
     if (!container) {
         container = findPageViewContainer() || // #2632
-                    document.querySelector('[dj-root]');
+                    document.querySelector('[dj-root]:not(html):not(head)');
     }
     if (!container) return;
 
@@ -1732,6 +1840,9 @@ window.djust._extractDjIfMarkerId = _extractDjIfMarkerId;
 // Export for testing
 window.djust.getSignificantChildren = getSignificantChildren;
 window.djust.isSignificantChild = isSignificantChild;
+window.djust.isForeignBodyChild = isForeignBodyChild;
+window.djust.replaceContainerHtml = replaceContainerHtml;
+window.djust.markBodyStamped = markBodyStamped;
 window.djust._applySinglePatch = applySinglePatch;
 window.djust._stampDjIds = _stampDjIds;
 window.djust._getNodeByPath = getNodeByPath;

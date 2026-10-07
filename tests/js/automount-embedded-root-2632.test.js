@@ -144,9 +144,10 @@ describe('structural pin: ONE page-container helper across src/ (#2632, #1646)',
 
     it('defines findPageViewContainer once, in 03-websocket.js, with every exclusion', () => {
         // Sticky and embedded roots (#2632), and a view that hydrates beside the
-        // page view: `dj-lazy`, or mounted at a `data-djust-target` (#3252).
+        // page view: `dj-lazy`, or mounted at a `data-djust-target` (#3252). `<html>` and
+        // `<head>` are never a container (#3302: unsupported and ignored).
         expect(WS_MODULE).toContain(
-            "'[dj-view]:not([dj-sticky-root]):not([data-djust-embedded]):not([dj-lazy]):not([data-djust-target])'"
+            "'[dj-view]:not(html):not(head):not([dj-sticky-root]):not([data-djust-embedded]):not([dj-lazy]):not([data-djust-target])'"
         );
         const defs = MODULES.flatMap(([, src]) => src.match(/function findPageViewContainer\(\)/g) || []);
         expect(defs.length).toBe(1);

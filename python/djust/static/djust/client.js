@@ -312,9 +312,9 @@ function reinitLiveViewForTurboNav() {
     globalThis.djust._installPageParameterContracts();
 
     // Find all LiveView containers in the new content
-    const allContainers = document.querySelectorAll('[dj-view]');
-    const lazyContainers = document.querySelectorAll('[dj-view][dj-lazy]');
-    const eagerContainers = document.querySelectorAll('[dj-view]:not([dj-lazy])');
+    const allContainers = document.querySelectorAll('[dj-view]:not(html):not(head)');
+    const lazyContainers = document.querySelectorAll('[dj-view][dj-lazy]:not(html):not(head)');
+    const eagerContainers = document.querySelectorAll('[dj-view]:not([dj-lazy]):not(html):not(head)');
 
     if (globalThis.djustDebug) console.log(`[LiveView:TurboNav] Found ${allContainers.length} containers (${lazyContainers.length} lazy, ${eagerContainers.length} eager)`);
 
@@ -929,7 +929,7 @@ function findPageViewContainer() {
     // Not a view that hydrates beside the page view (`dj-lazy`, or mounted at a
     // `data-djust-target`, #3252): it is not the page.
     return document.querySelector(
-        '[dj-view]:not([dj-sticky-root]):not([data-djust-embedded]):not([dj-lazy]):not([data-djust-target])');
+        '[dj-view]:not(html):not(head):not([dj-sticky-root]):not([data-djust-embedded]):not([dj-lazy]):not([data-djust-target])');
 }
 
 /**
@@ -983,6 +983,21 @@ function _stampEmbeddedWrapperDjIds(liveContainer, serverTemplate) {
 }
 
 /**
+ * The scripts inside `container`. For a `<body>` root (#3302) the scripts of
+ * its foreign children (djust's own client scripts, extension nodes) are not
+ * the view's: they ran when the page loaded and must not run again.
+ */
+function _containerScripts(container) {
+    const scripts = Array.from(container.querySelectorAll('script'));
+    if (container !== document.body || !pageRootIsBody()) return scripts;
+    return scripts.filter((el) => {
+        let top = el;
+        while (top.parentNode && top.parentNode !== document.body) top = top.parentNode;
+        return !isForeignBodyChild(top);
+    });
+}
+
+/**
  * #1848: re-execute classic <script> tags inside a freshly-mounted/morphed
  * container so inline page JS inside the dj-root actually runs.
  *
@@ -1009,15 +1024,26 @@ function _stampEmbeddedWrapperDjIds(liveContainer, serverTemplate) {
  *
  * @param {Element} container - the mounted/morphed container to scan.
  */
-function _runInsertedScripts(container) {
+// Presence before a body mount establishes retention, not execution. Keep
+// this distinct from the marker on scripts djust actually reinserted to run.
+const _retainedMountScripts = new WeakSet();
+
+function _runInsertedScripts(container, retainedBefore) {
     if (!container || typeof container.querySelectorAll !== 'function') return;
     let scripts;
     try {
-        scripts = container.querySelectorAll('script');
+        scripts = _containerScripts(container);
     } catch (_err) {
         return;
     }
     for (const old of scripts) {
+        // #3302: retain these nodes without executing them. They may have run
+        // during parsing OR been inserted inert before the mount.
+        if (retainedBefore && retainedBefore.has(old)) {
+            _retainedMountScripts.add(old);
+            continue;
+        }
+        if (_retainedMountScripts.has(old)) continue;
         // Skip already-executed scripts (idempotent on reconnect/re-mount)
         // and any djust-managed marker scripts.
         if (old.hasAttribute('data-djust-script-ran')) continue;
@@ -1058,6 +1084,8 @@ function _runInsertedScripts(container) {
  *  - Scripts already re-executed by `_runInsertedScripts()` — marked
  *    `data-djust-script-ran` (the mount / `live_redirect` re-execution path
  *    documented above, #1635/#1650 lineage).
+ *  - Retained body-mount scripts get an honest unknown-status warning instead:
+ *    DOM presence does not establish whether the browser executed them.
  *  - `type="djust/hook"` colocated-hook payload scripts — extracted (never
  *    meant to run as a script) by `extractColocatedHooks()` in
  *    32-colocated-hooks.js.
@@ -1075,7 +1103,7 @@ function _warnDeadScripts(root) {
     if (!root || typeof root.querySelectorAll !== 'function') return;
     let scripts;
     try {
-        scripts = root.querySelectorAll('script');
+        scripts = _containerScripts(root);
     } catch (_err) {
         return;
     }
@@ -1094,6 +1122,16 @@ function _warnDeadScripts(root) {
         const label = el.getAttribute('src')
             || (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 60)
             || '(empty inline script)';
+        if (_retainedMountScripts.has(el)) {
+            console.warn(
+                '[djust] Retained <script> execution status is unknown (%s). ' +
+                'It was present before the mount and was not rerun: parser-created scripts ' +
+                'may have executed, while innerHTML-created scripts remain inert. ' +
+                'Use a {% colocated_hook %} for initialization after DOM updates.',
+                label
+            );
+            continue;
+        }
         console.error(
             '[djust] <script> inserted by a DOM morph/patch will NOT execute (%s). ' +
             'Browsers treat innerHTML/morph-inserted <script> tags as inert. ' +
@@ -1148,7 +1186,12 @@ function _morphPrerenderedMount(container, html, formRecoverySnapshot, restoreDr
     const temp = document.createElement('div');
     // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
     temp.innerHTML = html;
+    // #3302: scripts retained from the body must not be rerun. DOM presence
+    // alone cannot distinguish parser-executed scripts from inert ones.
+    const retainedBefore = (container === document.body && pageRootIsBody())
+        ? new Set(_containerScripts(container)) : null;
     morphChildren(container, temp);
+    if (retainedBefore) markBodyStamped();
     // The morph resets form fields to the server's values; put a saved draft
     // back into this container before form recovery, which restores what the
     // user had typed (#3351). Only a FIRST mount does: a reconnect's mount
@@ -1167,7 +1210,7 @@ function _morphPrerenderedMount(container, html, formRecoverySnapshot, restoreDr
     _stampEmbeddedWrapperDjIds(container, temp);
     // #1848: morphChildren re-creates inline <script> nodes inert. Re-run
     // classic page scripts inside the dj-root so their init runs on mount.
-    _runInsertedScripts(container);
+    _runInsertedScripts(container, retainedBefore);
     // #2058: anything _runInsertedScripts() didn't re-execute gets a loud
     // DEBUG-mode warning instead of silently staying dead.
     _warnDeadScripts(container);
@@ -1656,7 +1699,7 @@ class LiveViewWebSocket {
                     // path (~line 641).
                     if (hasDataDjAttrs && data.html) {
                         const _morphContainer = findPageViewContainer()
-                                            || document.querySelector('[dj-root]');
+                                            || document.querySelector('[dj-root]:not(html):not(head)');
                         if (_morphContainer) {
                             _morphPrerenderedMount(_morphContainer, data.html, formRecoverySnapshot);
                             if (globalThis.djustDebug) console.log('[LiveView] Morphed pre-rendered DOM against WS-mount HTML (#1610)');
@@ -1778,11 +1821,11 @@ class LiveViewWebSocket {
                     // selection via the shared helper (#2632).
                     let container = findPageViewContainer();
                     if (!container) {
-                        container = document.querySelector('[dj-root]');
+                        container = document.querySelector('[dj-root]:not(html):not(head)');
                     }
                     if (container) {
                         // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
-                        container.innerHTML = data.html;
+                        replaceContainerHtml(container, data.html);
                         if (formRecoverySnapshot) window.djust._restoreFormRecovery(formRecoverySnapshot);
                         // #1848: innerHTML never executes inserted <script>.
                         // Re-run classic page scripts inside the dj-root so
@@ -3080,7 +3123,7 @@ class LiveViewSSE {
                     // #2632: the PAGE container — a sticky/embedded root
                     // with a valueless dj-view must not receive the page.
                     let container = findPageViewContainer();
-                    if (!container) container = document.querySelector('[dj-root]');
+                    if (!container) container = document.querySelector('[dj-root]:not(html):not(head)');
                     if (container) {
                         if (typeof data.view === 'string') container.setAttribute('dj-view', data.view);
                         const hasDataDjAttrs = data.has_ids === true;
@@ -3092,7 +3135,7 @@ class LiveViewSSE {
                             _morphPrerenderedMount(container, data.html, null);
                         } else {
                             // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
-                            container.innerHTML = data.html;
+                            replaceContainerHtml(container, data.html);
                             // #2058: the SSE mount path never calls
                             // _runInsertedScripts() (WS-only fix) — a classic
                             // <script> is silently dead here exactly like
@@ -5524,7 +5567,7 @@ let _scopedGovernorRoots = [];
  * the scanned root was neither refreshed nor evicted — exactly the #2110 bug.
  */
 function _refreshScopedGovernorRoots() {
-    const allRoots = document.querySelectorAll('[dj-view], [dj-root]');
+    const allRoots = document.querySelectorAll('[dj-view]:not(html):not(head), [dj-root]:not(html):not(head)');
     const roots = [];
     allRoots.forEach(function(r) {
         if (roots.length && roots[roots.length - 1].contains(r)) return;
@@ -6989,7 +7032,7 @@ function bindLiveViewEvents(scope) {
     // Only install on actual [dj-view]/[dj-root] elements, NOT on document.body
     // fallback — body persists across TurboNav page swaps, causing duplicate
     // events when navigating away from a LiveView page and back.
-    const liveRoot = findPageViewContainer() || document.querySelector('[dj-root]'); // #2632
+    const liveRoot = findPageViewContainer() || document.querySelector('[dj-root]:not(html):not(head)'); // #2632
     if (liveRoot) installDelegatedListeners(liveRoot);
 
     // Bind upload handlers (dj-upload, dj-upload-drop, dj-upload-preview)
@@ -7647,7 +7690,7 @@ function getLiveViewRoot() {
     // While a frame for a view mounted beside the page view is applied, that
     // view's container is the root (#3252).
     if (_activeSlot) return _activeSlot.root;
-    return findPageViewContainer() || document.querySelector('[dj-root]') || document.body;
+    return findPageViewContainer() || document.querySelector('[dj-root]:not(html):not(head)') || document.body;
 }
 
 // Helper: Clear optimistic state
@@ -7835,7 +7878,7 @@ function _formRecoveryKey(field, root) {
 // Capture before mount mutates the DOM. Keep defaults in the NEW markup so
 // the normal recovery scanner can still compare the draft with server state.
 function _captureFormRecovery() {
-    const root = findPageViewContainer() || document.querySelector('[dj-root]');
+    const root = findPageViewContainer() || document.querySelector('[dj-root]:not(html):not(head)');
     if (!root) return null;
     const values = new Map();
     for (const field of _formRecoveryFields(root)) {
@@ -7851,7 +7894,7 @@ function _captureFormRecovery() {
 
 function _restoreFormRecovery(snapshot) {
     if (!snapshot) return;
-    const root = findPageViewContainer() || document.querySelector('[dj-root]');
+    const root = findPageViewContainer() || document.querySelector('[dj-root]:not(html):not(head)');
     if (!root || root.getAttribute('dj-view') !== snapshot.view) return;
     for (const field of _formRecoveryFields(root)) {
         const values = snapshot.values.get(_formRecoveryKey(field, root));
@@ -7871,7 +7914,7 @@ function _processFormRecovery() {
     if (!window.djust._isReconnect) return;
 
     let root = findPageViewContainer(); // #2632
-    if (!root) root = document.querySelector('[dj-root]');
+    if (!root) root = document.querySelector('[dj-root]:not(html):not(head)');
     if (!root) return;
 
     // Collect fields to recover
@@ -8646,13 +8689,13 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     // Keepalive teardown sends deliberately outlive the outgoing page.
     const httpController = teardown ? null : new AbortController();
     if (httpController) _pendingHttpControllers.add(httpController);
-    const httpOwner = document.querySelector('[dj-root]') || document.body;
+    const httpOwner = document.querySelector('[dj-root]:not(html):not(head)') || document.body;
     // The fragment never reaches the server, so an in-page #anchor jump
     // does not make this a different page (PR #3122 review).
     const pageUrl = () => window.location.href.split('#')[0];
     const httpUrl = pageUrl();
     const httpGeneration = _httpPageGeneration;
-    const ownsHttpResponse = () => httpOwner === (document.querySelector('[dj-root]') || document.body)
+    const ownsHttpResponse = () => httpOwner === (document.querySelector('[dj-root]:not(html):not(head)') || document.body)
         && httpUrl === pageUrl() && httpGeneration === _httpPageGeneration;
     // Keepalive teardown sends are not queued: they must leave with the page.
     const previousHttpEvent = teardown ? null : _httpEventChain;
@@ -8814,6 +8857,75 @@ function isDjIfComment(text) {
 }
 
 /**
+ * #3302: a view whose root is `<body>` (`<body dj-view>` / `<body dj-root>`
+ * with no root declared inside it).
+ * Its VDOM children are the page's top-level siblings, but the live `<body>`
+ * also holds nodes the server never rendered for this view: djust's own
+ * injected scripts and debug panel, browser-extension and dev-toolbar nodes.
+ * Those are "foreign": a body child element with no `dj-id` once the view has
+ * been mounted (the server stamps every element it renders). Morphs, path
+ * resolution and content replacement must leave them alone.
+ */
+function pageRootIsBody() {
+    const body = document.body;
+    if (!body || !(body.hasAttribute('dj-view') || body.hasAttribute('dj-root'))) return false;
+    // <body> is the root of LAST RESORT, as on the server: any root inside it
+    // wins (a page that already works keeps its root). The containers of other
+    // views (an embedded child, a lazy view before or after it hydrates) do not
+    // count.
+    for (const el of body.querySelectorAll('[dj-root], [dj-view]')) {
+        if (el.closest('[data-djust-embedded], [dj-view][dj-lazy], [dj-view][data-djust-target]')) continue;
+        return false;
+    }
+    return true;
+}
+
+function isForeignBodyChild(node) {
+    return !!node && node.nodeType === Node.ELEMENT_NODE &&
+        node.parentNode === document.body &&
+        !node.hasAttribute('dj-id') &&
+        bodyHasStampedChildren() &&
+        pageRootIsBody();
+}
+
+/**
+ * Have the server's elements under `<body>` been stamped with their dj-id (a
+ * WebSocket/SSE mount or a content replacement did it)? Before that, and for
+ * the whole life of an HTTP-only page (patches insert a few stamped nodes, the
+ * rest never are), "no dj-id" cannot tell a server-rendered element from a
+ * foreign one (see `_morphChildrenInner`).
+ */
+function bodyHasStampedChildren() {
+    return !!(window.djust && window.djust._bodyStamped === true);
+}
+
+/** Record that the server's elements under `<body>` now carry their dj-id. */
+function markBodyStamped() {
+    if (window.djust) window.djust._bodyStamped = true;
+}
+
+/**
+ * Replace a container's content with server HTML (`innerHTML` semantics: the
+ * inserted scripts stay inert). For `<body>` the foreign children survive, in
+ * place, and the server's nodes land before any trailing foreign ones.
+ */
+function replaceContainerHtml(container, html) {
+    if (container !== document.body || !pageRootIsBody()) {
+        container.innerHTML = html;
+        return;
+    }
+    const all = Array.from(container.childNodes);
+    const owned = all.filter((n) => !isForeignBodyChild(n));
+    const lastOwned = owned.length ? all.indexOf(owned[owned.length - 1]) : -1;
+    const anchor = all.slice(lastOwned + 1).find((n) => isForeignBodyChild(n)) || null;
+    owned.forEach((n) => container.removeChild(n));
+    const tpl = document.createElement('template');
+    tpl.innerHTML = html;
+    container.insertBefore(tpl.content, anchor);
+    if (/\sdj-id=/.test(html)) markBodyStamped();
+}
+
+/**
  * Single source of truth for "does this child node count toward VDOM child
  * indices" (#1655). Both the path walker (``getNodeByPath``) and the index
  * resolver (``getSignificantChildren``) MUST agree, or index-based patches
@@ -8840,6 +8952,8 @@ function isDjIfComment(text) {
  * @returns {boolean}
  */
 function isSignificantChild(child, preserveWhitespace = false) {
+    // #3302: a <body> root's foreign children are not part of the VDOM.
+    if (isForeignBodyChild(child)) return false;
     if (child.nodeType === Node.ELEMENT_NODE) return true;
     if (child.nodeType === Node.TEXT_NODE) {
         if (preserveWhitespace) return true;
@@ -9584,8 +9698,40 @@ function morphChildren(existing, desired) {
 }
 
 function _morphChildrenInner(existing, desired) {
-    const existingNodes = Array.from(existing.childNodes);
+    let existingNodes = Array.from(existing.childNodes);
     const desiredNodes = Array.from(desired.childNodes);
+
+    // #3302: `<body>` as the root holds nodes the server did not render
+    // (injected scripts, debug UI, extension nodes). Once the server's elements
+    // carry a dj-id, a body child without one is foreign: left out of the
+    // alignment and never removed. Before the first mount nothing is stamped,
+    // so the prerendered DOM is aligned as usual and unmatched ELEMENTS are
+    // kept instead of removed (the foreign ones follow the template's content).
+    let keepUnmatchedElements = false;
+    let tailAnchor = null;
+    if (existing === document.body && pageRootIsBody()) {
+        if (bodyHasStampedChildren()) {
+            const owned = existingNodes.filter((n) => !isForeignBodyChild(n));
+            const lastOwned = owned.length ? existingNodes.indexOf(owned[owned.length - 1]) : -1;
+            tailAnchor = existingNodes.slice(lastOwned + 1).find((n) => isForeignBodyChild(n)) || null;
+            existingNodes = owned;
+        } else {
+            // Not stamped yet: an existing element is plausibly the server's
+            // when the server renders an element it could be (same id, or same
+            // tag where neither has an id). Anything else (an extension's node
+            // with its own id, a dev toolbar) is foreign and stays where it is.
+            const ids = new Set();
+            const tags = new Set();
+            for (const d of desiredNodes) {
+                if (d.nodeType !== Node.ELEMENT_NODE) continue;
+                if (d.id) ids.add(d.id); else tags.add(d.tagName);
+            }
+            existingNodes = existingNodes.filter((n) =>
+                n.nodeType !== Node.ELEMENT_NODE ||
+                (n.id ? ids.has(n.id) : tags.has(n.tagName)));
+            keepUnmatchedElements = true;
+        }
+    }
 
     // #1724: whether this parent preserves whitespace (<pre>/<code>/<textarea>
     // /<script>/<style>). Inside such elements EVERY text node is significant
@@ -9660,7 +9806,7 @@ function _morphChildrenInner(existing, desired) {
                 matched.add(eNode);
                 eIdx++;
             } else {
-                existing.insertBefore(document.createTextNode(dNode.textContent), eNode);
+                existing.insertBefore(document.createTextNode(dNode.textContent), eNode || tailAnchor);
             }
             continue;
         }
@@ -9674,7 +9820,7 @@ function _morphChildrenInner(existing, desired) {
                 matched.add(eNode);
                 eIdx++;
             } else {
-                existing.insertBefore(document.createComment(dNode.textContent), eNode);
+                existing.insertBefore(document.createComment(dNode.textContent), eNode || tailAnchor);
             }
             continue;
         }
@@ -9693,7 +9839,7 @@ function _morphChildrenInner(existing, desired) {
             matched.add(match);
             if (match !== eNode) {
                 // Move keyed element into correct position
-                existing.insertBefore(match, eNode);
+                existing.insertBefore(match, eNode || tailAnchor);
             } else {
                 eIdx++;
             }
@@ -9712,12 +9858,13 @@ function _morphChildrenInner(existing, desired) {
         }
 
         // Strategy 3: No match — clone desired child and insert
-        existing.insertBefore(dNode.cloneNode(true), eNode);
+        existing.insertBefore(dNode.cloneNode(true), eNode || tailAnchor);
     }
 
     // Remove unmatched existing children
     for (const node of existingNodes) {
         if (!matched.has(node) && node.parentNode === existing) {
+            if (keepUnmatchedElements && node.nodeType === Node.ELEMENT_NODE) continue;
             if (node.nodeType === Node.ELEMENT_NODE
                 && globalThis.djust
                 && typeof globalThis.djust.maybeDeferRemoval === 'function'
@@ -9798,6 +9945,10 @@ function _morphElementInner(existing, desired) {
         const name = existing.attributes[i].name;
         if (!desired.hasAttribute(name)) {
             if (isCanvas && (name === 'width' || name === 'height')) continue;
+            // The address the client gave a view's container is not the
+            // server's to remove: a page mount that morphs the container's
+            // ancestors (a `<body>` root holds every lazy view) must keep it.
+            if (name === 'data-djust-target' && existing.hasAttribute('dj-view')) continue;
             if (_isIgnored && _isIgnored(existing, name)) continue;
             existing.removeAttribute(name);
         }
@@ -10017,7 +10168,7 @@ function _applyDjUpdateElementsInner(existingRoot, newRoot) {
 function _stampDjIds(serverHtml, container) {
     if (!container) {
         container = findPageViewContainer() || // #2632
-                    document.querySelector('[dj-root]');
+                    document.querySelector('[dj-root]:not(html):not(head)');
     }
     if (!container) return;
 
@@ -10487,6 +10638,9 @@ window.djust._extractDjIfMarkerId = _extractDjIfMarkerId;
 // Export for testing
 window.djust.getSignificantChildren = getSignificantChildren;
 window.djust.isSignificantChild = isSignificantChild;
+window.djust.isForeignBodyChild = isForeignBodyChild;
+window.djust.replaceContainerHtml = replaceContainerHtml;
+window.djust.markBodyStamped = markBodyStamped;
 window.djust._applySinglePatch = applySinglePatch;
 window.djust._stampDjIds = _stampDjIds;
 window.djust._getNodeByPath = getNodeByPath;
@@ -12320,8 +12474,29 @@ window.djust._switchToSSETransport = _switchToSSETransport;
 // Auto-stamp dj-root and dj-liveview-root on [dj-view]
 // elements so developers only need to write dj-view (#258).
 // Extracted as a helper so both djustInit() and reinitLiveViewForTurboNav() can call it.
+// #3302: `dj-view` / `dj-root` on `<html>` or `<head>` is unsupported. It is
+// ignored everywhere the client looks for a container, so the page stays a
+// plain HTTP page instead of mounting a view that replaces the whole document
+// element. Say so once.
+let _documentRootWarned = false;
+function warnUnsupportedDocumentRoot() {
+    if (_documentRootWarned) return;
+    for (const el of [document.documentElement, document.head]) {
+        if (el && (el.hasAttribute('dj-view') || el.hasAttribute('dj-root'))) {
+            _documentRootWarned = true;
+            console.warn(
+                '[djust] dj-view / dj-root on <' + el.tagName.toLowerCase() + '> is not supported and is ignored: ' +
+                'no live view is mounted and the page stays a plain HTTP page. ' +
+                'Put dj-view on <body> or a <div> (system check djust.T025).'
+            );
+            return;
+        }
+    }
+}
+
 function autoStampRootAttributes() {
-    const allContainers = document.querySelectorAll('[dj-view]');
+    warnUnsupportedDocumentRoot();
+    const allContainers = document.querySelectorAll('[dj-view]:not(html):not(head)');
     allContainers.forEach(container => {
         if (!container.hasAttribute('dj-root')) {
             container.setAttribute('dj-root', '');
@@ -12332,6 +12507,8 @@ function autoStampRootAttributes() {
     });
     return allContainers;
 }
+
+window.djust._autoStampRootAttributes = autoStampRootAttributes;
 
 // Initialize on load (support both normal page load and dynamic script injection via TurboNav)
 function djustInit() {
@@ -12345,7 +12522,8 @@ function djustInit() {
     _installPageParameterContracts();
 
     if (allContainers.length === 0) {
-        if (globalThis.djustDebug) console.error(
+        // (A root on <html>/<head> already got its own, precise warning.)
+        if (globalThis.djustDebug && !_documentRootWarned) console.error(
             '[LiveView] No containers found! Your template root element needs:\n' +
             '  dj-view="app.views.MyView"\n' +
             'Example: <div dj-view="myapp.views.DashboardView">'
@@ -12354,8 +12532,8 @@ function djustInit() {
         if (globalThis.djustDebug) console.log(`[LiveView] Found ${allContainers.length} containers`);
     }
 
-    const lazyContainers = document.querySelectorAll('[dj-view][dj-lazy]');
-    const eagerContainers = document.querySelectorAll('[dj-view]:not([dj-lazy])');
+    const lazyContainers = document.querySelectorAll('[dj-view][dj-lazy]:not(html):not(head)');
+    const eagerContainers = document.querySelectorAll('[dj-view]:not([dj-lazy]):not(html):not(head)');
 
     // Register lazy containers with the lazy hydration manager
     lazyContainers.forEach(container => {
@@ -14448,10 +14626,10 @@ window.djust.getActiveStreams = getActiveStreams;
                         const vdomReply = await window.djust._sw.lookupVdom(destinationKey);
                         if (vdomReply && vdomReply.hit && !vdomReply.stale && typeof vdomReply.html === 'string') {
                             let fastContainer = findPageViewContainer(); // #2632
-                            if (!fastContainer) fastContainer = document.querySelector('[dj-root]');
+                            if (!fastContainer) fastContainer = document.querySelector('[dj-root]:not(html):not(head)');
                             if (fastContainer) {
                                 // codeql[js/xss] -- html is server-rendered; only reads from SW cache keyed by same-origin url
-                                fastContainer.innerHTML = vdomReply.html;
+                                replaceContainerHtml(fastContainer, vdomReply.html);
                                 window.dispatchEvent(new CustomEvent('djust:vdom-cache-applied', {
                                     detail: { url: url.pathname, version: vdomReply.version },
                                 }));

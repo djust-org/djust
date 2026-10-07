@@ -316,9 +316,12 @@ def test_body_attribute_lookalike_does_not_hijack_the_root():
     assert "<!--" not in _root_slice(ssr, "main")
 
 
-def test_unsupported_root_on_body_warns_once(caplog):
-    """A root the normaliser cannot use (``<body dj-root>``) fails loudly."""
-    base = _BASE.replace("<body>", "<body dj-root>")
+def test_unsupported_root_on_html_warns_once(caplog):
+    """A root the normaliser cannot use (``<html dj-root>``) fails loudly.
+
+    ``<body>`` is a root since #3302, so this pin moved from ``<body dj-root>``
+    to ``<html dj-root>``, which still is not one."""
+    base = _BASE.replace("<html>", "<html dj-root>")
     child = '{% extends "base_2892.html" %}\n{% block content %}<p>x</p>{% endblock %}\n'
     template_mod._UNMATCHED_ROOT_WARNED.clear()
     with _TemplateHarness(base, child):
@@ -332,6 +335,58 @@ def test_unsupported_root_on_body_warns_once(caplog):
     hits = [r for r in caplog.records if "#2892" in r.getMessage()]
     assert len(hits) == 1, [r.getMessage() for r in caplog.records]
     assert "BodyRoot" in hits[0].getMessage()
+    # The fail-safe: unsupported and ignored, the page stays a plain HTTP page.
+    assert "not supported and is ignored" in hits[0].getMessage()
+    assert "no live view is mounted" in hits[0].getMessage()
+
+
+def test_html_root_page_renders_unchanged_and_is_not_stamped_3302():
+    """``<html dj-view>`` is ignored: the server render is the complete document
+    (no root claimed, no view path stamped, nothing normalised), so the page
+    works as plain HTTP and the client has nothing to mount."""
+    base = _BASE.replace("<html>", '<html dj-view="app.HtmlRoot">')
+    child = '{% extends "base_2892.html" %}\n{% block content %}<p>x</p>{% endblock %}\n'
+    with _TemplateHarness(base, child):
+        cls = _extends_view("HtmlRootPage")
+        v = cls()
+        v.mount(None)
+        v.get_template()
+        ssr = v.render_full_template(None)
+        stamped = v._stamp_dj_view(ssr, "app.HtmlRootPage")
+    assert ssr.upper().count("<!DOCTYPE") == 1
+    for part in ("<nav>NAV</nav>", "<p>x</p>", "<footer>F</footer>", "<head>"):
+        assert part in ssr, part
+    assert stamped == ssr, "nothing to stamp: <html> is never a root"
+    assert (
+        template_mod._search_dj_root_open(ssr, template_mod._DJ_ROOT_RE, template_mod._DJ_VIEW_RE)
+        is None
+    )
+
+
+def test_body_root_in_the_base_template_is_a_root_3302(caplog):
+    """``<body dj-root>`` in the BASE template (the content comes from the
+    child's blocks) is the page's root: no warning, one document, the view path
+    stamped on ``<body>``, and the WS frame is the body's content."""
+    base = _BASE.replace("<body>", "<body dj-root>")
+    child = '{% extends "base_2892.html" %}\n{% block content %}<p>x</p>{% endblock %}\n'
+    template_mod._UNMATCHED_ROOT_WARNED.clear()
+    with _TemplateHarness(base, child):
+        cls = _extends_view("BodyRootBase")
+        with caplog.at_level(logging.WARNING, logger="djust.mixins.template"):
+            ssr, ws_html = _ssr_and_ws(cls, "body")
+            v = cls()
+            v.mount(None)
+            v.get_template()
+            stamped = v._stamp_dj_view(v.render_full_template(None), "app.BodyRootBase")
+    assert not [r for r in caplog.records if "#2892" in r.getMessage()]
+    assert ssr.upper().count("<!DOCTYPE") == 1
+    assert ws_html.lstrip().startswith("<body"), ws_html[:80]
+    assert "<nav" in ws_html and "<p" in ws_html and "<footer" in ws_html
+    assert "<head" not in ws_html
+    assert re.search(r"<body\b[^>]*dj-view=\"app.BodyRootBase\"", stamped), stamped[:300]
+    # The page's top-level siblings all reach the WS frame and the initial GET.
+    for sibling in ("<nav", "<p", "<footer"):
+        assert sibling in ssr and sibling in ws_html
 
 
 def test_page_without_any_root_does_not_warn(caplog):
@@ -360,6 +415,7 @@ class TestRootOpenRegex:
             '<div class="x" dj-root>',
             "<main dj-root>",
             "<SECTION dj-root>",
+            "<body dj-root>",
             "<my-app dj-root>",
             '<div\tdj-root="">',
             "<div\ndj-root>",
@@ -375,7 +431,6 @@ class TestRootOpenRegex:
             "<div dj-rooted>",
             "<div data-dj-root>",
             "<div dj-root-x>",
-            "<body dj-root>",
             "<html dj-root>",
             "<head dj-root>",
             "<!-- <div dj-root> -->",
