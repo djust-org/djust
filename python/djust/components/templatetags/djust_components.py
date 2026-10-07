@@ -9591,6 +9591,7 @@ class ResizablePanelNode(template.Node):
         initial_size = kw.get("initial_size", "50%")
         disabled = kw.get("disabled", False)
         custom_class = kw.get("class", "")
+        resize_event = kw.get("resize_event", "")
 
         e_class = conditional_escape(str(custom_class))
 
@@ -9617,11 +9618,14 @@ class ResizablePanelNode(template.Node):
         style = f'style="{";".join(style_parts)}"'
 
         disabled_attr = ' data-disabled="true"' if disabled else ""
+        event_attr = (
+            f' data-resize-event="{conditional_escape(str(resize_event))}"' if resize_event else ""
+        )
 
         return mark_safe(
             f'<div class="{class_str}" dj-hook="ResizablePanel" '
             f'data-direction="{direction}" '
-            f'data-min-size="{e_min}" data-max-size="{e_max}" '
+            f'data-min-size="{e_min}" data-max-size="{e_max}"{event_attr} '
             f"{style}{disabled_attr}>"
             f'<div class="dj-resizable-panel__content">{content}</div>'
             f'<div class="dj-resizable-panel__handle" role="separator" '
