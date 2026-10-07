@@ -3023,6 +3023,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             try:
                 fields["ref"] = int(ref)
             except (ValueError, OverflowError):
+                # Non-finite numeric refs cannot be echoed as integers; the
+                # busy refusal still answers the frame without a ref.
                 pass
         if isinstance(data.get("target_id"), str):
             fields["target_id"] = data["target_id"]
