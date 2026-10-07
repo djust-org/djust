@@ -1864,8 +1864,9 @@ fn resolve_tag_operand_value(expr: &str, context: &Context) -> Option<Value> {
 /// * `Decimal` / `BigInt` also serialize as JSON strings (their exact digits
 ///   would not survive a JSON number), so routing them through here would tell
 ///   the handler a `Decimal` is a sequence of characters — where Python raises
-///   `TypeError: 'decimal.Decimal' object is not iterable`. Their `Display`
-///   form is already unambiguous, so they keep it.
+///   `TypeError` (`'decimal.Decimal' object is not iterable`; the spelling is
+///   the interpreter's, #3255). Their `Display` form is already unambiguous, so
+///   they keep it.
 /// * `List` / `Tuple` / `Object` / `DictView` were ALREADY JSON — that is what
 ///   [`value_to_arg_string`] exists for — so nothing changes for them.
 /// * `Bool` IS re-encoded, as of #2463, and the sentence that used to stand

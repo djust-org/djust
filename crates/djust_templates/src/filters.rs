@@ -6541,10 +6541,11 @@ pub(crate) fn int_value_error(filter_name: &str, err: IntValueError) -> DjangoRu
 /// question answered for seven filters (#1646).
 ///
 /// Every arm names the type the value HELD IN PYTHON, not the Rust variant:
-/// [`Value::BigInt`] is a Python `int` too large for an `i64`, CPython's name
-/// for a `Decimal` is the qualified `'decimal.Decimal'` since `decimal` is not
-/// a builtin, and a [`Value::DictView`] is one of the three view types rather
-/// than a list.
+/// [`Value::BigInt`] is a Python `int` too large for an `i64`, a
+/// [`Value::DictView`] is one of the three view types rather than a list, and a
+/// `Decimal` is named by the interpreter itself — qualified
+/// (`'decimal.Decimal'`) with the C `_decimal` accelerator, bare (`'Decimal'`)
+/// without it, which is why that arm MEASURES rather than lists (#3255).
 ///
 /// [`Value::Missing`] is `str`, and that is load-bearing rather than tidy: it
 /// is Django's `string_if_invalid`, so the value that reaches the filter is
@@ -6566,7 +6567,14 @@ pub(crate) fn python_type_name(value: &Value) -> &str {
         Value::Bool(_) => "bool",
         Value::Integer(_) | Value::BigInt(_) => "int",
         Value::Float(_) => "float",
-        Value::Decimal(_) => "decimal.Decimal",
+        // MEASURED, not a literal (#3255). CPython spells a C static type with
+        // its module (`decimal.Decimal` for the `_decimal` accelerator) and a
+        // Python-level class with its bare name (`Decimal` for the pure-Python
+        // `_pydecimal` fallback), so which spelling is correct depends on the
+        // INTERPRETER, not on the Python version. A literal diverged from
+        // Django's own message on any build without the C accelerator — CI's
+        // 3.15 build is one.
+        Value::Decimal(_) => djust_core::decimal_type_name(),
         Value::None => "NoneType",
         // Django's `string_if_invalid`, which is a `str`. See the doc above.
         Value::String(_) | Value::SafeString(_) | Value::Missing => "str",

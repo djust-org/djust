@@ -2089,17 +2089,79 @@ impl<'de> Deserialize<'de> for Value {
 /// answer is "no" and the value takes its previous path. A serialization helper
 /// must not raise on an odd object.
 pub fn is_decimal(ob: &Bound<'_, PyAny>) -> bool {
-    static DECIMAL_TYPE: pyo3::sync::PyOnceLock<Py<PyAny>> = pyo3::sync::PyOnceLock::new();
-    // `PyOnceLock`, not `GILOnceCell` — pyo3 0.29 renamed it.
     let py = ob.py();
-    let Ok(cls) = DECIMAL_TYPE.get_or_try_init(py, || {
-        py.import("decimal")
-            .and_then(|m| m.getattr("Decimal"))
-            .map(|c| c.unbind())
-    }) else {
+    let Some(resolved) = decimal_type(py) else {
         return false;
     };
-    ob.is_instance(cls.bind(py)).unwrap_or(false)
+    ob.is_instance(resolved.class.bind(py)).unwrap_or(false)
+}
+
+/// The `decimal.Decimal` class and the name CPython spells it with — one
+/// interpreter fact, resolved once.
+struct DecimalType {
+    class: Py<PyAny>,
+    /// `"decimal.Decimal"` with the C `_decimal` accelerator, `"Decimal"`
+    /// without it.
+    ///
+    /// CPython's refusal message formats `Py_TYPE(obj)->tp_name`. The C
+    /// `_decimal.Decimal` is a STATIC type, so its `tp_name` carries the
+    /// module; with no `_decimal` the `decimal` module falls back to the
+    /// pure-Python `_pydecimal.Decimal`, a HEAP type whose `tp_name` is the
+    /// bare `__name__`. Which one is installed is a property of the
+    /// INTERPRETER, not of the Python version — so a literal is wrong on any
+    /// build without the C accelerator, and CI's Python 3.15 build is one
+    /// (#3255; reproduced by forcing the pure-Python fallback).
+    type_name: &'static str,
+}
+
+fn decimal_type(py: Python<'_>) -> Option<&'static DecimalType> {
+    static DECIMAL: pyo3::sync::PyOnceLock<DecimalType> = pyo3::sync::PyOnceLock::new();
+    // `PyOnceLock`, not `GILOnceCell` — pyo3 0.29 renamed it.
+    DECIMAL
+        .get_or_try_init(py, || {
+            let class = py.import("decimal")?.getattr("Decimal")?.unbind();
+            Ok::<DecimalType, PyErr>(DecimalType {
+                class,
+                type_name: if is_c_decimal(py) {
+                    "decimal.Decimal"
+                } else {
+                    "Decimal"
+                },
+            })
+        })
+        .ok()
+}
+
+/// Is `decimal.Decimal` the C `_decimal` class rather than the pure-Python
+/// `_pydecimal` fallback? Identity, not a name comparison (#3255).
+fn is_c_decimal(py: Python<'_>) -> bool {
+    let Ok(c) = py.import("_decimal").and_then(|m| m.getattr("Decimal")) else {
+        return false;
+    };
+    let Ok(d) = py.import("decimal").and_then(|m| m.getattr("Decimal")) else {
+        return false;
+    };
+    c.is(&d)
+}
+
+/// The name CPython puts in `'X' object is not iterable` for a `Decimal` on
+/// THIS interpreter (#3255) — measured, never assumed.
+///
+/// Falls soft to the C spelling, which is what every platform with the C
+/// accelerator reports.
+///
+/// `try_attach`, NOT `attach`, and the distinction is load-bearing: this is
+/// reachable from the PURE-RUST renderer path, where no interpreter is
+/// initialized and pyo3's `auto-initialize` feature is off — `djust_templates`'
+/// own unit tests are exactly that, and `attach` panics there
+/// (`for_iterability_agrees_with_iter_values`, found in review of #3410). The
+/// name is a property of an interpreter; with none to ask, the C spelling is
+/// the honest default, and a `Value::Decimal` on that path can only have been
+/// built by Rust code anyway.
+pub fn decimal_type_name() -> &'static str {
+    Python::try_attach(|py| decimal_type(py).map(|d| d.type_name))
+        .flatten()
+        .unwrap_or("decimal.Decimal")
 }
 
 /// The four `datetime` types and a live `DjangoJSONEncoder`, resolved once per
