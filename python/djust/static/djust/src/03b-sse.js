@@ -394,6 +394,12 @@ class LiveViewSSE {
                 break;
             }
 
+            case 'view_refused':
+                // A view beside the page view is refused: its container shows it
+                // and the page does not navigate (#3252).
+                applyViewRefusal(data);
+                break;
+
             case 'async_complete':
                 completeAsyncBatch(this, data.async_batch);
                 break;
