@@ -1,0 +1,1 @@
+- Show deferred state saves as a nonblocking saving status that clears after recovery, while retaining error events and the development overlay for persistent failures.

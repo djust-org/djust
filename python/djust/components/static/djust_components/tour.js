@@ -338,11 +338,9 @@
       var last = step === total - 1;
       if (e.key === "Escape") {
         e.preventDefault();
-        // djust's own modal handling (keyboard-nav) would also react to Escape
-        // in a role=dialog by clicking the first dj-click control it finds,
-        // with no value: Next, Back or Skip with nothing to say which. This
-        // dialog answers Escape itself.
-        e.stopPropagation();
+          // Only the top dialog owns Escape; ancestor and window shortcuts
+          // must not act on the same consumed key.
+          e.stopPropagation();
         if (child(root, "dj-tour__skip")) this._press("dj-tour__skip");
         else if (last) this._press("dj-tour__next");
       } else if (e.key === "ArrowRight") {
@@ -360,7 +358,6 @@
         var active = document.activeElement;
         if (!items.length) {
           e.preventDefault();
-          e.stopPropagation();
           this._focusPopover();
           return;
         }
@@ -368,11 +365,9 @@
         var end = items[items.length - 1];
         if (e.shiftKey && (active === first || active === popover || !root.contains(active))) {
           e.preventDefault();
-          e.stopPropagation();
           end.focus();
         } else if (!e.shiftKey && (active === end || !root.contains(active))) {
           e.preventDefault();
-          e.stopPropagation();
           first.focus();
         }
       }

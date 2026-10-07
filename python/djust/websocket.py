@@ -45,6 +45,7 @@ from .websocket_utils import (
 )
 from .signals import full_html_update, liveview_server_error
 from .mixins.async_work import has_pending_async_work
+from ._view_lanes import ViewLane
 from ._view_slots import ViewSlot, valid_target_id
 
 logger = logging.getLogger(__name__)
@@ -140,6 +141,11 @@ async def _acquire_render_lock(lock: asyncio.Lock, timeout: float) -> None:
             await lock.acquire()
             return
     await asyncio.wait_for(lock.acquire(), timeout=timeout)
+
+
+def _real_consumer(consumer: Any) -> Any:
+    """The socket's own consumer, for a consumer or a view's stand-in (#3252)."""
+    return getattr(consumer, "_slot_consumer", consumer)
 
 
 def _is_send_after_close_error(exc: RuntimeError) -> bool:
@@ -785,6 +791,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             maxlen=_MAX_DEFERRED_PUSHES
         )
         self._push_drain_task: Optional["asyncio.Task[None]"] = None
+        # The queue the page view's frames run on while the socket hosts views
+        # beside it (``_view_lanes``, #3252); None until a frame is queued.
+        self._lane: Optional["ViewLane"] = None
+        # Uploads whose register waits on a view's lane (ref -> the view's
+        # consumer), and uploads stopped because a busy view had no room for
+        # more of them (#3252).
+        self._pending_uploads: Dict[str, Any] = {}
+        self._aborted_uploads: Dict[str, Any] = {}
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
         """Run the consumer; guarantee ``disconnect()`` cleanup (#3000).
@@ -824,6 +838,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     )
             raise
         finally:
+            # The consumer is going away (a cancellation does not run
+            # ``disconnect``): no view's queued turn outlives it (#3252).
+            self._cancel_lanes()
             if binding is not None:
                 binding.release()
 
@@ -2529,6 +2546,16 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # (#3001). First, so a later cleanup step that raises can't leave the
         # drain running.
         self._cancel_deferred_pushes()
+        # A turn running on a view's lane finishes before its view is released,
+        # as it did when frames ran one at a time in the receive loop; turns
+        # still queued are dropped (#3252).
+        lanes = self._lanes()
+        for lane in lanes:
+            lane.drop_queued()
+        self._pending_uploads = {}
+        self._aborted_uploads = {}
+        for lane in lanes:
+            await lane.quiesce()
 
         # Clear the tenant ContextVar bound at mount (Finding #6) so the
         # consumer task doesn't carry a stale tenant if the executor/context is
@@ -2885,6 +2912,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if consumer is None:
             await self._refuse_unmounted_target(data)
             return
+        queued = self._queue_on_lane(consumer, "", data)
+        if queued is None:
+            await self._refuse_busy_view(data)
+            return
+        if queued:
+            return
         await consumer._dispatch_runtime_owned(data)
 
     async def _route_to_view(self, data: Dict[str, Any], handler: str) -> None:
@@ -2893,7 +2926,158 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if consumer is None:
             await self._refuse_unmounted_target(data)
             return
-        await getattr(consumer, handler)(data)
+        if handler in ("_handle_upload_register", "_handle_upload_resume"):
+            self._note_upload_owner(data.get("ref"), consumer)
+        queued = self._queue_on_lane(consumer, handler, data)
+        if queued is None:
+            self._finish_queued_upload(handler, data, consumer)
+            await self._refuse_busy_view(data)
+            return
+        if queued:
+            return
+        try:
+            await getattr(consumer, handler)(data)
+        finally:
+            self._finish_queued_upload(handler, data, consumer)
+
+    #: Uploads whose ``upload_register`` / ``upload_resume`` is queued on a view's
+    #: lane remembered at most this many at a time (#3252).
+    _MAX_PENDING_UPLOADS = 256
+
+    def _note_upload_owner(self, ref: Any, consumer: Any) -> None:
+        """Remember which view an upload ref was registered for, before it has run.
+
+        The upload's binary frames carry only the ref. A register that is still
+        queued on its view's lane has not put the ref in that view's manager, so
+        without this the chunks that follow it would be routed to the wrong view
+        and lost.
+        """
+        if not isinstance(ref, str) or not ref:
+            return
+        pending: Dict[str, Any] = getattr(self, "_pending_uploads", None) or {}
+        self._pending_uploads = pending
+        pending.pop(ref, None)
+        pending[ref] = consumer
+        while len(pending) > self._MAX_PENDING_UPLOADS:
+            pending.pop(next(iter(pending)))
+
+    def _finish_queued_upload(self, handler: str, data: Dict[str, Any], consumer: Any) -> None:
+        """An ``upload_register`` / ``upload_resume`` has run (or was refused): its
+        ref no longer needs the pending map, and an upload that was stopped while
+        its register waited is cancelled now that its entry exists."""
+        if handler not in ("_handle_upload_register", "_handle_upload_resume"):
+            return
+        ref = data.get("ref")
+        if not isinstance(ref, str):
+            return
+        (getattr(self, "_pending_uploads", None) or {}).pop(ref, None)
+        if ref in (getattr(self, "_aborted_uploads", None) or {}):
+            manager = getattr(getattr(consumer, "view_instance", None), "_upload_manager", None)
+            if manager is not None:
+                manager.cancel_upload(ref)
+
+    def _forget_upload(self, ref: Any) -> None:
+        """An upload ended (complete, cancel, error): drop what is remembered of it."""
+        (getattr(self, "_pending_uploads", None) or {}).pop(ref, None)
+        (getattr(self, "_aborted_uploads", None) or {}).pop(ref, None)
+
+    def _forget_uploads_of(self, consumer: Any) -> None:
+        """A view is released: nothing remembered for it outlives it."""
+        pending = getattr(self, "_pending_uploads", None) or {}
+        for ref in [r for r, owner in pending.items() if owner is consumer]:
+            pending.pop(ref, None)
+        aborted = getattr(self, "_aborted_uploads", None) or {}
+        for ref in [r for r, owner in aborted.items() if owner is consumer]:
+            aborted.pop(ref, None)
+
+    def _upload_queue_budget(self) -> int:
+        """Bytes of upload frames a busy view's lane may hold (#3252).
+
+        ``rate_limit.upload_burst`` frames (default 400) of ``max_message_size``
+        (default 64 KiB), about 25 MiB: what the connection's upload rate limit
+        lets a client send in one burst, so an ordinary upload of a default-sized
+        file (10 MB, 160 chunks of 63 KiB) fits behind a busy view many times over.
+        """
+        rate_limit = djust_config.get("rate_limit", {})
+        burst = rate_limit.get("upload_burst", 400) if isinstance(rate_limit, dict) else 400
+        size = djust_config.get("max_message_size", 65536)
+        burst = burst if type(burst) is int and burst > 0 else 400
+        size = size if type(size) is int and size > 0 else 65536
+        return burst * size
+
+    def _lanes(self) -> List["ViewLane"]:
+        """The lane of the page view and of each view beside it that has one."""
+        owners = [self, *(slot.facade for slot in list(self._slot_map().values()))]
+        lanes = [getattr(owner, "_lane", None) for owner in owners]
+        return [lane for lane in lanes if lane is not None]
+
+    def _cancel_lanes(self) -> None:
+        for lane in self._lanes():
+            lane.cancel()
+
+    async def _refuse_busy_view(self, data: Dict[str, Any]) -> None:
+        """Answer a frame for a view that already has as many turns waiting as it may."""
+        fields: Dict[str, Any] = {"code": "view_busy"}
+        ref = data.get("ref")
+        if type(ref) is int or type(ref) is float:
+            try:
+                fields["ref"] = int(ref)
+            except (ValueError, OverflowError):
+                # Non-finite numeric refs cannot be echoed as integers; the
+                # busy refusal still answers the frame without a ref.
+                pass
+        if isinstance(data.get("target_id"), str):
+            fields["target_id"] = data["target_id"]
+        # Which event was dropped, so the application can decide to send it
+        # again: the frame is refused, not queued, and the client does not retry.
+        if isinstance(data.get("event"), str):
+            fields["event"] = data["event"][:100]
+        await self.send_error("This view is busy. Try again in a moment.", **fields)
+
+    def _queue_on_lane(self, consumer: Any, handler: str, data: Dict[str, Any]) -> Optional[bool]:
+        """Queue a frame on its view's lane instead of running it here (#3252).
+
+        True when queued; None when the view's lane is full (the caller refuses
+        the frame); False when the frame is to run inline. A socket that hosts several views runs each view's
+        frames on a lane of its own, one at a time and in order, so a slow
+        handler in one view does not hold up the frames of the others. A socket
+        with one view, and no turns left on its lane, runs the frame inline in
+        the receive loop exactly as before.
+        """
+        lane = getattr(consumer, "_lane", None)
+        if lane is None:
+            if not self._slot_map():
+                return False
+            lane = consumer._lane = ViewLane()
+        elif not self._slot_map() and not lane.busy():
+            return False
+        return True if lane.submit(consumer._run_lane_item, (handler, data)) else None
+
+    @owned_diagnostic_scope
+    async def _run_lane_item(self, item: Tuple[str, Dict[str, Any]]) -> None:
+        """Run one queued frame for the view ``self`` runs, as ``receive`` would.
+
+        ``handler`` is the consumer method of a view-addressed verb, or empty
+        for a runtime-owned one (``event``, ``url_change``). A failure answers
+        with the same protected error ``receive`` sends.
+        """
+        handler, data = item
+        try:
+            if handler:
+                try:
+                    await getattr(self, handler)(data)
+                finally:
+                    _real_consumer(self)._finish_queued_upload(handler, data, self)
+            else:
+                await self._dispatch_runtime_owned(data)
+        except Exception as e:
+            response = handle_exception(
+                e,
+                error_type="default",
+                logger=logger,
+                log_message="Error in WebSocket receive",
+            )
+            await self.send_json(response)
 
     async def handle_mount(
         self,
@@ -3220,7 +3404,19 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             await self.send_error("Invalid unmount target")
             return
         slot = self._slot_map().get(target_id)
-        if slot is not None:
+        if slot is None:
+            return
+        lane = getattr(slot.facade, "_lane", None)
+        if lane is not None and lane.busy() and lane.submit(self._unmount_slot, slot):
+            # Turns are queued or running for the view: it goes after them, on
+            # its own lane, so the receive loop (and every other view) is not
+            # held up waiting for them (#3252).
+            return
+        await self._release_slot(slot, reason="view_unmounted")
+
+    async def _unmount_slot(self, slot: "ViewSlot") -> None:
+        """Release a view from its own lane, once the turns before it have run."""
+        if self._slot_map().get(slot.target_id) is slot:
             await self._release_slot(slot, reason="view_unmounted")
 
     async def handle_mount_batch(self, data: Dict[str, Any]) -> None:
@@ -3545,19 +3741,81 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 logger.warning("Invalid upload frame received")
             return
 
-        # An upload belongs to the view that registered it: with several views
-        # on the socket, the one whose manager holds this ref (#3252).
-        owner = self._upload_owner(frame["ref"])
+        ref = frame["ref"]
+        aborted_owner = (getattr(self, "_aborted_uploads", None) or {}).get(ref)
+        if aborted_owner is not None:
+            # Do not route a late frame to the page's manager: its completion
+            # cleanup would erase the marker before a queued register can
+            # cancel this upload on its actual owner.
+            from .uploads import build_progress_message
+
+            message = build_progress_message(ref, 0, "error")
+            message["error"] = "Upload cancelled because the view is busy."
+            await aborted_owner.send_json(message)
+            return
+        owner = self._known_upload_owner(ref)
+        lane = getattr(owner, "_lane", None) if owner is not None else None
+        if lane is not None and lane.busy():
+            # A view with turns queued or running keeps its uploads in order too:
+            # the frames of an upload follow its register on the view's lane, so
+            # they are never applied before the register has run (#3252). Only an
+            # upload whose ref is known is queued (an unknown ref is answered
+            # inline, as it always was), and what is queued is bounded in bytes.
+            size = len(frame["data"]) if frame["type"] == "chunk" else 0
+            if lane.submit(
+                owner._run_lane_item,
+                ("_handle_upload_frame_for_view", frame),
+                size=size,
+                budget=self._upload_queue_budget(),
+            ):
+                return
+            await self._abort_busy_upload(owner, ref)
+            return
+        owner = owner if owner is not None else self._default_consumer()
         await type(self)._handle_upload_frame_for_view(owner, frame)
 
-    def _upload_owner(self, ref: Any) -> Any:
-        """The consumer-like whose view registered the upload ``ref``."""
+    async def _abort_busy_upload(self, owner: Any, ref: str) -> None:
+        """A busy view's lane has no room for more of this upload: stop the upload.
+
+        The client is told (an ``upload_progress`` error for the ref), the upload
+        is cancelled if its entry exists (or when its queued register runs), and
+        later frames of the ref are answered like those of an unknown upload. The
+        upload fails visibly rather than losing chunks.
+        """
+        from .uploads import build_progress_message
+
+        aborted: Dict[str, Any] = getattr(self, "_aborted_uploads", None) or {}
+        self._aborted_uploads = aborted
+        aborted[ref] = owner
+        while len(aborted) > self._MAX_PENDING_UPLOADS:
+            aborted.pop(next(iter(aborted)))
+        (getattr(self, "_pending_uploads", None) or {}).pop(ref, None)
+        manager = getattr(owner.view_instance, "_upload_manager", None)
+        entries = getattr(manager, "_entries", None)
+        if manager is not None and isinstance(entries, dict) and ref in entries:
+            manager.cancel_upload(ref)
+        message = build_progress_message(ref, 0, "error")
+        message["error"] = "The view is busy and cannot take more of this upload; try again."
+        await owner.send_json(message)
+
+    def _known_upload_owner(self, ref: Any) -> Any:
+        """The consumer-like whose view registered the upload ``ref``, or None.
+
+        None for a ref no view knows (never registered, or stopped by
+        :meth:`_abort_busy_upload`).
+        """
+        if ref in (getattr(self, "_aborted_uploads", None) or {}):
+            return None
         for consumer in self._view_consumers():
             manager = getattr(consumer.view_instance, "_upload_manager", None)
             entries = getattr(manager, "_entries", None)
             if isinstance(entries, dict) and ref in entries:
                 return consumer
-        return self._default_consumer()
+        # Registered, but the register is still queued on the view's lane.
+        pending = (getattr(self, "_pending_uploads", None) or {}).get(ref)
+        if pending is not None and pending.view_instance is not None:
+            return pending
+        return None
 
     async def _handle_upload_frame_for_view(self, frame: Dict[str, Any]) -> None:
         """Apply a parsed upload frame to the upload manager of the view ``self`` runs."""
@@ -3583,6 +3841,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 if entry and (progress % 10 == 0 or progress >= 100):
                     await self.send_json(build_progress_message(ref, progress))
             else:
+                _real_consumer(self)._forget_upload(ref)
                 # Surface error details (writer exception, size-limit, etc.)
                 err_entry = mgr._entries.get(ref)
                 error_msg = err_entry.error if err_entry and err_entry.error else None
@@ -3592,6 +3851,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 await self.send_json(msg)
 
         elif frame["type"] == "complete":
+            _real_consumer(self)._forget_upload(ref)
             entry = mgr.complete_upload(ref)
             if entry:
                 await self.send_json(build_progress_message(ref, 100, "complete"))
@@ -3609,6 +3869,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 )
 
         elif frame["type"] == "cancel":
+            _real_consumer(self)._forget_upload(ref)
             mgr.cancel_upload(ref)
             await self.send_json(build_progress_message(ref, 0, "cancelled"))
 
@@ -4343,6 +4604,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         from .runtime import leave_consumer_view_groups
 
         view = consumer.view_instance
+        # Turns queued for this view run before it goes (#3252).
+        lane = getattr(consumer, "_lane", None)
+        if lane is not None:
+            await lane.quiesce()
+        self._forget_uploads_of(consumer)
         await leave_consumer_view_groups(consumer)
         # Presence waits for the replacement mount (#3254): see
         # ``_defer_presence_untrack``. Not for a backend with one record per
@@ -4369,7 +4635,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         # Pushes deferred for the old view must not reach the new one (#3001).
         if view is not None:
-            self._cancel_deferred_pushes(view)
+            consumer._cancel_own_deferred_pushes()
 
         # Store the latest state before the view goes (#3248), so Back to this
         # page restores what the user left, not an older session copy.
@@ -5494,7 +5760,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 # entitled to: same re-check as a server-originated render
                 # turn, run for THE VIEW THAT RECEIVES THE FRAME (the page
                 # view or a slot's stand-in), under the render lock.
-                async with self._render_lock:
+                async with consumer._render_lock:
                     if consumer.view_instance is not view:
                         continue
                     if not await consumer._reauth_legacy_server_turn(view):
@@ -5964,40 +6230,46 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             self._push_drain_task = asyncio.ensure_future(self._drain_deferred_pushes())
 
     async def _drain_deferred_pushes(self) -> None:
-        """Replay deferred pushes in order, each as soon as the lock frees."""
+        """Replay this view's deferred pushes in order, each as soon as its lock frees.
+
+        Each view has its own queue and drain (#3252): a push waits only for the
+        view it is addressed to.
+        """
         queue = self._deferred_pushes
         while queue:
             # Unbounded wait is right here: this runs in its own task, not in
             # the dispatch loop, so it blocks nothing; whoever holds the lock
             # (a user event, a background result, a tick) releases it.
             await self._render_lock.acquire()
-            # Take what is queued for the first view still mounted: one turn,
-            # one render for it (#3001). Entries for a view that has since been
-            # replaced are dropped; another mounted view's entries wait for
-            # their own turn (the loop comes back for them).
+            # Take what is queued for the view mounted now: one turn, one
+            # render (#3001). Entries for a view that has since been replaced
+            # are dropped.
+            view = self.view_instance
             events: List[Dict[str, Any]] = []
-            target: Any = None
-            for view, event in list(queue):
-                consumer = self._consumer_for_view(view)
-                if consumer is None:
-                    queue.remove((view, event))
-                    continue
-                if target is None:
-                    target = consumer
-                if consumer is target:
-                    queue.remove((view, event))
+            for queued_view, event in list(queue):
+                queue.remove((queued_view, event))
+                if view is not None and queued_view is view:
                     events.append(event)
             if not events:
                 self._render_lock.release()
                 continue
-            await type(self)._run_server_push_turn(target, target.view_instance, *events)
+            # A view beside the page view runs on a stand-in: the turn is the
+            # consumer's code, with the stand-in as ``self``.
+            owner_class: Any = type(getattr(self, "_slot_consumer", self))
+            await owner_class._run_server_push_turn(self, view, *events)
 
     def _cancel_deferred_pushes(self, view: Any = None) -> None:
-        """Drop queued pushes and stop the drain (disconnect / view teardown).
+        """Drop queued pushes and stop the drains (disconnect / view teardown).
 
-        With ``view``, only the pushes queued for that view go: its siblings
-        keep theirs, and the drain keeps running for them.
+        With ``view``, only the pushes queued for that view go; the drains keep
+        running. Covers the page view and every view beside it.
         """
+        owners: List[Any] = [self, *(slot.facade for slot in list(self._slot_map().values()))]
+        for owner in owners:
+            owner._cancel_own_deferred_pushes(view)
+
+    def _cancel_own_deferred_pushes(self, view: Any = None) -> None:
+        """:meth:`_cancel_deferred_pushes` for the one view ``self`` runs."""
         # getattr: test doubles and subclasses may skip __init__.
         queue = getattr(self, "_deferred_pushes", None)
         if view is not None:

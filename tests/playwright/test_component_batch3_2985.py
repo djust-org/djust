@@ -712,6 +712,40 @@ def main() -> int:
                             f"{name}: back at the bottom it follows the stream again (every {ms} ms, gap {resumed:.0f})",
                         )
 
+                # ---- the page is busy for 900 ms right after a wheel (before its scroll event is handled) ----
+                # A wheel scroll is stamped when it happens (by the compositor); the hook compares
+                # the two events' own times, so the stall between their handlers does not separate them.
+                for name, body_sel, event, prefix in (
+                    ("terminal", "#trim-term .dj-terminal__body", "trim_out", ""),
+                    ("log viewer", "#trim-log .dj-log-viewer__body", "log_trim", "INFO "),
+                ):
+                    page.eval_on_selector(body_sel, "b => b.scrollIntoView({block: 'center'})")
+                    page.evaluate(start_stream, [event, prefix, 50])
+                    page.wait_for_timeout(500)
+                    page.eval_on_selector(
+                        body_sel,
+                        "b => { window.__stall = () => { const t = Date.now(); while (Date.now() - t < 900); };"
+                        " b.addEventListener('wheel', window.__stall, {capture: true, passive: true}); }",
+                    )
+                    box = page.eval_on_selector(
+                        body_sel,
+                        "b => { const r = b.getBoundingClientRect(); return {x: r.left + r.width / 2, y: r.top + r.height / 2}; }",
+                    )
+                    page.mouse.move(box["x"], box["y"])
+                    page.mouse.wheel(0, -3000)
+                    page.wait_for_timeout(2500)
+                    up = page.eval_on_selector(body_sel, gap)
+                    page.evaluate(stop_stream)
+                    page.eval_on_selector(
+                        body_sel,
+                        "b => { b.removeEventListener('wheel', window.__stall, true); b.scrollTop = b.scrollHeight; }",
+                    )
+                    page.wait_for_timeout(300)
+                    check(
+                        up > 40,
+                        f"{name}: a wheel-up followed by a 900 ms stall of the page before its scroll event still un-pins (gap {up:.0f})",
+                    )
+
                 # ======================= Tour =======================
                 page.evaluate("() => window.scrollTo(0, 0)")
                 page.focus("#start-tour")

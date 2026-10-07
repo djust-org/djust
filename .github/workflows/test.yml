@@ -595,12 +595,19 @@ jobs:
       - name: Run browser-smoke canary (BLOCKING, #1849/#1848)
         run: .venv/bin/python tests/playwright/test_browser_smoke.py
 
+      - name: Verify transient state-save recovery over WebSocket and SSE
+        env:
+          TRANSIENT_SAVE_ARTIFACTS: scratch/transient-save-recovery
+        run: .venv/bin/python tests/playwright/test_transient_save_recovery.py
+
       - name: Upload server logs on failure
         if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: browser-smoke-server-logs
-          path: examples/demo_project/server.log
+          path: |
+            examples/demo_project/server.log
+            scratch/transient-save-recovery/
 
       - name: Stop server
         if: always()

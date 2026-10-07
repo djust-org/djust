@@ -58,6 +58,7 @@ def _feed_paths(**kw) -> dict[str, str]:
 def _terminal_paths(**kw) -> dict[str, str]:
     numbers = kw.get("show_line_numbers", False)
     max_lines = kw.get("max_lines", 0)
+    auto_scroll = kw.get("auto_scroll", True)
     return {
         "class": Terminal(
             output=OUTPUT,
@@ -65,10 +66,11 @@ def _terminal_paths(**kw) -> dict[str, str]:
             stream_event="out",
             show_line_numbers=numbers,
             max_lines=max_lines,
+            auto_scroll=auto_scroll,
         ).render(),
         "tag": _tag(
             "{% terminal output=output title='Build' stream_event='out' "
-            f"show_line_numbers={numbers} max_lines={max_lines} %}}",
+            f"show_line_numbers={numbers} max_lines={max_lines} auto_scroll={auto_scroll} %}}",
             output=OUTPUT,
         ),
         "handler": str(
@@ -79,6 +81,7 @@ def _terminal_paths(**kw) -> dict[str, str]:
                     "stream_event='out'",
                     f"show_line_numbers={numbers}",
                     f"max_lines={max_lines}",
+                    f"auto_scroll={auto_scroll}",
                 ],
                 {"output": OUTPUT},
             )
@@ -156,6 +159,16 @@ class TestTerminalMarkup:
 
     def test_the_three_render_paths_agree(self):
         paths = _terminal_paths(show_line_numbers=True, max_lines=100)
+        assert paths["class"] == paths["tag"] == paths["handler"]
+
+    def test_auto_scroll_false_is_the_only_thing_that_adds_an_attribute(self):
+        for path, html in _terminal_paths(auto_scroll=False).items():
+            assert 'data-auto-scroll="false"' in html, path
+        for path, html in _terminal_paths().items():
+            assert "data-auto-scroll" not in html, path  # the default markup is unchanged
+
+    def test_auto_scroll_agrees_on_the_three_render_paths(self):
+        paths = _terminal_paths(show_line_numbers=True, max_lines=100, auto_scroll=False)
         assert paths["class"] == paths["tag"] == paths["handler"]
 
     def test_max_lines_is_additive_and_defaults_to_the_old_behaviour(self):
