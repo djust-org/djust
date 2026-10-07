@@ -46,46 +46,85 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           LIMIT="${{ github.event.inputs.limit || '50' }}"
-          # `audit-pipeline-bypass.py` exits 1 when it finds flagged PRs.
-          # Capture that exit code without failing the step — the whole
-          # point of this workflow is to *surface* findings as
-          # annotations, not turn the daily cron red. The annotations
-          # themselves are the alert mechanism.
-          set +o pipefail
+          # `audit-pipeline-bypass.py` exits 0 clean / 1 findings / 2 could
+          # not complete, and prints a final `AUDIT_VERDICT:` line. GitHub
+          # Actions runs a `run:` block under `bash -e`, so the pre-#3129
+          # version aborted at the script's exit 1 — before AUDIT_EXIT,
+          # before `cat`, before any annotation — and threw the findings
+          # away (`set +o pipefail` does nothing about `-e`). Turn `-e` off
+          # around this one command so the exit code is captured instead.
+          set +e
           python scripts/audit-pipeline-bypass.py --limit "$LIMIT" \
             > audit-output.txt 2>&1
           AUDIT_EXIT=$?
-          set -o pipefail
+          set -e
+          # Always echo the captured output: the run log must carry the
+          # audit's findings even when the workflow itself stays green.
           cat audit-output.txt
           echo "audit_exit=$AUDIT_EXIT" >> "$GITHUB_OUTPUT"
-          # If the script printed any "potential bypass" rows, surface
-          # them as annotations.
-          if grep -q "potential bypass" audit-output.txt; then
-            echo "flagged=true" >> "$GITHUB_OUTPUT"
-            grep "potential bypass" audit-output.txt | while IFS= read -r line; do
-              echo "::warning::Retro gate: $line"
-            done
-          else
-            echo "flagged=false" >> "$GITHUB_OUTPUT"
-          fi
+
+          # The VERDICT LINE is the contract, not the exit code. A Python
+          # crash also exits 1, so "found something" and "died" are the same
+          # number — which is how a broken audit reported findings it never
+          # produced (#3129, found in independent review).
+          VERDICT="$(sed -n 's/^AUDIT_VERDICT: //p' audit-output.txt | tail -n 1)"
+          echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
+
+          case "$VERDICT" in
+            clean)
+              echo "flagged=false" >> "$GITHUB_OUTPUT"
+              ;;
+            findings)
+              # Surface each row and leave the step green — the annotations
+              # are the alert mechanism.
+              echo "flagged=true" >> "$GITHUB_OUTPUT"
+              grep "potential bypass" audit-output.txt | while IFS= read -r line; do
+                echo "::warning::Retro gate: $line"
+              done || true
+              ;;
+            incomplete)
+              echo "flagged=error" >> "$GITHUB_OUTPUT"
+              echo "::error::Retro gate audit could not complete (exit $AUDIT_EXIT) — the output above is not a clean audit."
+              exit 1
+              ;;
+            *)
+              # No verdict at all: the script died before printing one. Never
+              # report this as clean.
+              echo "flagged=error" >> "$GITHUB_OUTPUT"
+              echo "::error::Retro gate audit produced no verdict (exit $AUDIT_EXIT) — this is not a clean result."
+              exit 1
+              ;;
+          esac
+
+      - name: Upload audit output
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: retro-gate-audit-output
+          path: audit-output.txt
+          if-no-files-found: warn
 
       - name: Append summary
         if: always()
         run: |
+          FLAGGED="${{ steps.audit.outputs.flagged }}"
           {
             echo "## Retro Gate Audit"
             echo ""
-            if [ "${{ steps.audit.outputs.flagged }}" = "true" ]; then
-              echo "⚠️ Found PRs without retro markers. See annotations above."
-              echo ""
-            else
-              echo "✅ No flagged PRs."
-              echo ""
-            fi
+            case "$FLAGGED" in
+              true)  echo "⚠️ Found PRs without retro markers. See annotations above." ;;
+              false) echo "✅ Audit ran and reported no flagged PRs." ;;
+              error) echo "❌ The audit did not complete — the output below is NOT a clean result." ;;
+              # No verdict (step never ran, or aborted before writing the
+              # output). Pre-#3129 this fell through to "✅ No flagged PRs."
+              # for an audit that reported nothing (#3129).
+              *)     echo "❌ No audit verdict was produced — this is NOT a clean result." ;;
+            esac
+            echo ""
             echo "<details><summary>Full audit output</summary>"
             echo ""
             echo '```'
-            cat audit-output.txt
+            if [ -f audit-output.txt ]; then cat audit-output.txt; fi
             echo '```'
             echo "</details>"
           } >> "$GITHUB_STEP_SUMMARY"
