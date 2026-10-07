@@ -136,6 +136,8 @@ Client sends "mount" message
         2. permission_required? → check request.user.has_perms()
         3. check_permissions()? → call custom hook (if overridden)
     → If unauthenticated: send {"type": "navigate", "to": "/login/"}
+      (a view mounted beside the page view, such as a `dj-lazy` view, gets a
+      `view_refused` frame for its own container instead: nothing navigates)
     → If authenticated but lacking permission_required perms: close with 4403 (PermissionDenied)
     → If check_permissions() returns False or raises PermissionDenied:
       navigate to login_url (not a 403), even for a logged-in user

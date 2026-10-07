@@ -343,6 +343,30 @@ def _check_url(name: str, value: Any) -> None:
         raise ValueError(f"{name}= refuses javascript:, vbscript: and data: URLs")
 
 
+def _check_item_urls(items: Any, name: str = "url") -> None:
+    """Apply :func:`_check_url` to ``name`` on every dict in *items*.
+
+    The navigation components (``theme_nav`` / ``theme_nav_group`` /
+    ``theme_sidebar_nav`` / ``theme_breadcrumb``) take their links as a list of
+    ``{"label": ..., "url": ...}`` dicts, which the component template renders
+    into ``<a href>``. ``theme_nav_item``'s single ``url`` and the
+    ``**attrs`` passthrough are validated already; a list an app fills from its
+    own data (a CMS page, a user-supplied link) was not. Every element is
+    validated here so a script-bearing scheme in any item is refused.
+    """
+    if not items:
+        return
+    if isinstance(items, dict):
+        items = [items]
+    if not isinstance(items, (list, tuple)):
+        return
+    for item in items:
+        if isinstance(item, dict):
+            value = item.get(name)
+            if isinstance(value, str) and value:
+                _check_url(name, value)
+
+
 def _passthrough_attrs(attrs: dict[str, Any], skip: tuple[str, ...]) -> SafeString:
     """``key="value"`` pairs for the attrs a component template does not
     handle itself. ``dj_input`` → ``dj-input``; values are escaped; ``True``
@@ -587,6 +611,10 @@ def theme_pagination(
     # templates only ever read as `attrs.class` / `attrs.id`, so a
     # caller-supplied slot rendered as nothing at all.
     slots, remaining_attrs = _extract_slots(attrs)
+    # Every page link is built from ``url_pattern`` by ``.format(p)`` and rendered
+    # into an ``<a href>``; a script-bearing scheme in the pattern would reach all
+    # of them (#F1).
+    _check_url("url_pattern", url_pattern)
 
     # Build page range (show up to 5 pages around current)
     window = 2
@@ -850,6 +878,7 @@ def theme_breadcrumb(
     slots, remaining_attrs = _extract_slots(attrs)
     request = context.get("request")
     tmpl = resolve_component_template(request, "breadcrumb")
+    _check_item_urls(items)
     ctx = {
         "items": items or [],
         "separator": separator,
@@ -886,6 +915,8 @@ def theme_avatar(
     slots, remaining_attrs = _extract_slots(attrs)
     request = context.get("request")
     tmpl = resolve_component_template(request, "avatar")
+    if src:
+        _check_url("src", src)
 
     # Generate initials from name
     initials = ""
@@ -1131,6 +1162,8 @@ def theme_nav_item(
     request = context.get("request")
     tmpl = resolve_component_template(request, "nav_item")
     url = "" if url is None else str(url)
+    if url:
+        _check_url("url", url)
 
     # Auto-detect active state from request.path
     is_active = active
@@ -1188,6 +1221,7 @@ def theme_nav_group(
     slots, remaining_attrs = _extract_slots(attrs)
     request = context.get("request")
     tmpl = resolve_component_template(request, "nav_group")
+    _check_item_urls(items)
     ctx = {
         "label": label,
         "items": items or [],
@@ -1224,6 +1258,7 @@ def theme_nav(
     slots, remaining_attrs = _extract_slots(attrs)
     request = context.get("request")
     tmpl = resolve_component_template(request, "nav")
+    _check_item_urls(items)
     ctx = {
         "brand": brand,
         "items": items or [],
@@ -1250,6 +1285,10 @@ def theme_sidebar_nav(context: Context, sections: Any = None, **attrs: Any) -> S
     slots, remaining_attrs = _extract_slots(attrs)
     request = context.get("request")
     tmpl = resolve_component_template(request, "sidebar_nav")
+    # Sections wrap their own items: ``[{"title": ..., "items": [{"url": ...}]}]``.
+    for section in sections or []:
+        if isinstance(section, dict):
+            _check_item_urls(section.get("items"))
     ctx = {
         "sections": sections or [],
         "attrs": remaining_attrs,
