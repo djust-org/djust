@@ -54,18 +54,28 @@
   // over WebSocket, SSE and HTTP-only, honours strict parameter contracts and
   // reaches the right view when several are mounted. Falls back to the hook's
   // own pushEvent when the client API is absent.
+  function addContext(params, el) {
+    for (var node = el; node && node !== document.body; node = node.parentElement) {
+      var ds = node.dataset || {};
+      if (params.component_id === undefined && ds.componentId) params.component_id = ds.componentId;
+      if (params.view_id === undefined && ds.djustEmbedded) params.view_id = ds.djustEmbedded;
+    }
+  }
+
   function send(hook, root, eventName, params) {
     var d = window.djust;
     if (d && typeof d.handleEvent === "function") {
       var sent = params;
       if (typeof d._strictBinding === "function") {
-        var strict = d._strictBinding(root, eventName, params, []);
+        var strict = d._strictBinding(root, eventName, params, [], root);
         if (strict === false) return;
         if (strict) sent = strict;
       }
+      if (sent === params) addContext(sent, root);
       if (typeof d._markSlotOf === "function") d._markSlotOf(sent, root);
       d.handleEvent(eventName, sent);
     } else if (typeof hook.pushEvent === "function") {
+      addContext(params, root);
       hook.pushEvent(eventName, params);
     }
   }

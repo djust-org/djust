@@ -449,6 +449,25 @@ describe('Clear, Undo and the empty state', () => {
 // Save
 // ---------------------------------------------------------------------------
 
+describe('signature notification routing', () => {
+    it('preserves component and embedded view routing', async () => {
+        const env = await boot('<section data-djust-embedded="child"><div data-component-id="signer">' + PAD() + '</div></section>');
+        delete env.window.djust._strictBinding;
+        env.draw([[20, 20], [80, 40]]);
+        env.click('save');
+        expect(env.sent[0].params).toMatchObject({ component_id: 'signer', view_id: 'child' });
+    });
+
+    it('passes the pad root to strict binding', async () => {
+        const env = await boot(PAD());
+        env.window.djust._strictBinding = vi.fn((_el, _event, params, _required, context) => ({ ...params, view_id: context === env.root ? 'child' : undefined }));
+        env.draw([[20, 20], [80, 40]]);
+        env.click('save');
+        expect(env.sent[0].params.view_id).toBe('child');
+        expect(env.window.djust._strictBinding.mock.calls[0][4]).toBe(env.root);
+    });
+});
+
 describe('Save', () => {
     it('with nothing drawn sends nothing and says so', async () => {
         const env = await boot(PAD(), { dpr: 1, width: 400 });
