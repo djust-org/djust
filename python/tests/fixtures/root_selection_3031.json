@@ -248,6 +248,27 @@
    "root": true
   },
   {
+   "name": "textarea_incomplete_end_token",
+   "why": "An end-tag name plus whitespace at EOF is not a complete token; the root exists but its content range is unavailable.",
+   "html": "<textarea dj-root data-expect-root>text</textarea ",
+   "root": true,
+   "content": null
+  },
+  {
+   "name": "textarea_unterminated_end_attribute",
+   "why": "An unterminated quoted end-tag attribute discards the token at EOF; Python and the native scanner reject its closing range.",
+   "html": "<textarea dj-root data-expect-root>text</textarea x='unfinished",
+   "root": true,
+   "content": null
+  },
+  {
+   "name": "textarea_complete_end_attribute",
+   "why": "Parsed control: ignored end-tag attributes do not invalidate a complete closing token.",
+   "html": "<textarea dj-root data-expect-root>text</textarea x='ignored'>",
+   "root": true,
+   "content": "text"
+  },
+  {
    "name": "lookalike_in_title",
    "why": "html5ever (and a browser) read this element's content as text; the Python mask and the text scanner only mask script/style/comments, so they see the lookalike (predates #3031)",
    "html": "<title><div dj-root></title><div dj-root data-expect-root>m</div>",

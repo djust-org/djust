@@ -119,7 +119,11 @@ function _containerScripts(container) {
  *
  * @param {Element} container - the mounted/morphed container to scan.
  */
-function _runInsertedScripts(container, alreadyRan) {
+// Presence before a body mount establishes retention, not execution. Keep
+// this distinct from the marker on scripts djust actually reinserted to run.
+const _retainedMountScripts = new WeakSet();
+
+function _runInsertedScripts(container, retainedBefore) {
     if (!container || typeof container.querySelectorAll !== 'function') return;
     let scripts;
     try {
@@ -128,14 +132,13 @@ function _runInsertedScripts(container, alreadyRan) {
         return;
     }
     for (const old of scripts) {
-        // #3302: a script the browser already ran (the prerendered page's own)
-        // is not run a second time.
-        if (alreadyRan && alreadyRan.has(old)) {
-            // Share the execution marker with _warnDeadScripts: this node
-            // already executed during parsing, rather than being inserted inert.
-            old.setAttribute('data-djust-script-ran', '');
+        // #3302: retain these nodes without executing them. They may have run
+        // during parsing OR been inserted inert before the mount.
+        if (retainedBefore && retainedBefore.has(old)) {
+            _retainedMountScripts.add(old);
             continue;
         }
+        if (_retainedMountScripts.has(old)) continue;
         // Skip already-executed scripts (idempotent on reconnect/re-mount)
         // and any djust-managed marker scripts.
         if (old.hasAttribute('data-djust-script-ran')) continue;
@@ -176,6 +179,8 @@ function _runInsertedScripts(container, alreadyRan) {
  *  - Scripts already re-executed by `_runInsertedScripts()` — marked
  *    `data-djust-script-ran` (the mount / `live_redirect` re-execution path
  *    documented above, #1635/#1650 lineage).
+ *  - Retained body-mount scripts get an honest unknown-status warning instead:
+ *    DOM presence does not establish whether the browser executed them.
  *  - `type="djust/hook"` colocated-hook payload scripts — extracted (never
  *    meant to run as a script) by `extractColocatedHooks()` in
  *    32-colocated-hooks.js.
@@ -212,6 +217,16 @@ function _warnDeadScripts(root) {
         const label = el.getAttribute('src')
             || (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 60)
             || '(empty inline script)';
+        if (_retainedMountScripts.has(el)) {
+            console.warn(
+                '[djust] Retained <script> execution status is unknown (%s). ' +
+                'It was present before the mount and was not rerun: parser-created scripts ' +
+                'may have executed, while innerHTML-created scripts remain inert. ' +
+                'Use a {% colocated_hook %} for initialization after DOM updates.',
+                label
+            );
+            continue;
+        }
         console.error(
             '[djust] <script> inserted by a DOM morph/patch will NOT execute (%s). ' +
             'Browsers treat innerHTML/morph-inserted <script> tags as inert. ' +
@@ -266,12 +281,12 @@ function _morphPrerenderedMount(container, html, formRecoverySnapshot, restoreDr
     const temp = document.createElement('div');
     // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
     temp.innerHTML = html;
-    // #3302: with <body> as the container, the prerendered page's own scripts
-    // already ran when it loaded; only scripts the morph creates are run below.
-    const ranBefore = (container === document.body && pageRootIsBody())
+    // #3302: scripts retained from the body must not be rerun. DOM presence
+    // alone cannot distinguish parser-executed scripts from inert ones.
+    const retainedBefore = (container === document.body && pageRootIsBody())
         ? new Set(_containerScripts(container)) : null;
     morphChildren(container, temp);
-    if (ranBefore) markBodyStamped();
+    if (retainedBefore) markBodyStamped();
     // The morph resets form fields to the server's values; put a saved draft
     // back into this container before form recovery, which restores what the
     // user had typed (#3351). Only a FIRST mount does: a reconnect's mount
@@ -290,7 +305,7 @@ function _morphPrerenderedMount(container, html, formRecoverySnapshot, restoreDr
     _stampEmbeddedWrapperDjIds(container, temp);
     // #1848: morphChildren re-creates inline <script> nodes inert. Re-run
     // classic page scripts inside the dj-root so their init runs on mount.
-    _runInsertedScripts(container, ranBefore);
+    _runInsertedScripts(container, retainedBefore);
     // #2058: anything _runInsertedScripts() didn't re-execute gets a loud
     // DEBUG-mode warning instead of silently staying dead.
     _warnDeadScripts(container);

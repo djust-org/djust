@@ -4968,7 +4968,8 @@ fn find_root_open(bytes: &[u8]) -> Option<(usize, Vec<u8>)> {
 /// opened just before `open_end`.
 fn find_root_close(bytes: &[u8], open_end: usize, tag_name: &[u8]) -> Option<usize> {
     if tag_name.eq_ignore_ascii_case(b"textarea") {
-        return find_text_region_close(bytes, open_end, tag_name);
+        let close = find_text_region_close(bytes, open_end, tag_name)?;
+        return find_open_tag_end(bytes, close).ok().map(|_| close);
     }
     // Now walk forward, balancing open/close tags of the same name, to
     // find the matching closing tag. Returns the byte offset of that
@@ -5760,6 +5761,18 @@ mod dj_root_selection_3031 {
                 assert!(!got_expected, "{name}: now agrees, drop it from `diverges`");
             } else {
                 assert!(got_expected, "{name}: picked {picked:?}");
+            }
+            if let Some(content) = case.get("content") {
+                let range = find_dj_root_content_range(html);
+                if content.is_null() {
+                    assert!(
+                        range.is_none(),
+                        "{name}: incomplete end token accepted: {range:?}"
+                    );
+                } else {
+                    let (start, end) = range.expect("complete end token");
+                    assert_eq!(&html[start..end], content.as_str().unwrap(), "{name}");
+                }
             }
         }
     }

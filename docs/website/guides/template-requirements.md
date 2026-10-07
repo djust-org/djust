@@ -63,6 +63,11 @@ documented tokenizer divergences are unchanged.
 
 With the root on `<body>`, the view owns the elements djust rendered for it and leaves the other children of `<body>` alone: djust's own scripts and debug panel, a dev toolbar, the nodes a browser extension adds. The page's own scripts run once, when the page loads. A few rules follow from sharing `<body>`:
 
+Retained scripts are not rerun on mount. In DEBUG, their execution status is
+reported as unknown: DOM presence cannot prove execution, since scripts
+inserted earlier via `innerHTML` are inert. Use a colocated hook for
+initialization after DOM updates.
+
 - Put `dj-root` on `<body>` and djust adds the view path (`dj-view="..."`) for you, as it does for any `dj-root`. A valueless `<body dj-view>` has no view path and does not connect, as on any other element.
 - The body is the root only while nothing inside it declares one: a `dj-root` (or `dj-view`) on an element inside `<body>` is the root, as it always was.
 - A root can sit in a base template (`{% extends %}`): the `<body dj-root>` in the base, the content in the child's blocks.

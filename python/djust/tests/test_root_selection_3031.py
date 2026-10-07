@@ -39,7 +39,7 @@ from django.test import override_settings
 
 from djust import LiveView
 from djust._rust import RustLiveView
-from djust.mixins.template import _DJ_ROOT_RE, _DJ_VIEW_RE, _search_dj_root_open
+from djust.mixins.template import _DJ_ROOT_RE, _DJ_VIEW_RE, _find_root_close, _search_dj_root_open
 
 _CORPUS = json.loads(
     (Path(__file__).resolve().parents[2] / "tests/fixtures/root_selection_3031.json").read_text()
@@ -101,6 +101,18 @@ def test_python_and_rust_agree_on_every_corpus_page(case):
         assert py.lower().startswith("<" + name)
     else:
         assert _MARK not in attrs
+
+
+@pytest.mark.parametrize("case", [c for c in _CORPUS if "content" in c], ids=lambda c: c["name"])
+def test_corpus_root_content_requires_a_complete_end_token(case):
+    html = case["html"]
+    opening = _search_dj_root_open(html, _DJ_ROOT_RE, _DJ_VIEW_RE)
+    assert opening is not None
+    start, end = _find_root_close(html, opening)
+    if case["content"] is None:
+        assert (start, end) == (None, None)
+    else:
+        assert html[opening.end() : start] == case["content"]
 
 
 class TestIssue3031Scenario:

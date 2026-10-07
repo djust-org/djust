@@ -251,11 +251,58 @@ describe('prerendered script diagnostics', () => {
         w.djust.markBodyStamped();
         w.DEBUG_MODE = true;
         const errors = vi.spyOn(w.console, 'error').mockImplementation(() => {});
+        const warnings = vi.spyOn(w.console, 'warn').mockImplementation(() => {});
         w.djust._runInsertedScripts(w.document.body, new Set([own]));
         w.djust._warnDeadScripts(w.document.body);
         expect(w.__parsedRuns).toBe(1);
         expect(errors).not.toHaveBeenCalled();
+        expect(own.hasAttribute('data-djust-script-ran')).toBe(false);
+        expect(warnings.mock.calls.some(args => String(args[0]).includes('execution status is unknown'))).toBe(true);
+        warnings.mockRestore();
         errors.mockRestore();
         w.close();
     });
+});
+
+describe('retained script execution provenance', () => {
+    for (const kind of ['LiveViewWebSocket', 'LiveViewSSE']) {
+        for (const inert of [false, true]) {
+            it(`${kind}: retained ${inert ? 'inert' : 'parsed'} script has unknown provenance without rerunning`, async () => {
+                const w = load('dj-root dj-view="review.View"', '<header id="h">old</header><script id="parsed">window.__parsedRuns = (window.__parsedRuns || 0) + 1</script>');
+                w.DEBUG_MODE = true;
+                w.DJUST_USE_WEBSOCKET = false;
+                const errors = vi.spyOn(w.console, 'error').mockImplementation(() => {});
+                const warnings = vi.spyOn(w.console, 'warn').mockImplementation(() => {});
+                try {
+                    if (inert) {
+                        const host = w.document.createElement('div');
+                        host.id = 'inert-host';
+                        host.innerHTML = '<script id="inert">window.__inertRuns = (window.__inertRuns || 0) + 1</script>';
+                        w.document.body.appendChild(host);
+                    }
+                    const retained = w.document.querySelector(inert ? '#inert' : '#parsed');
+                    let html = '<header id="h" dj-id="1">new</header><script id="parsed" dj-id="2">window.__parsedRuns = (window.__parsedRuns || 0) + 1</script>';
+                    if (inert) html += '<div id="inert-host" dj-id="3"><script id="inert" dj-id="4">window.__inertRuns = (window.__inertRuns || 0) + 1</script></div>';
+                    const transport = new w.djust[kind]();
+                    transport.skipMountHtml = true;
+                    transport.primaryViewPath = 'review.View';
+                    await transport.handleMessage({type: 'mount', view: 'review.View', html, has_ids: true, version: 1});
+                    expect(w.document.querySelector(inert ? '#inert' : '#parsed')).toBe(retained);
+                    expect(w.__parsedRuns).toBe(1);
+                    expect(w.__inertRuns || 0).toBe(0);
+                    expect(retained.hasAttribute('data-djust-script-ran')).toBe(false);
+                    expect(warnings.mock.calls.some(args => String(args[0]).includes('execution status is unknown'))).toBe(true);
+                    expect(errors).not.toHaveBeenCalled();
+                    // A later diagnostic/run pass must not turn the retained inert node executable.
+                    w.djust._runInsertedScripts(w.document.body);
+                    w.djust._warnDeadScripts(w.document.body);
+                    expect(w.__parsedRuns).toBe(1);
+                    expect(w.__inertRuns || 0).toBe(0);
+                    expect(errors).not.toHaveBeenCalled();
+                } finally {
+                    warnings.mockRestore(); errors.mockRestore(); w.close();
+                }
+            });
+        }
+    }
 });
