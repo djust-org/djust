@@ -11,8 +11,12 @@ class MentionsInput(Component):
     """Text input that triggers a user mention dropdown on @ character.
 
     Renders a text input with an associated hidden suggestion list. When the user
-    types @, JavaScript (via dj-hook) triggers a lookup event. The suggestion list
-    is populated from the `users` prop.
+    types @ (at the start of the text or after a space), the hook
+    (``djust_components/mentions-input.js``) shows the people in ``users`` whose
+    name, or any word of it, starts with what was typed; there is no server
+    lookup, so narrow a very large list before rendering. Enter or Tab inserts
+    the active suggestion as ``@Name``; Enter, when no suggestion is being
+    chosen, submits.
 
     Usage in a LiveView::
 
@@ -28,6 +32,25 @@ class MentionsInput(Component):
     In template::
 
         {{ msg_input|safe }}
+
+    The event Enter sends (``event``)::
+
+        {"text": "Thanks @Alice Cooper!", "mentions": ["1"],
+         "value": "Thanks @Alice Cooper!", "field": "message", "key": "Enter", "code": "Enter"}
+
+    ``mentions`` are the ids of the people whose ``@Name`` is still in the text
+    (a mention edited away is dropped), in the order they appear, each once.
+    ``value``, ``field``, ``key`` and ``code`` are what a plain ``dj-keydown.enter``
+    input event sends, kept so an existing handler keeps working; ``text`` is
+    the same string as ``value``. Without the script the input still sends the
+    plain event. Everything in the payload is **untrusted**: look the ids up
+    among the people this user may mention, and check the text's length::
+
+        @event_handler()
+        def send_message(self, text: str = "", mentions: list = None, **kwargs):
+            allowed = {str(u["id"]) for u in self.mentionable}
+            ids = [m for m in (mentions or []) if isinstance(m, str) and m in allowed]
+            self.post(text[:2000], mentioned=ids)
 
     CSS Custom Properties::
 

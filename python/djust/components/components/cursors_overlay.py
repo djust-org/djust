@@ -25,6 +25,16 @@ class CursorsOverlay(Component):
 
         {{ cursors|safe }}
 
+    The component only draws what it is given: where the cursors are comes
+    from the app (for example ``PresenceMixin`` plus a ``push_event`` or an
+    update of ``users`` on each presence change), and the component sends
+    nothing to the server. The hook (``djust_components/cursors-overlay.js``)
+    keeps the name labels inside the overlay and off each other, announces
+    people appearing and disappearing in a polite live region (never a
+    movement), and treats the arrows as decoration for assistive tech; the
+    arrows ease to a new position unless the user prefers reduced motion.
+    ``x`` and ``y`` are pixels from the overlay's top-left corner.
+
     CSS Custom Properties::
 
         --dj-cursors-label-font-size: label text size (default: 0.75rem)
