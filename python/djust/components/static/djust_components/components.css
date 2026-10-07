@@ -2316,12 +2316,21 @@ button.rating-star:hover ~ .rating-star { color: hsl(var(--muted-foreground)); }
 
 /* --- Voice Input --- */
 .dj-voice-input { position: relative; display: inline-flex; align-items: center; justify-content: center; width: var(--dj-voice-input-size, 3rem); height: var(--dj-voice-input-size, 3rem); border: none; border-radius: var(--dj-voice-input-radius, 9999px); background: var(--dj-voice-input-bg, hsl(var(--accent, 210 40% 96%))); color: var(--dj-voice-input-color, hsl(var(--foreground, 222 47% 11%))); cursor: pointer; transition: background var(--duration-normal, 0.2s), color var(--duration-normal, 0.2s); }
+.dj-voice-field { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 0.25rem; max-width: 22rem; vertical-align: top; }
+.dj-voice-input__disclosure { font-size: 0.75rem; line-height: 1.35; color: hsl(var(--muted-foreground, 215 16% 40%)); }
+.dj-voice-input__interim { min-height: 1.1em; font-size: 0.8125rem; font-style: italic; color: hsl(var(--muted-foreground, 215 16% 40%)); }
+.dj-voice-input__interim:empty { display: none; }
+.dj-voice-input__status { font-size: 0.8125rem; color: hsl(var(--foreground, 222 47% 11%)); }
+.dj-voice-input__status:empty { display: none; }
+.dj-voice-input:focus-visible { outline: 2px solid var(--dj-voice-input-focus, hsl(var(--ring, 221 83% 53%))); outline-offset: 2px; }
+.dj-voice-input:disabled { opacity: 0.5; cursor: not-allowed; }
 .dj-voice-input:hover { background: hsl(var(--border, 214 32% 91%)); }
 .dj-voice-input[aria-pressed="true"] { background: var(--dj-voice-input-active-bg, #fee2e2); color: var(--dj-voice-input-active-color, #dc2626); }
 .dj-voice-input__icon { flex-shrink: 0; }
 .dj-voice-input__pulse { position: absolute; inset: -4px; border-radius: 9999px; border: 2px solid currentColor; opacity: 0; animation: none; pointer-events: none; }
 .dj-voice-input[aria-pressed="true"] .dj-voice-input__pulse { animation: dj-voice-pulse 1.5s ease-out infinite; }
 @keyframes dj-voice-pulse { 0% { opacity: 0.6; transform: scale(1); } 100% { opacity: 0; transform: scale(1.4); } }
+@media (prefers-reduced-motion: reduce) { .dj-voice-input[aria-pressed="true"] .dj-voice-input__pulse { animation: none; opacity: 0.6; } }
 
 /* --- Cron Input --- */
 .dj-cron-input { display: flex; flex-direction: column; gap: 0.75rem; }
