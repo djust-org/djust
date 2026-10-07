@@ -888,14 +888,25 @@ describe('AnimatedNumber', () => {
     const text = (env) => env.$('.dj-animated-number__value').textContent;
     const wait = (env, ms) => new Promise((resolve) => env.window.setTimeout(resolve, ms));
 
-    it('counts up from zero and ends on the exact text the server rendered', async () => {
-        const env = boot(NUMBER({ duration: 120 }), 'animated-number.js');
-        expect(text(env)).toBe('0.0'); // the starting frame is shown at once, not the final number
-        await wait(env, 60);
+    it('counts up from zero and ends on the exact text the server rendered', () => {
+        const frames = [];
+        const env = boot(NUMBER({ duration: 120 }), 'animated-number.js', {
+            preRegister(window) {
+                window.requestAnimationFrame = (callback) => {
+                    frames.push(callback);
+                    return frames.length;
+                };
+            },
+        });
+        expect(text(env)).toBe('0.0');
+        // Supply animation timestamps directly; scheduling delays cannot turn
+        // the intermediate-frame assertion into a final-frame assertion.
+        frames.shift()(0);
+        frames.shift()(60);
         const mid = parseFloat(text(env).replace(/,/g, ''));
         expect(mid).toBeGreaterThan(0);
         expect(mid).toBeLessThan(1234.5);
-        await wait(env, 200);
+        frames.shift()(120);
         expect(text(env)).toBe('1,234.5');
     });
 
@@ -1265,8 +1276,63 @@ describe('ResizablePanel resize_event', () => {
         env.window.djust.handleEvent = (n, p) => env.sent.push([n, p]);
         env.events = [];
         panel.addEventListener('dj-resize', (e) => env.events.push(e.detail));
+        const timers = new Map();
+        let nextTimer = 0;
+        env.window.setTimeout = (callback) => { timers.set(++nextTimer, callback); return nextTimer; };
+        env.window.clearTimeout = (id) => timers.delete(id);
+        env.flush = () => { const pending = [...timers.values()]; timers.clear(); for (const callback of pending) callback(); };
         return env;
     };
+
+    it('stale resize echoes do not shrink a newer gesture or replace the reset size', () => {
+        const env = setup();
+        for (const x of [350, 400]) {
+            pointer(env.window, env.handle, 'pointerdown', parseFloat(env.panel.style.width), 10);
+            pointer(env.window, env.handle, 'pointermove', x, 10);
+            pointer(env.window, env.handle, 'pointerup', x, 10);
+        }
+        env.panel.style.width = '350px';
+        env.window.djust.updateHooks();
+        expect(env.panel.style.width).toBe('400px');
+        env.panel.style.width = '400px';
+        env.window.djust.updateHooks();
+        key(env.window, env.handle, 'Enter');
+        env.flush();
+        expect(env.panel.style.width).toBe('300px');
+    });
+
+    it('held resize keys send one trailing notification while local events stay immediate', () => {
+        const env = setup();
+        for (let i = 0; i < 20; i++) key(env.window, env.handle, 'ArrowRight');
+        expect(env.panel.style.width).toBe('500px');
+        expect(env.events).toHaveLength(20);
+        expect(env.sent).toEqual([]);
+        env.flush();
+        expect(env.sent).toEqual([['panel_resized', { size: 500 }]]);
+    });
+
+    it('teardown cancels a pending keyboard notification', () => {
+        const env = setup();
+        key(env.window, env.handle, 'ArrowRight');
+        env.window.djust.getHook(env.panel).destroyed();
+        env.flush();
+        expect(env.sent).toEqual([]);
+    });
+
+    it('resize notifications retain component and child-view routing', () => {
+        const env = setup('', '<section data-djust-embedded="child"><div data-component-id="panel">' + PANEL({ extra: ' data-resize-event="panel_resized"' }) + '</div></section>');
+        delete env.window.djust._strictBinding;
+        key(env.window, env.handle, 'ArrowRight');
+        env.flush();
+        expect(env.sent[0][1]).toMatchObject({ component_id: 'panel', view_id: 'child' });
+    });
+
+    it('a no-op drag does not send a resize', () => {
+        const env = setup();
+        pointer(env.window, env.handle, 'pointerdown', 300, 10);
+        pointer(env.window, env.handle, 'pointerup', 300, 10);
+        expect(env.sent).toEqual([]);
+    });
 
     it('without the attribute nothing goes to the server (the CustomEvent still does)', () => {
         const env = setup('');
@@ -1295,12 +1361,16 @@ describe('ResizablePanel resize_event', () => {
         expect(env.sent).toEqual([['panel_resized', { size: 600 }]]);
     });
 
-    it('a key press sends once per press; Home and End send the limits; a reset sends the initial size', () => {
+    it('settled key presses notify; Home and End send the limits; a reset sends the initial size', () => {
         const env = setup();
         key(env.window, env.handle, 'ArrowRight');
+        env.flush();
         key(env.window, env.handle, 'ArrowRight', { shiftKey: true });
+        env.flush();
         key(env.window, env.handle, 'End');
+        env.flush();
         key(env.window, env.handle, 'Home');
+        env.flush();
         expect(env.sent.map((s) => s[1].size)).toEqual([310, 360, 600, 100]);
         env.handle.dispatchEvent(new env.window.MouseEvent('dblclick', { bubbles: true }));
         expect(env.sent.at(-1)).toEqual(['panel_resized', { size: 300 }]);
@@ -1309,6 +1379,7 @@ describe('ResizablePanel resize_event', () => {
     it('a key that changes nothing (not an arrow) sends nothing', () => {
         const env = setup();
         key(env.window, env.handle, 'a');
+        env.flush();
         expect(env.sent).toEqual([]);
     });
 
@@ -1334,6 +1405,7 @@ describe('ResizablePanel resize_event', () => {
         pointer(env.window, env.handle, 'pointermove', 340, 10);
         pointer(env.window, env.handle, 'pointerup', 340, 10);
         key(env.window, env.handle, 'ArrowRight');
+        env.flush();
         expect(env.sent).toEqual([]);
     });
 
@@ -1348,9 +1420,11 @@ describe('ResizablePanel resize_event', () => {
         const env = setup();
         env.window.djust._strictBinding = () => false;
         key(env.window, env.handle, 'ArrowRight');
+        env.flush();
         expect(env.sent).toEqual([]);
         env.window.djust._strictBinding = () => ({ size: 1 });
         key(env.window, env.handle, 'ArrowRight');
+        env.flush();
         expect(env.sent).toEqual([['panel_resized', { size: 1 }]]);
 
         const env2 = setup();
@@ -1359,6 +1433,7 @@ describe('ResizablePanel resize_event', () => {
         const entry = [...env2.window.djust._activeHooks.values()].find((h) => h.instance && h.instance._emit);
         entry.instance.pushEvent = (n, p) => pushed.push([n, p]);
         key(env2.window, env2.handle, 'ArrowRight');
+        env2.flush();
         expect(pushed).toEqual([['panel_resized', { size: 310 }]]);
     });
 
@@ -1366,6 +1441,7 @@ describe('ResizablePanel resize_event', () => {
         const env = setup();
         for (let i = 0; i < 4; i++) env.window.djust.updateHooks();
         key(env.window, env.handle, 'ArrowRight');
+        env.flush();
         expect(env.sent).toHaveLength(1);
     });
 });
@@ -1383,6 +1459,23 @@ describe('FileTree toggle_event', () => {
         const env = setup(TREE());
         row(env, 'src').click();
         expect(env.sent).toEqual([]);
+    });
+
+    it('an unchanged expansion request does not notify again', () => {
+        const env = setup();
+        const hook = env.window.djust.getHook(env.$('.dj-file-tree'));
+        hook._setExpanded(row(env, 'src'), true);
+        expect(env.sent).toEqual([]);
+        hook._setExpanded(row(env, 'src'), false);
+        hook._setExpanded(row(env, 'src'), false);
+        expect(env.sent).toHaveLength(1);
+    });
+
+    it('toggle notifications retain component and child-view routing', () => {
+        const env = setup('<section data-djust-embedded="child"><div data-component-id="files">' + TREE_EV() + '</div></section>');
+        delete env.window.djust._strictBinding;
+        row(env, 'src').click();
+        expect(env.sent[0][1]).toMatchObject({ component_id: 'files', view_id: 'child' });
     });
 
     it('collapsing and expanding by click sends {path, expanded}, once per change', () => {

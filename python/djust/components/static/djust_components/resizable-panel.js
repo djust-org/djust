@@ -14,8 +14,8 @@
  * - ``disabled`` (data-disabled) turns all of it off.
  *
  * The size is the reader's own and is not sent to the server unless the
- * component has a ``resize_event`` (data-resize-event): when a drag or key
- * press ends the hook then sends that event with ``{size}`` (whole pixels;
+ * component has a ``resize_event`` (data-resize-event): when a drag ends or keyboard resizing
+ * settles for 250 ms the hook sends that event with ``{size}`` (whole pixels;
  * untrusted, clamp it on the server). Either way it announces the size to the
  * page as a bubbling ``dj-resize`` CustomEvent on the panel with
  * ``detail: {size, direction}`` (px). A re-render that leaves the panel's style unchanged leaves it as the
@@ -35,18 +35,28 @@
   // over WebSocket, SSE and HTTP-only, honours strict parameter contracts and
   // reaches the right view when several are mounted. Falls back to the hook's
   // own pushEvent when the client API is absent.
+  function addContext(params, el) {
+    for (var node = el; node && node !== document.body; node = node.parentElement) {
+      var ds = node.dataset || {};
+      if (params.component_id === undefined && ds.componentId) params.component_id = ds.componentId;
+      if (params.view_id === undefined && ds.djustEmbedded) params.view_id = ds.djustEmbedded;
+    }
+  }
+
   function send(hook, root, eventName, params) {
     var d = window.djust;
     if (d && typeof d.handleEvent === "function") {
       var sent = params;
       if (typeof d._strictBinding === "function") {
-        var strict = d._strictBinding(root, eventName, params, []);
+        var strict = d._strictBinding(root, eventName, params, [], root);
         if (strict === false) return;
         if (strict) sent = strict;
       }
+      if (sent === params) addContext(sent, root);
       if (typeof d._markSlotOf === "function") d._markSlotOf(sent, root);
       d.handleEvent(eventName, sent);
     } else if (typeof hook.pushEvent === "function") {
+      addContext(params, root);
       hook.pushEvent(eventName, params);
     }
   }
@@ -65,6 +75,8 @@
       this._bind();
       this._initial = this._styleSize();
       this._set = null;
+      this._sentSizes = [];
+      this._lastNotified = Math.round(this._size());
       this._enhance();
     },
 
@@ -73,12 +85,19 @@
         this._unbind();
         this._bind();
       }
-      // A style the server set (a new initial_size) replaces ours; anything
-      // else (an unrelated patch) leaves the reader's size alone.
+      // An outstanding echo acknowledges a gesture, not a new reset target.
       var now = this._styleSize();
-      if (this._set === null || now !== this._set) {
+      var echo = this._sentSizes.indexOf(now);
+      if (echo !== -1) {
+        this._sentSizes.splice(echo, 1);
+        if (this._set !== null) this.el.style[this._prop()] = this._set;
+      } else if (this._set === null || now !== this._set) {
         this._initial = now;
         this._set = null;
+        this._sentSizes = [];
+        this._lastNotified = Math.round(this._size());
+        window.clearTimeout(this._notifyTimer);
+        this._notifyTimer = null;
       }
       this._enhance();
     },
@@ -180,7 +199,7 @@
       return size;
     },
 
-    _emit: function () {
+    _emit: function (defer) {
       var size = Math.round(this._size());
       this.el.dispatchEvent(
         new CustomEvent("dj-resize", {
@@ -192,12 +211,32 @@
         })
       );
       var eventName = this.el.getAttribute("data-resize-event");
-      if (eventName && isFinite(size)) send(this, this.el, eventName, { size: size });
+      window.clearTimeout(this._notifyTimer);
+      this._notifyTimer = null;
+      if (!eventName || !isFinite(size)) return;
+      var self = this;
+      if (defer) {
+        this._notifyTimer = window.setTimeout(function () {
+          self._notifyTimer = null;
+          self._notify();
+        }, 250);
+      } else this._notify();
+    },
+
+    _notify: function () {
+      var size = Math.round(this._size());
+      var eventName = this.el.getAttribute("data-resize-event");
+      if (!eventName || !isFinite(size) || size === this._lastNotified || this._disabled()) return;
+      this._lastNotified = size;
+      this._sentSizes.push(size + "px");
+      // Retain only a bounded history of outstanding responses.
+      if (this._sentSizes.length > 64) this._sentSizes.shift();
+      send(this, this.el, eventName, { size: size });
     },
 
     _reset: function () {
       this.el.style[this._prop()] = this._initial || "";
-      this._set = null;
+      this._set = this._styleSize();
       this._values();
       this._emit();
     },
@@ -288,7 +327,7 @@
           if (target === null) return;
           e.preventDefault();
           self._apply(target);
-          self._emit();
+          self._emit(true);
         },
       };
       this._h = h;
@@ -298,6 +337,8 @@
     },
 
     _unbind: function () {
+      window.clearTimeout(this._notifyTimer);
+      this._notifyTimer = null;
       var panel = this._boundEl;
       var h = this._h;
       if (panel && h) {

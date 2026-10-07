@@ -161,6 +161,8 @@ PROJECT = {
 
             @event_handler()
             def panel_resized(self, size=0, **kwargs):
+                import time
+                time.sleep(0.15)  # render-back latency regression
                 self.rp_n += 1
                 try:
                     size = int(size)
@@ -355,6 +357,27 @@ def main() -> int:
                 page.click("#redraw")
                 page.wait_for_timeout(400)
                 check(text("#rp-n") == n, "panel: a server re-render sends nothing")
+
+                page.focus(handle_a)
+                before = int(text("#rp-n"))
+                sizes = []
+                for _ in range(20):
+                    page.keyboard.press("ArrowRight")
+                    sizes.append(round(rect(panel_a)["w"]))
+                    page.wait_for_timeout(30)
+                wait_text(
+                    "#rp-size", "320", "panel: held keys settle at 320 despite 150ms server latency"
+                )
+                check(sizes == sorted(sizes), "panel: held keys never snap back under latency")
+                check(
+                    int(text("#rp-n")) == before + 1,
+                    "panel: held keys coalesce to one server event",
+                )
+                page.keyboard.press("Enter")
+                wait_text(
+                    "#rp-size", "300", "panel: delayed echoes preserve the original reset target"
+                )
+                n = text("#rp-n")
 
                 # a panel without the event sends nothing
                 handle_b = "#rp-b .dj-resizable-panel .dj-resizable-panel__handle"

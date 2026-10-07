@@ -44,6 +44,8 @@ class FileTree(Component):
 
         @event_handler()
         def folder_toggled(self, path: list = None, expanded: bool = False, **kwargs):
+            if not isinstance(expanded, bool):
+                return
             key = "/".join(str(p) for p in (path or []))
             if key not in self.known_folder_paths:  # not a folder of this tree: ignore
                 return

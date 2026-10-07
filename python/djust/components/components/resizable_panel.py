@@ -27,7 +27,10 @@ class ResizablePanel(Component):
     ``resize_event`` is set. When a drag or key press ends the panel dispatches
     a bubbling ``dj-resize`` CustomEvent with ``detail: {size, direction}``
     (pixels) that page script may listen to, and, with ``resize_event``, sends
-    that event to the server with ``{"size": <whole pixels>}``. The size comes
+    that event to the server with ``{"size": <whole pixels>}`` after a drag or
+    after keyboard resizing settles for 250 ms. Unchanged sizes do not notify.
+    Outstanding size echoes preserve newer gestures and the reset target;
+    an unrelated server size still takes over. The size comes
     from the browser, so it is untrusted: clamp it before storing it::
 
         @event_handler()
