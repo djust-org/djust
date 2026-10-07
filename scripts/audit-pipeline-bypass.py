@@ -28,6 +28,19 @@ Usage:
     python scripts/audit-pipeline-bypass.py --limit 100
     python scripts/audit-pipeline-bypass.py --lookback "60 days ago"
 
+Exit status is part of the interface:
+
+    0  the audit completed and found nothing
+    1  the audit completed and found something (``potential bypass`` rows)
+    2  the audit could not complete — a required ``gh``/``git`` read failed,
+       or an unexpected error. NOT a clean result.
+
+The last stdout line is a machine-readable verdict,
+``AUDIT_VERDICT: clean|findings|incomplete``, so a caller does not have to
+infer the outcome from the exit code alone. A crash can no longer be
+mistaken for findings (both used to exit 1) and a failed read can no longer
+be mistaken for clean (it used to exit 0) — see #3129.
+
 Flags PRs as a "potential bypass" if their comments contain none of the
 retro markers (``Retrospective``, ``Quality:``, ``Lessons learned``,
 ``RETRO_COMPLETE``, ``what went well``).
@@ -43,6 +56,7 @@ import json
 import re
 import subprocess
 import sys
+import traceback
 from pathlib import Path
 
 # Make ``scripts.lib.retro_markers`` importable both when this file is
@@ -69,15 +83,37 @@ PR_SQUASH_SUFFIX = re.compile(r"\s\(#\d+\)\s*$")
 AUDIT_BYPASS_TRAILER = re.compile(r"^audit-bypass-reason:\s*\S+", re.IGNORECASE | re.MULTILINE)
 
 
+class AuditIncomplete(RuntimeError):
+    """A required data read failed, so the audit cannot reach a verdict.
+
+    Raised instead of returning an empty, clean-looking result: an audit
+    that could not read its inputs must never be reported as "no findings"
+    (#3129).
+    """
+
+
 def gh(args: list[str]) -> str:
-    """Run gh, return stdout (empty on failure)."""
+    """Run gh, returning stdout; raise AuditIncomplete if the read fails.
+
+    A failed read is NOT an empty result. Returning "" here (the
+    pre-#3129 behaviour) made an authentication failure indistinguishable
+    from "no merged PRs" and every PR was then scored as missing a retro,
+    while the same failure in the direct-commit scan produced a clean exit.
+    """
     result = subprocess.run(
         ["gh", *args],
         capture_output=True,
         text=True,
         check=False,
     )
-    return result.stdout if result.returncode == 0 else ""
+    if result.returncode != 0:
+        raise AuditIncomplete(
+            f"`gh {' '.join(args)}` exited {result.returncode}: "
+            f"{(result.stderr or '').strip()[:500]}"
+        )
+    if not result.stdout.strip():
+        raise AuditIncomplete(f"`gh {' '.join(args)}` returned no output")
+    return result.stdout
 
 
 def merged_prs(since: int | None, limit: int) -> list[dict]:
@@ -94,8 +130,6 @@ def merged_prs(since: int | None, limit: int) -> list[dict]:
             "number,title,mergedAt,author",
         ]
     )
-    if not raw:
-        return []
     prs = json.loads(raw)
     if since is not None:
         prs = [p for p in prs if p["number"] >= since]
@@ -111,8 +145,6 @@ def has_retro(pr_number: int) -> tuple[bool, int]:
     the total for context.
     """
     raw = gh(["pr", "view", str(pr_number), "--json", "comments"])
-    if not raw:
-        return (False, 0)
     data = json.loads(raw)
     comments = data.get("comments", []) or []
     user_comments = [
@@ -139,7 +171,8 @@ def direct_main_commits(lookback: str) -> list[tuple[str, str, str]]:
     because they're squashed-PR commits whose retros are scanned by
     ``merged_prs`` instead.
 
-    Empty list on failure (git error, no commits in range, etc.).
+    An empty list means the scan ran and matched nothing. A git failure
+    raises ``AuditIncomplete`` — an unread scan is not an empty one.
     """
     try:
         # ``--first-parent main`` walks the main-branch line only;
@@ -161,8 +194,10 @@ def direct_main_commits(lookback: str) -> list[tuple[str, str, str]]:
             text=True,
             stderr=subprocess.DEVNULL,
         )
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return []
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        # A git failure is not "no direct commits": reporting an unread scan
+        # as empty is how a broken audit ends up looking clean (#3129).
+        raise AuditIncomplete(f"`git log` failed: {exc}") from exc
 
     commits: list[tuple[str, str, str]] = []
     for record in out.split("\x1e"):
@@ -229,8 +264,9 @@ def main() -> int:
 
     prs = merged_prs(args.since, args.limit)
     if not prs:
-        print("No merged PRs found (gh authentication issue or empty repo).")
-        # Fall through to direct-commit scan; gh failure shouldn't block git checks.
+        print("No merged PRs matched the scan window.")
+        # Fall through to the direct-commit scan. A *failed* read raises
+        # above; reaching here means the read succeeded and matched nothing.
 
     if not args.dependabot:
         prs = [p for p in prs if not p.get("author", {}).get("login", "").startswith("dependabot")]
@@ -262,6 +298,7 @@ def main() -> int:
 
     if not bypassed and not flagged_direct:
         print("All audited PRs and direct commits have retros / bypass reasons.")
+        print("AUDIT_VERDICT: clean")
         return 0
 
     if bypassed:
@@ -296,8 +333,31 @@ def main() -> int:
     print("PR was merged outside pipeline-run entirely — file as a")
     print("'pipeline-bypass merge' for milestone-retro tracking.")
     print()
-    return 1 if (bypassed or flagged_direct) else 0
+    print("AUDIT_VERDICT: findings")
+    return 1
+
+
+def run() -> int:
+    """Entry point: a failure must never look like a verdict (#3129).
+
+    Exit 1 means "the audit ran and found something". A crash also exits 1
+    by Python's default, so a caller reading only the exit code cannot tell
+    them apart — the same indistinguishability that let a broken audit
+    report a clean summary. Everything that is not a completed audit
+    therefore prints ``AUDIT_VERDICT: incomplete`` and exits 2.
+    """
+    try:
+        return main()
+    except AuditIncomplete as exc:
+        print(f"audit incomplete: {exc}", file=sys.stderr)
+        print("AUDIT_VERDICT: incomplete")
+        return 2
+    except Exception as exc:  # noqa: BLE001 — a crash must not read as findings
+        traceback.print_exc()
+        print(f"audit errored: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print("AUDIT_VERDICT: incomplete")
+        return 2
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(run())
