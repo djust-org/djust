@@ -3742,6 +3742,17 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             return
 
         ref = frame["ref"]
+        aborted_owner = (getattr(self, "_aborted_uploads", None) or {}).get(ref)
+        if aborted_owner is not None:
+            # Do not route a late frame to the page's manager: its completion
+            # cleanup would erase the marker before a queued register can
+            # cancel this upload on its actual owner.
+            from .uploads import build_progress_message
+
+            message = build_progress_message(ref, 0, "error")
+            message["error"] = "Upload cancelled because the view is busy."
+            await aborted_owner.send_json(message)
+            return
         owner = self._known_upload_owner(ref)
         lane = getattr(owner, "_lane", None) if owner is not None else None
         if lane is not None and lane.busy():

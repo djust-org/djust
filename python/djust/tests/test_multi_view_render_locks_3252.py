@@ -925,10 +925,20 @@ async def test_frames_of_unregistered_refs_are_not_queued_behind_a_busy_view():
         await communicator.disconnect()
 
 
-async def test_an_upload_past_the_lane_budget_is_stopped_visibly_not_dropped(monkeypatch):
+@pytest.mark.parametrize("page_uploads", [False, True])
+async def test_an_upload_past_the_lane_budget_is_stopped_visibly_not_dropped(
+    monkeypatch, page_uploads
+):
     communicator = await _connect()
     try:
-        lane = await _busy_uploader(communicator)
+        if page_uploads:
+            await _mount(communicator, Uploader)
+            await _mount(communicator, Uploader, "up")
+            await _send(communicator, "hold", "up", ref=1)
+            await _wait_started()
+            lane = CONSUMERS[-1]._slot_map()["up"].facade._lane
+        else:
+            lane = await _busy_uploader(communicator)
         consumer = CONSUMERS[-1]
         monkeypatch.setattr(type(consumer), "_upload_queue_budget", lambda self: 1000)
         ref = str(uuid.uuid4())
