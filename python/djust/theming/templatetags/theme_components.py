@@ -393,7 +393,7 @@ def _neutralise_item_urls(items: Any, name: str = "url") -> Any:
     for item in items:
         if isinstance(item, dict):
             value = item.get(name)
-            if isinstance(value, str) and value:
+            if value is not None:
                 safe = _neutralise_url(name, value)
                 if safe is not value:
                     item = {**item, name: safe}

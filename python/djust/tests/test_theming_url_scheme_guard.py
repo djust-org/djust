@@ -14,14 +14,80 @@ Two policies, by where the URL comes from:
 
 from __future__ import annotations
 
+from collections import UserString
+
 import pytest
 
+from django.http import HttpResponse
 from django.template import engines
+from django.test import override_settings
+from django.urls import path, reverse_lazy
+from django.utils.functional import lazy
 
 pytestmark = pytest.mark.theming
 
 BAD = "javascript:alert(1)"
 PNG = "data:image/png;base64,iVBORw0KGgo="
+
+urlpatterns = [path("theming-safe/", lambda request: HttpResponse(), name="theming-url-safe")]
+
+
+class _URLObject:
+    def __init__(self, value: str) -> None:
+        self.value = value
+
+    def __str__(self) -> str:
+        return self.value
+
+
+def _wrapped_url(kind: str, value: str) -> object:
+    if kind == "promise":
+        return lazy(lambda: value, str)()
+    if kind == "user_string":
+        return UserString(value)
+    return _URLObject(value)
+
+
+_LIST_TAGS = [
+    "{% theme_nav items=items %}",
+    "{% theme_nav_group 'Group' items=items %}",
+    "{% theme_sidebar_nav sections=sections %}",
+    "{% theme_breadcrumb items=items %}",
+]
+
+
+def _render_list_url(source: str, url: object) -> str:
+    items = [{"label": "Link", "url": url}, {"label": "Current"}]
+    original = [dict(item) for item in items]
+    sections = [{"title": "Group", "items": items}]
+    html = render(source, items=items, sections=sections)
+    assert items == original
+    assert items[0]["url"] is url
+    assert sections[0]["items"] is items
+    return html
+
+
+@pytest.mark.parametrize("source", _LIST_TAGS)
+@pytest.mark.parametrize("kind", ["promise", "url_object", "user_string"])
+def test_non_string_item_urls_are_neutralised_without_mutating_caller(source, kind):
+    html = _render_list_url(source, _wrapped_url(kind, BAD))
+    assert_neutralised(html)
+    assert "Link" in html
+
+
+@pytest.mark.parametrize("source", _LIST_TAGS)
+@pytest.mark.parametrize("kind", ["promise", "url_object", "user_string"])
+def test_safe_non_string_item_urls_are_escaped_once_without_mutating_caller(source, kind):
+    html = _render_list_url(source, _wrapped_url(kind, "/safe/?a=1&b=2"))
+    assert 'href="/safe/?a=1&amp;b=2"' in html
+    assert "&amp;amp;" not in html
+
+
+@pytest.mark.parametrize("source", _LIST_TAGS)
+def test_reverse_lazy_item_url_is_preserved_without_mutating_caller(source):
+    with override_settings(ROOT_URLCONF=__name__):
+        html = _render_list_url(source, reverse_lazy("theming-url-safe"))
+    assert 'href="/theming-safe/"' in html
 
 
 def render(source: str, **ctx: object) -> str:

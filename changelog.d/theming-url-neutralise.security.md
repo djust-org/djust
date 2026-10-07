@@ -7,3 +7,6 @@
   `"#"` and the rest of the component renders; an avatar keeps a legitimate
   `data:image/*` source. `theme_button href=` and the `**attrs` passthrough are
   developer-supplied and still raise `ValueError`.
+- Navigation item URLs are validated even when supplied as Django lazy strings
+  or other URL objects. Safe values retain single template escaping and the
+  caller's item dictionaries are not modified.
