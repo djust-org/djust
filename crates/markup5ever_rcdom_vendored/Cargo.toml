@@ -1,0 +1,22 @@
+[package]
+# Same crate NAME as the crates.io dependency it replaces, so every consumer
+# (`extern crate markup5ever_rcdom` / `markup5ever_rcdom::...`) resolves to this
+# path crate with no source change. See PROVENANCE.md for the exact upstream
+# source this file tree was taken from.
+name = "markup5ever_rcdom"
+description = "Vendored: basic, unsupported DOM structure for html5ever (see PROVENANCE.md)"
+version = "0.40.1"
+license = "MIT OR Apache-2.0"
+edition = "2021"
+rust-version = "1.70"
+# Not for publication: this is a vendored copy, never pushed to crates.io.
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+html5ever = { workspace = true }
+markup5ever = { workspace = true, features = ["serde"] }
+tendril = { workspace = true }
+xml5ever = { workspace = true }

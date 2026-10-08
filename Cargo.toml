@@ -5,6 +5,10 @@ members = [
     "crates/djust_vdom",
     "crates/djust_live",
     "crates/djust_components",
+    # Vendored copy of crates.io `markup5ever_rcdom`, which has no 0.40 release
+    # (#3011). Path-vendored under the SAME crate name so consumers need no
+    # source change. See the crate's PROVENANCE.md.
+    "crates/markup5ever_rcdom_vendored",
 ]
 resolver = "2"
 
@@ -33,8 +37,16 @@ regex = "1.12"
 once_cell = "1.21"
 thiserror = "2.0"
 quick-xml = "0.36"
-html5ever = "0.39"
-markup5ever_rcdom = "0.39"
+html5ever = "0.40"
+markup5ever = "0.40"
+# `markup5ever_rcdom` has NO 0.40 release on crates.io (upstream publishes it out
+# of band and marks it `publish = false`), so the three parser crates cannot move
+# together from the registry. Vendored at the SAME crate name from
+# servo/html5ever tag `html5ever-v0.40.1`; see the crate's PROVENANCE.md.
+markup5ever_rcdom = { path = "crates/markup5ever_rcdom_vendored" }
+# Pulled in by the vendored rcdom (`tendril::StrTendril`, `xml5ever::interface::ElemName`).
+tendril = "0.5"
+xml5ever = "0.40"
 chrono = "0.4"  # DateTime handling for timesince filter
 # Timezone database for USE_TZ/TIME_ZONE parity (#2209). Bundles compiled
 # tzdata: +1.16 MB raw on the extension, +136 KB compressed (what a wheel
