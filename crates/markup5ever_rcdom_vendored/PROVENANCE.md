@@ -24,12 +24,37 @@ unsupported.
 
 ## Modifications from upstream
 
-**None to the source.** `src/lib.rs` is byte-identical to `rcdom/lib.rs` at the
-commit above. The only delta is packaging: this crate is placed under `crates/`, and
-its `Cargo.toml` is adapted to this workspace (workspace-inherited dependency
-versions, `src/lib.rs` layout, `publish = false`). Upstream's `[dev-dependencies]`,
-benches and examples are not vendored — this is a library copy for djust's use, not
-a maintained fork.
+**One formatting-only change. This file previously claimed the source was
+byte-identical to upstream; that was false and was corrected after review.**
+
+`cargo fmt --all` (which this repository enforces) runs over every workspace member,
+including this crate, and rustfmt removes the trailing commas after four match-block
+arms — at lines 328, 469, 651 and 669 of the file as vendored. That is the **entire**
+difference:
+
+```
+diff <(curl -sSL raw.githubusercontent.com/servo/html5ever/d7232d74.../rcdom/lib.rs) \
+     crates/markup5ever_rcdom_vendored/src/lib.rs
+  -> 328c328  },  ->  }
+  -> 469c469  },  ->  }
+  -> 651c651  },  ->  }
+  -> 669c669  },  ->  }
+```
+
+Verified, not assumed: `rustfmt --edition 2021` applied to the upstream file produces
+output that is **byte-identical** to the vendored file, so rustfmt alone accounts for
+every byte of the delta and no other edit was made. Both licence files ARE
+byte-identical to upstream.
+
+The alternative — preserving upstream bytes exactly — was rejected because this
+repository enforces rustfmt over the workspace, so the vendored file would fail the
+format gate on every run. Formatting-only, no semantic change, and the upstream
+copyright header is still the unmodified first line.
+
+The rest is packaging: the crate lives under `crates/`, its `Cargo.toml` is adapted
+to this workspace (workspace-inherited dependency versions, `src/lib.rs` layout,
+`publish = false`), and upstream's `[dev-dependencies]`, benches and examples are not
+vendored — this is a library copy for djust's use, not a maintained fork.
 
 ## Maintenance consequence, stated plainly
 

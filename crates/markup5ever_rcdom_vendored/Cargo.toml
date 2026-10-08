@@ -8,7 +8,13 @@ description = "Vendored: basic, unsupported DOM structure for html5ever (see PRO
 version = "0.40.1"
 license = "MIT OR Apache-2.0"
 edition = "2021"
-rust-version = "1.70"
+# Matches the actual floor of the rest of the 0.40 stack: registry html5ever
+# 0.40.1, markup5ever 0.40.0, xml5ever 0.40.0 and string_cache 0.11.0 all declare
+# `rust-version = "1.85"`. An earlier draft of this manifest said 1.70, which
+# understated the requirement — the vendored crate cannot be built on an older
+# toolchain than the crates it depends on, so the workspace's effective compiler
+# floor is now 1.85.
+rust-version = "1.85"
 # Not for publication: this is a vendored copy, never pushed to crates.io.
 publish = false
 
