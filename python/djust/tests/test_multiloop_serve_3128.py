@@ -157,13 +157,25 @@ def test_the_check_creates_each_layer_once_before_the_loops_start(settings, rest
 
 _APP = textwrap.dedent(
     """
-    import asyncio, os, threading, time
+    import asyncio, os, sys, threading, time
 
     STARTS = []
     # The loops start concurrently on separate threads: the append and the
     # count must be one step, or two loops can both see 3 and none fails (#3215).
     _STARTS_LOCK = threading.Lock()
     FAIL_ON = int(os.environ.get("FAIL_STARTUP_ON", "0"))
+    # Each marker is ONE write, under a lock. `print("shutdown on", name)` is
+    # several writes (arg, separator, arg, newline), so two loops sharing this
+    # stdout interleave mid-line and the line can vanish from a substring
+    # count even though both loops ran it (#3128: the capture showed the two
+    # loops' lines spliced into each other, so the marker appeared once).
+    _MARK_LOCK = threading.Lock()
+
+    def _mark(kind):
+        line = "{} on {}\\n".format(kind, threading.current_thread().name)
+        with _MARK_LOCK:
+            sys.stdout.write(line)
+            sys.stdout.flush()
 
     async def app(scope, receive, send):
         if scope["type"] == "lifespan":
@@ -173,13 +185,13 @@ _APP = textwrap.dedent(
                     with _STARTS_LOCK:
                         STARTS.append(threading.current_thread().name)
                         n = len(STARTS)
-                    print("startup on", threading.current_thread().name, flush=True)
+                    _mark("startup")
                     if FAIL_ON and n == FAIL_ON:
                         await send({"type": "lifespan.startup.failed", "message": "no"})
                         return
                     await send({"type": "lifespan.startup.complete"})
                 elif m["type"] == "lifespan.shutdown":
-                    print("shutdown on", threading.current_thread().name, flush=True)
+                    _mark("shutdown")
                     await send({"type": "lifespan.shutdown.complete"})
                     return
         if scope["path"] == "/block":
@@ -424,6 +436,41 @@ def test_the_restart_helper_does_not_signal_before_the_handlers_exist(tmp_path):
             "--uds", uds, "--app-dir", str(tmp_path), "--lifespan", "off", "--allow-gil",
         ]  # fmt: skip
         _uds_restart_cycle(cmd, env, uds, 1, ready_marker=_READY_AFTER_HANDLERS)
+
+
+def test_a_marker_line_is_one_write_so_two_loops_cannot_splice_it(monkeypatch):
+    """#3128: one write per marker, which is the property that makes splicing
+    impossible.
+
+    The markers are emitted by concurrent loops on separate threads. A marker
+    written as SEVERAL pieces can be spliced with a sibling's — the observed
+    failure was the capture reading
+
+        shutdown onshutdown on djust-loop-1
+
+    with the loop name on the next line — so an exact substring count saw one
+    marker where two loops had run. `print("shutdown on", name)` is four writes
+    (arg, separator, arg, newline); `_mark` is one.
+    """
+    ns: dict = {}
+    exec(compile(_APP, "<mlapp>", "exec"), ns)  # noqa: S102 — the app the tests serve
+
+    writes: list = []
+
+    class _Recorder:
+        def write(self, text):
+            writes.append(text)
+            return len(text)
+
+        def flush(self):
+            pass
+
+    monkeypatch.setattr(sys, "stdout", _Recorder())
+    ns["_mark"]("shutdown")
+
+    assert len(writes) == 1, f"a marker must be ONE write, got {writes!r}"
+    assert writes[0].startswith("shutdown on "), writes[0]
+    assert writes[0].endswith("\n"), writes[0]
 
 
 def _log_text(log):
