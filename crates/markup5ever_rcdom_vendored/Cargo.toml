@@ -26,3 +26,15 @@ html5ever = { workspace = true }
 markup5ever = { workspace = true, features = ["serde"] }
 tendril = { workspace = true }
 xml5ever = { workspace = true }
+
+# Explicit vendored-source classification (ADR-040 decision 6). The SBOM covers
+# Rust crates LINKED INTO the extension, not registry-only code, so a vendored
+# crate must still appear as a third-party component with its licence and
+# provenance. `rust_components()` treats a `source is None` package as internal
+# djust and skips it UNLESS this table is present, which is what keeps djust's own
+# crates out while this one in.
+[package.metadata.djust.vendored]
+upstream = "https://github.com/servo/html5ever"
+tag = "html5ever-v0.40.1"
+commit = "d7232d746d3112f08926d169591576bd12fe2fdf"
+path = "rcdom/lib.rs"

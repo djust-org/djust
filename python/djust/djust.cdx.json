@@ -1289,6 +1289,36 @@
       "version": "0.40.0"
     },
     {
+      "bom-ref": "rust:pkg:cargo/markup5ever_rcdom@0.40.1",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "markup5ever_rcdom",
+      "properties": [
+        {
+          "name": "djust:vendored:upstream",
+          "value": "https://github.com/servo/html5ever"
+        },
+        {
+          "name": "djust:vendored:tag",
+          "value": "html5ever-v0.40.1"
+        },
+        {
+          "name": "djust:vendored:commit",
+          "value": "d7232d746d3112f08926d169591576bd12fe2fdf"
+        },
+        {
+          "name": "djust:vendored:path",
+          "value": "rcdom/lib.rs"
+        }
+      ],
+      "purl": "pkg:cargo/markup5ever_rcdom@0.40.1",
+      "type": "library",
+      "version": "0.40.1"
+    },
+    {
       "bom-ref": "rust:pkg:cargo/memchr@2.8.0",
       "licenses": [
         {
