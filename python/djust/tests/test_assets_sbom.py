@@ -229,3 +229,102 @@ def test_rust_components_normalise_legacy_slash_licenses(monkeypatch):
         "c": "MIT OR Apache-2.0",
         "d": "Unlicense OR MIT OR Apache-2.0",
     }
+
+
+def test_rust_components_include_vendored_path_crate_but_not_internal_ones(monkeypatch):
+    """ADR-040 decision 6: the shipped SBOM covers Rust crates LINKED INTO the
+    extension, not registry-only code. A vendored third-party crate is a *path*
+    crate like djust's own, so "no source" cannot be the exclusion test — an
+    explicit ``[package.metadata.djust.vendored]`` table is.
+
+    Positive control: the marked path crate is included WITH its provenance.
+    Negative control: an unmarked path crate (djust's own) stays excluded, and a
+    registry crate is unaffected.
+    """
+    import subprocess
+    import types
+
+    def pkg(name, source, metadata=None):
+        entry = {"id": name, "name": name, "version": "1.0.0", "source": source}
+        if metadata is not None:
+            entry["metadata"] = metadata
+        return entry
+
+    registry = "registry+https://github.com/rust-lang/crates.io-index"
+    metadata = {
+        "packages": [
+            # the bindings crate: a path crate, internal, must stay out
+            pkg("djust_live", None),
+            # djust's own workspace crate: a path crate, internal, must stay out
+            pkg("djust_vdom", None),
+            # a VENDORED third-party path crate: must be INCLUDED
+            pkg(
+                "markup5ever_rcdom",
+                None,
+                {
+                    "djust": {
+                        "vendored": {
+                            "upstream": "https://github.com/servo/html5ever",
+                            "tag": "html5ever-v0.40.1",
+                            "commit": "d7232d746d3112f08926d169591576bd12fe2fdf",
+                            "path": "rcdom/lib.rs",
+                        }
+                    }
+                },
+            ),
+            pkg("pyo3", registry),
+        ],
+        "resolve": {
+            "root": "djust_live",
+            "nodes": [
+                {
+                    "id": "djust_live",
+                    "deps": [
+                        {"pkg": p, "dep_kinds": [{"kind": None}]}
+                        for p in ("djust_vdom", "markup5ever_rcdom", "pyo3")
+                    ],
+                },
+                {"id": "djust_vdom", "deps": []},
+                {"id": "markup5ever_rcdom", "deps": []},
+                {"id": "pyo3", "deps": []},
+            ],
+        },
+    }
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *a, **k: types.SimpleNamespace(stdout=json.dumps(metadata)),
+    )
+    by_name = {c["name"]: c for c in rust_components(Path("Cargo.toml"))}
+
+    # positive control
+    vendored = by_name.get("markup5ever_rcdom")
+    assert vendored is not None, "a marked vendored path crate must appear in the SBOM"
+    assert vendored["version"] == "1.0.0"
+    assert vendored["purl"] == "pkg:cargo/markup5ever_rcdom@1.0.0"
+    props = {p["name"]: p["value"] for p in vendored.get("properties", [])}
+    assert props["djust:vendored:commit"] == "d7232d746d3112f08926d169591576bd12fe2fdf"
+    assert props["djust:vendored:tag"] == "html5ever-v0.40.1"
+    assert props["djust:vendored:path"] == "rcdom/lib.rs"
+    assert props["djust:vendored:upstream"].startswith("https://github.com/servo/html5ever")
+
+    # negative controls
+    assert "djust_vdom" not in by_name, "djust's own path crates must stay excluded"
+    assert "djust_live" not in by_name
+    assert "pyo3" in by_name, "registry crates are unaffected"
+
+
+def test_the_real_manifest_emits_the_vendored_rcdom_with_provenance():
+    """Guard the actual repo, not just the fixture: the vendored crate must be in
+    the real component list with its upstream commit, and djust's own crates out.
+    Without this, the fixture above could pass while the shipped SBOM lost the
+    crate again."""
+    repo = Path(__file__).resolve().parents[3]
+    components = rust_components(repo / "crates" / "djust_live" / "Cargo.toml")
+    by_name = {c["name"]: c for c in components}
+    vendored = by_name.get("markup5ever_rcdom")
+    assert vendored is not None, "the vendored rcdom is missing from the real SBOM"
+    props = {p["name"]: p["value"] for p in vendored.get("properties", [])}
+    assert props.get("djust:vendored:commit"), "vendored provenance must ship with the component"
+    assert vendored.get("licenses"), "a vendored component must carry its licence"
+    assert not any(n.startswith("djust_") for n in by_name), "internal crates must stay out"

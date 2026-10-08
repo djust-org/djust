@@ -155,9 +155,17 @@ def _spdx_license(cargo_license: str) -> str:
 
 
 def rust_components(manifest_path: Path) -> list[dict]:
-    """Registry crates linked into the extension: normal dependencies
-    reachable from the bindings crate. Workspace crates (no ``source``) are
-    djust itself and are left out."""
+    """Rust crates linked into the extension: normal dependencies reachable
+    from the bindings crate (ADR-040 decision 6 — the distribution SBOM covers
+    crates linked into the extension, not registry-only code).
+
+    A package with no ``source`` is a path/workspace crate. That is *usually*
+    djust itself and is left out — but a VENDORED third-party crate is also a
+    path crate, and dropping it would lose shipped third-party code from the
+    scanner/licence inventory. So "no source" is not the test; an explicit
+    ``[package.metadata.djust.vendored]`` table is. Internal djust crates carry
+    no such table and stay excluded, and a vendored one is emitted as a
+    third-party component carrying its upstream provenance."""
     metadata = json.loads(
         subprocess.run(
             [
@@ -191,7 +199,9 @@ def rust_components(manifest_path: Path) -> list[dict]:
     components = []
     for pkg_id in seen:
         package = packages[pkg_id]
-        if package.get("source") is None:
+        vendored = (package.get("metadata") or {}).get("djust", {}).get("vendored")
+        if package.get("source") is None and not vendored:
+            # Internal djust crate: not third-party.
             continue
         purl = f"pkg:cargo/{package['name']}@{package['version']}"
         component = {
@@ -203,6 +213,15 @@ def rust_components(manifest_path: Path) -> list[dict]:
         }
         if package.get("license"):
             component["licenses"] = [{"expression": _spdx_license(package["license"])}]
+        if vendored:
+            # Keep the provenance with the component so a reader of the shipped
+            # SBOM can tell where this code came from, not just that it exists.
+            component["properties"] = [
+                {"name": "djust:vendored:upstream", "value": str(vendored.get("upstream", ""))},
+                {"name": "djust:vendored:tag", "value": str(vendored.get("tag", ""))},
+                {"name": "djust:vendored:commit", "value": str(vendored.get("commit", ""))},
+                {"name": "djust:vendored:path", "value": str(vendored.get("path", ""))},
+            ]
         components.append(component)
     return sorted(components, key=lambda c: c["purl"])
 

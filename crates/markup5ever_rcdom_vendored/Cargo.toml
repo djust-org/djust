@@ -1,0 +1,40 @@
+[package]
+# Same crate NAME as the crates.io dependency it replaces, so every consumer
+# (`extern crate markup5ever_rcdom` / `markup5ever_rcdom::...`) resolves to this
+# path crate with no source change. See PROVENANCE.md for the exact upstream
+# source this file tree was taken from.
+name = "markup5ever_rcdom"
+description = "Vendored: basic, unsupported DOM structure for html5ever (see PROVENANCE.md)"
+version = "0.40.1"
+license = "MIT OR Apache-2.0"
+edition = "2021"
+# Matches the actual floor of the rest of the 0.40 stack: registry html5ever
+# 0.40.1, markup5ever 0.40.0, xml5ever 0.40.0 and string_cache 0.11.0 all declare
+# `rust-version = "1.85"`. An earlier draft of this manifest said 1.70, which
+# understated the requirement — the vendored crate cannot be built on an older
+# toolchain than the crates it depends on, so the workspace's effective compiler
+# floor is now 1.85.
+rust-version = "1.85"
+# Not for publication: this is a vendored copy, never pushed to crates.io.
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+html5ever = { workspace = true }
+markup5ever = { workspace = true, features = ["serde"] }
+tendril = { workspace = true }
+xml5ever = { workspace = true }
+
+# Explicit vendored-source classification (ADR-040 decision 6). The SBOM covers
+# Rust crates LINKED INTO the extension, not registry-only code, so a vendored
+# crate must still appear as a third-party component with its licence and
+# provenance. `rust_components()` treats a `source is None` package as internal
+# djust and skips it UNLESS this table is present, which is what keeps djust's own
+# crates out while this one in.
+[package.metadata.djust.vendored]
+upstream = "https://github.com/servo/html5ever"
+tag = "html5ever-v0.40.1"
+commit = "d7232d746d3112f08926d169591576bd12fe2fdf"
+path = "rcdom/lib.rs"

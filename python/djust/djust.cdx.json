@@ -1145,16 +1145,16 @@
       "version": "0.5.0"
     },
     {
-      "bom-ref": "rust:pkg:cargo/html5ever@0.39.0",
+      "bom-ref": "rust:pkg:cargo/html5ever@0.40.1",
       "licenses": [
         {
           "expression": "MIT OR Apache-2.0"
         }
       ],
       "name": "html5ever",
-      "purl": "pkg:cargo/html5ever@0.39.0",
+      "purl": "pkg:cargo/html5ever@0.40.1",
       "type": "library",
-      "version": "0.39.0"
+      "version": "0.40.1"
     },
     {
       "bom-ref": "rust:pkg:cargo/iana-time-zone-haiku@0.1.2",
@@ -1277,28 +1277,46 @@
       "version": "0.4.29"
     },
     {
-      "bom-ref": "rust:pkg:cargo/markup5ever@0.39.0",
+      "bom-ref": "rust:pkg:cargo/markup5ever@0.40.0",
       "licenses": [
         {
           "expression": "MIT OR Apache-2.0"
         }
       ],
       "name": "markup5ever",
-      "purl": "pkg:cargo/markup5ever@0.39.0",
+      "purl": "pkg:cargo/markup5ever@0.40.0",
       "type": "library",
-      "version": "0.39.0"
+      "version": "0.40.0"
     },
     {
-      "bom-ref": "rust:pkg:cargo/markup5ever_rcdom@0.39.0+unofficial",
+      "bom-ref": "rust:pkg:cargo/markup5ever_rcdom@0.40.1",
       "licenses": [
         {
           "expression": "MIT OR Apache-2.0"
         }
       ],
       "name": "markup5ever_rcdom",
-      "purl": "pkg:cargo/markup5ever_rcdom@0.39.0+unofficial",
+      "properties": [
+        {
+          "name": "djust:vendored:upstream",
+          "value": "https://github.com/servo/html5ever"
+        },
+        {
+          "name": "djust:vendored:tag",
+          "value": "html5ever-v0.40.1"
+        },
+        {
+          "name": "djust:vendored:commit",
+          "value": "d7232d746d3112f08926d169591576bd12fe2fdf"
+        },
+        {
+          "name": "djust:vendored:path",
+          "value": "rcdom/lib.rs"
+        }
+      ],
+      "purl": "pkg:cargo/markup5ever_rcdom@0.40.1",
       "type": "library",
-      "version": "0.39.0+unofficial"
+      "version": "0.40.1"
     },
     {
       "bom-ref": "rust:pkg:cargo/memchr@2.8.0",
@@ -1397,16 +1415,16 @@
       "version": "0.12.1"
     },
     {
-      "bom-ref": "rust:pkg:cargo/phf@0.13.1",
+      "bom-ref": "rust:pkg:cargo/phf@0.14.0",
       "licenses": [
         {
           "expression": "MIT"
         }
       ],
       "name": "phf",
-      "purl": "pkg:cargo/phf@0.13.1",
+      "purl": "pkg:cargo/phf@0.14.0",
       "type": "library",
-      "version": "0.13.1"
+      "version": "0.14.0"
     },
     {
       "bom-ref": "rust:pkg:cargo/phf_shared@0.12.1",
@@ -1421,16 +1439,16 @@
       "version": "0.12.1"
     },
     {
-      "bom-ref": "rust:pkg:cargo/phf_shared@0.13.1",
+      "bom-ref": "rust:pkg:cargo/phf_shared@0.14.0",
       "licenses": [
         {
           "expression": "MIT"
         }
       ],
       "name": "phf_shared",
-      "purl": "pkg:cargo/phf_shared@0.13.1",
+      "purl": "pkg:cargo/phf_shared@0.14.0",
       "type": "library",
-      "version": "0.13.1"
+      "version": "0.14.0"
     },
     {
       "bom-ref": "rust:pkg:cargo/pin-project-lite@0.2.17",
@@ -1817,16 +1835,16 @@
       "version": "0.6.3"
     },
     {
-      "bom-ref": "rust:pkg:cargo/string_cache@0.9.0",
+      "bom-ref": "rust:pkg:cargo/string_cache@0.11.0",
       "licenses": [
         {
           "expression": "MIT OR Apache-2.0"
         }
       ],
       "name": "string_cache",
-      "purl": "pkg:cargo/string_cache@0.9.0",
+      "purl": "pkg:cargo/string_cache@0.11.0",
       "type": "library",
-      "version": "0.9.0"
+      "version": "0.11.0"
     },
     {
       "bom-ref": "rust:pkg:cargo/syn@2.0.117",
@@ -2201,16 +2219,16 @@
       "version": "0.244.0"
     },
     {
-      "bom-ref": "rust:pkg:cargo/web_atoms@0.2.4",
+      "bom-ref": "rust:pkg:cargo/web_atoms@0.3.0",
       "licenses": [
         {
           "expression": "MIT OR Apache-2.0"
         }
       ],
       "name": "web_atoms",
-      "purl": "pkg:cargo/web_atoms@0.2.4",
+      "purl": "pkg:cargo/web_atoms@0.3.0",
       "type": "library",
-      "version": "0.2.4"
+      "version": "0.3.0"
     },
     {
       "bom-ref": "rust:pkg:cargo/windows-core@0.62.2",
@@ -2381,16 +2399,16 @@
       "version": "0.244.0"
     },
     {
-      "bom-ref": "rust:pkg:cargo/xml5ever@0.39.0",
+      "bom-ref": "rust:pkg:cargo/xml5ever@0.40.0",
       "licenses": [
         {
           "expression": "MIT OR Apache-2.0"
         }
       ],
       "name": "xml5ever",
-      "purl": "pkg:cargo/xml5ever@0.39.0",
+      "purl": "pkg:cargo/xml5ever@0.40.0",
       "type": "library",
-      "version": "0.39.0"
+      "version": "0.40.0"
     },
     {
       "bom-ref": "rust:pkg:cargo/zerocopy-derive@0.8.48",

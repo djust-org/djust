@@ -301,7 +301,7 @@ pub fn parse_html_fragment(html: &str, context_tag: &str) -> Result<Vec<VNode>> 
     let doc_children = document.children.borrow();
     let html_wrapper = doc_children
         .iter()
-        .find(|c| matches!(c.data, NodeData::Element { ref name, .. } if name.local.as_ref() == "html"))
+        .find(|c| matches!(c.data, NodeData::Element { ref name, .. } if AsRef::<str>::as_ref(&name.local) == "html"))
         .ok_or_else(|| DjangoRustError::VdomError("fragment parse: missing html wrapper".into()))?
         .clone();
     drop(doc_children);
@@ -340,7 +340,7 @@ pub fn parse_html_fragment_client_view(html: &str, context_tag: &str) -> Result<
     let doc_children = document.children.borrow();
     let html_wrapper = doc_children
         .iter()
-        .find(|c| matches!(c.data, NodeData::Element { ref name, .. } if name.local.as_ref() == "html"))
+        .find(|c| matches!(c.data, NodeData::Element { ref name, .. } if AsRef::<str>::as_ref(&name.local) == "html"))
         .ok_or_else(|| DjangoRustError::VdomError("fragment parse: missing html wrapper".into()))?
         .clone();
     drop(doc_children);
@@ -414,10 +414,10 @@ fn find_root(handle: &Handle) -> Handle {
 fn find_body(handle: &Handle) -> Option<Handle> {
     for child in handle.children.borrow().iter() {
         if let NodeData::Element { ref name, .. } = child.data {
-            if name.local.as_ref() == "html" {
+            if AsRef::<str>::as_ref(&name.local) == "html" {
                 for html_child in child.children.borrow().iter() {
                     if let NodeData::Element { ref name, .. } = html_child.data {
-                        if name.local.as_ref() == "body" {
+                        if AsRef::<str>::as_ref(&name.local) == "body" {
                             return Some(html_child.clone());
                         }
                     }
@@ -463,7 +463,9 @@ fn element_is_root_candidate(handle: &Handle, attr: &str) -> bool {
         NodeData::Element { ref attrs, .. } => {
             let attrs = attrs.borrow();
             !is_embedded_child_wrapper(&attrs)
-                && attrs.iter().any(|a| a.name.local.as_ref() == attr)
+                && attrs
+                    .iter()
+                    .any(|a| AsRef::<str>::as_ref(&a.name.local) == attr)
         }
         _ => false,
     }
@@ -472,7 +474,11 @@ fn element_is_root_candidate(handle: &Handle, attr: &str) -> bool {
 /// The container of ANOTHER view: `dj-view` with `data-djust-embedded` (what
 /// `{% live_render %}` emits, sticky or not) or with `dj-lazy` (a lazy view).
 fn is_embedded_child_wrapper(attrs: &[html5ever::Attribute]) -> bool {
-    let has = |wanted: &str| attrs.iter().any(|a| a.name.local.as_ref() == wanted);
+    let has = |wanted: &str| {
+        attrs
+            .iter()
+            .any(|a| AsRef::<str>::as_ref(&a.name.local) == wanted)
+    };
     has("dj-view") && (has("data-djust-embedded") || has("dj-lazy"))
 }
 
@@ -485,7 +491,10 @@ fn find_root_with_attr(handle: &Handle, attr: &str) -> Option<Handle> {
             if is_embedded_child_wrapper(&attrs) {
                 continue;
             }
-            if attrs.iter().any(|a| a.name.local.as_ref() == attr) {
+            if attrs
+                .iter()
+                .any(|a| AsRef::<str>::as_ref(&a.name.local) == attr)
+            {
                 return Some(child.clone());
             }
             drop(attrs);
