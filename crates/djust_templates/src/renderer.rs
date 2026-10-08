@@ -2481,7 +2481,14 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
 ) -> Result<String> {
     match node {
         Node::Located { .. } => render_effectful_node(node, context, loader),
-        Node::Text(text) => Ok(text.clone()),
+        // The single choke point where authored HTML reaches output. Recording
+        // here is what makes the lazy-container binding per RENDER rather than
+        // per template: a container in a branch that did not run is authored
+        // but never emitted, so it is never recorded (#3252).
+        Node::Text(text) => {
+            crate::lazy_scope::record_text(text);
+            Ok(text.clone())
+        }
 
         Node::Variable(var_name, filter_specs, in_attr) => {
             // A LITERAL is decided before any lookup, exactly as Django does

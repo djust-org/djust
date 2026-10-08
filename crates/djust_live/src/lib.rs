@@ -5474,6 +5474,30 @@ fn crosses_as_encoded_by_conversion(obj: &Bound<'_, PyAny>) -> PyResult<bool> {
 // data race. `crates/djust_templates/tests/free_threaded_safety.rs` and
 // `crates/djust_vdom/tests/free_threaded_safety.rs` are the regression
 // guards. The audit checklist and findings are recorded on issue #1432.
+/// Forget the lazy containers recorded so far (#3252). Call BEFORE a render.
+#[pyfunction]
+fn reset_lazy_containers() {
+    djust_templates::lazy_scope::reset();
+}
+
+/// Take the `dj-view` + `dj-lazy` containers THIS render actually emitted
+/// (#3252), as `(view_path, trigger)` pairs, leaving the record empty.
+///
+/// The renderer writes this for `Node::Text` only — developer-authored template
+/// text — so it is provenance rather than a marker string that user data could
+/// copy, and a container in a branch that did not run is never recorded.
+///
+/// CANDIDATES ONLY. The caller must resolve the child and its arguments for the
+/// request and apply the same view-level auth and object permission
+/// `{% live_render %}` applies; nothing here authorizes anything.
+#[pyfunction]
+fn take_lazy_containers() -> Vec<(String, Option<String>)> {
+    djust_templates::lazy_scope::take()
+        .into_iter()
+        .map(|container| (container.view_path, container.trigger))
+        .collect()
+}
+
 #[pymodule(gil_used = false)]
 fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RustLiveViewBackend>()?;
@@ -5486,6 +5510,8 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // constructor: only `value_into_handler_pyobject` builds one.
     m.add_class::<djust_core::TemplateObject>()?;
     m.add_class::<djust_core::LazyBlock>()?;
+    m.add_function(wrap_pyfunction!(reset_lazy_containers, m)?)?;
+    m.add_function(wrap_pyfunction!(take_lazy_containers, m)?)?;
     m.add_function(wrap_pyfunction!(render_template, m)?)?;
     m.add_function(wrap_pyfunction!(render_template_with_dirs, m)?)?;
     m.add_function(wrap_pyfunction!(compile_template, m)?)?;

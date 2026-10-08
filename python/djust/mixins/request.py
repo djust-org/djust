@@ -397,7 +397,16 @@ class RequestMixin:
         from .._child_rendering import render_view_full_template, render_view_with_diff
 
         self._prepare_child_ids()
+        # #3252: the renderer records the lazy containers each render emits, and
+        # this method renders the template twice (the page, then the VDOM-diff
+        # baseline) — the same trap the lazy THUNKS have. Take ONE authoritative
+        # pass: reset before the page render, collect immediately after it, so
+        # the baseline render contributes nothing.
+        from .. import _rust
+
+        _rust.reset_lazy_containers()
         html = render_view_full_template(self, request, serialized_context=state_serializable)
+        lazy_containers = _rust.take_lazy_containers()
         # ADR-036 R1: recovery targets come from what the server rendered.
         from ..validation import note_rendered_recovery_targets
 
@@ -420,6 +429,12 @@ class RequestMixin:
         # One authoritative page pass (#3252): discard the baseline render's
         # lazy thunks before anything drains them.
         self._lazy_thunks = list(page_lazy_thunks)
+
+        # #3252: register the `dj-view` + `dj-lazy` containers the page emitted.
+        # Registration only — no render, no response change. `lazy_containers`
+        # is the PAGE render's record, taken above before the baseline render
+        # ran, so one container registers once.
+        self._register_lazy_containers(request, lazy_containers)
 
         if not uses_legacy_exposure(self):
             from .._exposure_child_persistence import save_child_states
@@ -515,6 +530,95 @@ class RequestMixin:
         if not service_worker_cache_eligible(self):
             response[SW_CACHE_HEADER] = SW_CACHE_NO_STORE
         return response
+
+    def _register_lazy_containers(self, request: "HttpRequest", containers: list) -> None:
+        """Register the `dj-view` + `dj-lazy` containers this page EMITTED (#3252).
+
+        REGISTRATION ONLY: nothing renders, the response is untouched, and no
+        state policy moves. The renderer recorded which containers it emitted —
+        a container inside a branch that did not run is not among them — and
+        each one now gets exactly the checks `{% live_render %}` applies when it
+        registers a child: the ``DJUST_LIVE_RENDER_ALLOWED_MODULES`` prefix
+        allow-list, resolvability, a ``LiveView`` subclass, ``check_view_auth``
+        and ``enforce_object_permission``, all against THIS request.
+
+        A container that fails any of them is NOT registered, so no later event
+        can name it. That is the same fail-closed outcome the tag reaches by
+        raising, without failing a page whose authored markup has already been
+        emitted.
+
+        The view path here came from AUTHORED template text (the renderer only
+        records ``Node::Text``), so it is developer-supplied exactly as a tag's
+        path is — but it is still resolved and authorized, never trusted: there
+        is no route from a client-supplied id to a class, only a lookup in the
+        registry this method builds.
+        """
+        containers = list(containers)
+        registry: Dict[str, Dict[str, Any]] = {}
+        self.__dict__["_lazy_containers"] = registry
+        if not containers:
+            return
+
+        from django.conf import settings as django_settings
+        from django.utils.module_loading import import_string
+
+        from ..auth.core import check_view_auth, enforce_object_permission
+        from ..live_view import LiveView
+        from .sticky import _child_identity
+
+        allowed_prefixes = getattr(django_settings, "DJUST_LIVE_RENDER_ALLOWED_MODULES", None)
+        for view_path, trigger in containers:
+            if allowed_prefixes is not None and not any(
+                view_path == prefix or view_path.startswith(prefix + ".")
+                for prefix in allowed_prefixes
+            ):
+                logger.warning(
+                    "Lazy container %r is not in DJUST_LIVE_RENDER_ALLOWED_MODULES; not registered",
+                    view_path,
+                )
+                continue
+            try:
+                child_cls = import_string(view_path)
+            except (ImportError, AttributeError, ModuleNotFoundError):
+                logger.warning("Lazy container %r cannot be resolved; not registered", view_path)
+                continue
+            if not (isinstance(child_cls, type) and issubclass(child_cls, LiveView)):
+                logger.warning(
+                    "Lazy container %r is not a LiveView subclass; not registered", view_path
+                )
+                continue
+
+            child = child_cls()
+            child.request = request
+            try:
+                if check_view_auth(child, request) is not None:
+                    # The child's own view-level gate says no for this request.
+                    continue
+                enforce_object_permission(child, request)
+            except Exception:  # noqa: BLE001 — a broken or denying predicate fails closed
+                logger.info("Lazy container %r is not authorized for this request", view_path)
+                continue
+
+            # The same keyed, cross-process id an auto-named HTTP child gets, so
+            # a container keeps one addressable name between requests and a
+            # client cannot confirm guesses about what it cannot see.
+            #
+            # The digest names what the container IS, so two containers that
+            # author the same view collide; they are separated with the same
+            # `_2`/`_3` suffix a tag's repeated children get, in document order.
+            # Without this the second would overwrite the first and one
+            # container would be unaddressable.
+            base = "child_" + _child_identity(view_path, {})
+            container_id = base
+            repeat = 1
+            while container_id in registry:
+                repeat += 1
+                container_id = f"{base}_{repeat}"
+            registry[container_id] = {
+                "view_path": view_path,
+                "trigger": trigger,
+                "child_cls": child_cls,
+            }
 
     def _fill_lazy_slots(self, html: str) -> str:
         """Run this page's lazily-deferred slots into ``html`` (#3252).

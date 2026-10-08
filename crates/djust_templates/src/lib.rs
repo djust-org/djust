@@ -21,6 +21,7 @@ pub mod filters;
 pub mod floatformat;
 pub mod htmlparser;
 pub mod inheritance;
+pub mod lazy_scope;
 pub mod lexer;
 pub mod loop_cache;
 pub mod markdown;

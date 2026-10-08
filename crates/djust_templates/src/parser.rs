@@ -2948,6 +2948,207 @@ fn scan_dj_model_in_text(text: &str, fields: &mut HashSet<String>) {
     }
 }
 
+/// A lazily-hydrated container AUTHORED as `<… dj-view="…" … dj-lazy …>` (#3252).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct AuthoredLazyContainer {
+    /// The authored `dj-view` value — a view/template path.
+    pub view_path: String,
+    /// The authored `dj-lazy` value when it carries one (`dj-lazy="click"`),
+    /// `None` for the valueless form (`dj-lazy`).
+    pub trigger: Option<String>,
+}
+
+/// Collect every `dj-view` + `dj-lazy` container written as literal
+/// developer-authored markup, recursing into `{% include %}` via `loader`.
+///
+/// # Security: this is the immune source for lazy-container CANDIDACY (#3252)
+///
+/// Same argument as [`collect_dj_model_fields`], and it is the whole reason
+/// this scan is over the AST rather than the rendered HTML: static containers
+/// live ENTIRELY inside [`Node::Text`] literals, and attacker-controlled data
+/// only reaches output through [`Node::Variable`] substitution, so it can never
+/// appear in a `Node::Text` literal. A `|safe` value, a comment, a username or
+/// an interpolated attribute that *looks* like `<div dj-view="…" dj-lazy>` is
+/// therefore not a candidate at all — there is no marker string for anyone to
+/// copy, which a synthetic attribute emitted into the output could never have
+/// promised.
+///
+/// This yields CANDIDATES ONLY. It does not authorize: registration must still
+/// resolve the child and its arguments per request and apply the same
+/// view-level auth and object permission `{% live_render %}` applies, and a
+/// container in a branch that did not render must not register. A dynamic
+/// `dj-view="{{ var }}"` resolves to nothing here (fail-closed).
+pub fn collect_lazy_containers<L: crate::inheritance::TemplateLoader>(
+    nodes: &[Node],
+    loader: Option<&L>,
+) -> Vec<AuthoredLazyContainer> {
+    let mut found = std::collections::BTreeSet::new();
+    collect_lazy_containers_depth(nodes, loader, &mut found, 0);
+    found.into_iter().collect()
+}
+
+fn collect_lazy_containers_depth<L: crate::inheritance::TemplateLoader>(
+    nodes: &[Node],
+    loader: Option<&L>,
+    found: &mut std::collections::BTreeSet<AuthoredLazyContainer>,
+    depth: usize,
+) {
+    for node in nodes {
+        match node {
+            Node::Text(text) => {
+                let mut scanned = Vec::new();
+                scan_lazy_containers_in_text(text, &mut scanned);
+                found.extend(scanned);
+            }
+
+            Node::Include { template, .. } => {
+                if depth >= MAX_INCLUDE_DEPTH {
+                    continue;
+                }
+                if let Some(loader) = loader {
+                    let name = template.trim_matches(|c| c == '"' || c == '\'');
+                    if !name.is_empty() {
+                        if let Ok(included) = loader.load_template(name) {
+                            collect_lazy_containers_depth(
+                                &included,
+                                Some(loader),
+                                found,
+                                depth + 1,
+                            );
+                        }
+                    }
+                }
+            }
+
+            _ => {
+                for children in node.child_lists().into_iter().flatten() {
+                    collect_lazy_containers_depth(children, loader, found, depth);
+                }
+            }
+        }
+    }
+}
+
+/// An authored attribute's presence and value.
+enum AuthoredAttr<'a> {
+    Absent,
+    /// Present with no `=` (`dj-lazy`), so no value to read.
+    Valueless,
+    Value(&'a str),
+}
+
+/// Find a REAL attribute in one authored tag: a standalone name (preceded by
+/// ASCII whitespace or tag start), then either `=` and a quoted value, or a
+/// name boundary. Mirrors the dj-model scanner's discipline so `data-dj-view=…`
+/// and `xdj-view=…` do not over-match.
+fn find_authored_attr<'a>(tag: &'a str, name: &str) -> AuthoredAttr<'a> {
+    let bytes = tag.as_bytes();
+    let mut from = 0usize;
+    while let Some(rel) = tag[from..].find(name) {
+        let start = from + rel;
+        let after = start + name.len();
+        from = after;
+
+        let left_ok = start == 0
+            || bytes
+                .get(start - 1)
+                .is_some_and(|b| b.is_ascii_whitespace());
+        if !left_ok {
+            continue;
+        }
+        let right = bytes.get(after).copied();
+        let right_ok =
+            right.is_some_and(|b| b.is_ascii_whitespace() || b == b'=' || b == b'/' || b == b'>');
+        if !right_ok {
+            continue;
+        }
+        if right != Some(b'=') {
+            return AuthoredAttr::Valueless;
+        }
+        let quote = match bytes.get(after + 1) {
+            Some(&b'"') => b'"',
+            Some(&b'\'') => b'\'',
+            // Unquoted values are not a form djust emits; fail closed.
+            _ => return AuthoredAttr::Valueless,
+        };
+        let value_start = after + 2;
+        if let Some(end_rel) = tag[value_start..].find(quote as char) {
+            return AuthoredAttr::Value(&tag[value_start..value_start + end_rel]);
+        }
+        return AuthoredAttr::Absent;
+    }
+    AuthoredAttr::Absent
+}
+
+/// Scan one `Node::Text` literal for authored `dj-view` + `dj-lazy` containers.
+///
+/// Tag-aware, because the two attributes must sit on the SAME tag: the text is
+/// walked tag by tag, tolerating quoted values that contain `>`. As with the
+/// dj-model scan there is no security dependence on being a *perfect* HTML
+/// parser — this text is never attacker-controlled, so a false positive can
+/// only widen the candidate list with something the developer themselves typed,
+/// and every candidate is still authorized at registration.
+pub(crate) fn scan_lazy_containers_in_text(text: &str, found: &mut Vec<AuthoredLazyContainer>) {
+    let bytes = text.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        // Only open tags can carry the attributes: skip `</…`, `<!…`, `<?…`.
+        if matches!(bytes.get(i + 1), Some(b'/') | Some(b'!') | Some(b'?')) {
+            i += 1;
+            continue;
+        }
+        // Find this tag's `>`, skipping over quoted attribute values.
+        let mut j = i + 1;
+        let mut quote: Option<u8> = None;
+        while j < bytes.len() {
+            let b = bytes[j];
+            match quote {
+                Some(q) if b == q => quote = None,
+                Some(_) => {}
+                None if b == b'"' || b == b'\'' => quote = Some(b),
+                None if b == b'>' => break,
+                None => {}
+            }
+            j += 1;
+        }
+        if j >= bytes.len() {
+            return;
+        }
+        // The slice INCLUDES the closing `>`: a valueless trailing attribute
+        // (`<div dj-view="…" dj-lazy>`) has no right boundary without it, and
+        // the dj-lazy form is exactly the common one.
+        let tag = &text[i..j + 1];
+        let view_path = match find_authored_attr(tag, "dj-view") {
+            AuthoredAttr::Value(v) if !v.is_empty() => v,
+            _ => {
+                i = j + 1;
+                continue;
+            }
+        };
+        let trigger = match find_authored_attr(tag, "dj-lazy") {
+            AuthoredAttr::Absent => {
+                i = j + 1;
+                continue;
+            }
+            AuthoredAttr::Valueless => None,
+            AuthoredAttr::Value(v) => Some(v.to_string()),
+        };
+        // PUSH, not insert: two containers that author the same view are two
+        // containers, and the caller that wants them collapsed (the parser's
+        // candidate list) dedupes explicitly. Registration needs the repeats to
+        // give them separate ids (#3252).
+        found.push(AuthoredLazyContainer {
+            view_path: view_path.to_string(),
+            trigger,
+        });
+        i = j + 1;
+    }
+}
+
 /// Tokenize + parse `source`, then collect every static `dj-model="<field>"`
 /// binding from the resulting AST (recursing into `{% include %}` via `loader`).
 ///
@@ -6507,5 +6708,133 @@ mod dep_tests {
         ] {
             assert!(parse_source(source).is_ok(), "{source:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod lazy_container_tests {
+    use super::*;
+    use crate::lexer::tokenize;
+
+    /// A loader that resolves nothing: these tests exercise authored text, and
+    /// an unresolvable `{% include %}` contributes nothing (fail-closed).
+    struct NoLoader;
+
+    impl crate::inheritance::TemplateLoader for NoLoader {
+        fn shared_handle(
+            &self,
+        ) -> std::sync::Arc<dyn crate::inheritance::TemplateLoader + Send + Sync> {
+            std::sync::Arc::new(NoLoader)
+        }
+        fn load_template(&self, _name: &str) -> Result<Vec<Node>> {
+            Err(djust_core::DjangoRustError::TemplateError(
+                "no includes in these tests".to_string(),
+            ))
+        }
+    }
+
+    fn containers(source: &str) -> Vec<AuthoredLazyContainer> {
+        let tokens = tokenize(source).expect("tokenize");
+        let nodes = parse(&tokens).expect("parse");
+        collect_lazy_containers::<NoLoader>(&nodes, None)
+    }
+
+    #[test]
+    fn a_valueless_trailing_attribute_is_still_an_attribute() {
+        // The common authored form puts `dj-lazy` LAST, right before `>`, so
+        // the tag slice must include the `>` or the name has no right boundary
+        // and the container is missed. (That was this scanner's first bug.)
+        let found = containers(r#"<div dj-view="app.Room" dj-lazy>"#);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].trigger, None);
+    }
+
+    #[test]
+    fn walker_reaches_text_at_all() {
+        let tokens = tokenize(r#"<div dj-view="app.Room" dj-lazy></div>"#).expect("tokenize");
+        let nodes = parse(&tokens).expect("parse");
+        let mut texts = 0usize;
+        fn count(nodes: &[Node], n: &mut usize) {
+            for node in nodes {
+                match node {
+                    Node::Text(_) => *n += 1,
+                    _ => {
+                        for children in node.child_lists().into_iter().flatten() {
+                            count(children, n);
+                        }
+                    }
+                }
+            }
+        }
+        count(&nodes, &mut texts);
+        assert!(texts > 0, "no Node::Text in the AST; top level = {nodes:?}");
+    }
+
+    #[test]
+    fn finds_a_container_with_both_attributes() {
+        let found = containers(r#"<div dj-view="app.Room" dj-lazy></div>"#);
+        assert_eq!(
+            found,
+            vec![AuthoredLazyContainer {
+                view_path: "app.Room".into(),
+                trigger: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn keeps_the_authored_trigger_value() {
+        let found = containers(r#"<div dj-lazy="click" dj-view="app.Room"></div>"#);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].trigger.as_deref(), Some("click"));
+        assert_eq!(found[0].view_path, "app.Room");
+    }
+
+    #[test]
+    fn requires_both_attributes_on_the_same_tag() {
+        assert!(containers(r#"<div dj-view="app.Room"></div>"#).is_empty());
+        assert!(containers(r#"<div dj-lazy></div>"#).is_empty());
+        // ...and not one on each of two tags.
+        assert!(containers(r#"<div dj-view="a.B"></div><div dj-lazy></div>"#).is_empty());
+    }
+
+    #[test]
+    fn does_not_over_match_longer_attribute_names() {
+        assert!(containers(r#"<div data-dj-view="app.Room" dj-lazy></div>"#).is_empty());
+        assert!(containers(r#"<div dj-view="app.Room" data-dj-lazy></div>"#).is_empty());
+        assert!(containers(r#"<div xdj-view="app.Room" dj-lazy></div>"#).is_empty());
+    }
+
+    #[test]
+    fn a_quoted_value_containing_a_gt_does_not_end_the_tag() {
+        let found = containers(r#"<div title="a > b" dj-view="app.Room" dj-lazy></div>"#);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].view_path, "app.Room");
+    }
+
+    #[test]
+    fn dynamic_or_empty_view_paths_are_not_candidates() {
+        assert!(containers(r#"<div dj-view="" dj-lazy></div>"#).is_empty());
+        assert!(containers(r#"<div dj-view="{{ v }}" dj-lazy></div>"#).is_empty());
+        // A variable split across Text and Variable never forms the literal.
+        assert!(containers(r#"<div dj-view="app.{{ x }}"></div>"#).is_empty());
+    }
+
+    #[test]
+    fn finds_containers_inside_a_branch_and_the_walker_sees_them() {
+        // The SCAN is provenance only: a container in a branch that never
+        // renders is still a candidate here, and registration is what must
+        // refuse it. Pinning that keeps the two responsibilities separate.
+        let found = containers(
+            r#"{% if x %}<div dj-view="app.A" dj-lazy></div>{% else %}<div dj-view="app.B" dj-lazy></div>{% endif %}"#,
+        );
+        let paths: Vec<&str> = found.iter().map(|c| c.view_path.as_str()).collect();
+        assert_eq!(paths, vec!["app.A", "app.B"]);
+    }
+
+    #[test]
+    fn a_lowercase_variant_of_the_tag_is_not_an_element() {
+        // `<` followed by `/`, `!` or `?` is never an open tag.
+        assert!(containers(r#"<!-- dj-view="app.Room" dj-lazy -->"#).is_empty());
     }
 }

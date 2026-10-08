@@ -11,6 +11,22 @@ Generated for djust framework - see crates/djust_live/src/lib.rs
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 # ============================================================================
+# Lazy-container record (#3252)
+# ============================================================================
+
+def reset_lazy_containers() -> None:
+    """Forget the lazy containers recorded so far. Call BEFORE a render."""
+
+def take_lazy_containers() -> List[Tuple[str, Optional[str]]]:
+    """The `dj-view` + `dj-lazy` containers the last render EMITTED.
+
+    `(view_path, trigger)` pairs; clearing the record. Written from authored
+    template text only, so it is provenance rather than a marker user data
+    could forge. CANDIDATES ONLY — the caller must still resolve and authorize
+    each one for the request.
+    """
+
+# ============================================================================
 # Core Template Rendering Functions
 # ============================================================================
 
@@ -1414,6 +1430,9 @@ class RustTooltip:
 # ============================================================================
 
 __all__ = [
+    # Lazy-container record (#3252)
+    "reset_lazy_containers",
+    "take_lazy_containers",
     # Core rendering
     "render_template",
     "render_template_with_dirs",
