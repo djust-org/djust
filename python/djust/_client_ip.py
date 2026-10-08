@@ -28,10 +28,20 @@ logger = logging.getLogger(__name__)
 def _trusted_proxy_count() -> int:
     """Number of trusted reverse-proxy hops in front of the app (>= 0).
 
-    Accepts a clean non-negative ``int``. Any other set value (float, bool,
-    string, negative) is coerced fail-safe (toward *fewer* trusted hops, never
-    more of the spoofable chain) and logged once — a misconfigured count should
-    be loud, not silent, since it controls a security-relevant identity.
+    Accepts a clean non-negative ``int``, which is used as given. Any other set
+    value is coerced through ``max(0, int(float(raw)))`` and logged once — a
+    misconfigured count should be loud, not silent, since it controls a
+    security-relevant identity.
+
+    That coercion is NOT guaranteed to reduce the hop count, and an earlier
+    version of this docstring claimed it was ("toward fewer trusted hops, never
+    more"). ``float()`` rounds before ``int()`` truncates, so a numeric string
+    just under an integer can round *up* to it: ``"1.999999999999999999999999"``
+    becomes ``2``, one hop MORE than the exact decimal floor of the value the
+    operator wrote. What the coercion does guarantee is narrower — a value that
+    cannot be parsed, or a negative one, becomes 0, so an unusable setting fails
+    toward no trusted proxy rather than trusting a spoofable header. Configure it
+    as an ``int``; the coercion path exists to fail loudly, not to interpret.
     """
     raw = getattr(settings, "DJUST_TRUSTED_PROXY_COUNT", 0)
     if isinstance(raw, int) and not isinstance(raw, bool):
