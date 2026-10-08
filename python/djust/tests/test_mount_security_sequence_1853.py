@@ -396,6 +396,38 @@ class TestWebSocketMountSequence:
         )
         await communicator.disconnect()
 
+    async def test_a_reconnect_does_not_bypass_the_login_gate(self):
+        """A reconnect is a fresh mount, and the mount path is where auth runs.
+
+        The release checklist asks that a WebSocket RECONNECTION not bypass
+        auth. A reconnect is a new connection carrying a fresh ``mount``, so
+        this drives the denied mount once per connection — first connect, then
+        reconnect — and requires the identical navigate-then-close(4403)
+        refusal on both (threat model T1). Driven on the real consumer rather
+        than asserted from the structural pin alone, because "every mount path
+        calls the chokepoint" and "a reconnect is refused" are different claims.
+        """
+        from channels.testing import WebsocketCommunicator
+
+        from djust.websocket import LiveViewConsumer
+
+        app = _anon_middleware(LiveViewConsumer.as_asgi())
+        for attempt in ("first connect", "reconnect"):
+            communicator = WebsocketCommunicator(app, "/ws/")
+            connected, _ = await communicator.connect()
+            assert connected, attempt
+            await _drain_handshake(communicator)
+            await communicator.send_json_to(
+                {"type": "mount", "view": _LOGIN_PATH, "url": "/secret/"}
+            )
+            nav = await communicator.receive_json_from(timeout=2)
+            assert nav.get("type") == "navigate", f"{attempt}: {nav!r}"
+            out = await communicator.receive_output(timeout=2)
+            assert out["type"] == "websocket.close" and out.get("code") == 4403, (
+                f"{attempt}: socket not closed 4403 after auth redirect: {out!r}"
+            )
+            await communicator.disconnect()
+
     async def test_object_permission_denied_mount_refused(self):
         """The post-mount object-permission control (NOT folded into the helper)
         still refuses a denied object over WS: error frame + close 4403."""
