@@ -402,6 +402,13 @@ class RequestMixin:
         from ..validation import note_rendered_recovery_targets
 
         note_rendered_recovery_targets(self, html)
+        # #3252: the VDOM-diff render below runs the template a SECOND time, so
+        # the tag stashes a second thunk for every lazy slot. Those are NOT
+        # interchangeable with the page pass: `_prepare_child_ids` scopes the
+        # ids per render, and an explicit-exposure parent assigns different ones
+        # on the two passes. Hold the page pass and restore it below, so neither
+        # the fill nor the streaming emitter ever sees the baseline's copies.
+        page_lazy_thunks = list(getattr(self, "_lazy_thunks", None) or [])
         t_render_full = (time.perf_counter() - t0) * 1000
         liveview_content = html
 
@@ -410,6 +417,9 @@ class RequestMixin:
         self._prepare_child_ids()
         _, _, _ = render_view_with_diff(self, request)
         t_render_diff = (time.perf_counter() - t0) * 1000
+        # One authoritative page pass (#3252): discard the baseline render's
+        # lazy thunks before anything drains them.
+        self._lazy_thunks = list(page_lazy_thunks)
 
         if not uses_legacy_exposure(self):
             from .._exposure_child_persistence import save_child_states
@@ -485,6 +495,13 @@ class RequestMixin:
         # Inject LiveView client script
         html = self._inject_client_script(html)
 
+        # #3252: the page-POST fallback hosts its lazy slots too. The
+        # streaming path flushes their thunks through the chunk emitter; here
+        # nothing ran them, so a browser with neither WebSocket nor EventSource
+        # got an empty <dj-lazy-slot>. See `_fill_lazy_slots`.
+        if not getattr(self, "streaming_render", False):
+            html = self._fill_lazy_slots(html)
+
         response: HttpResponse
         if getattr(self, "streaming_render", False):
             response = self._make_streaming_response(html)
@@ -498,6 +515,60 @@ class RequestMixin:
         if not service_worker_cache_eligible(self):
             response[SW_CACHE_HEADER] = SW_CACHE_NO_STORE
         return response
+
+    def _fill_lazy_slots(self, html: str) -> str:
+        """Run this page's lazily-deferred slots into ``html`` (#3252).
+
+        ``{% live_render ... lazy=True %}`` renders a ``<dj-lazy-slot>``
+        placeholder and stashes an async thunk that builds a self-contained
+        fill envelope: an inert ``<template id="djl-fill-X">`` holding the
+        child's HTML, plus an activator that performs the replacement. The
+        envelope needs no transport, because ``50-lazy-fill.js`` fills from the
+        template — and its `DOMContentLoaded` auto-scan already covers the
+        activator running before the bundle defines ``lazyFill``.
+
+        Over a WebSocket or SSE stream the consumer or the chunk emitter runs
+        those thunks. On the plain page render (the page-POST fallback, for a
+        browser with neither WebSocket nor ``EventSource``) nothing did, so the
+        slot stayed empty even though the server could render it. Running them
+        here makes that transport host its lazy slots like the others.
+
+        Returns ``html`` unchanged when the page has no lazy slot. A slot whose
+        envelope cannot be built is left empty and logged: the thunk wraps its
+        OWN failures in a ``data-status="error"`` envelope (ADR-015), so
+        reaching the handler means the envelope itself did not build, and that
+        must not take the page down with it.
+        """
+        thunks = list(getattr(self, "_lazy_thunks", None) or [])
+        self._lazy_thunks = []
+        if not thunks:
+            return html
+
+        from asgiref.sync import async_to_sync
+
+        envelopes: list[str] = []
+        for view_id, thunk in thunks:
+            try:
+                envelopes.append(async_to_sync(thunk)().decode("utf-8"))
+            except Exception as exc:  # noqa: BLE001 — a slot must not break the page
+                from .._exposure_diagnostics import log_failure_for
+
+                # The thunk mounts and renders a child view, so its exception
+                # can carry application values (ADR-038).
+                log_failure_for(
+                    logger,
+                    (self,),
+                    exc,
+                    "Lazy slot %s could not be filled on the page-POST fallback",
+                    view_id,
+                )
+        if not envelopes:
+            return html
+
+        block = "".join(envelopes)
+        if "</body>" in html:
+            return html.replace("</body>", block + "</body>", 1)
+        return html + block
 
     def _make_streaming_response(self, full_html: str) -> StreamingHttpResponse:
         """Return a chunked ``StreamingHttpResponse`` for the initial GET.
