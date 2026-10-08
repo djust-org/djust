@@ -28,15 +28,15 @@ logger = logging.getLogger(__name__)
 def _trusted_proxy_count() -> int:
     """Number of trusted reverse-proxy hops in front of the app (>= 0).
 
-    A non-negative ``int`` is used as given. Any other value is coerced through
-    ``max(0, int(float(raw)))`` and logged once — a misconfigured count should be
-    loud, not silent, since it controls a security-relevant identity.
+    Integer values other than ``bool`` are clamped at zero; non-negative integers
+    are used as given. ``None`` and values equal to zero return zero without
+    warning. Other values are converted through ``max(0, int(float(raw)))``;
+    ``TypeError``, ``ValueError`` or ``OverflowError`` yields zero. That
+    conversion path logs a warning on each call.
 
-    Configure an ``int``. The coercion rounds through ``float``, so a numeric
-    string can round *up*: ``"1.999999999999999999999999"`` yields 2, one hop
-    more than the exact decimal floor of the written value. A value that cannot
-    be parsed, or a negative one, becomes 0, so an unusable setting trusts no
-    proxy rather than a spoofable header.
+    Configure an ``int``. The conversion rounds through ``float``, so a numeric
+    string can round *up*: ``"1.999999999999999999999999"`` yields 2, one hop more
+    than the exact decimal floor of the written value.
     """
     raw = getattr(settings, "DJUST_TRUSTED_PROXY_COUNT", 0)
     if isinstance(raw, int) and not isinstance(raw, bool):
