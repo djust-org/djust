@@ -217,7 +217,7 @@ pub type SharedValues = std::sync::Arc<AHashMap<String, Value>>;
 struct ScopeFrame {
     /// Template-literal bindings, independent of HTML safety or registration authority.
     literal_keys: std::sync::Arc<AHashSet<String>>,
-    captured_literals: std::sync::Arc<AHashMap<String, Option<String>>>,
+    captured_literals: std::sync::Arc<AHashMap<String, LiteralOutput>>,
     /// COPY-ON-WRITE, and that is a performance contract, not a style choice
     /// (#2732).
     ///
@@ -588,7 +588,7 @@ pub struct Context {
     block_super: Option<std::sync::Arc<dyn BlockSuperSource>>,
     // Render-owned notification: resolver/capture APIs return Values and cannot
     // carry intervals. Shared only by scopes/clones of this tracked render.
-    provenance_flatten: Option<std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>>>,
+    provenance_flatten: Option<std::sync::Arc<std::sync::Mutex<Vec<LiteralOutput>>>>,
 }
 
 impl Default for Context {
@@ -662,6 +662,7 @@ pub trait BlockSuperSource: std::fmt::Debug + Send + Sync {
                 Vec::new(),
                 Vec::new(),
                 LiteralOutput {
+                    blocked: false,
                     html: Some(String::new()),
                     openings: Vec::new(),
                 },
@@ -674,6 +675,8 @@ pub trait BlockSuperSource: std::fmt::Debug + Send + Sync {
 /// metadata is None and fails closed for the whole render.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LiteralOutput {
+    /// A permanent forward authority cutoff, distinct from unknown cache metadata.
+    pub blocked: bool,
     pub html: Option<String>,
     pub openings: Vec<(usize, usize)>,
 }
@@ -699,6 +702,7 @@ pub fn flatten_authored_output(output: AuthoredOutput, text: String) -> Authored
         Vec::new(),
         Vec::new(),
         LiteralOutput {
+            blocked: output.3.blocked,
             html: literal,
             openings: Vec::new(),
         },
@@ -1637,11 +1641,11 @@ impl Context {
     }
 
     pub fn record_provenance_flatten(&self, output: AuthoredOutput, text: String) -> String {
-        self.restore_provenance_literals(vec![output.3.html]);
+        self.restore_provenance_literals(vec![output.3]);
         text
     }
 
-    pub fn restore_provenance_literals(&self, literals: Vec<Option<String>>) {
+    pub fn restore_provenance_literals(&self, literals: Vec<LiteralOutput>) {
         if let Some(pending) = &self.provenance_flatten {
             pending
                 .lock()
@@ -1650,7 +1654,7 @@ impl Context {
         }
     }
 
-    pub fn take_provenance_flatten(&self) -> Vec<Option<String>> {
+    pub fn take_provenance_flatten(&self) -> Vec<LiteralOutput> {
         self.provenance_flatten
             .as_ref()
             .map(|pending| {
@@ -2172,13 +2176,13 @@ impl Context {
 
     /// Captured rendered output carries context bytes at its emission position,
     /// never start-tag authority. Metadata follows scoped aliases and shadowing.
-    pub fn mark_captured_literals(&mut self, name: &str, literal: Option<String>) {
+    pub fn mark_captured_literals(&mut self, name: &str, literal: LiteralOutput) {
         if let Some(frame) = self.stack.iter_mut().rev().find(|f| f.contains_key(name)) {
             std::sync::Arc::make_mut(&mut frame.captured_literals).insert(name.to_owned(), literal);
         }
     }
 
-    pub fn captured_literals(&self, name: &str) -> Option<Option<String>> {
+    pub fn captured_literals(&self, name: &str) -> Option<LiteralOutput> {
         self.stack
             .iter()
             .rev()

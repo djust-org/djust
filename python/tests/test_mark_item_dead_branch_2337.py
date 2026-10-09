@@ -548,7 +548,7 @@ class TestTheProducerEnumerationIsComplete:
         # They hold a String (never a mixed sequence), read the SAME local as
         # the ordinary call, and introduce no new source of item safety.
         seeds = re.findall(
-            r"(?:let mut literal_value = .*?\.map\(\|literal\| \{)(.*?)\n\s*\}\);",
+            r"(?:let mut literal_value =\s*.*?\.map\(\|literal\| \{)(.*?)\n\s*\}\);",
             src,
             re.S,
         )

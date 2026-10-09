@@ -1,4 +1,5 @@
 //! Template renderer that converts AST nodes to output strings
+use djust_core::context::LiteralOutput;
 
 use crate::filters;
 use crate::inheritance::TemplateLoader;
@@ -679,7 +680,7 @@ fn render_effectful_node_output<L: TemplateLoader, R: RenderOutput>(
                 }
             }
             Ok(if let Some(capture) = effect.capture {
-                R::captured(effect.html, capture)
+                R::captured_projection(effect.html, capture)
             } else if effect.literal {
                 R::context_literal(effect.html)
             } else {
@@ -918,19 +919,47 @@ fn literal_filter(name: &str) -> bool {
         )
 }
 
-// Replay only built-ins whose output is deterministic in this render context.
-// Explicit yesno arguments avoid its translation-dependent default.
-fn replayable_filter(name: &str, has_arg: bool) -> bool {
-    (literal_filter(name) && name != "random") || (name == "yesno" && has_arg)
+// Replay is a deliberately small allow-list, separate from literal-expression
+// evaluation. These text transforms do not select fallback bytes from input
+// truthiness, consult locale/i18n, or introduce value arguments into the literal
+// run. Spaceless is handled by its node arm using the same transform on both runs.
+fn replayable_filter(name: &str, arg: Option<&str>, context: &Context) -> bool {
+    matches!(
+        name,
+        "lower"
+            | "upper"
+            | "title"
+            | "capfirst"
+            | "cut"
+            | "slice"
+            | "escape"
+            | "force_escape"
+            | "striptags"
+            | "linebreaksbr"
+    ) && arg.is_none_or(|arg| expression_is_literal(arg, context))
 }
 
-fn literal_run(literals: Vec<Option<String>>) -> Option<String> {
-    literals
-        .into_iter()
-        .try_fold(String::new(), |mut out, literal| {
-            out.push_str(&literal?);
-            Some(out)
-        })
+// Escaping a capture's authored opener can relax its hiding context. The
+// literal projection must still receive the page escape policy, but cannot
+// authorize later containers solely because that opener became escaped text.
+#[cfg(feature = "liveview")]
+fn escaping_erases_hiding_context(literal: &str) -> bool {
+    if !literal.contains('<') {
+        return false;
+    }
+    let probe = format!("{literal}<div dj-view=\"djust.provenance.Probe\" dj-lazy></div>");
+    djust_vdom::lazy_provenance::lazy_elements(&probe, &[(literal.len(), probe.len())]).is_empty()
+}
+
+#[cfg(not(feature = "liveview"))]
+fn escaping_erases_hiding_context(_literal: &str) -> bool {
+    false
+}
+
+fn literal_run(literals: Vec<LiteralOutput>) -> LiteralOutput {
+    let mut out = crate::provenance::Rendered::default();
+    out.flattened_literals(literals);
+    out.into_authored_output().3
 }
 
 fn filters_are_literal(specs: &[(String, Option<String>)], context: &Context) -> bool {
@@ -944,17 +973,10 @@ fn filters_are_literal(specs: &[(String, Option<String>)], context: &Context) ->
 
 /// Snapshot projection for a resolved capture, removing resolver notifications
 /// before any intervening body node can consume them. No bytes are emitted here.
-fn captured_expression(expr: &str, context: &Context) -> Option<Option<String>> {
+fn captured_expression(expr: &str, context: &Context) -> Option<LiteralOutput> {
     let pending = context.take_provenance_flatten();
     if !pending.is_empty() {
-        return Some(
-            pending
-                .into_iter()
-                .try_fold(String::new(), |mut out, literal| {
-                    out.push_str(&literal?);
-                    Some(out)
-                }),
-        );
+        return Some(literal_run(pending));
     }
     let base = crate::filter_lexer::split_pipes(expr)
         .first()
@@ -993,7 +1015,7 @@ fn cycle_step(
     values: &[String],
     id: &str,
     context: &Context,
-) -> Result<(Value, bool, bool, Option<Option<String>>)> {
+) -> Result<(Value, bool, bool, Option<LiteralOutput>)> {
     if values.is_empty() {
         return Ok((Value::Missing, false, true, None));
     }
@@ -1236,7 +1258,7 @@ fn cycle_emit(value: &Value, runtime_safe: bool, autoescape: bool) -> String {
 /// One name a context-mutating node binds for the siblings that follow it.
 struct SiblingBinding {
     literal: bool,
-    capture: Option<Option<String>>,
+    capture: Option<LiteralOutput>,
     upward: bool,
     name: String,
     value: Value,
@@ -1248,7 +1270,7 @@ struct SiblingBinding {
 /// binds for the siblings that follow it (#2547).
 struct SiblingEffect {
     literal: bool,
-    capture: Option<Option<String>>,
+    capture: Option<LiteralOutput>,
     html: String,
     bindings: Vec<SiblingBinding>,
 }
@@ -1418,7 +1440,11 @@ fn call_block_custom_tag<L: TemplateLoader>(
         context.restore_provenance_literals(if html == content {
             body_literals
         } else {
-            vec![None]
+            vec![LiteralOutput {
+                html: None,
+                openings: Vec::new(),
+                blocked: false,
+            }]
         });
         return Ok((html, bindings.into_iter().map(sibling_binding).collect()));
     }
@@ -1434,7 +1460,11 @@ fn call_block_custom_tag<L: TemplateLoader>(
     context.restore_provenance_literals(if html == content {
         body_literals
     } else {
-        vec![None]
+        vec![LiteralOutput {
+            html: None,
+            openings: Vec::new(),
+            blocked: false,
+        }]
     });
     Ok((html, Vec::new()))
 }
@@ -1470,14 +1500,15 @@ fn call_lazy_body_block_tag<L: TemplateLoader>(
     let raw_py = context.render_raw_py_objects();
     let autoescape = context.autoescape();
 
-    let (answered, state, literal_only) = crate::registry::call_block_handler_before_body(
-        name,
-        &resolved_args,
-        &context_map,
-        raw_py.as_deref(),
-        autoescape,
-    )
-    .map_err(|e| handler_call_error("Block tag", name, e))?;
+    let (answered, state, literal_only, literal_blocked) =
+        crate::registry::call_block_handler_before_body(
+            name,
+            &resolved_args,
+            &context_map,
+            raw_py.as_deref(),
+            autoescape,
+        )
+        .map_err(|e| handler_call_error("Block tag", name, e))?;
     if let Some(html) = answered {
         context.record_provenance_flatten(
             (
@@ -1485,6 +1516,7 @@ fn call_lazy_body_block_tag<L: TemplateLoader>(
                 vec![],
                 vec![],
                 djust_core::context::LiteralOutput {
+                    blocked: literal_blocked,
                     html: literal_only,
                     openings: vec![],
                 },
@@ -1510,8 +1542,13 @@ fn call_lazy_body_block_tag<L: TemplateLoader>(
     let flattened =
         djust_core::context::flatten_authored_output(output.into_authored_output(), text);
     let literal_only = flattened.3.html.clone();
+    let literal_blocked = flattened.3.blocked;
     let content = flattened.0.clone();
     let mut handler_context = std::ops::Deref::deref(&context_map).clone();
+    handler_context.insert(
+        "_djust_body_literal_blocked".into(),
+        Value::Bool(literal_blocked),
+    );
     if let Some(literal_only) = literal_only {
         handler_context.insert(
             "_djust_body_literal_only".into(),
@@ -2859,20 +2896,25 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             let captured = if R::TRACKED {
                 super_context
                     .as_ref()
-                    .map(|output| output.3.html.clone())
+                    .map(|output| output.3.clone())
                     .or_else(|| context.captured_literals(var_name))
             } else {
                 None
             };
-            let mut literal_value = captured.clone().flatten().map(|literal| {
-                (
-                    Value::String(literal),
-                    filters::InputSafety {
-                        container: runtime_safe,
-                        items: items_safe,
-                    },
-                )
-            });
+            let mut literal_blocked = captured.as_ref().is_some_and(|capture| capture.blocked);
+            let mut literal_value =
+                captured
+                    .clone()
+                    .and_then(|capture| capture.html)
+                    .map(|literal| {
+                        (
+                            Value::String(literal),
+                            filters::InputSafety {
+                                container: runtime_safe,
+                                items: items_safe,
+                            },
+                        )
+                    });
             for (filter_name, arg) in filter_specs {
                 // Strip quotes from literal filter args at render time —
                 // the parser preserves quotes so the dep-tracking
@@ -2884,7 +2926,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                 let arg_was_quoted = original.map(is_quoted_arg).unwrap_or(false);
                 let unescaped = original.map(crate::parser::unescape_filter_arg_literal);
                 let stripped = unescaped.as_deref();
-                let replay = replayable_filter(filter_name, arg.is_some());
+                let replay = replayable_filter(filter_name, original, context);
                 let (new_value, produced_safe) = filters::apply_filter_with_literal(
                     filter_name,
                     &value,
@@ -2905,8 +2947,14 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                     context.autoescape(),
                     if replay { literal_value.as_mut() } else { None },
                 )?;
-                if !replay && new_value.to_string() != value.to_string() {
+                if !replay
+                    && literal_value
+                        .as_ref()
+                        .is_some_and(|(literal, _)| !literal.to_string().is_empty())
+                    && new_value.to_string() != value.to_string()
+                {
                     literal_value = None;
+                    literal_blocked = true;
                 }
                 value = new_value;
                 // Captured BEFORE the reassignment below: both rules read the
@@ -2982,10 +3030,36 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             // Replay the same filters over the capture's literal-only run.
             // This drops start-tag authority without retaining stale closers.
             if captured.is_some() {
-                // Capture context follows the filter chain, as before; emit-time
-                // escaping cannot erase its authored hiding context.
-                let literal = literal_value.map(|(value, _)| value.to_string());
-                return Ok(R::captured(text, literal));
+                // Use the PAGE's final escape decision, not replay safety:
+                // escaping an authored closer must erase it in both trees.
+                let literal = literal_value.and_then(|(value, _)| {
+                    let literal = value.to_string();
+                    let escaped = if is_safe || !context.autoescape() {
+                        literal.clone()
+                    } else if *in_attr {
+                        filters::html_escape_attr(&literal)
+                    } else {
+                        filters::html_escape(&literal)
+                    };
+                    if escaped != literal && escaping_erases_hiding_context(&literal) {
+                        literal_blocked = true;
+                        None
+                    } else {
+                        Some(escaped)
+                    }
+                });
+                return Ok(R::captured_projection(
+                    text,
+                    LiteralOutput {
+                        html: if literal_blocked {
+                            Some(String::new())
+                        } else {
+                            literal
+                        },
+                        openings: Vec::new(),
+                        blocked: literal_blocked,
+                    },
+                ));
             }
             Ok(if literal_output {
                 R::context_literal(text)
@@ -3026,21 +3100,26 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             // See the Variable arm: item-level safety, seeded from the context
             // (#2283, #2287) — the second of the three sites.
             let mut items_safe = context.items_are_safe(expr);
-            let mut literal_value = capture.clone().flatten().map(|literal| {
-                (
-                    Value::String(literal),
-                    filters::InputSafety {
-                        container: runtime_safe,
-                        items: items_safe,
-                    },
-                )
-            });
+            let mut literal_blocked = capture.as_ref().is_some_and(|capture| capture.blocked);
+            let mut literal_value =
+                capture
+                    .clone()
+                    .and_then(|capture| capture.html)
+                    .map(|literal| {
+                        (
+                            Value::String(literal),
+                            filters::InputSafety {
+                                container: runtime_safe,
+                                items: items_safe,
+                            },
+                        )
+                    });
             for (filter_name, arg) in filters {
                 let original = arg.as_deref();
                 let arg_was_quoted = original.map(is_quoted_arg).unwrap_or(false);
                 let unescaped = original.map(crate::parser::unescape_filter_arg_literal);
                 let stripped = unescaped.as_deref();
-                let replay = replayable_filter(filter_name, arg.is_some());
+                let replay = replayable_filter(filter_name, original, context);
                 let (new_value, produced_safe) = filters::apply_filter_with_literal(
                     filter_name,
                     &value,
@@ -3058,8 +3137,14 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                     context.autoescape(),
                     if replay { literal_value.as_mut() } else { None },
                 )?;
-                if !replay && new_value.to_string() != value.to_string() {
+                if !replay
+                    && literal_value
+                        .as_ref()
+                        .is_some_and(|(literal, _)| !literal.to_string().is_empty())
+                    && new_value.to_string() != value.to_string()
+                {
                     literal_value = None;
+                    literal_blocked = true;
                 }
                 value = new_value;
                 // Captured BEFORE the reassignment below: both rules read the
@@ -3106,7 +3191,32 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                 filters::html_escape(&text)
             };
             Ok(if capture.is_some() {
-                R::captured(text, literal_value.map(|(value, _)| value.to_string()))
+                let literal = literal_value.and_then(|(value, _)| {
+                    let literal = value.to_string();
+                    let escaped = if is_safe || !context.autoescape() {
+                        literal.clone()
+                    } else {
+                        filters::html_escape(&literal)
+                    };
+                    if escaped != literal && escaping_erases_hiding_context(&literal) {
+                        literal_blocked = true;
+                        None
+                    } else {
+                        Some(escaped)
+                    }
+                });
+                R::captured_projection(
+                    text,
+                    LiteralOutput {
+                        html: if literal_blocked {
+                            Some(String::new())
+                        } else {
+                            literal
+                        },
+                        openings: Vec::new(),
+                        blocked: literal_blocked,
+                    },
+                )
             } else if R::TRACKED
                 && expression_is_literal(expr, context)
                 && filters_are_literal(filters, context)
@@ -4417,7 +4527,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             let (value, literal, capture) = first_of(args, context)?;
             let text = value.map(|v| v.to_string()).unwrap_or_default();
             Ok(if let Some(capture) = capture {
-                R::captured(text, capture)
+                R::captured_projection(text, capture)
             } else if literal {
                 R::context_literal(text)
             } else {
@@ -4462,11 +4572,11 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             let text = SPACELESS_RE.replace_all(content.trim(), "><").to_string();
             if R::TRACKED {
                 let output = content.into_authored_output();
-                let literal = output
-                    .3
+                let mut literal = output.3;
+                literal.html = literal
                     .html
                     .map(|literal| SPACELESS_RE.replace_all(literal.trim(), "><").to_string());
-                Ok(R::captured(text, literal))
+                Ok(R::captured_projection(text, literal))
             } else {
                 Ok(text.into())
             }
@@ -4508,7 +4618,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             // `&amp;LT;` a second escape would make of it. The block's
             // output is therefore exactly the chain's output.
             if R::TRACKED {
-                ctx.mark_captured_literals("var", body.into_authored_output().3.html);
+                ctx.mark_captured_literals("var", body.into_authored_output().3);
             }
             let expr = format!("var|{}", format_filter_chain(filters));
             let (value, _runtime_safe) = get_value_safe(&expr, &ctx)?;
@@ -4519,7 +4629,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             };
             let literals = ctx.take_provenance_flatten();
             if R::TRACKED {
-                Ok(R::captured(text, literal_run(literals)))
+                Ok(R::captured_projection(text, literal_run(literals)))
             } else {
                 Ok(text.into())
             }
@@ -4539,7 +4649,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             let (value, runtime_safe, literal, capture) = cycle_step(values, id, context)?;
             let text = cycle_emit(&value, runtime_safe, context.autoescape());
             Ok(if let Some(capture) = capture {
-                R::captured(text, capture)
+                R::captured_projection(text, capture)
             } else if literal {
                 R::context_literal(text)
             } else {
@@ -4553,7 +4663,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             // as the loop would have emitted, with the same single advance.
             match sibling_updates(node, context, loader)? {
                 Some(effect) => Ok(if let Some(capture) = effect.capture {
-                    R::captured(effect.html, capture)
+                    R::captured_projection(effect.html, capture)
                 } else if effect.literal {
                     R::context_literal(effect.html)
                 } else {
@@ -5997,15 +6107,19 @@ fn get_value_safe_inner(
         } else {
             Some(literal_run(input_literals))
         };
-        let mut literal_value = capture.clone().flatten().map(|literal| {
-            (
-                Value::String(literal),
-                filters::InputSafety {
-                    container: runtime_safe,
-                    items: items_safe,
-                },
-            )
-        });
+        let mut literal_blocked = capture.as_ref().is_some_and(|capture| capture.blocked);
+        let mut literal_value = capture
+            .clone()
+            .and_then(|capture| capture.html)
+            .map(|literal| {
+                (
+                    Value::String(literal),
+                    filters::InputSafety {
+                        container: runtime_safe,
+                        items: items_safe,
+                    },
+                )
+            });
         // Django's `ignore_failures=True` substitutes **None**, not "missing"
         // (#2528, ADR-027). `FilterExpression.resolve` (`base.py:720-726`)
         // reads
@@ -6064,7 +6178,7 @@ fn get_value_safe_inner(
             // emit path can honour runtime SafeStrings (#1672, follow-up to
             // #1660). Built-ins report it too, for the four whose safety is
             // per-call rather than per-name (`filters::builtin_produced_safe`).
-            let replay = replayable_filter(filter_name, arg.is_some());
+            let replay = replayable_filter(filter_name, raw_arg, context);
             let (new_value, produced_safe) = filters::apply_filter_with_literal(
                 filter_name,
                 &value,
@@ -6081,8 +6195,14 @@ fn get_value_safe_inner(
                 context.autoescape(),
                 if replay { literal_value.as_mut() } else { None },
             )?;
-            if !replay && new_value.to_string() != value.to_string() {
+            if !replay
+                && literal_value
+                    .as_ref()
+                    .is_some_and(|(literal, _)| !literal.to_string().is_empty())
+                && new_value.to_string() != value.to_string()
+            {
                 literal_value = None;
+                literal_blocked = true;
             }
             value = new_value;
             // Captured before the reassignment — see the Variable arm (#2283).
@@ -6096,9 +6216,15 @@ fn get_value_safe_inner(
 
         context.take_provenance_flatten();
         if capture.is_some() {
-            context.restore_provenance_literals(vec![
-                literal_value.map(|(value, _)| value.to_string())
-            ]);
+            context.restore_provenance_literals(vec![LiteralOutput {
+                html: if literal_blocked {
+                    Some(String::new())
+                } else {
+                    literal_value.map(|(value, _)| value.to_string())
+                },
+                openings: Vec::new(),
+                blocked: literal_blocked,
+            }]);
         }
         return Ok((value, runtime_safe));
     }
@@ -6803,7 +6929,7 @@ fn try_compare(a: &Value, b: &Value) -> Option<i32> {
 fn first_of(
     args: &[String],
     context: &Context,
-) -> Result<(Option<Value>, bool, Option<Option<String>>)> {
+) -> Result<(Option<Value>, bool, Option<LiteralOutput>)> {
     for arg in args {
         let (val, runtime_safe) = get_value_safe_ignoring_failures(arg.trim(), context)?;
         let capture = captured_expression(arg.trim(), context);
@@ -7193,6 +7319,51 @@ mod tests {
     use crate::lexer::tokenize;
     use crate::parser::parse;
     use indexmap::IndexMap;
+
+    #[test]
+    fn captured_literal_replay_requires_allowlisted_text_and_literal_arguments() {
+        let mut context = Context::new();
+        context.set("value_arg".into(), Value::String("-->".into()));
+        for name in [
+            "lower",
+            "upper",
+            "title",
+            "capfirst",
+            "cut",
+            "slice",
+            "escape",
+            "force_escape",
+            "striptags",
+            "linebreaksbr",
+        ] {
+            assert!(replayable_filter(name, None, &context), "{name}");
+            assert!(replayable_filter(name, Some("\";\""), &context), "{name}");
+            assert!(
+                !replayable_filter(name, Some("value_arg"), &context),
+                "{name}"
+            );
+        }
+        for name in [
+            "default",
+            "default_if_none",
+            "yesno",
+            "length",
+            "length_is",
+            "date",
+            "time",
+            "random",
+            "pluralize",
+            "add",
+            "floatformat",
+            "wordwrap",
+            "custom",
+        ] {
+            assert!(
+                !replayable_filter(name, Some("\"-->\""), &context),
+                "{name}"
+            );
+        }
+    }
 
     // ---- #2597: the scope stacks unwind on PANIC, not just on `Err` -------
 

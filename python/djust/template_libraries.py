@@ -1561,6 +1561,7 @@ class _CachedProvenanceFragment(str):
     """
 
     literal_only: Optional[str] = None
+    literal_blocked: bool = False
 
 
 class CacheTagHandler:
@@ -1650,6 +1651,11 @@ class CacheTagHandler:
         # could survive an external overwrite with identical bytes but different
         # provenance. Old/plain entries or serializers dropping metadata are
         # uncertain: their literal/value boundaries cannot be recovered from text.
+        context["_djust_cached_literal_blocked"] = (
+            getattr(cached, "literal_blocked", False)
+            if isinstance(cached, _CachedProvenanceFragment)
+            else False
+        )
         context["_djust_cached_literal_only"] = (
             getattr(cached, "literal_only", None)
             if isinstance(cached, _CachedProvenanceFragment)
@@ -1668,6 +1674,7 @@ class CacheTagHandler:
         if "_djust_body_literal_only" in context:
             fragment = _CachedProvenanceFragment(content)
             fragment.literal_only = context["_djust_body_literal_only"]
+            fragment.literal_blocked = context.get("_djust_body_literal_blocked", False)
         backend.set(key, fragment, expire_time)
         return content
 

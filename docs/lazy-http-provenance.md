@@ -86,17 +86,39 @@ opaque, rather than a flattened tracked capture. A value-derived filter chain re
 opaque even if a filter selects a literal fallback argument. These
 context bytes never grant start-tag authority.
 Unfiltered `block.super` composes its literal context; filtered `block.super`
-replays pure built-in filters on the parent's literal-only content while dropping
-authority.
-Captured values carry their literal-only bytes through scoped bindings and
-aliases, emitted at each use rather than at the time of assignment. Unused
-captures and condition operands contribute no output. Pure built-in filters apply
-with the same resolved arguments to both the final and literal-only runs,
-including filtered captured bindings. Spaceless applies its whitespace transform
-to both runs. These operations drop all start-tag authority. Custom block tags,
-Python-bridged filters and other unreplayable transforms retain literal context
-only when their output is byte-identical; changed bytes make the tracked render
-non-authoritative, as with unknown cache metadata.
+and other captured values drop start-tag authority. Captured values carry their
+literal-only bytes through scoped bindings and aliases, emitted at each use rather
+than at assignment. Unused captures and condition operands contribute no output.
+
+Replay of byte-changing transforms on captured literal-only content uses an
+explicit allow-list, distinct from evaluation of fully literal expressions:
+
+- `lower`, `upper`, `title`, `capfirst`: Unicode text casing, with no locale lookup
+  or truthiness-based fallback output.
+- `cut`, `slice`: text removal or character slicing using a literal-derived
+  argument; no value-selected fallback bytes.
+- `escape`, `force_escape`: HTML escaping, using the same input safety and
+  autoescape policy as the page filter call.
+- `striptags`, `linebreaksbr`: tag removal and newline-to-`<br>` conversion;
+  `linebreaksbr` uses the same input safety and autoescape policy as the page.
+- The `spaceless` wrapper: trim and remove inter-tag whitespace in both runs.
+
+Every replayed filter argument must be a template literal or a literal-derived
+binding; value arguments are forbidden. The captured literal-only output receives
+exactly the page output's final escaping decision (including attribute escaping).
+No fallback, truthiness, numeric, time, random or locale/i18n-dependent filters are
+replayed: in particular `default`, `default_if_none`, `yesno`, `length`,
+`length_is`, `pluralize`, `add`, `date` and `time` are excluded. Unlisted transforms,
+including Python filters, retain literal context only if
+their page output is byte-identical. A byte-changing unlisted transform over a run
+containing authored bytes fails closed: its unknown literal context makes the
+following containers non-authoritative. A permanent cutoff travels with the
+capture through aliases, includes and cache fragments; authored closers cannot
+restore authority after it. Earlier containers keep their literal projection
+and still require final-page survival. Escaping that erases an authored hiding
+context also establishes a cutoff. Unknown cache metadata continues to fail
+closed for the complete render, as do unknown byte changes from custom block tags.
+
 During a tracked render, the renderer also composes a literal-only rendering of
 exactly the selected branch and loop iterations. Authored literal bytes and
 literal-derived expression output are kept. Non-literal value bytes and
@@ -110,8 +132,9 @@ rendering once, using the same token-correlated RcDom tree and live-element
 predicate as the final-page (E) check. A container registers only if its own
 start tag creates a live element in **both** the literal-only tree and the
 final-page tree. Comments, raw text, ignored tags and inert template contents
-cannot register. A later authored closer can restore liveness; there is no
-scanner, terminal-state approximation or permanent context cutoff. Untracked
+cannot register. A later authored closer can restore liveness while literal
+context remains known. The explicit cutoff for uncertain transforms is permanent;
+it is not a replacement for HTML5 tree parsing. Untracked
 pages and tracked pages without authored lazy candidates need no extra parse.
 
 Cache fragments store their literal-only bytes alongside fragment text on the
@@ -232,3 +255,8 @@ it does not grant authority or expose interpolated values.
 Unauthored whitespace immediately after a valueless `dj-lazy` belongs to its
 selected attribute range and fails closed. Prefer a fully literal attribute,
 or an explicit quoted trigger, and keep interpolations outside authority bytes.
+
+The M1 split-closer cases (`</textarea{{ v }}>` and `</script{{ v }}>` with
+`v=" "`) remain outside this model. N4, a byte-identical custom filter over a
+closer split across literal and value bytes (for example `-{{ v }}->`), is likewise
+not modelled; blanking the value can assemble a closer absent from the real input.

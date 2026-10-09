@@ -1345,7 +1345,7 @@ pub fn call_block_handler_before_body(
     context: &HashMap<String, djust_core::Value>,
     raw_py_objects: Option<&HashMap<String, pyo3::Py<PyAny>>>,
     autoescape: bool,
-) -> Result<(Option<String>, PendingBlockBody, Option<String>), DjangoRustError> {
+) -> Result<(Option<String>, PendingBlockBody, Option<String>, bool), DjangoRustError> {
     let handler = clone_block_handler(name)?;
     Python::attach(|py| {
         let py_args = build_py_args(py, args).map_err(DjangoRustError::TemplateError)?;
@@ -1367,10 +1367,17 @@ pub fn call_block_handler_before_body(
                 None,
                 PendingBlockBody { handler, state },
                 Some(String::new()),
+                false,
             ));
         }
         let html = escape_handler_return(output, "Block handler", name, autoescape)
             .map_err(DjangoRustError::TemplateError)?;
+        let literal_blocked = py_context
+            .get_item("_djust_cached_literal_blocked")
+            .ok()
+            .flatten()
+            .and_then(|value| value.extract::<bool>().ok())
+            .unwrap_or(false);
         let literal_only = match py_context.get_item("_djust_cached_literal_only") {
             Ok(Some(value)) => value.extract::<String>().ok(),
             // Non-cache handlers return ordinary opaque values: empty context.
@@ -1381,6 +1388,7 @@ pub fn call_block_handler_before_body(
             Some(html),
             PendingBlockBody { handler, state },
             literal_only,
+            literal_blocked,
         ))
     })
 }

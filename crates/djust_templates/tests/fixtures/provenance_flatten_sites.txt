@@ -3,10 +3,12 @@ if !context.is_safe(&format!("{prefix}.{key_text}")) {
 let text = output.to_string();
 Ok(context.record_provenance_flatten(output.into_authored_output(), text))
 output.identify(&format!(
-R::captured(effect.html, capture)
+R::captured_projection(effect.html, capture)
 R::context_literal(effect.html)
 effect.html.into()
 render_nodes_with_loader_mut(nodes, &mut context.clone(), loader)
+let probe = format!("{literal}<div dj-view=\"djust.provenance.Probe\" dj-lazy></div>");
+out.into_authored_output().3
 let mut message = format!(
 message.push_str(&format!(" Got this from the '{}' variable.", token));
 Value::Missing | Value::None => "n".to_string(),
@@ -27,13 +29,14 @@ value.to_string()
 filters::html_escape(&value.to_string())
 other => DjangoRustError::TemplateError(format!("{kind} '{name}' error: {other}")),
 let content = render_nodes_with_loader_mut(children, context, loader)?;
-let (answered, state, literal_only) = crate::registry::call_block_handler_before_body(
+let (answered, state, literal_only, literal_blocked) =
 context.record_provenance_flatten(
 html: literal_only,
 let text = output.to_string();
 djust_core::context::flatten_authored_output(output.into_authored_output(), text);
 let literal_only = flattened.3.html.clone();
 let content = flattened.0.clone();
+"_djust_body_literal_blocked".into(),
 if let Some(literal_only) = literal_only {
 "_djust_body_literal_only".into(),
 Value::String(literal_only),
@@ -67,14 +70,15 @@ Ok(rendered.into_authored_output())
 map.insert("block".to_string(), lazy_block);
 super_value = Some(Value::SafeString(output.0.clone()));
 .into());
-.map(|output| output.3.html.clone())
-let mut literal_value = captured.clone().flatten().map(|literal| {
-if !replay && new_value.to_string() != value.to_string() {
-let literal = literal_value.map(|(value, _)| value.to_string());
+.and_then(|capture| capture.html)
+.is_some_and(|(literal, _)| !literal.to_string().is_empty())
+&& new_value.to_string() != value.to_string()
+let literal = value.to_string();
 text.into()
-let mut literal_value = capture.clone().flatten().map(|literal| {
-if !replay && new_value.to_string() != value.to_string() {
-R::captured(text, literal_value.map(|(value, _)| value.to_string()))
+.and_then(|capture| capture.html)
+.is_some_and(|(literal, _)| !literal.to_string().is_empty())
+&& new_value.to_string() != value.to_string()
+let literal = value.to_string();
 text.into()
 R::context_neutral("<!--dj-if-->".to_string())
 format!("-{namespace}")
@@ -137,16 +141,17 @@ return Err(DjangoRustError::TemplateError(format!(
 Ok((output.to_string()).into())
 let text = SPACELESS_RE.replace_all(content.trim(), "><").to_string();
 let output = content.into_authored_output();
+literal.html = literal
 .html
 .map(|literal| SPACELESS_RE.replace_all(literal.trim(), "><").to_string());
 Ok(text.into())
 ctx.bind("var".to_string(), Value::String(body.to_string()), true);
-ctx.mark_captured_literals("var", body.into_authored_output().3.html);
+ctx.mark_captured_literals("var", body.into_authored_output().3);
 let expr = format!("var|{}", format_filter_chain(filters));
 value.to_string()
 Ok(text.into())
 text.into()
-R::captured(effect.html, capture)
+R::captured_projection(effect.html, capture)
 R::context_literal(effect.html)
 effect.html.into()
 None => Ok((String::new()).into()),
@@ -180,10 +185,11 @@ Err(DjangoRustError::TemplateError(format!(
 .replace(&format!("\\{quote}"), &quote.to_string())
 .replace(&format!("\\{quote}"), &quote.to_string())
 Some(format!("{sign}{body}"))
-let mut literal_value = capture.clone().flatten().map(|literal| {
+.and_then(|capture| capture.html)
 raw_arg[1..raw_arg.len() - 1].to_string()
 raw_arg.to_string()
-if !replay && new_value.to_string() != value.to_string() {
+.is_some_and(|(literal, _)| !literal.to_string().is_empty())
+&& new_value.to_string() != value.to_string()
 literal_value.map(|(value, _)| value.to_string())
 Value::Bool(b) => Some(Value::Integer(i64::from(*b))),
 let text = val.to_string();
@@ -245,6 +251,7 @@ let year = dt.format("%Y").to_string().parse::<i32>().unwrap_or(2000);
 'r' => result.push_str(&dt.format("%a, %d %b %Y %H:%M:%S %z").to_string()),
 'U' => result.push_str(&dt.timestamp().to_string()),
 'N' => result.push_str(&dt.format("%b.").to_string()), // Month abbrev AP style
+context.set("value_arg".into(), Value::String("-->".into()));
 template: "\"boom.html\"".to_string(),
 Err(DjangoRustError::TemplateError("exit blew up".to_string()))
 context.set("lang".to_string(), Value::String("fr".to_string()));
@@ -1006,6 +1013,7 @@ return DjangoRustError::TemplateError(message.to_string());
 return DjangoRustError::TemplateError(message.to_string());
 return DjangoRustError::TemplateError(message.to_string());
 DjangoRustError::TemplateError(format!(
+.flatten()
 let literal_only = match py_context.get_item("_djust_cached_literal_only") {
 literal_only,
 DjangoRustError::TemplateError(format!("Failed to convert content: {e}"))
@@ -1081,7 +1089,6 @@ self.string_if_invalid = value.into();
 let key = format!(
 state.insert(key, value.to_string());
 pub fn record_provenance_flatten(&self, output: AuthoredOutput, text: String) -> String {
-self.restore_provenance_literals(vec![output.3.html]);
 let text = output.0.clone();
 Ok(Some(self.record_provenance_flatten(output, text)))
 source.render_block_super(self).map(Some)
@@ -1228,6 +1235,7 @@ Ok(format!("p{n}"))
 provenance.rs
 text.into()
 text.into()
+Self::captured(text, literal.html)
 text.into()
 text.into()
 fn into_authored_output(self) -> djust_core::context::AuthoredOutput;
@@ -1252,6 +1260,7 @@ literal_only: Some(text.to_owned()),
 literal_offsets: vec![(0, 0)],
 let mut result = Self::from(text);
 result.literal_only = literal;
+let mut result = Self::captured(text, literal.html);
 let mut result = Self::from(text);
 result.literal_only = Some(result.html.clone());
 result.literal_offsets = source
@@ -1262,13 +1271,12 @@ literal_only: output.3.html,
 literal_offsets: output.3.openings,
 Self::from_authored_output(djust_core::context::flatten_authored_output(
 self.into_authored_output(),
-match (&mut self.literal_only, literal) {
-_ => self.literal_only = None,
 let offset = self.html.len();
-match (&mut self.literal_only, &child.literal_only) {
+if self.literal_only.is_none() || child.literal_only.is_none() {
+self.literal_only = None;
+if let (Some(output), Some(literal)) = (&mut self.literal_only, &child.literal_only) {
 self.literal_offsets.extend(
 .literal_offsets
-_ => self.literal_only = None,
 self.html.push_str(&child.html);
 self.html.push_str(text);
 *id = format!("{identity}/{id}");

@@ -1,4 +1,5 @@
 //! Result-bound authored UTF-8 byte intervals. No ambient collector (#3252).
+use djust_core::context::LiteralOutput;
 use std::ops::{Deref, Range};
 
 /// Output operations shared by the ordinary and provenance-aware renderer.
@@ -13,6 +14,9 @@ pub trait RenderOutput: Default + From<String> + Deref<Target = str> + std::fmt:
     fn captured(text: String, _literal: Option<String>) -> Self {
         text.into()
     }
+    fn captured_projection(text: String, literal: LiteralOutput) -> Self {
+        Self::captured(text, literal.html)
+    }
     fn context_neutral(text: String) -> Self {
         text.into()
     }
@@ -20,7 +24,7 @@ pub trait RenderOutput: Default + From<String> + Deref<Target = str> + std::fmt:
     fn flatten(self, text: String) -> Self {
         text.into()
     }
-    fn flattened_literals(&mut self, _literals: Vec<Option<String>>) {}
+    fn flattened_literals(&mut self, _literals: Vec<LiteralOutput>) {}
     fn into_authored_output(self) -> djust_core::context::AuthoredOutput;
     fn from_authored_output(output: djust_core::context::AuthoredOutput) -> Self;
     fn append(&mut self, child: &Self);
@@ -45,6 +49,7 @@ impl RenderOutput for String {
             Vec::new(),
             Vec::new(),
             djust_core::context::LiteralOutput {
+                blocked: false,
                 html: Some(String::new()),
                 openings: Vec::new(),
             },
@@ -66,6 +71,7 @@ impl RenderOutput for String {
 /// recover it, even when their output happens to be byte-identical.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rendered {
+    pub literal_blocked: bool,
     pub html: String,
     pub authored: Vec<Range<usize>>,
     pub origins: Vec<(usize, usize, usize, String)>,
@@ -89,6 +95,7 @@ impl Rendered {
                 .collect(),
             self.origins,
             djust_core::context::LiteralOutput {
+                blocked: self.literal_blocked,
                 html: self.literal_only,
                 openings: self.literal_offsets,
             },
@@ -158,6 +165,7 @@ impl Rendered {
 impl From<String> for Rendered {
     fn from(html: String) -> Self {
         Self {
+            literal_blocked: false,
             html,
             authored: Vec::new(),
             origins: Vec::new(),
@@ -182,6 +190,7 @@ impl RenderOutput for Rendered {
     #[allow(clippy::single_range_in_vec_init)] // One byte run, not an integer list.
     fn authored(text: &str) -> Self {
         Self {
+            literal_blocked: false,
             html: text.to_owned(),
             literal_only: Some(text.to_owned()),
             literal_offsets: vec![(0, 0)],
@@ -200,6 +209,11 @@ impl RenderOutput for Rendered {
     fn captured(text: String, literal: Option<String>) -> Self {
         let mut result = Self::from(text);
         result.literal_only = literal;
+        result
+    }
+    fn captured_projection(text: String, literal: LiteralOutput) -> Self {
+        let mut result = Self::captured(text, literal.html);
+        result.literal_blocked = literal.blocked;
         result
     }
     fn context_literal(text: String) -> Self {
@@ -234,6 +248,7 @@ impl RenderOutput for Rendered {
     }
     fn from_authored_output(output: djust_core::context::AuthoredOutput) -> Self {
         Self {
+            literal_blocked: output.3.blocked,
             html: output.0,
             authored: output.1.into_iter().map(|(a, b)| a..b).collect(),
             origins: output.2,
@@ -247,20 +262,20 @@ impl RenderOutput for Rendered {
             text,
         ))
     }
-    fn flattened_literals(&mut self, literals: Vec<Option<String>>) {
+    fn flattened_literals(&mut self, literals: Vec<LiteralOutput>) {
         // Resolver notifications belong to this node. Values are blank; a
         // flattened capture supplies its original authored bytes instead.
         for literal in literals {
-            match (&mut self.literal_only, literal) {
-                (Some(output), Some(literal)) => output.push_str(&literal),
-                _ => self.literal_only = None,
-            }
+            self.append(&Self::captured_projection(String::new(), literal));
         }
     }
     fn append(&mut self, child: &Self) {
         let offset = self.html.len();
-        match (&mut self.literal_only, &child.literal_only) {
-            (Some(output), Some(literal)) => {
+        if self.literal_only.is_none() || child.literal_only.is_none() {
+            // Unknown cache/custom-tag bytes can invalidate earlier elements.
+            self.literal_only = None;
+        } else if !self.literal_blocked {
+            if let (Some(output), Some(literal)) = (&mut self.literal_only, &child.literal_only) {
                 let literal_offset = output.len();
                 self.literal_offsets.extend(
                     child
@@ -270,20 +285,20 @@ impl RenderOutput for Rendered {
                 );
                 output.push_str(literal);
             }
-            _ => self.literal_only = None,
+            self.authored.extend(
+                child
+                    .authored
+                    .iter()
+                    .map(|r| r.start + offset..r.end + offset),
+            );
+            self.origins.extend(
+                child
+                    .origins
+                    .iter()
+                    .map(|(a, b, c, id)| (a + offset, b + offset, *c, id.clone())),
+            );
+            self.literal_blocked = child.literal_blocked;
         }
-        self.authored.extend(
-            child
-                .authored
-                .iter()
-                .map(|r| r.start + offset..r.end + offset),
-        );
-        self.origins.extend(
-            child
-                .origins
-                .iter()
-                .map(|(a, b, c, id)| (a + offset, b + offset, *c, id.clone())),
-        );
         self.html.push_str(&child.html);
     }
     fn push_str(&mut self, text: &str) {

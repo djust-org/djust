@@ -385,7 +385,8 @@ def test_changed_mixed_super_literal_closer_restores_authority(tmp_path, outer_f
     rust.update_state({"q": value})
     html, spans = rust.render_with_provenance()
     assert html.count("dj-lazy") == (2 if outer_filter and "yesno" in outer_filter else 3)
-    assert len(authored_lazy_elements(html, spans)) == 2
+    expected = 1 if outer_filter and "yesno" in outer_filter else 2
+    assert len(authored_lazy_elements(html, spans)) == expected
 
 
 def test_changed_literal_only_super_keeps_following_authority(tmp_path):
@@ -1108,4 +1109,85 @@ def test_python_filter_capture_is_called_once_and_changed_bytes_fail_closed(chan
     rust.update_state({"q": "-->"})
     html, spans = rust.render_with_provenance()
     assert calls == ["-->"]
-    assert len(authored_lazy_elements(html, spans)) == (0 if changed else 2)
+    assert len(authored_lazy_elements(html, spans)) == (1 if changed else 2)
+
+
+REPLAY_REVIEW_CASES = [
+    ("", "<!--{{ block.super|default:q|safe }}", "super"),
+    ("", "<!--{{ block.super|add:q|safe }}", "super"),
+    ("", "<!--{% with s=block.super %}{{ s|default:q|safe }}{% endwith %}", "super"),
+    ("{{ v }}", '<!--{{ block.super|default:"-->" }}{{ q|safe }}', "super"),
+    ("{{ v }}", '<!--{{ block.super|yesno:"a,-->" }}{{ q|safe }}', "super"),
+    ("", '<!--{% filter default:"-->" %}{{ v }}{% endfilter %}{{ q|safe }}', "filter"),
+    ("", '<!--{% filter yesno:"a,-->" %}{{ v }}{% endfilter %}{{ q|safe }}', "filter"),
+    ("-->", '<!--{{ block.super|cut:";" }}{{ q|safe }}', "super"),
+    ("-->", "<!--{{ block.super|lower|upper }}{{ q|safe }}", "super"),
+]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("q", ["-->", "x"])
+@pytest.mark.parametrize("parent,body,kind", REPLAY_REVIEW_CASES)
+def test_replay_review_n1_n2_n3_http(tmp_path, settings, parent, body, kind, q):
+    """Value arguments, branchy filters and escaped closers cannot revive children."""
+    settings.TEMPLATES = [
+        {
+            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "DIRS": [str(tmp_path)],
+            "APP_DIRS": True,
+        }
+    ]
+    if kind == "super":
+        (tmp_path / "parent.html").write_text("{% block body %}" + parent + "{% endblock %}")
+        (tmp_path / "child.html").write_text(
+            '{% extends "parent.html" %}{% block body %}' + body + HIDDEN + "{% endblock %}"
+        )
+        body = '{% include "child.html" %}'
+    else:
+        body += HIDDEN
+    ids, statuses, mounts = run("<div dj-root>" + TAG + body + "</div>", {"q": q, "v": "x"})
+    assert len(ids) == 1
+    assert statuses == [200]
+    assert mounts == 0
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "body",
+    [
+        "{{ block.super|length }}",
+        "{% with s=block.super|length %}{% with t=s %}{{ t }}{% endwith %}{% endwith %}",
+        "{{ block.super if flag else empty|length }}",
+        "{{ block.super|upper|lower }}",
+        "{% filter length %}<!--{% endfilter %}",
+    ],
+)
+@pytest.mark.parametrize("cached", [False, True])
+def test_uncertain_transform_permanently_refuses_following_containers(
+    tmp_path, settings, body, cached
+):
+    from django.core.cache import cache
+
+    cache.clear()
+    settings.TEMPLATES = [
+        {
+            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "DIRS": [str(tmp_path)],
+            "APP_DIRS": True,
+        }
+    ]
+    (tmp_path / "parent.html").write_text("{% block body %}<!--y{% endblock %}")
+    if cached:
+        body = "{% load cache %}{% cache 60 cutoff %}" + body + "{% endcache %}"
+    (tmp_path / "child.html").write_text(
+        '{% extends "parent.html" %}{% block body %}' + body + "-->" + HIDDEN + "{% endblock %}"
+    )
+    # An authored closer after an uncertain transform cannot restore authority.
+    for _ in range(2):
+        ids, statuses, mounts = run(
+            "<div dj-root>" + TAG + '{% include "child.html" %}</div>',
+            {"flag": True, "empty": ""},
+        )
+        assert len(ids) == 1
+        assert statuses == [200]
+        assert mounts == 0
