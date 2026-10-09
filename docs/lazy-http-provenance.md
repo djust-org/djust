@@ -21,7 +21,9 @@ The server supplies an opaque, keyed `data-djust-lazy-id` and
 restored state. The address binds the page class, URL, session, authenticated
 user, parent and child tenant scopes, and the authored container node (template
 relative name, authored container index and a short hash of its start-tag bytes)
-plus its include-site and loop index paths.
+plus its include-site and loop index paths. Include sites name their defining
+template (or `inline` for the inline page template), including sites moved
+through inheritance.
 Hiding an earlier conditional container does not change the remaining child's
 address or state. Removing a loop item changes subsequent index paths; use a
 stable ordered input when retaining loop child state. Old occurrence-based
@@ -66,10 +68,17 @@ the intervals of untouched bytes. Converting the result to ordinary text and
 reinserting it, including via a wrapper-template value, drops that authority.
 
 At compile time, each container must be live in its own authored template
-context. Template expressions are opaque, so a value such as `-->`,
-`</script>`, `</textarea>`, `</template>` or `'>` cannot revive a container
-written inside an inert context. Only source-live containers carry start-tag
-authority and origin addresses.
+context, with template expressions masked. The complete tracked Rust render
+then checks liveness again using only the literal bytes emitted by the selected
+branches and loop iterations; value output is replaced by opaque whitespace
+at the same byte offsets. Literal context is carried across includes,
+inheritance and unfiltered `block.super`. This check is applied to the complete
+render, rather than isolated fragments. An authored closer in a skipped branch
+cannot make a following container authoritative, and a value such as `-->`,
+`</script>`, `</textarea>`, `</template>` or `'>` cannot supply that closer.
+Only containers live in both checks keep start-tag authority and origin addresses.
+The compile-time check remains conservative: a container rejected there does
+not gain authority just because a particular rendered branch would be live.
 
 Provenance alone does not authorize a container. `djust_vdom` parses the final
 coherent page with the HTML5 tokenizer and tree builder. It correlates the
@@ -119,7 +128,13 @@ an authority attribute's selected bytes also refuse registration.
 
 The template-tree planner detects include cycles and memoizes visits, with a
 20-include depth limit. Plans are cached by template, registry generation and
-loader directories; resolved dynamic plans also depend on selector context.
+loader directories; resolved dynamic plans also depend on the context paths
+consumed by include/parent selectors (including filter arguments and indexed
+paths). Per-walk memo entries use the same selector inputs. Nested include
+bindings are rebased into the caller's context, and `only` isolates unbound
+names. Bindings such as `rows=rows` are omitted from these keys when no nested
+selector consumes them. A selector that actually consumes a large value still
+pays for that value's fingerprint; unrelated render state does not.
 Dependency mtime/length checks use the template loader's invalidation policy,
 including missing candidates that could later become selected.
 

@@ -134,6 +134,11 @@ struct LazyDependency {
     bindings: Vec<(String, String)>,
     only: bool,
 }
+type LazyRenderOutput = (
+    String,
+    Vec<(usize, usize)>,
+    Vec<(usize, usize, usize, String)>,
+);
 type CachedTemplate = (Arc<Template>, u64, bool, Vec<LazyDependency>);
 static TEMPLATE_CACHE: Lazy<DashMap<(u64, String), CachedTemplate>> = Lazy::new(DashMap::new);
 /// Global supervisor for managing actor lifecycle
@@ -740,7 +745,7 @@ impl RustLiveViewBackend {
     }
 
     /// Automatic compiled-tree planning plus stable authored node addresses.
-    fn render_lazy_html(&mut self) -> PyResult<djust_core::context::AuthoredOutput> {
+    fn render_lazy_html(&mut self) -> PyResult<LazyRenderOutput> {
         let context = Context::from_shared(self.state.clone());
         let track = needs_lazy_tree(
             &self.template_source,
@@ -753,10 +758,7 @@ impl RustLiveViewBackend {
         self.render_result(track)
     }
 
-    fn render_result(
-        &mut self,
-        track_provenance: bool,
-    ) -> PyResult<djust_core::context::AuthoredOutput> {
+    fn render_result(&mut self, track_provenance: bool) -> PyResult<LazyRenderOutput> {
         guard_panic("render", move || {
             // Invalidate partial render cache — render() bypasses the diff pipeline
             // so the cache would be stale for the next render_with_diff() call.
@@ -2775,26 +2777,64 @@ struct LazyTreePlan {
 type LazyPlanKey = (u64, String, Vec<std::path::PathBuf>, bool);
 static LAZY_TREE_PLANS: Lazy<DashMap<LazyPlanKey, LazyTreePlan>> = Lazy::new(DashMap::new);
 #[derive(Default)]
+struct LazyPlanMemo {
+    found: bool,
+    keys: Vec<String>,
+    context: String,
+}
+#[derive(Default)]
 struct LazyPlanWalk {
     active: std::collections::HashSet<String>,
-    memo: HashMap<(String, usize, String), bool>,
+    memo: HashMap<(String, usize), Vec<LazyPlanMemo>>,
     files: HashMap<std::path::PathBuf, LazyFileStamp>,
     dynamic: bool,
-    context_keys: std::collections::HashSet<String>,
 }
-fn lazy_plan_context(context: &Context) -> String {
-    let mut values: Vec<_> = context.to_hashmap().into_iter().collect();
-    values.sort_by(|a, b| a.0.cmp(&b.0));
-    format!("{values:?}")
+/// Shared traversal state and the selector dependencies of this scoped visit.
+struct LazyPlanVisit<'a> {
+    walk: &'a mut LazyPlanWalk,
+    selectors: &'a mut std::collections::HashSet<String>,
 }
 fn lazy_selector_context(context: &Context, keys: &[String]) -> String {
-    let values: Vec<_> = keys.iter().map(|key| (key, context.get(key))).collect();
+    let values: Vec<_> = keys
+        .iter()
+        .map(|key| {
+            (
+                key,
+                djust_templates::renderer::resolve_template_reference(key, context),
+            )
+        })
+        .collect();
     format!("{values:?}")
 }
-fn watch_lazy_selector(expression: &str, walk: &mut LazyPlanWalk) -> PyResult<()> {
-    let variables =
-        djust_templates::parser::extract_template_variables(&format!("{{{{ {expression} }}}}"))?;
-    walk.context_keys.extend(variables.into_keys());
+fn watch_lazy_selector(
+    expression: &str,
+    keys: &mut std::collections::HashSet<String>,
+) -> PyResult<()> {
+    // Preserve exact dotted/indexed paths. The JIT variable extractor merges
+    // roots and normalizes numeric indices for model serialization, which is
+    // intentionally too broad (and sometimes too narrow) for selector keys.
+    fn watch_operand(operand: &str, keys: &mut std::collections::HashSet<String>) {
+        let operand = operand.trim();
+        if operand
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_alphabetic() || c == '_')
+            && !matches!(operand, "True" | "False" | "None")
+            && operand
+                .chars()
+                .all(|c| c.is_alphanumeric() || matches!(c, '_' | '.'))
+        {
+            keys.insert(operand.to_owned());
+        }
+    }
+    let parts = djust_templates::filter_lexer::split_pipes(expression);
+    watch_operand(parts[0], keys);
+    for spec in &parts[1..] {
+        let (_, argument) = djust_templates::filter_lexer::split_filter_spec(spec, expression)?;
+        if let Some(argument) = argument {
+            watch_operand(argument, keys);
+        }
+    }
     Ok(())
 }
 fn needs_lazy_tree(
@@ -2827,6 +2867,7 @@ fn needs_lazy_tree(
         }
     }
     let mut walk = LazyPlanWalk::default();
+    let mut selectors = std::collections::HashSet::new();
     let found = needs_lazy_tree_walk(
         source,
         dirs,
@@ -2834,7 +2875,10 @@ fn needs_lazy_tree(
         depth,
         current_name,
         potential,
-        &mut walk,
+        LazyPlanVisit {
+            walk: &mut walk,
+            selectors: &mut selectors,
+        },
     )?;
     // Bound storage independently of the renderer's source cache.
     if LAZY_TREE_PLANS.len() >= 512 {
@@ -2845,8 +2889,8 @@ fn needs_lazy_tree(
         LazyTreePlan {
             generation,
             found,
-            context: walk.dynamic.then(|| {
-                let mut keys: Vec<_> = walk.context_keys.into_iter().collect();
+            context: (walk.dynamic || !selectors.is_empty()).then(|| {
+                let mut keys: Vec<_> = selectors.into_iter().collect();
                 keys.sort();
                 let value = lazy_selector_context(context, &keys);
                 (keys, value)
@@ -2863,8 +2907,9 @@ fn needs_lazy_tree_walk(
     depth: usize,
     current_name: Option<&str>,
     potential: bool,
-    walk: &mut LazyPlanWalk,
+    visit: LazyPlanVisit<'_>,
 ) -> PyResult<bool> {
+    let LazyPlanVisit { walk, selectors } = visit;
     if depth > 20 {
         return Ok(false);
     }
@@ -2872,16 +2917,40 @@ fn needs_lazy_tree_walk(
     if !walk.active.insert(identity.clone()) {
         return Ok(false);
     }
-    let key = (identity.clone(), depth, lazy_plan_context(context));
-    if let Some(found) = walk.memo.get(&key) {
-        walk.active.remove(&identity);
-        return Ok(*found);
+    let key = (identity.clone(), depth);
+    if let Some(entries) = walk.memo.get(&key) {
+        for entry in entries {
+            if entry.context == lazy_selector_context(context, &entry.keys) {
+                selectors.extend(entry.keys.iter().cloned());
+                walk.active.remove(&identity);
+                return Ok(entry.found);
+            }
+        }
     }
-    let found =
-        needs_lazy_tree_uncached(source, dirs, context, depth, current_name, potential, walk);
+    let mut local_selectors = std::collections::HashSet::new();
+    let found = needs_lazy_tree_uncached(
+        source,
+        dirs,
+        context,
+        depth,
+        current_name,
+        potential,
+        LazyPlanVisit {
+            walk,
+            selectors: &mut local_selectors,
+        },
+    );
     walk.active.remove(&identity);
     if let Ok(value) = found {
-        walk.memo.insert(key, value);
+        let mut keys: Vec<_> = local_selectors.into_iter().collect();
+        keys.sort();
+        let saved = lazy_selector_context(context, &keys);
+        selectors.extend(keys.iter().cloned());
+        walk.memo.entry(key).or_default().push(LazyPlanMemo {
+            found: value,
+            keys,
+            context: saved,
+        });
     }
     found
 }
@@ -2892,8 +2961,9 @@ fn needs_lazy_tree_uncached(
     depth: usize,
     current_name: Option<&str>,
     potential: bool,
-    walk: &mut LazyPlanWalk,
+    visit: LazyPlanVisit<'_>,
 ) -> PyResult<bool> {
+    let LazyPlanVisit { walk, selectors } = visit;
     if depth > 20 {
         return Ok(false);
     }
@@ -2909,10 +2979,7 @@ fn needs_lazy_tree_uncached(
         return Ok(false);
     };
     for dependency in &refs {
-        watch_lazy_selector(&dependency.operand, walk)?;
-        for (_, expression) in &dependency.bindings {
-            watch_lazy_selector(expression, walk)?;
-        }
+        watch_lazy_selector(&dependency.operand, selectors)?;
     }
     if template.uses_extends() {
         if refs
@@ -2960,10 +3027,7 @@ fn needs_lazy_tree_uncached(
             let mut parents = Vec::new();
             lazy_dependencies(&layer.nodes, &mut parents);
             for parent in parents {
-                watch_lazy_selector(&parent.operand, walk)?;
-                for (_, expression) in &parent.bindings {
-                    watch_lazy_selector(expression, walk)?;
-                }
+                watch_lazy_selector(&parent.operand, selectors)?;
                 if let Ok(Value::String(name) | Value::SafeString(name)) =
                     djust_templates::renderer::resolve_template_reference(&parent.operand, context)
                 {
@@ -2983,6 +3047,7 @@ fn needs_lazy_tree_uncached(
         return Ok(true);
     }
     for dependency in refs {
+        watch_lazy_selector(&dependency.operand, selectors)?;
         let token = &dependency.operand;
         let literal = token.starts_with(['\'', '"'])
             && token.ends_with(['\'', '"'])
@@ -3028,15 +3093,47 @@ fn needs_lazy_tree_uncached(
                 walk.files.insert(path.clone(), lazy_file_stamp(&path));
                 if path.is_file() {
                     let child = lazy_source_file(&path)?;
-                    if needs_lazy_tree_walk(
+                    let mut child_selectors = std::collections::HashSet::new();
+                    let found = needs_lazy_tree_walk(
                         &child,
                         dirs,
                         &child_context,
                         depth + 1,
                         Some(&name),
                         potential,
-                        walk,
-                    )? {
+                        LazyPlanVisit {
+                            walk,
+                            selectors: &mut child_selectors,
+                        },
+                    )?;
+                    // Only bindings consumed by an include selector affect the
+                    // plan. Rebase those dependencies into the caller's scope;
+                    // unrelated rows/user state never enters a memo/cache key.
+                    for key in child_selectors {
+                        let (root, suffix) = key
+                            .split_once('.')
+                            .map_or((key.as_str(), ""), |(a, b)| (a, b));
+                        if let Some((_, expression)) = dependency
+                            .bindings
+                            .iter()
+                            .filter(|_| !potential)
+                            .find(|(name, _)| name == root)
+                        {
+                            if !suffix.is_empty()
+                                && expression.split('.').all(|part| {
+                                    !part.is_empty()
+                                        && part.chars().all(|c| c.is_alphanumeric() || c == '_')
+                                })
+                            {
+                                selectors.insert(format!("{expression}.{suffix}"));
+                            } else {
+                                watch_lazy_selector(expression, selectors)?;
+                            }
+                        } else if !dependency.only {
+                            selectors.insert(key);
+                        }
+                    }
+                    if found {
                         return Ok(true);
                     }
                     selected = true;
@@ -7502,5 +7599,71 @@ mod render_with_diff_detaches_3074 {
         }
         assert!(second_a.0.ends_with("row 50</li></ul></div>"));
         assert!(second_b.0.ends_with("row 50</li></ul></div>"));
+    }
+}
+
+#[cfg(test)]
+mod lazy_selector_keys_3428 {
+    use super::*;
+
+    #[test]
+    fn selectors_preserve_numeric_paths_and_whole_variable_uses() {
+        let mut keys = std::collections::HashSet::new();
+        watch_lazy_selector("choices.0|default:choices", &mut keys).unwrap();
+        watch_lazy_selector("cfg.target|default:fallback", &mut keys).unwrap();
+        watch_lazy_selector("'literal.html'|default:other", &mut keys).unwrap();
+        assert_eq!(
+            keys,
+            ["choices.0", "choices", "cfg.target", "fallback", "other"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect()
+        );
+    }
+
+    #[test]
+    fn dynamic_plan_and_memo_ignore_unconsumed_rows_binding() {
+        let dir = std::env::temp_dir().join(format!("djust-3428-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("plain.html"), "plain").unwrap();
+        let source = "{% include tpl with rows=rows %}";
+        let mut context = Context::new();
+        context.set("tpl".into(), Value::String("plain.html".into()));
+        context.set("rows".into(), Value::List(vec![Value::Integer(1); 5000]));
+        let mut walk = LazyPlanWalk::default();
+        let mut selectors = std::collections::HashSet::new();
+        assert!(!needs_lazy_tree_walk(
+            source,
+            std::slice::from_ref(&dir),
+            &context,
+            0,
+            None,
+            false,
+            LazyPlanVisit {
+                walk: &mut walk,
+                selectors: &mut selectors
+            }
+        )
+        .unwrap());
+        assert_eq!(selectors, ["tpl".to_owned()].into_iter().collect());
+        let memo = &walk.memo[&(source.to_owned(), 0)][0];
+        assert_eq!(memo.keys, vec!["tpl"]);
+        let saved = memo.context.clone();
+        context.set("rows".into(), Value::List(vec![Value::Integer(2); 5000]));
+        assert_eq!(saved, lazy_selector_context(&context, &memo.keys));
+        assert!(
+            !needs_lazy_tree(source, std::slice::from_ref(&dir), &context, 0, None, false).unwrap()
+        );
+        let key = (
+            djust_templates::registry_scope::current(),
+            source.to_owned(),
+            vec![dir.clone()],
+            false,
+        );
+        let plan = LAZY_TREE_PLANS.get(&key).unwrap();
+        assert_eq!(plan.context.as_ref().unwrap().0, vec!["tpl"]);
+        drop(plan);
+        LAZY_TREE_PLANS.remove(&key);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

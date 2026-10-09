@@ -42,6 +42,63 @@ pub struct Rendered {
     pub html: String,
     pub authored: Vec<Range<usize>>,
     pub origins: Vec<(usize, usize, usize, String)>,
+    /// All emitted literal bytes, including context-opening markup with no authority.
+    pub literals: Vec<Range<usize>>,
+}
+impl Rendered {
+    /// Recheck source liveness on the branch that actually rendered. Values
+    /// occupy opaque whitespace, so they cannot close an authored inert context.
+    /// Do this once on the complete result, never on incomplete include/block
+    /// fragments. The ordinary final-HTML survival check remains necessary.
+    pub fn retain_live_authority(&mut self) {
+        if self.origins.is_empty() {
+            return;
+        }
+        let mut masked = vec![b' '; self.html.len()];
+        for span in &self.literals {
+            masked[span.clone()].copy_from_slice(&self.html.as_bytes()[span.clone()]);
+        }
+        // Literal spans contain whole UTF-8 scalars; opaque gaps are ASCII.
+        let masked = String::from_utf8(masked).unwrap_or_default();
+        #[cfg(feature = "liveview")]
+        let live = djust_vdom::lazy_provenance::lazy_elements(&masked, &[(0, masked.len())]);
+        #[cfg(not(feature = "liveview"))]
+        let live: Vec<SourceContainer> = Vec::new();
+        let starts: std::collections::HashSet<_> = live.iter().map(|e| e.start).collect();
+        let rejected: std::collections::HashSet<_> = self
+            .origins
+            .iter()
+            .filter(|(a, _, offset, _)| *offset == 0 && !starts.contains(a))
+            .map(|(a, _, _, _)| *a)
+            .collect();
+        if rejected.is_empty() {
+            return;
+        }
+        let mut openings: Vec<_> = rejected.iter().copied().collect();
+        openings.sort_unstable();
+        // Removing the opening byte alone prevents both registration and later
+        // composition from recovering a rejected candidate's authority.
+        let mut authored = Vec::new();
+        for span in &self.authored {
+            let mut cursor = span.start;
+            let left = openings.partition_point(|a| *a < span.start);
+            let right = openings.partition_point(|a| *a < span.end);
+            for &a in &openings[left..right] {
+                if cursor < a {
+                    authored.push(cursor..a);
+                }
+                cursor = a + 1;
+            }
+            if cursor < span.end {
+                authored.push(cursor..span.end);
+            }
+        }
+        self.authored = authored;
+        self.origins.retain(|(a, _, offset, _)| {
+            a.checked_sub(*offset)
+                .is_some_and(|start| !rejected.contains(&start))
+        });
+    }
 }
 impl From<String> for Rendered {
     fn from(html: String) -> Self {
@@ -49,6 +106,7 @@ impl From<String> for Rendered {
             html,
             authored: Vec::new(),
             origins: Vec::new(),
+            literals: Vec::new(),
         }
     }
 }
@@ -69,6 +127,11 @@ impl RenderOutput for Rendered {
     fn authored(text: &str) -> Self {
         Self {
             html: text.to_owned(),
+            literals: if text.is_empty() {
+                Vec::new()
+            } else {
+                vec![0..text.len()]
+            },
             origins: if text.to_ascii_lowercase().contains("dj-view") {
                 vec![(0, text.len(), 0, String::new())]
             } else {
@@ -102,10 +165,17 @@ impl RenderOutput for Rendered {
             html: output.0,
             authored: output.1.into_iter().map(|(a, b)| a..b).collect(),
             origins: output.2,
+            literals: output.3.into_iter().map(|(a, b)| a..b).collect(),
         }
     }
     fn append(&mut self, child: &Self) {
         let offset = self.html.len();
+        self.literals.extend(
+            child
+                .literals
+                .iter()
+                .map(|r| r.start + offset..r.end + offset),
+        );
         self.authored.extend(
             child
                 .authored

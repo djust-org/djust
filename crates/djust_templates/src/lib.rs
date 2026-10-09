@@ -331,7 +331,10 @@ impl Template {
         context: &Context,
         loader: &L,
     ) -> Result<provenance::Rendered> {
-        self.render_output_named_mut(&mut context.clone(), loader, None)
+        let mut rendered: provenance::Rendered =
+            self.render_output_named_mut(&mut context.clone(), loader, None)?;
+        rendered.retain_live_authority();
+        Ok(rendered)
     }
 
     pub fn render_output_named_mut<L: TemplateLoader, R: provenance::RenderOutput>(
