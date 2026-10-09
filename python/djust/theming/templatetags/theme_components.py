@@ -11,7 +11,9 @@ Falling back to:
     djust_theming/components/{component}.html
 """
 
+import logging
 import uuid
+from collections.abc import Callable, Iterable
 
 from typing import Any, Optional
 
@@ -21,6 +23,8 @@ from django.utils.safestring import SafeString, mark_safe
 
 from ..manager import get_theme_config
 from ..template_resolver import resolve_component_template
+
+logger = logging.getLogger(__name__)
 
 register = template.Library()
 
@@ -65,6 +69,8 @@ def theme_button(
     """
     request = context.get("request")
     tmpl = resolve_component_template(request, "button")
+    if attrs.get("href") is not None:
+        _check_url("href", attrs["href"])
     # `slot_*` keywords are context, not attributes — the template
     # reads them by name. Without this they stay in `attrs`, which
     # templates only ever read as `attrs.class` / `attrs.id`, so a
@@ -245,6 +251,86 @@ def theme_input(
     return mark_safe(tmpl.render(ctx))
 
 
+# Attributes whose value is a URL the browser will navigate to or load.
+_URL_ATTRS = frozenset({"href", "src", "action", "formaction"})
+
+_UNSAFE_URL_SCHEMES = ("javascript:", "vbscript:", "data:")
+
+
+def _has_unsafe_url_scheme(value: Any, *, image: bool = False) -> bool:
+    """Apply the theming denylist after stripping scheme obfuscation."""
+    compact = "".join(ch for ch in str(value) if ord(ch) > 32 and ord(ch) != 127).lower()
+    if image and compact.startswith("data:image/"):
+        return False
+    return compact.startswith(_UNSAFE_URL_SCHEMES)
+
+
+def _check_url(name: str, value: Any) -> None:
+    """Refuse a script-bearing URL scheme in ``name``.
+
+    Browsers drop tabs, newlines and other control characters inside a URL
+    scheme and ignore leading whitespace, so ``"java\tscript:..."`` is still
+    ``javascript:``. Strip those before looking at the scheme.
+    """
+    if _has_unsafe_url_scheme(value):
+        raise ValueError(f"{name}= refuses javascript:, vbscript: and data: URLs")
+
+
+def _neutralise_url(name: str, value: Any, *, image: bool = False) -> Any:
+    """Return ``value`` unchanged, or ``"#"`` for a script-bearing scheme.
+
+    Data-derived URLs must not take the whole render down. Use the same
+    denylist as :func:`_check_url`, allowing ``data:image/*`` for image sources.
+    Safe values retain single template escaping; developer-supplied literals
+    and passthrough attributes still raise via :func:`_check_url`.
+    """
+    if value is not None and _has_unsafe_url_scheme(value, image=image):
+        logger.debug("theming: %s= URL with a disallowed scheme rendered as '#'", name)
+        return "#"
+    return value
+
+
+class _ItemAttributeProxy:
+    """Override one template-visible attribute without modifying its object."""
+
+    def __init__(self, item: Any, name: str, value: Any) -> None:
+        self._item = item
+        self._name = name
+        self._value = value
+
+    def __getattr__(self, name: str) -> Any:
+        if name == self._name:
+            return self._value
+        return getattr(self._item, name)
+
+
+def _map_item_attribute(items: Any, name: str, transform: Callable[[Any], Any]) -> Any:
+    """Copy changed dicts, proxy changed objects and materialise item iterables."""
+    if items is None or isinstance(items, (str, bytes)):
+        return items
+    if isinstance(items, dict):
+        value = items.get(name)
+        safe = transform(value)
+        return {**items, name: safe} if safe is not value else items
+    missing = object()
+    value = getattr(items, name, missing)
+    if value is not missing:
+        safe = transform(value)
+        return _ItemAttributeProxy(items, name, safe) if safe is not value else items
+    if isinstance(items, Iterable):
+        return [_map_item_attribute(item, name, transform) for item in items]
+    return items
+
+
+def _neutralise_item_urls(items: Any, name: str = "url") -> Any:
+    """Neutralise dict/object item URLs without mutating caller-owned items.
+
+    Navigation accepts lists, tuples and other iterables, including QuerySets
+    and generators. Materialise them so templates see the checked items.
+    """
+    return _map_item_attribute(items, name, lambda value: _neutralise_url(name, value))
+
+
 def _passthrough_attrs(attrs: dict[str, Any], skip: tuple[str, ...]) -> SafeString:
     """``key="value"`` pairs for the attrs a component template does not
     handle itself. ``dj_input`` → ``dj-input``; values are escaped; ``True``
@@ -256,6 +342,8 @@ def _passthrough_attrs(attrs: dict[str, Any], skip: tuple[str, ...]) -> SafeStri
         if key in skip or value is None or value is False:
             continue
         name = key.replace("_", "-")
+        if name.lower() in _URL_ATTRS and value is not True:
+            _check_url(key, value)
         parts.append(name if value is True else f'{name}="{escape(value)}"')
     return mark_safe(" ".join(parts))
 
@@ -473,6 +561,9 @@ def theme_pagination(
     # caller-supplied slot rendered as nothing at all.
     slots, remaining_attrs = _extract_slots(attrs)
 
+    def page_url(page: int) -> Any:
+        return _neutralise_url("url_pattern", url_pattern.format(page))
+
     # Build page range (show up to 5 pages around current)
     window = 2
     range_start = max(1, current_page - window)
@@ -480,19 +571,19 @@ def theme_pagination(
 
     page_range = []
     for p in range(range_start, range_end + 1):
-        page_range.append({"number": p, "url": url_pattern.format(p)})
+        page_range.append({"number": p, "url": page_url(p)})
 
     # Edge detection
     first_page = 1 if show_edges and range_start > 1 else None
-    first_url = url_pattern.format(1) if first_page else None
+    first_url = page_url(1) if first_page else None
     first_ellipsis = range_start > 2
 
     last_page = total_pages if show_edges and range_end < total_pages else None
-    last_url = url_pattern.format(total_pages) if last_page else None
+    last_url = page_url(total_pages) if last_page else None
     last_ellipsis = range_end < total_pages - 1
 
-    prev_url = url_pattern.format(current_page - 1) if current_page > 1 else None
-    next_url = url_pattern.format(current_page + 1) if current_page < total_pages else None
+    prev_url = page_url(current_page - 1) if current_page > 1 else None
+    next_url = page_url(current_page + 1) if current_page < total_pages else None
 
     ctx = {
         "current_page": current_page,
@@ -675,6 +766,7 @@ def theme_breadcrumb(
     slots, remaining_attrs = _extract_slots(attrs)
     request = context.get("request")
     tmpl = resolve_component_template(request, "breadcrumb")
+    items = _neutralise_item_urls(items)
     ctx = {
         "items": items or [],
         "separator": separator,
@@ -711,6 +803,7 @@ def theme_avatar(
     slots, remaining_attrs = _extract_slots(attrs)
     request = context.get("request")
     tmpl = resolve_component_template(request, "avatar")
+    src = _neutralise_url("src", src, image=True)
 
     # Generate initials from name
     initials = ""
@@ -919,6 +1012,8 @@ def theme_nav_item(
     slots, remaining_attrs = _extract_slots(attrs)
     request = context.get("request")
     tmpl = resolve_component_template(request, "nav_item")
+    url = "" if url is None else str(url)
+    url = _neutralise_url("url", url)
 
     # Auto-detect active state from request.path
     is_active = active
@@ -971,6 +1066,7 @@ def theme_nav_group(
     slots, remaining_attrs = _extract_slots(attrs)
     request = context.get("request")
     tmpl = resolve_component_template(request, "nav_group")
+    items = _neutralise_item_urls(items)
     ctx = {
         "label": label,
         "items": items or [],
@@ -1007,6 +1103,7 @@ def theme_nav(
     slots, remaining_attrs = _extract_slots(attrs)
     request = context.get("request")
     tmpl = resolve_component_template(request, "nav")
+    items = _neutralise_item_urls(items)
     ctx = {
         "brand": brand,
         "items": items or [],
@@ -1033,6 +1130,8 @@ def theme_sidebar_nav(context: Context, sections: Any = None, **attrs: Any) -> S
     slots, remaining_attrs = _extract_slots(attrs)
     request = context.get("request")
     tmpl = resolve_component_template(request, "sidebar_nav")
+    # Sections and their nested items may both be dicts, objects or iterables.
+    sections = _map_item_attribute(sections, "items", _neutralise_item_urls)
     ctx = {
         "sections": sections or [],
         "attrs": remaining_attrs,
