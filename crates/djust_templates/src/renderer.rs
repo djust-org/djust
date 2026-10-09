@@ -1440,6 +1440,8 @@ fn call_block_custom_tag<L: TemplateLoader>(
         } else {
             vec![LiteralOutput {
                 html: None,
+                blank_html: None,
+                blank_openings: Vec::new(),
                 openings: Vec::new(),
                 blocked: false,
             }]
@@ -1460,6 +1462,8 @@ fn call_block_custom_tag<L: TemplateLoader>(
     } else {
         vec![LiteralOutput {
             html: None,
+            blank_html: None,
+            blank_openings: Vec::new(),
             openings: Vec::new(),
             blocked: false,
         }]
@@ -1498,29 +1502,16 @@ fn call_lazy_body_block_tag<L: TemplateLoader>(
     let raw_py = context.render_raw_py_objects();
     let autoescape = context.autoescape();
 
-    let (answered, state, literal_only, literal_blocked) =
-        crate::registry::call_block_handler_before_body(
-            name,
-            &resolved_args,
-            &context_map,
-            raw_py.as_deref(),
-            autoescape,
-        )
-        .map_err(|e| handler_call_error("Block tag", name, e))?;
+    let (answered, state, literal) = crate::registry::call_block_handler_before_body(
+        name,
+        &resolved_args,
+        &context_map,
+        raw_py.as_deref(),
+        autoescape,
+    )
+    .map_err(|e| handler_call_error("Block tag", name, e))?;
     if let Some(html) = answered {
-        context.record_provenance_flatten(
-            (
-                String::new(),
-                vec![],
-                vec![],
-                djust_core::context::LiteralOutput {
-                    blocked: literal_blocked,
-                    html: literal_only,
-                    openings: vec![],
-                },
-            ),
-            String::new(),
-        );
+        context.record_provenance_flatten((String::new(), vec![], vec![], literal), String::new());
         return Ok((html, Vec::new()));
     }
 
@@ -1540,6 +1531,7 @@ fn call_lazy_body_block_tag<L: TemplateLoader>(
     let flattened =
         djust_core::context::flatten_authored_output(output.into_authored_output(), text);
     let literal_only = flattened.3.html.clone();
+
     let literal_blocked = flattened.3.blocked;
     let content = flattened.0.clone();
     let mut handler_context = std::ops::Deref::deref(&context_map).clone();
@@ -1547,6 +1539,12 @@ fn call_lazy_body_block_tag<L: TemplateLoader>(
         "_djust_body_literal_blocked".into(),
         Value::Bool(literal_blocked),
     );
+    if let Some(blank) = &flattened.3.blank_html {
+        handler_context.insert(
+            "_djust_body_blank_only".into(),
+            Value::String(blank.clone()),
+        );
+    }
     if let Some(literal_only) = literal_only {
         handler_context.insert(
             "_djust_body_literal_only".into(),
@@ -2900,6 +2898,19 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                 None
             };
             let mut literal_blocked = captured.as_ref().is_some_and(|capture| capture.blocked);
+            let mut blank_value =
+                captured
+                    .as_ref()
+                    .and_then(|c| c.blank_html.clone())
+                    .map(|text| {
+                        (
+                            Value::String(text),
+                            filters::InputSafety {
+                                container: runtime_safe,
+                                items: items_safe,
+                            },
+                        )
+                    });
             let mut literal_value =
                 captured
                     .clone()
@@ -2925,7 +2936,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                 let unescaped = original.map(crate::parser::unescape_filter_arg_literal);
                 let stripped = unescaped.as_deref();
                 let replay = replayable_filter(filter_name, original, context);
-                let (new_value, produced_safe) = filters::apply_filter_with_literal(
+                let (new_value, produced_safe) = filters::apply_filter_with_projections(
                     filter_name,
                     &value,
                     stripped,
@@ -2944,6 +2955,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                     // surrounding `{% autoescape %}` policy.
                     context.autoescape(),
                     if replay { literal_value.as_mut() } else { None },
+                    if replay { blank_value.as_mut() } else { None },
                 )?;
                 if !replay
                     && literal_value
@@ -2952,6 +2964,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                     && new_value.to_string() != value.to_string()
                 {
                     literal_value = None;
+                    blank_value = None;
                     literal_blocked = true;
                 }
                 value = new_value;
@@ -3030,6 +3043,22 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             if captured.is_some() {
                 // Use the PAGE's final escape decision, not replay safety:
                 // escaping an authored closer must erase it in both trees.
+                let blank = blank_value.and_then(|(value, _)| {
+                    let literal = value.to_string();
+                    let escaped = if is_safe || !context.autoescape() {
+                        literal.clone()
+                    } else if *in_attr {
+                        filters::html_escape_attr(&literal)
+                    } else {
+                        filters::html_escape(&literal)
+                    };
+                    if escaped != literal && escaping_erases_hiding_context(&literal) {
+                        literal_blocked = true;
+                        None
+                    } else {
+                        Some(escaped)
+                    }
+                });
                 let literal = literal_value.and_then(|(value, _)| {
                     let literal = value.to_string();
                     let escaped = if is_safe || !context.autoescape() {
@@ -3054,6 +3083,12 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                         } else {
                             literal
                         },
+                        blank_html: if literal_blocked {
+                            Some(String::new())
+                        } else {
+                            blank
+                        },
+                        blank_openings: Vec::new(),
                         openings: Vec::new(),
                         blocked: literal_blocked,
                     },
@@ -3099,6 +3134,18 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             // (#2283, #2287) — the second of the three sites.
             let mut items_safe = context.items_are_safe(expr);
             let mut literal_blocked = capture.as_ref().is_some_and(|capture| capture.blocked);
+            let mut blank_value = capture
+                .as_ref()
+                .and_then(|c| c.blank_html.clone())
+                .map(|text| {
+                    (
+                        Value::String(text),
+                        filters::InputSafety {
+                            container: runtime_safe,
+                            items: items_safe,
+                        },
+                    )
+                });
             let mut literal_value =
                 capture
                     .clone()
@@ -3118,7 +3165,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                 let unescaped = original.map(crate::parser::unescape_filter_arg_literal);
                 let stripped = unescaped.as_deref();
                 let replay = replayable_filter(filter_name, original, context);
-                let (new_value, produced_safe) = filters::apply_filter_with_literal(
+                let (new_value, produced_safe) = filters::apply_filter_with_projections(
                     filter_name,
                     &value,
                     stripped,
@@ -3134,6 +3181,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                     // surrounding `{% autoescape %}` policy.
                     context.autoescape(),
                     if replay { literal_value.as_mut() } else { None },
+                    if replay { blank_value.as_mut() } else { None },
                 )?;
                 if !replay
                     && literal_value
@@ -3142,6 +3190,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                     && new_value.to_string() != value.to_string()
                 {
                     literal_value = None;
+                    blank_value = None;
                     literal_blocked = true;
                 }
                 value = new_value;
@@ -3189,6 +3238,20 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                 filters::html_escape(&text)
             };
             Ok(if capture.is_some() {
+                let blank = blank_value.and_then(|(value, _)| {
+                    let literal = value.to_string();
+                    let escaped = if is_safe || !context.autoescape() {
+                        literal.clone()
+                    } else {
+                        filters::html_escape(&literal)
+                    };
+                    if escaped != literal && escaping_erases_hiding_context(&literal) {
+                        literal_blocked = true;
+                        None
+                    } else {
+                        Some(escaped)
+                    }
+                });
                 let literal = literal_value.and_then(|(value, _)| {
                     let literal = value.to_string();
                     let escaped = if is_safe || !context.autoescape() {
@@ -3211,6 +3274,12 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                         } else {
                             literal
                         },
+                        blank_html: if literal_blocked {
+                            Some(String::new())
+                        } else {
+                            blank
+                        },
+                        blank_openings: Vec::new(),
                         openings: Vec::new(),
                         blocked: literal_blocked,
                     },
@@ -4571,6 +4640,9 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             if R::TRACKED {
                 let output = content.into_authored_output();
                 let mut literal = output.3;
+                literal.blank_html = literal
+                    .blank_html
+                    .map(|literal| SPACELESS_RE.replace_all(literal.trim(), "><").to_string());
                 literal.html = literal
                     .html
                     .map(|literal| SPACELESS_RE.replace_all(literal.trim(), "><").to_string());
@@ -6106,6 +6178,18 @@ fn get_value_safe_inner(
             Some(literal_run(input_literals))
         };
         let mut literal_blocked = capture.as_ref().is_some_and(|capture| capture.blocked);
+        let mut blank_value = capture
+            .as_ref()
+            .and_then(|c| c.blank_html.clone())
+            .map(|text| {
+                (
+                    Value::String(text),
+                    filters::InputSafety {
+                        container: runtime_safe,
+                        items: items_safe,
+                    },
+                )
+            });
         let mut literal_value = capture
             .clone()
             .and_then(|capture| capture.html)
@@ -6177,7 +6261,7 @@ fn get_value_safe_inner(
             // #1660). Built-ins report it too, for the four whose safety is
             // per-call rather than per-name (`filters::builtin_produced_safe`).
             let replay = replayable_filter(filter_name, raw_arg, context);
-            let (new_value, produced_safe) = filters::apply_filter_with_literal(
+            let (new_value, produced_safe) = filters::apply_filter_with_projections(
                 filter_name,
                 &value,
                 arg.as_deref(),
@@ -6192,6 +6276,7 @@ fn get_value_safe_inner(
                 },
                 context.autoescape(),
                 if replay { literal_value.as_mut() } else { None },
+                if replay { blank_value.as_mut() } else { None },
             )?;
             if !replay
                 && literal_value
@@ -6200,6 +6285,7 @@ fn get_value_safe_inner(
                 && new_value.to_string() != value.to_string()
             {
                 literal_value = None;
+                blank_value = None;
                 literal_blocked = true;
             }
             value = new_value;
@@ -6220,6 +6306,12 @@ fn get_value_safe_inner(
                 } else {
                     literal_value.map(|(value, _)| value.to_string())
                 },
+                blank_html: if literal_blocked {
+                    Some(String::new())
+                } else {
+                    blank_value.map(|(value, _)| value.to_string())
+                },
+                blank_openings: Vec::new(),
                 openings: Vec::new(),
                 blocked: literal_blocked,
             }]);

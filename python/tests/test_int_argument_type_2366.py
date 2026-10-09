@@ -311,6 +311,7 @@ class TestEveryRendererCallSiteResolvesItsArgument:
             for i, ln in enumerate(lines)
             if "filters::apply_filter_full_safe(" in ln
             or "filters::apply_filter_with_literal(" in ln
+            or "filters::apply_filter_with_projections(" in ln
         ]
         assert len(opens) == 3, (
             f"found {len(opens)} safety-aware filter call sites in renderer.rs, "

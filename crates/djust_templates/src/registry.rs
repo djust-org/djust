@@ -1345,7 +1345,14 @@ pub fn call_block_handler_before_body(
     context: &HashMap<String, djust_core::Value>,
     raw_py_objects: Option<&HashMap<String, pyo3::Py<PyAny>>>,
     autoescape: bool,
-) -> Result<(Option<String>, PendingBlockBody, Option<String>, bool), DjangoRustError> {
+) -> Result<
+    (
+        Option<String>,
+        PendingBlockBody,
+        djust_core::context::LiteralOutput,
+    ),
+    DjangoRustError,
+> {
     let handler = clone_block_handler(name)?;
     Python::attach(|py| {
         let py_args = build_py_args(py, args).map_err(DjangoRustError::TemplateError)?;
@@ -1366,8 +1373,13 @@ pub fn call_block_handler_before_body(
             return Ok((
                 None,
                 PendingBlockBody { handler, state },
-                Some(String::new()),
-                false,
+                djust_core::context::LiteralOutput {
+                    html: Some(String::new()),
+                    blank_html: Some(String::new()),
+                    blocked: false,
+                    openings: Vec::new(),
+                    blank_openings: Vec::new(),
+                },
             ));
         }
         let html = escape_handler_return(output, "Block handler", name, autoescape)
@@ -1384,11 +1396,30 @@ pub fn call_block_handler_before_body(
             Ok(None) => Some(String::new()),
             Err(_) => None,
         };
+        let blank_only = match py_context.get_item("_djust_cached_blank_only") {
+            Ok(Some(value)) => value.extract::<String>().ok(),
+            Ok(None) => {
+                if py_context
+                    .contains("_djust_cached_literal_only")
+                    .unwrap_or(true)
+                {
+                    None
+                } else {
+                    Some(String::new())
+                }
+            }
+            Err(_) => None,
+        };
         Ok((
             Some(html),
             PendingBlockBody { handler, state },
-            literal_only,
-            literal_blocked,
+            djust_core::context::LiteralOutput {
+                html: literal_only,
+                blank_html: blank_only,
+                blocked: literal_blocked,
+                openings: Vec::new(),
+                blank_openings: Vec::new(),
+            },
         ))
     })
 }

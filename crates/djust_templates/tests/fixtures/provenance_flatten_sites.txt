@@ -29,14 +29,18 @@ value.to_string()
 filters::html_escape(&value.to_string())
 other => DjangoRustError::TemplateError(format!("{kind} '{name}' error: {other}")),
 let content = render_nodes_with_loader_mut(children, context, loader)?;
-let (answered, state, literal_only, literal_blocked) =
-context.record_provenance_flatten(
-html: literal_only,
+blank_html: None,
+blank_openings: Vec::new(),
+blank_html: None,
+blank_openings: Vec::new(),
+context.record_provenance_flatten((String::new(), vec![], vec![], literal), String::new());
 let text = output.to_string();
 djust_core::context::flatten_authored_output(output.into_authored_output(), text);
 let literal_only = flattened.3.html.clone();
 let content = flattened.0.clone();
 "_djust_body_literal_blocked".into(),
+if let Some(blank) = &flattened.3.blank_html {
+"_djust_body_blank_only".into(),
 if let Some(literal_only) = literal_only {
 "_djust_body_literal_only".into(),
 Value::String(literal_only),
@@ -70,15 +74,23 @@ Ok(rendered.into_authored_output())
 map.insert("block".to_string(), lazy_block);
 super_value = Some(Value::SafeString(output.0.clone()));
 .into());
+.and_then(|c| c.blank_html.clone())
 .and_then(|capture| capture.html)
 .is_some_and(|(literal, _)| !literal.to_string().is_empty())
 && new_value.to_string() != value.to_string()
 let literal = value.to_string();
+let literal = value.to_string();
+blank_html: if literal_blocked {
+blank_openings: Vec::new(),
 text.into()
+.and_then(|c| c.blank_html.clone())
 .and_then(|capture| capture.html)
 .is_some_and(|(literal, _)| !literal.to_string().is_empty())
 && new_value.to_string() != value.to_string()
 let literal = value.to_string();
+let literal = value.to_string();
+blank_html: if literal_blocked {
+blank_openings: Vec::new(),
 text.into()
 R::context_neutral("<!--dj-if-->".to_string())
 format!("-{namespace}")
@@ -141,6 +153,9 @@ return Err(DjangoRustError::TemplateError(format!(
 Ok((output.to_string()).into())
 let text = SPACELESS_RE.replace_all(content.trim(), "><").to_string();
 let output = content.into_authored_output();
+literal.blank_html = literal
+.blank_html
+.map(|literal| SPACELESS_RE.replace_all(literal.trim(), "><").to_string());
 literal.html = literal
 .html
 .map(|literal| SPACELESS_RE.replace_all(literal.trim(), "><").to_string());
@@ -185,12 +200,16 @@ Err(DjangoRustError::TemplateError(format!(
 .replace(&format!("\\{quote}"), &quote.to_string())
 .replace(&format!("\\{quote}"), &quote.to_string())
 Some(format!("{sign}{body}"))
+.and_then(|c| c.blank_html.clone())
 .and_then(|capture| capture.html)
 raw_arg[1..raw_arg.len() - 1].to_string()
 raw_arg.to_string()
 .is_some_and(|(literal, _)| !literal.to_string().is_empty())
 && new_value.to_string() != value.to_string()
 literal_value.map(|(value, _)| value.to_string())
+blank_html: if literal_blocked {
+blank_value.map(|(value, _)| value.to_string())
+blank_openings: Vec::new(),
 Value::Bool(b) => Some(Value::Integer(i64::from(*b))),
 let text = val.to_string();
 return Ok("0".to_string());
@@ -1013,9 +1032,15 @@ return DjangoRustError::TemplateError(message.to_string());
 return DjangoRustError::TemplateError(message.to_string());
 return DjangoRustError::TemplateError(message.to_string());
 DjangoRustError::TemplateError(format!(
+blank_html: Some(String::new()),
+blank_openings: Vec::new(),
 .flatten()
 let literal_only = match py_context.get_item("_djust_cached_literal_only") {
-literal_only,
+let blank_only = match py_context.get_item("_djust_cached_blank_only") {
+.contains("_djust_cached_literal_only")
+html: literal_only,
+blank_html: blank_only,
+blank_openings: Vec::new(),
 DjangoRustError::TemplateError(format!("Failed to convert content: {e}"))
 .map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
 DjangoRustError::TemplateError(format!("No block handler registered for tag: {name}"))
@@ -1077,9 +1102,17 @@ context.rs
 fn render_block_super(&self, ctx: &Context) -> crate::Result<String>;
 self.render_block_super(ctx).map(|html| {
 html: Some("\u{fffd}".to_owned()),
+blank_html: Some(String::new()),
+blank_openings: Vec::new(),
+pub blank_html: Option<String>,
+pub blank_openings: Vec<(usize, usize)>,
 pub fn flatten_authored_output(output: AuthoredOutput, text: String) -> AuthoredOutput {
 let literal = if output.0 == text {
 output.3.html
+let blank_html = if output.0 == text {
+output.3.blank_html
+blank_html,
+blank_openings: Vec::new(),
 _ => Err(pyo3::exceptions::PyKeyError::new_err(key.to_string())),
 let path = path.into();
 let namespace = namespace.into();
@@ -1242,41 +1275,68 @@ text.into()
 fn into_authored_output(self) -> djust_core::context::AuthoredOutput;
 text.to_owned()
 fn into_authored_output(self) -> djust_core::context::AuthoredOutput {
+blank_html: Some(String::new()),
+blank_openings: Vec::new(),
 output.0
 pub literal_only: Option<String>,
+pub blank_only: Option<String>,
+pub blank_offsets: Vec<(usize, usize)>,
 pub literal_offsets: Vec<(usize, usize)>,
 pub fn into_authored_output(self) -> djust_core::context::AuthoredOutput {
 self.html,
 html: self.literal_only,
+blank_html: self.blank_only,
+blank_openings: self.blank_offsets,
 openings: self.literal_offsets,
 .literal_only
+.blank_only
+let blank_offsets: std::collections::HashMap<_, _> =
+self.blank_offsets.iter().copied().collect();
 self.literal_offsets.iter().copied().collect();
+|| !blank_offsets
 literal_only: Some("\u{fffd}".to_owned()),
+blank_only: Some(String::new()),
+blank_offsets: Vec::new(),
 literal_offsets: Vec::new(),
 &self.html
 f.write_str(&self.html)
 html: text.to_owned(),
 literal_only: Some(text.to_owned()),
+blank_only: Some(text.to_owned()),
+blank_offsets: vec![(0, 0)],
 literal_offsets: vec![(0, 0)],
 let mut result = Self::from(text);
+result.blank_only = literal.clone();
 result.literal_only = literal;
 let mut result = Self::captured(text, literal.html);
+result.blank_only = literal.blank_html;
 let mut result = Self::from(text);
 result.literal_only = Some(result.html.clone());
+result.blank_only = Some(result.html.clone());
 result.literal_offsets = source
+result.blank_offsets = result.literal_offsets.clone();
 fn into_authored_output(self) -> djust_core::context::AuthoredOutput {
 Rendered::into_authored_output(self)
 html: output.0,
 literal_only: output.3.html,
+blank_only: output.3.blank_html,
+blank_offsets: output.3.blank_openings,
 literal_offsets: output.3.openings,
 Self::from_authored_output(djust_core::context::flatten_authored_output(
 self.into_authored_output(),
 let offset = self.html.len();
-if self.literal_only.is_none() || child.literal_only.is_none() {
+if self.literal_only.is_none()
+|| child.literal_only.is_none()
+|| self.blank_only.is_none()
+|| child.blank_only.is_none()
 self.literal_only = None;
+self.blank_only = None;
 if let (Some(output), Some(literal)) = (&mut self.literal_only, &child.literal_only) {
 self.literal_offsets.extend(
 .literal_offsets
+if let (Some(output), Some(literal)) = (&mut self.blank_only, &child.blank_only) {
+self.blank_offsets.extend(
+.blank_offsets
 self.html.push_str(&child.html);
 self.append(&Self::from(text.to_owned()));
 *id = format!("{identity}/{id}");
@@ -1287,6 +1347,8 @@ ctx.set("extra".into(), Value::String("Δ".into()));
 output.append(&Rendered::from("é😀".to_owned()));
 output.append(&Rendered::from(String::new()));
 assert_eq!(output.literal_offsets, vec![(6, 6)]);
+assert_eq!(output.blank_offsets, vec![(6, 0)]);
+output.blank_only.as_deref(),
 output.literal_only.as_deref(),
 assert_eq!(Rendered::default().literal_only.as_deref(), Some(""));
 Rendered::context_neutral("<!--dj-if-->".into())
@@ -1311,6 +1373,10 @@ flattened.literal_only.as_deref(),
 "record_provenance_flatten(",
 "literal_only",
 "literal_offsets",
+"blank_only",
+"blank_offsets",
+"blank_html",
+"blank_openings",
 ctx.set(format!("value{i}"), Value::String(value.into()));
 source.push_str(&format!("{{{{ value{i}|safe }}}}"));
 ctx.set("flag".into(), Value::Bool(true));

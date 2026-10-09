@@ -538,12 +538,21 @@ class TestTheProducerEnumerationIsComplete:
         question rather than three (#1646).
         """
         src = self.RENDERER.read_text()
-        assert src.count("items: items_safe,") == 6, (
+        assert src.count("items: items_safe,") == 9, (
             "an InputSafety literal writes `items` from something other than "
             "the threaded `items_safe` local — the enumeration below no "
             "longer covers every producer"
         )
-        assert src.count("filters::InputSafety {") == 6
+        assert src.count("filters::InputSafety {") == 9
+        # #3442 adds a second (blank) replay seed per renderer arm.
+        blanks = re.findall(
+            r"let mut blank_value =\s*.*?\.map\(\|text\| \{(.*?)\n\s*\}\);", src, re.S
+        )
+        assert len(blanks) == 3
+        for seed in blanks:
+            assert "Value::String(text)" in seed
+            assert "container: runtime_safe," in seed
+            assert "items: items_safe," in seed
         # #3430 adds one literal-only replay seed per existing renderer arm.
         # They hold a String (never a mixed sequence), read the SAME local as
         # the ordinary call, and introduce no new source of item safety.
@@ -574,6 +583,22 @@ class TestTheProducerEnumerationIsComplete:
             "literal_safety.container =",
             "literal_safety.items = crate::renderer::filter_output_items_are_safe(",
         ]
+
+    def test_blank_replay_forwards_and_folds_both_safety_channels(self) -> None:
+        src = (self.RENDERER.parent / "filters.rs").read_text()
+        helper = src.split("pub(crate) fn apply_filter_with_projections(", 1)[1].split("\n}\n", 1)[
+            0
+        ]
+        assert (
+            "arg_was_quoted,\n            *safety,\n            autoescape,\n            None,"
+            in helper
+        )
+        assert "let input_safe = safety.container;" in helper
+        assert (
+            "safety.container = crate::renderer::filter_output_is_safe(filter_name, safe, input_safe);"
+            in helper
+        )
+        assert "filter_output_items_are_safe(filter_name, safety.items, input_safe)" in helper
 
     def test_shared_dispatcher_only_preserves_item_safety(self) -> None:
         src = (self.RENDERER.parent / "filters.rs").read_text()

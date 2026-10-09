@@ -1561,6 +1561,7 @@ class _CachedProvenanceFragment(str):
     """
 
     literal_only: Optional[str] = None
+    blank_only: Optional[str] = None
     literal_blocked: bool = False
 
 
@@ -1661,6 +1662,11 @@ class CacheTagHandler:
             if isinstance(cached, _CachedProvenanceFragment)
             else None
         )
+        context["_djust_cached_blank_only"] = (
+            getattr(cached, "blank_only", None)
+            if isinstance(cached, _CachedProvenanceFragment)
+            else None
+        )
         return mark_safe(cached), (backend, key, expire_time)
 
     def after_body(self, args: List[str], content: str, context: Dict[str, Any], state: Any) -> str:
@@ -1674,6 +1680,7 @@ class CacheTagHandler:
         if "_djust_body_literal_only" in context:
             fragment = _CachedProvenanceFragment(content)
             fragment.literal_only = context["_djust_body_literal_only"]
+            fragment.blank_only = context.get("_djust_body_blank_only")
             fragment.literal_blocked = context.get("_djust_body_literal_blocked", False)
         backend.set(key, fragment, expire_time)
         return content

@@ -780,8 +780,51 @@ pub fn apply_filter_full_safe(
     )
 }
 
-/// Apply a replayable built-in to both runs after resolving its argument ONCE.
-/// Callers exclude custom/environment-dependent filters from the replay channel.
+/// Replay B with ordinary filters and P with separator protection. The actual
+/// page operand is evaluated once; replay is limited to built-ins by the caller.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn apply_filter_with_projections(
+    filter_name: &str,
+    value: &Value,
+    arg: Option<&str>,
+    context: Option<&Context>,
+    arg_was_quoted: bool,
+    input_safety: InputSafety,
+    autoescape: bool,
+    literal: Option<&mut (Value, InputSafety)>,
+    blank: Option<&mut (Value, InputSafety)>,
+) -> Result<(Value, bool)> {
+    if let Some((value, safety)) = blank {
+        let (next, safe) = apply_filter_with_literal(
+            filter_name,
+            value,
+            arg,
+            context,
+            arg_was_quoted,
+            *safety,
+            autoescape,
+            None,
+        )?;
+        let input_safe = safety.container;
+        safety.container = crate::renderer::filter_output_is_safe(filter_name, safe, input_safe);
+        safety.items =
+            crate::renderer::filter_output_items_are_safe(filter_name, safety.items, input_safe);
+        *value = next;
+    }
+    apply_filter_with_literal(
+        filter_name,
+        value,
+        arg,
+        context,
+        arg_was_quoted,
+        input_safety,
+        autoescape,
+        literal,
+    )
+}
+
+/// Apply P and the page filter after resolving their shared argument once.
+/// Callers exclude custom/environment-dependent filters from replay.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_filter_with_literal(
     filter_name: &str,

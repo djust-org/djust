@@ -90,18 +90,18 @@ def test_real_demo_registers_all_five_containers():
 
 
 @pytest.mark.parametrize(
-    "source,state",
+    "source,state,expected",
     [
-        ("<{{ t }}>x<{{ c }}>", {"t": "script", "c": "/script"}),
-        ("<!-{{ d }}- a>-{{ e }}>", {"d": "-", "e": "-"}),
+        ("<{{ t }}>x<{{ c }}>", {"t": "script", "c": "/script"}, 1),
+        ("<!-{{ d }}- a>-{{ e }}>", {"d": "-", "e": "-"}, 0),
     ],
 )
-def test_m1_boundary_assembled_context_documented_behaviour(source, state):
-    # U+FFFD prevents a value from assembling an opener in the literal-only tree.
+def test_m1_boundary_assembled_context_documented_behaviour(source, state, expected):
+    # B detects the split comment opener; a fully value-built tag stays opaque.
     rust = RustLiveView(source + TAG + "-->", [])
     rust.update_state(state)
     html, spans = rust.render_with_provenance()
-    assert len(authored_lazy_elements(html, spans)) == 1
+    assert len(authored_lazy_elements(html, spans)) == expected
 
 
 C = TAG
@@ -183,7 +183,6 @@ def test_review_corpus_authored_liveness(tmp_path, label):
             "lorem",
             "join chars",
             "straddle tag2",
-            "straddle comment",
             "default literal",
             "now",
             "trans",
@@ -228,7 +227,6 @@ def test_http_review_corpus_authored_liveness(tmp_path, settings, label):
         "lorem",
         "join chars",
         "straddle tag2",
-        "straddle comment",
         "default literal",
         "now",
         "trans",
@@ -633,7 +631,7 @@ def test_round5_http_flatten_context_and_cache_hits(tmp_path, settings, body, ex
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("kind", ["legacy", "open", "same-byte-overwrite"])
+@pytest.mark.parametrize("kind", ["legacy", "open", "same-byte-overwrite", "single-projection"])
 def test_round5_unknown_or_open_cache_metadata_fails_closed(kind):
     from django.core.cache import caches
     from django.core.cache.utils import make_template_fragment_key
@@ -643,7 +641,8 @@ def test_round5_unknown_or_open_cache_metadata_fails_closed(kind):
     backend.clear()
     key = make_template_fragment_key("round5_legacy", [])
     fragment = _CachedProvenanceFragment("<!--cached-->")
-    fragment.literal_only = "<!--cached" if kind == "open" else "cached"
+    fragment.literal_only = "<!--cached" if kind in {"open", "single-projection"} else "cached"
+    fragment.blank_only = fragment.literal_only if kind == "open" else None
     backend.set(key, fragment if kind != "legacy" else str(fragment), 60)
     if kind == "same-byte-overwrite":
         # A closed tracked result must not survive an ordinary external writer
@@ -1289,3 +1288,125 @@ def test_byte_identical_custom_capture_keeps_split_closer_http(v, cached):
         assert len(ids) == 1
         assert statuses == [200]
         assert mounts == 0
+
+
+# All 25 Verification-3 HTTP revivals, retained as strict mount regressions.
+TWO_PROJECTION_ROWS = [
+    ("<{v}!-- v=''", "<{{ v }}!--{{ q|safe }}__HIDDEN__-->", "-->", {"v": ""}),
+    ("<!{v}-- > v=''", "<!{{ v }}-- >{{ q|safe }}__HIDDEN__-->", "-->", {"v": ""}),
+    ("<!-{v}- > v=''", "<!-{{ v }}- >{{ q|safe }}__HIDDEN__-->", "-->", {"v": ""}),
+    ("<{v}script> v=''", "<{{ v }}script>{{ q|safe }}__HIDDEN__</script>", "</script>", {"v": ""}),
+    ("<scr{v}ipt> v=''", "<scr{{ v }}ipt>{{ q|safe }}__HIDDEN__</script>", "</script>", {"v": ""}),
+    ("<script{v}> v=''", "<script{{ v }}>{{ q|safe }}__HIDDEN__</script>", "</script>", {"v": ""}),
+    (
+        "<textarea{v}> v=''",
+        "<textarea{{ v }}>{{ q|safe }}__HIDDEN__</textarea>",
+        "</textarea>",
+        {"v": ""},
+    ),
+    (
+        "<text{v}area> v=''",
+        "<text{{ v }}area>{{ q|safe }}__HIDDEN__</textarea>",
+        "</textarea>",
+        {"v": ""},
+    ),
+    ("<title{v}> v=''", "<title{{ v }}>{{ q|safe }}__HIDDEN__</title>", "</title>", {"v": ""}),
+    ("<xmp{v}> v=''", "<xmp{{ v }}>{{ q|safe }}__HIDDEN__</xmp>", "</xmp>", {"v": ""}),
+    ("<style{v}> v=''", "<style{{ v }}>{{ q|safe }}__HIDDEN__</style>", "</style>", {"v": ""}),
+    (
+        "<template{v}> v=''",
+        "<template{{ v }}>{{ q|safe }}__HIDDEN__</template>",
+        "</template>",
+        {"v": ""},
+    ),
+    (
+        "<noscript{v}> v=''",
+        "<noscript{{ v }}>{{ q|safe }}__HIDDEN__</noscript>",
+        "</noscript>",
+        {"v": ""},
+    ),
+    (
+        "svg <![{v}CDATA[ > v=''",
+        "<svg><![{{ v }}CDATA[ >{{ q|safe }}__HIDDEN__]]></svg>",
+        "]]>",
+        {"v": ""},
+    ),
+    (
+        "svg <!{v}[CDATA[ > v=''",
+        "<svg><!{{ v }}[CDATA[ >{{ q|safe }}__HIDDEN__]]></svg>",
+        "]]>",
+        {"v": ""},
+    ),
+    (
+        "filter cut:x <!-{v}- > v=''",
+        '{% filter cut:"x" %}<!-{{ v }}- >{% endfilter %}{{ q|safe }}__HIDDEN__-->',
+        "-->",
+        {"v": ""},
+    ),
+    (
+        "filter cut:x <!x{v}-- > v=''",
+        '{% filter cut:"x" %}<!x{{ v }}-- >{% endfilter %}{{ q|safe }}__HIDDEN__-->',
+        "-->",
+        {"v": ""},
+    ),
+    (
+        "filter title <{v}script> v=''",
+        "{% filter title %}<{{ v }}script>{% endfilter %}{{ q|safe }}__HIDDEN__</script>",
+        "</script>",
+        {"v": ""},
+    ),
+    (
+        "filter escape <!{v}-- v=''",
+        "{% autoescape off %}{% filter lower %}<!{{ v }}-- >{% endfilter %}{% endautoescape %}{{ q|safe }}__HIDDEN__-->",
+        "-->",
+        {"v": ""},
+    ),
+    (
+        "spaceless <!{v}-- v=''",
+        "{% spaceless %}<!{{ v }}-- >{% endspaceless %}{{ q|safe }}__HIDDEN__-->",
+        "-->",
+        {"v": ""},
+    ),
+    ("<!{v}{v}-- v=''", "<!{{ v }}{{ v }}-- >{{ q|safe }}__HIDDEN__-->", "-->", {"v": ""}),
+    ("<{v}!-- v=x", "<{{ v }}!--{{ q|safe }}__HIDDEN__-->", "-->", {"v": "x"}),
+    (
+        "filter cut:x <!-{v}- > v=x",
+        '{% filter cut:"x" %}<!-{{ v }}- >{% endfilter %}{{ q|safe }}__HIDDEN__-->',
+        "-->",
+        {"v": "x"},
+    ),
+    (
+        "filter cut:x <!x{v}-- > v=x",
+        '{% filter cut:"x" %}<!x{{ v }}-- >{% endfilter %}{{ q|safe }}__HIDDEN__-->',
+        "-->",
+        {"v": "x"},
+    ),
+    (
+        "authored FFFD + cut",
+        '{% filter cut:"�" %}<!�-- >{% endfilter %}{{ q|safe }}__HIDDEN__-->',
+        "-->",
+        {"v": ""},
+    ),
+]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "label,body,closer,state", TWO_PROJECTION_ROWS, ids=[r[0] for r in TWO_PROJECTION_ROWS]
+)
+@pytest.mark.parametrize("cached", [False, True])
+def test_two_projections_reject_split_openers_and_authored_fffd(label, body, closer, state, cached):
+    from django.core.cache import cache
+
+    cache.clear()
+    body = body.replace("__HIDDEN__", HIDDEN)
+    if cached:
+        body = "{% load cache %}{% cache 60 two_projections %}" + body + "{% endcache %}"
+    template = "<div dj-root>" + TAG + body + "</div>"
+    for q in (closer, "x"):
+        cache.clear()
+        for _ in range(2):  # cache miss and hit carry both projections
+            ids, statuses, mounts = run(template, {"q": q, **state})
+            assert len(ids) == 1, label
+            assert statuses == [200]
+            assert mounts == 0

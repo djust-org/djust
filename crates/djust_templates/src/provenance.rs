@@ -51,6 +51,8 @@ impl RenderOutput for String {
             djust_core::context::LiteralOutput {
                 blocked: false,
                 html: Some(String::new()),
+                blank_html: Some(String::new()),
+                blank_openings: Vec::new(),
                 openings: Vec::new(),
             },
         )
@@ -77,6 +79,9 @@ pub struct Rendered {
     pub origins: Vec<(usize, usize, usize, String)>,
     /// None means a cached/captured fragment lacks literal metadata: fail closed.
     pub literal_only: Option<String>,
+    /// Blank projection B, independent of placeholder projection P above.
+    pub blank_only: Option<String>,
+    pub blank_offsets: Vec<(usize, usize)>,
     /// Authored opening byte in HTML -> corresponding literal-only byte.
     pub literal_offsets: Vec<(usize, usize)>,
 }
@@ -97,14 +102,16 @@ impl Rendered {
             djust_core::context::LiteralOutput {
                 blocked: self.literal_blocked,
                 html: self.literal_only,
+                blank_html: self.blank_only,
+                blank_openings: self.blank_offsets,
                 openings: self.literal_offsets,
             },
         )
     }
     /// Recheck source liveness on the branch that actually rendered. Literal
     /// expression bytes participate, but other values cannot close that context.
-    /// Each non-literal occurrence contributes U+FFFD so literals cannot join.
-    /// Do this once on the complete result, never on incomplete include/block
+    /// Require liveness in B (blank opaque occurrences) and P (U+FFFD).
+    /// Parse each once on the complete result, never on incomplete include/block
     /// fragments. The ordinary final-HTML survival check remains necessary.
     pub fn retain_live_authority(&mut self) {
         if self.origins.is_empty() {
@@ -123,13 +130,32 @@ impl Rendered {
             .unwrap_or_default();
         #[cfg(not(feature = "liveview"))]
         let starts: std::collections::HashSet<usize> = Default::default();
+        #[cfg(feature = "liveview")]
+        let blank_starts: std::collections::HashSet<_> = self
+            .blank_only
+            .as_ref()
+            .map(|literal| {
+                djust_vdom::lazy_provenance::lazy_elements(literal, &[(0, literal.len())])
+                    .into_iter()
+                    .map(|e| e.start)
+                    .collect()
+            })
+            .unwrap_or_default();
+        #[cfg(not(feature = "liveview"))]
+        let blank_starts: std::collections::HashSet<usize> = Default::default();
+        let blank_offsets: std::collections::HashMap<_, _> =
+            self.blank_offsets.iter().copied().collect();
         let offsets: std::collections::HashMap<_, _> =
             self.literal_offsets.iter().copied().collect();
         let rejected: std::collections::HashSet<_> = self
             .origins
             .iter()
             .filter(|(a, _, offset, _)| {
-                *offset == 0 && !offsets.get(a).is_some_and(|offset| starts.contains(offset))
+                *offset == 0
+                    && (!offsets.get(a).is_some_and(|offset| starts.contains(offset))
+                        || !blank_offsets
+                            .get(a)
+                            .is_some_and(|offset| blank_starts.contains(offset)))
             })
             .map(|(a, _, _, _)| *a)
             .collect();
@@ -170,6 +196,8 @@ impl From<String> for Rendered {
             authored: Vec::new(),
             origins: Vec::new(),
             literal_only: Some("\u{fffd}".to_owned()),
+            blank_only: Some(String::new()),
+            blank_offsets: Vec::new(),
             literal_offsets: Vec::new(),
         }
     }
@@ -193,6 +221,8 @@ impl RenderOutput for Rendered {
             literal_blocked: false,
             html: text.to_owned(),
             literal_only: Some(text.to_owned()),
+            blank_only: Some(text.to_owned()),
+            blank_offsets: vec![(0, 0)],
             literal_offsets: vec![(0, 0)],
             origins: if text.to_ascii_lowercase().contains("dj-view") {
                 vec![(0, text.len(), 0, String::new())]
@@ -208,11 +238,13 @@ impl RenderOutput for Rendered {
     }
     fn captured(text: String, literal: Option<String>) -> Self {
         let mut result = Self::from(text);
+        result.blank_only = literal.clone();
         result.literal_only = literal;
         result
     }
     fn captured_projection(text: String, literal: LiteralOutput) -> Self {
         let mut result = Self::captured(text, literal.html);
+        result.blank_only = literal.blank_html;
         result.literal_blocked = literal.blocked;
         result
     }
@@ -222,6 +254,7 @@ impl RenderOutput for Rendered {
     fn context_literal(text: String) -> Self {
         let mut result = Self::from(text);
         result.literal_only = Some(result.html.clone());
+        result.blank_only = Some(result.html.clone());
         result
     }
     fn source_text(text: &str, source: &SourceText) -> Self {
@@ -233,6 +266,7 @@ impl RenderOutput for Rendered {
             .filter(|(_, _, offset, _)| *offset == 0)
             .map(|(a, _, _, _)| (*a, *a))
             .collect();
+        result.blank_offsets = result.literal_offsets.clone();
         result.authored.clear();
         let mut cursor = 0;
         for &offset in &source.inert_openings {
@@ -256,6 +290,8 @@ impl RenderOutput for Rendered {
             authored: output.1.into_iter().map(|(a, b)| a..b).collect(),
             origins: output.2,
             literal_only: output.3.html,
+            blank_only: output.3.blank_html,
+            blank_offsets: output.3.blank_openings,
             literal_offsets: output.3.openings,
         }
     }
@@ -274,15 +310,30 @@ impl RenderOutput for Rendered {
     }
     fn append(&mut self, child: &Self) {
         let offset = self.html.len();
-        if self.literal_only.is_none() || child.literal_only.is_none() {
+        if self.literal_only.is_none()
+            || child.literal_only.is_none()
+            || self.blank_only.is_none()
+            || child.blank_only.is_none()
+        {
             // Unknown cache/custom-tag bytes can invalidate earlier elements.
             self.literal_only = None;
+            self.blank_only = None;
         } else if !self.literal_blocked {
             if let (Some(output), Some(literal)) = (&mut self.literal_only, &child.literal_only) {
                 let literal_offset = output.len();
                 self.literal_offsets.extend(
                     child
                         .literal_offsets
+                        .iter()
+                        .map(|(a, b)| (a + offset, b + literal_offset)),
+                );
+                output.push_str(literal);
+            }
+            if let (Some(output), Some(literal)) = (&mut self.blank_only, &child.blank_only) {
+                let literal_offset = output.len();
+                self.blank_offsets.extend(
+                    child
+                        .blank_offsets
                         .iter()
                         .map(|(a, b)| (a + offset, b + literal_offset)),
                 );
@@ -348,6 +399,11 @@ mod tests {
         output.append(&Rendered::from(String::new()));
         output.append(&Rendered::authored("<div dj-view=\"app.C\" dj-lazy></div>"));
         assert_eq!(output.literal_offsets, vec![(6, 6)]);
+        assert_eq!(output.blank_offsets, vec![(6, 0)]);
+        assert_eq!(
+            output.blank_only.as_deref(),
+            Some("<div dj-view=\"app.C\" dj-lazy></div>")
+        );
         assert_eq!(
             output.literal_only.as_deref(),
             Some("\u{fffd}\u{fffd}<div dj-view=\"app.C\" dj-lazy></div>")
@@ -461,6 +517,10 @@ mod tests {
                         "record_provenance_flatten(",
                         "literal_only",
                         "literal_offsets",
+                        "blank_only",
+                        "blank_offsets",
+                        "blank_html",
+                        "blank_openings",
                     ]
                     .iter()
                     .any(|needle| line.contains(needle))

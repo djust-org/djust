@@ -95,9 +95,8 @@ explicit allow-list, distinct from evaluation of fully literal expressions:
 
 - `lower`, `upper`, `title`, `capfirst`: Unicode text casing, with no locale lookup
   or truthiness-based fallback output.
-- `cut`: text removal using a literal-derived argument, applied separately
-  between U+FFFD separators so replay cannot delete or match across a value
-  placeholder. Authored U+FFFD is also preserved conservatively in this replay.
+- `cut`: ordinary text removal in B; in P, removal separately between U+FFFD
+  separators so replay cannot delete or match across opaque or authored U+FFFD.
 - `escape`, `force_escape`: HTML escaping, using the same input safety and
   autoescape policy as the page filter call.
 - `linebreaksbr`: newline-to-`<br>` conversion;
@@ -120,29 +119,38 @@ and still require final-page survival. Escaping that erases an authored hiding
 context also establishes a cutoff. Unknown cache metadata continues to fail
 closed for the complete render, as do unknown byte changes from custom block tags.
 
-During a tracked render, the renderer also composes a literal-only rendering of
-exactly the selected branch and loop iterations. Authored literal bytes and
-literal-derived expression output are kept. Every non-literal value occurrence contributes a single U+FFFD replacement
-character, even when its page output is empty. Opaque tag results also use
-this placeholder, including empty results from non-emitting tags such as
-`load`, template comments, `resetcycle` and assignments. Renderer-owned neutral markers
-contribute the empty string. U+FFFD occupies three UTF-8 bytes; offset mappings
-use byte lengths.
-Flattened captures contribute their transformed literal-only content with values
-replaced by U+FFFD; flattening never grants authority.
-Each authored container's opening byte maps to its offset in that rendering.
+During a tracked render, the renderer composes two literal-only projections of
+exactly the selected branch and loop iterations. Authored bytes and literal-derived
+expression output are kept in both. Projection **B (blank)** replaces every
+non-literal value occurrence and opaque tag result with the empty string.
+Projection **P (placeholder)** replaces each with a single U+FFFD, even when the
+page output is empty. Non-emitting tags such as `load`, template comments,
+`resetcycle` and assignments are opaque results; renderer-owned neutral markers
+contribute no bytes in either projection. Offset mappings use UTF-8 byte lengths.
+Flattened captures carry both transformed projections, without start-tag authority.
 
-When authored lazy containers exist, html5ever parses the complete literal-only
-rendering once, using the same token-correlated RcDom tree and live-element
-predicate as the final-page (E) check. A container registers only if its own
-start tag creates a live element in **both** the literal-only tree and the
-final-page tree. Comments, raw text, ignored tags and inert template contents
-cannot register. A later authored closer can restore liveness while literal
-context remains known. The explicit cutoff for uncertain transforms is permanent;
-it is not a replacement for HTML5 tree parsing. Untracked
-pages and tracked pages without authored lazy candidates need no extra parse.
+B replays `cut` normally. P's `cut` operates separately on the runs between U+FFFD
+characters and preserves every U+FFFD, including template-written characters.
+Thus P cannot join literal bytes across an opaque occurrence; B still detects an
+opener created by cutting a template-written U+FFFD (for example `<!�-- >` under
+`cut:"�"`). No sentinel is reserved in authored text. The choice can conservatively
+refuse containers when an authored replacement character is cut from a closer.
 
-Cache fragments store their literal-only bytes alongside fragment text on the
+When authored lazy containers exist, html5ever parses each complete projection
+once, using the token-correlated RcDom live-element predicate used by the existing
+final-page **E** check. A container registers only if its own authored start tag
+creates a live element in **B, P and E**. Blank detects split openers preserved by
+empty page values; placeholder detects split closers assembled by removing values.
+Comments, raw text, ignored tags and inert template contents cannot register.
+A later authored closer can restore liveness while context is known; the explicit
+cutoff for uncertain transforms is permanent. Untracked pages and tracked pages
+without authored lazy candidates require neither additional parse. Parsing feeds
+non-candidate regions in bulk with token correlation disabled, and candidate
+regions at exact delimiter boundaries. The complete HTML still passes through
+the tokenizer and tree builder; no context or subtree is skipped. Script and encoding-indicator feed
+suspensions are drained before changing correlation offsets.
+
+Cache fragments store both literal-only projections alongside fragment text on the
 same cached string object, atomically under Django's usual key. Misses compute
 this metadata even during plain/WebSocket rendering. Hits reuse it without
 rendering the body. Legacy plain entries, external overwrites and serializers
@@ -157,22 +165,21 @@ Renderer-owned neutral marker bytes do not count as values. These rules concern
 rendered content with provenance; ordinary view values and expression operands
 have no authored-render sideband, as described below.
 
-Liveness is computed on authored text (template literals and literal expression
-output) in the rendered branch. Non-literal output, including view-context data,
-framework tags and HTML-producing filters applied to values, is replaced by
-a single U+FFFD character per occurrence. Such output does not break authority for following containers merely because it contains `<`, `>`, quotes or `--`.
+Liveness models template text and literal expression output on the rendered branch,
+with opaque output replaced as described above. Ordinary attribute interpolation
+and value output containing `<`, `>`, quotes or `--` do not by themselves drop
+following-container authority. Both projections can conservatively refuse a live
+page container: for example an empty opaque value between pieces of an authored
+closer leaves that closer split in P. Empty opaque tag results behave the same way.
 
-A container whose hiding context is produced by a non-literal value (view-context
-data) is not modelled by this liveness computation. The replacement character prevents authored bytes across a value from joining
-into an opener, closer or tag absent from the page. A value rendered empty can
-therefore cause a false negative: an actual closer remains split in the
-literal-only tree. Empty opaque tag results can cause the same refusal when
-a tag occurs between the authored pieces of a closer. This conservative refusal
-is intentional. Authors
-must not hide lazy containers with values. For example, a value emitting `<!--` followed by a value emitting `-->`, or
-`<{{ tag }}>` with `tag="script"`, or a split opener such as
-`<!-{{ d }}-` with `d="-"`, can leave a following
-authored container registered when it survives in the final page. An expression such as
+The two projections do not model all possible non-literal values or earlier HTML
+contexts produced by those values. Authors must not hide lazy containers with
+values. For example a value emitting `<!--` followed by a value emitting `-->`,
+`<{{ tag }}>` with `tag="script"`, or `<scr{{ middle }}>` with `middle="ipt"` can
+hide a container until another value closes it; neither B nor P recreates that
+value-generated opener. A following authored container can register if it is live
+in B, P and E. This is not an all-values tokenizer proof.
+An expression such as
 `{{ "<!--"|add:value|safe }}` is also opaque because its filter argument is a
 value, even though its input is quoted literal text; a value can close that
 expression's opener. The final-page (E) survival check
@@ -186,8 +193,8 @@ iterations. This check is applied once to the complete render. An authored
 closer in a skipped branch cannot make a following container authoritative;
 a value cannot
 supply the closer for an inert context opened by literal text or literal-derived
-expression output. Only containers live in both the
-literal-only and final-page trees keep start-tag authority and origin addresses.
+expression output. Only containers live in all three trees (B, P and E) keep
+start-tag authority and origin addresses.
 Source annotation grants no liveness verdict; inactive branches do not determine
 the rendered branch's liveness.
 
@@ -267,6 +274,6 @@ or an explicit quoted trigger, and keep interpolations outside authority bytes.
 
 M1 split end tags (`</textarea{{ v }}>`, `</script{{ v }}>`) and split comment
 closers (`--{{ v }}>`), including byte-identical custom-filter captures (N4),
-remain split by U+FFFD in the literal-only tree. They cannot restore authority
+remain split by U+FFFD in P (and are blank in B). They cannot restore authority
 for containers hidden by an authored opener. Value-generated hiding contexts
 remain outside the model as described above.

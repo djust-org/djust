@@ -588,7 +588,9 @@ class TestEveryRenderSiteThreadsTheInputSafety:
         # method arguments run once. Enumerate BOTH entry points: a new direct
         # caller must not escape the safety inventory by bypassing the helper.
         return re.findall(
-            r"filters::apply_filter_(?:full_safe|with_literal)\(\s*(.*?)\)\?;", src, re.S
+            r"filters::apply_filter_(?:full_safe|with_literal|with_projections)\(\s*(.*?)\)\?;",
+            src,
+            re.S,
         )
 
     def test_there_are_exactly_three_and_every_one_passes_runtime_safe(self):

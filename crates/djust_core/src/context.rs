@@ -664,6 +664,8 @@ pub trait BlockSuperSource: std::fmt::Debug + Send + Sync {
                 LiteralOutput {
                     blocked: false,
                     html: Some("\u{fffd}".to_owned()),
+                    blank_html: Some(String::new()),
+                    blank_openings: Vec::new(),
                     openings: Vec::new(),
                 },
             )
@@ -678,6 +680,9 @@ pub struct LiteralOutput {
     /// A permanent forward authority cutoff, distinct from unknown cache metadata.
     pub blocked: bool,
     pub html: Option<String>,
+    /// Blank projection: opaque occurrences contribute no bytes.
+    pub blank_html: Option<String>,
+    pub blank_openings: Vec<(usize, usize)>,
     pub openings: Vec<(usize, usize)>,
 }
 
@@ -697,12 +702,19 @@ pub fn flatten_authored_output(output: AuthoredOutput, text: String) -> Authored
     } else {
         None
     };
+    let blank_html = if output.0 == text {
+        output.3.blank_html
+    } else {
+        None
+    };
     (
         text,
         Vec::new(),
         Vec::new(),
         LiteralOutput {
             blocked: output.3.blocked,
+            blank_html,
+            blank_openings: Vec::new(),
             html: literal,
             openings: Vec::new(),
         },
