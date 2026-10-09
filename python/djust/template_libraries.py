@@ -1553,6 +1553,16 @@ def _stub_template_with(string_if_invalid: str, debug: bool) -> Any:
     return template
 
 
+class _CachedProvenanceFragment(str):
+    """Fragment bytes and cutoff stored atomically under Django's usual key.
+
+    A backend that strips subclass metadata returns an ordinary string, which
+    is uncertain on a tracked hit. Django can still consume the string itself.
+    """
+
+    provenance_cutoff: bool = True
+
+
 class CacheTagHandler:
     """``{% cache expiry fragment [vary…] [using="alias"] %}…{% endcache %}``.
 
@@ -1636,6 +1646,13 @@ class CacheTagHandler:
         # round-trip the ``SafeString`` through pickle; Redis and memcached do
         # not, and the tag must not emit ``&lt;b&gt;`` on the backends that
         # store bytes.
+        # Metadata belongs to this exact cached object. A separate side key
+        # could survive an external overwrite with identical bytes but different
+        # provenance. Old/plain entries or serializers dropping metadata are
+        # uncertain, so only an explicit closed tracked result avoids cutoff.
+        context["_djust_cached_provenance_cutoff"] = not (
+            isinstance(cached, _CachedProvenanceFragment) and cached.provenance_cutoff is False
+        )
         return mark_safe(cached), (backend, key, expire_time)
 
     def after_body(self, args: List[str], content: str, context: Dict[str, Any], state: Any) -> str:
@@ -1645,7 +1662,11 @@ class CacheTagHandler:
         single-phase version stored.
         """
         backend, key, expire_time = state
-        backend.set(key, content, expire_time)
+        fragment = content
+        if "_djust_body_provenance_cutoff" in context:
+            fragment = _CachedProvenanceFragment(content)
+            fragment.provenance_cutoff = context["_djust_body_provenance_cutoff"]
+        backend.set(key, fragment, expire_time)
         return content
 
     def _plan(self, args: List[str], context: Dict[str, Any]) -> Tuple[Any, str, Any]:

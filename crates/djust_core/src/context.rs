@@ -672,16 +672,113 @@ pub type AuthoredOutput = (
     Option<usize>,       // First position after which lazy authority fails closed.
 );
 
-/// The single fail-closed rule for rendered content becoming opaque. Markers
+/// The single fail-closed rule for rendered content becoming opaque: scan
+/// authored literal bytes with values blanked, and cut off iff possibly open.
+/// Covers pure-literal and mixed runs alike. Markers
 /// are renderer-owned neutral bytes, not values. Never clear an inner cutoff,
 /// even if the transform removes all bytes. Byte equality is irrelevant here:
 /// callers preserving boundaries do not flatten and must bypass this helper.
 pub fn flatten_authored_output(output: AuthoredOutput, text: String) -> AuthoredOutput {
-    let literal = output.3.iter().map(|(a, b)| b - a).sum::<usize>();
-    let neutral = output.4.iter().map(|(a, b)| b - a).sum::<usize>();
-    let mixed = literal > 0 && literal + neutral < output.0.len();
-    let cutoff = (mixed || output.5.is_some()).then_some(0);
+    let mut authored = vec![b' '; output.0.len()];
+    for &(start, end) in &output.3 {
+        authored[start..end].copy_from_slice(&output.0.as_bytes()[start..end]);
+    }
+    let cutoff = (output.5.is_some() || literal_context_is_open(&authored)).then_some(0);
     (text, Vec::new(), Vec::new(), Vec::new(), Vec::new(), cutoff)
+}
+
+/// Conservative terminal-state scan of authored bytes with opaque bytes blanked.
+/// This is deliberately not an HTML parser: unsupported tree-builder contexts,
+/// malformed markup and script escape states fail closed rather than guessing.
+pub fn literal_context_is_open(bytes: &[u8]) -> bool {
+    let lower = bytes.to_ascii_lowercase();
+    let mut i = 0;
+    let mut raw: Option<&[u8]> = None;
+    while i < lower.len() {
+        if lower[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        if let Some(name) = raw {
+            if name == b"script" && lower[i..].starts_with(b"<!--") {
+                return true; // HTML5 script escaped/double-escaped states.
+            }
+            if !lower[i..].starts_with(b"</")
+                || !lower[i + 2..].starts_with(name)
+                || !lower
+                    .get(i + 2 + name.len())
+                    .is_some_and(|b| b.is_ascii_whitespace() || *b == b'/' || *b == b'>')
+            {
+                i += 1;
+                continue;
+            }
+        } else if lower[i..].starts_with(b"<!--") {
+            let Some(end) = lower[i + 4..].windows(3).position(|w| w == b"-->") else {
+                return true;
+            };
+            if lower[i + 4..i + 4 + end].contains(&b'<')
+                || lower[i + 4..].starts_with(b">")
+                || lower[i + 4..].starts_with(b"->")
+            {
+                return true;
+            }
+            i += 4 + end + 3;
+            continue;
+        }
+        let closing = lower[i..].starts_with(b"</");
+        let start = i + if closing { 2 } else { 1 };
+        if !lower.get(start).is_some_and(u8::is_ascii_alphabetic) {
+            // Includes CDATA, bogus comments and declarations. Even a closed
+            // declaration is uncertain here; no false data-state verdict.
+            return true;
+        }
+        let mut end = start;
+        while lower
+            .get(end)
+            .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'-' || *b == b':')
+        {
+            end += 1;
+        }
+        let name = &lower[start..end];
+        if !lower
+            .get(end)
+            .is_some_and(|b| b.is_ascii_whitespace() || *b == b'/' || *b == b'>')
+        {
+            return true;
+        }
+        let mut quote = None;
+        let mut j = end;
+        while j < lower.len() {
+            let b = lower[j];
+            if let Some(q) = quote {
+                if b == q {
+                    quote = None;
+                }
+            } else if b == b'\'' || b == b'"' {
+                quote = Some(b);
+            } else if b == b'>' {
+                break;
+            } else if b == b'<' {
+                return true;
+            }
+            j += 1;
+        }
+        if j == lower.len() {
+            return true;
+        }
+        i = j + 1;
+        if raw.is_some() {
+            raw = None;
+        } else if !closing {
+            match name {
+                b"plaintext" | b"template" | b"select" | b"svg" | b"math" => return true,
+                b"script" | b"style" | b"textarea" | b"title" | b"xmp" | b"iframe" | b"noembed"
+                | b"noframes" | b"noscript" => raw = Some(name),
+                _ => {}
+            }
+        }
+    }
+    raw.is_some()
 }
 
 /// The `block` a PYTHON-BRIDGED tag receives while a `{{ block.super }}` is
@@ -1610,6 +1707,13 @@ impl Context {
             }
         }
         output.0
+    }
+
+    /// Snapshot the pending cutoff without consuming the per-node notification.
+    pub fn pending_provenance_flatten(&self) -> bool {
+        self.provenance_flatten
+            .as_ref()
+            .is_some_and(|pending| pending.load(std::sync::atomic::Ordering::Relaxed))
     }
 
     pub fn take_provenance_flatten(&self) -> bool {
@@ -4661,5 +4765,128 @@ mod tests {
             4,
             "the call is over: a retained handle renders nothing"
         );
+    }
+}
+
+#[cfg(test)]
+mod literal_context_differential_tests {
+    use super::literal_context_is_open;
+    use html5ever::{ns, parse_fragment, tendril::TendrilSink, LocalName, QualName};
+    use markup5ever_rcdom::{Handle, NodeData, RcDom};
+
+    fn sentinel_live(node: &Handle) -> bool {
+        if let NodeData::Element { attrs, .. } = &node.data {
+            if attrs.borrow().iter().any(|a| {
+                a.name.local == html5ever::local_name!("id") && a.value.as_ref() == "sentinel"
+            }) {
+                return true;
+            }
+        }
+        // Template contents are held separately by RcDom, not live children.
+        node.children.borrow().iter().any(sentinel_live)
+    }
+
+    #[test]
+    fn literal_context_scanner_differential_20000() {
+        let atoms = [
+            "text",
+            "é",
+            "&lt;",
+            "&#60;",
+            "&quot;",
+            "&",
+            "<",
+            "</",
+            "<div",
+            "</div",
+            "<div>",
+            "</div>",
+            "<nav><a>",
+            "</a></nav>",
+            "<a x=",
+            "<a x='",
+            "<a x=\"",
+            "'",
+            "\"",
+            ">",
+            "/>",
+            "<!--",
+            "<!-->",
+            "<!--->",
+            "-->",
+            "--!>",
+            "<![CDATA[",
+            "]]>",
+            "<?bogus",
+            "<!bogus>",
+            "<script>",
+            "</script>",
+            "<script",
+            "</script x='>'>",
+            "<style>",
+            "</style>",
+            "<textarea>",
+            "</textarea>",
+            "<title>",
+            "</title>",
+            "<xmp>",
+            "</xmp>",
+            "<iframe>",
+            "</iframe>",
+            "<noembed>",
+            "</noembed>",
+            "<noframes>",
+            "</noframes>",
+            "<noscript>",
+            "</noscript>",
+            "<plaintext>",
+            "<template>",
+            "</template>",
+            "<select>",
+            "</select>",
+            "<svg>",
+            "</svg>",
+            "<SCRIPT/>",
+            "</ScRiPt >",
+            "<a x='>'>",
+            "<a x=\"<\">",
+            "\0",
+            " ",
+            "\n",
+        ];
+        let mut seed = 0x3442_0005_u64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed as usize
+        };
+        let mut conservative = 0;
+        let mut live_count = 0;
+        let mut open_count = 0;
+        for _ in 0..20_000 {
+            let count = 1 + next() % 16;
+            let mut fragment = String::new();
+            for _ in 0..count {
+                fragment.push_str(atoms[next() % atoms.len()]);
+            }
+            let open = literal_context_is_open(fragment.as_bytes());
+            let html = format!("{fragment}<div id=sentinel></div>");
+            let dom = parse_fragment(
+                RcDom::default(),
+                Default::default(),
+                QualName::new(None, ns!(html), LocalName::from("div")),
+                vec![],
+                false,
+            )
+            .one(html);
+            let live = sentinel_live(&dom.document);
+            assert!(open || live, "false closed: {fragment:?}");
+            live_count += usize::from(live);
+            open_count += usize::from(open);
+            conservative += usize::from(open && live);
+        }
+        println!("differential: 20000 fragments, {live_count} live, {open_count} open, {conservative} open-but-live ({:.2}% of all, {:.2}% of live), 0 false closed",
+            conservative as f64 / 200.0, conservative as f64 * 100.0 / live_count as f64);
     }
 }

@@ -1391,7 +1391,7 @@ fn call_lazy_body_block_tag<L: TemplateLoader>(
     let raw_py = context.render_raw_py_objects();
     let autoescape = context.autoescape();
 
-    let (answered, state) = crate::registry::call_block_handler_before_body(
+    let (answered, state, cutoff) = crate::registry::call_block_handler_before_body(
         name,
         &resolved_args,
         &context_map,
@@ -1400,6 +1400,12 @@ fn call_lazy_body_block_tag<L: TemplateLoader>(
     )
     .map_err(|e| handler_call_error("Block tag", name, e))?;
     if let Some(html) = answered {
+        if cutoff {
+            context.record_provenance_flatten(
+                (String::new(), vec![], vec![], vec![], vec![], Some(0)),
+                String::new(),
+            );
+        }
         return Ok((html, Vec::new()));
     }
 
@@ -1411,11 +1417,18 @@ fn call_lazy_body_block_tag<L: TemplateLoader>(
     // halves of one call — a `{% cache %}` looking a key up under one context
     // and storing under another would store a key nobody can find again.
     let content = render_nodes_with_loader_mut(children, context, loader)?;
+    let mut handler_context = std::ops::Deref::deref(&context_map).clone();
+    if context.provenance_flatten_tracking() {
+        handler_context.insert(
+            "_djust_body_provenance_cutoff".into(),
+            Value::Bool(context.pending_provenance_flatten()),
+        );
+    }
     let html = crate::registry::call_block_handler_after_body(
         name,
         &resolved_args,
         &content,
-        &context_map,
+        &handler_context,
         raw_py.as_deref(),
         &state,
         autoescape,

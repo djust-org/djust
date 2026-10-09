@@ -13,7 +13,7 @@ pub trait RenderOutput: Default + From<String> + Deref<Target = str> + std::fmt:
     fn context_neutral(text: String) -> Self {
         text.into()
     }
-    /// Byte-changing mixed parent output makes subsequent authority uncertain.
+    /// Flattening an open authored context makes subsequent authority uncertain.
     fn context_uncertain(text: String) -> Self {
         text.into()
     }
@@ -63,7 +63,7 @@ pub struct Rendered {
     pub literals: Vec<Range<usize>>,
     /// Renderer-owned markers remain masked, and cannot end a trusted context run.
     pub neutral: Vec<Range<usize>>,
-    /// First byte at which a transformed mixed parent loses context boundaries.
+    /// First byte at which an open authored context loses its boundaries.
     pub authority_cutoff: Option<usize>,
 }
 impl Rendered {
@@ -321,7 +321,14 @@ mod tests {
         for replacement in ["évalue", "changed", ""] {
             let mut mixed = Rendered::context_literal("é".into());
             mixed.append(&Rendered::from("value".to_owned()));
-            assert_eq!(mixed.flatten(replacement.into()).authority_cutoff, Some(0));
+            assert_eq!(mixed.flatten(replacement.into()).authority_cutoff, None);
+            for opener in ["<!--y", "<script>", "<a title=\"", "<textarea>", "<div"] {
+                let literal = Rendered::context_literal(opener.into());
+                assert_eq!(
+                    literal.flatten(replacement.into()).authority_cutoff,
+                    Some(0)
+                );
+            }
             let mut literal = Rendered::context_literal("é".into());
             literal.append(&Rendered::context_neutral("<!--dj-if-->".into()));
             assert_eq!(literal.flatten(replacement.into()).authority_cutoff, None);
@@ -342,13 +349,55 @@ mod tests {
 
     #[test]
     fn provenance_flatten_site_inventory() {
-        // Grep-style review gate for *all* conversions, not a list of filters.
+        // Grep-style review prompt, not a proof of completeness.
         // New conversions must be classified and routed through the shared
         // helper before updating this inventory. Includes plain helper paths
         // used by custom body captures and the Context Value/bridge resolver.
         let mut inventory = String::new();
         for (name, source) in [
             ("renderer.rs", include_str!("renderer.rs")),
+            ("lib.rs", include_str!("lib.rs")),
+            (
+                "djust_live/src/provenance_edits.rs",
+                include_str!("../../djust_live/src/provenance_edits.rs"),
+            ),
+            (
+                "djust_live/src/model_serializer.rs",
+                include_str!("../../djust_live/src/model_serializer.rs"),
+            ),
+            (
+                "djust_live/src/lib.rs",
+                include_str!("../../djust_live/src/lib.rs"),
+            ),
+            (
+                "djust_live/src/actors/view.rs",
+                include_str!("../../djust_live/src/actors/view.rs"),
+            ),
+            (
+                "djust_live/src/actors/supervisor.rs",
+                include_str!("../../djust_live/src/actors/supervisor.rs"),
+            ),
+            (
+                "djust_live/src/actors/session.rs",
+                include_str!("../../djust_live/src/actors/session.rs"),
+            ),
+            (
+                "djust_live/src/actors/mod.rs",
+                include_str!("../../djust_live/src/actors/mod.rs"),
+            ),
+            (
+                "djust_live/src/actors/messages.rs",
+                include_str!("../../djust_live/src/actors/messages.rs"),
+            ),
+            (
+                "djust_live/src/actors/error.rs",
+                include_str!("../../djust_live/src/actors/error.rs"),
+            ),
+            (
+                "djust_live/src/actors/component.rs",
+                include_str!("../../djust_live/src/actors/component.rs"),
+            ),
+            ("registry.rs", include_str!("registry.rs")),
             (
                 "context.rs",
                 include_str!("../../djust_core/src/context.rs"),
@@ -363,6 +412,12 @@ mod tests {
                 if !line.starts_with("//")
                     && [
                         ".into()",
+                        "::from(",
+                        "output.0",
+                        ".0.clone()",
+                        "html.clone()",
+                        "format!",
+                        ".to_owned()",
                         ".to_string()",
                         ".html",
                         ".flatten(",

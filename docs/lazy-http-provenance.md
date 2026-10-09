@@ -59,8 +59,9 @@ Values, custom-tag return values, expression literals, filters, escaping,
 spaceless transforms and captured/reinjected `|safe` HTML grant no authored
 intervals. A filter also drops
 intervals when its output is byte-identical. Unfiltered `block.super` is direct
-renderer composition; filtered or captured `block.super` drops start-tag authority; flattening mixed
-literal/value content also records the cutoff described below.
+renderer composition; filtered or captured `block.super` drops start-tag
+authority. Flattening a possibly-open authored literal context records the
+cutoff described below.
 
 Python page assembly carries the sideband in `RenderedHTML`. Slices clip and
 shift UTF-8 intervals; concatenation shifts them; replacements invalidate the
@@ -89,18 +90,26 @@ and its filters meet the same rule. Built-in filters meeting that rule that
 leave a mixed parent output byte-identical retain its literal/opaque context
 boundaries, while dropping all start-tag authority. This prevents a filtered
 parent from coalescing a literal opener and a value closer into one balanced run.
-Whenever rendered content carrying authored-literal provenance and non-literal
-value bytes is flattened to plain/opaque output, the renderer records a
-fail-closed cutoff at that output position. No lazy container after that
-position in the complete render is authoritative, even after a literal closer.
-This is independent of byte equality, filter name, and literal versus value
-arguments. It applies to filtered `block.super` when boundaries cannot be
-preserved, `{% filter %}`, `{% spaceless %}`, `with`/include bindings and other
-value captures of `block.super`, custom block-body captures, and all of those
-wrappers around includes or inherited output. An inner cutoff survives outer
-transforms and captures, including transforms returning empty text.
+Whenever output carrying authored-literal provenance is flattened, the renderer
+scans its authored literal bytes with value and renderer-owned marker bytes
+blanked at the same offsets. A fail-closed cutoff is recorded iff those bytes
+end in a possibly-open inert context: an unclosed comment, raw-text or
+escapable-raw-text element (`script`, `style`, `textarea`, `title`, `xmp`,
+`iframe`, `noembed`, `noframes`, `noscript`, `plaintext`), unfinished start/end
+tag, quoted attribute value, CDATA or bogus comment. The small scanner reports
+open whenever uncertain (including unsupported foreign/tree-builder contexts).
+Pure-literal runs are covered; mixed runs ending in data state do not cut off.
+No lazy container after a cutoff in the complete render is authoritative, even
+after a literal closer. An inner cutoff always survives, including empty output.
+This rule applies at every routed flatten site: filtered `block.super` when
+boundaries cannot be preserved, `{% filter %}`, `{% spaceless %}`, with/include
+bindings and other value captures, and custom block-body captures.
+Cache fragments retain their cutoff as metadata on the cached string itself,
+stored atomically under Django's usual fragment key for hits and misses. Plain
+legacy entries, untracked overwrites and backends stripping that metadata are
+uncertain and fail closed. Fragment text and Django's cache key remain unchanged.
 
-Only-literal or only-value content does not acquire a cutoff from flattening.
+Only-value content has no authored opener and does not acquire a cutoff.
 Byte-identical literal-derived filters of `block.super` preserve its context
 boundaries (but drop start-tag authority) and therefore do not flatten it.
 Literal-only byte-identical filters keep following-container authority.

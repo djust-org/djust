@@ -1329,10 +1329,12 @@ pub struct PendingBlockBody {
 /// Phase one of the lazy-body contract (#2658): ask the handler whether it can
 /// answer WITHOUT the body.
 ///
-/// The first element of the returned pair is `Some(html)` for a finished
+/// The first element of the returned tuple is `Some(html)` for a finished
 /// answer — the renderer returns it and never renders the children — and
 /// `None` for "render the body and call [`call_block_handler_after_body`]".
 /// The second is the handler's opaque phase-two state, carried either way.
+/// The third restores a cached body's authored-context cutoff without rendering
+/// the body again. It can only remove authority, never grant it.
 ///
 /// The output is escaped by the same [`escape_handler_return`] the
 /// single-phase path uses, so a `SafeString` (which is what a stored
@@ -1344,7 +1346,7 @@ pub fn call_block_handler_before_body(
     context: &HashMap<String, djust_core::Value>,
     raw_py_objects: Option<&HashMap<String, pyo3::Py<PyAny>>>,
     autoescape: bool,
-) -> Result<(Option<String>, PendingBlockBody), DjangoRustError> {
+) -> Result<(Option<String>, PendingBlockBody, bool), DjangoRustError> {
     let handler = clone_block_handler(name)?;
     Python::attach(|py| {
         let py_args = build_py_args(py, args).map_err(DjangoRustError::TemplateError)?;
@@ -1352,7 +1354,7 @@ pub fn call_block_handler_before_body(
             .map_err(DjangoRustError::TemplateError)?;
         let result = handler
             .bind(py)
-            .call_method1("before_body", (py_args, py_context))
+            .call_method1("before_body", (py_args, &py_context))
             .map_err(handler_exception)?;
         let (output, state) = result.extract::<(Py<PyAny>, Py<PyAny>)>().map_err(|_| {
             DjangoRustError::TemplateError(format!(
@@ -1362,11 +1364,17 @@ pub fn call_block_handler_before_body(
         })?;
         let output = output.bind(py);
         if output.is_none() {
-            return Ok((None, PendingBlockBody { handler, state }));
+            return Ok((None, PendingBlockBody { handler, state }, false));
         }
         let html = escape_handler_return(output, "Block handler", name, autoescape)
             .map_err(DjangoRustError::TemplateError)?;
-        Ok((Some(html), PendingBlockBody { handler, state }))
+        let cutoff = py_context
+            .get_item("_djust_cached_provenance_cutoff")
+            .ok()
+            .flatten()
+            .and_then(|value| value.extract::<bool>().ok())
+            .unwrap_or(false);
+        Ok((Some(html), PendingBlockBody { handler, state }, cutoff))
     })
 }
 

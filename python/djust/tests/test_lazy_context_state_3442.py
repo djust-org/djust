@@ -369,7 +369,7 @@ def test_http_changed_mixed_super_never_mounts_hidden(tmp_path, settings, parent
 def test_changed_mixed_super_cutoff_reaches_rest_of_render(tmp_path, outer_filter, value):
     # UTF-8 before the include tests byte-offset shifting. A literal closer
     # cannot restore authority after the cutoff, even outside the include.
-    (tmp_path / "parent.html").write_text("{% block body %}Y{{ q|safe }}{% endblock %}")
+    (tmp_path / "parent.html").write_text("{% block body %}<!--Y{{ q|safe }}{% endblock %}")
     (tmp_path / "child.html").write_text(
         '{% extends "parent.html" %}{% block body %}{{ block.super|lower }}'
         + ("" if outer_filter and "yesno" in outer_filter else TAG)
@@ -491,13 +491,14 @@ def test_http_mixed_capture_wrappers_fail_closed(tmp_path, settings, q, wrapper)
 @pytest.mark.parametrize(
     "parent,q,expected",
     [
-        ("é{{ q|safe }}", "v", 1),  # No inert context: provenance loss itself is the cutoff.
+        ("é{{ q|safe }}", "v", 2),  # Data state remains safe after flattening.
+        ("<!--y", "v", 1),
         ("literal", "v", 2),
         ("{{ q|safe }}", "v", 2),
         ("{{ q|safe }}", "", 2),
     ],
 )
-def test_flatten_rule_depends_on_byte_sources_not_markup(tmp_path, wrapper, parent, q, expected):
+def test_flatten_rule_depends_on_authored_terminal_context(tmp_path, wrapper, parent, q, expected):
     (tmp_path / "mixed.html").write_text(parent)
     (tmp_path / "parent.html").write_text("{% block body %}" + parent + "{% endblock %}")
     (tmp_path / "bound.html").write_text("{{ s }}")
@@ -529,7 +530,7 @@ def test_custom_body_captures_preserve_cutoff(tmp_path, lazy, empty):
 
     register_block_tag_handler("round4_capture", "endround4_capture", Capture())
     try:
-        (tmp_path / "mixed.html").write_text("é{{ q|safe }}")
+        (tmp_path / "mixed.html").write_text("<!--y{{ q|safe }}")
         rust = RustLiveView(
             TAG + '{% round4_capture %}{% include "mixed.html" %}{% endround4_capture %}' + TAG,
             [str(tmp_path)],
@@ -550,7 +551,7 @@ def test_custom_body_captures_preserve_cutoff(tmp_path, lazy, empty):
     ],
 )
 def test_wrapping_already_uncertain_output_never_clears_cutoff(tmp_path, wrapper):
-    (tmp_path / "parent.html").write_text("{% block body %}Y{{ q|safe }}{% endblock %}")
+    (tmp_path / "parent.html").write_text("{% block body %}<!--Y{{ q|safe }}{% endblock %}")
     (tmp_path / "child.html").write_text(
         '{% extends "parent.html" %}{% block body %}{{ block.super|lower }}{% endblock %}'
     )
@@ -563,3 +564,91 @@ def test_wrapping_already_uncertain_output_never_clears_cutoff(tmp_path, wrapper
     rust.update_state({"q": "v"})
     html, spans = rust.render_with_provenance()
     assert len(authored_lazy_elements(html, spans)) == 1
+
+
+ROUND5_MIXED = [
+    "{% spaceless %}<nav><a>{{ q }}</a></nav>{% endspaceless %}",
+    "{% filter lower %}Title {{ q }}{% endfilter %}",
+    "{% load cache %}{% cache 60 round5_mixed %}<div>{{ q }}</div>{% endcache %}",
+    "{{ block.super|upper }}",
+    "{{ block.super|truncatechars:50 }}",
+    "{% with s=block.super %}{{ s }}{% endwith %}",
+]
+ROUND5_OPEN = [
+    '{% spaceless %}{% include "open.html" %}{% endspaceless %}',
+    '{% filter lower %}{% include "open.html" %}{% endfilter %}',
+    '{% filter truncatechars:200 %}{% include "open.html" %}{% endfilter %}',
+    "{{ block.super|truncatechars:200 }}",
+    "{% with s=block.super %}{{ s }}{% endwith %}",
+    "{% firstof block.super %}",
+    "{% load cache %}{% cache 60 round5_open %}<!--y{{ w }}{% endcache %}",
+    "{% load cache %}{% cache 60 round5_open_literal %}<!--y{% endcache %}",
+]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "body,expected", [(b, 2) for b in ROUND5_MIXED] + [(b, 1) for b in ROUND5_OPEN]
+)
+def test_round5_http_flatten_context_and_cache_hits(tmp_path, settings, body, expected):
+    from django.core.cache import caches
+
+    caches["default"].clear()
+    settings.TEMPLATES = [
+        {
+            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "DIRS": [str(tmp_path)],
+            "APP_DIRS": True,
+        }
+    ]
+    (tmp_path / "open.html").write_text("<!--y")
+    parent = "<nav>{{ q }}</nav>" if expected == 2 else "<!--y"
+    (tmp_path / "parent.html").write_text("{% block body %}" + parent + "{% endblock %}")
+    (tmp_path / "child.html").write_text(
+        '{% extends "parent.html" %}{% block body %}' + body + "{% endblock %}"
+    )
+    template = "<div dj-root>" + TAG + '{% include "child.html" %}'
+    template += ("{{ q|safe }}" if expected == 1 else "") + HIDDEN
+    template += ("-->" if expected == 1 else "") + "</div>"
+    # Two complete HTTP GET + lazy-mount POST cycles cover miss and hit.
+    for attempt in range(2):
+        ids, statuses, mounts = run(
+            template, {"q": "-->" if expected == 1 else "hello", "w": "x-->"}
+        )
+        assert len(ids) == expected, (body, attempt, ids)
+        assert statuses == [200] * expected
+        assert mounts == expected - 1, (body, attempt, mounts)
+        if "{% cache" in body:
+            from django.core.cache.utils import make_template_fragment_key
+            from djust.template_libraries import _CachedProvenanceFragment
+
+            name = body.split("{% cache 60 ", 1)[1].split()[0]
+            cached = caches["default"].get(make_template_fragment_key(name, []))
+            assert isinstance(cached, _CachedProvenanceFragment)
+            assert cached.provenance_cutoff is (expected == 1)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("kind", ["legacy", "open", "same-byte-overwrite"])
+def test_round5_unknown_or_open_cache_metadata_fails_closed(kind):
+    from django.core.cache import caches
+    from django.core.cache.utils import make_template_fragment_key
+    from djust.template_libraries import _CachedProvenanceFragment
+
+    backend = caches["default"]
+    backend.clear()
+    key = make_template_fragment_key("round5_legacy", [])
+    fragment = _CachedProvenanceFragment("<!--cached-->")
+    fragment.provenance_cutoff = kind == "open"
+    backend.set(key, fragment if kind != "legacy" else str(fragment), 60)
+    if kind == "same-byte-overwrite":
+        # A closed tracked result must not survive an ordinary external writer
+        # merely because the new bytes equal the old cached bytes.
+        backend.set(key, str(fragment), 60)
+    template = "<div dj-root>" + TAG
+    template += "{% load cache %}{% cache 60 round5_legacy %}not rendered{% endcache %}"
+    template += HIDDEN + "</div>"
+    ids, statuses, mounts = run(template, {})
+    assert len(ids) == 1
+    assert statuses == [200]
+    assert mounts == 0
