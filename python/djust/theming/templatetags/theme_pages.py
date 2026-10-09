@@ -30,6 +30,7 @@ from django.utils.safestring import SafeString, mark_safe
 
 from ..manager import get_theme_config
 from ..template_resolver import resolve_page_template
+from .theme_components import _neutralise_url
 
 register = template.Library()
 
@@ -91,6 +92,9 @@ def theme_login_page(
     slots, remaining_attrs = _extract_slots(attrs)
     request = context.get("request")
     tmpl = resolve_page_template(request, "login")
+    action = _neutralise_url("action", action)
+    forgot_password_url = _neutralise_url("forgot_password_url", forgot_password_url)
+    register_url = _neutralise_url("register_url", register_url)
     ctx = {
         "title": title,
         "action": action,
@@ -129,6 +133,9 @@ def theme_register_page(
     slots, remaining_attrs = _extract_slots(attrs)
     request = context.get("request")
     tmpl = resolve_page_template(request, "register")
+    action = _neutralise_url("action", action)
+    login_url = _neutralise_url("login_url", login_url)
+    terms_url = _neutralise_url("terms_url", terms_url)
     ctx = {
         "title": title,
         "action": action,
@@ -167,6 +174,8 @@ def theme_password_reset_page(
     slots, remaining_attrs = _extract_slots(attrs)
     request = context.get("request")
     tmpl = resolve_page_template(request, "password_reset")
+    action = _neutralise_url("action", action)
+    login_url = _neutralise_url("login_url", login_url)
     ctx = {
         "title": title,
         "action": action,
@@ -203,6 +212,7 @@ def theme_password_confirm_page(
     slots, remaining_attrs = _extract_slots(attrs)
     request = context.get("request")
     tmpl = resolve_page_template(request, "password_confirm")
+    action = _neutralise_url("action", action)
     ctx = {
         "title": title,
         "action": action,
@@ -243,6 +253,7 @@ def theme_404_page(
     slots, remaining_attrs = _extract_slots(attrs)
     request = context.get("request")
     tmpl = resolve_page_template(request, "404")
+    home_url = _neutralise_url("home_url", home_url)
     ctx = {
         "title": title,
         "description": description,
@@ -279,6 +290,8 @@ def theme_500_page(
     slots, remaining_attrs = _extract_slots(attrs)
     request = context.get("request")
     tmpl = resolve_page_template(request, "500")
+    home_url = _neutralise_url("home_url", home_url)
+    retry_url = _neutralise_url("retry_url", retry_url)
     ctx = {
         "title": title,
         "description": description,
@@ -314,6 +327,7 @@ def theme_403_page(
     slots, remaining_attrs = _extract_slots(attrs)
     request = context.get("request")
     tmpl = resolve_page_template(request, "403")
+    back_url = _neutralise_url("back_url", back_url)
     ctx = {
         "title": title,
         "description": description,
@@ -386,6 +400,7 @@ def theme_empty_state_page(
     slots, remaining_attrs = _extract_slots(attrs)
     request = context.get("request")
     tmpl = resolve_page_template(request, "empty_state")
+    cta_url = _neutralise_url("cta_url", cta_url)
     ctx = {
         "title": title,
         "description": description,
