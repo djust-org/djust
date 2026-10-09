@@ -1333,8 +1333,7 @@ pub struct PendingBlockBody {
 /// answer — the renderer returns it and never renders the children — and
 /// `None` for "render the body and call [`call_block_handler_after_body`]".
 /// The second is the handler's opaque phase-two state, carried either way.
-/// The third restores a cached body's authored-context cutoff without rendering
-/// the body again. It can only remove authority, never grant it.
+/// The third carries cached literal-only bytes; missing metadata fails closed.
 ///
 /// The output is escaped by the same [`escape_handler_return`] the
 /// single-phase path uses, so a `SafeString` (which is what a stored
@@ -1346,7 +1345,7 @@ pub fn call_block_handler_before_body(
     context: &HashMap<String, djust_core::Value>,
     raw_py_objects: Option<&HashMap<String, pyo3::Py<PyAny>>>,
     autoescape: bool,
-) -> Result<(Option<String>, PendingBlockBody, bool), DjangoRustError> {
+) -> Result<(Option<String>, PendingBlockBody, Option<String>), DjangoRustError> {
     let handler = clone_block_handler(name)?;
     Python::attach(|py| {
         let py_args = build_py_args(py, args).map_err(DjangoRustError::TemplateError)?;
@@ -1364,17 +1363,25 @@ pub fn call_block_handler_before_body(
         })?;
         let output = output.bind(py);
         if output.is_none() {
-            return Ok((None, PendingBlockBody { handler, state }, false));
+            return Ok((
+                None,
+                PendingBlockBody { handler, state },
+                Some(String::new()),
+            ));
         }
         let html = escape_handler_return(output, "Block handler", name, autoescape)
             .map_err(DjangoRustError::TemplateError)?;
-        let cutoff = py_context
-            .get_item("_djust_cached_provenance_cutoff")
-            .ok()
-            .flatten()
-            .and_then(|value| value.extract::<bool>().ok())
-            .unwrap_or(false);
-        Ok((Some(html), PendingBlockBody { handler, state }, cutoff))
+        let literal_only = match py_context.get_item("_djust_cached_literal_only") {
+            Ok(Some(value)) => value.extract::<String>().ok(),
+            // Non-cache handlers return ordinary opaque values: empty context.
+            Ok(None) => Some(String::new()),
+            Err(_) => None,
+        };
+        Ok((
+            Some(html),
+            PendingBlockBody { handler, state },
+            literal_only,
+        ))
     })
 }
 

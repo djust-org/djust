@@ -217,6 +217,7 @@ pub type SharedValues = std::sync::Arc<AHashMap<String, Value>>;
 struct ScopeFrame {
     /// Template-literal bindings, independent of HTML safety or registration authority.
     literal_keys: std::sync::Arc<AHashSet<String>>,
+    captured_literals: std::sync::Arc<AHashMap<String, Option<String>>>,
     /// COPY-ON-WRITE, and that is a performance contract, not a style choice
     /// (#2732).
     ///
@@ -587,7 +588,7 @@ pub struct Context {
     block_super: Option<std::sync::Arc<dyn BlockSuperSource>>,
     // Render-owned notification: resolver/capture APIs return Values and cannot
     // carry intervals. Shared only by scopes/clones of this tracked render.
-    provenance_flatten: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    provenance_flatten: Option<std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>>>,
 }
 
 impl Default for Context {
@@ -655,153 +656,48 @@ pub trait BlockSuperSource: std::fmt::Debug + Send + Sync {
     /// Direct unfiltered block.super emission may compose authored output.
     /// The default for external sources is untrusted String output.
     fn render_block_super_authored(&self, ctx: &Context) -> crate::Result<AuthoredOutput> {
-        self.render_block_super(ctx)
-            .map(|html| (html, Vec::new(), Vec::new(), Vec::new(), Vec::new(), None))
+        self.render_block_super(ctx).map(|html| {
+            (
+                html,
+                Vec::new(),
+                Vec::new(),
+                LiteralOutput {
+                    html: Some(String::new()),
+                    openings: Vec::new(),
+                },
+            )
+        })
     }
 }
 
-/// Renderer-internal `block.super` composition: HTML, authority ranges,
-/// origin addresses, and emitted-literal ranges for rendered-path liveness.
-/// The Python render API exposes only the first three fields.
+/// Literal-only context travels independently of emitted HTML. Missing cache
+/// metadata is None and fails closed for the whole render.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiteralOutput {
+    pub html: Option<String>,
+    pub openings: Vec<(usize, usize)>,
+}
+
+/// Renderer-internal composition. The Python API exposes the first three fields.
 pub type AuthoredOutput = (
     String,
     Vec<(usize, usize)>,
     Vec<(usize, usize, usize, String)>,
-    Vec<(usize, usize)>, // Rendered literal context, separate from authority.
-    Vec<(usize, usize)>, // Masked renderer-owned markers.
-    Option<usize>,       // First position after which lazy authority fails closed.
+    LiteralOutput,
 );
 
-/// The single fail-closed rule for rendered content becoming opaque: scan
-/// authored literal bytes with values blanked, and cut off iff possibly open.
-/// Covers pure-literal and mixed runs alike. Markers
-/// are renderer-owned neutral bytes, not values. Never clear an inner cutoff,
-/// even if the transform removes all bytes. Byte equality is irrelevant here:
-/// callers preserving boundaries do not flatten and must bypass this helper.
+/// Flattening drops authority but retains the rendered branch's original
+/// literal-only bytes. Transformed value bytes never supply parser context.
 pub fn flatten_authored_output(output: AuthoredOutput, text: String) -> AuthoredOutput {
-    let mut authored = vec![b' '; output.0.len()];
-    for &(start, end) in &output.3 {
-        authored[start..end].copy_from_slice(&output.0.as_bytes()[start..end]);
-    }
-    let cutoff = (output.5.is_some() || literal_context_is_open(&authored)).then_some(0);
-    (text, Vec::new(), Vec::new(), Vec::new(), Vec::new(), cutoff)
-}
-
-/// Conservative terminal-state scan of authored bytes with opaque bytes blanked.
-/// This is deliberately not an HTML parser: unsupported tree-builder contexts,
-/// malformed markup and script escape states fail closed rather than guessing.
-pub fn literal_context_is_open(bytes: &[u8]) -> bool {
-    let lower = bytes.to_ascii_lowercase();
-    // The surrounding namespace is lost at a flatten boundary. Either
-    // interpretation may hide following markup, including foreign comments.
-    literal_context_is_open_in(&lower, false) || literal_context_is_open_in(&lower, true)
-}
-
-fn literal_context_is_open_in(lower: &[u8], foreign: bool) -> bool {
-    let mut i = 0;
-    let mut raw: Option<&[u8]> = None;
-    while i < lower.len() {
-        if lower[i] != b'<' {
-            i += 1;
-            continue;
-        }
-        if let Some(name) = raw {
-            if !lower[i..].starts_with(b"</")
-                || !lower[i + 2..].starts_with(name)
-                || !lower
-                    .get(i + 2 + name.len())
-                    .is_some_and(|b| b.is_ascii_whitespace() || *b == b'/' || *b == b'>')
-            {
-                // A non-end-tag '<' may open a comment/tag in foreign
-                // content, or change HTML script escape state. Do not guess.
-                return true;
-            }
-        } else if foreign && lower[i..].starts_with(b"<![cdata[") {
-            let Some(end) = lower[i + 9..].windows(3).position(|w| w == b"]]>") else {
-                return true;
-            };
-            i += 9 + end + 3;
-            continue;
-        } else if lower[i..].starts_with(b"<!--") {
-            let Some(end) = lower[i + 4..].windows(3).position(|w| w == b"-->") else {
-                return true;
-            };
-            if lower[i + 4..i + 4 + end].contains(&b'<')
-                || lower[i + 4..].starts_with(b">")
-                || lower[i + 4..].starts_with(b"->")
-            {
-                return true;
-            }
-            i += 4 + end + 3;
-            continue;
-        }
-        let closing = lower[i..].starts_with(b"</");
-        let start = i + if closing { 2 } else { 1 };
-        if !lower.get(start).is_some_and(u8::is_ascii_alphabetic) {
-            // Includes CDATA, bogus comments and declarations. Even a closed
-            // declaration is uncertain here; no false data-state verdict.
-            return true;
-        }
-        let mut end = start;
-        while lower
-            .get(end)
-            .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'-' || *b == b':')
-        {
-            end += 1;
-        }
-        let name = &lower[start..end];
-        if !lower
-            .get(end)
-            .is_some_and(|b| b.is_ascii_whitespace() || *b == b'/' || *b == b'>')
-        {
-            return true;
-        }
-        let mut quote = None;
-        let mut j = end;
-        while j < lower.len() {
-            let b = lower[j];
-            if let Some(q) = quote {
-                if b == q {
-                    quote = None;
-                }
-            } else if b == b'\'' || b == b'"' {
-                let mut k = j;
-                while k > end && lower[k - 1].is_ascii_whitespace() {
-                    k -= 1;
-                }
-                // Quotes in names/unquoted values are ordinary tokenizer
-                // characters, not value delimiters. Fail closed for them.
-                if k == end || lower[k - 1] != b'=' {
-                    return true;
-                }
-                quote = Some(b);
-            } else if b == b'>' {
-                break;
-            } else if b == b'<' {
-                return true;
-            }
-            j += 1;
-        }
-        if j == lower.len() {
-            return true;
-        }
-        i = j + 1;
-        if raw.is_some() {
-            raw = None;
-        } else if !closing {
-            match name {
-                b"plaintext" | b"template" | b"select" | b"svg" | b"math" => return true,
-                b"script" | b"style" | b"textarea" | b"title" | b"xmp" | b"iframe" | b"noembed"
-                | b"noframes" | b"noscript"
-                    if !foreign =>
-                {
-                    raw = Some(name)
-                }
-                _ => {}
-            }
-        }
-    }
-    raw.is_some()
+    (
+        text,
+        Vec::new(),
+        Vec::new(),
+        LiteralOutput {
+            html: output.3.html,
+            openings: Vec::new(),
+        },
+    )
 }
 
 /// The `block` a PYTHON-BRIDGED tag receives while a `{{ block.super }}` is
@@ -1719,7 +1615,7 @@ impl Context {
     }
 
     /// Track a body independently of its caller, preserving assignment effects
-    /// but neither consuming the caller's pending cutoff nor leaking tracking
+    /// but neither consuming the caller's pending literal bytes nor leaking tracking
     /// into an untracked render. Used for cache metadata in every render mode.
     pub fn with_isolated_provenance_flatten<T>(
         &mut self,
@@ -1736,26 +1632,30 @@ impl Context {
     }
 
     pub fn record_provenance_flatten(&self, output: AuthoredOutput, text: String) -> String {
-        let output = flatten_authored_output(output, text);
-        if output.5.is_some() {
-            if let Some(pending) = &self.provenance_flatten {
-                pending.store(true, std::sync::atomic::Ordering::Relaxed);
-            }
+        self.restore_provenance_literals(vec![output.3.html]);
+        text
+    }
+
+    pub fn restore_provenance_literals(&self, literals: Vec<Option<String>>) {
+        if let Some(pending) = &self.provenance_flatten {
+            pending
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .extend(literals);
         }
-        output.0
     }
 
-    /// Snapshot the pending cutoff without consuming the per-node notification.
-    pub fn pending_provenance_flatten(&self) -> bool {
+    pub fn take_provenance_flatten(&self) -> Vec<Option<String>> {
         self.provenance_flatten
             .as_ref()
-            .is_some_and(|pending| pending.load(std::sync::atomic::Ordering::Relaxed))
-    }
-
-    pub fn take_provenance_flatten(&self) -> bool {
-        self.provenance_flatten
-            .as_ref()
-            .is_some_and(|pending| pending.swap(false, std::sync::atomic::Ordering::Relaxed))
+            .map(|pending| {
+                std::mem::take(
+                    &mut *pending
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()),
+                )
+            })
+            .unwrap_or_default()
     }
 
     /// Arm the DEFERRED `{{ block.super }}` for this scope (#2710).
@@ -2265,6 +2165,22 @@ impl Context {
         }
     }
 
+    /// Captured rendered output carries context bytes at its emission position,
+    /// never start-tag authority. Metadata follows scoped aliases and shadowing.
+    pub fn mark_captured_literals(&mut self, name: &str, literal: Option<String>) {
+        if let Some(frame) = self.stack.iter_mut().rev().find(|f| f.contains_key(name)) {
+            std::sync::Arc::make_mut(&mut frame.captured_literals).insert(name.to_owned(), literal);
+        }
+    }
+
+    pub fn captured_literals(&self, name: &str) -> Option<Option<String>> {
+        self.stack
+            .iter()
+            .rev()
+            .find(|f| f.contains_key(name))
+            .and_then(|f| f.captured_literals.get(name).cloned())
+    }
+
     /// Shadowing values never inherit a template literal's byte-source metadata.
     pub fn is_template_literal(&self, name: &str) -> bool {
         self.stack
@@ -2275,6 +2191,9 @@ impl Context {
     }
 
     fn set_at(&mut self, index: usize, key: String, value: Value) {
+        if !self.stack[index].captured_literals.is_empty() {
+            std::sync::Arc::make_mut(&mut self.stack[index].captured_literals).remove(&key);
+        }
         if !self.stack[index].literal_keys.is_empty() {
             std::sync::Arc::make_mut(&mut self.stack[index].literal_keys).remove(&key);
         }
@@ -4801,177 +4720,5 @@ mod tests {
             4,
             "the call is over: a retained handle renders nothing"
         );
-    }
-}
-
-#[cfg(test)]
-mod literal_context_differential_tests {
-    use super::literal_context_is_open;
-    use html5ever::{ns, parse_fragment, tendril::TendrilSink, LocalName, QualName};
-    use markup5ever_rcdom::{Handle, NodeData, RcDom};
-
-    fn sentinel_live(node: &Handle) -> bool {
-        if let NodeData::Element { attrs, .. } = &node.data {
-            if attrs.borrow().iter().any(|a| {
-                a.name.local == html5ever::local_name!("id") && a.value.as_ref() == "sentinel"
-            }) {
-                return true;
-            }
-        }
-        // Template contents are held separately by RcDom, not live children.
-        node.children.borrow().iter().any(sentinel_live)
-    }
-
-    fn live(html: &str) -> bool {
-        let dom = parse_fragment(
-            RcDom::default(),
-            Default::default(),
-            QualName::new(None, ns!(html), LocalName::from("div")),
-            vec![],
-            false,
-        )
-        .one(format!("{html}<div id=sentinel></div>"));
-        sentinel_live(&dom.document)
-    }
-
-    #[test]
-    fn literal_context_scanner_differential_330000() {
-        let atoms = [
-            "<!-->",
-            "<!--->",
-            "<!--",
-            "-->",
-            "--!>",
-            "<!-- -- -->",
-            "<!---->",
-            "<!-",
-            "--",
-            "-",
-            "!",
-            "<script>",
-            "</script>",
-            "</script ",
-            "</script x='>'>",
-            "<script><!--<script>",
-            "</script x=\"",
-            "<title>",
-            "</title>",
-            "<textarea>",
-            "</textarea>",
-            "<plaintext>",
-            "<svg>",
-            "</svg>",
-            "<style>",
-            "</style>",
-            "<math>",
-            "<mi>",
-            "</mi>",
-            "<noscript>",
-            "</noscript>",
-            "<iframe>",
-            "</iframe>",
-            "<xmp>",
-            "</xmp>",
-            "<a x=",
-            "<a x=y>",
-            "a>b",
-            "<a x='\"'>",
-            "<a x=\"'\">",
-            "'",
-            "\"",
-            "=",
-            "<a/b>",
-            "</>",
-            "<?pi>",
-            "<![CDATA[",
-            "]]>",
-            "\0",
-            "\r",
-            "\r\n",
-            "<a",
-            ">",
-            " ",
-            "x",
-            "<div>",
-            "</div>",
-            "<foreignObject>",
-            "<desc>",
-            "<b>",
-            "/",
-            "<table>",
-            "<select>",
-            "</select>",
-            "<option>",
-            "&",
-            "<noembed>",
-            "<noframes>",
-            "<template>",
-            "</template>",
-            "<listing>",
-            "<SCRIPT>",
-            "</SCRIPT>",
-            "<sCrIpT/>",
-            "<style/>",
-            "\t",
-            "\x0c",
-            "<!doctype html>",
-            "<br/>",
-            "<img src=x alt='a>b'>",
-            "<a x=\"1\"y='2'>",
-            "<a b",
-            "c=d",
-            "e\"f",
-            "<p>",
-            "</p>",
-            "<a x = 'y'>",
-            "<input value=5\" size=\">",
-            "<a \"=\">",
-            "<td width=50%>",
-            "<i>",
-            "<a href=/x?a=1&b=2>",
-        ];
-        let prefixes = [
-            "",
-            "<svg>",
-            "<math>",
-            "<svg><title>",
-            "<math><mi>",
-            "<table>",
-            "<select>",
-            "<template>",
-            "<noscript>",
-            "<script>",
-            "<style>",
-        ];
-        let mut seed = 0x5eed_0005_u64;
-        let mut next = || {
-            seed ^= seed << 13;
-            seed ^= seed >> 7;
-            seed ^= seed << 17;
-            seed as usize
-        };
-        let mut stats = [(0_usize, 0_usize, 0_usize); 11];
-        for _ in 0..30_000 {
-            let count = 1 + next() % 10;
-            let mut fragment = String::new();
-            for _ in 0..count {
-                fragment.push_str(atoms[next() % atoms.len()]);
-            }
-            let open = literal_context_is_open(fragment.as_bytes());
-            for (index, prefix) in prefixes.iter().enumerate() {
-                let real = live(&format!("{prefix}{fragment}"));
-                let page = live(&format!("{prefix}{}", " ".repeat(fragment.len())));
-                assert!(
-                    open || !page || real,
-                    "false closed: prefix={prefix:?} run={fragment:?}"
-                );
-                stats[index].0 += usize::from(real);
-                stats[index].1 += usize::from(open);
-                stats[index].2 += usize::from(open && real);
-            }
-        }
-        for (prefix, (live, open, conservative)) in prefixes.iter().zip(stats) {
-            println!("prefix={prefix:?} total=30000 false_closed=0 live={live} open={open} open_but_live={conservative} ({:.2}% of all)", conservative as f64 / 300.0);
-        }
     }
 }

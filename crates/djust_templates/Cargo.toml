@@ -48,6 +48,8 @@ djust_vdom = { path = "../djust_vdom", optional = true }
 djust_components = { path = "../djust_components", optional = true }
 
 [dev-dependencies]
+html5ever.workspace = true
+markup5ever_rcdom.workspace = true
 criterion = "0.8"
 tempfile = "3.27"
 # Lexes this crate's own source for the `value_to_json` structural pin (#2249).

@@ -3,6 +3,7 @@ if !context.is_safe(&format!("{prefix}.{key_text}")) {
 let text = output.to_string();
 Ok(context.record_provenance_flatten(output.into_authored_output(), text))
 output.identify(&format!(
+R::captured(effect.html, capture)
 R::context_literal(effect.html)
 effect.html.into()
 render_nodes_with_loader_mut(nodes, &mut context.clone(), loader)
@@ -26,12 +27,17 @@ value.to_string()
 filters::html_escape(&value.to_string())
 other => DjangoRustError::TemplateError(format!("{kind} '{name}' error: {other}")),
 let content = render_nodes_with_loader_mut(children, context, loader)?;
+let (answered, state, literal_only) = crate::registry::call_block_handler_before_body(
 context.record_provenance_flatten(
+html: literal_only,
 let text = output.to_string();
 djust_core::context::flatten_authored_output(output.into_authored_output(), text);
+let literal_only = flattened.3.html.clone();
 let content = flattened.0.clone();
 let content = context.record_provenance_flatten(flattened, content);
-handler_context.insert("_djust_body_provenance_cutoff".into(), Value::Bool(cutoff));
+if let Some(literal_only) = literal_only {
+"_djust_body_literal_only".into(),
+Value::String(literal_only),
 other => DjangoRustError::TemplateError(format!("{what} failed: {other}")),
 | Value::DictView { .. } => serde_json::to_string(v).unwrap_or_else(|_| v.to_string()),
 _ => v.to_string(),
@@ -58,14 +64,12 @@ _ => value.to_string(),
 fn render_block_super(&self, ctx: &Context) -> Result<String> {
 Ok(rendered.into_authored_output())
 map.insert("block".to_string(), lazy_block);
-output.3.iter().map(|(a, b)| b - a).sum::<usize>() == output.0.len();
 super_value = Some(Value::SafeString(output.0.clone()));
 .into());
 if filters_are_literal(filter_specs, context) && output.0 == text {
 djust_core::context::flatten_authored_output(output, text),
 text.into()
-Ok((text).into())
-Ok((filters::html_escape(&text)).into())
+text.into()
 R::context_neutral("<!--dj-if-->".to_string())
 format!("-{namespace}")
 let mut wrapped = R::context_neutral(format!(
@@ -132,6 +136,7 @@ let expr = format!("var|{}", format_filter_chain(filters));
 value.to_string()
 Ok(body.flatten(text))
 text.into()
+R::captured(effect.html, capture)
 R::context_literal(effect.html)
 effect.html.into()
 None => Ok((String::new()).into()),
@@ -988,7 +993,8 @@ return DjangoRustError::TemplateError(message.to_string());
 return DjangoRustError::TemplateError(message.to_string());
 return DjangoRustError::TemplateError(message.to_string());
 DjangoRustError::TemplateError(format!(
-.flatten()
+let literal_only = match py_context.get_item("_djust_cached_literal_only") {
+literal_only,
 DjangoRustError::TemplateError(format!("Failed to convert content: {e}"))
 .map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
 DjangoRustError::TemplateError(format!("No block handler registered for tag: {name}"))
@@ -1048,10 +1054,9 @@ assert!(TagArg::marked("x".to_string()).safe);
 assert_eq!(TagArg::plain("x".to_string()).text, "x");
 context.rs
 fn render_block_super(&self, ctx: &Context) -> crate::Result<String>;
-self.render_block_super(ctx)
+self.render_block_super(ctx).map(|html| {
 pub fn flatten_authored_output(output: AuthoredOutput, text: String) -> AuthoredOutput {
-let mut authored = vec![b' '; output.0.len()];
-authored[start..end].copy_from_slice(&output.0.as_bytes()[start..end]);
+html: output.3.html,
 _ => Err(pyo3::exceptions::PyKeyError::new_err(key.to_string())),
 let path = path.into();
 let namespace = namespace.into();
@@ -1062,8 +1067,7 @@ self.string_if_invalid = value.into();
 let key = format!(
 state.insert(key, value.to_string());
 pub fn record_provenance_flatten(&self, output: AuthoredOutput, text: String) -> String {
-let output = flatten_authored_output(output, text);
-output.0
+self.restore_provenance_literals(vec![output.3.html]);
 let text = output.0.clone();
 Ok(Some(self.record_provenance_flatten(output, text)))
 source.render_block_super(self).map(Some)
@@ -1081,6 +1085,7 @@ matches!(item, Value::String(_)) && self.is_marked_safe(&format!("{prefix}.{i}")
 .map(|c| Value::String(c.to_string()))
 .map(|(k, v)| Value::Tuple(vec![Value::from(k.clone()), v.clone()]))
 std::sync::Arc::make_mut(&mut frame.literal_keys).insert(name.to_owned());
+std::sync::Arc::make_mut(&mut frame.captured_literals).insert(name.to_owned(), literal);
 self.set_alias(loop_var, format!("{base}.{index}"));
 if target == name || target.starts_with(&format!("{name}.")) {
 .insert(loop_var.to_string(), None);
@@ -1206,13 +1211,6 @@ ctx.mark_safe("pp".to_string());
 ctx.mark_safe("p.a".to_string());
 fn render_block_super(&self, _ctx: &Context) -> crate::Result<String> {
 Ok(format!("p{n}"))
-QualName::new(None, ns!(html), LocalName::from("div")),
-.one(format!("{html}<div id=sentinel></div>"));
-let real = live(&format!("{prefix}{fragment}"));
-let page = live(&format!("{prefix}{}", " ".repeat(fragment.len())));
-stats[index].0 += usize::from(real);
-stats[index].1 += usize::from(open);
-stats[index].2 += usize::from(open && real);
 provenance.rs
 text.into()
 text.into()
@@ -1220,20 +1218,39 @@ text.into()
 text.into()
 text.to_owned()
 output.0
+pub literal_only: Option<String>,
+pub literal_offsets: Vec<(usize, usize)>,
+Self::from(String::new())
 pub fn into_authored_output(self) -> djust_core::context::AuthoredOutput {
 self.html,
-let mut masked = vec![b' '; self.html.len()];
-masked[span.clone()].copy_from_slice(&self.html.as_bytes()[span.clone()]);
+html: self.literal_only,
+openings: self.literal_offsets,
+.literal_only
+self.literal_offsets.iter().copied().collect();
+literal_only: Some(String::new()),
+literal_offsets: Vec::new(),
 &self.html
 f.write_str(&self.html)
 html: text.to_owned(),
+literal_only: Some(text.to_owned()),
+literal_offsets: vec![(0, 0)],
 let mut result = Self::from(text);
+result.literal_only = literal;
 let mut result = Self::from(text);
+result.literal_only = Some(result.html.clone());
+result.literal_offsets = source
 html: output.0,
+literal_only: output.3.html,
+literal_offsets: output.3.openings,
 Self::from_authored_output(djust_core::context::flatten_authored_output(
 self.into_authored_output(),
-let mut result = Self::from(text);
+match (&mut self.literal_only, literal) {
+_ => self.literal_only = None,
 let offset = self.html.len();
+match (&mut self.literal_only, &child.literal_only) {
+self.literal_offsets.extend(
+.literal_offsets
+_ => self.literal_only = None,
 self.html.push_str(&child.html);
 self.html.push_str(text);
 *id = format!("{identity}/{id}");
@@ -1241,18 +1258,9 @@ self.identify(&format!("loop{}", context.dj_if_loop_path()));
 ctx.set("flag".into(), Value::Bool(true));
 "xs".into(),
 ctx.set("extra".into(), Value::String("Δ".into()));
-let mut mixed = Rendered::context_literal("é".into());
-mixed.append(&Rendered::from("value".to_owned()));
-assert_eq!(mixed.flatten(replacement.into()).authority_cutoff, None);
-let literal = Rendered::context_literal(opener.into());
-literal.flatten(replacement.into()).authority_cutoff,
-let mut literal = Rendered::context_literal("é".into());
-literal.append(&Rendered::context_neutral("<!--dj-if-->".into()));
-assert_eq!(literal.flatten(replacement.into()).authority_cutoff, None);
-Rendered::from("value".to_owned())
-.flatten(replacement.into())
-Rendered::context_uncertain("".into())
-.flatten(replacement.into())
+output.append(&Rendered::from("</script>".to_owned()));
+let flattened = output.flatten(replacement.into());
+assert_eq!(flattened.literal_only.as_deref(), Some("<script>"));
 ".into()",
 "::from(",
 "output.0",
@@ -1268,14 +1276,48 @@ Rendered::context_uncertain("".into())
 "render_nodes_with_loader_mut(",
 "render_block_super(",
 "record_provenance_flatten(",
-assert_eq!(r.literals, vec![0..r.html.len()]);
+"literal_only",
+"literal_offsets",
+ctx.set(format!("value{i}"), Value::String(value.into()));
+source.push_str(&format!("{{{{ value{i}|safe }}}}"));
+ctx.set("flag".into(), Value::Bool(true));
+source.push_str(&format!(
+let final_html = &output.html;
+&output.html,
+output.literal_only.as_deref(),
+ctx.set("q".into(), Value::String(value.into()));
+ctx.set("empty".into(), Value::String(String::new()));
+ctx.set("truthy".into(), Value::String("</script>".into()));
+0 => (format!("{before}{{% with s=block.super %}}{{{{ empty }}}}{between}{{{{ s }}}}{TAG}{after}{{% endwith %}}"),
+format!("{before}{between}{parent}{TAG}{after}")),
+1 => (format!("{before}{{% with s=block.super %}}{{% with t=s %}}{between}{{{{ t }}}}{{{{ t }}}}{TAG}{after}{{% endwith %}}{{% endwith %}}"),
+format!("{before}{between}{parent}{parent}{TAG}{after}")),
+2 => (format!("{before}{{% firstof block.super as s %}}{between}{{{{ s }}}}{TAG}{after}"),
+format!("{before}{between}{parent}{TAG}{after}")),
+3 => (format!("{before}{{{{ truthy|default:block.super|safe }}}}{between}{TAG}{after}"),
+format!("{before}{between}{TAG}{after}")),
+_ => (format!("{before}{{% include block.super %}}{between}{after}"),
+format!("{before}{TAG}{between}{TAG}{after}")),
+"leaf".to_owned()
+format!("{parent}{{{{ q|safe }}}}")
+ctx.set("filename".into(), Value::String("leaf".into()));
+let loader = Loader(std::collections::HashMap::from([
+"base".into(),
+format!("{{% block body %}}{parent_source}{{% endblock %}}"),
+("leaf".into(), format!("{{{{ q|safe }}}}{TAG}")),
+let source = format!("{{% extends 'base' %}}{{% block body %}}{body}{{% endblock %}}");
+&output.html,
+live(&output.html),
+assert_eq!(r.literal_only.as_deref(), Some(r.html.as_str()));
 assert!(live.html.starts_with("<!---->"));
 ctx.set("flag".into(), Value::Bool(true));
+assert!(r.html.contains("<!--dj-if"));
+assert!(!r.literal_only.as_ref().unwrap().contains("dj-if"));
 let text: String = r.authored.iter().map(|s| &r.html[s.clone()]).collect();
 assert!(r.html.is_char_boundary(span.start) && r.html.is_char_boundary(span.end));
 let r = render(&format!(
 for children in node.child_lists_mut().into_iter().flatten() {
 (h ^ u64::from(*b)).wrapping_mul(0x100000001b3)
-(e.start, e.end, format!("container{index}:{hash:016x}"))
+(start, end, format!("container{index}:{hash:016x}"))
 for children in node.child_lists_mut().into_iter().flatten() {
 &std::sync::Arc::from(source),

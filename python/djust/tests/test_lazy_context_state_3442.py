@@ -1,4 +1,4 @@
-"""Authored liveness: I1 positives and documented M1 limitations (#3430)."""
+"""Literal-only and final-page parser liveness, including flattened runs (#3430)."""
 
 from pathlib import Path
 
@@ -97,11 +97,11 @@ def test_real_demo_registers_all_five_containers():
     ],
 )
 def test_m1_boundary_assembled_context_documented_behaviour(source, state):
-    # docs/lazy-http-provenance.md: literal/value boundaries are not modelled.
+    # Empty values can join authored bytes into a comment; parse the joined text.
     rust = RustLiveView(source + TAG + "-->", [])
     rust.update_state(state)
     html, spans = rust.render_with_provenance()
-    assert len(authored_lazy_elements(html, spans)) == 1
+    assert len(authored_lazy_elements(html, spans)) == (0 if "<!-" in source else 1)
 
 
 C = TAG
@@ -174,7 +174,7 @@ def test_review_corpus_authored_liveness(tmp_path, label):
     )
     html, spans = rust.render_with_provenance()
     # docs/lazy-http-provenance.md: value-derived filters, translations and
-    # environment tags are opaque; straddled hiding contexts are not modelled.
+    # environment tags are opaque; empty values join the remaining literal bytes.
     expected = (
         1
         if label
@@ -183,10 +183,10 @@ def test_review_corpus_authored_liveness(tmp_path, label):
             "lorem",
             "join chars",
             "straddle tag2",
-            "straddle comment",
             "default literal",
             "now",
             "trans",
+            "blocktrans",
             "_() literal",
         }
         else 0
@@ -221,16 +221,16 @@ def test_http_review_corpus_authored_liveness(tmp_path, settings, label):
         {"q": "-->", "qs": ["-->"], "t": "script", "c": "/script", "d": "-", "e": "-"},
     )
     # docs/lazy-http-provenance.md: value-derived filters, translations and
-    # environment tags are opaque; straddled hiding contexts are not modelled.
+    # environment tags are opaque; empty values join the remaining literal bytes.
     control = label in {
         "safe entity",
         "lorem",
         "join chars",
         "straddle tag2",
-        "straddle comment",
         "default literal",
         "now",
         "trans",
+        "blocktrans",
         "_() literal",
     }
     assert len(ids) == (2 if control else 1)
@@ -366,9 +366,9 @@ def test_http_changed_mixed_super_never_mounts_hidden(tmp_path, settings, parent
 
 @pytest.mark.parametrize("outer_filter", [None, "", "|safe", '|yesno:"y-->,n,m"|safe'])
 @pytest.mark.parametrize("value", ["x", "-->"])
-def test_changed_mixed_super_cutoff_reaches_rest_of_render(tmp_path, outer_filter, value):
+def test_changed_mixed_super_literal_closer_restores_authority(tmp_path, outer_filter, value):
     # UTF-8 before the include tests byte-offset shifting. A literal closer
-    # cannot restore authority after the cutoff, even outside the include.
+    # restores authority in the complete literal-only and final-page trees.
     (tmp_path / "parent.html").write_text("{% block body %}<!--Y{{ q|safe }}{% endblock %}")
     (tmp_path / "child.html").write_text(
         '{% extends "parent.html" %}{% block body %}{{ block.super|lower }}'
@@ -385,7 +385,7 @@ def test_changed_mixed_super_cutoff_reaches_rest_of_render(tmp_path, outer_filte
     rust.update_state({"q": value})
     html, spans = rust.render_with_provenance()
     assert html.count("dj-lazy") == (2 if outer_filter and "yesno" in outer_filter else 3)
-    assert len(authored_lazy_elements(html, spans)) == 1
+    assert len(authored_lazy_elements(html, spans)) == 2
 
 
 def test_changed_literal_only_super_keeps_following_authority(tmp_path):
@@ -498,7 +498,7 @@ def test_http_mixed_capture_wrappers_fail_closed(tmp_path, settings, q, wrapper)
         ("{{ q|safe }}", "", 2),
     ],
 )
-def test_flatten_rule_depends_on_authored_terminal_context(tmp_path, wrapper, parent, q, expected):
+def test_flattened_literal_context_is_parsed_with_the_page(tmp_path, wrapper, parent, q, expected):
     (tmp_path / "mixed.html").write_text(parent)
     (tmp_path / "parent.html").write_text("{% block body %}" + parent + "{% endblock %}")
     (tmp_path / "bound.html").write_text("{{ s }}")
@@ -513,7 +513,7 @@ def test_flatten_rule_depends_on_authored_terminal_context(tmp_path, wrapper, pa
 
 @pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize("empty", [False, True])
-def test_custom_body_captures_preserve_cutoff(tmp_path, lazy, empty):
+def test_custom_body_captures_preserve_literal_context(tmp_path, lazy, empty):
     from djust._rust import register_block_tag_handler, unregister_block_tag_handler
 
     class Capture:
@@ -550,7 +550,7 @@ def test_custom_body_captures_preserve_cutoff(tmp_path, lazy, empty):
         "{% with s=block.super %}{{ s }}{% endwith %}",
     ],
 )
-def test_wrapping_already_uncertain_output_never_clears_cutoff(tmp_path, wrapper):
+def test_wrapping_flattened_output_keeps_original_literal_context(tmp_path, wrapper):
     (tmp_path / "parent.html").write_text("{% block body %}<!--Y{{ q|safe }}{% endblock %}")
     (tmp_path / "child.html").write_text(
         '{% extends "parent.html" %}{% block body %}{{ block.super|lower }}{% endblock %}'
@@ -563,7 +563,7 @@ def test_wrapping_already_uncertain_output_never_clears_cutoff(tmp_path, wrapper
     )
     rust.update_state({"q": "v"})
     html, spans = rust.render_with_provenance()
-    assert len(authored_lazy_elements(html, spans)) == 1
+    assert len(authored_lazy_elements(html, spans)) == 2
 
 
 ROUND5_MIXED = [
@@ -625,7 +625,8 @@ def test_round5_http_flatten_context_and_cache_hits(tmp_path, settings, body, ex
             name = body.split("{% cache 60 ", 1)[1].split()[0]
             cached = caches["default"].get(make_template_fragment_key(name, []))
             assert isinstance(cached, _CachedProvenanceFragment)
-            assert cached.provenance_cutoff is (expected == 1)
+            assert cached.literal_only is not None
+            assert ("<!--" in cached.literal_only) is (expected == 1)
 
 
 @pytest.mark.django_db
@@ -639,7 +640,7 @@ def test_round5_unknown_or_open_cache_metadata_fails_closed(kind):
     backend.clear()
     key = make_template_fragment_key("round5_legacy", [])
     fragment = _CachedProvenanceFragment("<!--cached-->")
-    fragment.provenance_cutoff = kind == "open"
+    fragment.literal_only = "<!--cached" if kind == "open" else "cached"
     backend.set(key, fragment if kind != "legacy" else str(fragment), 60)
     if kind == "same-byte-overwrite":
         # A closed tracked result must not survive an ordinary external writer
@@ -649,8 +650,8 @@ def test_round5_unknown_or_open_cache_metadata_fails_closed(kind):
     template += "{% load cache %}{% cache 60 round5_legacy %}not rendered{% endcache %}"
     template += HIDDEN + "</div>"
     ids, statuses, mounts = run(template, {})
-    assert len(ids) == 1
-    assert statuses == [200]
+    assert len(ids) == (1 if kind == "open" else 0)
+    assert statuses == ([200] if kind == "open" else [])
     assert mounts == 0
 
 
@@ -720,7 +721,7 @@ ROUND6_ROWS = {
 @pytest.mark.django_db
 @pytest.mark.parametrize("closer", [True, False])
 @pytest.mark.parametrize("label", list(ROUND6_ROWS))
-def test_round6_http_scanner(tmp_path, settings, label, closer):
+def test_round6_http_literal_parser(tmp_path, settings, label, closer):
     pre, body, post_, inc, q = ROUND6_ROWS[label]
     q = q if closer else "x"
     settings.TEMPLATES = [
@@ -795,13 +796,13 @@ def test_round6_cache_untracked_fill(mode, body, expected):
     getattr(rust, mode)()
     cached = cache.get(make_template_fragment_key("round6"))
     assert isinstance(cached, _CachedProvenanceFragment)
-    assert cached.provenance_cutoff is (expected == 0)
+    assert cached.literal_only == body.replace("{{ w }}", "")
     for _ in range(2):
         html, spans = rust.render_with_provenance()
         assert len(authored_lazy_elements(html, spans)) == expected
 
 
-def test_round6_cache_verdict_is_local_to_body():
+def test_round6_cache_literal_bytes_are_local_to_body():
     from django.core.cache import cache
     from django.core.cache.utils import make_template_fragment_key
 
@@ -811,8 +812,189 @@ def test_round6_cache_verdict_is_local_to_body():
     rust.update_state({"w": "v", "q": "-->"})
     html, spans = rust.render_with_provenance()
     assert len(authored_lazy_elements(html, spans)) == 1
-    assert cache.get(make_template_fragment_key("round6_local")).provenance_cutoff is False
+    assert cache.get(make_template_fragment_key("round6_local")).literal_only == "<nav></nav>"
     # The same cached body can be used outside the caller's open comment.
     rust = RustLiveView(body + TAG, [])
     html, spans = rust.render_with_provenance()
     assert len(authored_lazy_elements(html, spans)) == 1
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "wrapper",
+    [
+        '{% include "run.html" %}',
+        '{% filter lower %}{% include "run.html" %}{% endfilter %}',
+        '{% spaceless %}{% include "run.html" %}{% endspaceless %}',
+        '{% load cache %}{% cache 500 latest %}{% include "run.html" %}{% endcache %}',
+    ],
+)
+def test_latest_svg_title_blocker(tmp_path, settings, wrapper):
+    from django.core.cache import cache
+
+    cache.clear()
+    settings.TEMPLATES = [
+        {
+            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "DIRS": [str(tmp_path)],
+            "APP_DIRS": True,
+        }
+    ]
+    (tmp_path / "run.html").write_text(
+        "c=d<svg><desc><table><desc>x</DESC><math><svg/></svg x='>'>"
+    )
+    template = (
+        "<div dj-root>"
+        + TAG
+        + "<svg><title>"
+        + wrapper
+        + "<script><!--</script>{{ q|safe }}"
+        + HIDDEN
+        + "</div>"
+    )
+    for value in ("x", "-->", "-->"):
+        ids, status, mounts = run(template, {"q": value})
+        assert len(ids) == 1 and status == [200] and mounts == 0
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "wrapper",
+    [
+        '{% include "nav.html" %}',
+        '{% load cache %}{% cache 500 svg_nav %}{% include "nav.html" %}{% endcache %}',
+        '{% spaceless %}{% include "nav.html" %}{% endspaceless %}',
+    ],
+)
+def test_svg_icon_navigation_registers_after_each_capture(tmp_path, settings, wrapper):
+    from django.core.cache import cache
+
+    cache.clear()
+    settings.TEMPLATES = [
+        {
+            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "DIRS": [str(tmp_path)],
+            "APP_DIRS": True,
+        }
+    ]
+    (tmp_path / "nav.html").write_text(
+        '<nav><a href="/"><svg viewBox="0 0 24 24"><path d="M3 12l9-9 9 9"/></svg>Home</a></nav>'
+    )
+    for _ in range(2):
+        ids, statuses, mounts = run("<div dj-root>" + wrapper + HIDDEN + "</div>", {})
+        assert len(ids) == 1 and statuses == [200] and mounts == 1
+
+
+@pytest.mark.parametrize(
+    "capture,emit",
+    [
+        ("{% with s=block.super %}", "{{ s }}{% endwith %}"),
+        ("{% with s=block.super %}{% with t=s %}", "{{ t }}{% endwith %}{% endwith %}"),
+        ("{% firstof block.super as s %}", "{{ s }}"),
+        ("{% cycle block.super as s silent %}", "{{ s }}"),
+        ('{% include "capture.html" with s=block.super %}', ""),
+        ('{% include "capture.html" with s=block.super only %}', ""),
+    ],
+)
+@pytest.mark.parametrize("closer", ["", "</script>"])
+def test_captured_literals_follow_emission_position(tmp_path, capture, emit, closer):
+    (tmp_path / "parent.html").write_text("{% block body %}<script>{{ q|safe }}{% endblock %}")
+    if "include" in capture:
+        (tmp_path / "capture.html").write_text("{{ empty }}</script>{{ s }}" + closer + TAG)
+        body = capture
+    else:
+        body = capture + "{{ empty }}</script>" + emit + closer + TAG
+    rust = RustLiveView(
+        '{% extends "parent.html" %}{% block body %}' + body + "{% endblock %}", [str(tmp_path)]
+    )
+    rust.update_state({"q": "</script>", "empty": ""})
+    html, spans = rust.render_with_provenance()
+    assert len(authored_lazy_elements(html, spans)) == (1 if closer else 0)
+
+
+def test_condition_capture_does_not_emit_literal_bytes(tmp_path):
+    (tmp_path / "parent.html").write_text("{% block body %}</script>{% endblock %}")
+    rust = RustLiveView(
+        '{% extends "parent.html" %}{% block body %}<script>{% if block.super %}{{ empty }}'
+        + TAG
+        + "{% endif %}{% endblock %}",
+        [str(tmp_path)],
+    )
+    html, spans = rust.render_with_provenance()
+    assert not authored_lazy_elements(html, spans)
+
+
+@pytest.mark.parametrize(
+    "emit",
+    [
+        "{{ q|default:block.super|safe }}",
+        "{% with s=q|default:block.super|safe %}{{ s }}{% endwith %}",
+        "{% firstof q|default:block.super|safe %}",
+        '{% cycle q|default:block.super|safe "x" %}',
+    ],
+)
+def test_unused_filter_argument_capture_never_closes_literal_context(tmp_path, emit):
+    (tmp_path / "parent.html").write_text("{% block body %}</script>{% endblock %}")
+    rust = RustLiveView(
+        '{% extends "parent.html" %}{% block body %}<script>' + emit + TAG + "{% endblock %}",
+        [str(tmp_path)],
+    )
+    rust.update_state({"q": "</script>"})
+    html, spans = rust.render_with_provenance()
+    assert not authored_lazy_elements(html, spans)
+
+
+def test_include_filename_capture_does_not_emit_literal_bytes(tmp_path):
+    (tmp_path / "parent.html").write_text("{% block body %}</script>{% endblock %}")
+    (tmp_path / "<").mkdir()
+    (tmp_path / "</script>").write_text("{{ q|safe }}" + TAG)
+    rust = RustLiveView(
+        '{% extends "parent.html" %}{% block body %}<script>{% include block.super %}{% endblock %}',
+        [str(tmp_path)],
+    )
+    rust.update_state({"q": "</script>"})
+    html, spans = rust.render_with_provenance()
+    assert not authored_lazy_elements(html, spans)
+
+
+def test_raw_translation_unused_parent_capture_is_not_emitted(tmp_path):
+    (tmp_path / "parent.html").write_text("{% block body %}</script>{% endblock %}")
+    rust = RustLiveView(
+        '{% extends "parent.html" %}{% load i18n %}{% block body %}<script>'
+        "{% autoescape off %}{% blocktrans with x=block.super %}{{ q }}{% endblocktrans %}{% endautoescape %}"
+        + TAG
+        + "{% endblock %}",
+        [str(tmp_path)],
+    )
+    rust.update_state({"q": "</script>"})
+    html, spans = rust.render_with_provenance()
+    assert len(authored_lazy_elements(html, [(0, len(html.encode()))])) == 1
+    assert not authored_lazy_elements(html, spans)
+
+
+def test_nested_raw_parent_read_preserves_eager_body_projection(tmp_path):
+    from djust._rust import register_block_tag_handler, unregister_block_tag_handler
+
+    class Capture:
+        def render(self, args, content, context):
+            context["block"].super()
+            return content
+
+    register_block_tag_handler("nested_parent_read", "endnested_parent_read", Capture())
+    try:
+        (tmp_path / "parent.html").write_text(
+            "{% load i18n %}{% block body %}{% blocktrans %}x{% endblocktrans %}{% endblock %}"
+        )
+        rust = RustLiveView(
+            '{% extends "parent.html" %}{% block body %}'
+            "{% nested_parent_read %}<script>{{ q|safe }}{% endnested_parent_read %}"
+            + TAG
+            + "{% endblock %}",
+            [str(tmp_path)],
+        )
+        rust.update_state({"q": "</script>"})
+        html, spans = rust.render_with_provenance()
+        assert len(authored_lazy_elements(html, [(0, len(html.encode()))])) == 1
+        assert not authored_lazy_elements(html, spans)
+    finally:
+        unregister_block_tag_handler("nested_parent_read")

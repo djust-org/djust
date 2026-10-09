@@ -669,11 +669,18 @@ fn render_effectful_node_output<L: TemplateLoader, R: RenderOutput>(
                 } else {
                     context.bind(binding.name, binding.value, binding.safe);
                 }
+                if R::TRACKED {
+                    if let Some(capture) = binding.capture {
+                        context.mark_captured_literals(&name, capture);
+                    }
+                }
                 if R::TRACKED && binding.literal {
                     context.mark_template_literal(&name);
                 }
             }
-            Ok(if effect.literal {
+            Ok(if let Some(capture) = effect.capture {
+                R::captured(effect.html, capture)
+            } else if effect.literal {
                 R::context_literal(effect.html)
             } else {
                 effect.html.into()
@@ -681,14 +688,13 @@ fn render_effectful_node_output<L: TemplateLoader, R: RenderOutput>(
         }
         None => render_node_output::<L, R>(node, context, loader),
     };
-    if R::TRACKED && context.take_provenance_flatten() {
-        result.map(|mut output| {
-            output.cut_off();
-            output
-        })
-    } else {
-        result
-    }
+    let literals = context.take_provenance_flatten();
+    result.map(|mut output| {
+        if R::TRACKED {
+            output.flattened_literals(literals);
+        }
+        output
+    })
 }
 
 /// Render with one owned context for the complete recursive render.
@@ -745,6 +751,7 @@ fn sibling_updates<L: TemplateLoader>(
                 html,
                 bindings,
                 literal: false,
+                capture: None,
             }))
         }
         Node::BlockCustomTag {
@@ -757,6 +764,7 @@ fn sibling_updates<L: TemplateLoader>(
                 html,
                 bindings,
                 literal: false,
+                capture: None,
             }))
         }
         Node::RawBlockCustomTag { name, args, body } => {
@@ -768,6 +776,7 @@ fn sibling_updates<L: TemplateLoader>(
                 html,
                 bindings,
                 literal: false,
+                capture: None,
             }))
         }
         Node::AssignTag { name, args } => {
@@ -780,6 +789,7 @@ fn sibling_updates<L: TemplateLoader>(
             // operands the handler declares literal (RESOLVE_ARG_POSITIONS)
             // are passed raw (#2041).
             let resolved_args = plain_args(resolve_assign_tag_args(name, args, context));
+            context.take_provenance_flatten();
             // #2710: through the ONE bridge, so a deferred `block.super` is
             // materialised for the flat map Python resolves against.
             let context_map = bridged_context_map(context)?;
@@ -799,6 +809,7 @@ fn sibling_updates<L: TemplateLoader>(
                     .into_iter()
                     .map(|(name, value)| SiblingBinding {
                         literal: false,
+                        capture: None,
                         upward: false,
                         name,
                         value,
@@ -819,6 +830,7 @@ fn sibling_updates<L: TemplateLoader>(
             asvar: Some(name),
         } => Ok(Some(SiblingEffect::silent(vec![SiblingBinding {
             literal: false,
+            capture: None,
             upward: false,
             name: name.clone(),
             value: Value::String(width_ratio(value, max_value, max_width, context)?),
@@ -830,11 +842,12 @@ fn sibling_updates<L: TemplateLoader>(
             args,
             asvar: Some(name),
         } => {
-            let (value, literal) = first_of(args, context)?;
+            let (value, literal, capture) = first_of(args, context)?;
             let value = value.unwrap_or_else(|| Value::String(String::new()));
             let safe = value.is_safe_string();
             Ok(Some(SiblingEffect::silent(vec![SiblingBinding {
                 literal,
+                capture,
                 upward: false,
                 name: name.clone(),
                 value,
@@ -855,7 +868,7 @@ fn sibling_updates<L: TemplateLoader>(
             id,
             ..
         } => {
-            let (value, runtime_safe, literal) = cycle_step(values, id, context)?;
+            let (value, runtime_safe, literal, capture) = cycle_step(values, id, context)?;
             let html = if *silent {
                 String::new()
             } else {
@@ -870,8 +883,10 @@ fn sibling_updates<L: TemplateLoader>(
             Ok(Some(SiblingEffect {
                 html,
                 literal,
+                capture: if *silent { None } else { capture.clone() },
                 bindings: vec![SiblingBinding {
                     literal,
+                    capture,
                     upward: true,
                     name: name.clone(),
                     value: bound,
@@ -912,6 +927,28 @@ fn filters_are_literal(specs: &[(String, Option<String>)], context: &Context) ->
     })
 }
 
+/// Snapshot projection for a resolved capture, removing resolver notifications
+/// before any intervening body node can consume them. No bytes are emitted here.
+fn captured_expression(expr: &str, context: &Context) -> Option<Option<String>> {
+    let pending = context.take_provenance_flatten();
+    if !pending.is_empty() {
+        return Some(
+            pending
+                .into_iter()
+                .try_fold(String::new(), |mut out, literal| {
+                    out.push_str(&literal?);
+                    Some(out)
+                }),
+        );
+    }
+    let base = crate::filter_lexer::split_pipes(expr)
+        .first()
+        .copied()
+        .unwrap_or(expr)
+        .trim();
+    context.captured_literals(base)
+}
+
 fn expression_is_literal(expr: &str, context: &Context) -> bool {
     let parts = crate::filter_lexer::split_pipes(expr);
     let head = parts[0].trim();
@@ -937,14 +974,23 @@ fn expression_is_literal(expr: &str, context: &Context) -> bool {
 /// (Django compiles each operand with `compile_filter` and a missing
 /// variable is `string_if_invalid`, not an error), and the runtime-safe
 /// flag rides along for the emit (#1672).
-fn cycle_step(values: &[String], id: &str, context: &Context) -> Result<(Value, bool, bool)> {
+fn cycle_step(
+    values: &[String],
+    id: &str,
+    context: &Context,
+) -> Result<(Value, bool, bool, Option<Option<String>>)> {
     if values.is_empty() {
-        return Ok((Value::Missing, false, true));
+        return Ok((Value::Missing, false, true, None));
     }
     let idx = context.cycle_advance(id) % values.len();
     let expr = values[idx].trim();
     let (value, safe) = get_value_safe_ignoring_failures(expr, context)?;
-    Ok((value, safe, expression_is_literal(expr, context)))
+    Ok((
+        value,
+        safe,
+        expression_is_literal(expr, context),
+        captured_expression(expr, context),
+    ))
 }
 
 /// Resolve an `{% extends %}` filter expression against the render context.
@@ -953,6 +999,7 @@ fn cycle_step(values: &[String], id: &str, context: &Context) -> Result<(Value, 
 /// results before invoking the loader, as Django's ExtendsNode does.
 pub(crate) fn resolve_extends_operand(token: &str, context: &Context) -> Result<Value> {
     let (mut value, _) = get_value_safe(token, context)?;
+    context.take_provenance_flatten();
     if matches!(value, Value::Missing) {
         value = Value::String(context.string_if_invalid_for(token).unwrap_or_default());
     }
@@ -1174,6 +1221,7 @@ fn cycle_emit(value: &Value, runtime_safe: bool, autoescape: bool) -> String {
 /// One name a context-mutating node binds for the siblings that follow it.
 struct SiblingBinding {
     literal: bool,
+    capture: Option<Option<String>>,
     upward: bool,
     name: String,
     value: Value,
@@ -1185,6 +1233,7 @@ struct SiblingBinding {
 /// binds for the siblings that follow it (#2547).
 struct SiblingEffect {
     literal: bool,
+    capture: Option<Option<String>>,
     html: String,
     bindings: Vec<SiblingBinding>,
 }
@@ -1195,6 +1244,7 @@ impl SiblingEffect {
         Self {
             html: String::new(),
             literal: false,
+            capture: None,
             bindings,
         }
     }
@@ -1223,6 +1273,7 @@ fn call_custom_tag(
     // TOKENS instead (#2423); both rules apply, in that order, through
     // `resolve_custom_tag_args`.
     let resolved_args = resolve_custom_tag_args(name, args, context);
+    context.take_provenance_flatten();
     let raw_py = context.render_raw_py_objects();
     let returns_bindings = crate::registry::tag_handler_returns_bindings(name);
     if returns_bindings && !context.block_super_is_armed() {
@@ -1329,7 +1380,9 @@ fn call_block_custom_tag<L: TemplateLoader>(
     }
     // Render children first to get block content
     let content = render_nodes_with_loader_mut(children, context, loader)?;
+    let body_literals = context.take_provenance_flatten();
     let resolved_args = resolve_block_tag_args(name, args, context);
+    context.take_provenance_flatten();
     // #2710: through the ONE bridge, so a deferred `block.super` is
     // materialised for the flat map Python resolves against.
     let context_map = bridged_context_map(context)?;
@@ -1347,6 +1400,7 @@ fn call_block_custom_tag<L: TemplateLoader>(
             &context.safe_key_paths(),
             context.autoescape(),
         )?;
+        context.restore_provenance_literals(body_literals);
         return Ok((html, bindings.into_iter().map(sibling_binding).collect()));
     }
     let html = crate::registry::call_block_handler_with_py_sidecar(
@@ -1358,6 +1412,7 @@ fn call_block_custom_tag<L: TemplateLoader>(
         context.autoescape(),
     )
     .map_err(|e| handler_call_error("Block tag", name, e))?;
+    context.restore_provenance_literals(body_literals);
     Ok((html, Vec::new()))
 }
 
@@ -1385,13 +1440,14 @@ fn call_lazy_body_block_tag<L: TemplateLoader>(
     loader: Option<&L>,
 ) -> Result<(String, Vec<SiblingBinding>)> {
     let resolved_args = resolve_block_tag_args(name, args, context);
+    context.take_provenance_flatten();
     // #2710: through the ONE bridge, so a deferred `block.super` is
     // materialised for the flat map Python resolves against.
     let context_map = bridged_context_map(context)?;
     let raw_py = context.render_raw_py_objects();
     let autoescape = context.autoescape();
 
-    let (answered, state, cutoff) = crate::registry::call_block_handler_before_body(
+    let (answered, state, literal_only) = crate::registry::call_block_handler_before_body(
         name,
         &resolved_args,
         &context_map,
@@ -1400,12 +1456,18 @@ fn call_lazy_body_block_tag<L: TemplateLoader>(
     )
     .map_err(|e| handler_call_error("Block tag", name, e))?;
     if let Some(html) = answered {
-        if cutoff {
-            context.record_provenance_flatten(
-                (String::new(), vec![], vec![], vec![], vec![], Some(0)),
+        context.record_provenance_flatten(
+            (
                 String::new(),
-            );
-        }
+                vec![],
+                vec![],
+                djust_core::context::LiteralOutput {
+                    html: literal_only,
+                    openings: vec![],
+                },
+            ),
+            String::new(),
+        );
         return Ok((html, Vec::new()));
     }
 
@@ -1417,18 +1479,23 @@ fn call_lazy_body_block_tag<L: TemplateLoader>(
     // halves of one call — a `{% cache %}` looking a key up under one context
     // and storing under another would store a key nobody can find again.
     // Cache metadata must describe this body even for plain/WS renders.
-    // A fresh notification scope keeps surrounding cutoffs out of the entry.
+    // A fresh notification scope keeps surrounding literal bytes out of the entry.
     let output = context.with_isolated_provenance_flatten(|context| {
         render_nodes_output::<L, crate::provenance::Rendered>(children, context, loader)
     })?;
     let text = output.to_string();
     let flattened =
         djust_core::context::flatten_authored_output(output.into_authored_output(), text);
-    let cutoff = flattened.5.is_some();
+    let literal_only = flattened.3.html.clone();
     let content = flattened.0.clone();
     let content = context.record_provenance_flatten(flattened, content);
     let mut handler_context = std::ops::Deref::deref(&context_map).clone();
-    handler_context.insert("_djust_body_provenance_cutoff".into(), Value::Bool(cutoff));
+    if let Some(literal_only) = literal_only {
+        handler_context.insert(
+            "_djust_body_literal_only".into(),
+            Value::String(literal_only),
+        );
+    }
     let html = crate::registry::call_block_handler_after_body(
         name,
         &resolved_args,
@@ -1468,6 +1535,9 @@ fn call_raw_block_tag(
         &context.safe_key_paths(),
         context.autoescape(),
     )?;
+    // Raw translation output is opaque. Resolving a Python-side operand
+    // (including an unused block.super binding) is not an emitted capture.
+    context.take_provenance_flatten();
     Ok((html, bindings.into_iter().map(sibling_binding).collect()))
 }
 
@@ -1613,6 +1683,7 @@ fn render_timezone_scope<L: TemplateLoader, R: RenderOutput>(
 fn sibling_binding(binding: crate::registry::HandlerBinding) -> SiblingBinding {
     SiblingBinding {
         literal: false,
+        capture: None,
         upward: false,
         name: binding.name,
         value: binding.value,
@@ -2657,15 +2728,12 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
 
         Node::Variable(var_name, filter_specs, in_attr) => {
             let mut super_value = None;
-            let mut super_literal = false;
             let mut super_context = None;
             if R::TRACKED && var_name == "block.super" && context.get(var_name).is_none() {
                 if let Some(output) = context.render_armed_block_super_authored()? {
                     if filter_specs.is_empty() {
                         return Ok(R::from_authored_output(output));
                     }
-                    super_literal =
-                        output.3.iter().map(|(a, b)| b - a).sum::<usize>() == output.0.len();
                     super_value = Some(Value::SafeString(output.0.clone()));
                     super_context = Some(output);
                 }
@@ -2858,9 +2926,9 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             } else {
                 filters::html_escape(&text)
             };
+            context.take_provenance_flatten();
             let literal_output = R::TRACKED
                 && ((was_literal && !var_name.starts_with("_("))
-                    || super_literal
                     || context.is_template_literal(var_name))
                 && filters_are_literal(filter_specs, context);
             // Built-in, byte-preserving filters still drop ALL authority, but
@@ -2874,12 +2942,14 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                         output.2.clear();
                         return Ok(R::from_authored_output(output));
                     }
-                    if literal_output && output.5.is_none() {
-                        return Ok(R::context_literal(text));
-                    }
                     return Ok(R::from_authored_output(
                         djust_core::context::flatten_authored_output(output, text),
                     ));
+                }
+            }
+            if R::TRACKED {
+                if let Some(literal) = context.captured_literals(var_name) {
+                    return Ok(R::captured(text, literal));
                 }
             }
             Ok(if literal_output {
@@ -2895,7 +2965,9 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             false_expr,
             filters,
         } => {
-            let expr = if evaluate_condition_for_if(condition, context)? {
+            let condition_result = evaluate_condition_for_if(condition, context)?;
+            context.take_provenance_flatten();
+            let expr = if condition_result {
                 true_expr.as_str()
             } else {
                 false_expr.as_str()
@@ -2909,6 +2981,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             // read before, so nothing that resolved through the context
             // changes answer.
             let (mut value, seeded_safe) = get_value_safe(expr, context)?;
+            let capture = captured_expression(expr, context);
 
             // See the Variable arm: track the LAST filter's runtime safeness so
             // a custom filter that ``mark_safe()``s at runtime bypasses escaping
@@ -2973,16 +3046,26 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             // Applied at BOTH variable-output sites (`Node::Variable` and the
             // inline-if expression), which are byte-identical and were found
             // only by counting the matches rather than by reading the diff.
+            context.take_provenance_flatten();
             let text = localize_if_number(&value)?;
             // Same shape as the Variable arm — see `filter_output_is_safe`.
             // Seeded, not OR-ed — see the Variable arm (#2274).
             let is_safe = runtime_safe || value.string_conversion_is_safe();
-            // Row 2 of #2556 — same shape as the Variable arm.
-            if is_safe || !context.autoescape() {
-                Ok((text).into())
+            let text = if is_safe || !context.autoescape() {
+                text
             } else {
-                Ok((filters::html_escape(&text)).into())
-            }
+                filters::html_escape(&text)
+            };
+            Ok(if let Some(capture) = capture {
+                R::captured(text, capture)
+            } else if R::TRACKED
+                && expression_is_literal(expr, context)
+                && filters_are_literal(filters, context)
+            {
+                R::context_literal(text)
+            } else {
+                text.into()
+            })
         }
 
         Node::If {
@@ -2993,6 +3076,8 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             marker_id,
         } => {
             let condition_result = evaluate_condition_for_if(condition, context)?;
+            // Condition operands are evaluated but their bytes are not emitted.
+            context.take_provenance_flatten();
             // #2519: the plain-backend path (and the engine built without the
             // `liveview` feature) renders `{% if %}` exactly as Django does —
             // no placeholder, no boundary pair. One switch for both forms.
@@ -3129,6 +3214,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             // unescaped, which is the one direction this fix must not move
             // (`{% for x in p|safe %}` over-escapes, as it did before).
             let iterable_value = get_value_ignoring_failures(iterable, context)?;
+            context.take_provenance_flatten();
 
             // Python iterates a string by CHARACTER, and #2325's own repro
             // table needs it: `{% for x in p|upper %}` over `"ab"` is `AB` in
@@ -3833,6 +3919,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                 let literal = is_quoted_literal(template)
                     && !crate::filter_lexer::has_unquoted_pipe(template);
                 let (mut value, _) = get_value_safe(template.trim(), context)?;
+                context.take_provenance_flatten();
                 if matches!(value, Value::Missing) {
                     value =
                         Value::String(context.string_if_invalid_for(template).unwrap_or_default());
@@ -3998,6 +4085,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                         value,
                         safe,
                         R::TRACKED && expression_is_literal(expression, context),
+                        captured_expression(expression, context),
                     ));
                     if let Some(path) = bare_dotted_path(expression) {
                         pending.push((key.clone(), context.alias_path(path)));
@@ -4011,10 +4099,13 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                 let render_include = |include_context: &mut Context| {
                     include_context.enter_include_instance(shared, identity);
                     include_context.begin_template_render();
-                    for (name, value, safe, literal) in bindings {
+                    for (name, value, safe, literal, capture) in bindings {
                         include_context.bind(name.clone(), value, safe);
                         if literal {
                             include_context.mark_template_literal(&name);
+                        }
+                        if let Some(capture) = capture {
+                            include_context.mark_captured_literals(&name, capture);
                         }
                     }
                     register_binding_aliases(include_context, pending, &bound);
@@ -4214,6 +4305,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                     value,
                     safe,
                     R::TRACKED && expression_is_literal(expression, context),
+                    captured_expression(expression, context),
                 ));
                 if let Some(path) = bare_dotted_path(expression) {
                     pending.push((name.clone(), context.alias_path(path)));
@@ -4221,10 +4313,13 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             }
             let bound: Vec<&str> = assignments.iter().map(|(name, _)| name.as_str()).collect();
             context.with_scope(|inner| {
-                for (name, value, safe, literal) in bindings {
+                for (name, value, safe, literal, capture) in bindings {
                     inner.bind(name.clone(), value, safe);
                     if literal {
                         inner.mark_template_literal(&name);
+                    }
+                    if let Some(capture) = capture {
+                        inner.mark_captured_literals(&name, capture);
                     }
                 }
                 register_binding_aliases(inner, pending, &bound);
@@ -4270,9 +4365,11 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             if asvar.is_some() {
                 return Ok((String::new()).into());
             }
-            let (value, literal) = first_of(args, context)?;
+            let (value, literal, capture) = first_of(args, context)?;
             let text = value.map(|v| v.to_string()).unwrap_or_default();
-            Ok(if literal {
+            Ok(if let Some(capture) = capture {
+                R::captured(text, capture)
+            } else if literal {
                 R::context_literal(text)
             } else {
                 text.into()
@@ -4373,9 +4470,11 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             // update (`sibling_updates`), which is where its single advance
             // and its binding live; this arm is only ever reached for a
             // cycle that binds nothing.
-            let (value, runtime_safe, literal) = cycle_step(values, id, context)?;
+            let (value, runtime_safe, literal, capture) = cycle_step(values, id, context)?;
             let text = cycle_emit(&value, runtime_safe, context.autoescape());
-            Ok(if literal {
+            Ok(if let Some(capture) = capture {
+                R::captured(text, capture)
+            } else if literal {
                 R::context_literal(text)
             } else {
                 text.into()
@@ -4387,7 +4486,9 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             // `sibling_updates` first); a direct caller gets the same bytes
             // as the loop would have emitted, with the same single advance.
             match sibling_updates(node, context, loader)? {
-                Some(effect) => Ok(if effect.literal {
+                Some(effect) => Ok(if let Some(capture) = effect.capture {
+                    R::captured(effect.html, capture)
+                } else if effect.literal {
                     R::context_literal(effect.html)
                 } else {
                     effect.html.into()
@@ -4475,6 +4576,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                 let mut parts = Vec::with_capacity(vars.len());
                 for var in vars {
                     let (value, _) = get_value_safe_ignoring_failures(var.trim(), context)?;
+                    context.take_provenance_flatten();
                     parts.push(ifchanged_key(&value));
                 }
                 (parts.join("\u{1f}"), None)
@@ -4536,6 +4638,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             // Resolve args (JSON-aware) honoring RESOLVE_ARG_POSITIONS,
             // as in render_nodes_with_loader_mut (#2041).
             let resolved_args = plain_args(resolve_assign_tag_args(name, args, context));
+            context.take_provenance_flatten();
             // #2710: through the ONE bridge, so a deferred `block.super` is
             // materialised for the flat map Python resolves against.
             let context_map = bridged_context_map(context)?;
@@ -5751,7 +5854,9 @@ fn get_value(expr: &str, context: &Context) -> Result<Value> {
     // `get_value_safe` directly to honour runtime SafeStrings (#1672).
     // Mirrors the `apply_filter_full` / `apply_filter_full_safe` shape in
     // `filters.rs` — single pipe-loop source of truth, no parallel drift.
-    get_value_safe(expr, context).map(|(value, _)| value)
+    let result = get_value_safe(expr, context).map(|(value, _)| value);
+    context.take_provenance_flatten();
+    result
 }
 
 /// Like [`get_value`] but also reports whether the produced value is a runtime
@@ -5816,6 +5921,7 @@ fn get_value_safe_inner(
         // `split_pipes`'s FIRST part and so contains no pipe.
         let (mut value, mut runtime_safe) =
             get_value_safe_inner(var_name, context, ignore_failures)?;
+        let input_literals = context.take_provenance_flatten();
         // Django's `ignore_failures=True` substitutes **None**, not "missing"
         // (#2528, ADR-027). `FilterExpression.resolve` (`base.py:720-726`)
         // reads
@@ -5904,6 +6010,8 @@ fn get_value_safe_inner(
             items_safe = filter_output_items_are_safe(filter_name, items_safe, input_was_safe);
         }
 
+        context.take_provenance_flatten();
+        context.restore_provenance_literals(input_literals);
         return Ok((value, runtime_safe));
     }
 
@@ -6604,9 +6712,13 @@ fn try_compare(a: &Value, b: &Value) -> Option<i32> {
 /// at runtime (e.g. `{% firstof a|md %}`) must NOT be re-escaped, matching the
 /// `Variable` / `InlineIf` arms (#1660). `runtime_safe` is true ONLY when the
 /// LAST filter produced a genuine `SafeString` → fail-safe.
-fn first_of(args: &[String], context: &Context) -> Result<(Option<Value>, bool)> {
+fn first_of(
+    args: &[String],
+    context: &Context,
+) -> Result<(Option<Value>, bool, Option<Option<String>>)> {
     for arg in args {
         let (val, runtime_safe) = get_value_safe_ignoring_failures(arg.trim(), context)?;
+        let capture = captured_expression(arg.trim(), context);
         if val.is_truthy() {
             let safe = runtime_safe || val.string_conversion_is_safe();
             let text = val.to_string();
@@ -6623,11 +6735,12 @@ fn first_of(args: &[String], context: &Context) -> Result<(Option<Value>, bool)>
                     Value::String(text)
                 }),
                 expression_is_literal(arg.trim(), context),
+                capture,
             ));
         }
     }
     // Django binds the initial plain empty string when no operand is truthy.
-    Ok((None, true))
+    Ok((None, true, None))
 }
 
 /// `{% widthratio %}`'s value, arm for arm with Django's `WidthRatioNode`.

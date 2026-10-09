@@ -10,19 +10,17 @@ pub trait RenderOutput: Default + From<String> + Deref<Target = str> + std::fmt:
     fn context_literal(text: String) -> Self {
         text.into()
     }
+    fn captured(text: String, _literal: Option<String>) -> Self {
+        text.into()
+    }
     fn context_neutral(text: String) -> Self {
         text.into()
     }
-    /// Flattening an open authored context makes subsequent authority uncertain.
-    fn context_uncertain(text: String) -> Self {
-        text.into()
-    }
-    /// Drop boundaries through the shared fail-closed rule, after a transform.
+    /// Drop start-tag authority while carrying original literal context.
     fn flatten(self, text: String) -> Self {
         text.into()
     }
-    /// Attach a resolver/capture loss at this node's output position.
-    fn cut_off(&mut self) {}
+    fn flattened_literals(&mut self, _literals: Vec<Option<String>>) {}
     fn from_authored_output(output: djust_core::context::AuthoredOutput) -> Self;
     fn append(&mut self, child: &Self);
     fn push_str(&mut self, text: &str);
@@ -54,17 +52,20 @@ impl RenderOutput for String {
 /// HTML and the disjoint authored runs in that exact output. Converting to a
 /// value/String intentionally drops authority; filters and reinjection cannot
 /// recover it, even when their output happens to be byte-identical.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rendered {
     pub html: String,
     pub authored: Vec<Range<usize>>,
     pub origins: Vec<(usize, usize, usize, String)>,
-    /// All emitted literal bytes, including context-opening markup with no authority.
-    pub literals: Vec<Range<usize>>,
-    /// Renderer-owned markers remain masked, and cannot end a trusted context run.
-    pub neutral: Vec<Range<usize>>,
-    /// First byte at which an open authored context loses its boundaries.
-    pub authority_cutoff: Option<usize>,
+    /// None means a cached/captured fragment lacks literal metadata: fail closed.
+    pub literal_only: Option<String>,
+    /// Authored opening byte in HTML -> corresponding literal-only byte.
+    pub literal_offsets: Vec<(usize, usize)>,
+}
+impl Default for Rendered {
+    fn default() -> Self {
+        Self::from(String::new())
+    }
 }
 impl Rendered {
     pub fn into_authored_output(self) -> djust_core::context::AuthoredOutput {
@@ -75,12 +76,10 @@ impl Rendered {
                 .map(|r| (r.start, r.end))
                 .collect(),
             self.origins,
-            self.literals
-                .into_iter()
-                .map(|r| (r.start, r.end))
-                .collect(),
-            self.neutral.into_iter().map(|r| (r.start, r.end)).collect(),
-            self.authority_cutoff,
+            djust_core::context::LiteralOutput {
+                html: self.literal_only,
+                openings: self.literal_offsets,
+            },
         )
     }
     /// Recheck source liveness on the branch that actually rendered. Literal
@@ -92,24 +91,26 @@ impl Rendered {
         if self.origins.is_empty() {
             return;
         }
-        let mut masked = vec![b' '; self.html.len()];
-        for span in &self.literals {
-            masked[span.clone()].copy_from_slice(&self.html.as_bytes()[span.clone()]);
-        }
-        // Literal spans contain whole UTF-8 scalars; opaque gaps are ASCII.
-        let masked = String::from_utf8(masked).unwrap_or_default();
         #[cfg(feature = "liveview")]
-        let live = djust_vdom::lazy_provenance::lazy_elements(&masked, &[(0, masked.len())]);
+        let starts: std::collections::HashSet<_> = self
+            .literal_only
+            .as_ref()
+            .map(|literal| {
+                djust_vdom::lazy_provenance::lazy_elements(literal, &[(0, literal.len())])
+                    .into_iter()
+                    .map(|e| e.start)
+                    .collect()
+            })
+            .unwrap_or_default();
         #[cfg(not(feature = "liveview"))]
-        let live: Vec<SourceContainer> = Vec::new();
-        let starts: std::collections::HashSet<_> = live.iter().map(|e| e.start).collect();
+        let starts: std::collections::HashSet<usize> = Default::default();
+        let offsets: std::collections::HashMap<_, _> =
+            self.literal_offsets.iter().copied().collect();
         let rejected: std::collections::HashSet<_> = self
             .origins
             .iter()
             .filter(|(a, _, offset, _)| {
-                *offset == 0
-                    && (!starts.contains(a)
-                        || self.authority_cutoff.is_some_and(|cutoff| *a >= cutoff))
+                *offset == 0 && !offsets.get(a).is_some_and(|offset| starts.contains(offset))
             })
             .map(|(a, _, _, _)| *a)
             .collect();
@@ -148,9 +149,8 @@ impl From<String> for Rendered {
             html,
             authored: Vec::new(),
             origins: Vec::new(),
-            literals: Vec::new(),
-            neutral: Vec::new(),
-            authority_cutoff: None,
+            literal_only: Some(String::new()),
+            literal_offsets: Vec::new(),
         }
     }
 }
@@ -171,13 +171,8 @@ impl RenderOutput for Rendered {
     fn authored(text: &str) -> Self {
         Self {
             html: text.to_owned(),
-            neutral: Vec::new(),
-            authority_cutoff: None,
-            literals: if text.is_empty() {
-                Vec::new()
-            } else {
-                vec![0..text.len()]
-            },
+            literal_only: Some(text.to_owned()),
+            literal_offsets: vec![(0, 0)],
             origins: if text.to_ascii_lowercase().contains("dj-view") {
                 vec![(0, text.len(), 0, String::new())]
             } else {
@@ -190,25 +185,25 @@ impl RenderOutput for Rendered {
             },
         }
     }
-    fn context_neutral(text: String) -> Self {
-        let len = text.len();
+    fn captured(text: String, literal: Option<String>) -> Self {
         let mut result = Self::from(text);
-        if len != 0 {
-            result.neutral.push(0..len);
-        }
+        result.literal_only = literal;
         result
     }
     fn context_literal(text: String) -> Self {
-        let len = text.len();
         let mut result = Self::from(text);
-        if len != 0 {
-            result.literals.push(0..len);
-        }
+        result.literal_only = Some(result.html.clone());
         result
     }
     fn source_text(text: &str, source: &SourceText) -> Self {
         let mut result = Self::authored(text);
         result.origins = source.origins.clone();
+        result.literal_offsets = source
+            .origins
+            .iter()
+            .filter(|(_, _, offset, _)| *offset == 0)
+            .map(|(a, _, _, _)| (*a, *a))
+            .collect();
         result.authored.clear();
         let mut cursor = 0;
         for &offset in &source.inert_openings {
@@ -227,9 +222,8 @@ impl RenderOutput for Rendered {
             html: output.0,
             authored: output.1.into_iter().map(|(a, b)| a..b).collect(),
             origins: output.2,
-            literals: output.3.into_iter().map(|(a, b)| a..b).collect(),
-            neutral: output.4.into_iter().map(|(a, b)| a..b).collect(),
-            authority_cutoff: output.5,
+            literal_only: output.3.html,
+            literal_offsets: output.3.openings,
         }
     }
     fn flatten(self, text: String) -> Self {
@@ -238,33 +232,31 @@ impl RenderOutput for Rendered {
             text,
         ))
     }
-    fn cut_off(&mut self) {
-        self.authority_cutoff = Some(0);
-    }
-    fn context_uncertain(text: String) -> Self {
-        let mut result = Self::from(text);
-        result.authority_cutoff = Some(0);
-        result
+    fn flattened_literals(&mut self, literals: Vec<Option<String>>) {
+        // Resolver notifications belong to this node. Values are blank; a
+        // flattened capture supplies its original authored bytes instead.
+        for literal in literals {
+            match (&mut self.literal_only, literal) {
+                (Some(output), Some(literal)) => output.push_str(&literal),
+                _ => self.literal_only = None,
+            }
+        }
     }
     fn append(&mut self, child: &Self) {
         let offset = self.html.len();
-        if let Some(cutoff) = child.authority_cutoff {
-            let cutoff = offset + cutoff;
-            self.authority_cutoff =
-                Some(self.authority_cutoff.map_or(cutoff, |old| old.min(cutoff)));
+        match (&mut self.literal_only, &child.literal_only) {
+            (Some(output), Some(literal)) => {
+                let literal_offset = output.len();
+                self.literal_offsets.extend(
+                    child
+                        .literal_offsets
+                        .iter()
+                        .map(|(a, b)| (a + offset, b + literal_offset)),
+                );
+                output.push_str(literal);
+            }
+            _ => self.literal_only = None,
         }
-        self.neutral.extend(
-            child
-                .neutral
-                .iter()
-                .map(|r| r.start + offset..r.end + offset),
-        );
-        self.literals.extend(
-            child
-                .literals
-                .iter()
-                .map(|r| r.start + offset..r.end + offset),
-        );
         self.authored.extend(
             child
                 .authored
@@ -317,33 +309,14 @@ mod tests {
             .unwrap()
     }
     #[test]
-    fn flatten_rule_is_independent_of_transform_and_preserves_inner_cutoffs() {
+    fn flatten_preserves_literal_bytes_and_drops_authority() {
         for replacement in ["évalue", "changed", ""] {
-            let mut mixed = Rendered::context_literal("é".into());
-            mixed.append(&Rendered::from("value".to_owned()));
-            assert_eq!(mixed.flatten(replacement.into()).authority_cutoff, None);
-            for opener in ["<!--y", "<script>", "<a title=\"", "<textarea>", "<div"] {
-                let literal = Rendered::context_literal(opener.into());
-                assert_eq!(
-                    literal.flatten(replacement.into()).authority_cutoff,
-                    Some(0)
-                );
-            }
-            let mut literal = Rendered::context_literal("é".into());
-            literal.append(&Rendered::context_neutral("<!--dj-if-->".into()));
-            assert_eq!(literal.flatten(replacement.into()).authority_cutoff, None);
-            assert_eq!(
-                Rendered::from("value".to_owned())
-                    .flatten(replacement.into())
-                    .authority_cutoff,
-                None
-            );
-            assert_eq!(
-                Rendered::context_uncertain("".into())
-                    .flatten(replacement.into())
-                    .authority_cutoff,
-                Some(0)
-            );
+            let mut output = Rendered::authored("<script>");
+            output.append(&Rendered::from("</script>".to_owned()));
+            let flattened = output.flatten(replacement.into());
+            assert_eq!(flattened.literal_only.as_deref(), Some("<script>"));
+            assert!(flattened.authored.is_empty());
+            assert!(flattened.origins.is_empty());
         }
     }
 
@@ -426,6 +399,8 @@ mod tests {
                         "render_nodes_with_loader_mut(",
                         "render_block_super(",
                         "record_provenance_flatten(",
+                        "literal_only",
+                        "literal_offsets",
                     ]
                     .iter()
                     .any(|needle| line.contains(needle))
@@ -443,9 +418,219 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "liveview")]
+    fn random_registration_requires_two_independent_trees() {
+        use html5ever::{parse_document, tendril::TendrilSink};
+        use markup5ever_rcdom::{NodeData, RcDom};
+        // Ordinary RcDom parsing: no production annotation, offset projection,
+        // retain_live_authority, or lazy_elements used by the oracle.
+        fn live(html: &str) -> bool {
+            let dom = parse_document(RcDom::default(), Default::default()).one(html);
+            let mut stack = vec![dom.document.clone()];
+            while let Some(node) = stack.pop() {
+                if let NodeData::Element { name, attrs, .. } = &node.data {
+                    if (&*name.local) == "div"
+                        && attrs.borrow().iter().any(|a| {
+                            (&*a.name.local) == "id" && a.value.as_ref() == "property-candidate"
+                        })
+                    {
+                        return true;
+                    }
+                }
+                // template_contents is deliberately not traversed: inert.
+                stack.extend(node.children.borrow().iter().cloned());
+            }
+            false
+        }
+        let pieces = [
+            "",
+            "é",
+            "<!--",
+            "-->",
+            "<script>",
+            "</script>",
+            "<template>",
+            "</template>",
+            "<svg><title>",
+            "</title></svg>",
+            "<table>",
+            "</table>",
+            "<math><mtext>",
+            "</mtext></math>",
+            "<select>",
+            "</select>",
+            "<a x='",
+            "'>",
+            "<svg/>",
+            "c=d<svg><desc><table><desc>x</DESC><math><svg/></svg x='>'>",
+        ];
+        const TAG: &str = "<div id='property-candidate' dj-view='app.Child' dj-lazy></div>";
+        let mut seed = 0x3430_3442_u64;
+        let mut registered = 0;
+        for _ in 0..4000 {
+            let mut choose = || {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                pieces[(seed as usize) % pieces.len()]
+            };
+            let mut source = String::new();
+            let mut literal = String::new();
+            let mut final_html = String::new();
+            let mut ctx = Context::new();
+            for i in 0..8 {
+                let text = choose();
+                if i % 3 == 0 {
+                    let value = choose();
+                    ctx.set(format!("value{i}"), Value::String(value.into()));
+                    source.push_str(&format!("{{{{ value{i}|safe }}}}"));
+                    final_html.push_str(value);
+                } else if i % 3 == 1 {
+                    // Select a template literal expression on the rendered branch.
+                    ctx.set("flag".into(), Value::Bool(true));
+                    source.push_str("{% if flag %}");
+                    source.push_str(&format!(
+                        "{{{{ {}|safe }}}}",
+                        serde_json::to_string(text).unwrap()
+                    ));
+                    source.push_str("{% else %}<!--{% endif %}");
+                    literal.push_str(text);
+                    final_html.push_str(text);
+                } else {
+                    source.push_str("{% filter lower %}");
+                    source.push_str(text);
+                    source.push_str("{% endfilter %}");
+                    // A flattened run contributes original authored bytes.
+                    literal.push_str(text);
+                    final_html.push_str(&text.to_lowercase());
+                }
+                if i == 4 {
+                    source.push_str(TAG);
+                    literal.push_str(TAG);
+                    final_html.push_str(TAG);
+                }
+            }
+            let output = Template::new(&source)
+                .unwrap()
+                .render_with_provenance(&ctx, &NoOpTemplateLoader)
+                .unwrap();
+            // Actual final HTML also includes renderer-owned branch markers.
+            // The oracle parses those real bytes, independently of provenance.
+            let final_html = &output.html;
+            let elements = djust_vdom::lazy_provenance::lazy_elements(
+                &output.html,
+                &output
+                    .authored
+                    .iter()
+                    .map(|r| (r.start, r.end))
+                    .collect::<Vec<_>>(),
+            );
+            if !elements.is_empty() {
+                registered += 1;
+                assert_eq!(
+                    output.literal_only.as_deref(),
+                    Some(literal.as_str()),
+                    "projection {source:?}"
+                );
+                assert!(
+                    live(&literal),
+                    "literal-only violation: {source:?} => {literal:?}"
+                );
+                assert!(
+                    live(final_html),
+                    "final-page violation: {source:?} => {final_html:?}"
+                );
+            }
+        }
+        #[derive(Clone)]
+        struct Loader(std::collections::HashMap<String, String>);
+        impl crate::TemplateLoader for Loader {
+            fn shared_handle(&self) -> std::sync::Arc<dyn crate::TemplateLoader + Send + Sync> {
+                std::sync::Arc::new(self.clone())
+            }
+            fn load_template(&self, name: &str) -> crate::Result<Vec<crate::parser::Node>> {
+                Ok(Template::new(self.0.get(name).expect("property fixture"))?
+                    .nodes
+                    .clone())
+            }
+        }
+        // Random capture/alias/filename/filter-argument templates. Construct the
+        // oracle input from the selected operation, without reading sidecars.
+        for trial in 0..1000 {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            let before = pieces[(seed as usize) % pieces.len()];
+            let parent = pieces[((seed >> 12) as usize) % pieces.len()];
+            let between = pieces[((seed >> 24) as usize) % pieces.len()];
+            let after = pieces[((seed >> 36) as usize) % pieces.len()];
+            let value = pieces[((seed >> 48) as usize) % pieces.len()];
+            let mut ctx = Context::new();
+            ctx.set("q".into(), Value::String(value.into()));
+            ctx.set("empty".into(), Value::String(String::new()));
+            ctx.set("truthy".into(), Value::String("</script>".into()));
+            let (body, expected_literal) = match trial % 5 {
+                0 => (format!("{before}{{% with s=block.super %}}{{{{ empty }}}}{between}{{{{ s }}}}{TAG}{after}{{% endwith %}}"),
+                    format!("{before}{between}{parent}{TAG}{after}")),
+                1 => (format!("{before}{{% with s=block.super %}}{{% with t=s %}}{between}{{{{ t }}}}{{{{ t }}}}{TAG}{after}{{% endwith %}}{{% endwith %}}"),
+                    format!("{before}{between}{parent}{parent}{TAG}{after}")),
+                2 => (format!("{before}{{% firstof block.super as s %}}{between}{{{{ s }}}}{TAG}{after}"),
+                    format!("{before}{between}{parent}{TAG}{after}")),
+                3 => (format!("{before}{{{{ truthy|default:block.super|safe }}}}{between}{TAG}{after}"),
+                    format!("{before}{between}{TAG}{after}")),
+                _ => (format!("{before}{{% include block.super %}}{between}{after}"),
+                    format!("{before}{TAG}{between}{TAG}{after}")),
+            };
+            // Include selector uses rendered parent bytes as a filename, but its
+            // bytes do not contribute to the included output's literal context.
+            let parent_source = if trial % 5 == 4 {
+                "leaf".to_owned()
+            } else {
+                format!("{parent}{{{{ q|safe }}}}")
+            };
+            ctx.set("filename".into(), Value::String("leaf".into()));
+            let loader = Loader(std::collections::HashMap::from([
+                (
+                    "base".into(),
+                    format!("{{% block body %}}{parent_source}{{% endblock %}}"),
+                ),
+                ("leaf".into(), format!("{{{{ q|safe }}}}{TAG}")),
+            ]));
+            let source = format!("{{% extends 'base' %}}{{% block body %}}{body}{{% endblock %}}");
+            let output = Template::new(&source)
+                .unwrap()
+                .render_with_provenance(&ctx, &loader)
+                .unwrap();
+            let elements = djust_vdom::lazy_provenance::lazy_elements(
+                &output.html,
+                &output
+                    .authored
+                    .iter()
+                    .map(|r| (r.start, r.end))
+                    .collect::<Vec<_>>(),
+            );
+            if !elements.is_empty() {
+                assert!(
+                    live(&expected_literal),
+                    "capture literal-only violation: {source:?} => {expected_literal:?}"
+                );
+                assert!(
+                    live(&output.html),
+                    "capture final-page violation: {source:?}"
+                );
+            }
+        }
+        println!("random registrations: {registered}");
+        assert!(
+            registered > 100,
+            "property must exercise positive registrations"
+        );
+    }
+
+    #[test]
     fn expression_context_never_grants_start_tag_authority() {
         let r = render("{{ \"<div dj-view='app.Child' dj-lazy></div>\"|safe }}");
-        assert_eq!(r.literals, vec![0..r.html.len()]);
+        assert_eq!(r.literal_only.as_deref(), Some(r.html.as_str()));
         assert!(r.authored.is_empty());
         assert!(r.origins.is_empty());
     }
@@ -469,10 +654,9 @@ mod tests {
         #[cfg(feature = "liveview")]
         {
             assert_eq!(r.origins.len(), 2);
-            assert!(!r.neutral.is_empty());
+            assert!(r.html.contains("<!--dj-if"));
         }
-        #[cfg(not(feature = "liveview"))]
-        assert!(r.neutral.is_empty());
+        assert!(!r.literal_only.as_ref().unwrap().contains("dj-if"));
     }
 
     #[test]
@@ -565,21 +749,22 @@ pub fn annotate_source(
     }
     // Only whole lexer byte ranges were replaced; no UTF-8 scalar is split.
     let masked = String::from_utf8(masked).unwrap_or_default();
+    // Source annotation locates candidate authority spans only. Liveness is
+    // decided once on the rendered literal-only branch, not all static branches.
     #[cfg(feature = "liveview")]
-    let live = djust_vdom::lazy_provenance::lazy_elements(&masked, &[(0, masked.len())]);
+    let candidates = djust_vdom::lazy_provenance::authority_spans(&masked, &[(0, masked.len())]);
     #[cfg(not(feature = "liveview"))]
-    let live: Vec<SourceContainer> = Vec::new();
-    let containers: Vec<_> = live
+    let candidates: Vec<(usize, usize)> = Vec::new();
+    let containers: Vec<_> = candidates
         .iter()
         .enumerate()
-        .map(|(index, e)| {
-            // Fixed FNV-1a algorithm: stable across hosts and Rust versions.
-            let hash = source.as_bytes()[e.start..e.end]
+        .map(|(index, &(start, end))| {
+            let hash = source.as_bytes()[start..end]
                 .iter()
                 .fold(0xcbf29ce484222325u64, |h, b| {
                     (h ^ u64::from(*b)).wrapping_mul(0x100000001b3)
                 });
-            (e.start, e.end, format!("container{index}:{hash:016x}"))
+            (start, end, format!("container{index}:{hash:016x}"))
         })
         .collect();
     fn walk(
@@ -651,10 +836,4 @@ pub fn annotate_source(
         &containers,
         &std::sync::Arc::from(source),
     );
-}
-
-#[cfg(not(feature = "liveview"))]
-struct SourceContainer {
-    start: usize,
-    end: usize,
 }

@@ -60,8 +60,7 @@ spaceless transforms and captured/reinjected `|safe` HTML grant no authored
 intervals. A filter also drops
 intervals when its output is byte-identical. Unfiltered `block.super` is direct
 renderer composition; filtered or captured `block.super` drops start-tag
-authority. Flattening a possibly-open authored literal context records the
-cutoff described below.
+authority. Flattening preserves the literal-only context described below.
 
 Python page assembly carries the sideband in `RenderedHTML`. Slices clip and
 shift UTF-8 intervals; concatenation shifts them; replacements invalidate the
@@ -70,9 +69,9 @@ source before authority is recorded. Its exact Rust deletion ranges preserve
 the intervals of untouched bytes. Converting the result to ordinary text and
 reinserting it, including via a wrapper-template value, drops that authority.
 
-At compile time, each container must be live in its own authored template
-context, with template expressions masked. The complete tracked Rust render
-then checks liveness again using the literal bytes emitted by the selected
+Source annotation locates authored tag/attribute spans without deciding
+liveness. The complete tracked Rust render checks liveness using the literal
+bytes emitted by the selected
 branches and loop iterations. Its context includes quoted variable expressions,
 the selected literal operand of `cycle`/`firstof` (including named bindings),
 and literal `with`/include bindings and aliases. Literal-derived expression
@@ -81,48 +80,46 @@ are literal-derived. Custom filters and the environment-dependent built-ins
 `date`, `time`, `timesince`, `timeuntil`, `floatformat`, `filesizeformat`,
 `yesno`, `truncatechars`, `truncatechars_html`, `truncatewords` and
 `truncatewords_html` remain opaque, as do translated `_()` expressions and environment-dependent
-tag output such as `now` and `trans`. A value-derived filter chain remains
+tag output such as `now`, `trans` and `blocktrans`/`blocktranslate`.
+Raw translation bodies cross to Django as source; their translated output is
+opaque, rather than a flattened tracked capture. A value-derived filter chain remains
 opaque even if a filter selects a literal fallback argument. These
 context bytes never grant start-tag authority.
 Unfiltered `block.super` composes its literal context; filtered `block.super`
-participates as literal-derived only when the entire parent output is literal
-and its filters meet the same rule. Built-in filters meeting that rule that
+retains the parent's original literal-only bytes while dropping authority.
+Captured values carry their literal-only bytes through scoped bindings and
+aliases, emitted at each use rather than at the time of assignment. Unused
+captures and condition operands contribute no output. Built-in filters meeting that rule that
 leave a mixed parent output byte-identical retain its literal/opaque context
 boundaries, while dropping all start-tag authority. This prevents a filtered
 parent from coalescing a literal opener and a value closer into one balanced run.
-Whenever output carrying authored-literal provenance is flattened, the renderer
-scans its authored literal bytes with value and renderer-owned marker bytes
-blanked at the same offsets. A fail-closed cutoff is recorded iff those bytes
-end in a possibly-open inert context: an unclosed comment, raw-text or
-escapable-raw-text element (`script`, `style`, `textarea`, `title`, `xmp`,
-`iframe`, `noembed`, `noframes`, `noscript`, `plaintext`), unfinished start/end
-tag, quoted attribute value, CDATA or bogus comment. The small scanner evaluates both HTML and foreign-content interpretations,
-because an enclosing SVG/MathML element may start outside the flattened run;
-either possibly-open result records a cutoff. Foreign raw-text names are
-ordinary elements, `<!--` opens a comment, and CDATA sections are recognized.
-In HTML raw text, any `<` other than the matching end tag is possibly-open.
-Inside tags, a quote opens a value only immediately after `=` with optional
-whitespace; quotes elsewhere fail closed. Unsupported tree-builder contexts
-and malformed/uncertain markup also fail closed.
-Pure-literal runs are covered; mixed runs ending in data state do not cut off.
-No lazy container after a cutoff in the complete render is authoritative, even
-after a literal closer. An inner cutoff always survives, including empty output.
-This rule applies at every routed flatten site: filtered `block.super` when
-boundaries cannot be preserved, `{% filter %}`, `{% spaceless %}`, with/include
-bindings and other value captures, and custom block-body captures.
-Cache fragments retain their cutoff as metadata on the cached string itself,
-stored atomically under Django's usual fragment key for hits and misses. Every
-cache-body render computes this verdict, including plain pages and WebSocket
-renders. The verdict is local to the body, independent of surrounding cutoffs.
-Legacy entries without a verdict cannot recover literal/value provenance from
-the cached text and remain fail closed, as do external plain-string overwrites
-and backends stripping metadata. Clear fragment caches when upgrading to avoid
-losing lazy registrations until these entries expire. Fragment text and Django's
-cache key remain unchanged.
+During a tracked render, the renderer also composes a literal-only rendering of
+exactly the selected branch and loop iterations. Authored literal bytes and
+literal-derived expression output are kept. Non-literal value bytes and
+renderer-owned markers contribute the empty string (not same-length spaces).
+Flattened captures contribute their original authored literal bytes with values
+empty, irrespective of transformed output; flattening never grants authority.
+Each authored container's opening byte maps to its offset in that rendering.
 
-Only-value content has no authored opener and does not acquire a cutoff.
-Byte-identical literal-derived filters of `block.super` preserve its context
-boundaries (but drop start-tag authority) and therefore do not flatten it.
+When authored lazy containers exist, html5ever parses the complete literal-only
+rendering once, using the same token-correlated RcDom tree and live-element
+predicate as the final-page (E) check. A container registers only if its own
+start tag creates a live element in **both** the literal-only tree and the
+final-page tree. Comments, raw text, ignored tags and inert template contents
+cannot register. A later authored closer can restore liveness; there is no
+scanner, terminal-state approximation or permanent context cutoff. Untracked
+pages and tracked pages without authored lazy candidates need no extra parse.
+
+Cache fragments store their literal-only bytes alongside fragment text on the
+same cached string object, atomically under Django's usual key. Misses compute
+this metadata even during plain/WebSocket rendering. Hits reuse it without
+rendering the body. Legacy plain entries, external overwrites and serializers
+that strip metadata fail closed for the complete tracked render, including
+candidates before the fragment: unknown later literal bytes can remove earlier
+elements through HTML tree-building. **Clear fragment caches on upgrade** to avoid
+lost lazy registrations until such entries expire. Fragment HTML and cache keys
+are unchanged.
+
 Literal-only byte-identical filters keep following-container authority.
 Renderer-owned neutral marker bytes do not count as values. These rules concern
 rendered content with provenance; ordinary view values and expression operands
@@ -131,13 +128,12 @@ have no authored-render sideband, as described below.
 Liveness is computed on authored text (template literals and literal expression
 output) in the rendered branch. Non-literal output, including view-context data,
 framework tags and HTML-producing filters applied to values, is replaced by
-whitespace at the same byte offsets. Such output does not break authority for
-following containers merely because it contains `<`, `>`, quotes or `--`.
+the empty string. Such output does not break authority for following containers merely because it contains `<`, `>`, quotes or `--`.
 
 A container whose hiding context is produced by a non-literal value (view-context
-data), or assembled across literal/value boundaries, is not modelled by this
-liveness computation. Authors must not hide lazy containers with values. For
-example, a value emitting `<!--` followed by a value emitting `-->`, or
+data) is not modelled by this liveness computation. Empty values can join remaining
+literal bytes into a hiding context; that context is parsed normally. Authors
+must not hide lazy containers with values. For example, a value emitting `<!--` followed by a value emitting `-->`, or
 `<{{ tag }}>` with `tag="script"`, can leave a following authored container
 registered when it survives in the final page. An expression such as
 `{{ "<!--"|add:value|safe }}` is also opaque because its filter argument is a
@@ -153,9 +149,9 @@ iterations. This check is applied once to the complete render. An authored
 closer in a skipped branch cannot make a following container authoritative;
 a value cannot supply the closer for an inert context opened by literal text
 or literal-derived expression output. Only containers live in both the
-compile-time and rendered checks keep start-tag authority and origin addresses.
-The compile-time check remains conservative: a container rejected there does
-not gain authority just because a particular rendered branch would be live.
+literal-only and final-page trees keep start-tag authority and origin addresses.
+Source annotation grants no liveness verdict; inactive branches do not determine
+the rendered branch's liveness.
 
 Provenance alone does not authorize a container. `djust_vdom` parses the final
 coherent page with the HTML5 tokenizer and tree builder. It correlates the

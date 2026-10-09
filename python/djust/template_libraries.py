@@ -1554,13 +1554,13 @@ def _stub_template_with(string_if_invalid: str, debug: bool) -> Any:
 
 
 class _CachedProvenanceFragment(str):
-    """Fragment bytes and cutoff stored atomically under Django's usual key.
+    """Fragment bytes and literal-only context stored atomically under Django's usual key.
 
     A backend that strips subclass metadata returns an ordinary string, which
     is uncertain on a tracked hit. Django can still consume the string itself.
     """
 
-    provenance_cutoff: bool = True
+    literal_only: Optional[str] = None
 
 
 class CacheTagHandler:
@@ -1650,10 +1650,10 @@ class CacheTagHandler:
         # could survive an external overwrite with identical bytes but different
         # provenance. Old/plain entries or serializers dropping metadata are
         # uncertain: their literal/value boundaries cannot be recovered from text.
-        # Only an explicit closed body verdict avoids cutoff, regardless of
-        # which render mode wrote it.
-        context["_djust_cached_provenance_cutoff"] = not (
-            isinstance(cached, _CachedProvenanceFragment) and cached.provenance_cutoff is False
+        context["_djust_cached_literal_only"] = (
+            getattr(cached, "literal_only", None)
+            if isinstance(cached, _CachedProvenanceFragment)
+            else None
         )
         return mark_safe(cached), (backend, key, expire_time)
 
@@ -1665,9 +1665,9 @@ class CacheTagHandler:
         """
         backend, key, expire_time = state
         fragment = content
-        if "_djust_body_provenance_cutoff" in context:
+        if "_djust_body_literal_only" in context:
             fragment = _CachedProvenanceFragment(content)
-            fragment.provenance_cutoff = context["_djust_body_provenance_cutoff"]
+            fragment.literal_only = context["_djust_body_literal_only"]
         backend.set(key, fragment, expire_time)
         return content
 

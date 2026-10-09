@@ -198,11 +198,11 @@ def test_expression_raw_text_and_inert_openers(opener, closer):
         '{% firstof missing "-->" as o %}{{ o }}',
     ],
 )
-def test_literal_closer_alone_never_grants_container_authority(expression):
-    # Source-inert containers cannot acquire authority from the rendered check.
+def test_literal_closer_restores_authored_container_liveness(expression):
+    # The selected literal expression closes the comment in both parsed trees.
     rust = RustLiveView("<!--" + expression + TAG + "-->", [])
     html, spans = rust.render_with_provenance()
-    assert authored_lazy_elements(html, spans) == []
+    assert len(authored_lazy_elements(html, spans)) == 1
 
 
 def test_literal_generated_markup_never_grants_authority():
