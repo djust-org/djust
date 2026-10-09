@@ -30,6 +30,15 @@ from djust.deploy_cli import (  # noqa: E402
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_inherited_git_env(monkeypatch):
+    """Keep fixture git commands isolated from hook execution state (#3179)."""
+    from tests.git_env import GIT_EXECUTION_VARS
+
+    for var in GIT_EXECUTION_VARS:
+        monkeypatch.delenv(var, raising=False)
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
