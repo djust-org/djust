@@ -637,7 +637,10 @@ fn render_effectful_node_output<L: TemplateLoader, R: RenderOutput>(
                 if lazy_text.is_some() {
                     output.identify(lazy_origin.as_deref().unwrap_or("inline"));
                 } else if let Some(site) = lazy_site {
-                    output.identify(&format!("site{site}"));
+                    output.identify(&format!(
+                        "{}/site{site}",
+                        lazy_origin.as_deref().unwrap_or("inline")
+                    ));
                 }
             }
         }
@@ -2470,6 +2473,11 @@ impl djust_core::context::BlockSuperSource for DeferredBlockSuper {
                 .map(|r| (r.start, r.end))
                 .collect(),
             rendered.origins,
+            rendered
+                .literals
+                .into_iter()
+                .map(|r| (r.start, r.end))
+                .collect(),
         ))
     }
 }
