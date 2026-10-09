@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Theming URLs use a shared script-scheme denylist (backported from #3400, #3407, #3420).** Data-derived URLs in navigation, sidebar sections, breadcrumbs, pagination, avatars and auth/error/empty-state pages are neutralised to `"#"` for `javascript:`, `vbscript:` and `data:` schemes, including whitespace and control-character obfuscation. Avatar image sources retain `data:image/*`; links do not. Other schemes, including `sms:`, `geo:` and app deep links, remain unchanged. Developer-supplied button `href=` and `href`/`src`/`action`/`formaction` attributes passed to button, input, select and progress tags raise `ValueError`. Dictionary and object items in iterable collections are checked without mutating caller-owned items; pagination checks every formatted page, first, last, previous and next URL. Regression tests: `python/djust/tests/test_theming_url_scheme_guard.py`.
+
 ## [1.0.9] - 2026-10-03
 
 A 1.0 patch release that includes security fixes; upgrading from 1.0.8 is recommended. The 1.0 line is no longer maintained, so moving to 1.2 or later is advised.
