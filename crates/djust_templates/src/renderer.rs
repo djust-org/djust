@@ -2560,6 +2560,7 @@ impl djust_core::context::BlockSuperSource for DeferredBlockSuper {
                 .into_iter()
                 .map(|r| (r.start, r.end))
                 .collect(),
+            rendered.authority_cutoff,
         ))
     }
 }
@@ -2850,12 +2851,25 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             // must not erase the parent's literal/opaque context boundaries.
             // Otherwise a literal opener and value closer in block.super
             // become one apparently balanced opaque operation (#3442).
-            if R::TRACKED && !literal_output && filters_are_literal(filter_specs, context) {
+            if R::TRACKED {
                 if let Some(mut output) = super_context {
-                    if output.0 == text {
+                    if (!super_literal || output.5.is_some()) && output.0 != text {
+                        // Transforming a mixed parent loses its literal/value
+                        // boundaries. Record the position in the result so even
+                        // containers outside this include/block fail closed.
+                        return Ok(R::context_uncertain(text));
+                    }
+                    if (!literal_output || output.5.is_some())
+                        && filters_are_literal(filter_specs, context)
+                        && output.0 == text
+                    {
                         output.1.clear();
                         output.2.clear();
                         return Ok(R::from_authored_output(output));
+                    }
+                    if output.5.is_some() {
+                        // An opaque outer filter cannot clear an inner cutoff.
+                        return Ok(R::context_uncertain(text));
                     }
                 }
             }

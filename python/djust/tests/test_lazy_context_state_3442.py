@@ -323,3 +323,79 @@ def test_exact_rev3429_http_cases_never_mount_hidden(opener, q):
     assert len(ids) == 1
     assert statuses == [200]
     assert mounts == 0
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("q", ["-->", "x"])
+@pytest.mark.parametrize(
+    "parent,flt",
+    [
+        ("<!--y", "lower"),  # Byte-identical control retains context boundaries.
+        ("<!--Y", "lower"),
+        ("<!--y", 'cut:"y"'),
+        ("<!--y", "title"),
+        ("<!--y", "striptags"),
+        ("<!--y", 'ljust:"20"'),
+    ],
+)
+def test_http_changed_mixed_super_never_mounts_hidden(tmp_path, settings, parent, flt, q):
+    settings.TEMPLATES = [
+        {
+            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "DIRS": [str(tmp_path)],
+            "APP_DIRS": True,
+        }
+    ]
+    (tmp_path / "parent.html").write_text(
+        "{% block body %}" + parent + "{{ q|safe }}{% endblock %}"
+    )
+    (tmp_path / "child.html").write_text(
+        '{% extends "parent.html" %}{% block body %}{{ block.super|'
+        + flt
+        + " }}"
+        + HIDDEN
+        + "-->{% endblock %}"
+    )
+    ids, statuses, mounts = run(
+        "<div dj-root>" + TAG + '{% include "child.html" %}</div>', {"q": q}
+    )
+    assert len(ids) == 1
+    assert statuses == [200]
+    assert mounts == 0
+
+
+@pytest.mark.parametrize("outer_filter", [None, "", "|safe", '|yesno:"y-->,n,m"|safe'])
+@pytest.mark.parametrize("value", ["x", "-->"])
+def test_changed_mixed_super_cutoff_reaches_rest_of_render(tmp_path, outer_filter, value):
+    # UTF-8 before the include tests byte-offset shifting. A literal closer
+    # cannot restore authority after the cutoff, even outside the include.
+    (tmp_path / "parent.html").write_text("{% block body %}Y{{ q|safe }}{% endblock %}")
+    (tmp_path / "child.html").write_text(
+        '{% extends "parent.html" %}{% block body %}{{ block.super|lower }}'
+        + ("" if outer_filter and "yesno" in outer_filter else TAG)
+        + "{% endblock %}"
+    )
+    (tmp_path / "grandchild.html").write_text(
+        '{% extends "child.html" %}{% block body %}{{ block.super'
+        + (outer_filter or "")
+        + " }}{% endblock %}"
+    )
+    target = "grandchild.html" if outer_filter is not None else "child.html"
+    rust = RustLiveView("é" + TAG + '{% include "' + target + '" %}<!-- -->' + TAG, [str(tmp_path)])
+    rust.update_state({"q": value})
+    html, spans = rust.render_with_provenance()
+    assert html.count("dj-lazy") == (2 if outer_filter and "yesno" in outer_filter else 3)
+    assert len(authored_lazy_elements(html, spans)) == 1
+
+
+def test_changed_literal_only_super_keeps_following_authority(tmp_path):
+    (tmp_path / "parent.html").write_text("{% block body %}Y{% endblock %}")
+    rust = RustLiveView(
+        '{% extends "parent.html" %}{% block body %}{{ block.super|lower }}'
+        + TAG
+        + "{% endblock %}",
+        [str(tmp_path)],
+    )
+    html, spans = rust.render_with_provenance()
+    assert html.startswith("y")
+    assert len(authored_lazy_elements(html, spans)) == 1

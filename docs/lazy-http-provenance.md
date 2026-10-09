@@ -88,7 +88,12 @@ and its filters meet the same rule. Built-in filters meeting that rule that
 leave a mixed parent output byte-identical retain its literal/opaque context
 boundaries, while dropping all start-tag authority. This prevents a filtered
 parent from coalescing a literal opener and a value closer into one balanced run.
-Other filtered parent output and captured/reinjected output remain opaque.
+When a filter changes the bytes of a mixed parent, its literal/value boundaries
+are lost. The render records that position and fails closed for every following
+lazy container, including those outside the include or inherited block. A later
+literal closer cannot restore authority in that render. Byte-identical filters
+keep the behaviour above. Other filtered parent output and captured/reinjected
+output remain opaque.
 
 Liveness is computed on authored text (template literals and literal expression
 output) in the rendered branch. Non-literal output, including view-context data,
@@ -101,7 +106,10 @@ data), or assembled across literal/value boundaries, is not modelled by this
 liveness computation. Authors must not hide lazy containers with values. For
 example, a value emitting `<!--` followed by a value emitting `-->`, or
 `<{{ tag }}>` with `tag="script"`, can leave a following authored container
-registered when it survives in the final page. The final-page (E) survival check
+registered when it survives in the final page. An expression such as
+`{{ "<!--"|add:value|safe }}` is also opaque because its filter argument is a
+value, even though its input is quoted literal text; a value can close that
+expression's opener. The final-page (E) survival check
 still rejects containers that are actually hidden in the final HTML; it does not
 track their earlier value-generated hiding context. Conversely, a literal
 `{{ "<!--" }}` cannot be closed by a non-literal value for authored-text

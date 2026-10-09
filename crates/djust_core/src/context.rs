@@ -652,7 +652,7 @@ pub trait BlockSuperSource: std::fmt::Debug + Send + Sync {
     /// The default for external sources is untrusted String output.
     fn render_block_super_authored(&self, ctx: &Context) -> crate::Result<AuthoredOutput> {
         self.render_block_super(ctx)
-            .map(|html| (html, Vec::new(), Vec::new(), Vec::new(), Vec::new()))
+            .map(|html| (html, Vec::new(), Vec::new(), Vec::new(), Vec::new(), None))
     }
 }
 
@@ -665,6 +665,7 @@ pub type AuthoredOutput = (
     Vec<(usize, usize, usize, String)>,
     Vec<(usize, usize)>, // Rendered literal context, separate from authority.
     Vec<(usize, usize)>, // Masked renderer-owned markers.
+    Option<usize>,       // First position after which lazy authority fails closed.
 );
 
 /// The `block` a PYTHON-BRIDGED tag receives while a `{{ block.super }}` is

@@ -13,6 +13,10 @@ pub trait RenderOutput: Default + From<String> + Deref<Target = str> + std::fmt:
     fn context_neutral(text: String) -> Self {
         text.into()
     }
+    /// Byte-changing mixed parent output makes subsequent authority uncertain.
+    fn context_uncertain(text: String) -> Self {
+        text.into()
+    }
     fn from_authored_output(output: djust_core::context::AuthoredOutput) -> Self;
     fn append(&mut self, child: &Self);
     fn push_str(&mut self, text: &str);
@@ -53,6 +57,8 @@ pub struct Rendered {
     pub literals: Vec<Range<usize>>,
     /// Renderer-owned markers remain masked, and cannot end a trusted context run.
     pub neutral: Vec<Range<usize>>,
+    /// First byte at which a transformed mixed parent loses context boundaries.
+    pub authority_cutoff: Option<usize>,
 }
 impl Rendered {
     /// Recheck source liveness on the branch that actually rendered. Literal
@@ -78,7 +84,11 @@ impl Rendered {
         let rejected: std::collections::HashSet<_> = self
             .origins
             .iter()
-            .filter(|(a, _, offset, _)| *offset == 0 && !starts.contains(a))
+            .filter(|(a, _, offset, _)| {
+                *offset == 0
+                    && (!starts.contains(a)
+                        || self.authority_cutoff.is_some_and(|cutoff| *a >= cutoff))
+            })
             .map(|(a, _, _, _)| *a)
             .collect();
         if rejected.is_empty() {
@@ -118,6 +128,7 @@ impl From<String> for Rendered {
             origins: Vec::new(),
             literals: Vec::new(),
             neutral: Vec::new(),
+            authority_cutoff: None,
         }
     }
 }
@@ -139,6 +150,7 @@ impl RenderOutput for Rendered {
         Self {
             html: text.to_owned(),
             neutral: Vec::new(),
+            authority_cutoff: None,
             literals: if text.is_empty() {
                 Vec::new()
             } else {
@@ -195,10 +207,21 @@ impl RenderOutput for Rendered {
             origins: output.2,
             literals: output.3.into_iter().map(|(a, b)| a..b).collect(),
             neutral: output.4.into_iter().map(|(a, b)| a..b).collect(),
+            authority_cutoff: output.5,
         }
+    }
+    fn context_uncertain(text: String) -> Self {
+        let mut result = Self::from(text);
+        result.authority_cutoff = Some(0);
+        result
     }
     fn append(&mut self, child: &Self) {
         let offset = self.html.len();
+        if let Some(cutoff) = child.authority_cutoff {
+            let cutoff = offset + cutoff;
+            self.authority_cutoff =
+                Some(self.authority_cutoff.map_or(cutoff, |old| old.min(cutoff)));
+        }
         self.neutral.extend(
             child
                 .neutral
