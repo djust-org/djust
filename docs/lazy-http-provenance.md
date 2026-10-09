@@ -20,12 +20,15 @@ The server supplies an opaque, keyed `data-djust-lazy-id` and
 `data-djust-embedded` address. The browser posts the address, never a class or
 restored state. The address binds the page class, URL, session, authenticated
 user, parent and child tenant scopes, and the authored container node (template
-origin and AST address) plus its loop index path.
+relative name, authored container index and a short hash of its start-tag bytes)
+plus its include-site and loop index paths.
 Hiding an earlier conditional container does not change the remaining child's
 address or state. Removing a loop item changes subsequent index paths; use a
 stable ordered input when retaining loop child state. Old occurrence-based
 addresses and addresses for containers absent from the current render are
-refused.
+refused. Absolute checkout paths and unrelated template text do not enter the
+address: pods with the same template names and container bytes share identities.
+Changing container bytes changes its address; the old address is refused.
 A fresh page render must authorize that address on every child POST. Mount and
 object permissions run before event dispatch; object permissions run again
 after restoring server-held state. Permission refusals use the existing HTTP
@@ -62,12 +65,18 @@ source before authority is recorded. Its exact Rust deletion ranges preserve
 the intervals of untouched bytes. Converting the result to ordinary text and
 reinserting it, including via a wrapper-template value, drops that authority.
 
+At compile time, each container must be live in its own authored template
+context. Template expressions are opaque, so a value such as `-->`,
+`</script>`, `</textarea>`, `</template>` or `'>` cannot revive a container
+written inside an inert context. Only source-live containers carry start-tag
+authority and origin addresses.
+
 Provenance alone does not authorize a container. `djust_vdom` parses the final
 coherent page with the HTML5 tokenizer and tree builder. It correlates the
 selected attribute ranges with actual start-tag tokens and actual live elements
 using a parser-private namespaced annotation that never enters the page output.
 Comments, script/style bodies, RCDATA, escaped text, inert template contents,
-quoted attribute strings and ignored/merged tags cannot authorize a child.
+quoted attribute strings, noscript bodies and ignored/merged tags cannot authorize a child.
 The selected `dj-view` and `dj-lazy` attributes, including the trigger, must be
 fully authored. Duplicate attributes follow HTML5's first-attribute selection.
 Unrelated interpolated attributes need no authority.
@@ -107,3 +116,23 @@ the authored `dj-view` and `dj-lazy` name/value bytes. Class and trigger come fr
 those authored bytes. Candidates containing another raw `<` fail closed, even
 inside a quoted attribute; HTML entities or newline normalization that change
 an authority attribute's selected bytes also refuse registration.
+
+The template-tree planner detects include cycles and memoizes visits, with a
+20-include depth limit. Plans are cached by template, registry generation and
+loader directories; resolved dynamic plans also depend on selector context.
+Dependency mtime/length checks use the template loader's invalidation policy,
+including missing candidates that could later become selected.
+
+Some authored lazy markup intentionally fails closed and receives no address:
+dynamic includes selected by a loop variable or a `{% with %}` binding that
+is absent from the planning context; source/render context mismatches (for
+example a conditional comment opener); and containers beyond 20 includes.
+Top-level context selectors such as `{% include chosen %}` are supported.
+The `djust._lazy_containers` logger emits a debug message when lazy markup
+remains unregistered, with context, selector, depth and authority checks to try.
+This diagnostic also covers permission refusals and inert/untrusted markup;
+it does not grant authority or expose interpolated values.
+
+Unauthored whitespace immediately after a valueless `dj-lazy` belongs to its
+selected attribute range and fails closed. Prefer a fully literal attribute,
+or an explicit quoted trigger, and keep interpolations outside authority bytes.

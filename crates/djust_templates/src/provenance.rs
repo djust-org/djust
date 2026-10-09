@@ -9,6 +9,9 @@ pub trait RenderOutput: Default + From<String> + Deref<Target = str> + std::fmt:
     fn from_authored_output(output: djust_core::context::AuthoredOutput) -> Self;
     fn append(&mut self, child: &Self);
     fn push_str(&mut self, text: &str);
+    fn source_text(text: &str, _source: &SourceText) -> Self {
+        Self::authored(text)
+    }
     fn has_origin(&self) -> bool {
         false
     }
@@ -78,6 +81,22 @@ impl RenderOutput for Rendered {
             },
         }
     }
+    fn source_text(text: &str, source: &SourceText) -> Self {
+        let mut result = Self::authored(text);
+        result.origins = source.origins.clone();
+        result.authored.clear();
+        let mut cursor = 0;
+        for &offset in &source.inert_openings {
+            if cursor < offset {
+                result.authored.push(cursor..offset);
+            }
+            cursor = offset + 1;
+        }
+        if cursor < text.len() {
+            result.authored.push(cursor..text.len());
+        }
+        result
+    }
     fn from_authored_output(output: djust_core::context::AuthoredOutput) -> Self {
         Self {
             html: output.0,
@@ -116,11 +135,7 @@ impl RenderOutput for Rendered {
         if self.origins.is_empty() {
             return;
         }
-        self.identify(&format!(
-            "loop{}:include{}",
-            context.dj_if_loop_path(),
-            context.dj_if_include_path()
-        ));
+        self.identify(&format!("loop{}", context.dj_if_loop_path()));
     }
 }
 
@@ -169,4 +184,159 @@ mod tests {
         );
         assert!(r.authored.is_empty());
     }
+}
+
+/// Compile-time liveness in the source template, independent of rendered values.
+#[derive(Debug, Clone, Default)]
+pub struct SourceText {
+    pub inert_openings: Vec<usize>,
+    pub origins: Vec<(usize, usize, usize, String)>,
+}
+
+pub fn annotate_source(
+    nodes: &mut [crate::parser::Node],
+    tokens: &[crate::lexer::Token],
+    spans: &[crate::lexer::Span],
+    source: &str,
+) {
+    use crate::parser::Node;
+    if spans.is_empty() {
+        return;
+    }
+    fn sites(nodes: &mut [crate::parser::Node], index: &mut usize) {
+        use crate::parser::Node;
+        for node in nodes {
+            if let Node::Located {
+                nodes, lazy_site, ..
+            } = node
+            {
+                if matches!(nodes.first(), Some(Node::Include { .. }))
+                    || matches!(nodes.first(), Some(Node::Variable(name, _, _)) if name == "block.super")
+                {
+                    *lazy_site = Some(*index);
+                    *index += 1;
+                }
+            }
+            for children in node.child_lists_mut().into_iter().flatten() {
+                sites(children, index);
+            }
+        }
+    }
+    sites(nodes, &mut 0);
+    if !source.to_ascii_lowercase().contains("dj-lazy") {
+        return;
+    }
+    // Same byte offsets as source; template syntax cannot terminate an HTML context.
+    let mut masked = source.as_bytes().to_vec();
+    let mut texts = Vec::new();
+    let mut comment = false;
+    for (token, &(a, b)) in tokens.iter().zip(spans) {
+        if let crate::lexer::Token::Tag(name, _) = token {
+            if name == "comment" {
+                comment = true;
+            }
+            if name == "endcomment" {
+                comment = false;
+            }
+        }
+        if !comment && matches!(token, crate::lexer::Token::Text(_)) {
+            texts.push((a, b));
+        } else {
+            masked[a..b].fill(b' ');
+        }
+    }
+    // Only whole lexer byte ranges were replaced; no UTF-8 scalar is split.
+    let masked = String::from_utf8(masked).unwrap_or_default();
+    #[cfg(feature = "liveview")]
+    let live = djust_vdom::lazy_provenance::lazy_elements(&masked, &[(0, masked.len())]);
+    #[cfg(not(feature = "liveview"))]
+    let live: Vec<SourceContainer> = Vec::new();
+    let containers: Vec<_> = live
+        .iter()
+        .enumerate()
+        .map(|(index, e)| {
+            // Fixed FNV-1a algorithm: stable across hosts and Rust versions.
+            let hash = source.as_bytes()[e.start..e.end]
+                .iter()
+                .fold(0xcbf29ce484222325u64, |h, b| {
+                    (h ^ u64::from(*b)).wrapping_mul(0x100000001b3)
+                });
+            (e.start, e.end, format!("container{index}:{hash:016x}"))
+        })
+        .collect();
+    fn walk(
+        nodes: &mut [Node],
+        texts: &[(usize, usize)],
+        cursor: &mut usize,
+        containers: &[(usize, usize, String)],
+        source: &std::sync::Arc<str>,
+    ) {
+        for node in nodes {
+            if let Node::Text(text) = node {
+                // Comment blocks can discard lexer text. Match the actual literal,
+                // rather than assuming every text token reaches the AST.
+                let matched = texts[*cursor..]
+                    .iter()
+                    .position(|&(a, b)| source.get(a..b) == Some(text.as_str()));
+                let a = if let Some(index) = matched {
+                    *cursor += index + 1;
+                    texts[*cursor - 1].0
+                } else {
+                    // Synthetic/verbatim text without a lexer span fails closed.
+                    usize::MAX
+                };
+                let mut metadata = SourceText::default();
+                for (offset, _) in text.match_indices('<') {
+                    if !containers
+                        .iter()
+                        .any(|(start, _, _)| a.checked_add(offset) == Some(*start))
+                    {
+                        metadata.inert_openings.push(offset);
+                    }
+                }
+                for (start, end, id) in containers {
+                    let left = (*start).max(a);
+                    let right = (*end).min(a.saturating_add(text.len()));
+                    if left < right {
+                        metadata
+                            .origins
+                            .push((left - a, right - a, left - start, id.clone()));
+                    }
+                }
+                let text = std::mem::take(text);
+                let span = if a == usize::MAX {
+                    (0, 0)
+                } else {
+                    (a, a + text.len())
+                };
+                *node = Node::Located {
+                    nodes: vec![Node::Text(text)],
+                    span,
+                    registry_namespace: crate::registry_scope::current(),
+                    source: source.clone(),
+                    origin: None,
+                    lazy_origin: None,
+                    lazy_site: None,
+                    lazy_text: Some(metadata),
+                };
+                continue;
+            }
+            for children in node.child_lists_mut().into_iter().flatten() {
+                walk(children, texts, cursor, containers, source);
+            }
+        }
+    }
+    walk(
+        nodes,
+        &texts,
+        &mut 0,
+        &containers,
+        &std::sync::Arc::from(source),
+    );
+}
+
+#[cfg(not(feature = "liveview"))]
+struct SourceContainer {
+    start: usize,
+    end: usize,
 }

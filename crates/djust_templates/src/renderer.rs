@@ -598,11 +598,8 @@ pub fn render_nodes_output<L: TemplateLoader, R: RenderOutput>(
     loader: Option<&L>,
 ) -> Result<R> {
     let mut output = R::default();
-    for (index, node) in nodes.iter().enumerate() {
-        let mut child = render_effectful_node_output::<L, R>(node, context, loader)?;
-        if R::TRACKED && child.has_origin() {
-            child.identify(&index.to_string());
-        }
+    for node in nodes {
+        let child = render_effectful_node_output::<L, R>(node, context, loader)?;
         output.append(&child);
     }
     Ok((output).into())
@@ -619,18 +616,29 @@ fn render_effectful_node_output<L: TemplateLoader, R: RenderOutput>(
         source,
         origin,
         registry_namespace,
+        lazy_origin,
+        lazy_site,
+        lazy_text,
     } = node
     {
         let _namespace = crate::registry_scope::NamespaceGuard::enter(*registry_namespace);
         let previous = context.replace_node_identity(Some((source.as_ptr() as usize, span.0)));
-        let mut rendered = render_effectful_node_output::<L, R>(&nodes[0], context, loader);
+        let mut rendered = if let (Some(metadata), Node::Text(text)) = (lazy_text, &nodes[0]) {
+            let mut output = R::source_text(text, metadata);
+            if R::TRACKED {
+                output.loop_identity(context);
+            }
+            Ok(output)
+        } else {
+            render_effectful_node_output::<L, R>(&nodes[0], context, loader)
+        };
         if R::TRACKED {
             if let Ok(output) = &mut rendered {
-                output.identify(&format!(
-                    "{}:{}",
-                    origin.as_deref().unwrap_or("inline"),
-                    span.0
-                ));
+                if lazy_text.is_some() {
+                    output.identify(lazy_origin.as_deref().unwrap_or("inline"));
+                } else if let Some(site) = lazy_site {
+                    output.identify(&format!("site{site}"));
+                }
             }
         }
         context.replace_node_identity(previous);
@@ -3888,12 +3896,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                     let mut output =
                         render_nodes_output::<L, R>(&nodes, include_context, Some(loader))?;
                     if R::TRACKED && output.has_origin() {
-                        output.identify(&format!(
-                            "include:{}",
-                            loader
-                                .template_origin(name)
-                                .unwrap_or_else(|| name.to_owned())
-                        ));
+                        output.identify(&format!("include:{}", name));
                     }
                     Ok(output)
                 };

@@ -331,20 +331,7 @@ impl Template {
         context: &Context,
         loader: &L,
     ) -> Result<provenance::Rendered> {
-        use std::hash::{Hash, Hasher};
-        let mut output: provenance::Rendered =
-            self.render_output_named_mut(&mut context.clone(), loader, None)?;
-        let mut hash = std::collections::hash_map::DefaultHasher::new();
-        self.source.hash(&mut hash);
-        provenance::RenderOutput::identify(&mut output, &format!("template{:x}", hash.finish()));
-        for node in &self.nodes {
-            if let Node::Extends(token) = node {
-                let parent = renderer::resolve_template_reference(token, context)?.to_string();
-                let origin = loader.template_origin(&parent).unwrap_or(parent);
-                provenance::RenderOutput::identify(&mut output, &format!("parent:{origin}"));
-            }
-        }
-        Ok(output)
+        self.render_output_named_mut(&mut context.clone(), loader, None)
     }
 
     pub fn render_output_named_mut<L: TemplateLoader, R: provenance::RenderOutput>(

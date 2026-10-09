@@ -2760,6 +2760,43 @@ fn resolved_lazy_syntax(nodes: &[djust_templates::parser::Node]) -> bool {
     found
 }
 
+type LazyFileStamp = Option<(std::time::SystemTime, u64)>;
+fn lazy_file_stamp(path: &std::path::Path) -> LazyFileStamp {
+    let metadata = std::fs::metadata(path).ok()?;
+    Some((metadata.modified().ok()?, metadata.len()))
+}
+#[derive(Clone)]
+struct LazyTreePlan {
+    generation: u64,
+    found: bool,
+    context: Option<(Vec<String>, String)>,
+    files: Vec<(std::path::PathBuf, LazyFileStamp)>,
+}
+type LazyPlanKey = (u64, String, Vec<std::path::PathBuf>, bool);
+static LAZY_TREE_PLANS: Lazy<DashMap<LazyPlanKey, LazyTreePlan>> = Lazy::new(DashMap::new);
+#[derive(Default)]
+struct LazyPlanWalk {
+    active: std::collections::HashSet<String>,
+    memo: HashMap<(String, usize, String), bool>,
+    files: HashMap<std::path::PathBuf, LazyFileStamp>,
+    dynamic: bool,
+    context_keys: std::collections::HashSet<String>,
+}
+fn lazy_plan_context(context: &Context) -> String {
+    let mut values: Vec<_> = context.to_hashmap().into_iter().collect();
+    values.sort_by(|a, b| a.0.cmp(&b.0));
+    format!("{values:?}")
+}
+fn lazy_selector_context(context: &Context, keys: &[String]) -> String {
+    let values: Vec<_> = keys.iter().map(|key| (key, context.get(key))).collect();
+    format!("{values:?}")
+}
+fn watch_lazy_selector(expression: &str, walk: &mut LazyPlanWalk) -> PyResult<()> {
+    let variables =
+        djust_templates::parser::extract_template_variables(&format!("{{{{ {expression} }}}}"))?;
+    walk.context_keys.extend(variables.into_keys());
+    Ok(())
+}
 fn needs_lazy_tree(
     source: &str,
     dirs: &[std::path::PathBuf],
@@ -2767,6 +2804,95 @@ fn needs_lazy_tree(
     depth: usize,
     current_name: Option<&str>,
     potential: bool,
+) -> PyResult<bool> {
+    let generation = djust_templates::registry::registry_generation();
+    let key = (
+        djust_templates::registry_scope::current(),
+        source.to_owned(),
+        dirs.to_vec(),
+        potential,
+    );
+    if let Some(plan) = LAZY_TREE_PLANS.get(&key) {
+        if plan.generation == generation
+            && plan
+                .context
+                .as_ref()
+                .is_none_or(|(keys, saved)| *saved == lazy_selector_context(context, keys))
+            && plan
+                .files
+                .iter()
+                .all(|(path, stamp)| lazy_file_stamp(path) == *stamp)
+        {
+            return Ok(plan.found);
+        }
+    }
+    let mut walk = LazyPlanWalk::default();
+    let found = needs_lazy_tree_walk(
+        source,
+        dirs,
+        context,
+        depth,
+        current_name,
+        potential,
+        &mut walk,
+    )?;
+    // Bound storage independently of the renderer's source cache.
+    if LAZY_TREE_PLANS.len() >= 512 {
+        LAZY_TREE_PLANS.clear();
+    }
+    LAZY_TREE_PLANS.insert(
+        key,
+        LazyTreePlan {
+            generation,
+            found,
+            context: walk.dynamic.then(|| {
+                let mut keys: Vec<_> = walk.context_keys.into_iter().collect();
+                keys.sort();
+                let value = lazy_selector_context(context, &keys);
+                (keys, value)
+            }),
+            files: walk.files.into_iter().collect(),
+        },
+    );
+    Ok(found)
+}
+fn needs_lazy_tree_walk(
+    source: &str,
+    dirs: &[std::path::PathBuf],
+    context: &Context,
+    depth: usize,
+    current_name: Option<&str>,
+    potential: bool,
+    walk: &mut LazyPlanWalk,
+) -> PyResult<bool> {
+    if depth > 20 {
+        return Ok(false);
+    }
+    let identity = current_name.unwrap_or(source).to_owned();
+    if !walk.active.insert(identity.clone()) {
+        return Ok(false);
+    }
+    let key = (identity.clone(), depth, lazy_plan_context(context));
+    if let Some(found) = walk.memo.get(&key) {
+        walk.active.remove(&identity);
+        return Ok(*found);
+    }
+    let found =
+        needs_lazy_tree_uncached(source, dirs, context, depth, current_name, potential, walk);
+    walk.active.remove(&identity);
+    if let Ok(value) = found {
+        walk.memo.insert(key, value);
+    }
+    found
+}
+fn needs_lazy_tree_uncached(
+    source: &str,
+    dirs: &[std::path::PathBuf],
+    context: &Context,
+    depth: usize,
+    current_name: Option<&str>,
+    potential: bool,
+    walk: &mut LazyPlanWalk,
 ) -> PyResult<bool> {
     if depth > 20 {
         return Ok(false);
@@ -2782,7 +2908,19 @@ fn needs_lazy_tree(
     else {
         return Ok(false);
     };
+    for dependency in &refs {
+        watch_lazy_selector(&dependency.operand, walk)?;
+        for (_, expression) in &dependency.bindings {
+            watch_lazy_selector(expression, walk)?;
+        }
+    }
     if template.uses_extends() {
+        if refs
+            .iter()
+            .any(|dependency| !dependency.operand.starts_with(['\'', '"']))
+        {
+            walk.dynamic = true;
+        }
         // A source-only pass must defer an unresolved dynamic parent.
         if potential
             && refs.iter().any(|dependency| {
@@ -2802,6 +2940,40 @@ fn needs_lazy_tree(
             current_name,
             Some(context),
         )?;
+        fn watch_origins(nodes: &[djust_templates::parser::Node], walk: &mut LazyPlanWalk) {
+            for node in nodes {
+                if let djust_templates::parser::Node::Located {
+                    origin: Some(origin),
+                    ..
+                } = node
+                {
+                    let path = std::path::PathBuf::from(origin);
+                    walk.files.insert(path.clone(), lazy_file_stamp(&path));
+                }
+                for children in node.child_lists().into_iter().flatten() {
+                    watch_origins(children, walk);
+                }
+            }
+        }
+        for layer in &chain.layers {
+            watch_origins(&layer.nodes, walk);
+            let mut parents = Vec::new();
+            lazy_dependencies(&layer.nodes, &mut parents);
+            for parent in parents {
+                watch_lazy_selector(&parent.operand, walk)?;
+                for (_, expression) in &parent.bindings {
+                    watch_lazy_selector(expression, walk)?;
+                }
+                if let Ok(Value::String(name) | Value::SafeString(name)) =
+                    djust_templates::renderer::resolve_template_reference(&parent.operand, context)
+                {
+                    for dir in dirs {
+                        let path = dir.join(&name);
+                        walk.files.insert(path.clone(), lazy_file_stamp(&path));
+                    }
+                }
+            }
+        }
         let nodes = chain.apply_block_overrides(chain.get_root_nodes());
         local = resolved_lazy_syntax(&nodes);
         refs.clear();
@@ -2815,6 +2987,9 @@ fn needs_lazy_tree(
         let literal = token.starts_with(['\'', '"'])
             && token.ends_with(['\'', '"'])
             && !djust_templates::filter_lexer::has_unquoted_pipe(token);
+        if !literal {
+            walk.dynamic = true;
+        }
         // Pre-render source planning cannot know a dynamic selector yet. It
         // preserves source bytes, but only resolved render planning tracks.
         if potential && !literal {
@@ -2850,15 +3025,17 @@ fn needs_lazy_tree(
             let mut selected = false;
             for dir in dirs {
                 let path = dir.join(&name);
+                walk.files.insert(path.clone(), lazy_file_stamp(&path));
                 if path.is_file() {
                     let child = lazy_source_file(&path)?;
-                    if needs_lazy_tree(
+                    if needs_lazy_tree_walk(
                         &child,
                         dirs,
                         &child_context,
                         depth + 1,
                         Some(&name),
                         potential,
+                        walk,
                     )? {
                         return Ok(true);
                     }
@@ -2958,6 +3135,7 @@ fn release_registry_namespace(namespace: u64) -> PyResult<()> {
     djust_templates::inheritance::release_registry_namespace(namespace);
     TEMPLATE_CACHE.retain(|(scope, _), _| *scope != namespace);
     RESOLVED_LAZY_SYNTAX.retain(|(scope, _, _), _| *scope != namespace);
+    LAZY_TREE_PLANS.retain(|(scope, _, _, _), _| *scope != namespace);
     Ok(())
 }
 

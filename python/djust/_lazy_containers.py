@@ -6,6 +6,8 @@ The client sends a keyed address, never a class or a state payload.
 
 from __future__ import annotations
 
+import logging
+
 from dataclasses import dataclass
 from typing import Any
 
@@ -21,6 +23,17 @@ from .auth.core import run_pre_mount_auth, enforce_object_permission
 from .mixins.sticky import _child_identity
 
 MOUNT_EVENT = "djust_lazy_mount"
+
+
+logger = logging.getLogger(__name__)
+
+
+def _log_unregistered(html: str, registered: int) -> None:
+    if logger.isEnabledFor(logging.DEBUG) and html.lower().count("dj-lazy") > registered:
+        logger.debug(
+            "Lazy markup did not register: check source/final HTML context, include selectors "
+            "(loop/with bindings), include depth (20), authority bytes and child permissions"
+        )
 
 
 @dataclass(frozen=True)
@@ -40,12 +53,15 @@ def register_lazy_containers(parent: Any, request: Any, html: str) -> str:
         or request is None
         or not uses_legacy_exposure(parent)
     ):
+        if not getattr(parent, "_defer_lazy_registration", False):
+            _log_unregistered(html, 0)
         return html
     from ._rust import authored_lazy_elements
     from .templatetags.live_tags import resolve_live_view_class
 
     elements = authored_lazy_elements(html, list(html.spans))
     if not elements:
+        _log_unregistered(html, 0)
         return html
     # A page with only deferred children may have no parent handlers or form
     # token. Its first lazy POST still needs the normal CSRF cookie/session.
@@ -96,6 +112,7 @@ def register_lazy_containers(parent: Any, request: Any, html: str) -> str:
                 "user": user_id,
                 "child_tenant": child_tenant,
                 "authored_node": origin,
+                "template": getattr(parent, "template_name", None),
             },
         )
         view_id = "lazy_" + identity
@@ -135,6 +152,7 @@ def register_lazy_containers(parent: Any, request: Any, html: str) -> str:
     parts.append(html[cursor:])
     html = join(parts)
     parent.__dict__["_http_lazy_validated_html"] = html
+    _log_unregistered(html, len(parent._http_lazy_containers))
     return html
 
 
