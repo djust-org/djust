@@ -27,6 +27,7 @@ from asgiref.sync import async_to_sync
 from django.db import close_old_connections
 
 from ._clock_loops import is_serving_loop
+from ._exposure_diagnostics import log_failure
 from ._exposure_diagnostics import diagnostic_scope, _details_allowed
 from .presence import PresenceManager, tenant_scoped_presence_key
 from .push import apush_to_view
@@ -461,13 +462,20 @@ class RoomClock:
             run.last_log = now
             # Do not interpolate scope, exception text, application Stop reasons
             # or traceback by default, even when Django DEBUG is true.
-            logger.error(
-                "Clock %s %s failed (%s)",
-                self.name,
-                operation,
-                type(exc).__name__,
-                exc_info=exc if self.log_details else None,
-            )
+            if self.log_details:
+                # The traceback goes through the framework's diagnostics gate,
+                # like every other exception-carrying log site.
+                log_failure(
+                    logger,
+                    exc,
+                    "Clock %s %s failed (%s)",
+                    self.name,
+                    operation,
+                    type(exc).__name__,
+                    traceback=True,
+                )
+            else:
+                logger.error("Clock %s %s failed (%s)", self.name, operation, type(exc).__name__)
 
     async def _timeout(self, awaitable: Any, seconds: float) -> Any:
         # Same time source as the schedule, including deterministic timeouts.
