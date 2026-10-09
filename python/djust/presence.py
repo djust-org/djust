@@ -394,8 +394,6 @@ class PresenceMixin:
         the ``_VIEW_PATH_RE`` check), or any other transient backend error
         never breaks ``track_presence`` / ``untrack_presence`` (#1614).
         """
-        import asyncio
-
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -569,7 +567,7 @@ class PresenceMixin:
         self._presence_connection_id = connection_id
 
         self._presence_tracked = True
-        self._ensure_room_clock(presence_key)
+        clock_ensure = self._ensure_room_clock(presence_key)
 
         # #1611 — refresh online_count after the backend join so this user's
         # own join is included.
@@ -581,18 +579,32 @@ class PresenceMixin:
         # so the broadcast terminates after one hop.
         self._broadcast_presence_change()
 
-        # Call presence join handler if it exists. It means "this user arrived":
-        # a user already present through another connection did not.
+        # A synchronous API cannot await on an event-loop thread. Defer the
+        # first-join callback until the asynchronous ensure has completed.
         if first_connection and hasattr(self, "handle_presence_join"):
-            try:
-                self.handle_presence_join(presence_data)
-            except Exception as e:
-                from ._exposure_diagnostics import log_failure_for
 
-                # handle_presence_join is application code (ADR-038).
-                log_failure_for(
-                    logger, (self,), e, "Error in handle_presence_join: %s", e, traceback=True
-                )
+            def joined() -> None:
+                # Disconnect/retrack may have happened while ensure waited.
+                if not self._presence_tracked or self._presence_connection_id != connection_id:
+                    return
+                try:
+                    self.handle_presence_join(presence_data)
+                except Exception as e:
+                    from ._exposure_diagnostics import log_failure_for
+
+                    log_failure_for(
+                        logger, (self,), e, "Error in handle_presence_join: %s", e, traceback=True
+                    )
+
+            if clock_ensure is None:
+                joined()
+            else:
+
+                def after_ensure(task: asyncio.Task[bool]) -> None:
+                    if not task.cancelled() and task.exception() is None:
+                        joined()
+
+                clock_ensure.add_done_callback(after_ensure)
 
     def _restore_presence(self) -> None:
         """Re-register this view's presence with the process-wide manager.
@@ -639,7 +651,7 @@ class PresenceMixin:
                 exc,
             )
 
-    def _ensure_room_clock(self, presence_key: str) -> None:
+    def _ensure_room_clock(self, presence_key: str) -> asyncio.Task[bool] | None:
         """Bind every tracked/restored connection, including silent second tabs.
 
         Use the actual recorded presence key for liveness. Namespace the clock
@@ -647,7 +659,7 @@ class PresenceMixin:
         """
         clock = self.room_clock
         if clock is None:
-            return
+            return None
         key = presence_key
         tenant = getattr(self, "_tenant", None)
         if tenant is not None:
@@ -666,8 +678,6 @@ class PresenceMixin:
             raise ValueError("room_clock needs one available push scope")
         self.push_scope = scope if len(scopes) == 1 else sorted(scopes)
         self._room_clock_scope = scope
-        import asyncio
-
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -694,6 +704,8 @@ class PresenceMixin:
                     )
 
             task.add_done_callback(ensured)
+            return task
+        return None
 
     def untrack_presence(self) -> None:
         """Stop tracking this view's presence.

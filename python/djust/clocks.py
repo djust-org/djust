@@ -136,6 +136,8 @@ _pool = None
 _pool_lock = threading.Lock()
 _registry_lock = threading.RLock()
 _registry = {}
+# Wall-clock budget for all retirement waits in one ensure call.
+_STOP_WAIT_SECONDS = 1.0
 
 
 def _worker_pool() -> _Pool:
@@ -277,7 +279,7 @@ class RoomClock:
         return async_to_sync(self.aensure)(view, key, presence_key=presence_key)
 
     async def aensure(self, view: Any, key: str, *, presence_key: str | None = None) -> bool:
-        """Start idempotently, or refuse a limit; return whether running."""
+        """Start idempotently; return False at capacity or after a 1s stop wait."""
         if _disabled.get():
             return False
         loop = asyncio.get_running_loop()
@@ -296,6 +298,7 @@ class RoomClock:
         if tenant is not None and not scope.startswith(f"tenant:{tenant_id}:"):
             raise ValueError("resolved clock tenants require TenantMixin scoping")
         now = self._time.now()
+        retirement_deadline = loop.time() + _STOP_WAIT_SECONDS
         while True:
             result = self._ensure_on_loop(
                 loop, view, key, scope, tenant, tenant_id, now, presence_key
@@ -309,7 +312,15 @@ class RoomClock:
                 result = result.done
             elif not isinstance(result, Future):
                 return result
-            await asyncio.shield(asyncio.wrap_future(result))
+            # A worker cannot be cancelled safely. Bound the join instead,
+            # retaining ownership until it finishes; never overlap its writes.
+            remaining = retirement_deadline - loop.time()
+            if remaining <= 0:
+                return False
+            try:
+                await asyncio.wait_for(asyncio.shield(asyncio.wrap_future(result)), remaining)
+            except asyncio.TimeoutError:
+                return False
             now = self._time.now()
 
     def _ensure_on_loop(self, loop, view, key, scope, tenant, tenant_id, now, presence_key):

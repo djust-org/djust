@@ -402,6 +402,7 @@ class AsyncJoinView(RoomView):
         self.track_presence({})
 
     def handle_presence_join(self, presence):
+        self.clock_running_on_join = CLOCK.running(self._room_clock_scope)
         self.joins += 1
 
 
@@ -415,6 +416,8 @@ async def test_async_handler_tracks_and_broadcasts_presence_with_clock():
             sockets.append(peer)
             await peer.send_json_to({"type": "event", "event": "join", "params": {}})
             assert (await peer.receive_json_from(timeout=3))["type"] == "patch"
+            await wait_until(lambda: peer_consumer.view_instance.joins == 1, what="first join")
+            assert peer_consumer.view_instance.clock_running_on_join
             joining, consumer = await mount(view_class=AsyncJoinView)
             sockets.append(joining)
             await joining.send_json_to({"type": "event", "event": "join", "params": {}})

@@ -93,8 +93,14 @@ Without the optional `room_clock` attribute, call `clock.ensure(self, key)` from
 authorized WebSocket mount/event/tick code. Assign `self.push_scope` to
 `clock.scope(self, key)` first. Async code calls `await clock.aensure(self, key)`.
 Presence tracking also works in async handlers; its synchronous binding schedules
-`aensure` on the serving loop and observes failures. Explicit stop-then-ensure
-waits for the old run to retire before starting a new run.
+`aensure` on the serving loop and observes failures. The first joiner's
+`handle_presence_join` runs after that ensure completes, without blocking the
+loop; it may run after the async event handler returns. As with capacity refusal,
+a failed ensure cannot guarantee a running clock to the callback.
+Explicit stop-then-ensure waits at most one second (real time) for the old run to
+retire before starting a new run. If it has not retired, ensure returns `False`;
+retry later. The stopping run retains ownership, so its unfinished sync step
+cannot overlap a replacement.
 `ensure` refuses plain management-command/Celery threads and unregistered loops;
 `async_to_sync` there would create a temporary loop that immediately dies.
 
@@ -121,6 +127,10 @@ attempted steps within `run_id`; restart creates a new run ID. `fence` is always
 `None`. Seeds and authoritative room state belong to the application.
 
 The doorbell uses a payload built once from the raw key (default `{"key": key}`).
+A custom `Publish.payload` factory runs in the shared clock worker pool, once
+per run and outside the registry lock. First-join ensure waits for its result,
+including any queue delay from busy clock workers. Keep factories short; this
+initialization wait is separate from the one-second stopping-run wait.
 It carries no sequence or run ID. Existing push delivery is best effort,
 ordered, bounded, and coalesces identical queued events. A busy session gets
 one queued doorbell for that key, then reads the latest committed snapshot.

@@ -1085,3 +1085,39 @@ async def test_step_stop_commits_before_foreign_loop_ensure():
         await time.settle()
     finally:
         await cleanup(c, time)
+
+
+@pytest.mark.asyncio
+async def test_join_hung_stopping_step_is_bounded_without_overlapping_workers():
+    register_serving_loop()
+    entered, release = threading.Event(), threading.Event()
+    ticks = []
+
+    def step(tick):
+        ticks.append(tick)
+        entered.set()
+        release.wait(5)
+
+    time = ManualClock()
+    c = RoomClock(name="hung_join", interval=0.02, step=step, idle_stop=100, time_source=time)
+    scope = c.scope(view(), "room")
+    try:
+        assert await c.aensure(view(), "room")
+        await time.advance(0.02)
+        assert await asyncio.to_thread(entered.wait, 5)
+        old_id = c.stats()[scope]["run_id"]
+        assert c.stop(scope)
+        # Real time bounds retirement waits even with a custom scheduling clock.
+        assert await asyncio.wait_for(c.aensure(view(), "room"), 2) is False
+        assert c.stats()[scope]["run_id"] == old_id
+        assert len(ticks) == 1
+        release.set()
+        await asyncio.wait_for(asyncio.wrap_future(c._lookup(scope).done), 2)
+        assert await c.aensure(view(), "room")
+        assert c.stats()[scope]["run_id"] != old_id
+    finally:
+        release.set()
+        c.stop(scope)
+        run = c._lookup(scope)
+        if run is not None:
+            await asyncio.wait_for(asyncio.wrap_future(run.done), 2)

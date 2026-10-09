@@ -48,8 +48,8 @@ quarters of those threads; other eligible due calls can proceed.
 | Method | Result and behavior |
 | --- | --- |
 | `scope(view, key)` | Canonical namespace and percent-encoded raw key, plus the resolved view's presence tenant prefix. Use this exact string for push subscriptions and state keys. |
-| `ensure(view, key)` | Sync bridge for authorized WebSocket lifecycle code; returns `True` if running, `False` at capacity or when disabled in tests. |
-| `await aensure(view, key)` | Async equivalent; refuses an unregistered/non-serving loop. A join during a requested or step-returned stop waits for retirement and starts a fresh run. |
+| `ensure(view, key)` | Sync bridge for authorized WebSocket lifecycle code; returns `True` if running, `False` at capacity, when disabled in tests, or after the one-second stopping-run wait. |
+| `await aensure(view, key)` | Async equivalent; refuses an unregistered/non-serving loop. A join during a requested or step-returned stop waits up to one second of real time for retirement, then starts a fresh run or returns `False` without cancelling the old worker. |
 | `running(scope)` | Whether the scoped run is active, including an unfinished sync step. |
 | `stop(scope, reason="requested")` | Graceful stop request, safe from a foreign thread/loop; returns whether a live run was found. |
 | `pause(scope)`, `resume(scope)` | Suppress/resume steps while keeping membership checks; return whether a live run was found. |
@@ -81,7 +81,7 @@ clock logs. Cancellation is recorded as `"cancelled"` and sends no trailing push
 
 `Publish(view_path, handler, payload=None)` sends through `apush_to_view` with
 the engine's scoped key. The optional payload factory receives the raw key and
-is called once per run in a worker, outside the registry lock. Its default is `{"key": key}`. It must return a dict
+is called once per run in the shared clock worker pool, outside the registry lock. First-join ensure waits for the result, including pool queue delay; keep factories short. This initialization wait is separate from the bounded stopping-run wait. Its default is `{"key": key}`. It must return a dict
 whose contents remain beat-invariant. There is no state or sequence in the
 engine-generated doorbell. Returning a truthy step result publishes; a falsy
 result is quiet.
