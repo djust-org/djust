@@ -5,9 +5,8 @@ Two policies, by where the URL comes from:
 * A URL from app data (nav / sidebar / breadcrumb items, ``url_pattern``, an
   avatar ``src``, the auth and error pages' links) is *neutralised*: a
   ``javascript:`` / ``vbscript:`` / ``data:`` value renders as ``"#"`` and the
-  rest of the component renders as before, the component library's policy
-  (``djust.components.utils.safe_url`` / ``url_attr``). One stored bad link must
-  not turn every viewer's page into an error.
+  rest of the component renders as before, using the theming denylist.
+  One stored bad link must not turn every viewer's page into an error.
 * A developer-supplied literal (``theme_button href=``, the ``**attrs``
   passthrough) still raises ``ValueError``: a loud error at development time.
 """
@@ -270,3 +269,151 @@ class TestPageUrlsNeutralised:
     def test_a_normal_action_still_renders(self):
         html = render_pages('{% theme_404_page home_url="/" %}')
         assert 'href="/"' in html
+
+
+@pytest.mark.parametrize("url", ["sms:+15551234567", "geo:40,-70", "myapp://record/42"])
+def test_non_script_schemes_are_preserved(url):
+    html = _render_list_url("{% theme_nav items=items %}", url)
+    assert f'href="{url}"' in html
+
+
+def test_data_image_is_neutralised_for_links():
+    html = render("{% theme_nav_item 'Image' url %}", url=PNG)
+    assert 'href="#"' in html
+
+
+@pytest.mark.parametrize("source", _LIST_TAGS)
+@pytest.mark.parametrize("collection", [list, tuple, iter, lambda items: map(lambda x: x, items)])
+def test_object_items_and_iterables_are_neutralised(source, collection):
+    from types import SimpleNamespace
+
+    item = SimpleNamespace(label="Object link", url=BAD, badge="7", active=True)
+    items = collection([item, {"label": "Current"}])
+    html = render(source, items=items, sections=iter([{"title": "Group", "items": items}]))
+    assert_neutralised(html)
+    assert "Object link" in html
+    assert item.url == BAD
+    assert item.badge == "7"
+
+
+@pytest.mark.parametrize("collection", [tuple, iter])
+def test_object_sidebar_sections_are_neutralised(collection):
+    from types import SimpleNamespace
+
+    item = SimpleNamespace(label="Object link", url=BAD)
+    items = iter([item])
+    section = SimpleNamespace(title="Object section", items=items)
+    html = render("{% theme_sidebar_nav sections=sections %}", sections=collection([section]))
+    assert_neutralised(html)
+    assert "Object section" in html and "Object link" in html
+    assert section.items is items
+    assert item.url == BAD
+
+
+@pytest.mark.parametrize("current,total", [(105, 110), (107, 110), (100, 106)])
+def test_pagination_checks_formatted_urls(current, total):
+    # At page 106, chr(106) supplies the missing 'j'.
+    html = render(
+        "{% theme_pagination current_page=current total_pages=total url_pattern=pat %}",
+        current=current,
+        total=total,
+        pat="{:c}avascript:alert(1)",
+    )
+    assert 'href="#"' in html
+    assert "javascript:" not in html.lower()
+
+
+def test_nav_through_rust_template_engine():
+    from djust._rust import render_template
+
+    html = render_template(
+        "{% load theme_components %}{% theme_nav items=items %}",
+        {"items": [{"label": "Bad", "url": BAD}, {"label": "App", "url": "myapp://home"}]},
+    )
+    assert_neutralised(html)
+    assert "Bad" in html and 'href="myapp://home"' in html
+
+
+@pytest.mark.parametrize(
+    "current,total,pattern,field",
+    [
+        (106, 110, "{:c}avascript:alert(1)", "page_range"),
+        (105, 110, "{:c}avascript:alert(1)", "next_url"),
+        (107, 110, "{:c}avascript:alert(1)", "prev_url"),
+        (100, 106, "{:c}avascript:alert(1)", "last_url"),
+        (100, 110, "{:c}javascript:alert(1)", "first_url"),
+    ],
+)
+def test_all_pagination_context_urls_are_checked(monkeypatch, current, total, pattern, field):
+    from django.template import Context
+    from djust.theming.templatetags import theme_components
+
+    captured = {}
+
+    class CaptureTemplate:
+        def render(self, ctx):
+            captured.update(ctx)
+            return ""
+
+    monkeypatch.setattr(
+        theme_components, "resolve_component_template", lambda *args: CaptureTemplate()
+    )
+    theme_components.theme_pagination(Context(), current, total, pattern)
+    if field == "page_range":
+        assert next(page["url"] for page in captured[field] if page["number"] == 106) == "#"
+    else:
+        assert captured[field] == "#"
+
+
+def test_custom_url_attribute_and_other_object_attributes_are_preserved():
+    from dataclasses import dataclass
+    from djust.theming.templatetags.theme_components import _neutralise_item_urls
+
+    @dataclass(frozen=True)
+    class Item:
+        destination: str
+        label: str
+        badge: str
+
+    item = Item(BAD, "Link", "7")
+    checked = _neutralise_item_urls([item], "destination")[0]
+    assert checked.destination == "#"
+    assert checked.label == item.label and checked.badge == item.badge
+    assert item.destination == BAD
+
+
+@pytest.mark.parametrize("items", ["javascript:alert(1)", b"javascript:alert(1)"])
+def test_strings_are_not_materialised_as_items(items):
+    from djust.theming.templatetags.theme_components import _neutralise_item_urls
+
+    assert _neutralise_item_urls(items) is items
+
+
+@pytest.mark.django_db
+def test_queryset_model_items_are_neutralised():
+    from django.contrib.auth import get_user_model
+    from django.db.models import Value
+
+    user = get_user_model().objects.create(username="Nav model")
+    items = (
+        get_user_model()
+        .objects.filter(pk=user.pk)
+        .annotate(url=Value(BAD), label=Value("Model link"))
+    )
+    html = render("{% theme_nav items=items %}", items=items)
+    assert_neutralised(html)
+    assert "Model link" in html
+    assert items[0].url == BAD
+
+
+@pytest.mark.parametrize("source", _LIST_TAGS)
+def test_namedtuple_items_retain_their_attributes(source):
+    from collections import namedtuple
+
+    Item = namedtuple("Item", "label url")
+    item = Item("Tuple link", BAD)
+    items = [item, {"label": "Current"}]
+    html = render(source, items=items, sections=[{"title": "Group", "items": items}])
+    assert_neutralised(html)
+    assert "Tuple link" in html
+    assert item.url == BAD

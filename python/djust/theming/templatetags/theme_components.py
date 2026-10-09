@@ -14,6 +14,7 @@ Falling back to:
 import logging
 import re
 import uuid
+from collections.abc import Callable, Iterable
 
 from typing import Any, Optional
 from urllib.parse import unquote
@@ -22,7 +23,6 @@ from django import template
 from django.template import Context
 from django.utils.safestring import SafeString, mark_safe
 
-from ...components.utils import safe_url, url_attr
 from ..manager import get_theme_config
 from ..template_resolver import resolve_component_template
 
@@ -335,6 +335,14 @@ _URL_ATTRS = frozenset({"href", "src", "action", "formaction"})
 _UNSAFE_URL_SCHEMES = ("javascript:", "vbscript:", "data:")
 
 
+def _has_unsafe_url_scheme(value: Any, *, image: bool = False) -> bool:
+    """Apply the theming denylist after stripping scheme obfuscation."""
+    compact = "".join(ch for ch in str(value) if ord(ch) > 32 and ord(ch) != 127).lower()
+    if image and compact.startswith("data:image/"):
+        return False
+    return compact.startswith(_UNSAFE_URL_SCHEMES)
+
+
 def _check_url(name: str, value: Any) -> None:
     """Refuse a script-bearing URL scheme in ``name``.
 
@@ -342,63 +350,63 @@ def _check_url(name: str, value: Any) -> None:
     scheme and ignore leading whitespace, so ``"java\tscript:..."`` is still
     ``javascript:``. Strip those before looking at the scheme.
     """
-    compact = "".join(ch for ch in str(value) if ord(ch) > 32 and ord(ch) != 127).lower()
-    if compact.startswith(_UNSAFE_URL_SCHEMES):
+    if _has_unsafe_url_scheme(value):
         raise ValueError(f"{name}= refuses javascript:, vbscript: and data: URLs")
 
 
 def _neutralise_url(name: str, value: Any, *, image: bool = False) -> Any:
-    """``value``, or ``"#"`` when its scheme is not safe for a link.
+    """Return ``value`` unchanged, or ``"#"`` for a script-bearing scheme.
 
-    For URLs that come from app data (nav items, page links, an avatar
-    ``src``): a stored ``javascript:`` link must not reach the page, but it
-    must not take the whole render down for every viewer either. The policy is
-    the component library's (:func:`djust.components.utils.safe_url`, and
-    :func:`~djust.components.utils.url_attr` with ``image=True`` for ``src``,
-    which also keeps ``data:image/*``). A safe value is returned unchanged, so
-    the template escapes it exactly once. Developer-supplied literals
-    (``theme_button href=``, the ``**attrs`` passthrough) still raise via
-    :func:`_check_url`.
+    Data-derived URLs must not take the whole render down. Use the same
+    denylist as :func:`_check_url`, allowing ``data:image/*`` for image sources.
+    Safe values retain single template escaping; developer-supplied literals
+    and passthrough attributes still raise via :func:`_check_url`.
     """
-    if value is None:
-        return value
-    text = str(value)
-    if not text.strip():
-        return value
-    checked = url_attr(value, image=True) if image else safe_url(value)
-    if checked == "#" and text.strip() != "#":
+    if value is not None and _has_unsafe_url_scheme(value, image=image):
         logger.debug("theming: %s= URL with a disallowed scheme rendered as '#'", name)
         return "#"
     return value
 
 
-def _neutralise_item_urls(items: Any, name: str = "url") -> Any:
-    """*items* with :func:`_neutralise_url` applied to ``name`` on every dict.
+class _ItemAttributeProxy:
+    """Override one template-visible attribute without modifying its object."""
 
-    The navigation components (``theme_nav`` / ``theme_nav_group`` /
-    ``theme_sidebar_nav`` / ``theme_breadcrumb``) take their links as a list of
-    ``{"label": ..., "url": ...}`` dicts, which the component template renders
-    into ``<a href>``. A list an app fills from its own data (a CMS page, a
-    user-supplied link) can carry a script-bearing scheme; that item's link
-    becomes ``"#"`` and the rest of the list renders as before. The caller's
-    dicts are never modified: an item that changes is a copy.
-    """
-    if not items:
+    def __init__(self, item: Any, name: str, value: Any) -> None:
+        self._item = item
+        self._name = name
+        self._value = value
+
+    def __getattr__(self, name: str) -> Any:
+        if name == self._name:
+            return self._value
+        return getattr(self._item, name)
+
+
+def _map_item_attribute(items: Any, name: str, transform: Callable[[Any], Any]) -> Any:
+    """Copy changed dicts, proxy changed objects and materialise item iterables."""
+    if items is None or isinstance(items, (str, bytes)):
         return items
     if isinstance(items, dict):
-        return _neutralise_item_urls([items], name)[0]
-    if not isinstance(items, (list, tuple)):
-        return items
-    result = []
-    for item in items:
-        if isinstance(item, dict):
-            value = item.get(name)
-            if value is not None:
-                safe = _neutralise_url(name, value)
-                if safe is not value:
-                    item = {**item, name: safe}
-        result.append(item)
-    return result
+        value = items.get(name)
+        safe = transform(value)
+        return {**items, name: safe} if safe is not value else items
+    missing = object()
+    value = getattr(items, name, missing)
+    if value is not missing:
+        safe = transform(value)
+        return _ItemAttributeProxy(items, name, safe) if safe is not value else items
+    if isinstance(items, Iterable):
+        return [_map_item_attribute(item, name, transform) for item in items]
+    return items
+
+
+def _neutralise_item_urls(items: Any, name: str = "url") -> Any:
+    """Neutralise dict/object item URLs without mutating caller-owned items.
+
+    Navigation accepts lists, tuples and other iterables, including QuerySets
+    and generators. Materialise them so templates see the checked items.
+    """
+    return _map_item_attribute(items, name, lambda value: _neutralise_url(name, value))
 
 
 def _passthrough_attrs(attrs: dict[str, Any], skip: tuple[str, ...]) -> SafeString:
@@ -645,10 +653,9 @@ def theme_pagination(
     # templates only ever read as `attrs.class` / `attrs.id`, so a
     # caller-supplied slot rendered as nothing at all.
     slots, remaining_attrs = _extract_slots(attrs)
-    # Every page link is built from ``url_pattern`` by ``.format(p)`` and rendered
-    # into an ``<a href>``; a script-bearing scheme in the pattern would reach all
-    # of them (#F1), so such a pattern makes every link ``"#"``.
-    url_pattern = _neutralise_url("url_pattern", url_pattern)
+
+    def page_url(page: int) -> Any:
+        return _neutralise_url("url_pattern", url_pattern.format(page))
 
     # Build page range (show up to 5 pages around current)
     window = 2
@@ -657,19 +664,19 @@ def theme_pagination(
 
     page_range = []
     for p in range(range_start, range_end + 1):
-        page_range.append({"number": p, "url": url_pattern.format(p)})
+        page_range.append({"number": p, "url": page_url(p)})
 
     # Edge detection
     first_page = 1 if show_edges and range_start > 1 else None
-    first_url = url_pattern.format(1) if first_page else None
+    first_url = page_url(1) if first_page else None
     first_ellipsis = range_start > 2
 
     last_page = total_pages if show_edges and range_end < total_pages else None
-    last_url = url_pattern.format(total_pages) if last_page else None
+    last_url = page_url(total_pages) if last_page else None
     last_ellipsis = range_end < total_pages - 1
 
-    prev_url = url_pattern.format(current_page - 1) if current_page > 1 else None
-    next_url = url_pattern.format(current_page + 1) if current_page < total_pages else None
+    prev_url = page_url(current_page - 1) if current_page > 1 else None
+    next_url = page_url(current_page + 1) if current_page < total_pages else None
 
     ctx = {
         "current_page": current_page,
@@ -1317,14 +1324,8 @@ def theme_sidebar_nav(context: Context, sections: Any = None, **attrs: Any) -> S
     slots, remaining_attrs = _extract_slots(attrs)
     request = context.get("request")
     tmpl = resolve_component_template(request, "sidebar_nav")
-    # Sections wrap their own items: ``[{"title": ..., "items": [{"url": ...}]}]``.
-    if isinstance(sections, (list, tuple)):
-        sections = [
-            {**section, "items": _neutralise_item_urls(section["items"])}
-            if isinstance(section, dict) and section.get("items")
-            else section
-            for section in sections
-        ]
+    # Sections and their nested items may both be dicts, objects or iterables.
+    sections = _map_item_attribute(sections, "items", _neutralise_item_urls)
     ctx = {
         "sections": sections or [],
         "attrs": remaining_attrs,
