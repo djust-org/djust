@@ -1547,52 +1547,52 @@
       "version": "0.29.0"
     },
     {
-      "bom-ref": "rust:pkg:cargo/pyo3-ffi@0.29.2",
+      "bom-ref": "rust:pkg:cargo/pyo3-ffi@0.29.3",
       "licenses": [
         {
           "expression": "MIT OR Apache-2.0"
         }
       ],
       "name": "pyo3-ffi",
-      "purl": "pkg:cargo/pyo3-ffi@0.29.2",
+      "purl": "pkg:cargo/pyo3-ffi@0.29.3",
       "type": "library",
-      "version": "0.29.2"
+      "version": "0.29.3"
     },
     {
-      "bom-ref": "rust:pkg:cargo/pyo3-macros-backend@0.29.2",
+      "bom-ref": "rust:pkg:cargo/pyo3-macros-backend@0.29.3",
       "licenses": [
         {
           "expression": "MIT OR Apache-2.0"
         }
       ],
       "name": "pyo3-macros-backend",
-      "purl": "pkg:cargo/pyo3-macros-backend@0.29.2",
+      "purl": "pkg:cargo/pyo3-macros-backend@0.29.3",
       "type": "library",
-      "version": "0.29.2"
+      "version": "0.29.3"
     },
     {
-      "bom-ref": "rust:pkg:cargo/pyo3-macros@0.29.2",
+      "bom-ref": "rust:pkg:cargo/pyo3-macros@0.29.3",
       "licenses": [
         {
           "expression": "MIT OR Apache-2.0"
         }
       ],
       "name": "pyo3-macros",
-      "purl": "pkg:cargo/pyo3-macros@0.29.2",
+      "purl": "pkg:cargo/pyo3-macros@0.29.3",
       "type": "library",
-      "version": "0.29.2"
+      "version": "0.29.3"
     },
     {
-      "bom-ref": "rust:pkg:cargo/pyo3@0.29.2",
+      "bom-ref": "rust:pkg:cargo/pyo3@0.29.3",
       "licenses": [
         {
           "expression": "MIT OR Apache-2.0"
         }
       ],
       "name": "pyo3",
-      "purl": "pkg:cargo/pyo3@0.29.2",
+      "purl": "pkg:cargo/pyo3@0.29.3",
       "type": "library",
-      "version": "0.29.2"
+      "version": "0.29.3"
     },
     {
       "bom-ref": "rust:pkg:cargo/quote@1.0.45",
@@ -1871,16 +1871,16 @@
       "version": "3.0.3"
     },
     {
-      "bom-ref": "rust:pkg:cargo/tendril@0.5.0",
+      "bom-ref": "rust:pkg:cargo/tendril@0.5.1",
       "licenses": [
         {
           "expression": "MIT OR Apache-2.0"
         }
       ],
       "name": "tendril",
-      "purl": "pkg:cargo/tendril@0.5.0",
+      "purl": "pkg:cargo/tendril@0.5.1",
       "type": "library",
-      "version": "0.5.0"
+      "version": "0.5.1"
     },
     {
       "bom-ref": "rust:pkg:cargo/thiserror-impl@2.0.21",
@@ -1943,16 +1943,16 @@
       "version": "2.7.0"
     },
     {
-      "bom-ref": "rust:pkg:cargo/tokio@1.53.1",
+      "bom-ref": "rust:pkg:cargo/tokio@1.53.2",
       "licenses": [
         {
           "expression": "MIT"
         }
       ],
       "name": "tokio",
-      "purl": "pkg:cargo/tokio@1.53.1",
+      "purl": "pkg:cargo/tokio@1.53.2",
       "type": "library",
-      "version": "1.53.1"
+      "version": "1.53.2"
     },
     {
       "bom-ref": "rust:pkg:cargo/tracing-attributes@0.1.31",
@@ -2051,28 +2051,16 @@
       "version": "0.0.4"
     },
     {
-      "bom-ref": "rust:pkg:cargo/utf-8@0.7.6",
-      "licenses": [
-        {
-          "expression": "MIT OR Apache-2.0"
-        }
-      ],
-      "name": "utf-8",
-      "purl": "pkg:cargo/utf-8@0.7.6",
-      "type": "library",
-      "version": "0.7.6"
-    },
-    {
-      "bom-ref": "rust:pkg:cargo/uuid@1.26.1",
+      "bom-ref": "rust:pkg:cargo/uuid@1.27.0",
       "licenses": [
         {
           "expression": "Apache-2.0 OR MIT"
         }
       ],
       "name": "uuid",
-      "purl": "pkg:cargo/uuid@1.26.1",
+      "purl": "pkg:cargo/uuid@1.27.0",
       "type": "library",
-      "version": "1.26.1"
+      "version": "1.27.0"
     },
     {
       "bom-ref": "rust:pkg:cargo/valuable@0.1.1",
