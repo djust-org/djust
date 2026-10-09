@@ -96,11 +96,20 @@ Presence tracking also works in async handlers; its synchronous binding schedule
 `aensure` on the serving loop and observes failures. The first joiner's
 `handle_presence_join` runs after that ensure completes, without blocking the
 loop; it may run after the async event handler returns. As with capacity refusal,
-a failed ensure cannot guarantee a running clock to the callback.
+a failed ensure cannot guarantee a running clock to the callback. Successful
+presence tracking still delivers the join callback if ensure raises (and logs
+the failure). If the connection untracks while ensure is pending, the pending
+join callback runs before its leave callback; completion cannot deliver it again.
 Explicit stop-then-ensure waits at most one second (real time) for the old run to
 retire before starting a new run. If it has not retired, ensure returns `False`;
 retry later. The stopping run retains ownership, so its unfinished sync step
-cannot overlap a replacement.
+cannot overlap a replacement. Presence-bound ensures automatically register one
+retry per retiring run and presence room, logged once at debug. As soon as the
+old run retires, the retry re-ensures if any participants remain, even if the
+joining connection has since left. No further join is required. An empty room
+is not restarted. Capacity refusals and factory errors do not schedule this
+retirement retry. Payload initialization does not consume the stopping-run wait
+budget.
 `ensure` refuses plain management-command/Celery threads and unregistered loops;
 `async_to_sync` there would create a temporary loop that immediately dies.
 
@@ -108,7 +117,8 @@ Supply `alive(scope)` for membership, or heartbeat `ensure` more frequently
 than `idle_stop`, with margin (a five-second heartbeat needs around twelve
 seconds, rather than the default five). A false, `None`, or failing `alive`
 starts the idle timer; a new ensure protects the run from a racing idle check.
-The engine retains no view or request user. Steps look state up by `tick.scope`.
+A pending presence retry temporarily retains its authorized view binding.
+Running steps retain no view or request user; they look state up by `tick.scope`.
 
 Return a truthy value to publish, a falsy value to remain quiet, or
 `Stop("room reaped")` to end a run. Sync steps and liveness callbacks use a

@@ -81,7 +81,10 @@ clock logs. Cancellation is recorded as `"cancelled"` and sends no trailing push
 
 `Publish(view_path, handler, payload=None)` sends through `apush_to_view` with
 the engine's scoped key. The optional payload factory receives the raw key and
-is called once per run in the shared clock worker pool, outside the registry lock. First-join ensure waits for the result, including pool queue delay; keep factories short. This initialization wait is separate from the bounded stopping-run wait. Its default is `{"key": key}`. It must return a dict
+is called once per run in the shared clock worker pool, outside the registry
+lock. First-join ensure waits for the result, including pool queue delay; keep
+factories short. This initialization wait is separate from the bounded
+stopping-run wait. Its default is `{"key": key}`. It must return a dict
 whose contents remain beat-invariant. There is no state or sequence in the
 engine-generated doorbell. Returning a truthy step result publishes; a falsy
 result is quiet.

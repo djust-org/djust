@@ -66,7 +66,7 @@ import threading
 import time
 import uuid
 import asyncio
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 from django.core.cache import cache
@@ -340,6 +340,7 @@ class PresenceMixin:
         # Which of the user's connections this view is (#3254). One per
         # tracking view, minted by ``track_presence`` / ``_restore_presence``.
         self._presence_connection_id: Optional[str] = None
+        self._presence_pending_join: Optional[Callable[[], None]] = None
 
     def _new_presence_connection_id(self) -> str:
         """A fresh id for this view's presence connection (#3254).
@@ -567,7 +568,35 @@ class PresenceMixin:
         self._presence_connection_id = connection_id
 
         self._presence_tracked = True
-        clock_ensure = self._ensure_room_clock(presence_key)
+        # Establish the callback as soon as the backend track succeeds, even
+        # if clock binding validation raises before an ensure can be scheduled.
+        if first_connection and hasattr(self, "handle_presence_join"):
+
+            def joined() -> None:
+                # Disconnect/retrack may have happened while ensure waited.
+                if (
+                    not self._presence_tracked
+                    or self._presence_connection_id != connection_id
+                    or self._presence_pending_join is not joined
+                ):
+                    return
+                self._presence_pending_join = None
+                try:
+                    self.handle_presence_join(presence_data)
+                except Exception as e:
+                    from ._exposure_diagnostics import log_failure_for
+
+                    log_failure_for(
+                        logger, (self,), e, "Error in handle_presence_join: %s", e, traceback=True
+                    )
+
+            self._presence_pending_join = joined
+        try:
+            clock_ensure = self._ensure_room_clock(presence_key)
+        except Exception:
+            if self._presence_pending_join is not None:
+                self._presence_pending_join()
+            raise
 
         # #1611 — refresh online_count after the backend join so this user's
         # own join is included.
@@ -581,28 +610,15 @@ class PresenceMixin:
 
         # A synchronous API cannot await on an event-loop thread. Defer the
         # first-join callback until the asynchronous ensure has completed.
-        if first_connection and hasattr(self, "handle_presence_join"):
-
-            def joined() -> None:
-                # Disconnect/retrack may have happened while ensure waited.
-                if not self._presence_tracked or self._presence_connection_id != connection_id:
-                    return
-                try:
-                    self.handle_presence_join(presence_data)
-                except Exception as e:
-                    from ._exposure_diagnostics import log_failure_for
-
-                    log_failure_for(
-                        logger, (self,), e, "Error in handle_presence_join: %s", e, traceback=True
-                    )
-
+        if self._presence_pending_join is not None:
             if clock_ensure is None:
                 joined()
             else:
 
                 def after_ensure(task: asyncio.Task[bool]) -> None:
-                    if not task.cancelled() and task.exception() is None:
-                        joined()
+                    # Tracking succeeded even if ensure failed or was cancelled.
+                    # The ensure observer logs failures independently.
+                    joined()
 
                 clock_ensure.add_done_callback(after_ensure)
 
@@ -681,7 +697,14 @@ class PresenceMixin:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            clock.ensure(self, key, presence_key=presence_key)
+            try:
+                clock.ensure(self, key, presence_key=presence_key)
+            except Exception as exc:
+                from ._exposure_diagnostics import log_failure_for
+
+                log_failure_for(
+                    logger, (self,), exc, "Presence clock ensure failed", traceback=True
+                )
         else:
             # track_presence is synchronous even in async event handlers. Keep
             # the join/count/broadcast path synchronous and observe failures.
@@ -716,6 +739,12 @@ class PresenceMixin:
         """
         if not self._presence_tracked:
             return
+
+        # Deliver a deferred first join before its matching leave. The task's
+        # later callback is suppressed by the connection identity check.
+        pending_join = getattr(self, "_presence_pending_join", None)
+        if pending_join is not None:
+            pending_join()
 
         presence_key = self.get_presence_key()
         user_id = self._presence_user_id

@@ -1,5 +1,7 @@
 """Presence-bound clocks through actual LiveView WebSocket consumers."""
 
+import asyncio
+import threading
 from unittest.mock import patch
 
 import pytest
@@ -446,10 +448,193 @@ async def test_untrack_after_clock_scope_validation_failure():
             sockets.append(socket)
             instance = consumer.view_instance
             instance.room = "x" * 513
-            with pytest.raises(ValueError, match="clock key"):
-                instance.track_presence({})
+            with patch.object(AsyncJoinView, "handle_presence_join") as joined:
+                with pytest.raises(ValueError, match="clock key"):
+                    instance.track_presence({})
+                joined.assert_called_once()
             assert instance._presence_tracked
             instance.untrack_presence()
             assert not instance._presence_tracked
         finally:
             await close_all(sockets)
+
+
+class FollowupView(RoomView):
+    exposure_policy = "explicit"
+
+    def mount(self, request, **kwargs):
+        self.room = "followup"
+        self.refreshes = 0
+        self.callbacks = []
+
+    @event_handler()
+    async def join(self, **kwargs):
+        self.track_presence({})
+
+    def handle_presence_join(self, presence):
+        self.callbacks.append("join")
+
+    def handle_presence_leave(self, presence):
+        self.callbacks.append("leave")
+
+
+class FollowupSyncView(FollowupView):
+    def mount(self, request, **kwargs):
+        super().mount(request, **kwargs)
+        self.track_presence({})
+
+
+async def join_followup(sockets, mode):
+    socket, consumer = await mount(view_class=FollowupSyncView if mode == "sync" else FollowupView)
+    sockets.append(socket)
+    if mode == "async":
+        await socket.send_json_to({"type": "event", "event": "join", "params": {}})
+        assert (await socket.receive_json_from(timeout=3))["type"] == "patch"
+    return consumer.view_instance
+
+
+async def retire_followup(clock):
+    for scope in clock.stats():
+        clock.stop(scope)
+        run = clock._lookup(scope)
+        if run is not None:
+            await asyncio.wait_for(asyncio.wrap_future(run.done), 3)
+    await TIME.settle()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("leave", ["none", "joiner", "all"])
+async def test_presence_timeout_retries_after_retirement_without_another_join(mode, leave, caplog):
+    entered, release = threading.Event(), threading.Event()
+    ticks = []
+
+    def hung_step(tick):
+        ticks.append(tick)
+        if len(ticks) == 1:
+            entered.set()
+            assert release.wait(5)
+        return True
+
+    clock = RoomClock(
+        name="presence-retry",
+        interval=0.1,
+        step=hung_step,
+        time_source=TIME,
+        idle_stop=100,
+        trailing=0,
+        publish=Publish(__name__ + ".FollowupView", "handle_refresh"),
+    )
+    sockets = []
+    caplog.set_level("DEBUG", logger="djust.clocks")
+    with (
+        override_settings(**SETTINGS),
+        patch.object(FollowupView, "room_clock", clock),
+        patch("djust.clocks._STOP_WAIT_SECONDS", 0.05),
+    ):
+        try:
+            peer = await join_followup(sockets, "async")
+            await wait_until(lambda: peer.callbacks == ["join"], what="peer join")
+            scope = peer._room_clock_scope
+            await TIME.advance(0.1)
+            assert await asyncio.to_thread(entered.wait, 3)
+            old_id = clock.stats()[scope]["run_id"]
+            assert clock.stop(scope)
+            joining = await join_followup(sockets, mode)
+            await wait_until(lambda: joining.callbacks == ["join"], what="bounded join callback")
+            assert clock.stats()[scope]["run_id"] == old_id
+            assert len(ticks) == 1
+            if leave != "none":
+                joining.untrack_presence()
+                assert joining.callbacks == ["join", "leave"]
+            if leave == "all":
+                peer.untrack_presence()
+                release.set()
+                await retire_followup(clock)
+                assert not clock.running(scope)
+                assert not clock._presence_retries
+                assert not clock._retry_tasks
+                return
+            release.set()
+            await wait_until(
+                lambda: clock.running(scope) and clock.stats()[scope]["run_id"] != old_id,
+                what="automatic replacement after retirement",
+            )
+            await TIME.advance(0.1)
+            await wait_until(lambda: peer.refreshes > 0, what="replacement doorbell")
+            assert len(ticks) == 2
+            assert sum("Presence clock retry scheduled" in r.message for r in caplog.records) == 1
+        finally:
+            release.set()
+            await close_all(sockets)
+            await retire_followup(clock)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_presence_raising_factory_still_calls_join_then_leave(mode, caplog):
+    def bad_factory(key):
+        raise ValueError("private factory payload")
+
+    clock = RoomClock(
+        name="presence-raising",
+        interval=0.1,
+        step=step,
+        time_source=TIME,
+        publish=Publish(__name__ + ".FollowupView", "handle_refresh", bad_factory),
+    )
+    sockets = []
+    with override_settings(**SETTINGS), patch.object(FollowupView, "room_clock", clock):
+        try:
+            joining = await join_followup(sockets, mode)
+            await wait_until(
+                lambda: joining.callbacks == ["join"], what="join despite ensure error"
+            )
+            assert joining._presence_tracked
+            assert joining.online_count == 1
+            joining.untrack_presence()
+            assert joining.callbacks == ["join", "leave"]
+            assert (
+                sum(r.name == "djust.presence" and r.levelname == "ERROR" for r in caplog.records)
+                == 1
+            )
+            assert "private factory payload" not in caplog.text
+        finally:
+            await close_all(sockets)
+            await retire_followup(clock)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_untrack_during_ensure_flushes_join_before_leave():
+    entered, release = threading.Event(), threading.Event()
+
+    def slow_factory(key):
+        entered.set()
+        assert release.wait(5)
+        return {"key": key}
+
+    clock = RoomClock(
+        name="presence-untrack",
+        interval=0.1,
+        step=step,
+        time_source=TIME,
+        publish=Publish(__name__ + ".FollowupView", "handle_refresh", slow_factory),
+    )
+    sockets = []
+    with override_settings(**SETTINGS), patch.object(FollowupView, "room_clock", clock):
+        try:
+            joining = await join_followup(sockets, "async")
+            assert await asyncio.to_thread(entered.wait, 3)
+            assert joining.callbacks == []
+            joining.untrack_presence()
+            assert joining.callbacks == ["join", "leave"]
+            release.set()
+            await retire_followup(clock)
+            assert joining.callbacks == ["join", "leave"]
+        finally:
+            release.set()
+            await close_all(sockets)
+            await retire_followup(clock)

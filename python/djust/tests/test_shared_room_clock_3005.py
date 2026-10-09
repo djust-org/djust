@@ -1121,3 +1121,57 @@ async def test_join_hung_stopping_step_is_bounded_without_overlapping_workers():
         run = c._lookup(scope)
         if run is not None:
             await asyncio.wait_for(asyncio.wrap_future(run.done), 2)
+
+
+@pytest.mark.asyncio
+async def test_payload_initialization_does_not_consume_stopping_wait_budget():
+    register_serving_loop()
+    entered, release = threading.Event(), threading.Event()
+    stopping, finish_stop = asyncio.Event(), asyncio.Event()
+    time = ManualClock()
+    calls = []
+
+    def factory(key):
+        calls.append(key)
+        if len(calls) == 1:
+            entered.set()
+            assert release.wait(5)
+        return {"key": key}
+
+    async def on_stop(scope, reason):
+        stopping.set()
+        await finish_stop.wait()
+
+    c = RoomClock(
+        name="factory-budget",
+        interval=0.1,
+        step=lambda _: False,
+        idle_stop=100,
+        time_source=time,
+        on_stop=on_stop,
+        publish=Publish("test.View", "refresh", factory),
+    )
+    task = None
+    with patch("djust.clocks._STOP_WAIT_SECONDS", 0.05):
+        try:
+            task = asyncio.create_task(c.aensure(view(), "room"))
+            assert await asyncio.to_thread(entered.wait, 3)
+            c.stop("factory-budget:room")
+            # Exceed the stop budget BEFORE the stopping wait actually begins.
+            await asyncio.sleep(0.08)
+            release.set()
+            await asyncio.wait_for(stopping.wait(), 3)
+            await asyncio.sleep(0.01)
+            assert not task.done(), "factory wait consumed the stopping-run budget"
+            finish_stop.set()
+            assert await asyncio.wait_for(task, 3) is True
+            assert calls == ["room", "room"]
+        finally:
+            release.set()
+            finish_stop.set()
+            if task is not None:
+                await asyncio.gather(task, return_exceptions=True)
+            c.stop("factory-budget:room")
+            run = c._lookup("factory-budget:room")
+            if run is not None:
+                await asyncio.wait_for(asyncio.wrap_future(run.done), 3)
