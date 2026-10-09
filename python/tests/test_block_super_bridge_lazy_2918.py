@@ -614,7 +614,9 @@ class TestTheMechanism:
         """The eager materialiser is gone: the only way a bridged tag gets the
         parent is by READING ``block.super`` off the lazy object."""
         source = RENDERER_RS.read_text()
-        helper = source.split("fn bridged_context_map", 1)[1][:2500]
+        helper = source.split("fn bridged_context_map", 1)[1].split("struct BridgedContextMap", 1)[
+            0
+        ]
         assert "render_armed_block_super" not in helper
         assert "lazy_block_value" in helper
         assert "Value::String(parent_html)" not in helper

@@ -359,7 +359,9 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     // page's own URL, where the page view would run the event. Refuse it rather
     // than run it on the wrong view.
     const slotId = teardown ? null : (params._slotId || slotIdFor(triggerElement));
-    if (slotId) {
+    const httpLazyOwner = triggerElement?.closest('[data-djust-lazy-id]') ||
+        (slotId && slotContainer(slotId)?.matches('[data-djust-lazy-id]'));
+    if (slotId && !httpLazyOwner) {
         if (!skipLoading) globalLoadingManager.stopLoading(eventName, triggerElement);
         window.dispatchEvent(new CustomEvent('djust:error', {detail: {
             error: `Event "${eventName}" was not sent: its view needs the WebSocket or SSE transport.`,
@@ -485,8 +487,9 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
         if (data.type === 'embedded_update') {
             // An embedded child's event: the server answers with the child's own
             // HTML, as the socket transports do (#3104).
-            await handleEmbeddedResponse(data, _localEventTransport);
+            const filled = await handleEmbeddedResponse(data, _localEventTransport);
             applyHttpSideChannels(data);
+            return filled;
         } else {
             await handleServerResponse(data, eventName, triggerElement, _localEventTransport);
         }

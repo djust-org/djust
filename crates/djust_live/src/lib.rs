@@ -723,6 +723,15 @@ impl RustLiveViewBackend {
 
     /// Render the template and return HTML
     fn render(&mut self) -> PyResult<String> {
+        self.render_result(false).map(|result| result.0)
+    }
+
+    /// Result-bound UTF-8 authored spans; no reset/take state (#3252).
+    fn render_with_provenance(&mut self) -> PyResult<(String, Vec<(usize, usize)>)> {
+        self.render_result(true)
+    }
+
+    fn render_result(&mut self, track_provenance: bool) -> PyResult<(String, Vec<(usize, usize)>)> {
         guard_panic("render", move || {
             // Invalidate partial render cache — render() bypasses the diff pipeline
             // so the cache would be stale for the next render_with_diff() call.
@@ -765,8 +774,16 @@ impl RustLiveViewBackend {
 
             // Use template loader for {% include %} support
             let loader = FilesystemTemplateLoader::new(self.template_dirs.clone());
-            let html = template_arc.render_with_loader(&context, &loader)?;
-            Ok(html)
+            if track_provenance {
+                let result = template_arc.render_with_provenance(&context, &loader)?;
+                let spans = result.authored.iter().map(|r| (r.start, r.end)).collect();
+                Ok((result.html, spans))
+            } else {
+                Ok((
+                    template_arc.render_with_loader(&context, &loader)?,
+                    Vec::new(),
+                ))
+            }
         })
     }
 
@@ -2802,6 +2819,23 @@ fn render_template_with_dirs(
         }
         Ok(rendered?)
     })
+}
+
+/// Validate render-result spans in the final page's HTML5 tree (#3252).
+#[pyfunction]
+fn authored_lazy_elements(
+    html: &str,
+    spans: Vec<(usize, usize)>,
+) -> Vec<(usize, usize, String, String)> {
+    djust_vdom::lazy_provenance::lazy_elements(html, &spans)
+        .into_iter()
+        .map(|r| (r.start, r.end, r.view_path, r.trigger))
+        .collect()
+}
+
+#[pyfunction]
+fn inter_tag_whitespace_edits(html: &str, block_tags: Vec<String>) -> Vec<(usize, usize)> {
+    djust_core::html_whitespace::inter_tag_whitespace_edits(html, &block_tags)
 }
 
 /// The egress normalizer's inter-tag whitespace pass (#2999).
@@ -5508,6 +5542,8 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(template_compiled_at_generation, m)?)?;
     m.add_function(wrap_pyfunction!(render_markdown_py, m)?)?;
     m.add_function(wrap_pyfunction!(diff_html, m)?)?;
+    m.add_function(wrap_pyfunction!(inter_tag_whitespace_edits, m)?)?;
+    m.add_function(wrap_pyfunction!(authored_lazy_elements, m)?)?;
     m.add_function(wrap_pyfunction!(collapse_inter_tag_whitespace, m)?)?;
     m.add_function(wrap_pyfunction!(fast_json_dumps, m)?)?;
     m.add_function(wrap_pyfunction!(resolve_template_inheritance, m)?)?;

@@ -26,7 +26,7 @@ const clientCode = fs.readFileSync('./python/djust/static/djust/client.js', 'utf
  * A page with its own view (`#page`), two lazy views of one class and a third
  * of another, and a mock socket that records what the client sends.
  */
-function createPage({ extra = '' } = {}) {
+function createPage({ extra = '', http = false } = {}) {
     const dom = new JSDOM(
         '<!DOCTYPE html><html><body>' +
         '<div id="page" dj-view="app.Page" dj-root><p id="page-text">page</p>' +
@@ -41,6 +41,10 @@ function createPage({ extra = '' } = {}) {
     const win = dom.window;
     if (!win.CSS) win.CSS = {};
     if (!win.CSS.escape) win.CSS.escape = (v) => String(v).replace(/([^\w-])/g, '\\$1');
+    if (http) {
+        Object.defineProperty(win, 'DJUST_USE_WEBSOCKET', { get: () => false, set() {} });
+        Object.defineProperty(win, 'EventSource', { get: () => undefined, set() {} });
+    }
     const sockets = [];
     win.WebSocket = class MockWebSocket {
         constructor(url) {
@@ -650,5 +654,55 @@ describe('a refused view (#3252)', () => {
         const { socket, win } = await pageWithHydratedLazies();
         await serve(socket, refusal({ target_id: 'nowhere' }));
         expect(win.djust.viewSlots.mounted().sort()).toEqual(['w1', 'w2']);
+    });
+});
+
+
+describe('registered attribute lazy views over HTTP only (#3252)', () => {
+    it('fills and sends independent keyed events without using a socket', async () => {
+        const page = createPage({ http: true, extra:
+            '<div id="h1" dj-view="app.Child" dj-lazy="click" data-djust-lazy-id="lazy_1" data-djust-embedded="lazy_1">load</div>' +
+            '<div id="h2" dj-view="app.Child" dj-lazy="click" data-djust-lazy-id="lazy_2" data-djust-embedded="lazy_2">load</div>' });
+        const { win, doc, sockets, dom } = page;
+        const sent = [];
+        const counts = { lazy_1: 0, lazy_2: 0 };
+        win.fetch = async (_url, options) => {
+            const params = JSON.parse(options.body);
+            const body = {event: options.headers["X-Djust-Event"], params};
+            sent.push(body);
+            const id = params.view_id;
+            if (body.event === 'inc') counts[id]++;
+            return { ok: true, json: async () => ({type: 'embedded_update', view_id: id,
+                html: '<span class="count">' + counts[id] + '</span><button dj-click="inc">+</button>'}) };
+        };
+        try {
+            await tick();
+            for (const id of ['h1', 'h2']) {
+                doc.getElementById(id).click();
+                await tick(40);
+                expect(doc.querySelector('#'+id+' .count'), JSON.stringify(sent) + doc.getElementById(id).outerHTML).not.toBeNull();
+                expect(doc.querySelector('#'+id+' .count').textContent).toBe('0');
+                expect(doc.getElementById(id).hasAttribute('dj-lazy')).toBe(false);
+            }
+            for (const id of ['h1', 'h2', 'h1', 'h2']) {
+                doc.querySelector('#'+id+' button').click();
+                await tick(40);
+            }
+            expect(doc.querySelector('#h1 .count').textContent, JSON.stringify(sent)).toBe('2');
+            expect(doc.querySelector('#h2 .count').textContent).toBe('2');
+            expect(sent.map(b => [b.event,b.params.view_id])).toEqual([
+                ['djust_lazy_mount','lazy_1'], ['djust_lazy_mount','lazy_2'],
+                ['inc','lazy_1'], ['inc','lazy_2'], ['inc','lazy_1'], ['inc','lazy_2']]);
+            expect(sockets).toHaveLength(0);
+            // Input/model/poll bindings can retain a slot address without a
+            // trigger DOM reference. Their registered HTTP owner still routes.
+            await win.djust.handleEvent('inc', {view_id: 'lazy_1', _slotId: 'h1'});
+            expect(doc.querySelector('#h1 .count').textContent).toBe('3');
+            expect(doc.querySelector('#h2 .count').textContent).toBe('2');
+            const n = sent.length;
+            doc.getElementById('w1').click(); // raw/unregistered reference
+            await tick(40);
+            expect(sent).toHaveLength(n);
+        } finally { dom.window.close(); }
     });
 });

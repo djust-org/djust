@@ -26,6 +26,7 @@ pub mod loop_cache;
 pub mod markdown;
 pub mod parser;
 pub mod pprint;
+pub mod provenance;
 pub mod registry;
 pub mod registry_scope;
 pub mod render_env;
@@ -316,13 +317,31 @@ impl Template {
         loader: &L,
         template_name: Option<&str>,
     ) -> Result<String> {
+        self.render_output_named_mut::<L, String>(context, loader, template_name)
+    }
+
+    /// Render bytes and their authored origin as one result (#3252).
+    pub fn render_with_provenance<L: TemplateLoader>(
+        &self,
+        context: &Context,
+        loader: &L,
+    ) -> Result<provenance::Rendered> {
+        self.render_output_named_mut(&mut context.clone(), loader, None)
+    }
+
+    pub fn render_output_named_mut<L: TemplateLoader, R: provenance::RenderOutput>(
+        &self,
+        context: &mut Context,
+        loader: &L,
+        template_name: Option<&str>,
+    ) -> Result<R> {
         let _includes = inheritance::IncludeRenderGuard::new();
         // Use cached resolved nodes if available. Skipped for a RELATIVE
         // `{% extends %}`: that resolution depends on the template's name and
         // the cache is keyed by source (#2517).
         if template_name.is_none() && !self.extends_is_relative() {
             if let Some(resolved) = self.resolved.get() {
-                return renderer::render_nodes_with_loader_mut(
+                return renderer::render_nodes_output::<L, R>(
                     &resolved.final_nodes,
                     context,
                     Some(loader),
@@ -342,7 +361,7 @@ impl Template {
             )?;
             let root_nodes = chain.get_root_nodes();
             let final_nodes = chain.apply_block_overrides(root_nodes);
-            renderer::render_nodes_with_loader_mut(&final_nodes, context, Some(loader))
+            renderer::render_nodes_output::<L, R>(&final_nodes, context, Some(loader))
         } else {
             if let Some(name) = template_name {
                 let mut nodes = self.nodes.clone();
@@ -353,9 +372,9 @@ impl Template {
                         .template_origin(name)
                         .unwrap_or_else(|| name.to_string()),
                 );
-                renderer::render_nodes_with_loader_mut(&nodes, context, Some(loader))
+                renderer::render_nodes_output::<L, R>(&nodes, context, Some(loader))
             } else {
-                renderer::render_nodes_with_loader_mut(&self.nodes, context, Some(loader))
+                renderer::render_nodes_output::<L, R>(&self.nodes, context, Some(loader))
             }
         }
     }

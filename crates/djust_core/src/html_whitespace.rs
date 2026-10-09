@@ -265,6 +265,21 @@ fn find_fwd(hay: &[u8], needle: &[u8]) -> Option<usize> {
 /// neighbour on each side is text or an inline-level element. Decisions are
 /// made on the input, never on partially rewritten output.
 pub fn collapse_inter_tag_whitespace(html: &str, block_tags: &[String]) -> String {
+    collapse_with_edits(html, block_tags, |_, _| {})
+}
+
+/// Exact deleted UTF-8 ranges for composing a render-result sideband (#3252).
+pub fn inter_tag_whitespace_edits(html: &str, block_tags: &[String]) -> Vec<(usize, usize)> {
+    let mut edits = Vec::new();
+    collapse_with_edits(html, block_tags, |start, end| edits.push((start, end)));
+    edits
+}
+
+fn collapse_with_edits<F: FnMut(usize, usize)>(
+    html: &str,
+    block_tags: &[String],
+    mut removed: F,
+) -> String {
     let bytes = html.as_bytes();
     let mut out = String::with_capacity(html.len());
     let mut copied = 0;
@@ -281,6 +296,7 @@ pub fn collapse_inter_tag_whitespace(html: &str, block_tags: &[String]) -> Strin
                     && next_sibling_is_inline(bytes, i + 1, block_tags)
                     && prev_sibling_is_inline(bytes, i, block_tags);
                 if !keep {
+                    removed(i, i + 1);
                     out.push_str(&html[copied..i]);
                     copied = i + 1;
                 }

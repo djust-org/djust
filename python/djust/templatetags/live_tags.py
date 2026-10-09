@@ -23,7 +23,10 @@ import logging
 import re
 import threading
 from collections.abc import Iterator
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
+
+if TYPE_CHECKING:
+    from ..live_view import LiveView
 
 from .._child_rendering import reconcile_child_render, record_rendered_child
 
@@ -1919,6 +1922,46 @@ def active_parent_view(view: Any) -> Iterator[None]:
         _active_parent_view.view = previous
 
 
+def resolve_live_view_class(view_path: str) -> "type[LiveView]":
+    """Shared authored-child resolution and allowlist gate (#3252)."""
+    from django.utils.module_loading import import_string
+    from ..live_view import LiveView
+
+    # 1a. Optional allowlist check — opt-in hardening via
+    #     ``DJUST_LIVE_RENDER_ALLOWED_MODULES`` setting. When unset, any
+    #     dotted path resolvable by ``import_string`` is permitted; this
+    #     preserves backward compatibility. When set, the resolved view
+    #     path must start with one of the allowed prefixes. The check is
+    #     prefix-based (like ``INSTALLED_APPS``) so e.g. ``"myapp.views"``
+    #     matches ``"myapp.views.X"`` and ``"myapp.views.sub.Y"``.
+    allowed_prefixes = getattr(settings, "DJUST_LIVE_RENDER_ALLOWED_MODULES", None)
+    if allowed_prefixes is not None:
+        if not any(
+            view_path == prefix or view_path.startswith(prefix + ".") for prefix in allowed_prefixes
+        ):
+            raise TemplateSyntaxError(
+                "{%% live_render %%} view_path %r is not in "
+                "DJUST_LIVE_RENDER_ALLOWED_MODULES" % view_path
+            )
+
+    # 1. Resolve the dotted path.
+    try:
+        child_cls = import_string(view_path)
+    except (ImportError, AttributeError, ModuleNotFoundError) as exc:
+        raise TemplateSyntaxError(
+            "{%% live_render %%} cannot resolve %r: %s" % (view_path, exc)
+        ) from exc
+
+    # 2. Validate it's a LiveView subclass.
+    if not (isinstance(child_cls, type) and issubclass(child_cls, LiveView)):
+        raise TemplateSyntaxError(
+            "{%% live_render %%} target %r must be a LiveView subclass; got %r"
+            % (view_path, child_cls)
+        )
+
+    return child_cls
+
+
 @register.simple_tag(takes_context=True)
 def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
     """Embed a LiveView as a child of the current view (Phoenix nested-LV parity).
@@ -1992,42 +2035,11 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
             (authenticated user without required permissions).
     """
     from django.template.loader import get_template
-    from django.utils.module_loading import import_string
 
     from ..auth.core import check_view_auth
     from ..live_view import LiveView  # Lazy import to avoid cycle
 
-    # 1a. Optional allowlist check — opt-in hardening via
-    #     ``DJUST_LIVE_RENDER_ALLOWED_MODULES`` setting. When unset, any
-    #     dotted path resolvable by ``import_string`` is permitted; this
-    #     preserves backward compatibility. When set, the resolved view
-    #     path must start with one of the allowed prefixes. The check is
-    #     prefix-based (like ``INSTALLED_APPS``) so e.g. ``"myapp.views"``
-    #     matches ``"myapp.views.X"`` and ``"myapp.views.sub.Y"``.
-    allowed_prefixes = getattr(settings, "DJUST_LIVE_RENDER_ALLOWED_MODULES", None)
-    if allowed_prefixes is not None:
-        if not any(
-            view_path == prefix or view_path.startswith(prefix + ".") for prefix in allowed_prefixes
-        ):
-            raise TemplateSyntaxError(
-                "{%% live_render %%} view_path %r is not in "
-                "DJUST_LIVE_RENDER_ALLOWED_MODULES" % view_path
-            )
-
-    # 1. Resolve the dotted path.
-    try:
-        child_cls = import_string(view_path)
-    except (ImportError, AttributeError, ModuleNotFoundError) as exc:
-        raise TemplateSyntaxError(
-            "{%% live_render %%} cannot resolve %r: %s" % (view_path, exc)
-        ) from exc
-
-    # 2. Validate it's a LiveView subclass.
-    if not (isinstance(child_cls, type) and issubclass(child_cls, LiveView)):
-        raise TemplateSyntaxError(
-            "{%% live_render %%} target %r must be a LiveView subclass; got %r"
-            % (view_path, child_cls)
-        )
+    child_cls = resolve_live_view_class(view_path)
 
     # 3. Locate the parent view in the render context.
     #

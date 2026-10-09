@@ -272,6 +272,16 @@ def collapse_inter_tag_whitespace(html: str, block_tags: List[str]) -> str:
     """
     ...
 
+def inter_tag_whitespace_edits(html: str, block_tags: List[str]) -> List[Tuple[int, int]]:
+    """UTF-8 deletion ranges used to compose authored render intervals."""
+    ...
+
+def authored_lazy_elements(
+    html: str, spans: List[Tuple[int, int]]
+) -> List[Tuple[int, int, str, str]]:
+    """Final HTML5 elements backed by authored UTF-8 render intervals."""
+    ...
+
 def diff_html(old_html: str, new_html: str) -> str:
     """
     Compute diff between two HTML strings.
@@ -1248,6 +1258,10 @@ class RustLiveView:
         """
         ...
 
+    def render_with_provenance(self) -> Tuple[str, List[Tuple[int, int]]]:
+        """Render HTML and result-local, disjoint authored UTF-8 intervals."""
+        ...
+
     def render_with_diff(self) -> Tuple[str, Optional[str], int]:
         """
         Render and compute diff from last render.
@@ -1432,6 +1446,8 @@ __all__ = [
     "render_markdown",
     "diff_html",
     "collapse_inter_tag_whitespace",
+    "inter_tag_whitespace_edits",
+    "authored_lazy_elements",
     "resolve_template_inheritance",
     # Serialization
     "fast_json_dumps",
