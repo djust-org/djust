@@ -24,21 +24,29 @@ from pathlib import Path
 
 import pytest
 
-from tests.git_env import scrub_host_git_state
+from tests.git_env import isolated_git_env
+
+
+@pytest.fixture(autouse=True)
+def _no_inherited_git_env(monkeypatch):
+    """Keep git commands aimed at fixture repositories under hooks (#3179)."""
+    from tests.git_env import GIT_EXECUTION_VARS
+
+    for var in GIT_EXECUTION_VARS:
+        monkeypatch.delenv(var, raising=False)
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CHECKER = REPO_ROOT / "scripts" / "check-shared-git-config.sh"
 
 
+def _isolated_env() -> dict[str, str]:
+    """Ignore inherited repository state and host git configuration."""
+    return isolated_git_env(GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_SYSTEM="/dev/null")
+
+
 def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    env = os.environ.copy()
-    # Isolate from the host user's global/system git config so a real-repo
-    # setting can never influence (or be influenced by) these throwaway repos.
-    env["GIT_CONFIG_GLOBAL"] = "/dev/null"
-    env["GIT_CONFIG_SYSTEM"] = "/dev/null"
-    # ...and from the host repo's git STATE (GIT_DIR/GIT_INDEX_FILE/...), which
-    # pre-commit exports into hook environments. See tests/git_env.py.
-    scrub_host_git_state(env)
+    env = _isolated_env()
     return subprocess.run(
         ["git", *args],
         cwd=cwd,
@@ -50,10 +58,7 @@ def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 
 def _run_checker(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    env = os.environ.copy()
-    env["GIT_CONFIG_GLOBAL"] = "/dev/null"
-    env["GIT_CONFIG_SYSTEM"] = "/dev/null"
-    scrub_host_git_state(env)
+    env = _isolated_env()
     return subprocess.run(
         ["bash", str(CHECKER), *args],
         cwd=cwd,

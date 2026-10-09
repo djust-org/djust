@@ -19,6 +19,16 @@ from pathlib import Path
 
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def _no_inherited_git_env(monkeypatch):
+    """Keep git commands aimed at fixture repositories under hooks (#3179)."""
+    from tests.git_env import GIT_EXECUTION_VARS
+
+    for var in GIT_EXECUTION_VARS:
+        monkeypatch.delenv(var, raising=False)
+
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "check-changelog-tagged-sections.py"
 CHANGELOG = REPO_ROOT / "CHANGELOG.md"
@@ -51,10 +61,13 @@ def _in_git_repo_with_a_shipped_section() -> bool:
     return any(check._tag_exists(f"v{ver}") for ver, _ in working)
 
 
-requires_shipped = pytest.mark.skipif(
-    not _in_git_repo_with_a_shipped_section(),
-    reason="no git work tree / no shipped CHANGELOG section tagged yet",
-)
+@pytest.fixture(autouse=True)
+def _require_shipped_section(_no_inherited_git_env):
+    # Evaluate after git isolation, not at collection time when hook variables
+    # still name the caller's repository. Otherwise the victim run skips every
+    # test in this module before any autouse fixture can protect it.
+    if not _in_git_repo_with_a_shipped_section():
+        pytest.skip("no git work tree / no shipped CHANGELOG section tagged yet")
 
 
 def _first_superseded_section() -> str:
@@ -79,7 +92,6 @@ def _first_superseded_section() -> str:
     raise AssertionError("no superseded section found to exercise the canary")
 
 
-@requires_shipped
 class TestChangelogTaggedSectionPin:
     def test_current_tree_passes(self):
         # The untouched working CHANGELOG must pin clean.

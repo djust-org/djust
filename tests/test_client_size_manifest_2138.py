@@ -31,6 +31,16 @@ from pathlib import Path
 
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def _no_inherited_git_env(monkeypatch):
+    """Keep git commands aimed at fixture repositories under hooks (#3179)."""
+    from tests.git_env import GIT_EXECUTION_VARS
+
+    for var in GIT_EXECUTION_VARS:
+        monkeypatch.delenv(var, raising=False)
+
+
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "python/djust/static/djust/client-sizes.json"
 CHECKER = ROOT / "scripts/check-doc-snippets.py"
