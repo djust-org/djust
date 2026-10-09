@@ -191,7 +191,7 @@ const ITEM_SAFETY_PRESERVING_FILTERS: [&str; 1] = ["slice"];
 /// like it, ASSIGNED per filter rather than OR-ed over the chain — a filter
 /// that is neither a producer nor a preserver re-taints the items, exactly as
 /// a plain filter re-taints the container.
-fn filter_output_items_are_safe(
+pub(crate) fn filter_output_items_are_safe(
     filter_name: &str,
     input_items_were_safe: bool,
     input_was_safe: bool,
@@ -918,6 +918,21 @@ fn literal_filter(name: &str) -> bool {
         )
 }
 
+// Replay only built-ins whose output is deterministic in this render context.
+// Explicit yesno arguments avoid its translation-dependent default.
+fn replayable_filter(name: &str, has_arg: bool) -> bool {
+    (literal_filter(name) && name != "random") || (name == "yesno" && has_arg)
+}
+
+fn literal_run(literals: Vec<Option<String>>) -> Option<String> {
+    literals
+        .into_iter()
+        .try_fold(String::new(), |mut out, literal| {
+            out.push_str(&literal?);
+            Some(out)
+        })
+}
+
 fn filters_are_literal(specs: &[(String, Option<String>)], context: &Context) -> bool {
     specs.iter().all(|(name, arg)| {
         literal_filter(name)
@@ -1400,7 +1415,11 @@ fn call_block_custom_tag<L: TemplateLoader>(
             &context.safe_key_paths(),
             context.autoescape(),
         )?;
-        context.restore_provenance_literals(body_literals);
+        context.restore_provenance_literals(if html == content {
+            body_literals
+        } else {
+            vec![None]
+        });
         return Ok((html, bindings.into_iter().map(sibling_binding).collect()));
     }
     let html = crate::registry::call_block_handler_with_py_sidecar(
@@ -1412,7 +1431,11 @@ fn call_block_custom_tag<L: TemplateLoader>(
         context.autoescape(),
     )
     .map_err(|e| handler_call_error("Block tag", name, e))?;
-    context.restore_provenance_literals(body_literals);
+    context.restore_provenance_literals(if html == content {
+        body_literals
+    } else {
+        vec![None]
+    });
     Ok((html, Vec::new()))
 }
 
@@ -1488,7 +1511,6 @@ fn call_lazy_body_block_tag<L: TemplateLoader>(
         djust_core::context::flatten_authored_output(output.into_authored_output(), text);
     let literal_only = flattened.3.html.clone();
     let content = flattened.0.clone();
-    let content = context.record_provenance_flatten(flattened, content);
     let mut handler_context = std::ops::Deref::deref(&context_map).clone();
     if let Some(literal_only) = literal_only {
         handler_context.insert(
@@ -1506,6 +1528,10 @@ fn call_lazy_body_block_tag<L: TemplateLoader>(
         autoescape,
     )
     .map_err(|e| handler_call_error("Block tag", name, e))?;
+    context.record_provenance_flatten(
+        djust_core::context::flatten_authored_output(flattened, html.clone()),
+        String::new(),
+    );
     Ok((html, Vec::new()))
 }
 
@@ -2830,6 +2856,23 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             // before widening it. Seeded `false` for anything that is not a
             // fully-marked sequence, which is the escaping direction.
             let mut items_safe = context.items_are_safe(var_name);
+            let captured = if R::TRACKED {
+                super_context
+                    .as_ref()
+                    .map(|output| output.3.html.clone())
+                    .or_else(|| context.captured_literals(var_name))
+            } else {
+                None
+            };
+            let mut literal_value = captured.clone().flatten().map(|literal| {
+                (
+                    Value::String(literal),
+                    filters::InputSafety {
+                        container: runtime_safe,
+                        items: items_safe,
+                    },
+                )
+            });
             for (filter_name, arg) in filter_specs {
                 // Strip quotes from literal filter args at render time —
                 // the parser preserves quotes so the dep-tracking
@@ -2841,7 +2884,8 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                 let arg_was_quoted = original.map(is_quoted_arg).unwrap_or(false);
                 let unescaped = original.map(crate::parser::unescape_filter_arg_literal);
                 let stripped = unescaped.as_deref();
-                let (new_value, produced_safe) = filters::apply_filter_full_safe(
+                let replay = replayable_filter(filter_name, arg.is_some());
+                let (new_value, produced_safe) = filters::apply_filter_with_literal(
                     filter_name,
                     &value,
                     stripped,
@@ -2859,7 +2903,11 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                     // Django's `needs_autoescape` OTHER term (#2556): the
                     // surrounding `{% autoescape %}` policy.
                     context.autoescape(),
+                    if replay { literal_value.as_mut() } else { None },
                 )?;
+                if !replay && new_value.to_string() != value.to_string() {
+                    literal_value = None;
+                }
                 value = new_value;
                 // Captured BEFORE the reassignment below: both rules read the
                 // safety of the value that went IN, and the item rule reads it
@@ -2931,26 +2979,13 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                 && ((was_literal && !var_name.starts_with("_("))
                     || context.is_template_literal(var_name))
                 && filters_are_literal(filter_specs, context);
-            // Built-in, byte-preserving filters still drop ALL authority, but
-            // must not erase the parent's literal/opaque context boundaries.
-            // Otherwise a literal opener and value closer in block.super
-            // become one apparently balanced opaque operation (#3442).
-            if R::TRACKED {
-                if let Some(mut output) = super_context {
-                    if filters_are_literal(filter_specs, context) && output.0 == text {
-                        output.1.clear();
-                        output.2.clear();
-                        return Ok(R::from_authored_output(output));
-                    }
-                    return Ok(R::from_authored_output(
-                        djust_core::context::flatten_authored_output(output, text),
-                    ));
-                }
-            }
-            if R::TRACKED {
-                if let Some(literal) = context.captured_literals(var_name) {
-                    return Ok(R::captured(text, literal));
-                }
+            // Replay the same filters over the capture's literal-only run.
+            // This drops start-tag authority without retaining stale closers.
+            if captured.is_some() {
+                // Capture context follows the filter chain, as before; emit-time
+                // escaping cannot erase its authored hiding context.
+                let literal = literal_value.map(|(value, _)| value.to_string());
+                return Ok(R::captured(text, literal));
             }
             Ok(if literal_output {
                 R::context_literal(text)
@@ -2991,12 +3026,22 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             // See the Variable arm: item-level safety, seeded from the context
             // (#2283, #2287) — the second of the three sites.
             let mut items_safe = context.items_are_safe(expr);
+            let mut literal_value = capture.clone().flatten().map(|literal| {
+                (
+                    Value::String(literal),
+                    filters::InputSafety {
+                        container: runtime_safe,
+                        items: items_safe,
+                    },
+                )
+            });
             for (filter_name, arg) in filters {
                 let original = arg.as_deref();
                 let arg_was_quoted = original.map(is_quoted_arg).unwrap_or(false);
                 let unescaped = original.map(crate::parser::unescape_filter_arg_literal);
                 let stripped = unescaped.as_deref();
-                let (new_value, produced_safe) = filters::apply_filter_full_safe(
+                let replay = replayable_filter(filter_name, arg.is_some());
+                let (new_value, produced_safe) = filters::apply_filter_with_literal(
                     filter_name,
                     &value,
                     stripped,
@@ -3011,7 +3056,11 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                     // Django's `needs_autoescape` OTHER term (#2556): the
                     // surrounding `{% autoescape %}` policy.
                     context.autoescape(),
+                    if replay { literal_value.as_mut() } else { None },
                 )?;
+                if !replay && new_value.to_string() != value.to_string() {
+                    literal_value = None;
+                }
                 value = new_value;
                 // Captured BEFORE the reassignment below: both rules read the
                 // safety of the value that went IN, and the item rule reads it
@@ -3056,8 +3105,8 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             } else {
                 filters::html_escape(&text)
             };
-            Ok(if let Some(capture) = capture {
-                R::captured(text, capture)
+            Ok(if capture.is_some() {
+                R::captured(text, literal_value.map(|(value, _)| value.to_string()))
             } else if R::TRACKED
                 && expression_is_literal(expr, context)
                 && filters_are_literal(filters, context)
@@ -4411,7 +4460,16 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             let content = render_nodes_output::<L, R>(nodes, context, loader)?;
             // Remove whitespace between > and <
             let text = SPACELESS_RE.replace_all(content.trim(), "><").to_string();
-            Ok(content.flatten(text))
+            if R::TRACKED {
+                let output = content.into_authored_output();
+                let literal = output
+                    .3
+                    .html
+                    .map(|literal| SPACELESS_RE.replace_all(literal.trim(), "><").to_string());
+                Ok(R::captured(text, literal))
+            } else {
+                Ok(text.into())
+            }
         }
 
         Node::Filter { filters, nodes } => {
@@ -4449,6 +4507,9 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             // on Django (the body's own escape, upper-cased), not the
             // `&amp;LT;` a second escape would make of it. The block's
             // output is therefore exactly the chain's output.
+            if R::TRACKED {
+                ctx.mark_captured_literals("var", body.into_authored_output().3.html);
+            }
             let expr = format!("var|{}", format_filter_chain(filters));
             let (value, _runtime_safe) = get_value_safe(&expr, &ctx)?;
             let text = if matches!(value, Value::Missing) {
@@ -4456,7 +4517,12 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             } else {
                 value.to_string()
             };
-            Ok(body.flatten(text))
+            let literals = ctx.take_provenance_flatten();
+            if R::TRACKED {
+                Ok(R::captured(text, literal_run(literals)))
+            } else {
+                Ok(text.into())
+            }
         }
 
         Node::Cycle {
@@ -5922,6 +5988,20 @@ fn get_value_safe_inner(
         let (mut value, mut runtime_safe) =
             get_value_safe_inner(var_name, context, ignore_failures)?;
         let input_literals = context.take_provenance_flatten();
+        let capture = if input_literals.is_empty() {
+            context.captured_literals(var_name)
+        } else {
+            Some(literal_run(input_literals))
+        };
+        let mut literal_value = capture.clone().flatten().map(|literal| {
+            (
+                Value::String(literal),
+                filters::InputSafety {
+                    container: runtime_safe,
+                    items: context.items_are_safe(var_name),
+                },
+            )
+        });
         // Django's `ignore_failures=True` substitutes **None**, not "missing"
         // (#2528, ADR-027). `FilterExpression.resolve` (`base.py:720-726`)
         // reads
@@ -5985,7 +6065,8 @@ fn get_value_safe_inner(
             // emit path can honour runtime SafeStrings (#1672, follow-up to
             // #1660). Built-ins report it too, for the four whose safety is
             // per-call rather than per-name (`filters::builtin_produced_safe`).
-            let (new_value, produced_safe) = filters::apply_filter_full_safe(
+            let replay = replayable_filter(filter_name, arg.is_some());
+            let (new_value, produced_safe) = filters::apply_filter_with_literal(
                 filter_name,
                 &value,
                 arg.as_deref(),
@@ -5999,7 +6080,11 @@ fn get_value_safe_inner(
                     items: items_safe,
                 },
                 context.autoescape(),
+                if replay { literal_value.as_mut() } else { None },
             )?;
+            if !replay && new_value.to_string() != value.to_string() {
+                literal_value = None;
+            }
             value = new_value;
             // Captured before the reassignment — see the Variable arm (#2283).
             let input_was_safe = runtime_safe;
@@ -6011,7 +6096,11 @@ fn get_value_safe_inner(
         }
 
         context.take_provenance_flatten();
-        context.restore_provenance_literals(input_literals);
+        if capture.is_some() {
+            context.restore_provenance_literals(vec![
+                literal_value.map(|(value, _)| value.to_string())
+            ]);
+        }
         return Ok((value, runtime_safe));
     }
 

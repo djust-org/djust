@@ -686,15 +686,20 @@ pub type AuthoredOutput = (
     LiteralOutput,
 );
 
-/// Flattening drops authority but retains the rendered branch's original
-/// literal-only bytes. Transformed value bytes never supply parser context.
+/// Drop authority; an unreplayable byte-changing transform invalidates literal
+/// context. Byte-identical captures retain their literal/value boundaries.
 pub fn flatten_authored_output(output: AuthoredOutput, text: String) -> AuthoredOutput {
+    let literal = if output.0 == text {
+        output.3.html
+    } else {
+        None
+    };
     (
         text,
         Vec::new(),
         Vec::new(),
         LiteralOutput {
-            html: output.3.html,
+            html: literal,
             openings: Vec::new(),
         },
     )

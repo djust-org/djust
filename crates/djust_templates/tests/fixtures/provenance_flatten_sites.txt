@@ -34,10 +34,11 @@ let text = output.to_string();
 djust_core::context::flatten_authored_output(output.into_authored_output(), text);
 let literal_only = flattened.3.html.clone();
 let content = flattened.0.clone();
-let content = context.record_provenance_flatten(flattened, content);
 if let Some(literal_only) = literal_only {
 "_djust_body_literal_only".into(),
 Value::String(literal_only),
+context.record_provenance_flatten(
+djust_core::context::flatten_authored_output(flattened, html.clone()),
 other => DjangoRustError::TemplateError(format!("{what} failed: {other}")),
 | Value::DictView { .. } => serde_json::to_string(v).unwrap_or_else(|_| v.to_string()),
 _ => v.to_string(),
@@ -66,9 +67,14 @@ Ok(rendered.into_authored_output())
 map.insert("block".to_string(), lazy_block);
 super_value = Some(Value::SafeString(output.0.clone()));
 .into());
-if filters_are_literal(filter_specs, context) && output.0 == text {
-djust_core::context::flatten_authored_output(output, text),
+.map(|output| output.3.html.clone())
+let mut literal_value = captured.clone().flatten().map(|literal| {
+if !replay && new_value.to_string() != value.to_string() {
+let literal = literal_value.map(|(value, _)| value.to_string());
 text.into()
+let mut literal_value = capture.clone().flatten().map(|literal| {
+if !replay && new_value.to_string() != value.to_string() {
+R::captured(text, literal_value.map(|(value, _)| value.to_string()))
 text.into()
 R::context_neutral("<!--dj-if-->".to_string())
 format!("-{namespace}")
@@ -130,11 +136,15 @@ text.into()
 return Err(DjangoRustError::TemplateError(format!(
 Ok((output.to_string()).into())
 let text = SPACELESS_RE.replace_all(content.trim(), "><").to_string();
-Ok(content.flatten(text))
+let output = content.into_authored_output();
+.html
+.map(|literal| SPACELESS_RE.replace_all(literal.trim(), "><").to_string());
+Ok(text.into())
 ctx.bind("var".to_string(), Value::String(body.to_string()), true);
+ctx.mark_captured_literals("var", body.into_authored_output().3.html);
 let expr = format!("var|{}", format_filter_chain(filters));
 value.to_string()
-Ok(body.flatten(text))
+Ok(text.into())
 text.into()
 R::captured(effect.html, capture)
 R::context_literal(effect.html)
@@ -170,8 +180,11 @@ Err(DjangoRustError::TemplateError(format!(
 .replace(&format!("\\{quote}"), &quote.to_string())
 .replace(&format!("\\{quote}"), &quote.to_string())
 Some(format!("{sign}{body}"))
+let mut literal_value = capture.clone().flatten().map(|literal| {
 raw_arg[1..raw_arg.len() - 1].to_string()
 raw_arg.to_string()
+if !replay && new_value.to_string() != value.to_string() {
+literal_value.map(|(value, _)| value.to_string())
 Value::Bool(b) => Some(Value::Integer(i64::from(*b))),
 let text = val.to_string();
 return Ok("0".to_string());
@@ -1056,7 +1069,8 @@ context.rs
 fn render_block_super(&self, ctx: &Context) -> crate::Result<String>;
 self.render_block_super(ctx).map(|html| {
 pub fn flatten_authored_output(output: AuthoredOutput, text: String) -> AuthoredOutput {
-html: output.3.html,
+let literal = if output.0 == text {
+output.3.html
 _ => Err(pyo3::exceptions::PyKeyError::new_err(key.to_string())),
 let path = path.into();
 let namespace = namespace.into();
@@ -1216,7 +1230,9 @@ text.into()
 text.into()
 text.into()
 text.into()
+fn into_authored_output(self) -> djust_core::context::AuthoredOutput;
 text.to_owned()
+fn into_authored_output(self) -> djust_core::context::AuthoredOutput {
 output.0
 pub literal_only: Option<String>,
 pub literal_offsets: Vec<(usize, usize)>,
@@ -1239,6 +1255,8 @@ result.literal_only = literal;
 let mut result = Self::from(text);
 result.literal_only = Some(result.html.clone());
 result.literal_offsets = source
+fn into_authored_output(self) -> djust_core::context::AuthoredOutput {
+Rendered::into_authored_output(self)
 html: output.0,
 literal_only: output.3.html,
 literal_offsets: output.3.openings,
@@ -1260,7 +1278,7 @@ ctx.set("flag".into(), Value::Bool(true));
 ctx.set("extra".into(), Value::String("Δ".into()));
 output.append(&Rendered::from("</script>".to_owned()));
 let flattened = output.flatten(replacement.into());
-assert_eq!(flattened.literal_only.as_deref(), Some("<script>"));
+flattened.literal_only.as_deref(),
 ".into()",
 "::from(",
 "output.0",

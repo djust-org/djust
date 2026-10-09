@@ -86,19 +86,23 @@ opaque, rather than a flattened tracked capture. A value-derived filter chain re
 opaque even if a filter selects a literal fallback argument. These
 context bytes never grant start-tag authority.
 Unfiltered `block.super` composes its literal context; filtered `block.super`
-retains the parent's original literal-only bytes while dropping authority.
+replays pure built-in filters on the parent's literal-only content while dropping
+authority.
 Captured values carry their literal-only bytes through scoped bindings and
 aliases, emitted at each use rather than at the time of assignment. Unused
-captures and condition operands contribute no output. Built-in filters meeting that rule that
-leave a mixed parent output byte-identical retain its literal/opaque context
-boundaries, while dropping all start-tag authority. This prevents a filtered
-parent from coalescing a literal opener and a value closer into one balanced run.
+captures and condition operands contribute no output. Pure built-in filters apply
+with the same resolved arguments to both the final and literal-only runs,
+including filtered captured bindings. Spaceless applies its whitespace transform
+to both runs. These operations drop all start-tag authority. Custom block tags,
+Python-bridged filters and other unreplayable transforms retain literal context
+only when their output is byte-identical; changed bytes make the tracked render
+non-authoritative, as with unknown cache metadata.
 During a tracked render, the renderer also composes a literal-only rendering of
 exactly the selected branch and loop iterations. Authored literal bytes and
 literal-derived expression output are kept. Non-literal value bytes and
 renderer-owned markers contribute the empty string (not same-length spaces).
-Flattened captures contribute their original authored literal bytes with values
-empty, irrespective of transformed output; flattening never grants authority.
+Flattened captures contribute their transformed literal-only content with values
+empty; flattening never grants authority.
 Each authored container's opening byte maps to its offset in that rendering.
 
 When authored lazy containers exist, html5ever parses the complete literal-only
@@ -134,8 +138,9 @@ A container whose hiding context is produced by a non-literal value (view-contex
 data) is not modelled by this liveness computation. Empty values can join remaining
 literal bytes into a hiding context; that context is parsed normally. Authors
 must not hide lazy containers with values. For example, a value emitting `<!--` followed by a value emitting `-->`, or
-`<{{ tag }}>` with `tag="script"`, can leave a following authored container
-registered when it survives in the final page. An expression such as
+`<{{ tag }}>` with `tag="script"`, or a split end tag such as
+`</textarea{{ v }}>` (also `</script{{ v }}>`) with `v=" "`, can leave a following
+authored container registered when it survives in the final page. An expression such as
 `{{ "<!--"|add:value|safe }}` is also opaque because its filter argument is a
 value, even though its input is quoted literal text; a value can close that
 expression's opener. The final-page (E) survival check
@@ -147,8 +152,9 @@ liveness, even if that value makes the container visible in the final page.
 Literal context and opaque runs compose across includes, inheritance and loop
 iterations. This check is applied once to the complete render. An authored
 closer in a skipped branch cannot make a following container authoritative;
-a value cannot supply the closer for an inert context opened by literal text
-or literal-derived expression output. Only containers live in both the
+except for the value-assembled split end tags described above, a value cannot
+supply the closer for an inert context opened by literal text or literal-derived
+expression output. Only containers live in both the
 literal-only and final-page trees keep start-tag authority and origin addresses.
 Source annotation grants no liveness verdict; inactive branches do not determine
 the rendered branch's liveness.

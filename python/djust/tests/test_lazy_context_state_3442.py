@@ -537,7 +537,7 @@ def test_custom_body_captures_preserve_literal_context(tmp_path, lazy, empty):
         )
         rust.update_state({"q": "v"})
         html, spans = rust.render_with_provenance()
-        assert len(authored_lazy_elements(html, spans)) == 1
+        assert len(authored_lazy_elements(html, spans)) == (0 if empty else 1)
     finally:
         unregister_block_tag_handler("round4_capture")
 
@@ -998,3 +998,114 @@ def test_nested_raw_parent_read_preserves_eager_body_projection(tmp_path):
         assert not authored_lazy_elements(html, spans)
     finally:
         unregister_block_tag_handler("nested_parent_read")
+
+
+TRANSFORMED_CLOSERS = [
+    ('{% filter cut:"-->" %}-->{% endfilter %}', "-->"),
+    ("{% filter force_escape %}-->{% endfilter %}", "-->"),
+    ("{% filter length %}-->{% endfilter %}", "-->"),
+    ('{% filter slice:":0" %}-->{% endfilter %}', "-->"),
+    ("{% filter striptags %}</textarea>{% endfilter %}", "</textarea>"),
+    ('{% filter cut:"-->" %}{% include "closer.html" %}{% endfilter %}', "-->"),
+    ('{% filter cut:"-->" %}{{ block.super }}{% endfilter %}', "-->"),
+    *[
+        ("{{ block.super|" + flt + " }}", "-->")
+        for flt in ['cut:"-->"', "length", "force_escape", 'slice:":1"', 'yesno:"a,b"']
+    ],
+    *[
+        ("{% with s=block.super %}{{ s|" + flt + " }}{% endwith %}", "-->")
+        for flt in ['cut:"-->"', "length"]
+    ],
+    ("{% filter cut:closer|length %}-->{% endfilter %}", "-->"),
+    ("{% with s=block.super|cut:closer %}{{ s }}{% endwith %}", "-->"),
+]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("body,closer", TRANSFORMED_CLOSERS)
+@pytest.mark.parametrize("value_closer", [True, False])
+def test_transformed_literal_closer_cannot_be_replaced_by_value(
+    tmp_path, settings, body, closer, value_closer
+):
+    settings.TEMPLATES = [
+        {
+            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "DIRS": [str(tmp_path)],
+            "APP_DIRS": True,
+        }
+    ]
+    (tmp_path / "closer.html").write_text(closer)
+    (tmp_path / "parent.html").write_text("{% block body %}" + closer + "{% endblock %}")
+    opener = "<textarea>" if closer == "</textarea>" else "<!--"
+    (tmp_path / "child.html").write_text(
+        '{% extends "parent.html" %}{% block body %}'
+        + opener
+        + body
+        + "{{ q|safe }}"
+        + HIDDEN
+        + closer
+        + "{% endblock %}"
+    )
+    ids, statuses, mounts = run(
+        "<div dj-root>" + TAG + '{% include "child.html" %}</div>',
+        {"q": closer if value_closer else "x", "closer": closer},
+    )
+    assert len(ids) == 1
+    assert statuses == [200]
+    assert mounts == 0
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "{{ block.super|cut:provider.closer }}",
+        "{{ block.super if flag else empty|cut:provider.closer }}",
+        "{% with s=block.super|cut:provider.closer %}{{ s }}{% endwith %}",
+        "{% filter cut:provider.closer %}-->{% endfilter %}",
+    ],
+)
+def test_filter_replay_resolves_argument_once(tmp_path, body):
+    class Provider:
+        calls = 0
+
+        def closer(self):
+            self.calls += 1
+            return "-->" if self.calls == 1 else "x"
+
+    provider = Provider()
+    (tmp_path / "parent.html").write_text("{% block body %}-->{% endblock %}")
+    rust = RustLiveView(
+        '{% extends "parent.html" %}{% block body %}'
+        + TAG
+        + "<!--"
+        + body
+        + "{{ q|safe }}"
+        + TAG
+        + "-->{% endblock %}",
+        [str(tmp_path)],
+    )
+    rust.set_raw_py_values({"provider": provider})
+    rust.update_state({"q": "-->", "flag": True, "empty": ""})
+    html, spans = rust.render_with_provenance()
+    assert provider.calls == 1
+    assert len(authored_lazy_elements(html, spans)) == 1
+
+
+@pytest.mark.parametrize("changed", [True, False])
+def test_python_filter_capture_is_called_once_and_changed_bytes_fail_closed(changed):
+    from djust.template_filters import register_django_filter
+
+    calls = []
+
+    def transform(value):
+        calls.append(value)
+        return "" if changed else value
+
+    register_django_filter("final_transform_3442", transform)
+    rust = RustLiveView(
+        TAG + "<!--{% filter final_transform_3442 %}-->{% endfilter %}{{ q|safe }}" + TAG
+    )
+    rust.update_state({"q": "-->"})
+    html, spans = rust.render_with_provenance()
+    assert calls == ["-->"]
+    assert len(authored_lazy_elements(html, spans)) == (0 if changed else 2)

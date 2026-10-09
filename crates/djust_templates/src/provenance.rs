@@ -16,11 +16,12 @@ pub trait RenderOutput: Default + From<String> + Deref<Target = str> + std::fmt:
     fn context_neutral(text: String) -> Self {
         text.into()
     }
-    /// Drop start-tag authority while carrying original literal context.
+    /// Drop start-tag authority; unknown byte changes invalidate context.
     fn flatten(self, text: String) -> Self {
         text.into()
     }
     fn flattened_literals(&mut self, _literals: Vec<Option<String>>) {}
+    fn into_authored_output(self) -> djust_core::context::AuthoredOutput;
     fn from_authored_output(output: djust_core::context::AuthoredOutput) -> Self;
     fn append(&mut self, child: &Self);
     fn push_str(&mut self, text: &str);
@@ -37,6 +38,17 @@ impl RenderOutput for String {
     const TRACKED: bool = false;
     fn authored(text: &str) -> Self {
         text.to_owned()
+    }
+    fn into_authored_output(self) -> djust_core::context::AuthoredOutput {
+        (
+            self,
+            Vec::new(),
+            Vec::new(),
+            djust_core::context::LiteralOutput {
+                html: Some(String::new()),
+                openings: Vec::new(),
+            },
+        )
     }
     fn from_authored_output(output: djust_core::context::AuthoredOutput) -> Self {
         output.0
@@ -217,6 +229,9 @@ impl RenderOutput for Rendered {
         }
         result
     }
+    fn into_authored_output(self) -> djust_core::context::AuthoredOutput {
+        Rendered::into_authored_output(self)
+    }
     fn from_authored_output(output: djust_core::context::AuthoredOutput) -> Self {
         Self {
             html: output.0,
@@ -309,12 +324,19 @@ mod tests {
             .unwrap()
     }
     #[test]
-    fn flatten_preserves_literal_bytes_and_drops_authority() {
-        for replacement in ["évalue", "changed", ""] {
+    fn unreplayable_flatten_fails_closed_on_byte_changes() {
+        for replacement in ["<script></script>", "changed", ""] {
             let mut output = Rendered::authored("<script>");
             output.append(&Rendered::from("</script>".to_owned()));
             let flattened = output.flatten(replacement.into());
-            assert_eq!(flattened.literal_only.as_deref(), Some("<script>"));
+            assert_eq!(
+                flattened.literal_only.as_deref(),
+                if replacement == "<script></script>" {
+                    Some("<script>")
+                } else {
+                    None
+                }
+            );
             assert!(flattened.authored.is_empty());
             assert!(flattened.origins.is_empty());
         }
@@ -500,8 +522,8 @@ mod tests {
                     source.push_str("{% filter lower %}");
                     source.push_str(text);
                     source.push_str("{% endfilter %}");
-                    // A flattened run contributes original authored bytes.
-                    literal.push_str(text);
+                    // Replay lower on the literal-only run too.
+                    literal.push_str(&text.to_lowercase());
                     final_html.push_str(&text.to_lowercase());
                 }
                 if i == 4 {
