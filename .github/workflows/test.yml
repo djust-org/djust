@@ -600,6 +600,9 @@ jobs:
           TRANSIENT_SAVE_ARTIFACTS: scratch/transient-save-recovery
         run: .venv/bin/python tests/playwright/test_transient_save_recovery.py
 
+      - name: Verify HTTP-only attribute-form lazy views (#3252)
+        run: .venv/bin/python tests/playwright/test_lazy_attribute_http_3252.py
+
       - name: Upload server logs on failure
         if: failure()
         uses: actions/upload-artifact@v7

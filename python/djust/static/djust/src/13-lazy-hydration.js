@@ -167,17 +167,26 @@ const lazyHydrationManager = {
 
         // Ensure WebSocket is connected (skip in HTTP-only mode)
         if (window.DJUST_USE_WEBSOCKET === false) {
-            // No stream either (a browser without EventSource, or a page with no
-            // page view for a session to mount): the view cannot go live. Say
-            // so rather than leave a container that looks interactive and is
-            // not (#3252).
-            if (globalThis.djustDebug) console.log('[LiveView:lazy] HTTP-only mode — a lazy view cannot hydrate');
-            this.hydratedElements.delete(elementId);
-            window.dispatchEvent(new CustomEvent('djust:error', {detail: {
-                error: `The lazy view "${viewPath}" was not mounted: it needs the WebSocket or SSE transport.`,
-                code: 'view_unavailable',
-                traceback: null,
-            }}));
+            const viewId = element.getAttribute('data-djust-lazy-id');
+            if (viewId) {
+                // Only the keyed address emitted by the server's provenance
+                // registry is sent. The page endpoint never accepts a class.
+                handleEvent('djust_lazy_mount', {view_id: viewId, _targetElement: element}).then((filled) => {
+                    if (filled) {
+                        element.removeAttribute('dj-lazy');
+                        element.setAttribute('data-live-hydrated', 'true');
+                        installSlotListeners(element);
+                        reinitAfterDOMUpdate(element);
+                    }
+                    else this.hydratedElements.delete(elementId);
+                });
+            } else {
+                this.hydratedElements.delete(elementId);
+                window.dispatchEvent(new CustomEvent('djust:error', {detail: {
+                    error: `The lazy view "${viewPath}" is not registered on this page.`,
+                    code: 'view_unavailable', traceback: null,
+                }}));
+            }
             return;
         }
         if (!liveViewWS || !liveViewWS.enabled) {

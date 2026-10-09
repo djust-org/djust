@@ -177,6 +177,9 @@ def _scan_html_tag(html: str, start: int) -> "tuple[int, list[tuple[int, int, in
     Spans are (name start, name end, value start, attribute end).
     An end offset of -1 means EOF discarded the unfinished tag.
     """
+    # Inspection owns no emission ranges. Scan plain bytes/characters rather
+    # than allocating provenance-bearing slices for every ordinary attribute.
+    html = str(html)
     n = len(html)
     i = start + 1
     if i < n and html[i] == "/":
@@ -228,6 +231,7 @@ def _mask_for_root_search(html: str) -> str:
     candidates. The original offsets remain suitable for template splicing.
     Root precedence and embedded ownership are decided by the caller.
     """
+    html = str(html)  # Read-only scanner; returned coordinates address the original result.
     out = list(html)
     n = len(html)
     i = html.find("<")
@@ -426,7 +430,7 @@ def _root_tag_name(html: str, match: "re.Match[str]") -> str:
 
     Read from the ORIGINAL string by position (the match ran over a
     length-preserving masked copy, whose group text must not be used)."""
-    return html[match.start(1) : match.end(1)].lower()
+    return str(html)[match.start(1) : match.end(1)].lower()
 
 
 def _find_root_close(html: str, match: "re.Match[str]") -> "tuple[int, int] | tuple[None, None]":
@@ -632,7 +636,7 @@ class TemplateMixin:
                     # document.
                     self._full_template = None
                     extracted = self._extract_liveview_root_with_wrapper(template_source)
-                    extracted = self._strip_comments_and_whitespace(extracted)
+                    extracted = self._normalize_source_for_render(extracted)
 
                     logger.debug(
                         "[LiveView] Extracted and stripped liveview-root: %d chars (from %d chars)",
@@ -684,7 +688,7 @@ class TemplateMixin:
                 vdom_template = self._extract_liveview_root_with_wrapper(vdom_source)
 
                 # CRITICAL: Strip comments and whitespace from template BEFORE Rust VDOM sees it
-                vdom_template = self._strip_comments_and_whitespace(vdom_template)
+                vdom_template = self._normalize_source_for_render(vdom_template)
 
                 logger.debug(
                     "[LiveView] Template inheritance resolved (%d chars), "
@@ -697,7 +701,7 @@ class TemplateMixin:
             # No template inheritance - store full template and extract liveview-root for VDOM
             self._full_template = template_source
             extracted = self._extract_liveview_root_with_wrapper(template_source)
-            extracted = self._strip_comments_and_whitespace(extracted)
+            extracted = self._normalize_source_for_render(extracted)
 
             logger.debug(
                 "[LiveView] No inheritance - extracted and stripped liveview-root: "
@@ -708,6 +712,13 @@ class TemplateMixin:
             return extracted
         else:
             raise ValueError("Either template_name or template must be set")
+
+    def _normalize_source_for_render(self, source: str) -> str:
+        from .._render_provenance import _needs_provenance
+
+        # Grant authority only to original literals. Normalize tracked OUTPUT
+        # later, where replacements can invalidate their exact byte intervals.
+        return source if _needs_provenance(source) else self._strip_comments_and_whitespace(source)
 
     def render(self, request: Optional["HttpRequest"] = None) -> str:
         """
@@ -727,7 +738,9 @@ class TemplateMixin:
         self._initialize_rust_view(request)
         self._sync_state_to_rust()
         with library_render_scope():
-            html = self._rust_view.render()
+            from .._render_provenance import render_html
+
+            html = render_html(self._rust_view, self.get_template())
 
         # Record dj-model auto-allowlist from the TEMPLATE SOURCE (CWE-915
         # mass-assignment guard). Derived from the Rust template engine's parsed
@@ -741,6 +754,9 @@ class TemplateMixin:
         # Inject handler metadata for client-side decorators
         html = self._inject_handler_metadata(html, request=request)
 
+        from .._lazy_containers import register_lazy_containers
+
+        html = register_lazy_containers(self, request, html)
         # Reset temporary assigns and streams to free memory after rendering
         self._reset_temporary_assigns()
 
@@ -798,7 +814,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         if close < 0:
             close = _find_html_close(masked)
         if close >= 0:
-            html = f"{html[:close]}{script}\n{html[close:]}"
+            html = html[:close] + script + "\n" + html[close:]
             logger.debug("[LiveView] Injected metadata script before the closing tag")
         else:
             html = html + script
@@ -818,7 +834,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         ``matches!(tag_ref, "pre" | "code" | "textarea" | "script" | "style")``),
         and this normalizer exists explicitly to "match Rust VDOM parser
         behavior" — yet it previously collapsed whitespace ONLY around
-        ``<pre>``/``<code>``/``<textarea>``. The ``re.sub(r"\\s+", " ", html)``
+        ``<pre>``/``<code>``/``<textarea>``. The ``sub(r"\\s+", " ", html)``
         pass below turned every newline inside an inline ``<script>`` into a
         single space, collapsing the whole body onto ONE line. A ``//`` line
         comment then swallows the rest of the script, so an inline
@@ -844,11 +860,26 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         a marker-less DOM) and every subsequent event fell back to
         ``html_recovery``.
         """
+        from .._render_provenance import sub, collapse, RenderedHTML
+
+        if isinstance(html, RenderedHTML):
+            from .._rust import lazy_authority_spans
+
+            spans = tuple(lazy_authority_spans(html, list(html.spans)))
+            if not spans:
+                return RenderedHTML(self._strip_comments_and_whitespace(str(html)))
+            html = RenderedHTML(html, spans, html.held, html.origins)
+
         preserved_blocks: list[str] = []
 
         def preserve_block(match: "re.Match[str]") -> str:
-            preserved_blocks.append(match.group(0))
-            return f"__PRESERVED_BLOCK_{len(preserved_blocks) - 1}__"
+            preserved_blocks.append(html[match.start() : match.end()])
+            token = f"__PRESERVED_BLOCK_{len(preserved_blocks) - 1}__"
+            from .._render_provenance import RenderedHTML
+
+            if isinstance(html, RenderedHTML):
+                return RenderedHTML(token, held=((0, len(token), preserved_blocks[-1]),))
+            return token
 
         # #1927: <script> and <style> are RAW-TEXT, whitespace-preserving
         # elements in the Rust VDOM parser (crates/djust_vdom/src/parser.rs:475),
@@ -875,26 +906,26 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         # (or ``</script\s*>``) misses those forms, so the block isn't preserved
         # and the comment-strip below corrupts the JS/CSS body — CodeQL flags it
         # as ``py/bad-tag-filter`` (#2482). ``[^>]*`` matches every closing form.
-        html = re.sub(
+        html = sub(
             r"<script[^>]*>.*?</script[^>]*>", preserve_block, html, flags=re.DOTALL | re.IGNORECASE
         )
-        html = re.sub(
+        html = sub(
             r"<style[^>]*>.*?</style[^>]*>", preserve_block, html, flags=re.DOTALL | re.IGNORECASE
         )
 
         # Remove HTML comments — but NOT dj-if boundary markers (#1678). The
         # negative lookahead skips comments whose body is ``dj-if …`` or
         # ``/dj-if`` so they survive; all other comments are stripped.
-        html = re.sub(r"<!--(?!\s*/?dj-if\b).*?-->", "", html, flags=re.DOTALL)
+        html = sub(r"<!--(?!\s*/?dj-if\b).*?-->", "", html, flags=re.DOTALL)
 
         # Preserve whitespace inside <pre>, <code>, and <textarea> tags
-        html = re.sub(
+        html = sub(
             r"<pre[^>]*>.*?</pre[^>]*>", preserve_block, html, flags=re.DOTALL | re.IGNORECASE
         )
-        html = re.sub(
+        html = sub(
             r"<code[^>]*>.*?</code[^>]*>", preserve_block, html, flags=re.DOTALL | re.IGNORECASE
         )
-        html = re.sub(
+        html = sub(
             r"<textarea[^>]*>.*?</textarea[^>]*>",
             preserve_block,
             html,
@@ -904,7 +935,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         # Normalize whitespace: collapse every run of HTML whitespace to one
         # space (#2999: HTML whitespace only — NBSP and other Unicode spaces
         # are content to the Rust parser and the browser, so ``\s`` was wrong).
-        html = _HTML_WS_RUN_RE.sub(" ", html)
+        html = sub(_HTML_WS_RUN_RE, " ", html)
 
         # Then drop the space between two tags — and around/between preserved
         # blocks (#1737), whose placeholders hide their ``<`` — unless it sits
@@ -921,15 +952,18 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         # ``before <pre>``) is part of that text node and is left alone.
         # The decision lives in Rust, next to the parser's own rule
         # (djust_core::html_whitespace), so the two can't drift.
-        from djust._rust import collapse_inter_tag_whitespace
 
         block_tags = []
         for block in preserved_blocks:
             m = _BLOCK_TAG_RE.match(block)
             block_tags.append(m.group(1).lower() if m else "")
-        html = collapse_inter_tag_whitespace(html, block_tags)
+        html = collapse(html, block_tags)
 
         # Restore preserved blocks
+        from .._render_provenance import RenderedHTML, restore_preserved
+
+        if isinstance(html, RenderedHTML):
+            return restore_preserved(html)
         for i, block in enumerate(preserved_blocks):
             html = html.replace(f"__PRESERVED_BLOCK_{i}__", block)
 
@@ -1498,7 +1532,9 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             self._initialize_rust_view(request)
             self._sync_state_to_rust()
             with library_render_scope():
-                liveview_html = self._rust_view.render()
+                from .._render_provenance import render_html
+
+                liveview_html = render_html(self._rust_view, self._full_template)
             # Record dj-model auto-allowlist from the TEMPLATE SOURCE (CWE-915
             # mass-assignment guard). Derived from the Rust template AST
             # (Text-node literals) — reflects exactly the developer-exposed
@@ -1609,7 +1645,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             # the sidecar only and never enters ``update_state``.
             self._set_shell_sidecar(temp_rust, request, serialized_context, context_for_sidecar)
             with library_render_scope():
-                shell_html = temp_rust.render()
+                shell_html = render_html(temp_rust, self._full_template)
 
             # --- Step 3: Replace the ENTIRE dj-root div in the shell ---
             # liveview_html already includes its own <div dj-root>...</div>
@@ -1647,6 +1683,9 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 _close_start, close_end = _find_root_close(shell_html, dj_root_match)
                 if close_end is not None:
                     result = shell_html[:tag_start] + liveview_html + shell_html[close_end:]
+                    from .._lazy_containers import register_lazy_containers
+
+                    result = register_lazy_containers(self, request, result)
                     result = self._inject_handler_metadata(result, request=request)
                     return result
 
@@ -1655,6 +1694,9 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             # normalisation was skipped and every patch will miss (#2892) —
             # say so instead of degrading silently.
             self._warn_unmatched_root(shell_html, found=dj_root_match is not None)
+            from .._lazy_containers import register_lazy_containers
+
+            shell_html = register_lazy_containers(self, request, shell_html)
             shell_html = self._inject_handler_metadata(shell_html, request=request)
             return shell_html
         else:
@@ -1701,7 +1743,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             has_view = False
             _, attrs = _scan_html_tag(html, start)
             for begin, name_end, _value_start, end in attrs:
-                kind = html[begin:name_end].lower()
+                kind = str.__getitem__(html, slice(begin, name_end)).lower()
                 if kind == "dj-view":
                     has_view = True
                 elif kind == "dj-root" and root_attr_end is None:
@@ -1715,6 +1757,13 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         if not parts:
             return html
         parts.append(html[last:])
+        from .._render_provenance import RenderedHTML
+
+        if isinstance(html, RenderedHTML):
+            result = RenderedHTML("")
+            for part in parts:
+                result += part
+            return result
         return "".join(parts)
 
     def _warn_unmatched_root(self, shell_html: str, found: bool) -> None:

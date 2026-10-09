@@ -390,7 +390,9 @@ class PostProcessingMixin:
             else:
                 return match.group(0)
 
-        html = re.sub(pattern, replace_component, html, flags=re.DOTALL)
+        from .._render_provenance import sub
+
+        html = sub(pattern, replace_component, html, flags=re.DOTALL)
 
         return html
 

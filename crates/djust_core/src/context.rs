@@ -645,7 +645,21 @@ pub trait BlockSuperSource: std::fmt::Debug + Send + Sync {
     /// Render the parent body against `ctx`, as Django's
     /// `BlockNode.render(self.context)` does.
     fn render_block_super(&self, ctx: &Context) -> crate::Result<String>;
+
+    /// Direct unfiltered block.super emission may compose authored output.
+    /// The default for external sources is untrusted String output.
+    fn render_block_super_authored(&self, ctx: &Context) -> crate::Result<AuthoredOutput> {
+        self.render_block_super(ctx)
+            .map(|html| (html, Vec::new(), Vec::new()))
+    }
 }
+
+/// HTML with disjoint UTF-8 source-origin byte ranges, owned by one result.
+pub type AuthoredOutput = (
+    String,
+    Vec<(usize, usize)>,
+    Vec<(usize, usize, usize, String)>,
+);
 
 /// The `block` a PYTHON-BRIDGED tag receives while a `{{ block.super }}` is
 /// armed (#2918).
@@ -1585,6 +1599,25 @@ impl Context {
     pub fn render_armed_block_super(&self) -> crate::Result<Option<String>> {
         match self.block_super.clone() {
             Some(source) => source.render_block_super(self).map(Some),
+            None => Ok(None),
+        }
+    }
+
+    /// Result-bound origin for direct block.super emission (#3252).
+    pub fn render_armed_block_super_authored(&self) -> crate::Result<Option<AuthoredOutput>> {
+        // Preserve the resolver's base-block error, without rendering a parent
+        // twice. Context::get has already handled any shadowing value.
+        if self
+            .stack
+            .iter()
+            .rev()
+            .find(|frame| frame.contains_key("block"))
+            .is_some_and(|frame| frame.invalid_block_super)
+        {
+            self.resolve("block.super")?;
+        }
+        match self.block_super.clone() {
+            Some(source) => source.render_block_super_authored(self).map(Some),
             None => Ok(None),
         }
     }

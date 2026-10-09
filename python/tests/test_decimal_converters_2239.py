@@ -557,6 +557,9 @@ _PKG = pathlib.Path(__file__).resolve().parents[1] / "djust"
 #: being such a boundary will fail too. Either way the author has to decide
 #: deliberately rather than by default.
 EXPECTED_ROUNDTRIP_SITES = {
+    # #3252: legacy lazy-child public/private state is written to the Django
+    # session and restored onto the child by mount_http_lazy.
+    ("_lazy_containers.py", "save_http_lazy"),
     ("mixins/components.py", "_save_components_to_session"),
     ("mixins/request.py", "get"),
     ("mixins/request.py", "post"),

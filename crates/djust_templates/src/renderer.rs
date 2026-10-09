@@ -3,6 +3,7 @@
 use crate::filters;
 use crate::inheritance::TemplateLoader;
 use crate::parser::Node;
+use crate::provenance::RenderOutput;
 use crate::registry::TagArg;
 #[cfg(feature = "liveview")]
 use djust_components::Component;
@@ -566,6 +567,22 @@ fn node_is_element_bearing(node: &Node) -> bool {
     }
 }
 
+pub fn render_nodes_with_loader_mut<L: TemplateLoader>(
+    nodes: &[Node],
+    context: &mut Context,
+    loader: Option<&L>,
+) -> Result<String> {
+    render_nodes_output::<L, String>(nodes, context, loader)
+}
+
+pub fn render_node_with_loader_mut<L: TemplateLoader>(
+    node: &Node,
+    context: &mut Context,
+    loader: Option<&L>,
+) -> Result<String> {
+    render_node_output::<L, String>(node, context, loader)
+}
+
 pub fn render_nodes(nodes: &[Node], context: &Context) -> Result<String> {
     render_nodes_with_loader(nodes, context, None::<&NoOpLoader>)
 }
@@ -575,34 +592,55 @@ pub fn render_nodes(nodes: &[Node], context: &Context) -> Result<String> {
 /// Assignment effects remain visible to following siblings and recursive
 /// control-flow bodies. Nodes that introduce a lexical scope push a frame;
 /// their local bindings disappear when that frame is popped.
-pub fn render_nodes_with_loader_mut<L: TemplateLoader>(
+pub fn render_nodes_output<L: TemplateLoader, R: RenderOutput>(
     nodes: &[Node],
     context: &mut Context,
     loader: Option<&L>,
-) -> Result<String> {
-    let mut output = String::new();
+) -> Result<R> {
+    let mut output = R::default();
     for node in nodes {
-        output.push_str(&render_effectful_node(node, context, loader)?);
+        let child = render_effectful_node_output::<L, R>(node, context, loader)?;
+        output.append(&child);
     }
-    Ok(output)
+    Ok((output).into())
 }
 
-fn render_effectful_node<L: TemplateLoader>(
+fn render_effectful_node_output<L: TemplateLoader, R: RenderOutput>(
     node: &Node,
     context: &mut Context,
     loader: Option<&L>,
-) -> Result<String> {
+) -> Result<R> {
     if let Node::Located {
         nodes,
         span,
         source,
         origin,
         registry_namespace,
+        lazy_origin,
+        lazy_site,
+        lazy_text,
     } = node
     {
         let _namespace = crate::registry_scope::NamespaceGuard::enter(*registry_namespace);
         let previous = context.replace_node_identity(Some((source.as_ptr() as usize, span.0)));
-        let rendered = render_effectful_node(&nodes[0], context, loader);
+        let mut rendered = if let (Some(metadata), Node::Text(text)) = (lazy_text, &nodes[0]) {
+            let mut output = R::source_text(text, metadata);
+            if R::TRACKED {
+                output.loop_identity(context);
+            }
+            Ok(output)
+        } else {
+            render_effectful_node_output::<L, R>(&nodes[0], context, loader)
+        };
+        if R::TRACKED {
+            if let Ok(output) = &mut rendered {
+                if lazy_text.is_some() {
+                    output.identify(lazy_origin.as_deref().unwrap_or("inline"));
+                } else if let Some(site) = lazy_site {
+                    output.identify(&format!("site{site}"));
+                }
+            }
+        }
         context.replace_node_identity(previous);
         return rendered.map_err(|error| {
             error
@@ -619,9 +657,9 @@ fn render_effectful_node<L: TemplateLoader>(
                     context.bind(binding.name, binding.value, binding.safe);
                 }
             }
-            Ok(effect.html)
+            Ok((effect.html).into())
         }
-        None => render_node_with_loader_mut(node, context, loader),
+        None => render_node_output::<L, R>(node, context, loader),
     }
 }
 
@@ -1417,17 +1455,17 @@ impl Drop for ScopeExitGuard {
 /// render the children in Rust, exit on ALL THREE paths — `Ok`, `Err` and a
 /// panicking child (#2597). A leak here installs the WRONG LANGUAGE on the
 /// pooled worker thread, which then serves the next render.
-fn render_language_scope<L: TemplateLoader>(
+fn render_language_scope<L: TemplateLoader, R: RenderOutput>(
     expr: &str,
     children: &[Node],
     context: &mut Context,
     loader: Option<&L>,
-) -> Result<String> {
+) -> Result<R> {
     let lang = scope_operand_string(expr, context);
     let token = crate::registry::language_scope_enter(lang.as_deref())
         .map_err(|e| scope_hook_error("language scope enter", e))?;
     let guard = ScopeExitGuard::new(token, crate::registry::language_scope_exit);
-    let result = render_nodes_with_loader_mut(children, context, loader);
+    let result = render_nodes_output::<L, R>(children, context, loader);
     if let Err(exit_err) = guard.release() {
         if result.is_ok() {
             return Err(scope_hook_error("language scope exit", exit_err));
@@ -1438,17 +1476,17 @@ fn render_language_scope<L: TemplateLoader>(
 
 /// Render a [`Node::Timezone`] (#2558) — the timezone twin of
 /// [`render_language_scope`], panic-guarded the same way (#2597).
-fn render_timezone_scope<L: TemplateLoader>(
+fn render_timezone_scope<L: TemplateLoader, R: RenderOutput>(
     expr: &str,
     children: &[Node],
     context: &mut Context,
     loader: Option<&L>,
-) -> Result<String> {
+) -> Result<R> {
     let zone = scope_operand_string(expr, context);
     let token = crate::registry::timezone_scope_enter(zone.as_deref())
         .map_err(|e| scope_hook_error("timezone scope enter", e))?;
     let guard = ScopeExitGuard::new(token, crate::registry::timezone_scope_exit);
-    let result = render_nodes_with_loader_mut(children, context, loader);
+    let result = render_nodes_output::<L, R>(children, context, loader);
     if let Err(exit_err) = guard.release() {
         if result.is_ok() {
             return Err(scope_hook_error("timezone scope exit", exit_err));
@@ -2248,7 +2286,7 @@ pub fn render_nodes_collecting<L: TemplateLoader>(
     let mut output = String::new();
     let mut fragments = Vec::with_capacity(nodes.len());
     for node in nodes {
-        let fragment = render_effectful_node(node, &mut context, loader)?;
+        let fragment = render_effectful_node_output::<L, String>(node, &mut context, loader)?;
         output.push_str(&fragment);
         fragments.push(fragment);
     }
@@ -2286,7 +2324,7 @@ pub fn render_nodes_partial<L: TemplateLoader>(
         });
         let html = if needs_render {
             changed.push(i);
-            render_effectful_node(node, &mut context, loader)?
+            render_effectful_node_output::<L, String>(node, &mut context, loader)?
         } else {
             node_html_cache[i].clone()
         };
@@ -2377,8 +2415,8 @@ struct DeferredBlockSuper {
     loader: Option<std::sync::Arc<dyn TemplateLoader + Send + Sync>>,
 }
 
-impl djust_core::context::BlockSuperSource for DeferredBlockSuper {
-    fn render_block_super(&self, ctx: &Context) -> Result<String> {
+impl DeferredBlockSuper {
+    fn render_output<R: RenderOutput>(&self, ctx: &Context) -> Result<R> {
         // A CLONE of the live context, not a scope push on it, because the
         // resolver hands us `&Context` and the render needs `&mut`. The two
         // are equivalent for what Django does here: `BlockNode.render` wraps
@@ -2405,13 +2443,34 @@ impl djust_core::context::BlockSuperSource for DeferredBlockSuper {
             Some(handle) => {
                 let loader = SharedLoader(std::sync::Arc::clone(handle));
                 scoped.with_scope(|inner| {
-                    render_nodes_with_loader_mut(&self.super_nodes, inner, Some(&loader))
+                    render_nodes_output::<SharedLoader, R>(&self.super_nodes, inner, Some(&loader))
                 })
             }
             None => scoped.with_scope(|inner| {
-                render_nodes_with_loader_mut(&self.super_nodes, inner, None::<&NoOpLoader>)
+                render_nodes_output::<NoOpLoader, R>(&self.super_nodes, inner, None::<&NoOpLoader>)
             }),
         }
+    }
+}
+
+impl djust_core::context::BlockSuperSource for DeferredBlockSuper {
+    fn render_block_super(&self, ctx: &Context) -> Result<String> {
+        self.render_output::<String>(ctx)
+    }
+    fn render_block_super_authored(
+        &self,
+        ctx: &Context,
+    ) -> Result<djust_core::context::AuthoredOutput> {
+        let rendered = self.render_output::<crate::provenance::Rendered>(ctx)?;
+        Ok((
+            rendered.html,
+            rendered
+                .authored
+                .into_iter()
+                .map(|r| (r.start, r.end))
+                .collect(),
+            rendered.origins,
+        ))
     }
 }
 
@@ -2474,16 +2533,32 @@ impl std::ops::Deref for BridgedContextMap {
     }
 }
 
-pub fn render_node_with_loader_mut<L: TemplateLoader>(
+pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
     node: &Node,
     context: &mut Context,
     loader: Option<&L>,
-) -> Result<String> {
+) -> Result<R> {
     match node {
-        Node::Located { .. } => render_effectful_node(node, context, loader),
-        Node::Text(text) => Ok(text.clone()),
+        Node::Located { .. } => render_effectful_node_output::<L, R>(node, context, loader),
+        Node::Text(text) => {
+            let mut output = R::authored(text);
+            if R::TRACKED {
+                output.loop_identity(context);
+            }
+            Ok(output)
+        }
 
         Node::Variable(var_name, filter_specs, in_attr) => {
+            if R::TRACKED
+                && var_name == "block.super"
+                && filter_specs.is_empty()
+                && context.get(var_name).is_none()
+            {
+                if let Some(output) = context.render_armed_block_super_authored()? {
+                    return Ok(R::from_authored_output(output));
+                }
+            }
+
             // A LITERAL is decided before any lookup, exactly as Django does
             // it (#2376). `Variable.__init__` runs at COMPILE time and a
             // quoted or numeric token never becomes a `lookups` tuple at all,
@@ -2503,7 +2578,7 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
             // then falls back to `getattr` on any Py<PyAny> sidecar attached
             // to the context (e.g. Django model instances). The `?`
             // propagates exceptions raised inside an auto-called method
-            // (ADR-024 Django parity); lookup misses stay `Ok(None)`.
+            // (ADR-024 Django parity); lookup misses stay `Ok((None).into())`.
             let literal = django_literal(var_name);
             let literal_safe = literal.as_ref().is_some_and(|(_, safe)| *safe);
             // Captured BEFORE the move below: a literal is never a failed
@@ -2525,13 +2600,14 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                     // makes: Django puts the marker through
                     // `render_value_in_context`, which applies
                     // `conditional_escape` like any other value.
-                    return Ok(if !context.autoescape() {
+                    return Ok((if !context.autoescape() {
                         marker
                     } else if *in_attr {
                         filters::html_escape_attr(&marker)
                     } else {
                         filters::html_escape(&marker)
-                    });
+                    })
+                    .into());
                 }
             }
 
@@ -2661,16 +2737,16 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
             // was, so the flag never becomes a grant a later filter could read.
             let is_safe = runtime_safe || value.string_conversion_is_safe();
             if is_safe || !context.autoescape() {
-                Ok(text)
+                Ok((text).into())
             } else if *in_attr {
                 // Attribute-context escape: handles `"` → `&quot;`
                 // and `'` → `&#x27;` in addition to the base
                 // `&`/`<`/`>` escapes, so quoted attribute values
                 // like `<a href="{{ url }}">` never break when the
                 // value itself contains a quote.
-                Ok(filters::html_escape_attr(&text))
+                Ok((filters::html_escape_attr(&text)).into())
             } else {
-                Ok(filters::html_escape(&text))
+                Ok((filters::html_escape(&text)).into())
             }
         }
 
@@ -2764,9 +2840,9 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
             let is_safe = runtime_safe || value.string_conversion_is_safe();
             // Row 2 of #2556 — same shape as the Variable arm.
             if is_safe || !context.autoescape() {
-                Ok(text)
+                Ok((text).into())
             } else {
-                Ok(filters::html_escape(&text))
+                Ok((filters::html_escape(&text)).into())
             }
         }
 
@@ -2784,15 +2860,15 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
             let markers = dj_if_markers_enabled(context);
 
             // Render the body that fires (truthy/falsy branch).
-            let body = if condition_result {
-                render_nodes_with_loader_mut(true_nodes, context, loader)?
+            let mut body = if condition_result {
+                render_nodes_output::<L, R>(true_nodes, context, loader)?
             } else if false_nodes.is_empty() {
                 if *in_tag_context || !markers {
                     // Inside an HTML attribute value: a comment node would produce
                     // malformed HTML (e.g. class="btn <!--dj-if-->"). Emit empty
                     // string instead. Fix for issue #380. Same answer when
                     // markers are off (#2519).
-                    String::new()
+                    R::default()
                 } else if !nodes_contain_elements(true_nodes)
                     && !nodes_contain_elements(false_nodes)
                 {
@@ -2801,15 +2877,18 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                     // Element-bearing branches drop into the dj-if pair
                     // path below, which serves the same sibling-stability
                     // role (closing tag adjacent to opening).
-                    "<!--dj-if-->".to_string()
+                    R::from("<!--dj-if-->".to_string())
                 } else {
                     // Element-bearing if with no else and false condition:
                     // emit empty body inside the wrapping pair below.
-                    String::new()
+                    R::default()
                 }
             } else {
-                render_nodes_with_loader_mut(false_nodes, context, loader)?
+                render_nodes_output::<L, R>(false_nodes, context, loader)?
             };
+            if R::TRACKED && body.has_origin() {
+                body.identify(if condition_result { "then" } else { "else" });
+            }
 
             // Decide whether to wrap in `<!--dj-if id="if-N"-->` /
             // `<!--/dj-if-->` boundary markers. Wrap iff:
@@ -2875,13 +2954,16 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                     // segments, so the two concatenate unambiguously.
                     let include_path = context.dj_if_include_path();
                     let loop_path = context.dj_if_loop_path();
-                    return Ok(format!(
-                        "<!--dj-if id=\"{id}{namespace}{include_path}{loop_path}\"-->{body}<!--/dj-if-->"
+                    let mut wrapped = R::from(format!(
+                        "<!--dj-if id=\"{id}{namespace}{include_path}{loop_path}\"-->"
                     ));
+                    wrapped.append(&body);
+                    wrapped.push_str("<!--/dj-if-->");
+                    return Ok(wrapped);
                 }
             }
 
-            Ok(body)
+            Ok((body).into())
         }
 
         Node::For {
@@ -3028,13 +3110,13 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                 Value::List(items) | Value::Tuple(items) | Value::NamedTuple { items, .. } => {
                     // If list is empty, render the {% empty %} block
                     if items.is_empty() {
-                        return render_nodes_with_loader_mut(empty_nodes, context, loader);
+                        return render_nodes_output::<L, R>(empty_nodes, context, loader);
                     }
 
                     let parent_context = context.clone();
                     context.with_scope(|ctx| {
                         let context = &parent_context;
-                        let mut output = String::new();
+                        let mut output = R::default();
                         // ONE fresh `{% ifchanged %}` frame per EXECUTION of this
                         // loop, hoisted out of the iteration exactly as Django
                         // binds one `forloop` dict before iterating. Inside the
@@ -3153,10 +3235,11 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                         //       See `loop_cache::body_is_cacheable`.
                         // When disabled, `loop_caching_enabled` is `false` and the
                         // render path below is byte-identical to before #1967.
-                        let loop_caching_enabled = crate::loop_cache::with_active_cache(|cache| {
-                            cache.body_cacheable(nodes, var_names)
-                        })
-                        .unwrap_or(false);
+                        let loop_caching_enabled = !R::TRACKED
+                            && crate::loop_cache::with_active_cache(|cache| {
+                                cache.body_cacheable(nodes, var_names)
+                            })
+                            .unwrap_or(false);
 
                         // No per-iteration `{% cycle %}` counter here any more (#2556):
                         // cycle state is per NODE per RENDER on the `Context`'s
@@ -3456,12 +3539,11 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                                 // (on a parse-miss) and to reconstruct the full HTML
                                 // for the fallback / `last_html`.
                                 let item_html = match cached {
-                                    Some(html) => html,
+                                    Some(html) => R::from(html),
                                     None => {
-                                        let html =
-                                            render_nodes_with_loader_mut(nodes, ctx, loader)?;
+                                        let html = render_nodes_output::<L, R>(nodes, ctx, loader)?;
                                         crate::loop_cache::with_active_cache(|cache| {
-                                            cache.insert(hash, html.clone())
+                                            cache.insert(hash, html.to_string())
                                         });
                                         html
                                     }
@@ -3501,7 +3583,7 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                                         cache.record_manifest_item(
                                             hash,
                                             parse_hit,
-                                            item_html.clone(),
+                                            item_html.to_string(),
                                         );
                                     })
                                     .is_some();
@@ -3523,10 +3605,10 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                                     // the real item HTML. `render_with_diff` parses
                                     // it and (for recorded eligible items) caches the
                                     // resulting subtree.
-                                    output.push_str(&item_html);
+                                    output.append(&item_html);
                                 }
                             } else {
-                                output.push_str(&render_nodes_with_loader_mut(nodes, ctx, loader)?);
+                                output.append(&render_nodes_output::<L, R>(nodes, ctx, loader)?);
                             }
                         }
 
@@ -3539,7 +3621,7 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                             ctx.clear_loop_mapping(var_name);
                         }
 
-                        Ok(output)
+                        Ok((output).into())
                     })
                 }
                 // Django REFUSES a non-iterable operand, and this arm used to
@@ -3579,7 +3661,7 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                     // folded into the raise below: these two are the reason
                     // this class is about non-iterables rather than falsiness,
                     // and they AGREE today.
-                    render_nodes_with_loader_mut(empty_nodes, context, loader)
+                    render_nodes_output::<L, R>(empty_nodes, context, loader)
                 }
                 other => Err(DjangoRustError::TemplateError(format!(
                     "'{}' object is not iterable",
@@ -3590,7 +3672,7 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
 
         Node::Block { name: _, nodes } => context.with_scope(|inner| {
             inner.enter_base_block();
-            render_nodes_with_loader_mut(nodes, inner, loader)
+            render_nodes_output::<L, R>(nodes, inner, loader)
         }),
 
         Node::Include {
@@ -3790,7 +3872,7 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                     }
                     register_binding_aliases(include_context, pending, &bound);
                     if let Some(object) = &object {
-                        return render_template_object(object, include_context);
+                        return render_template_object(object, include_context).map(R::from);
                     }
                     // Resolve the parent only after `with` and `only` establish
                     // the context in which the included template renders.
@@ -3811,7 +3893,12 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                             nodes
                         };
 
-                    render_nodes_with_loader_mut(&nodes, include_context, Some(loader))
+                    let mut output =
+                        render_nodes_output::<L, R>(&nodes, include_context, Some(loader))?;
+                    if R::TRACKED && output.has_origin() {
+                        output.identify(&format!("include:{}", name));
+                    }
+                    Ok(output)
                 };
                 if let Some(fresh) = fresh_context.as_mut() {
                     render_include(fresh)
@@ -3827,7 +3914,7 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
             } else {
                 // No loader available — silently omit ({% include %} without a loader
                 // is valid in tests where only a fragment is rendered)
-                Ok(String::new())
+                Ok((String::new()).into())
             }
         }
 
@@ -3837,7 +3924,7 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
             children,
         } => {
             // Render React component as data attributes for client-side hydration
-            let mut output = String::new();
+            let mut output = R::default();
             output.push_str(&format!("<div data-react-component=\"{name}\""));
 
             // Add props as data attributes
@@ -3880,24 +3967,24 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                     "{{{}}}",
                     props_json.join(",")
                 )));
-                output.push('\'');
+                output.push_str("'");
             }
 
-            output.push('>');
+            output.push_str(">");
 
             // Render children
             for child in children {
-                output.push_str(&render_node_with_loader_mut(child, context, loader)?);
+                output.append(&render_node_output::<L, R>(child, context, loader)?);
             }
 
             output.push_str("</div>");
-            Ok(output)
+            Ok((output).into())
         }
 
         #[cfg(feature = "liveview")]
         Node::RustComponent { name, props } => {
             // Render Rust component server-side
-            render_rust_component(name, props, context)
+            render_rust_component(name, props, context).map(R::from)
         }
 
         #[cfg(not(feature = "liveview"))]
@@ -3920,11 +4007,12 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
             match token {
                 Some(t) => {
                     let escaped = filters::html_escape(&t);
-                    Ok(format!(
+                    Ok((format!(
                         "<input type=\"hidden\" name=\"csrfmiddlewaretoken\" value=\"{escaped}\">"
                     ))
+                    .into())
                 }
-                None => Ok(String::new()),
+                None => Ok((String::new()).into()),
             }
         }
 
@@ -3941,7 +4029,7 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                     )
                 })?;
             let escaped = filters::html_escape(&manifest.to_string());
-            Ok(format!("{DJUST_AUDIO_OPEN}{escaped}{DJUST_AUDIO_CLOSE}"))
+            Ok((format!("{DJUST_AUDIO_OPEN}{escaped}{DJUST_AUDIO_CLOSE}")).into())
         }
 
         Node::Static(operand) => {
@@ -3965,7 +4053,7 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                     v => v.to_string(),
                 }
             };
-            Ok(format!("{static_url}{path}"))
+            Ok((format!("{static_url}{path}")).into())
         }
 
         Node::With { assignments, nodes } => {
@@ -3985,7 +4073,7 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                     inner.bind(name, value, safe);
                 }
                 register_binding_aliases(inner, pending, &bound);
-                render_nodes_with_loader_mut(nodes, inner, loader)
+                render_nodes_output::<L, R>(nodes, inner, loader)
             })
         }
 
@@ -3998,8 +4086,8 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
             ))
         }
 
-        Node::Comment => Ok(String::new()),
-        Node::Load(_) => Ok(String::new()), // No-op at render time; preserved for reconstruction
+        Node::Comment => Ok((String::new()).into()),
+        Node::Load(_) => Ok((String::new()).into()), // No-op at render time; preserved for reconstruction
 
         Node::WidthRatio {
             value,
@@ -4013,22 +4101,24 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
             // sibling-aware loops can apply — a lone node has no sibling to
             // hand a mutated context to, exactly as `Node::AssignTag` here
             // invokes its handler and discards the updates.
-            Ok(if asvar.is_some() {
+            Ok((if asvar.is_some() {
                 String::new()
             } else {
                 result
             })
+            .into())
         }
 
         Node::FirstOf { args, asvar } => {
             // `as <var>` renders NOTHING; the assignment is `sibling_updates`'
             // job, exactly as for `Node::WidthRatio` above.
             if asvar.is_some() {
-                return Ok(String::new());
+                return Ok((String::new()).into());
             }
-            Ok(first_of(args, context)?
+            Ok((first_of(args, context)?
                 .map(|value| value.to_string())
                 .unwrap_or_default())
+            .into())
         }
 
         Node::TemplateTag(name) => {
@@ -4048,7 +4138,7 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                     )));
                 }
             };
-            Ok(output.to_string())
+            Ok((output.to_string()).into())
         }
 
         Node::AutoEscape { on, nodes } => {
@@ -4056,16 +4146,16 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
             // body belong to the surrounding variable scope.
             let previous = context.autoescape();
             context.set_autoescape(*on);
-            let result = render_nodes_with_loader_mut(nodes, context, loader);
+            let result = render_nodes_output::<L, R>(nodes, context, loader);
             context.set_autoescape(previous);
             result
         }
 
         Node::Spaceless { nodes } => {
             // {% spaceless %}...{% endspaceless %} → remove whitespace between HTML tags
-            let content = render_nodes_with_loader_mut(nodes, context, loader)?;
+            let content = render_nodes_output::<L, R>(nodes, context, loader)?;
             // Remove whitespace between > and <
-            Ok(SPACELESS_RE.replace_all(content.trim(), "><").to_string())
+            Ok((SPACELESS_RE.replace_all(content.trim(), "><").to_string()).into())
         }
 
         Node::Filter { filters, nodes } => {
@@ -4081,7 +4171,7 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
             // block is text, not a keyed subtree (documented limitation).
             let previous_markers = context.emit_dj_if_markers();
             context.set_emit_dj_if_markers(false);
-            let body = render_nodes_with_loader_mut(nodes, context, loader);
+            let body = render_nodes_output::<L, R>(nodes, context, loader);
             context.set_emit_dj_if_markers(previous_markers);
             let body = body?;
             // `bind`, SAFE: `NodeList.render` returns `SafeString`, which is
@@ -4091,7 +4181,7 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
             // to any input, safe or not.
             let mut ctx = context.clone();
             ctx.push();
-            ctx.bind("var".to_string(), Value::String(body), true);
+            ctx.bind("var".to_string(), Value::String(body.to_string()), true);
             // ONE pipe loop: `get_value_safe` is the resolver `{{ }}`,
             // `{% firstof %}` and `{% cycle %}` share, so every filter rule
             // is the one they have — never a second copy.
@@ -4105,11 +4195,12 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
             // output is therefore exactly the chain's output.
             let expr = format!("var|{}", format_filter_chain(filters));
             let (value, _runtime_safe) = get_value_safe(&expr, &ctx)?;
-            Ok(if matches!(value, Value::Missing) {
+            Ok((if matches!(value, Value::Missing) {
                 String::new()
             } else {
                 value.to_string()
             })
+            .into())
         }
 
         Node::Cycle {
@@ -4124,7 +4215,7 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
             // and its binding live; this arm is only ever reached for a
             // cycle that binds nothing.
             let (value, runtime_safe) = cycle_step(values, id, context)?;
-            Ok(cycle_emit(&value, runtime_safe, context.autoescape()))
+            Ok((cycle_emit(&value, runtime_safe, context.autoescape())).into())
         }
 
         Node::Cycle { name: Some(_), .. } => {
@@ -4132,15 +4223,15 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
             // `sibling_updates` first); a direct caller gets the same bytes
             // as the loop would have emitted, with the same single advance.
             match sibling_updates(node, context, loader)? {
-                Some(effect) => Ok(effect.html),
-                None => Ok(String::new()),
+                Some(effect) => Ok((effect.html).into()),
+                None => Ok((String::new()).into()),
             }
         }
 
         Node::ResetCycle { id, .. } => {
             // {% resetcycle [name] %} → `CycleNode.reset(context)`, "" (#2556).
             context.cycle_reset(id);
-            Ok(String::new())
+            Ok((String::new()).into())
         }
 
         Node::BlockSuperScope { super_nodes, nodes } => {
@@ -4183,7 +4274,7 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                 );
                 scoped.mark_safe("block.super".to_string());
                 scoped.arm_block_super(source);
-                render_nodes_with_loader_mut(nodes, scoped, loader)
+                render_nodes_output::<L, R>(nodes, scoped, loader)
             })
         }
 
@@ -4206,8 +4297,8 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
             // a side effect (`{% cycle %}`, a custom tag) would otherwise
             // fire twice per iteration.
             let (compare_to, rendered) = if vars.is_empty() {
-                let body = render_nodes_with_loader_mut(nodes, context, loader)?;
-                (body.clone(), Some(body))
+                let body = render_nodes_output::<L, R>(nodes, context, loader)?;
+                (body.to_string(), Some(body))
             } else {
                 // Django resolves with `ignore_failures=True`, so a missing
                 // operand compares as `None` — NOT as `string_if_invalid`,
@@ -4223,20 +4314,20 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
 
             if context.ifchanged_step_in_template(id, origin.as_deref(), &compare_to) {
                 match rendered {
-                    Some(body) => Ok(body),
-                    None => render_nodes_with_loader_mut(nodes, context, loader),
+                    Some(body) => Ok((body).into()),
+                    None => render_nodes_output::<L, R>(nodes, context, loader),
                 }
             } else if else_nodes.is_empty() {
-                Ok(String::new())
+                Ok((String::new()).into())
             } else {
-                render_nodes_with_loader_mut(else_nodes, context, loader)
+                render_nodes_output::<L, R>(else_nodes, context, loader)
             }
         }
 
         Node::Now(format) => {
             // {% now "Y-m-d" %} → current date/time
             let now = chrono::Local::now();
-            Ok(django_date_format(&now, format))
+            Ok((django_date_format(&now, format)).into())
         }
 
         Node::UnsupportedTag { name, args } => {
@@ -4264,7 +4355,7 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
             // bindings to, so they are dropped here, as the AssignTag arm
             // below drops its updates.
             let (html, _bindings) = call_block_custom_tag(name, args, children, context, loader)?;
-            Ok(html)
+            Ok((html).into())
         }
 
         Node::AssignTag { name, args } => {
@@ -4289,7 +4380,7 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                 raw_py.as_deref(),
             )
             .map_err(|e| handler_call_error("Assign tag", name, e))?;
-            Ok(String::new())
+            Ok((String::new()).into())
         }
 
         Node::CustomTag { name, args } => {
@@ -4321,7 +4412,7 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
             // to, so they are dropped here, as the AssignTag arm above drops
             // its updates.
             let (html, _bindings) = call_custom_tag(name, args, context)?;
-            Ok(html)
+            Ok((html).into())
         }
 
         Node::RawBlockCustomTag { name, args, body } => {
@@ -4329,12 +4420,16 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
             // to hand bindings to, so they are dropped here, exactly as the
             // `Node::CustomTag` arm above drops its own.
             let (html, _bindings) = call_raw_block_tag(name, args, body, context)?;
-            Ok(html)
+            Ok((html).into())
         }
 
-        Node::Language { expr, children } => render_language_scope(expr, children, context, loader),
+        Node::Language { expr, children } => {
+            render_language_scope::<L, R>(expr, children, context, loader)
+        }
 
-        Node::Timezone { expr, children } => render_timezone_scope(expr, children, context, loader),
+        Node::Timezone { expr, children } => {
+            render_timezone_scope::<L, R>(expr, children, context, loader)
+        }
 
         Node::Localize { use_l10n, children } => {
             // Django's `LocalizeNode` toggles `context.use_l10n` and
@@ -4349,7 +4444,7 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
             // would inherit a stale `localize` state.
             USE_L10N_STACK.with(|s| s.borrow_mut().push(*use_l10n));
             let _guard = UseL10nGuard;
-            render_nodes_with_loader_mut(children, context, loader)
+            render_nodes_output::<L, R>(children, context, loader)
         }
 
         Node::LocalTime { use_tz, children } => {
@@ -4366,7 +4461,7 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                 crate::timezone::set_active_timezone(None);
                 Some(ActiveTimezoneGuard { prev })
             };
-            render_nodes_with_loader_mut(children, context, loader)
+            render_nodes_output::<L, R>(children, context, loader)
         }
     }
 }
@@ -5472,6 +5567,12 @@ fn get_value_ignoring_failures(expr: &str, context: &Context) -> Result<Value> {
 /// [`get_value_ignoring_failures`] for which callers may use it.
 fn get_value_safe_ignoring_failures(expr: &str, context: &Context) -> Result<(Value, bool)> {
     get_value_safe_inner(expr, context, true)
+}
+
+/// Resolve a template reference with the renderer's own FilterExpression rules.
+/// Used by compiled lazy-container planning; no second expression grammar.
+pub fn resolve_template_reference(expr: &str, context: &Context) -> Result<Value> {
+    get_value(expr, context)
 }
 
 fn get_value(expr: &str, context: &Context) -> Result<Value> {

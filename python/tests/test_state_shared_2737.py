@@ -163,18 +163,19 @@ class TestTheRenderEntriesShareTheStateMap:
 
         An entry that FORGETS the helper is caught by the sibling
         `test_no_render_entry_rebuilds_the_state_map`, not by this — a
-        forgotten entry leaves the count at 3 and this stays green. What the
-        exact count pins is the OTHER direction: a fourth entry that shares
-        (count 4) or a removed one (count 2) must be acknowledged here
+        forgotten entry leaves the count at 4 and this stays green. What the
+        exact count pins is the OTHER direction: a fifth entry that shares
+        (count 5) or a removed one (count 3) must be acknowledged here
         deliberately, so the set of render entries is a maintained list and
-        not an accident. Three today: `render`, `render_with_diff`, and
-        `render_binary_diff`; `render_rust` / `render_with_diff_rust`
-        delegate to them.
+        not an accident. Four today: `render`, `render_with_diff`,
+        `render_binary_diff`, and `render_lazy_html` (#3252, the page render
+        that carries authored provenance for lazy containers);
+        `render_rust` / `render_with_diff_rust` delegate to them.
         """
         shared = sharing_entries(LIVE.read_text(encoding="utf-8"))
-        assert len(shared) == 3, (
+        assert len(shared) == 4, (
             "the number of render entries sharing the state map changed "
-            f"(found {len(shared)}, expected 3). If an entry was added, it must "
+            f"(found {len(shared)}, expected 4). If an entry was added, it must "
             "share too; if one was removed, update this count deliberately."
         )
 
@@ -273,7 +274,7 @@ class TestThePinsCanActuallyGoRed:
             live, "Context::from_dict((*self.state).clone())"
         )
         assert len(rebuild_offenders(regressed)) == 1
-        assert len(sharing_entries(regressed)) == 2
+        assert len(sharing_entries(regressed)) == 3
 
     def test_the_rebuild_predicate_flags_a_two_line_spelling(self, live: str) -> None:
         regressed = self._regress_one_render_entry(
@@ -284,7 +285,7 @@ class TestThePinsCanActuallyGoRed:
     def test_the_rebuild_predicate_ignores_a_comment(self, live: str) -> None:
         commented = live + "\n// Context::from_dict(self.state.clone()) — historical note\n"
         assert rebuild_offenders(commented) == []
-        assert len(sharing_entries(commented)) == 3
+        assert len(sharing_entries(commented)) == 4
 
     def test_the_from_dict_predicate_flags_a_hand_built_frame(self, core: str) -> None:
         body = _fn_body(core, FROM_DICT_SIGNATURE)

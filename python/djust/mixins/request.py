@@ -397,6 +397,7 @@ class RequestMixin:
         from .._child_rendering import render_view_full_template, render_view_with_diff
 
         self._prepare_child_ids()
+        self._defer_lazy_registration = True
         html = render_view_full_template(self, request, serialized_context=state_serializable)
         # ADR-036 R1: recovery targets come from what the server rendered.
         from ..validation import note_rendered_recovery_targets
@@ -502,6 +503,9 @@ class RequestMixin:
         if not getattr(self, "streaming_render", False):
             html = self._fill_lazy_slots(html)
 
+        from .._lazy_containers import finalize_lazy_containers
+
+        html = finalize_lazy_containers(self, html)
         response: HttpResponse
         if getattr(self, "streaming_render", False):
             response = self._make_streaming_response(html)
@@ -846,10 +850,25 @@ class RequestMixin:
             return None
         self._prepare_child_ids()
         with self._processor_context(request):
-            from .._child_rendering import render_view_with_diff
+            # Attribute-form authority comes from the coherent full page,
+            # including includes/extends; the normalized diff source is not
+            # an independent registration source (#3252).
+            from .._child_rendering import render_view_full_template
+            from .._lazy_containers import mount_http_lazy
 
-            render_view_with_diff(self, request)
-        child = self._get_all_child_views().get(view_id)
+            self.get_template()
+            self._defer_lazy_registration = True
+            page_html = render_view_full_template(self, request)
+            from .._lazy_containers import finalize_lazy_containers
+
+            if getattr(self, "wrapper_template", None):
+                # Passing a page back through a wrapper value is reinjection;
+                # that value does not carry authored renderer authority.
+                page_html = str(page_html)
+            finalize_lazy_containers(self, page_html)
+        child = mount_http_lazy(self, request, view_id)
+        if child is None:
+            child = self._get_all_child_views().get(view_id)
         if child is None or not uses_legacy_exposure(child):
             return None
         return child
@@ -925,6 +944,9 @@ class RequestMixin:
             return _contract_error_response()
         response.update(contract_fields)
         response["html"] = render_embedded_child_html(child)
+        from .._lazy_containers import save_http_lazy
+
+        save_http_lazy(self, request, view_id, child)
         response["event_name"] = event_name
         if cache_request_id:
             response["cache_request_id"] = cache_request_id
@@ -1152,6 +1174,12 @@ class RequestMixin:
                     )
                     return JsonResponse({"error": "Embedded view not found"}, status=400)
                 owner = child_view
+                from .._lazy_containers import MOUNT_EVENT
+
+                if event_name == MOUNT_EVENT and view_id in getattr(
+                    self, "_http_lazy_containers", {}
+                ):
+                    return self._http_child_response(request, child_view, view_id, event_name)
             component_id = (
                 params.get("component_id")
                 if isinstance(params, dict) and child_view is None

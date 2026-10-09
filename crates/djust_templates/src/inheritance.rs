@@ -51,6 +51,11 @@ pub fn set_include_origins(nodes: &mut [Node], name: &str) -> Result<()> {
 /// Preserve the defining template name when includes move through inheritance.
 fn attach_include_origins(nodes: &mut [Node], name: &str) {
     for node in nodes {
+        if let Node::Located { lazy_origin, .. } = node {
+            if lazy_origin.is_none() {
+                *lazy_origin = Some(name.to_owned());
+            }
+        }
         if let Node::Include { origin, .. } = node {
             if origin.is_none() {
                 *origin = Some(name.to_string());

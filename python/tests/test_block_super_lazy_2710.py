@@ -352,8 +352,9 @@ class TestTheDeferralHasOneStatementPerBoundary:
 
     def test_the_parent_nodes_are_rendered_in_exactly_one_place(self) -> None:
         source = RENDERER_RS.read_text()
-        # The two arms of `render_block_super` (loader / no loader).
-        assert source.count("render_nodes_with_loader_mut(&self.super_nodes") == 2
+        # The generic deferred renderer's loader / no-loader arms, shared by
+        # ordinary String and direct authored block.super emission (#3252).
+        assert len(re.findall(r"render_nodes_output::<[^>]+>\(&self.super_nodes", source)) == 2
         # And the pre-#2710 EAGER form is gone. This is the shape that would
         # come back: a render of the borrowed `super_nodes` at the scope arm.
         assert "render_nodes_with_loader_mut(super_nodes" not in source, (
@@ -386,7 +387,10 @@ class TestTheDeferralHasOneStatementPerBoundary:
         # The trait declaration, `Context::resolve`'s call, and
         # `render_armed_block_super`'s (a bridged tag's read of `block.super`
         # through `LazyBlock`, #2918).
-        assert source.count("render_block_super(") == 3
+        # The default authored-output adapter delegates to the ordinary trait
+        # method for external sources that do not supply provenance (#3252).
+        assert source.count("render_block_super(") == 4
+        assert source.count("source.render_block_super_authored(self)") == 1
 
 
 class TestTheSourceIsDeferredRatherThanPreRendered:

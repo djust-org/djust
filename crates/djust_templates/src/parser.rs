@@ -15,6 +15,9 @@ pub enum Node {
         registry_namespace: u64,
         source: std::sync::Arc<str>,
         origin: Option<String>,
+        lazy_origin: Option<String>,
+        lazy_site: Option<usize>,
+        lazy_text: Option<crate::provenance::SourceText>,
     },
     Text(String),
     /// Variable expression `{{ var|filter:arg }}`.
@@ -633,6 +636,7 @@ fn parse_internal(
     if !spans.is_empty() {
         crate::inheritance::set_node_sources(&mut nodes, &std::sync::Arc::from(source), None);
     }
+    crate::provenance::annotate_source(&mut nodes, tokens, spans, source);
     Ok(nodes)
 }
 
@@ -1050,6 +1054,9 @@ fn parse_token(
                             registry_namespace: crate::registry_scope::current(),
                             source: std::sync::Arc::from(""),
                             origin: None,
+                            lazy_origin: None,
+                            lazy_site: None,
+                            lazy_text: None,
                         };
                     }
                 }
@@ -6118,6 +6125,9 @@ mod dep_tests {
                 registry_namespace: 0,
                 source: std::sync::Arc::from("{{ a }}"),
                 origin: None,
+                lazy_origin: None,
+                lazy_site: None,
+                lazy_text: None,
             },
             Node::Text("hi".into()),
             Node::Variable("a".into(), vec![], false),

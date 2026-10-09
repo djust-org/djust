@@ -1827,3 +1827,6 @@ mod tests {
         );
     }
 }
+
+/// Final HTML5 survival check for renderer-carried authored spans.
+pub mod lazy_provenance;
