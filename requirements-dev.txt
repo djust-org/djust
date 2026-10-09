@@ -17,7 +17,7 @@ pytest-xdist>=3.0
 pytest-split>=0.10  # CI shards: --splits/--group against the committed .test_durations
 
 # Code quality
-black>=26.5.1
+black>=26.10.0
 ruff>=0.1
 mypy>=1.0
 
