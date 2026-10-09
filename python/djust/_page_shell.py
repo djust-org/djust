@@ -222,8 +222,12 @@ def _entries(source: str) -> Optional[List[List[str]]]:
     source = _mask_template_syntax(source)
     for root_attr in ("dj-root", "dj-view"):
         collector = _ShellCollector(root_attr)
-        collector.feed(source)
-        collector.close()
+        try:
+            collector.feed(source)
+            collector.close()
+        except (AssertionError, ValueError):
+            # A partial shell must not be treated as a complete fingerprint.
+            return None
         if collector.root_state:
             return collector.entries
     return None

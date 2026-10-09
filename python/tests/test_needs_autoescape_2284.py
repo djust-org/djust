@@ -584,12 +584,19 @@ class TestEveryRenderSiteThreadsTheInputSafety:
 
     def _call_sites(self) -> list[str]:
         src = self.RENDERER.read_text()
-        return re.findall(r"filters::apply_filter_full_safe\(\s*(.*?)\)\?;", src, re.S)
+        # #3430 shares argument resolution with literal-only replay so Python
+        # method arguments run once. Enumerate BOTH entry points: a new direct
+        # caller must not escape the safety inventory by bypassing the helper.
+        return re.findall(
+            r"filters::apply_filter_(?:full_safe|with_literal|with_projections)\(\s*(.*?)\)\?;",
+            src,
+            re.S,
+        )
 
     def test_there_are_exactly_three_and_every_one_passes_runtime_safe(self):
         sites = self._call_sites()
         assert len(sites) == 3, (
-            f"expected 3 apply_filter_full_safe call sites in renderer.rs, found "
+            f"expected 3 safety-aware filter call sites in renderer.rs, found "
             f"{len(sites)} — a new one must pass `runtime_safe`, not a literal"
         )
         for site in sites:
@@ -607,6 +614,30 @@ class TestEveryRenderSiteThreadsTheInputSafety:
             assert "items: items_safe" in fields, (
                 f"a call site does not thread the ITEM granularity (#2283); got {args!r}"
             )
+
+    def test_replay_helper_forwards_both_safety_channels(self):
+        """Replay and ordinary calls use the same dispatcher and input grants."""
+        src = (self.RENDERER.parent / "filters.rs").read_text()
+        wrapper = src.split("pub fn apply_filter_full_safe(", 1)[1].split("\n}\n", 1)[0]
+        assert "apply_filter_with_literal(" in wrapper
+        assert re.search(r"input_safety,\s*autoescape,\s*None,", wrapper)
+        helper = src.split("pub(crate) fn apply_filter_with_literal(", 1)[1].split("\n}\n", 1)[0]
+        calls = re.findall(r"apply_resolved_filter\(\s*(.*?)\n[ \t]*\)", helper, re.S)
+        assert len(calls) == 2
+        assert re.search(r"arg_was_quoted,\s*\*literal_safety,\s*autoescape,", calls[0])
+        assert re.search(r"arg_was_quoted,\s*input_safety,\s*autoescape,", calls[1])
+
+    def test_shared_dispatcher_threads_safety_to_builtins_and_custom_filters(self):
+        src = (self.RENDERER.parent / "filters.rs").read_text()
+        body = src.split("fn apply_resolved_filter(", 1)[1].split("\n}\n", 1)[0]
+        builtin = body.split("apply_builtin_filter(", 1)[1].split("\n    )", 1)[0]
+        custom = body.split("filter_registry::apply_custom_filter(", 1)[1].split("\n    )", 1)[0]
+        produced_safe = body.split("let safe = builtin_produced_safe(", 1)[1].split(
+            "\n            );", 1
+        )[0]
+        assert "input_safety," in produced_safe
+        assert "input_safety,\n        autoescape," in builtin
+        assert "autoescape,\n        input_safety," in custom
 
     def test_the_classic_entry_point_still_defaults_to_escaping(self):
         """``apply_filter_full`` has no view of the chain and must report the

@@ -1,0 +1,1422 @@
+renderer.rs
+if !context.is_safe(&format!("{prefix}.{key_text}")) {
+let text = output.to_string();
+Ok(context.record_provenance_flatten(output.into_authored_output(), text))
+output.identify(&format!(
+R::captured_projection(effect.html, capture)
+R::context_literal(effect.html)
+effect.html.into()
+render_nodes_with_loader_mut(nodes, &mut context.clone(), loader)
+let probe = format!("{literal}<div dj-view=\"djust.provenance.Probe\" dj-lazy></div>");
+out.into_authored_output().3
+let mut message = format!(
+message.push_str(&format!(" Got this from the '{}' variable.", token));
+Value::Missing | Value::None => "n".to_string(),
+Value::Bool(b) => format!("#{}", if *b { 1 } else { 0 }),
+Value::Integer(i) => format!("#{i}"),
+format!("#c{}:{}", python_float_repr(real), python_float_repr(imag))
+Some(EqClass::Mapping) => format!("m{}", e.repr),
+_ => format!("o{value:?}"),
+Err(_) => format!("d{text}"),
+Value::String(s) | Value::SafeString(s) => format!("s{s}"),
+other => format!("o{other:?}"),
+return "#nan".to_string();
+return "#0".to_string();
+return format!("#{}", f as i64);
+format!("#{}", python_float_repr(f))
+Some(arg) => format!("{name}:{arg}"),
+value.to_string()
+filters::html_escape(&value.to_string())
+other => DjangoRustError::TemplateError(format!("{kind} '{name}' error: {other}")),
+let content = render_nodes_with_loader_mut(children, context, loader)?;
+blank_html: None,
+blank_openings: Vec::new(),
+blank_html: None,
+blank_openings: Vec::new(),
+context.record_provenance_flatten((String::new(), vec![], vec![], literal), String::new());
+let text = output.to_string();
+djust_core::context::flatten_authored_output(output.into_authored_output(), text);
+let literal_only = flattened.3.html.clone();
+let content = flattened.0.clone();
+"_djust_body_literal_blocked".into(),
+if let Some(blank) = &flattened.3.blank_html {
+"_djust_body_blank_only".into(),
+if let Some(literal_only) = literal_only {
+"_djust_body_literal_only".into(),
+Value::String(literal_only),
+context.record_provenance_flatten(
+djust_core::context::flatten_authored_output(flattened, html.clone()),
+other => DjangoRustError::TemplateError(format!("{what} failed: {other}")),
+| Value::DictView { .. } => serde_json::to_string(v).unwrap_or_else(|_| v.to_string()),
+_ => v.to_string(),
+Err(_) => TagArg::plain(arg.to_string()),
+return TagArg::plain(arg.to_string());
+Ok(resolved) => TagArg::plain(format!("{}={}", key, value_to_arg_string(&resolved))),
+Err(_) => TagArg::plain(arg.to_string()),
+Err(_) => TagArg::plain(arg.to_string()),
+return arg.to_string();
+return arg.to_string();
+Some(resolved) => format!("{key}={resolved}"),
+None => arg.to_string(),
+None => arg.to_string(),
+Value::Bool(b) => if *b { "true" } else { "false" }.to_string(),
+serde_json::to_string(&e.items).unwrap_or_else(|_| v.to_string())
+return serde_json::to_string(literal).unwrap_or_else(|_| arg.to_string());
+None => arg.to_string(),
+Some(spelled) => spelled.to_string(),
+DjangoRustError::TemplateError(format!("localizing {}: {e}", encoded.type_name))
+djust_core::locale::localize_number_unlocalized(&value.to_string(), false)
+djust_core::locale::localize_number(&value.to_string())
+_ => value.to_string(),
+"Template loader not configured".to_string(),
+fn render_block_super(&self, ctx: &Context) -> Result<String> {
+Ok(rendered.into_authored_output())
+map.insert("block".to_string(), lazy_block);
+super_value = Some(Value::SafeString(output.0.clone()));
+.into());
+.and_then(|c| c.blank_html.clone())
+.and_then(|capture| capture.html)
+.is_some_and(|(literal, _)| !literal.to_string().is_empty())
+&& new_value.to_string() != value.to_string()
+let literal = value.to_string();
+let literal = value.to_string();
+blank_html: if literal_blocked {
+blank_openings: Vec::new(),
+text.into()
+.and_then(|c| c.blank_html.clone())
+.and_then(|capture| capture.html)
+.is_some_and(|(literal, _)| !literal.to_string().is_empty())
+&& new_value.to_string() != value.to_string()
+let literal = value.to_string();
+let literal = value.to_string();
+blank_html: if literal_blocked {
+blank_openings: Vec::new(),
+text.into()
+R::context_neutral("<!--dj-if-->".to_string())
+format!("-{namespace}")
+let mut wrapped = R::context_neutral(format!(
+wrapped.append(&R::context_neutral("<!--/dj-if-->".to_owned()));
+Value::List(s.chars().map(|c| Value::String(c.to_string())).collect()),
+loop_dict.insert("parentloop".into(), parentloop);
+let parent_if_loop_path = ctx.dj_if_loop_path().to_string();
+ctx.set_dj_if_loop_path(format!("{parent_if_loop_path}-{index}"));
+loop_dict.insert("counter0".into(), Value::Integer(counter as i64));
+loop_dict.insert("counter".into(), Value::Integer(counter as i64 + 1));
+"revcounter".into(),
+"revcounter0".into(),
+loop_dict.insert("first".into(), Value::Bool(counter == 0));
+"last".into(),
+ctx.set("forloop".to_string(), Value::Object(loop_dict.clone()));
+pyo3::exceptions::PyValueError::new_err(format!(
+.is_safe(&format!("{iterable}.{index}.{i}"))
+format!("{base}.{index}.{i}"),
+.flatten();
+Some(html) => R::from(html),
+cache.insert(hash, html.to_string())
+item_html.to_string(),
+other => Err(DjangoRustError::TemplateError(format!(
+format!(
+pyo3::exceptions::PyTypeError::new_err(format!(
+(String::new(), std::sync::Arc::from(Vec::<Node>::new()))
+"No template names provided".to_string()
+let parent_include_path = context.dj_if_include_path().to_string();
+Some(site) => format!("{parent_include_path}-i{site}"),
+std::sync::Arc::from(resolved_nodes.as_slice())
+output.identify(&format!("include:{}", name));
+Ok((String::new()).into())
+output.push_str(&format!("<div data-react-component=\"{name}\""));
+ctx_value.to_string()
+ctx_value.to_string()
+format!(
+output.push_str(&filters::html_escape_attr(&format!(
+Node::RustComponent { name, .. } => Err(DjangoRustError::TemplateError(format!(
+.map(|v| v.to_string())
+Ok((format!(
+.into())
+None => Ok((String::new()).into()),
+"djust_audio requires AudioMixin on the view".to_string(),
+let escaped = filters::html_escape(&manifest.to_string());
+Ok((format!("{DJUST_AUDIO_OPEN}{escaped}{DJUST_AUDIO_CLOSE}")).into())
+.map(|v| v.to_string())
+.unwrap_or_else(|| "/static/".to_string());
+operand[1..operand.len() - 1].to_string()
+v => v.to_string(),
+Ok((format!("{static_url}{path}")).into())
+.to_string(),
+Node::Comment => Ok((String::new()).into()),
+Node::Load(_) => Ok((String::new()).into()), // No-op at render time; preserved for reconstruction
+.into())
+return Ok((String::new()).into());
+let text = value.map(|v| v.to_string()).unwrap_or_default();
+text.into()
+return Err(DjangoRustError::TemplateError(format!(
+Ok((output.to_string()).into())
+let text = SPACELESS_RE.replace_all(content.trim(), "><").to_string();
+let output = content.into_authored_output();
+literal.blank_html = literal
+.blank_html
+.map(|literal| SPACELESS_RE.replace_all(literal.trim(), "><").to_string());
+literal.html = literal
+.html
+.map(|literal| SPACELESS_RE.replace_all(literal.trim(), "><").to_string());
+Ok(text.into())
+ctx.bind("var".to_string(), Value::String(body.to_string()), true);
+ctx.mark_captured_literals("var", body.into_authored_output().3);
+let expr = format!("var|{}", format_filter_chain(filters));
+value.to_string()
+Ok(text.into())
+text.into()
+R::captured_projection(effect.html, capture)
+R::context_literal(effect.html)
+effect.html.into()
+None => Ok((String::new()).into()),
+Ok((String::new()).into())
+"block".to_string(),
+scoped.mark_safe("block.super".to_string());
+(body.to_string(), Some(body))
+Ok((String::new()).into())
+Ok((django_date_format(&now, format)).into())
+Ok((html).into())
+Ok((String::new()).into())
+Ok((html).into())
+Ok((html).into())
+DjangoRustError::TemplateError(format!("Failed to render RustButton: {e}"))
+DjangoRustError::TemplateError(format!("Failed to render RustInput: {e}"))
+DjangoRustError::TemplateError(format!("Failed to render RustText: {e}"))
+DjangoRustError::TemplateError(format!("Failed to render RustCard: {e}"))
+DjangoRustError::TemplateError(format!("Failed to render RustAlert: {e}"))
+DjangoRustError::TemplateError(format!("Failed to render RustModal: {e}"))
+label: label.to_string(),
+value: value.to_string(),
+DjangoRustError::TemplateError(format!("Failed to render RustDropdown: {e}"))
+id: tab_id.to_string(),
+label: label.to_string(),
+content: content.to_string(),
+DjangoRustError::TemplateError(format!("Failed to render RustTabs: {e}"))
+_ => Err(DjangoRustError::TemplateError(format!(
+return Ok(ctx_value.to_string());
+return Ok(ctx_value.to_string());
+Err(DjangoRustError::TemplateError(format!(
+.replace(&format!("\\{quote}"), &quote.to_string())
+.replace(&format!("\\{quote}"), &quote.to_string())
+Some(format!("{sign}{body}"))
+.and_then(|c| c.blank_html.clone())
+.and_then(|capture| capture.html)
+raw_arg[1..raw_arg.len() - 1].to_string()
+raw_arg.to_string()
+.is_some_and(|(literal, _)| !literal.to_string().is_empty())
+&& new_value.to_string() != value.to_string()
+literal_value.map(|(value, _)| value.to_string())
+blank_html: if literal_blocked {
+blank_value.map(|(value, _)| value.to_string())
+blank_openings: Vec::new(),
+Value::Bool(b) => Some(Value::Integer(i64::from(*b))),
+let text = val.to_string();
+return Ok("0".to_string());
+let text = format!("{rounded:.0}");
+Some(if text == "-0" { "0".to_string() } else { text })
+context.set("p".to_string(), Value::Integer(5));
+value: "p".into(),
+max_value: "10".into(),
+max_width: "100".into(),
+asvar: Some("w".into()),
+value: "p".into(),
+max_value: "10".into(),
+max_width: "100".into(),
+value: "p".into(),
+max_value: "10".into(),
+max_width: "100".into(),
+args: vec!["p".into()],
+value: "p".into(),
+max_value: "10".into(),
+max_width: "100".into(),
+asvar: Some("w".into()),
+args: vec!["p".into()],
+asvar: Some("v".into()),
+context.set("p".to_string(), Value::String("<b>".to_string()));
+args: vec!["p".into(), "'F'".into()],
+asvar: Some("v".into()),
+args: vec!["p".into(), "'F'".into()],
+'d' => result.push_str(&dt.format("%d").to_string()), // 01-31
+'j' => result.push_str(&dt.format("%-d").to_string()), // 1-31
+'D' => result.push_str(&dt.format("%a").to_string()), // Mon
+'l' => result.push_str(&dt.format("%A").to_string()), // Monday
+'m' => result.push_str(&dt.format("%m").to_string()), // 01-12
+'n' => result.push_str(&dt.format("%-m").to_string()), // 1-12
+'M' => result.push_str(&dt.format("%b").to_string()), // Jan
+'F' => result.push_str(&dt.format("%B").to_string()), // January
+'Y' => result.push_str(&dt.format("%Y").to_string()), // 2024
+'y' => result.push_str(&dt.format("%y").to_string()), // 24
+'H' => result.push_str(&dt.format("%H").to_string()), // 00-23
+'i' => result.push_str(&dt.format("%M").to_string()), // 00-59
+'s' => result.push_str(&dt.format("%S").to_string()), // 00-59
+'G' => result.push_str(&dt.format("%-H").to_string()), // 0-23
+'g' => result.push_str(&dt.format("%-I").to_string()), // 1-12
+'A' => result.push_str(&dt.format("%p").to_string()), // AM/PM
+let hour = dt.format("%-I").to_string().parse::<u32>().unwrap_or(0);
+let minute = dt.format("%M").to_string();
+let ampm = if dt.format("%P").to_string() == "am" {
+result.push_str(&format!("{} {}", hour, ampm));
+result.push_str(&format!("{}:{} {}", hour, minute, ampm));
+'w' => result.push_str(&dt.format("%w").to_string()), // 0 (Sun) - 6 (Sat)
+'W' => result.push_str(&dt.format("%V").to_string()), // ISO week number
+let day = dt.format("%-d").to_string().parse::<u32>().unwrap_or(0);
+let month = dt.format("%-m").to_string().parse::<u32>().unwrap_or(1);
+let year = dt.format("%Y").to_string().parse::<i32>().unwrap_or(2000);
+result.push_str(&days.to_string());
+let year = dt.format("%Y").to_string().parse::<i32>().unwrap_or(2000);
+'e' => result.push_str(&dt.format("%Z").to_string()),
+'c' => result.push_str(&dt.format("%Y-%m-%dT%H:%M:%S%:z").to_string()),
+'r' => result.push_str(&dt.format("%a, %d %b %Y %H:%M:%S %z").to_string()),
+'U' => result.push_str(&dt.timestamp().to_string()),
+'N' => result.push_str(&dt.format("%b.").to_string()), // Month abbrev AP style
+context.set("value_arg".into(), Value::String("-->".into()));
+template: "\"boom.html\"".to_string(),
+Err(DjangoRustError::TemplateError("exit blew up".to_string()))
+context.set("lang".to_string(), Value::String("fr".to_string()));
+context.set("nothing".to_string(), Value::None);
+Some("de".to_string())
+Some("de".to_string())
+Some("fr".to_string())
+let nodes = vec![Node::Text("Hello".to_string())];
+let nodes = vec![Node::Variable("name".to_string(), vec![], false)];
+context.set("name".to_string(), Value::String("World".to_string()));
+"name".to_string(),
+Value::String("it's \"q\" <b> a\\b\n".to_string()),
+context.set("show".to_string(), Value::Bool(true));
+"items".to_string(),
+Value::String("a".to_string()),
+Value::String("b".to_string()),
+Value::String("c".to_string()),
+"items".to_string(),
+Value::String("a".to_string()),
+Value::String("b".to_string()),
+Value::String("c".to_string()),
+"numbers".to_string(),
+"items".to_string(),
+Value::String("x".to_string()),
+Value::String("y".to_string()),
+Value::String("z".to_string()),
+"items".to_string(),
+Value::String("a".to_string()),
+Value::String("b".to_string()),
+context.set("items".to_string(), Value::List(vec![]));
+context.set("properties".to_string(), Value::List(vec![]));
+"djust_audio_manifest".to_string(),
+Value::String("{\"a\":\"<x>&'\"}".to_string()),
+assert!(err.to_string().contains("AudioMixin"), "{err}");
+context.set("djust_audio_manifest".to_string(), Value::None);
+assert!(err.to_string().contains("AudioMixin"), "{err}");
+"csrf_token".to_string(),
+Value::String("test-csrf-token-123".to_string()),
+"STATIC_URL".to_string(),
+Value::String("/static/".to_string()),
+"STATIC_URL".to_string(),
+Value::String("https://cdn.example.com/static/".to_string()),
+"message".to_string(),
+Value::String("Hello World".to_string()),
+context.set("x".to_string(), Value::String("foo".to_string()));
+context.set("y".to_string(), Value::String("bar".to_string()));
+context.set("name".to_string(), Value::String("outer".to_string()));
+context.set("other".to_string(), Value::String("inner".to_string()));
+context.set("a".to_string(), Value::Bool(true));
+context.set("b".to_string(), Value::Bool(true));
+context.set("b".to_string(), Value::Bool(false));
+context.set("a".to_string(), Value::Bool(false));
+context.set("b".to_string(), Value::Bool(true));
+context.set("b".to_string(), Value::Bool(false));
+context.set("a".to_string(), Value::List(vec![]));
+context.set("b".to_string(), Value::String(String::new()));
+context.set("a".to_string(), Value::List(vec![Value::Integer(1)]));
+context.set("a".to_string(), Value::Bool(false));
+context.set("b".to_string(), Value::Bool(true));
+context.set("c".to_string(), Value::Bool(false));
+context.set("a".to_string(), Value::Bool(true));
+context.set("b".to_string(), Value::Bool(false));
+context.set("a".to_string(), Value::Bool(true));
+context.set("b".to_string(), Value::Bool(true));
+context.set("c".to_string(), Value::Bool(true));
+context.set("b".to_string(), Value::Bool(false));
+context.set("a".to_string(), Value::Bool(true));
+context.set("b".to_string(), Value::Bool(false));
+context.set("b".to_string(), Value::Bool(true));
+context.set("a".to_string(), Value::Bool(false));
+context.set("b".to_string(), Value::Bool(false));
+context.set("item".to_string(), Value::String("b".to_string()));
+"items".to_string(),
+Value::String("a".to_string()),
+Value::String("b".to_string()),
+Value::String("c".to_string()),
+context.set("item".to_string(), Value::String("z".to_string()));
+context.set("sub".to_string(), Value::String("world".to_string()));
+context.set("text".to_string(), Value::String("hello world".to_string()));
+context.set("sub".to_string(), Value::String("xyz".to_string()));
+map.insert("2".into(), Value::Bool(true));
+map.insert("5".into(), Value::String("hello".to_string()));
+context.set("mydict".to_string(), Value::Object(map));
+context.set("key".to_string(), Value::String("2".to_string()));
+context.set("key".to_string(), Value::String("99".to_string()));
+context.set("key".to_string(), Value::Integer(5));
+context.set("mydict".to_string(), Value::Object(int_keyed));
+context.set("key".to_string(), Value::Integer(5));
+context.set("key".to_string(), Value::String("5".to_string()));
+map.insert("42".into(), Value::Bool(true));
+context.set("mydict".to_string(), Value::Object(map));
+context.set("val".to_string(), Value::Integer(42));
+context.set("val".to_string(), Value::Integer(99));
+"content".to_string(),
+Value::String("<script>alert(\"xss\")</script>".to_string()),
+"content".to_string(),
+Value::String("<b>bold</b>".to_string()),
+"content".to_string(),
+Value::String("<b>\"hi\"</b>".to_string()),
+context.set("name".to_string(), Value::String("World".to_string()));
+context.set("show".to_string(), Value::Bool(false));
+context.set("show".to_string(), Value::Bool(true));
+context.set("show".to_string(), Value::Bool(false));
+context.set("show".to_string(), Value::Bool(false));
+context.set("a".to_string(), Value::Bool(false));
+context.set("b".to_string(), Value::Bool(true));
+context.set("c".to_string(), Value::Bool(false));
+context.set("value".to_string(), Value::Integer(175));
+context.set("max_value".to_string(), Value::Integer(200));
+context.set("max_width".to_string(), Value::Integer(100));
+context.set("value".to_string(), Value::Integer(50));
+context.set("max_value".to_string(), Value::Integer(0));
+context.set("value".to_string(), Value::Integer(75));
+context.set("total".to_string(), Value::Integer(100));
+context.set("var2".to_string(), Value::String("hello".to_string()));
+context.set("var3".to_string(), Value::String("world".to_string()));
+"var1".to_string(),
+Value::String("<script>xss</script>".to_string()),
+let tokens = tokenize(&format!("{{% templatetag {name} %}}")).unwrap();
+"items".to_string(),
+Value::String("a".to_string()),
+Value::String("b".to_string()),
+Value::String("c".to_string()),
+"outer".to_string(),
+Value::String("a".to_string()),
+Value::String("b".to_string()),
+"inner".to_string(),
+Value::String("x".to_string()),
+Value::String("y".to_string()),
+user.insert("name".into(), Value::String("Alice".to_string()));
+context.set("user".to_string(), Value::Object(user));
+context.set("x".to_string(), Value::String("<b>hi</b>".to_string()));
+"x".to_string(),
+Value::String("Visit https://example.com".to_string()),
+context.set("x".to_string(), Value::String("<b>hi</b>".to_string()));
+context.set("x".to_string(), Value::String("<b>hi</b>".to_string()));
+context.set("active".to_string(), Value::Bool(false));
+context.set("active".to_string(), Value::Bool(true));
+context.set("show".to_string(), Value::Bool(false));
+context.set("show".to_string(), Value::Bool(false));
+context.set("show".to_string(), Value::Bool(false));
+context.set("a".to_string(), Value::Bool(false));
+context.set("b".to_string(), Value::Bool(false));
+context.set("a".to_string(), Value::Bool(false));
+context.set("b".to_string(), Value::Bool(true));
+context.set("a".to_string(), Value::Bool(false));
+context.set("b".to_string(), Value::Bool(false));
+context.set("c".to_string(), Value::Bool(false));
+Value::String("a".to_string()),
+map.insert("key".into(), Value::String("val".to_string()));
+assert_eq!(Value::Integer(42).to_string(), "42");
+assert_eq!(Value::Bool(true).to_string(), "True");
+assert_eq!(Value::String("hello".to_string()).to_string(), "hello");
+"items".to_string(),
+obj.insert("key".into(), Value::String("val".to_string()));
+ctx.set("obj".to_string(), Value::Object(obj));
+ctx.set("count".to_string(), Value::Integer(42));
+ctx.set("name".to_string(), Value::String("hello".to_string()));
+Value::Decimal("1.50".to_string()),
+Value::BigInt("123456789012345678901".to_string()),
+Value::String("ab".to_string()),
+type_name: "datetime.datetime".to_string(),
+display: "2020-01-01 03:04:05".to_string(),
+json: "2020-01-01T03:04:05".to_string(),
+repr: "datetime.datetime(2020, 1, 1, 3, 4, 5)".to_string(),
+type_name: "set".to_string(),
+display: "set()".to_string(),
+json: "set()".to_string(),
+repr: "set()".to_string(),
+type_name: "set".to_string(),
+display: "{'a'}".to_string(),
+json: "{'a'}".to_string(),
+repr: "{'a'}".to_string(),
+items: Some(vec![Value::String("a".to_string())]),
+type_name: "FalsyIterable".to_string(),
+display: "FalsyIterable()".to_string(),
+json: "FalsyIterable()".to_string(),
+repr: "FalsyIterable()".to_string(),
+items: Some(vec![Value::String("x".to_string())]),
+type_name: "LenZero".to_string(),
+display: "<LenZero object>".to_string(),
+json: "<LenZero object>".to_string(),
+repr: "<LenZero object>".to_string(),
+ctx.set("p".to_string(), value.clone());
+var_names: vec!["x".to_string()],
+iterable: "p".to_string(),
+nodes: vec![Node::Text("[item]".to_string())],
+empty_nodes: vec![Node::Text("[empty]".to_string())],
+map.insert("key".into(), Value::String("val".to_string()));
+assert_eq!(value_to_arg_string(&Value::String("hi".to_string())), "hi");
+let s = Value::String("<b>".to_string());
+Value::List(vec![Value::String("<b>".to_string())]),
+ctx.set("marked".to_string(), Value::String("<b>".to_string()));
+ctx.mark_safe("marked".to_string());
+ctx.set("marked".to_string(), Value::String("<b>".to_string()));
+ctx.mark_safe("marked".to_string());
+value_channel_arg_string(&Value::String("ab".to_string())),
+value_channel_arg_string(&Value::String("a\"b\\c".to_string())),
+value_channel_arg_string(&Value::Decimal("1.5".to_string())),
+value_channel_arg_string(&Value::BigInt("123456789012345678901".to_string())),
+"items".to_string(),
+Value::String("a".to_string()),
+Value::String("b".to_string()),
+Value::String("c".to_string()),
+assert_eq!(result.to_string(), "3");
+context.set("name".to_string(), Value::String("hello".to_string()));
+assert_eq!(result.to_string(), "HELLO");
+context.set("count".to_string(), Value::Integer(42));
+assert_eq!(result.to_string(), "42");
+context.set("True".to_string(), Value::String("not a bool".to_string()));
+assert_eq!(val.to_string(), "not a bool");
+context.set(k.to_string(), v);
+&Value::String("a".to_string()),
+&Value::String("a".to_string())
+templates.insert((*name).to_string(), nodes);
+DjangoRustError::TemplateError(format!("template not found: {name}"))
+"theme_panel".to_string(),
+Value::String("<div class=\"panel\">x</div>".to_string()),
+context.mark_safe("theme_panel".to_string());
+let loader = MapLoader::new(&[("_partial.html", "[{{ theme_panel }}]")]);
+let tokens = tokenize("{% include \"_partial.html\" %}").unwrap();
+"theme_panel".to_string(),
+Value::String("<div class=\"panel\">x</div>".to_string()),
+context.mark_safe("theme_panel".to_string());
+let loader = MapLoader::new(&[("_partial.html", "[{{ nav_items }}]")]);
+let tokens = tokenize("{% include \"_partial.html\" %}").unwrap();
+"nav_items".to_string(),
+Value::String("home,about".to_string()),
+("_start.html", "{% include \"_sidebar.html\" %}"),
+("_sidebar.html", "<aside>{{ theme_panel }}</aside>"),
+let tokens = tokenize("{% include \"_start.html\" %}").unwrap();
+"theme_panel".to_string(),
+Value::String("<b>P</b>".to_string()),
+context.mark_safe("theme_panel".to_string());
+&Value::String("5".to_string()),
+assert!(bool_as_int(&Value::String("1".to_string())).is_none());
+assert!(!values_equal(&t, &Value::String("1".to_string())));
+assert!(!values_equal(&Value::String("True".to_string()), &t));
+try_compare(&Value::Bool(true), &Value::String("1".to_string())),
+a.insert("a".into(), Value::Integer(1));
+a.insert("b".into(), Value::Integer(2));
+b.insert("b".into(), Value::Integer(2));
+b.insert("a".into(), Value::Integer(1));
+c.insert("a".into(), Value::Integer(1));
+&l(vec![l(vec![]), Value::String("a".into()), d]),
+try_compare(&Value::String("a".into()), &Value::Integer(1)),
+try_compare(&Value::String("b".into()), &Value::String("a".into())),
+ctx.set("p".to_string(), Value::String("a.css".into()));
+ctx.set("p".to_string(), Value::String("a.css".into()));
+ctx.set("STATIC_URL".to_string(), Value::String("/s/".into()));
+ctx.set("p".to_string(), Value::String("a.css".into()));
+lib.rs
+source: source.to_string(),
+.unwrap_or_else(|| name.to_string()),
+Err(DjangoRustError::TemplateError(format!(
+ctx.insert("flag".to_string(), Value::Bool(true));
+let via_function = render_template(source.to_string(), ctx.clone()).unwrap();
+context.set("name".to_string(), Value::String("World".to_string()));
+self.templates.insert(name.to_string(), source.to_string());
+Err(DjangoRustError::TemplateError(format!(
+"base.html",
+"{% extends \"base.html\" %}{% block title %}My Page{% endblock %}{% block content %}Hello World{% endblock %}";
+"base.html",
+"{% extends \"base.html\" %}{% block content %}Child content{% endblock %}",
+"grandparent.html",
+"parent.html",
+"{% extends \"grandparent.html\" %}{% block header %}Parent Header{% endblock %}",
+"{% extends \"parent.html\" %}{% block content %}Child Content{% endblock %}";
+"base.html",
+"{% extends \"base.html\" %}{% block content %}Welcome {{ user }}{% endblock %}";
+"site_name".to_string(),
+Value::String("My Site".to_string()),
+context.set("user".to_string(), Value::String("John".to_string()));
+"base.html",
+let child_source = "{% extends \"base.html\" %}{% block content %}{% endblock %}";
+loader.add("base.html", "<ul>{% block items %}{% endblock %}</ul>");
+let child_source = "{% extends \"base.html\" %}{% block items %}{% for item in items %}<li>{{ item }}</li>{% endfor %}{% endblock %}";
+"items".to_string(),
+Value::String("A".to_string()),
+Value::String("B".to_string()),
+Value::String("C".to_string()),
+context.set("greeting".to_string(), Value::String("Hello".to_string()));
+context.set("name".to_string(), Value::String("World".to_string()));
+context.set("greeting".to_string(), Value::String("Hello".to_string()));
+context.set("name".to_string(), Value::String("World".to_string()));
+context.set("name".to_string(), Value::String("Rust".to_string()));
+let changed_keys: HashSet<String> = ["name".to_string()].into_iter().collect();
+context.set("dynamic".to_string(), Value::String("v1".to_string()));
+context.set("dynamic".to_string(), Value::String("v2".to_string()));
+let changed_keys: HashSet<String> = ["dynamic".to_string()].into_iter().collect();
+Template::new("{% extends \"base.html\" %}{% block content %}X{% endblock %}").unwrap();
+djust_live/src/provenance_edits.rs
+djust_live/src/model_serializer.rs
+.map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
+return Ok(JsonValue::Number(i.into()));
+Ok(JsonValue::String(obj.str()?.to_string()))
+Ok(result_list.into())
+Ok(result.into())
+return Ok(result_list.unbind().into());
+return Ok(result_list.unbind().into());
+Ok(value.str()?.unbind().into())
+djust_live/src/lib.rs
+.map(|s| (*s).to_string())
+.unwrap_or_else(|| "panic with a non-string payload".to_string());
+Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+self.dj_if_id_namespace = namespace.to_string();
+let prefix = format!("{key}.");
+Ok(dict.into())
+Ok((result.html, spans, result.origins))
+return Err(e.into());
+let open = format!("<{sentinel_tag} ");
+reduced_html.clone()
+PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
+PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
+let old_html = old_html.clone();
+PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
+Some(PyBytes::new(py, &bytes).into())
+PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
+Some(PyBytes::new(py, &bytes).into())
+.unwrap_or_else(|| "body".to_string()),
+None => "body".to_string(),
+.map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+self.last_html = Some(full_html.clone());
+PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+Ok(PyBytes::new(py, &bytes).into())
+PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+m.insert("render_ms".to_string(), t.render_ms);
+m.insert("parse_ms".to_string(), t.parse_ms);
+m.insert("diff_ms".to_string(), t.diff_ms);
+m.insert("serialize_ms".to_string(), t.serialize_ms);
+m.insert("total_ms".to_string(), t.total_ms);
+m.insert("html_len".to_string(), t.html_len as f64);
+m.insert("fast_path".to_string(), t.fast_path);
+return Err(e.into());
+let open = format!("<{sentinel_tag} ");
+reduced_html.clone()
+text_changes.push((idx, old_frag.to_string(), new_frag.to_string()));
+Some("[]".to_string())
+PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
+Some("[]".to_string())
+PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
+PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
+PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
+PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
+PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
+PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
+Some("[]".to_string())
+let prefix = format!("{key}.");
+.map_err(|e| djust_core::DjangoRustError::TemplateError(e.to_string()))
+.map_err(|e| djust_core::DjangoRustError::TemplateError(e.to_string()))?;
+.map_err(|e| djust_core::DjangoRustError::TemplateError(e.to_string()))?,
+let open = format!("<{tag} ");
+let close = format!("</{tag}>");
+for children in node.child_lists().into_iter().flatten() {
+std::fs::metadata(path).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+.map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+let source: Arc<str> = Arc::from(
+.map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?,
+LAZY_SOURCE_FILES.insert(path.to_owned(), (modified, metadata.len(), source.clone()));
+for list in children.into_iter().flatten() {
+format!("{values:?}")
+keys.insert(operand.to_owned());
+source.to_owned(),
+let identity = current_name.unwrap_or(source).to_owned();
+source.to_owned(),
+let path = std::path::PathBuf::from(origin);
+for children in node.child_lists().into_iter().flatten() {
+Value::List(values) => values.iter().map(|v| v.to_string()).collect(),
+selectors.insert(format!("{expression}.{suffix}"));
+template_source.to_owned(),
+return Ok(entry.0.clone());
+let py_err: PyErr = err.into();
+template_source.to_owned(),
+template_source.to_owned(),
+.map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+.map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+.map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
+PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+Ok(JsonValue::Number(i.into()))
+.map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+format!("{:?}", self.inner)
+.map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+dict.set_item("html", result.html)?;
+Ok(dict.unbind().into())
+.map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
+if let Some(html) = result.html {
+Ok(dict.unbind().into())
+.map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+.map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+.map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+.map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+.map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+.map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+self.handle.session_id().to_string()
+"Cannot convert Python type to Value".to_string(),
+serde_json::Value::Bool(b) => Ok((*b).into_pyobject(py)?.to_owned().into_any().unbind()),
+Ok(i.into_pyobject(py)?.to_owned().into_any().unbind())
+Ok(f.into_pyobject(py)?.to_owned().into_any().unbind())
+serde_json::Value::String(s) => Ok(s.into_pyobject(py)?.to_owned().into_any().unbind()),
+Ok(py_list.into())
+Ok(py_dict.into())
+Ok(result_list.into())
+Ok(result_dict.into())
+.map_or("unknown".to_string(), |s| s.to_string());
+return Ok(result_list.into());
+return Ok(result_list.into());
+return Ok(result_dict.into());
+return Ok(s.into_pyobject(py)?.to_owned().into_any().unbind());
+return Ok(b.into_pyobject(py)?.to_owned().into_any().unbind());
+return Ok(i.into_pyobject(py)?.to_owned().into_any().unbind());
+let str_repr = value.str()?.to_string();
+return Ok(str_repr.into_pyobject(py)?.to_owned().into_any().unbind());
+return Ok(f.into_pyobject(py)?.to_owned().into_any().unbind());
+return Ok(wrapper.into());
+let str_repr = value.str()?.to_string();
+return Ok(str_repr.into_pyobject(py)?.to_owned().into_any().unbind());
+return Ok(iso_str.into_pyobject(py)?.to_owned().into_any().unbind());
+let str_repr = value.str()?.to_string();
+return Ok(str_repr.into_pyobject(py)?.to_owned().into_any().unbind());
+let str_repr = value.str()?.to_string();
+Ok(str_repr.into_pyobject(py)?.to_owned().into_any().unbind())
+.entry(part.to_string())
+current.entry(part.to_string()).or_insert(PathNode::Leaf);
+.entry(part.to_string())
+current.entry(part.to_string()).or_insert(PathNode::Leaf);
+.entry(part.to_string())
+out.insert(name.to_string());
+return Ok(serde_json::Value::Number(i.into()));
+Ok(s) => Ok(serde_json::Value::String(s.to_string())),
+return if foreign { None } else { Some(raw.to_string()) };
+if pfx < e.html_start {
+} else if pfx >= e.html_end {
+let offset_in_text = pfx - entry.html_start;
+if pfx + old_mid.len() > entry.html_end {
+let old_html_end = entry.html_end;
+|| !old_html.is_char_boundary(entry.html_start)
+let old_raw = &old_html[entry.html_start..old_html_end];
+text_node_index[entry_idx].html_end = new_html_end;
+e.html_start = (e.html_start as isize + delta_add) as usize;
+e.html_end = (e.html_end as isize + delta_add) as usize;
+PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Template parsing error: {e}"))
+Ok(py_dict.into())
+let html = format!(
+&html["<body dj-root>".len()..html.len() - "</body>".len()]
+let mut html = String::from("<div dj-view=\"p.P\">");
+html.push_str(&format!(
+let html = format!("<main dj-root>real{closing}<footer>tail</footer>");
+let html = format!("{prefix}<main dj-root>real</main>");
+let html = format!("<main dj-root>{body}</main><footer>end</footer>");
+let html = "<html><head><script>\n  // base.html wraps the content block in <div dj-root>\n</script></head>\
+let message = err.value(py).to_string();
+assert!(err.value(py).to_string().contains("ordinary failure"));
+m.insert(ObjectKey::Str("id".to_string()), Value::Integer(id));
+ObjectKey::Str("title".to_string()),
+Value::String(format!("Post {id}")),
+m.insert(ObjectKey::Str("views".to_string()), Value::Integer(views));
+s.insert("label".to_string(), Value::String(label.to_string()));
+s.insert("highlight_id".to_string(), Value::Integer(highlight_id));
+"rows".to_string(),
+let mut view = RustLiveViewBackend::new_rust(TEMPLATE.to_string());
+view.set_changed_keys(vec!["label".to_string()]);
+view.set_changed_keys(vec!["label".to_string()]);
+let mut view = RustLiveViewBackend::new_rust(template.to_string());
+s.insert("x".to_string(), Value::String(x.to_string()));
+s.insert("x".to_string(), Value::String(x.to_string()));
+view.set_changed_keys(vec!["x".to_string()]);
+let tpl = format!(r#"<div dj-id="0"><{tag}>{{{{ x|safe }}}}</{tag}></div>"#);
+view.set_changed_keys(vec!["highlight_id".to_string()]);
+view.set_changed_keys(vec!["label".to_string()]);
+view.set_changed_keys(vec!["label".to_string()]);
+view.set_changed_keys(vec!["highlight_id".to_string()]);
+view.set_changed_keys(vec!["label".to_string()]);
+slow.set_changed_keys(vec!["highlight_id".to_string()]);
+slow.set_changed_keys(vec!["label".to_string(), "highlight_id".to_string()]);
+.map(|x| x["path"].to_string())
+view.set_changed_keys(vec!["highlight_id".to_string()]);
+view.set_changed_keys(vec!["rows".to_string()]);
+let mut view = RustLiveViewBackend::new_rust(TEMPLATE.to_string());
+view.set_changed_keys(vec!["label".to_string()]);
+view.set_changed_keys(vec!["rows".to_string()]);
+view.set_changed_keys(vec!["highlight_id".to_string()]);
+s.insert("n".to_string(), Value::Integer(n));
+s.insert("secret".to_string(), Value::String(SECRET.to_string()));
+let mut view = RustLiveViewBackend::new_rust(TEMPLATE.to_string());
+view.set_changed_keys(vec!["n".to_string()]);
+let removed = view.retain_state_keys_rust(vec!["n".to_string()]);
+assert_eq!(removed, vec!["secret".to_string()]);
+let removed = view.retain_state_keys_rust(vec!["n".to_string()]);
+assert_eq!(removed, vec!["secret".to_string()]);
+let mut view = RustLiveViewBackend::new_rust("{{ p }}".to_string());
+s.insert("p".to_string(), Value::String("<b>x</b>".to_string()));
+view.mark_safe_keys(vec!["p".to_string()]);
+assert_eq!(view.retain_state_keys_rust(vec![]), vec!["p".to_string()]);
+"p".to_string(),
+Value::String("<img src=x onerror=alert(1)>".to_string()),
+let mut view = RustLiveViewBackend::new_rust("<p>hello</p>".to_string());
+view.update_state_rust(HashMap::from([("rows".to_string(), Value::List(rows))]));
+view.set_state("n".to_string(), Value::Integer(1));
+v.set_state("k".to_string(), Value::Integer(9))
+v.update_state_rust(HashMap::from([("k".to_string(), Value::Integer(9))]))
+v.set_component_html("k".to_string(), "<i>k</i>".to_string())
+let mut view = RustLiveViewBackend::new_rust(TEMPLATE.to_string());
+"rows".to_string(),
+Value::List((0..n).map(|i| Value::String(format!("row {i}"))).collect()),
+"rows".to_string(),
+Value::List((0..51).map(|i| Value::String(format!("row {i}"))).collect()),
+watch_lazy_selector("'literal.html'|default:other", &mut keys).unwrap();
+let dir = std::env::temp_dir().join(format!("djust-3428-{}", uuid::Uuid::new_v4()));
+std::fs::write(dir.join("plain.html"), "plain").unwrap();
+context.set("tpl".into(), Value::String("plain.html".into()));
+context.set("rows".into(), Value::List(vec![Value::Integer(1); 5000]));
+assert_eq!(selectors, ["tpl".to_owned()].into_iter().collect());
+let memo = &walk.memo[&(source.to_owned(), 0)][0];
+context.set("rows".into(), Value::List(vec![Value::Integer(2); 5000]));
+source.to_owned(),
+djust_live/src/actors/view.rs
+.map_err(|e| ActorError::template(e.to_string()));
+.map_err(|e| ActorError::template(e.to_string()))?;
+.ok_or_else(|| ActorError::Python("No Python view set".to_string()))?;
+ActorError::Python(format!(
+ActorError::Python(format!("Failed to convert param '{key}': {e}"))
+.map_err(|e| ActorError::Python(format!("Failed to set param '{key}': {e}")))?;
+ActorError::Python(format!(
+ActorError::Python(format!(
+ActorError::Python(format!("Error calling get_context_data(): {e}"))
+ActorError::Python(format!("get_context_data() did not return dict: {e}"))
+ActorError::Python(format!("Failed to extract key as string: {e}"))
+ActorError::Python(format!("Failed to convert value for key '{key_str}': {e}"))
+None => Err(ActorError::ComponentNotFound(format!(
+None => Err(ActorError::ComponentNotFound(format!(
+None => Err(ActorError::ComponentNotFound(format!(
+let (actor, handle) = ViewActor::new("test.view".to_string());
+let (actor, handle) = ViewActor::new("test.view".to_string());
+updates.insert("count".to_string(), Value::Integer(42));
+let (actor, handle) = ViewActor::new("test.view".to_string());
+updates.insert("count".to_string(), Value::Integer(42));
+let (actor, handle) = ViewActor::new("test.view".to_string());
+let (actor, handle) = ViewActor::new("test.view".to_string());
+updates.insert("a".to_string(), Value::Integer(1));
+updates.insert("b".to_string(), Value::Integer(2));
+let (actor, handle) = ViewActor::new("test.view".to_string());
+updates.insert("count".to_string(), Value::Integer(1));
+python_instance(&format!(
+let (actor, handle) = ViewActor::with_template("t2592.V".to_string(), template.to_string());
+.event(name.to_string(), EventParams::new())
+.html
+(format!("'{SECRET}'"), "{{ k }}"),
+(format!("{{'secret': '{SECRET}'}}"), "{{ k.secret }}"),
+let handle = actor_with("{{ k }}", delete_view(&format!("'{SECRET}'"))).await;
+let view = python_instance(&format!(
+ViewActor::with_template("t2592.V".to_string(), "{{ a }}|{{ b }}".to_string());
+updates.insert("a".to_string(), Value::Integer(1));
+updates.insert("b".to_string(), Value::Integer(2));
+.retain_state_keys(vec!["b".to_string(), "never-present".to_string()])
+assert_eq!(removed, vec!["a".to_string()]);
+.retain_state_keys(vec!["b".to_string()])
+ViewActor::with_template("t2592.V".to_string(), "{{ a }}|{{ b }}".to_string());
+first.insert("a".to_string(), Value::Integer(1));
+second.insert("b".to_string(), Value::Integer(2));
+decimal_sep: ",".into(),
+thousand_sep: "\u{a0}".into(),
+ViewActor::with_template("t2741.V".to_string(), RENDER_ENV_PROBE.to_string());
+state.insert("v".to_string(), Value::Float(1234.5));
+observed.html, "1234,5",
+observed.html
+unconfigured.html, "1234.5",
+unconfigured.html
+assert_eq!(flipped.html, "1234,5");
+decimal_sep: ",".into(),
+thousand_sep: "\u{a0}".into(),
+ViewActor::with_template("t2741.V".to_string(), "parent".to_string());
+props.insert("v".to_string(), Value::Float(1234.5));
+.create_component("c".to_string(), "{{ v }}".to_string(), props, None)
+let (actor, handle) = ViewActor::new("t3228.V".to_string());
+let (actor, handle) = ViewActor::new("t3228.V".to_string());
+let (actor, handle) = ViewActor::new("t3228.V".to_string());
+let (actor, handle) = ViewActor::new("t3228.V".to_string());
+"c3228".to_string(),
+"<p>c</p>".to_string(),
+let (actor, handle) = ViewActor::new("t3228.V".to_string());
+let (mut actor, handle) = ViewActor::new("t3228.V".to_string());
+"c3228".to_string(),
+"<p>c</p>".to_string(),
+.insert("c3228".to_string(), child_handle.clone());
+component_id: "c3228".to_string(),
+.send_to_parent("ping".to_string(), HashMap::new())
+let (mut actor, handle) = ViewActor::new("t3228.V".to_string());
+"c3228".to_string(),
+"<p>c</p>".to_string(),
+.insert("c3228".to_string(), child_handle.clone());
+.send_to_parent("ping".to_string(), HashMap::new())
+djust_live/src/actors/supervisor.rs
+.get_or_create_session("test-session".to_string())
+.get_or_create_session("test-session".to_string())
+.get_or_create_session(format!("session-{i}"))
+supervisor.remove_session(&format!("session-{i}")).await;
+.get_or_create_session(format!("session-{i}"))
+.get_or_create_session("test-session".to_string())
+djust_live/src/actors/session.rs
+let view_id = Uuid::new_v4().to_string();
+.map(|module| module.unbind().into())
+html: result.html,
+.ok_or_else(|| ActorError::ViewNotFound(format!("View not found: {id}")))?
+.ok_or_else(|| ActorError::ViewNotFound("No views mounted".to_string()))?
+recovery_html: result.html.clone(),
+Some(result.html)
+Err(ActorError::ViewNotFound(format!(
+return Err(ActorError::ViewNotFound(format!(
+.ok_or_else(|| ActorError::ViewNotFound(format!("View not found: {view_id}")))?;
+.ok_or_else(|| ActorError::ViewNotFound(format!("View not found: {view_id}")))?;
+.ok_or_else(|| ActorError::ViewNotFound(format!("View not found: {view_id}")))?;
+decimal_sep: ",".into(),
+thousand_sep: "\u{a0}".into(),
+state.insert("v".to_string(), Value::Float(1234.5));
+let (actor, handle) = SessionActor::new("s2741".to_string());
+"t2741.V".to_string(),
+Some(PROBE.to_string()),
+.html;
+"t2741.V".to_string(),
+Some(PROBE.to_string()),
+.html;
+let (actor, handle) = SessionActor::new("test-session".to_string());
+let (actor, handle) = SessionActor::new("test-session".to_string());
+let (actor, handle) = SessionActor::new("test-session".to_string());
+.mount("test.view".to_string(), HashMap::new(), None)
+assert!(response.html.is_empty() || !response.html.is_empty());
+let (actor, handle) = SessionActor::new("test-session".to_string());
+.event("click".to_string(), EventParams::new(), None)
+let (actor, handle) = SessionActor::new("test-session".to_string());
+.mount("test.view".to_string(), HashMap::new(), None)
+.event("click".to_string(), EventParams::new(), None)
+let (actor, handle) = SessionActor::new("test-session".to_string());
+.mount("view1".to_string(), HashMap::new(), None)
+.mount("view2".to_string(), HashMap::new(), None)
+"click".to_string(),
+.event("click".to_string(), EventParams::new(), None)
+let (actor, handle) = SessionActor::new("test-session".to_string());
+let (actor, handle) = SessionActor::new("test-session".to_string());
+.mount("test.view".to_string(), HashMap::new(), None)
+let (actor, handle) = SessionActor::new("test-session".to_string());
+let (actor, handle) = SessionActor::new("test-session".to_string());
+.mount("view1".to_string(), HashMap::new(), None)
+.mount("view2".to_string(), HashMap::new(), None)
+"click".to_string(),
+"click".to_string(),
+let (actor, handle) = SessionActor::new("test-session".to_string());
+let result = handle.unmount("nonexistent-uuid".to_string()).await;
+let (mut session, handle) = SessionActor::new("s3228".to_string());
+let (view_actor, view_handle) = ViewActor::new("t3228.V".to_string());
+session.views.insert("v3228".to_string(), view_handle);
+let (actor, handle) = SessionActor::new("s3228".to_string());
+.mount("t3228.V".to_string(), HashMap::new(), Some(view))
+let (mut session, handle) = SessionActor::new("s3228".to_string());
+let (view_actor, view_handle) = ViewActor::new("t3228.V".to_string());
+session.views.insert("v3228".to_string(), view_handle);
+handle.unmount("v3228".to_string()).await.unwrap();
+let (actor, handle) = SessionActor::new("s3228".to_string());
+djust_live/src/actors/mod.rs
+djust_live/src/actors/messages.rs
+html: "<div>Test</div>".to_string(),
+session_id: "session-123".to_string(),
+view_id: "view-456".to_string(),
+assert_eq!(deserialized.html, response.html);
+html: Some("<div>Updated</div>".to_string()),
+assert_eq!(deserialized.html, Some("<div>Updated</div>".to_string()));
+html: "<div>Test</div>".to_string(),
+assert_eq!(cloned.html, result.html);
+assert!(restored.html.is_none());
+html: Some("<div>updated</div>".to_string()),
+assert_eq!(restored.html.as_deref(), Some("<div>updated</div>"));
+assert!(restored.html.is_none());
+html: Some("<div/>".to_string()),
+recovery_html: "<div/>".to_string(),
+parameter_contracts: Some(r#"{"version":1,"owners":[]}"#.to_string()),
+assert_eq!(restored.html.as_deref(), Some("<div/>"));
+djust_live/src/actors/error.rs
+ActorError::Template(msg.into())
+ActorError::Vdom(msg.into())
+ActorError::Serialization(msg.into())
+ActorError::Other(msg.into())
+assert_eq!(err.to_string(), "Actor mailbox full");
+assert_eq!(err.to_string(), "Template error: Invalid syntax");
+assert_eq!(err.to_string(), "Actor shutdown");
+assert_eq!(err1.to_string(), err2.to_string());
+djust_live/src/actors/component.rs
+.map_err(|e| ActorError::Template(format!("Failed to parse template: {e}")))?;
+.ok_or_else(|| ActorError::Python("No Python component set".to_string()))?;
+ActorError::Python(format!(
+ActorError::Python(format!("Failed to convert param '{key}': {e}"))
+.map_err(|e| ActorError::Python(format!("Failed to set param '{key}': {e}")))?;
+ActorError::Python(format!(
+ActorError::Python(format!(
+ActorError::Python(format!("Error calling get_context_data(): {e}"))
+ActorError::Python(format!("get_context_data() did not return dict: {e}"))
+ActorError::Python(format!("Failed to extract key as string: {e}"))
+ActorError::Python(format!("Failed to convert value for key '{key_str}': {e}"))
+.map_err(|e| ActorError::Template(format!("Render failed: {e}")))?;
+.map_err(|e| ActorError::Vdom(format!("Failed to parse HTML: {e}")))?;
+decimal_sep: ",".into(),
+thousand_sep: "\u{a0}".into(),
+props.insert("obj".to_string(), greeter());
+props.insert("v".to_string(), Value::Float(1234.5));
+"c2741".to_string(),
+"{{ obj.greet }}|{{ v }}".to_string(),
+let template = "<div>{{ message }}</div>".to_string();
+props.insert("message".to_string(), Value::String("Hello".to_string()));
+let result = ComponentActor::new("test-comp".to_string(), template, props, None);
+let template = "<div>{{ message }}</div>".to_string();
+props.insert("message".to_string(), Value::String("Hello".to_string()));
+ComponentActor::new("test-comp".to_string(), template, props, None).unwrap();
+let template = "<div>{{ message }}</div>".to_string();
+props.insert("message".to_string(), Value::String("Hello".to_string()));
+ComponentActor::new("test-comp".to_string(), template, props, None).unwrap();
+new_props.insert("message".to_string(), Value::String("Goodbye".to_string()));
+let template = "<div>Count: {{ count }}</div>".to_string();
+props.insert("count".to_string(), Value::Integer(0));
+ComponentActor::new("test-comp".to_string(), template, props, None).unwrap();
+params.insert("count".to_string(), Value::Integer(5));
+let html = handle.event("increment".to_string(), params).await.unwrap();
+let template = "<div>{{ message }}</div>".to_string();
+ComponentActor::new("test-comp".to_string(), template, props, None).unwrap();
+.send_to_parent("child_event".to_string(), HashMap::new())
+"c3228".to_string(),
+"<p/>".to_string(),
+"c3228".to_string(),
+"<p/>".to_string(),
+registry.rs
+.map_err(|_| format!("{what} '{name}' render() must return a string"))?;
+.map_err(|e| format!("Failed to mark the `as` name: {e}"))?
+.map_err(|e| format!("Failed to mark an argument safe: {e}"))?
+.map_err(|e| format!("Failed to create args list: {e}"))?;
+Ok(_) => Err(pyo3::exceptions::PyTypeError::new_err(format!(
+.map_err(|e| DjangoRustError::TemplateError(e.to_string()))?;
+.map_err(|e| DjangoRustError::TemplateError(e.to_string()))?;
+.map_err(|e| DjangoRustError::TemplateError(e.to_string()))?;
+return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
+PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
+return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
+PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+.map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
+DjangoRustError::TemplateError(format!("No block handler registered for tag: {name}"))
+DjangoRustError::TemplateError(format!("Failed to convert content: {e}"))
+.map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
+DjangoRustError::TemplateError(format!("No handler registered for tag: {name}"))
+PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+return DjangoRustError::TemplateError(message.to_string());
+return DjangoRustError::TemplateError(message.to_string());
+return DjangoRustError::TemplateError(message.to_string());
+DjangoRustError::TemplateError(format!(
+blank_html: Some(String::new()),
+blank_openings: Vec::new(),
+.flatten()
+let literal_only = match py_context.get_item("_djust_cached_literal_only") {
+let blank_only = match py_context.get_item("_djust_cached_blank_only") {
+.contains("_djust_cached_literal_only")
+html: literal_only,
+blank_html: blank_only,
+blank_openings: Vec::new(),
+DjangoRustError::TemplateError(format!("Failed to convert content: {e}"))
+.map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
+DjangoRustError::TemplateError(format!("No block handler registered for tag: {name}"))
+.map_err(|e| format!("Failed to convert value for key '{key}': {e}"))?;
+.map_err(|e| format!("Failed to set context key '{key}': {e}"))?;
+.map_err(|e| format!("Failed to set raw context key '{key}': {e}"))?;
+.map_err(|e| format!("Failed to set raw context key '{key}': {e}"))?;
+let mut key: String = first.to_string();
+d.get_item(segment).ok().flatten()
+key = segment.to_string();
+.map_err(|e| format!("Failed to mark context value '{path}' safe: {e}"))?;
+.map_err(|e| format!("Failed to set context key '{path}': {e}"))?;
+.map_err(|e| format!("Failed to set context item '{path}': {e}"))?;
+format!("{what} '{name}' declared RETURNS_BINDINGS but did not return a (str, dict) tuple")
+return Err(format!(
+.map_err(|e| format!("{what} '{name}': {e}"))?;
+.map_err(|e| format!("{what} '{name}': {e}"))?;
+.map_err(|_| format!("{what} '{name}' bindings must be a dict"))?;
+.map_err(|e| format!("{what} '{name}' bound a non-string name: {e}"))?;
+format!("{what} '{name}' bound '{key_str}' to an unconvertible value: {e}")
+.map_err(|e| format!("Failed to set autoescape kwarg: {e}"))?;
+.map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
+DjangoRustError::TemplateError(format!("No handler registered for tag: {name}"))
+.map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
+DjangoRustError::TemplateError(format!("No block handler registered for tag: {name}"))
+DjangoRustError::TemplateError(format!("Failed to convert content: {e}"))
+PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+.map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
+.map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
+DjangoRustError::TemplateError(format!("No assign handler registered for tag: {name}"))
+.map(|s| s.to_string())
+.unwrap_or_else(|_| "<unknown>".to_string());
+PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+.map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
+DjangoRustError::TemplateError(format!(
+PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+.map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
+.map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
+PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+.map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
+.map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
+arm_scope_tags(vec!["language".to_string(), "timezone".to_string()]).unwrap();
+arm_scope_tags(vec!["localize".to_string()]).unwrap();
+arm_scope_tags(vec!["language".to_string()]).unwrap();
+arm_scope_tags(vec!["language".to_string()]).unwrap();
+assert!(!TagArg::plain("x".to_string()).safe);
+assert!(TagArg::marked("x".to_string()).safe);
+assert_eq!(TagArg::plain("x".to_string()).text, "x");
+context.rs
+fn render_block_super(&self, ctx: &Context) -> crate::Result<String>;
+self.render_block_super(ctx).map(|html| {
+html: Some("\u{fffd}".to_owned()),
+blank_html: Some(String::new()),
+blank_openings: Vec::new(),
+pub blank_html: Option<String>,
+pub blank_openings: Vec<(usize, usize)>,
+pub fn flatten_authored_output(output: AuthoredOutput, text: String) -> AuthoredOutput {
+let literal = if output.0 == text {
+output.3.html
+let blank_html = if output.0 == text {
+output.3.blank_html
+blank_html,
+blank_openings: Vec::new(),
+_ => Err(pyo3::exceptions::PyKeyError::new_err(key.to_string())),
+let path = path.into();
+let namespace = namespace.into();
+let path = path.into();
+format!("{}:{id}", self.render_scope())
+format!("{}/{:?}", self.include_instance(), identity)
+self.string_if_invalid = value.into();
+let key = format!(
+state.insert(key, value.to_string());
+pub fn record_provenance_flatten(&self, output: AuthoredOutput, text: String) -> String {
+let text = output.0.clone();
+Ok(Some(self.record_provenance_flatten(output, text)))
+source.render_block_super(self).map(Some)
+.map_err(|e| crate::DjangoRustError::TemplateError(format!("block.super: {e}")))?;
+type_name: "LazyBlock".to_string(),
+repr: LAZY_BLOCK_REPR.to_string(),
+self.set("block".to_owned(), Value::Object(Default::default()));
+frame.safe_keys_mut().insert(name.to_string());
+frame.unsafe_keys_mut().insert(name.to_string());
+let prefix = format!("{key}.");
+frame.aliases_mut().insert(key.to_string(), None);
+frame.revoked_safe_subtrees_mut().insert(key.to_string());
+let mut prefixes: Vec<String> = vec![key.to_string()];
+matches!(item, Value::String(_)) && self.is_marked_safe(&format!("{prefix}.{i}"))
+.map(|c| Value::String(c.to_string()))
+.map(|(k, v)| Value::Tuple(vec![Value::from(k.clone()), v.clone()]))
+std::sync::Arc::make_mut(&mut frame.literal_keys).insert(name.to_owned());
+std::sync::Arc::make_mut(&mut frame.captured_literals).insert(name.to_owned(), literal);
+self.set_alias(loop_var, format!("{base}.{index}"));
+if target == name || target.starts_with(&format!("{name}.")) {
+.insert(loop_var.to_string(), None);
+Some(rest) => format!("{prefix}.{rest}"),
+self.resolve_alias(path).unwrap_or_else(|| path.to_string())
+.to_owned(),
+key.to_string()
+.map_err(|e| format!("Failed to merge cached frame: {e}"))?;
+.map_err(|e| format!("Failed to convert value for key '{key}': {e}"))?;
+.map_err(|e| format!("Failed to set context key '{key}': {e}"))?;
+.map_err(|e| format!("Failed to merge frame: {e}"))?;
+if !guard.insert(path.to_string()) {
+ctx.bind("o".into(), Value::String("<!--".into()), true);
+clone.set("o".into(), Value::String("-->".into()));
+inner.bind("o".into(), Value::String("-->".into()), true);
+inner.bind_upward("o".into(), Value::String("x".into()), false);
+ctx.set("name".to_string(), Value::String("Django".to_string()));
+user.insert("name".into(), Value::String("John".to_string()));
+user.insert("age".into(), Value::Integer(30));
+ctx.set("user".to_string(), Value::Object(user));
+ctx.set("a".to_string(), Value::Integer(1));
+ctx.set("a".to_string(), Value::Integer(2));
+.map(|s| Value::String(s.to_string()))
+"p".to_string(),
+ctx.mark_safe("p.0".to_string());
+ctx.mark_safe("p.1".to_string());
+ctx.set("p".to_string(), Value::Tuple(strs(&["a", "b"])));
+ctx.mark_safe("p.0".to_string());
+ctx.mark_safe("p.1".to_string());
+ctx.set("p".to_string(), Value::List(strs(&["a", "b", "c"])));
+map.insert("0".into(), Value::String("<b>v</b>".to_string()));
+ctx.set("p".to_string(), Value::Object(map));
+ctx.mark_safe("p.0".to_string());
+ctx.set("p".to_string(), Value::String("<b>x</b>".to_string()));
+ctx.mark_safe("p".to_string());
+ctx.mark_safe("p.0".to_string());
+ctx.set("p".to_string(), Value::List(vec![]));
+"p".to_string(),
+Value::String("<b>a</b>".to_string()),
+ctx.mark_safe("p.0".to_string());
+ctx.mark_safe("p.1".to_string());
+ctx.mark_safe("p.1.0".to_string());
+"p".to_string(),
+ctx.mark_safe("p.0".to_string());
+ctx.set("rows".to_string(), Value::List(vec![row.clone()]));
+ctx.mark_safe("rows.0.0".to_string());
+ctx.mark_safe("rows.0.1".to_string());
+ctx.set("row".to_string(), row);
+ctx.set_loop_mapping("row".to_string(), "rows".to_string(), 0);
+"rows".to_string(),
+ctx.mark_safe("rows.0.0".to_string());
+ctx.set("row".to_string(), unmarked);
+ctx.set_loop_mapping("row".to_string(), "rows".to_string(), 1);
+map.insert("a".into(), Value::Integer(1));
+map.insert("b".into(), Value::Integer(2));
+ctx.set("d".to_string(), Value::Object(map));
+items.iter().map(|v| v.to_string()).collect::<Vec<_>>(),
+items.iter().map(|v| v.to_string()).collect::<Vec<_>>(),
+assert_eq!(pair[0].to_string(), "a");
+assert_eq!(pair[1].to_string(), "1");
+ctx.resolve(path).unwrap().unwrap().to_string(),
+map.insert("items".into(), Value::Integer(5));
+ctx.set("d".to_string(), Value::Object(map));
+assert_eq!(ctx.resolve("d.items").unwrap().unwrap().to_string(), "5");
+ctx.set("s".to_string(), Value::String("x".to_string()));
+ctx.set("l".to_string(), Value::List(vec![Value::Integer(1)]));
+inner.insert("x".into(), Value::Integer(9));
+outer.insert("inner".into(), Value::Object(inner));
+ctx.set("d".to_string(), Value::Object(outer));
+items.iter().map(|v| v.to_string()).collect::<Vec<_>>(),
+ctx.set("p".to_string(), Value::String("<b>x</b>".into()));
+ctx.mark_safe("p".to_string());
+ctx.mark_safe("p.a".to_string());
+ctx.mark_safe("q".to_string());
+ctx.bind("x".to_string(), Value::String("<b>".into()), true);
+ctx.bind("p".to_string(), Value::String("<img>".into()), false);
+ctx.bind("p".to_string(), Value::String("<img>".into()), false);
+ctx.bind("p".to_string(), Value::String("<img>".into()), false);
+ctx.bind("p".to_string(), Value::String("<b>ok</b>".into()), true);
+(Value::String("<b>0</b>".into()), true),
+(Value::String("<i>1</i>".into()), false),
+(Value::String("<u>2</u>".into()), true),
+a.bind("p".to_string(), value.clone(), *safe);
+b.set("p".to_string(), value.clone());
+map.insert("rows".to_string(), Value::List(rows));
+map.insert("title".to_string(), Value::String("t".to_string()));
+map.insert("rows".to_string(), Value::List(vec![Value::Integer(1)]));
+map.insert("n".to_string(), Value::Integer(1));
+context.set_at(0, "n".to_string(), Value::Integer(2));
+original.set("inner".to_string(), Value::Integer(1));
+original.set("innermost".to_string(), Value::Integer(2));
+original.set("title".to_string(), Value::String("changed".to_string()));
+original.set("added".to_string(), Value::Integer(7));
+copy.set("title".to_string(), Value::String("changed".to_string()));
+ctx.set("forloop".to_string(), Value::String("outer".to_string()));
+inner.set("row".to_string(), Value::Integer(i));
+inner.set("forloop".to_string(), Value::Integer(100 + i));
+ctx.set("a".to_string(), Value::List(vec![Value::Tuple(vec![])]));
+ctx.mark_safe("a.0.1".to_string());
+ctx.set("title".to_string(), Value::String("shadowed".to_string()));
+ctx.mark_safe(format!("rows.{i}"));
+ctx.set_alias("r".to_string(), "rows".to_string());
+ctx.bind("bound".to_string(), Value::Integer(1), false);
+original.mark_safe("inner".to_string());
+original.set_alias("q".to_string(), "rows.1".to_string());
+original.mark_safe("title".to_string()); // title: unsafe -> safe
+original.set_alias("z".to_string(), "rows.2".to_string());
+copy.bind("rows".to_string(), Value::Integer(0), false);
+ctx.mark_safe("row".to_string()); // a marked OUTER `row` the loop shadows
+inner.set("row".to_string(), Value::Integer(i));
+ctx.mark_safe("inner".to_string()); // frame 1 has a grant of its own
+ctx.bind_upward("title".to_string(), Value::Integer(1), false);
+ctx.bind_upward("rows".to_string(), Value::Integer(0), false);
+let decl = format!("    {field}: std::sync::Arc<");
+let door_body = format!("std::sync::Arc::make_mut(&mut self.{field})");
+let door_sig = format!("fn {field}_mut(&mut self)");
+let direct = format!(".{field}.");
+let borrow = format!("&mut self.{field}");
+.map(|(n, l)| format!("{}: {}", n + 1, l.trim()))
+let call = format!(".{field}_mut()");
+ctx.mark_safe("p".to_string());
+ctx.mark_safe("pp".to_string());
+ctx.mark_safe("p.a".to_string());
+fn render_block_super(&self, _ctx: &Context) -> crate::Result<String> {
+Ok(format!("p{n}"))
+provenance.rs
+text.into()
+text.into()
+Self::captured(text, literal.html)
+text.into()
+text.into()
+fn into_authored_output(self) -> djust_core::context::AuthoredOutput;
+text.to_owned()
+fn into_authored_output(self) -> djust_core::context::AuthoredOutput {
+blank_html: Some(String::new()),
+blank_openings: Vec::new(),
+output.0
+pub literal_only: Option<String>,
+pub blank_only: Option<String>,
+pub blank_offsets: Vec<(usize, usize)>,
+pub literal_offsets: Vec<(usize, usize)>,
+pub fn into_authored_output(self) -> djust_core::context::AuthoredOutput {
+self.html,
+html: self.literal_only,
+blank_html: self.blank_only,
+blank_openings: self.blank_offsets,
+openings: self.literal_offsets,
+.literal_only
+.blank_only
+let blank_offsets: std::collections::HashMap<_, _> =
+self.blank_offsets.iter().copied().collect();
+self.literal_offsets.iter().copied().collect();
+|| !blank_offsets
+literal_only: Some("\u{fffd}".to_owned()),
+blank_only: Some(String::new()),
+blank_offsets: Vec::new(),
+literal_offsets: Vec::new(),
+&self.html
+f.write_str(&self.html)
+html: text.to_owned(),
+literal_only: Some(text.to_owned()),
+blank_only: Some(text.to_owned()),
+blank_offsets: vec![(0, 0)],
+literal_offsets: vec![(0, 0)],
+let mut result = Self::from(text);
+result.blank_only = literal.clone();
+result.literal_only = literal;
+let mut result = Self::captured(text, literal.html);
+result.blank_only = literal.blank_html;
+let mut result = Self::from(text);
+result.literal_only = Some(result.html.clone());
+result.blank_only = Some(result.html.clone());
+result.literal_offsets = source
+result.blank_offsets = result.literal_offsets.clone();
+fn into_authored_output(self) -> djust_core::context::AuthoredOutput {
+Rendered::into_authored_output(self)
+html: output.0,
+literal_only: output.3.html,
+blank_only: output.3.blank_html,
+blank_offsets: output.3.blank_openings,
+literal_offsets: output.3.openings,
+Self::from_authored_output(djust_core::context::flatten_authored_output(
+self.into_authored_output(),
+let offset = self.html.len();
+if self.literal_only.is_none()
+|| child.literal_only.is_none()
+|| self.blank_only.is_none()
+|| child.blank_only.is_none()
+self.literal_only = None;
+self.blank_only = None;
+if let (Some(output), Some(literal)) = (&mut self.literal_only, &child.literal_only) {
+self.literal_offsets.extend(
+.literal_offsets
+if let (Some(output), Some(literal)) = (&mut self.blank_only, &child.blank_only) {
+self.blank_offsets.extend(
+.blank_offsets
+self.html.push_str(&child.html);
+self.append(&Self::from(text.to_owned()));
+*id = format!("{identity}/{id}");
+self.identify(&format!("loop{}", context.dj_if_loop_path()));
+ctx.set("flag".into(), Value::Bool(true));
+"xs".into(),
+ctx.set("extra".into(), Value::String("Δ".into()));
+output.append(&Rendered::from("é😀".to_owned()));
+output.append(&Rendered::from(String::new()));
+assert_eq!(output.literal_offsets, vec![(6, 6)]);
+assert_eq!(output.blank_offsets, vec![(6, 0)]);
+output.blank_only.as_deref(),
+output.literal_only.as_deref(),
+assert_eq!(Rendered::default().literal_only.as_deref(), Some(""));
+Rendered::context_neutral("<!--dj-if-->".into())
+.literal_only
+output.append(&Rendered::from("</script>".to_owned()));
+let flattened = output.flatten(replacement.into());
+flattened.literal_only.as_deref(),
+".into()",
+"::from(",
+"output.0",
+".0.clone()",
+"html.clone()",
+"format!",
+".to_owned()",
+".to_string()",
+".html",
+".flatten(",
+"into_authored_output(",
+"flatten_authored_output(",
+"render_nodes_with_loader_mut(",
+"render_block_super(",
+"record_provenance_flatten(",
+"literal_only",
+"literal_offsets",
+"blank_only",
+"blank_offsets",
+"blank_html",
+"blank_openings",
+ctx.set(format!("value{i}"), Value::String(value.into()));
+source.push_str(&format!("{{{{ value{i}|safe }}}}"));
+ctx.set("flag".into(), Value::Bool(true));
+source.push_str(&format!(
+let final_html = &output.html;
+&output.html,
+output.literal_only.as_deref(),
+ctx.set("q".into(), Value::String(value.into()));
+ctx.set("empty".into(), Value::String(String::new()));
+ctx.set("truthy".into(), Value::String("</script>".into()));
+0 => (format!("{before}{{% with s=block.super %}}{{{{ empty }}}}{between}{{{{ s }}}}{TAG}{after}{{% endwith %}}"),
+format!("{before}\u{fffd}{between}{parent}{TAG}{after}")),
+1 => (format!("{before}{{% with s=block.super %}}{{% with t=s %}}{between}{{{{ t }}}}{{{{ t }}}}{TAG}{after}{{% endwith %}}{{% endwith %}}"),
+format!("{before}{between}{parent}{parent}{TAG}{after}")),
+2 => (format!("{before}{{% firstof block.super as s %}}{between}{{{{ s }}}}{TAG}{after}"),
+format!("{before}{between}{parent}{TAG}{after}")),
+3 => (format!("{before}{{{{ truthy|default:block.super|safe }}}}{between}{TAG}{after}"),
+format!("{before}\u{fffd}{between}{TAG}{after}")),
+_ => (format!("{before}{{% include block.super %}}{between}{after}"),
+format!("{before}\u{fffd}{TAG}{between}{TAG}{after}")),
+"leaf".to_owned()
+format!("{parent}{{{{ q|safe }}}}")
+ctx.set("filename".into(), Value::String("leaf".into()));
+let loader = Loader(std::collections::HashMap::from([
+"base".into(),
+format!("{{% block body %}}{parent_source}{{% endblock %}}"),
+("leaf".into(), format!("{{{{ q|safe }}}}{TAG}")),
+let source = format!("{{% extends 'base' %}}{{% block body %}}{body}{{% endblock %}}");
+&output.html,
+live(&output.html),
+assert_eq!(r.literal_only.as_deref(), Some(r.html.as_str()));
+assert!(live.html.starts_with("<!---->"));
+ctx.set("flag".into(), Value::Bool(true));
+assert!(r.html.contains("<!--dj-if"));
+assert!(!r.literal_only.as_ref().unwrap().contains("dj-if"));
+let text: String = r.authored.iter().map(|s| &r.html[s.clone()]).collect();
+assert!(r.html.is_char_boundary(span.start) && r.html.is_char_boundary(span.end));
+let r = render(&format!(
+for children in node.child_lists_mut().into_iter().flatten() {
+(h ^ u64::from(*b)).wrapping_mul(0x100000001b3)
+(start, end, format!("container{index}:{hash:016x}"))
+for children in node.child_lists_mut().into_iter().flatten() {
+&std::sync::Arc::from(source),

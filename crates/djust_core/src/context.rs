@@ -215,6 +215,9 @@ pub type SharedValues = std::sync::Arc<AHashMap<String, Value>>;
 /// One lexical binding scope, including the provenance of its values.
 #[derive(Clone, Debug, Default)]
 struct ScopeFrame {
+    /// Template-literal bindings, independent of HTML safety or registration authority.
+    literal_keys: std::sync::Arc<AHashSet<String>>,
+    captured_literals: std::sync::Arc<AHashMap<String, LiteralOutput>>,
     /// COPY-ON-WRITE, and that is a performance contract, not a style choice
     /// (#2732).
     ///
@@ -583,6 +586,9 @@ pub struct Context {
     /// the resolver holds `&Context` — hence a shareable handle rather than
     /// a borrow. See [`BlockSuperSource`].
     block_super: Option<std::sync::Arc<dyn BlockSuperSource>>,
+    // Render-owned notification: resolver/capture APIs return Values and cannot
+    // carry intervals. Shared only by scopes/clones of this tracked render.
+    provenance_flatten: Option<std::sync::Arc<std::sync::Mutex<Vec<LiteralOutput>>>>,
 }
 
 impl Default for Context {
@@ -623,6 +629,7 @@ impl Clone for Context {
             // the parent NODES, not a rendered string, so cloning it costs a
             // refcount.
             block_super: self.block_super.clone(),
+            provenance_flatten: self.provenance_flatten.clone(),
         }
     }
 }
@@ -649,20 +656,70 @@ pub trait BlockSuperSource: std::fmt::Debug + Send + Sync {
     /// Direct unfiltered block.super emission may compose authored output.
     /// The default for external sources is untrusted String output.
     fn render_block_super_authored(&self, ctx: &Context) -> crate::Result<AuthoredOutput> {
-        self.render_block_super(ctx)
-            .map(|html| (html, Vec::new(), Vec::new(), Vec::new()))
+        self.render_block_super(ctx).map(|html| {
+            (
+                html,
+                Vec::new(),
+                Vec::new(),
+                LiteralOutput {
+                    blocked: false,
+                    html: Some("\u{fffd}".to_owned()),
+                    blank_html: Some(String::new()),
+                    blank_openings: Vec::new(),
+                    openings: Vec::new(),
+                },
+            )
+        })
     }
 }
 
-/// Renderer-internal `block.super` composition: HTML, authority ranges,
-/// origin addresses, and emitted-literal ranges for rendered-path liveness.
-/// The Python render API exposes only the first three fields.
+/// Literal-only context travels independently of emitted HTML. Missing cache
+/// metadata is None and fails closed for the whole render.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiteralOutput {
+    /// A permanent forward authority cutoff, distinct from unknown cache metadata.
+    pub blocked: bool,
+    pub html: Option<String>,
+    /// Blank projection: opaque occurrences contribute no bytes.
+    pub blank_html: Option<String>,
+    pub blank_openings: Vec<(usize, usize)>,
+    pub openings: Vec<(usize, usize)>,
+}
+
+/// Renderer-internal composition. The Python API exposes the first three fields.
 pub type AuthoredOutput = (
     String,
     Vec<(usize, usize)>,
     Vec<(usize, usize, usize, String)>,
-    Vec<(usize, usize)>, // Rendered literal context, separate from authority.
+    LiteralOutput,
 );
+
+/// Drop authority; an unreplayable byte-changing transform invalidates literal
+/// context. Byte-identical captures retain their literal/value boundaries.
+pub fn flatten_authored_output(output: AuthoredOutput, text: String) -> AuthoredOutput {
+    let literal = if output.0 == text {
+        output.3.html
+    } else {
+        None
+    };
+    let blank_html = if output.0 == text {
+        output.3.blank_html
+    } else {
+        None
+    };
+    (
+        text,
+        Vec::new(),
+        Vec::new(),
+        LiteralOutput {
+            blocked: output.3.blocked,
+            blank_html,
+            blank_openings: Vec::new(),
+            html: literal,
+            openings: Vec::new(),
+        },
+    )
+}
 
 /// The `block` a PYTHON-BRIDGED tag receives while a `{{ block.super }}` is
 /// armed (#2918).
@@ -1077,6 +1134,7 @@ impl Context {
             loop_scope_counter: std::sync::Arc::default(),
             string_if_invalid: String::new(),
             block_super: None,
+            provenance_flatten: None,
         }
     }
 
@@ -1131,6 +1189,7 @@ impl Context {
             loop_scope_counter: std::sync::Arc::default(),
             string_if_invalid: String::new(),
             block_super: None,
+            provenance_flatten: None,
         }
     }
 
@@ -1569,6 +1628,57 @@ impl Context {
             .collect()
     }
 
+    /// Begin a tracked render's value/capture loss notifications.
+    pub fn enable_provenance_flatten_tracking(&mut self) {
+        if self.provenance_flatten.is_none() {
+            self.provenance_flatten = Some(std::sync::Arc::default());
+        }
+    }
+
+    /// Track a body independently of its caller, preserving assignment effects
+    /// but neither consuming the caller's pending literal bytes nor leaking tracking
+    /// into an untracked render. Used for cache metadata in every render mode.
+    pub fn with_isolated_provenance_flatten<T>(
+        &mut self,
+        render: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let outer = self.provenance_flatten.replace(std::sync::Arc::default());
+        let result = render(self);
+        self.provenance_flatten = outer;
+        result
+    }
+
+    pub fn provenance_flatten_tracking(&self) -> bool {
+        self.provenance_flatten.is_some()
+    }
+
+    pub fn record_provenance_flatten(&self, output: AuthoredOutput, text: String) -> String {
+        self.restore_provenance_literals(vec![output.3]);
+        text
+    }
+
+    pub fn restore_provenance_literals(&self, literals: Vec<LiteralOutput>) {
+        if let Some(pending) = &self.provenance_flatten {
+            pending
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .extend(literals);
+        }
+    }
+
+    pub fn take_provenance_flatten(&self) -> Vec<LiteralOutput> {
+        self.provenance_flatten
+            .as_ref()
+            .map(|pending| {
+                std::mem::take(
+                    &mut *pending
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()),
+                )
+            })
+            .unwrap_or_default()
+    }
+
     /// Arm the DEFERRED `{{ block.super }}` for this scope (#2710).
     ///
     /// Called by the renderer's `Node::BlockSuperScope` arm on the scoped
@@ -1601,7 +1711,15 @@ impl Context {
     /// reads `super`, and every read calls it again (no memo, #2918).
     pub fn render_armed_block_super(&self) -> crate::Result<Option<String>> {
         match self.block_super.clone() {
-            Some(source) => source.render_block_super(self).map(Some),
+            Some(source) => {
+                if self.provenance_flatten_tracking() {
+                    let output = source.render_block_super_authored(self)?;
+                    let text = output.0.clone();
+                    Ok(Some(self.record_provenance_flatten(output, text)))
+                } else {
+                    source.render_block_super(self).map(Some)
+                }
+            }
             None => Ok(None),
         }
     }
@@ -2061,7 +2179,45 @@ impl Context {
         self.set_at(self.stack.len() - 1, key, value);
     }
 
+    /// Record the byte source of the nearest binding, without granting HTML authority.
+    pub fn mark_template_literal(&mut self, name: &str) {
+        if let Some(frame) = self.stack.iter_mut().rev().find(|f| f.contains_key(name)) {
+            std::sync::Arc::make_mut(&mut frame.literal_keys).insert(name.to_owned());
+        }
+    }
+
+    /// Captured rendered output carries context bytes at its emission position,
+    /// never start-tag authority. Metadata follows scoped aliases and shadowing.
+    pub fn mark_captured_literals(&mut self, name: &str, literal: LiteralOutput) {
+        if let Some(frame) = self.stack.iter_mut().rev().find(|f| f.contains_key(name)) {
+            std::sync::Arc::make_mut(&mut frame.captured_literals).insert(name.to_owned(), literal);
+        }
+    }
+
+    pub fn captured_literals(&self, name: &str) -> Option<LiteralOutput> {
+        self.stack
+            .iter()
+            .rev()
+            .find(|f| f.contains_key(name))
+            .and_then(|f| f.captured_literals.get(name).cloned())
+    }
+
+    /// Shadowing values never inherit a template literal's byte-source metadata.
+    pub fn is_template_literal(&self, name: &str) -> bool {
+        self.stack
+            .iter()
+            .rev()
+            .find(|f| f.contains_key(name))
+            .is_some_and(|f| f.literal_keys.contains(name))
+    }
+
     fn set_at(&mut self, index: usize, key: String, value: Value) {
+        if !self.stack[index].captured_literals.is_empty() {
+            std::sync::Arc::make_mut(&mut self.stack[index].captured_literals).remove(&key);
+        }
+        if !self.stack[index].literal_keys.is_empty() {
+            std::sync::Arc::make_mut(&mut self.stack[index].literal_keys).remove(&key);
+        }
         if self
             .raw_py_objects
             .as_ref()
@@ -2289,10 +2445,11 @@ impl Context {
         // `SafeString`, because Django `mark_safe`s the result: it is
         // rendered template output, already escaped by whatever produced it,
         // and escaping it again would double-escape every parent block.
-        if key == "block.super" {
-            if let Some(source) = self.block_super.clone() {
-                return Ok(Some(Value::SafeString(source.render_block_super(self)?)));
-            }
+        if key == "block.super" && self.block_super.is_some() {
+            // All Value/bridge captures share the same flatten chokepoint.
+            return self
+                .render_armed_block_super()
+                .map(|text| text.map(Value::SafeString));
         }
         // Django's THREE template builtins, tried LAST (#2347).
         //
@@ -3403,6 +3560,25 @@ fn warn_once_on_orm_autocall(py: Python<'_>, obj: &pyo3::Bound<'_, pyo3::PyAny>,
 mod tests {
     use super::*;
     use indexmap::IndexMap;
+
+    #[test]
+    fn template_literal_bindings_are_scoped_and_copy_on_write() {
+        let mut ctx = Context::new();
+        ctx.bind("o".into(), Value::String("<!--".into()), true);
+        ctx.mark_template_literal("o");
+        let mut clone = ctx.clone();
+        clone.set("o".into(), Value::String("-->".into()));
+        assert!(!clone.is_template_literal("o"));
+        assert!(ctx.is_template_literal("o"));
+        ctx.with_scope(|inner| {
+            inner.bind("o".into(), Value::String("-->".into()), true);
+            assert!(!inner.is_template_literal("o"));
+            inner.mark_template_literal("o");
+            inner.bind_upward("o".into(), Value::String("x".into()), false);
+            assert!(!inner.is_template_literal("o"));
+        });
+        assert!(ctx.is_template_literal("o"));
+    }
 
     /// #2689 / #2529 — the include path is interpolated RAW into a marker
     /// comment, so its grammar is a refusal, not an escape.

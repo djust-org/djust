@@ -178,7 +178,14 @@ def note_rendered_recovery_targets(view: Any, html: str) -> None:
 
                 handle_startendtag = handle_starttag
 
-            _Targets().feed(html)
+            parser = _Targets()
+            try:
+                parser.feed(html)
+                parser.close()
+            except (AssertionError, ValueError):
+                # Only targets seen before the malformed section are known.
+                # Unseen targets retain their strict exposure policy.
+                logger.debug("Recovery target scan stopped at malformed HTML")
             names = frozenset(found)
         _RENDERED_RECOVERY[view] = names
     except TypeError:

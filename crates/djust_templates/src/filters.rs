@@ -768,6 +768,74 @@ pub fn apply_filter_full_safe(
     // the safety the tuple's second element reports.
     autoescape: bool,
 ) -> Result<(Value, bool)> {
+    apply_filter_with_literal(
+        filter_name,
+        value,
+        arg,
+        context,
+        arg_was_quoted,
+        input_safety,
+        autoescape,
+        None,
+    )
+}
+
+/// Replay B with ordinary filters and P with separator protection. The actual
+/// page operand is evaluated once; replay is limited to built-ins by the caller.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn apply_filter_with_projections(
+    filter_name: &str,
+    value: &Value,
+    arg: Option<&str>,
+    context: Option<&Context>,
+    arg_was_quoted: bool,
+    input_safety: InputSafety,
+    autoescape: bool,
+    literal: Option<&mut (Value, InputSafety)>,
+    blank: Option<&mut (Value, InputSafety)>,
+) -> Result<(Value, bool)> {
+    if let Some((value, safety)) = blank {
+        let (next, safe) = apply_filter_with_literal(
+            filter_name,
+            value,
+            arg,
+            context,
+            arg_was_quoted,
+            *safety,
+            autoescape,
+            None,
+        )?;
+        let input_safe = safety.container;
+        safety.container = crate::renderer::filter_output_is_safe(filter_name, safe, input_safe);
+        safety.items =
+            crate::renderer::filter_output_items_are_safe(filter_name, safety.items, input_safe);
+        *value = next;
+    }
+    apply_filter_with_literal(
+        filter_name,
+        value,
+        arg,
+        context,
+        arg_was_quoted,
+        input_safety,
+        autoescape,
+        literal,
+    )
+}
+
+/// Apply P and the page filter after resolving their shared argument once.
+/// Callers exclude custom/environment-dependent filters from replay.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn apply_filter_with_literal(
+    filter_name: &str,
+    value: &Value,
+    arg: Option<&str>,
+    context: Option<&Context>,
+    arg_was_quoted: bool,
+    input_safety: InputSafety,
+    autoescape: bool,
+    literal: Option<&mut (Value, InputSafety)>,
+) -> Result<(Value, bool)> {
     // An `_()` filter argument is translated BEFORE anything touches it
     // (#2558): `{{ absent|default:_("Password") }}` must see the msgid the
     // active language renders, not the literal source. The `_(` shape
@@ -915,6 +983,70 @@ pub fn apply_filter_full_safe(
         is_falsy: arg_is_falsy(resolved_type.as_ref(), arg, arg_was_quoted),
     };
 
+    if let Some((literal_value, literal_safety)) = literal {
+        let (mut next, safe) = apply_resolved_filter(
+            filter_name,
+            literal_value,
+            arg,
+            context,
+            arg_was_quoted,
+            *literal_safety,
+            autoescape,
+            resolved_type.as_ref(),
+            builtin_arg,
+            arg_type,
+        )?;
+        if filter_name == "cut" {
+            // U+FFFD separates opaque occurrences. Never remove a separator or
+            // match across it: replay must not join authored bytes that the
+            // page's non-literal value keeps apart. Authored U+FFFD is likewise
+            // preserved conservatively in this projection only.
+            next = Value::String(
+                literal_value
+                    .to_string()
+                    .split('\u{fffd}')
+                    .map(|run| run.replace(builtin_arg.unwrap_or(""), ""))
+                    .collect::<Vec<_>>()
+                    .join("\u{fffd}"),
+            );
+        }
+        let input_safe = literal_safety.container;
+        literal_safety.container =
+            crate::renderer::filter_output_is_safe(filter_name, safe, input_safe);
+        literal_safety.items = crate::renderer::filter_output_items_are_safe(
+            filter_name,
+            literal_safety.items,
+            input_safe,
+        );
+        *literal_value = next;
+    }
+    apply_resolved_filter(
+        filter_name,
+        value,
+        arg,
+        context,
+        arg_was_quoted,
+        input_safety,
+        autoescape,
+        resolved_type.as_ref(),
+        builtin_arg,
+        arg_type,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_resolved_filter(
+    filter_name: &str,
+    value: &Value,
+    arg: Option<&str>,
+    context: Option<&Context>,
+    arg_was_quoted: bool,
+    input_safety: InputSafety,
+    autoescape: bool,
+    resolved_type: Option<&Value>,
+    builtin_arg: Option<&str>,
+    arg_type: ArgType,
+) -> Result<(Value, bool)> {
     // The two fallback filters return the ARGUMENT ITSELF, so they are the
     // only built-ins whose OUTPUT is the argument's Python object rather than
     // a string derived from it — and the dispatch table below takes a `&str`,
@@ -937,7 +1069,7 @@ pub fn apply_filter_full_safe(
     // Django substitutes `string_if_invalid` BEFORE the filter runs and the
     // fallback never fires there. Only the five `ignore_failures` tags can
     // reach it, and they could not reach it until the sink was routed.
-    if let (Some(resolved), false) = (resolved_type.as_ref(), arg_was_quoted) {
+    if let (Some(resolved), false) = (resolved_type, arg_was_quoted) {
         let fires = match filter_name {
             "default_if_none" => matches!(value, Value::None),
             // Exactly the dispatch arms' own conditions, so the only thing
@@ -1010,7 +1142,7 @@ pub fn apply_filter_full_safe(
         filter_name,
         value,
         builtin_arg,
-        resolved_type.as_ref(),
+        resolved_type,
         context,
         arg_was_quoted,
         arg_type,

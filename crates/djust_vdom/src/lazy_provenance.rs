@@ -6,8 +6,8 @@ use html5ever::buffer_queue::BufferQueue;
 use html5ever::tendril::StrTendril;
 use html5ever::tokenizer::{StartTag, TagToken, Token, TokenSink, TokenSinkResult, Tokenizer};
 use html5ever::tree_builder::{ElementFlags, NodeOrText, QuirksMode, TreeBuilder, TreeSink};
-use html5ever::ExpandedName;
 use html5ever::{Attribute, LocalName, Namespace, QualName};
+use html5ever::{ExpandedName, TokenizerResult};
 use markup5ever_rcdom::{Handle, NodeData, RcDom};
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
@@ -338,6 +338,13 @@ impl TokenSink for LocatedTree<'_> {
 /// from the entire page, so comments, raw text, RCDATA, ignored tags and inert
 /// template contents cannot register. No order/count match to authored source.
 pub fn lazy_elements(html: &str, spans: &[(usize, usize)]) -> Vec<LazyElement> {
+    lazy_elements_impl::<true>(html, spans)
+}
+
+fn lazy_elements_impl<const BATCHED: bool>(
+    html: &str,
+    spans: &[(usize, usize)],
+) -> Vec<LazyElement> {
     if spans.is_empty()
         || !html
             .as_bytes()
@@ -377,28 +384,73 @@ pub fn lazy_elements(html: &str, spans: &[(usize, usize)]) -> Vec<LazyElement> {
     };
     let tokenizer = Tokenizer::new(sink, Default::default());
     let input = BufferQueue::default();
-    // Feed at lexical delimiter boundaries, retaining exact offsets at every
-    // possible tag emission. Runs without `<` or `>` cannot finish a tag, so
-    // allocating a tendril for every Unicode scalar is unnecessary.
+    // Like html5ever's Parser::loop_until_done: script ends and encoding
+    // indicators can suspend feed with bytes queued. Drain before changing
+    // correlation offsets; the input is already decoded UTF-8.
+    let feed_until_done = || {
+        while !matches!(tokenizer.feed(&input), TokenizerResult::Done) {}
+    };
+    // Only a lexical lazy candidate can receive an annotation. Feed all other
+    // HTML in bulk with correlation disabled; it still traverses the SAME
+    // tokenizer and tree builder, including raw text, comments and templates.
+    // Within candidate windows retain every delimiter boundary, including '<'
+    // inside quoted attributes, so an inner spelling cannot borrow its token.
+    let mut windows: Vec<_> = if BATCHED {
+        tokenizer
+            .sink
+            .candidates
+            .values()
+            .filter(|raw| raw.attrs.contains_key("dj-view") && raw.attrs.contains_key("dj-lazy"))
+            .map(|raw| (raw.start, raw.end))
+            .collect()
+    } else {
+        vec![(0, html.len())]
+    };
+    windows.sort_unstable();
+    let mut merged: Vec<(usize, usize)> = Vec::new();
+    for (start, end) in windows {
+        if let Some(last) = merged.last_mut().filter(|last| start <= last.1) {
+            last.1 = last.1.max(end);
+        } else {
+            merged.push((start, end));
+        }
+    }
     let mut previous = 0;
-    for (i, delimiter) in html.match_indices(['<', '>']) {
-        if previous < i {
-            tokenizer.sink.cursor.set(i);
-            input.push_back(StrTendril::from(&html[previous..i]));
-            let _ = tokenizer.feed(&input);
+    for (start, end) in merged {
+        if previous < start {
+            tokenizer.sink.cursor.set(usize::MAX);
+            tokenizer.sink.tag_start.set(usize::MAX);
+            input.push_back(StrTendril::from(&html[previous..start]));
+            feed_until_done();
         }
-        if delimiter == "<" {
-            tokenizer.sink.tag_start.set(i);
+        previous = start;
+        for (relative, delimiter) in html[start..end].match_indices(['<', '>']) {
+            let i = start + relative;
+            if previous < i {
+                tokenizer.sink.cursor.set(i);
+                input.push_back(StrTendril::from(&html[previous..i]));
+                feed_until_done();
+            }
+            if delimiter == "<" {
+                tokenizer.sink.tag_start.set(i);
+            }
+            tokenizer.sink.cursor.set(i + 1);
+            input.push_back(StrTendril::from(delimiter));
+            feed_until_done();
+            previous = i + 1;
         }
-        tokenizer.sink.cursor.set(i + 1);
-        input.push_back(StrTendril::from(delimiter));
-        let _ = tokenizer.feed(&input);
-        previous = i + 1;
+        if previous < end {
+            tokenizer.sink.cursor.set(end);
+            input.push_back(StrTendril::from(&html[previous..end]));
+            feed_until_done();
+            previous = end;
+        }
     }
     if previous < html.len() {
-        tokenizer.sink.cursor.set(html.len());
+        tokenizer.sink.cursor.set(usize::MAX);
+        tokenizer.sink.tag_start.set(usize::MAX);
         input.push_back(StrTendril::from(&html[previous..]));
-        let _ = tokenizer.feed(&input);
+        feed_until_done();
     }
     tokenizer.end();
     let mut result = Vec::new();
@@ -451,6 +503,67 @@ pub fn lazy_elements(html: &str, spans: &[(usize, usize)]) -> Vec<LazyElement> {
 mod tests {
     use super::*;
     const TAG: &str = "<div dj-view=\"app.Child\" dj-lazy=\"visible\"></div>";
+    #[test]
+    fn batched_feeding_matches_delimiter_feeding() {
+        let fragments = [
+            "",
+            "<p>x</p>",
+            "<meta charset=windows-1252>",
+            "<meta http-equiv=content-type content=\"text/html; charset=utf-8\">",
+            "<!--",
+            "-->",
+            "--!>",
+            "<script>",
+            "</script>",
+            "<textarea>",
+            "</textarea>",
+            "<template>",
+            "</template>",
+            "<svg><![CDATA[",
+            "]]></svg>",
+            "<table>",
+            "</table>",
+            "<select>",
+            "</select>",
+            "<b>",
+            "</b>",
+            "é😀�",
+            "<div title='",
+            "'>",
+            TAG,
+        ];
+        let mut seed = 3442_u64;
+        for _ in 0..2000 {
+            let mut html = String::new();
+            for _ in 0..12 {
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+                html.push_str(fragments[(seed >> 32) as usize % fragments.len()]);
+            }
+            html.push_str(TAG);
+            let spans = [(0, html.len())];
+            assert_eq!(
+                lazy_elements_impl::<true>(&html, &spans),
+                lazy_elements_impl::<false>(&html, &spans),
+                "{html:?}"
+            );
+        }
+    }
+    #[test]
+    fn batched_feeding_drains_suspensions_before_correlating_tags() {
+        for meta in [
+            "<meta charset=windows-1252>",
+            "<meta http-equiv=content-type content=\"text/html; charset=utf-8\">",
+        ] {
+            let prefix =
+                format!("{meta}<div>unrelated</div><script>x</script><div>unrelated</div>");
+            let html = format!("{prefix}{TAG}");
+            let spans = [(prefix.len(), html.len())];
+            let found = lazy_elements(&html, &spans);
+            assert_eq!(found.len(), 1);
+            assert_eq!(found[0].start, prefix.len());
+            assert_eq!(found, lazy_elements_impl::<false>(&html, &spans));
+        }
+    }
     #[test]
     fn final_tree_context() {
         for (before, after) in [

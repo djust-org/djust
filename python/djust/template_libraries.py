@@ -1553,6 +1553,18 @@ def _stub_template_with(string_if_invalid: str, debug: bool) -> Any:
     return template
 
 
+class _CachedProvenanceFragment(str):
+    """Fragment bytes and literal-only context stored atomically under Django's usual key.
+
+    A backend that strips subclass metadata returns an ordinary string, which
+    is uncertain on a tracked hit. Django can still consume the string itself.
+    """
+
+    literal_only: Optional[str] = None
+    blank_only: Optional[str] = None
+    literal_blocked: bool = False
+
+
 class CacheTagHandler:
     """``{% cache expiry fragment [vary…] [using="alias"] %}…{% endcache %}``.
 
@@ -1636,6 +1648,25 @@ class CacheTagHandler:
         # round-trip the ``SafeString`` through pickle; Redis and memcached do
         # not, and the tag must not emit ``&lt;b&gt;`` on the backends that
         # store bytes.
+        # Metadata belongs to this exact cached object. A separate side key
+        # could survive an external overwrite with identical bytes but different
+        # provenance. Old/plain entries or serializers dropping metadata are
+        # uncertain: their literal/value boundaries cannot be recovered from text.
+        context["_djust_cached_literal_blocked"] = (
+            getattr(cached, "literal_blocked", False)
+            if isinstance(cached, _CachedProvenanceFragment)
+            else False
+        )
+        context["_djust_cached_literal_only"] = (
+            getattr(cached, "literal_only", None)
+            if isinstance(cached, _CachedProvenanceFragment)
+            else None
+        )
+        context["_djust_cached_blank_only"] = (
+            getattr(cached, "blank_only", None)
+            if isinstance(cached, _CachedProvenanceFragment)
+            else None
+        )
         return mark_safe(cached), (backend, key, expire_time)
 
     def after_body(self, args: List[str], content: str, context: Dict[str, Any], state: Any) -> str:
@@ -1645,7 +1676,13 @@ class CacheTagHandler:
         single-phase version stored.
         """
         backend, key, expire_time = state
-        backend.set(key, content, expire_time)
+        fragment = content
+        if "_djust_body_literal_only" in context:
+            fragment = _CachedProvenanceFragment(content)
+            fragment.literal_only = context["_djust_body_literal_only"]
+            fragment.blank_only = context.get("_djust_body_blank_only")
+            fragment.literal_blocked = context.get("_djust_body_literal_blocked", False)
+        backend.set(key, fragment, expire_time)
         return content
 
     def _plan(self, args: List[str], context: Dict[str, Any]) -> Tuple[Any, str, Any]:
