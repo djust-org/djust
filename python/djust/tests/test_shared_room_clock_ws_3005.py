@@ -562,7 +562,10 @@ async def test_presence_timeout_retries_after_retirement_without_another_join(mo
                 what="automatic replacement after retirement",
             )
             await TIME.advance(0.1)
-            await wait_until(lambda: peer.refreshes > 0, what="replacement doorbell")
+            # The released old step publishes its own doorbell first, so wait for
+            # the replacement run's step rather than for any refresh.
+            await wait_until(lambda: len(ticks) == 2, what="replacement step")
+            await wait_until(lambda: peer.refreshes > 1, what="replacement doorbell")
             assert len(ticks) == 2
             assert sum("Presence clock retry scheduled" in r.message for r in caplog.records) == 1
         finally:
