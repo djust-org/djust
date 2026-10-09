@@ -652,3 +652,167 @@ def test_round5_unknown_or_open_cache_metadata_fails_closed(kind):
     assert len(ids) == 1
     assert statuses == [200]
     assert mounts == 0
+
+
+ROUND6_ROWS = {
+    # family A: quote outside a value position in an included (other-template) tag
+    "A control include": ("", '{% include "o.html" %}', "", '<input value=5" size=">', '">'),
+    "A filter lower{include}": (
+        "",
+        '{% filter lower %}{% include "o.html" %}{% endfilter %}',
+        "",
+        '<input value=5" size=">',
+        '">',
+    ),
+    "A spaceless{include}": (
+        "",
+        '{% spaceless %} {% include "o.html" %}{% endspaceless %}',
+        "",
+        '<input value=5" size=">',
+        '">',
+    ),
+    "A attr-name quote": (
+        "",
+        '{% filter lower %}{% include "o.html" %}{% endfilter %}',
+        "",
+        '<a "=">',
+        '">',
+    ),
+    # family B: run starts in foreign content opened by the enclosing template
+    "B control include": (
+        "<svg>",
+        '{% include "o.html" %}',
+        "</svg>",
+        "<style><!--</style>",
+        "-->",
+    ),
+    "B filter lower{include}": (
+        "<svg>",
+        '{% filter lower %}{% include "o.html" %}{% endfilter %}',
+        "</svg>",
+        "<style><!--</style>",
+        "-->",
+    ),
+    "B spaceless{include}": (
+        "<svg>",
+        '{% spaceless %} {% include "o.html" %}{% endspaceless %}',
+        "</svg>",
+        "<style><!--</style>",
+        "-->",
+    ),
+    "B svg title": (
+        "<svg>",
+        '{% filter lower %}{% include "o.html" %}{% endfilter %}',
+        "</svg>",
+        "<title><!--</title>",
+        "-->",
+    ),
+    "B math textarea": (
+        "<math>",
+        '{% filter lower %}{% include "o.html" %}{% endfilter %}',
+        "</math>",
+        "<textarea><!--</textarea>",
+        "-->",
+    ),
+}
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("closer", [True, False])
+@pytest.mark.parametrize("label", list(ROUND6_ROWS))
+def test_round6_http_scanner(tmp_path, settings, label, closer):
+    pre, body, post_, inc, q = ROUND6_ROWS[label]
+    q = q if closer else "x"
+    settings.TEMPLATES = [
+        {
+            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "DIRS": [str(tmp_path)],
+            "APP_DIRS": True,
+        }
+    ]
+    (tmp_path / "o.html").write_text(inc)
+
+    class P(Page):
+        template = "<div dj-root>" + TAG + pre + body + post_ + "{{ q|safe }}" + HIDDEN + "</div>"
+
+        def mount(self, request, **kw):
+            self.q = q
+
+    session = SessionStore()
+    session.create()
+    Hidden.mounts = 0
+    ids = get_ids(session, P)
+    st = [post(session, i, "djust_lazy_mount", P).status_code for i in ids]
+    assert len(ids) == 1, (label, q, ids)
+    assert st == [200]
+    assert Hidden.mounts == 0
+
+
+SIDEBAR = "{% load cache %}{% cache 500 sidebar %}<nav><a>{{ user_label }}</a></nav>{% endcache %}"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("order", ["lazy page first", "plain page fills cache first"])
+def test_round6_cache_shared_fragment(order):
+    from django.core.cache import cache
+
+    cache.clear()
+
+    class Plain(Page):
+        template = "<div dj-root>" + SIDEBAR + "<main>plain</main></div>"
+
+        def mount(self, request, **kw):
+            self.user_label = "u"
+
+    class Lazy(Page):
+        template = "<div dj-root>" + SIDEBAR + TAG + "</div>"
+
+        def mount(self, request, **kw):
+            self.user_label = "u"
+
+    session = SessionStore()
+    session.create()
+    if order != "lazy page first":
+        get_ids(session, Plain)
+    ids = get_ids(session, Lazy)
+    ids2 = get_ids(session, Lazy)
+    assert (len(ids), len(ids2)) == (1, 1)
+
+
+@pytest.mark.parametrize("mode", ["render", "render_with_diff"])
+@pytest.mark.parametrize(
+    "body,expected", [("<nav>{{ w }}</nav>", 1), ("<!--y{{ w }}", 0), ("<!--y", 0)]
+)
+def test_round6_cache_untracked_fill(mode, body, expected):
+    from django.core.cache import cache
+    from django.core.cache.utils import make_template_fragment_key
+    from djust.template_libraries import _CachedProvenanceFragment
+
+    cache.clear()
+    source = "{% load cache %}{% cache 500 round6 %}" + body + "{% endcache %}{{ q|safe }}" + TAG
+    rust = RustLiveView(source, [])
+    rust.update_state({"w": "v", "q": "-->"})
+    getattr(rust, mode)()
+    cached = cache.get(make_template_fragment_key("round6"))
+    assert isinstance(cached, _CachedProvenanceFragment)
+    assert cached.provenance_cutoff is (expected == 0)
+    for _ in range(2):
+        html, spans = rust.render_with_provenance()
+        assert len(authored_lazy_elements(html, spans)) == expected
+
+
+def test_round6_cache_verdict_is_local_to_body():
+    from django.core.cache import cache
+    from django.core.cache.utils import make_template_fragment_key
+
+    cache.clear()
+    body = "{% load cache %}{% cache 500 round6_local %}<nav>{{ w }}</nav>{% endcache %}"
+    rust = RustLiveView(TAG + "<!--" + body + "{{ q|safe }}" + TAG, [])
+    rust.update_state({"w": "v", "q": "-->"})
+    html, spans = rust.render_with_provenance()
+    assert len(authored_lazy_elements(html, spans)) == 1
+    assert cache.get(make_template_fragment_key("round6_local")).provenance_cutoff is False
+    # The same cached body can be used outside the caller's open comment.
+    rust = RustLiveView(body + TAG, [])
+    html, spans = rust.render_with_provenance()
+    assert len(authored_lazy_elements(html, spans)) == 1

@@ -692,6 +692,12 @@ pub fn flatten_authored_output(output: AuthoredOutput, text: String) -> Authored
 /// malformed markup and script escape states fail closed rather than guessing.
 pub fn literal_context_is_open(bytes: &[u8]) -> bool {
     let lower = bytes.to_ascii_lowercase();
+    // The surrounding namespace is lost at a flatten boundary. Either
+    // interpretation may hide following markup, including foreign comments.
+    literal_context_is_open_in(&lower, false) || literal_context_is_open_in(&lower, true)
+}
+
+fn literal_context_is_open_in(lower: &[u8], foreign: bool) -> bool {
     let mut i = 0;
     let mut raw: Option<&[u8]> = None;
     while i < lower.len() {
@@ -700,18 +706,22 @@ pub fn literal_context_is_open(bytes: &[u8]) -> bool {
             continue;
         }
         if let Some(name) = raw {
-            if name == b"script" && lower[i..].starts_with(b"<!--") {
-                return true; // HTML5 script escaped/double-escaped states.
-            }
             if !lower[i..].starts_with(b"</")
                 || !lower[i + 2..].starts_with(name)
                 || !lower
                     .get(i + 2 + name.len())
                     .is_some_and(|b| b.is_ascii_whitespace() || *b == b'/' || *b == b'>')
             {
-                i += 1;
-                continue;
+                // A non-end-tag '<' may open a comment/tag in foreign
+                // content, or change HTML script escape state. Do not guess.
+                return true;
             }
+        } else if foreign && lower[i..].starts_with(b"<![cdata[") {
+            let Some(end) = lower[i + 9..].windows(3).position(|w| w == b"]]>") else {
+                return true;
+            };
+            i += 9 + end + 3;
+            continue;
         } else if lower[i..].starts_with(b"<!--") {
             let Some(end) = lower[i + 4..].windows(3).position(|w| w == b"-->") else {
                 return true;
@@ -755,6 +765,15 @@ pub fn literal_context_is_open(bytes: &[u8]) -> bool {
                     quote = None;
                 }
             } else if b == b'\'' || b == b'"' {
+                let mut k = j;
+                while k > end && lower[k - 1].is_ascii_whitespace() {
+                    k -= 1;
+                }
+                // Quotes in names/unquoted values are ordinary tokenizer
+                // characters, not value delimiters. Fail closed for them.
+                if k == end || lower[k - 1] != b'=' {
+                    return true;
+                }
                 quote = Some(b);
             } else if b == b'>' {
                 break;
@@ -773,7 +792,11 @@ pub fn literal_context_is_open(bytes: &[u8]) -> bool {
             match name {
                 b"plaintext" | b"template" | b"select" | b"svg" | b"math" => return true,
                 b"script" | b"style" | b"textarea" | b"title" | b"xmp" | b"iframe" | b"noembed"
-                | b"noframes" | b"noscript" => raw = Some(name),
+                | b"noframes" | b"noscript"
+                    if !foreign =>
+                {
+                    raw = Some(name)
+                }
                 _ => {}
             }
         }
@@ -1693,6 +1716,19 @@ impl Context {
         if self.provenance_flatten.is_none() {
             self.provenance_flatten = Some(std::sync::Arc::default());
         }
+    }
+
+    /// Track a body independently of its caller, preserving assignment effects
+    /// but neither consuming the caller's pending cutoff nor leaking tracking
+    /// into an untracked render. Used for cache metadata in every render mode.
+    pub fn with_isolated_provenance_flatten<T>(
+        &mut self,
+        render: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let outer = self.provenance_flatten.replace(std::sync::Arc::default());
+        let result = render(self);
+        self.provenance_flatten = outer;
+        result
     }
 
     pub fn provenance_flatten_tracking(&self) -> bool {
@@ -4786,107 +4822,156 @@ mod literal_context_differential_tests {
         node.children.borrow().iter().any(sentinel_live)
     }
 
+    fn live(html: &str) -> bool {
+        let dom = parse_fragment(
+            RcDom::default(),
+            Default::default(),
+            QualName::new(None, ns!(html), LocalName::from("div")),
+            vec![],
+            false,
+        )
+        .one(format!("{html}<div id=sentinel></div>"));
+        sentinel_live(&dom.document)
+    }
+
     #[test]
-    fn literal_context_scanner_differential_20000() {
+    fn literal_context_scanner_differential_330000() {
         let atoms = [
-            "text",
-            "é",
-            "&lt;",
-            "&#60;",
-            "&quot;",
-            "&",
-            "<",
-            "</",
-            "<div",
-            "</div",
-            "<div>",
-            "</div>",
-            "<nav><a>",
-            "</a></nav>",
-            "<a x=",
-            "<a x='",
-            "<a x=\"",
-            "'",
-            "\"",
-            ">",
-            "/>",
-            "<!--",
             "<!-->",
             "<!--->",
+            "<!--",
             "-->",
             "--!>",
-            "<![CDATA[",
-            "]]>",
-            "<?bogus",
-            "<!bogus>",
+            "<!-- -- -->",
+            "<!---->",
+            "<!-",
+            "--",
+            "-",
+            "!",
             "<script>",
             "</script>",
-            "<script",
+            "</script ",
             "</script x='>'>",
-            "<style>",
-            "</style>",
-            "<textarea>",
-            "</textarea>",
+            "<script><!--<script>",
+            "</script x=\"",
             "<title>",
             "</title>",
-            "<xmp>",
-            "</xmp>",
-            "<iframe>",
-            "</iframe>",
-            "<noembed>",
-            "</noembed>",
-            "<noframes>",
-            "</noframes>",
-            "<noscript>",
-            "</noscript>",
+            "<textarea>",
+            "</textarea>",
             "<plaintext>",
-            "<template>",
-            "</template>",
-            "<select>",
-            "</select>",
             "<svg>",
             "</svg>",
-            "<SCRIPT/>",
-            "</ScRiPt >",
-            "<a x='>'>",
-            "<a x=\"<\">",
+            "<style>",
+            "</style>",
+            "<math>",
+            "<mi>",
+            "</mi>",
+            "<noscript>",
+            "</noscript>",
+            "<iframe>",
+            "</iframe>",
+            "<xmp>",
+            "</xmp>",
+            "<a x=",
+            "<a x=y>",
+            "a>b",
+            "<a x='\"'>",
+            "<a x=\"'\">",
+            "'",
+            "\"",
+            "=",
+            "<a/b>",
+            "</>",
+            "<?pi>",
+            "<![CDATA[",
+            "]]>",
             "\0",
+            "\r",
+            "\r\n",
+            "<a",
+            ">",
             " ",
-            "\n",
+            "x",
+            "<div>",
+            "</div>",
+            "<foreignObject>",
+            "<desc>",
+            "<b>",
+            "/",
+            "<table>",
+            "<select>",
+            "</select>",
+            "<option>",
+            "&",
+            "<noembed>",
+            "<noframes>",
+            "<template>",
+            "</template>",
+            "<listing>",
+            "<SCRIPT>",
+            "</SCRIPT>",
+            "<sCrIpT/>",
+            "<style/>",
+            "\t",
+            "\x0c",
+            "<!doctype html>",
+            "<br/>",
+            "<img src=x alt='a>b'>",
+            "<a x=\"1\"y='2'>",
+            "<a b",
+            "c=d",
+            "e\"f",
+            "<p>",
+            "</p>",
+            "<a x = 'y'>",
+            "<input value=5\" size=\">",
+            "<a \"=\">",
+            "<td width=50%>",
+            "<i>",
+            "<a href=/x?a=1&b=2>",
         ];
-        let mut seed = 0x3442_0005_u64;
+        let prefixes = [
+            "",
+            "<svg>",
+            "<math>",
+            "<svg><title>",
+            "<math><mi>",
+            "<table>",
+            "<select>",
+            "<template>",
+            "<noscript>",
+            "<script>",
+            "<style>",
+        ];
+        let mut seed = 0x5eed_0005_u64;
         let mut next = || {
             seed ^= seed << 13;
             seed ^= seed >> 7;
             seed ^= seed << 17;
             seed as usize
         };
-        let mut conservative = 0;
-        let mut live_count = 0;
-        let mut open_count = 0;
-        for _ in 0..20_000 {
-            let count = 1 + next() % 16;
+        let mut stats = [(0_usize, 0_usize, 0_usize); 11];
+        for _ in 0..30_000 {
+            let count = 1 + next() % 10;
             let mut fragment = String::new();
             for _ in 0..count {
                 fragment.push_str(atoms[next() % atoms.len()]);
             }
             let open = literal_context_is_open(fragment.as_bytes());
-            let html = format!("{fragment}<div id=sentinel></div>");
-            let dom = parse_fragment(
-                RcDom::default(),
-                Default::default(),
-                QualName::new(None, ns!(html), LocalName::from("div")),
-                vec![],
-                false,
-            )
-            .one(html);
-            let live = sentinel_live(&dom.document);
-            assert!(open || live, "false closed: {fragment:?}");
-            live_count += usize::from(live);
-            open_count += usize::from(open);
-            conservative += usize::from(open && live);
+            for (index, prefix) in prefixes.iter().enumerate() {
+                let real = live(&format!("{prefix}{fragment}"));
+                let page = live(&format!("{prefix}{}", " ".repeat(fragment.len())));
+                assert!(
+                    open || !page || real,
+                    "false closed: prefix={prefix:?} run={fragment:?}"
+                );
+                stats[index].0 += usize::from(real);
+                stats[index].1 += usize::from(open);
+                stats[index].2 += usize::from(open && real);
+            }
         }
-        println!("differential: 20000 fragments, {live_count} live, {open_count} open, {conservative} open-but-live ({:.2}% of all, {:.2}% of live), 0 false closed",
-            conservative as f64 / 200.0, conservative as f64 * 100.0 / live_count as f64);
+        for (prefix, (live, open, conservative)) in prefixes.iter().zip(stats) {
+            println!("prefix={prefix:?} total=30000 false_closed=0 live={live} open={open} open_but_live={conservative} ({:.2}% of all)", conservative as f64 / 300.0);
+        }
     }
 }

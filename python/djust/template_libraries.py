@@ -1649,7 +1649,9 @@ class CacheTagHandler:
         # Metadata belongs to this exact cached object. A separate side key
         # could survive an external overwrite with identical bytes but different
         # provenance. Old/plain entries or serializers dropping metadata are
-        # uncertain, so only an explicit closed tracked result avoids cutoff.
+        # uncertain: their literal/value boundaries cannot be recovered from text.
+        # Only an explicit closed body verdict avoids cutoff, regardless of
+        # which render mode wrote it.
         context["_djust_cached_provenance_cutoff"] = not (
             isinstance(cached, _CachedProvenanceFragment) and cached.provenance_cutoff is False
         )

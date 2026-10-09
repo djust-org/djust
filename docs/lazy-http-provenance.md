@@ -96,8 +96,14 @@ blanked at the same offsets. A fail-closed cutoff is recorded iff those bytes
 end in a possibly-open inert context: an unclosed comment, raw-text or
 escapable-raw-text element (`script`, `style`, `textarea`, `title`, `xmp`,
 `iframe`, `noembed`, `noframes`, `noscript`, `plaintext`), unfinished start/end
-tag, quoted attribute value, CDATA or bogus comment. The small scanner reports
-open whenever uncertain (including unsupported foreign/tree-builder contexts).
+tag, quoted attribute value, CDATA or bogus comment. The small scanner evaluates both HTML and foreign-content interpretations,
+because an enclosing SVG/MathML element may start outside the flattened run;
+either possibly-open result records a cutoff. Foreign raw-text names are
+ordinary elements, `<!--` opens a comment, and CDATA sections are recognized.
+In HTML raw text, any `<` other than the matching end tag is possibly-open.
+Inside tags, a quote opens a value only immediately after `=` with optional
+whitespace; quotes elsewhere fail closed. Unsupported tree-builder contexts
+and malformed/uncertain markup also fail closed.
 Pure-literal runs are covered; mixed runs ending in data state do not cut off.
 No lazy container after a cutoff in the complete render is authoritative, even
 after a literal closer. An inner cutoff always survives, including empty output.
@@ -105,9 +111,14 @@ This rule applies at every routed flatten site: filtered `block.super` when
 boundaries cannot be preserved, `{% filter %}`, `{% spaceless %}`, with/include
 bindings and other value captures, and custom block-body captures.
 Cache fragments retain their cutoff as metadata on the cached string itself,
-stored atomically under Django's usual fragment key for hits and misses. Plain
-legacy entries, untracked overwrites and backends stripping that metadata are
-uncertain and fail closed. Fragment text and Django's cache key remain unchanged.
+stored atomically under Django's usual fragment key for hits and misses. Every
+cache-body render computes this verdict, including plain pages and WebSocket
+renders. The verdict is local to the body, independent of surrounding cutoffs.
+Legacy entries without a verdict cannot recover literal/value provenance from
+the cached text and remain fail closed, as do external plain-string overwrites
+and backends stripping metadata. Clear fragment caches when upgrading to avoid
+losing lazy registrations until these entries expire. Fragment text and Django's
+cache key remain unchanged.
 
 Only-value content has no authored opener and does not acquire a cutoff.
 Byte-identical literal-derived filters of `block.super` preserve its context

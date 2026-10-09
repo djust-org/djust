@@ -27,8 +27,11 @@ filters::html_escape(&value.to_string())
 other => DjangoRustError::TemplateError(format!("{kind} '{name}' error: {other}")),
 let content = render_nodes_with_loader_mut(children, context, loader)?;
 context.record_provenance_flatten(
-let content = render_nodes_with_loader_mut(children, context, loader)?;
-"_djust_body_provenance_cutoff".into(),
+let text = output.to_string();
+djust_core::context::flatten_authored_output(output.into_authored_output(), text);
+let content = flattened.0.clone();
+let content = context.record_provenance_flatten(flattened, content);
+handler_context.insert("_djust_body_provenance_cutoff".into(), Value::Bool(cutoff));
 other => DjangoRustError::TemplateError(format!("{what} failed: {other}")),
 | Value::DictView { .. } => serde_json::to_string(v).unwrap_or_else(|_| v.to_string()),
 _ => v.to_string(),
@@ -1203,11 +1206,13 @@ ctx.mark_safe("pp".to_string());
 ctx.mark_safe("p.a".to_string());
 fn render_block_super(&self, _ctx: &Context) -> crate::Result<String> {
 Ok(format!("p{n}"))
-let html = format!("{fragment}<div id=sentinel></div>");
 QualName::new(None, ns!(html), LocalName::from("div")),
-live_count += usize::from(live);
-open_count += usize::from(open);
-conservative += usize::from(open && live);
+.one(format!("{html}<div id=sentinel></div>"));
+let real = live(&format!("{prefix}{fragment}"));
+let page = live(&format!("{prefix}{}", " ".repeat(fragment.len())));
+stats[index].0 += usize::from(real);
+stats[index].1 += usize::from(open);
+stats[index].2 += usize::from(open && real);
 provenance.rs
 text.into()
 text.into()

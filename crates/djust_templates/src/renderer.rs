@@ -1416,14 +1416,19 @@ fn call_lazy_body_block_tag<L: TemplateLoader>(
     // here would let the body's own writes change the answer between the two
     // halves of one call — a `{% cache %}` looking a key up under one context
     // and storing under another would store a key nobody can find again.
-    let content = render_nodes_with_loader_mut(children, context, loader)?;
+    // Cache metadata must describe this body even for plain/WS renders.
+    // A fresh notification scope keeps surrounding cutoffs out of the entry.
+    let output = context.with_isolated_provenance_flatten(|context| {
+        render_nodes_output::<L, crate::provenance::Rendered>(children, context, loader)
+    })?;
+    let text = output.to_string();
+    let flattened =
+        djust_core::context::flatten_authored_output(output.into_authored_output(), text);
+    let cutoff = flattened.5.is_some();
+    let content = flattened.0.clone();
+    let content = context.record_provenance_flatten(flattened, content);
     let mut handler_context = std::ops::Deref::deref(&context_map).clone();
-    if context.provenance_flatten_tracking() {
-        handler_context.insert(
-            "_djust_body_provenance_cutoff".into(),
-            Value::Bool(context.pending_provenance_flatten()),
-        );
-    }
+    handler_context.insert("_djust_body_provenance_cutoff".into(), Value::Bool(cutoff));
     let html = crate::registry::call_block_handler_after_body(
         name,
         &resolved_args,
