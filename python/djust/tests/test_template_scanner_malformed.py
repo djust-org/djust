@@ -8,8 +8,30 @@ from djust._template_bindings import recovery_scan, scan_source
 from djust.checks.bindings import binding_reports, check_event_bindings, coverage
 
 
+def _marked_sections_raise(monkeypatch):
+    """Make html.parser raise on `<![` the way CPython <= 3.12.9 does.
+
+    Newer patch releases (3.12.13+, 3.12.15 in CI) accept `<![\ue000CDATA[`
+    and no longer route `<![` through ``parse_marked_section``, so the tests
+    force the old failure at ``parse_html_declaration`` (which every version
+    calls for `<!`) to exercise the scanners' recovery path everywhere.
+    """
+    from html.parser import HTMLParser
+
+    original = HTMLParser.parse_html_declaration
+
+    def fail(self, i):
+        if self.rawdata.startswith("<![", i):
+            raise AssertionError("expected name token")
+        return original(self, i)
+
+    monkeypatch.setattr(HTMLParser, "parse_html_declaration", fail)
+
+
 @pytest.mark.parametrize("malformed", ["<![\ue000CDATA[ >", "<!x"])
-def test_malformed_inline_template_does_not_abort_checks(malformed):
+def test_malformed_inline_template_does_not_abort_checks(monkeypatch, malformed):
+    _marked_sections_raise(monkeypatch)
+
     class MalformedView(LiveView):
         template = '<button dj-click="missing">before</button>' + malformed
 
@@ -43,21 +65,6 @@ def test_parser_failure_is_a_nonfatal_scan_gap(monkeypatch, error, method):
     assert not scan.gaps[0].recovery_safe
 
 
-def _marked_sections_raise(monkeypatch):
-    """Make html.parser raise on `<![` the way CPython <= 3.12.9 does.
-
-    Newer patch releases (3.12.15 in CI) accept `<![\ue000CDATA[`, so the
-    tests force the old failure to exercise the scanners' recovery path on
-    every interpreter.
-    """
-    from _markupbase import ParserBase
-
-    def fail(self, i, report=1):
-        raise AssertionError("expected name token")
-
-    monkeypatch.setattr(ParserBase, "parse_marked_section", fail)
-
-
 @pytest.mark.parametrize("malformed", ["<![\ue000CDATA[ >", "<!x"])
 def test_page_shell_scanner_does_not_abort(monkeypatch, malformed):
     from djust._page_shell import shell_fingerprint
@@ -80,6 +87,7 @@ def test_child_slot_scanner_discards_partial_ownership_graph(monkeypatch):
 
 
 def test_rendered_recovery_scanner_keeps_only_seen_targets(monkeypatch):
+    _marked_sections_raise(monkeypatch)
     from djust import validation
 
     class View:
@@ -138,7 +146,8 @@ def test_other_scanners_handle_parser_failures(monkeypatch, error, method, scann
         assert validation._RENDERED_RECOVERY[view] == expected
 
 
-def test_token_fallback_records_malformed_markup_gap():
+def test_token_fallback_records_malformed_markup_gap(monkeypatch):
+    _marked_sections_raise(monkeypatch)
     from djust._template_bindings import scan_tokens
 
     scan = scan_tokens(
