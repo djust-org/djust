@@ -17,10 +17,25 @@ from pathlib import Path
 
 import pytest
 
-from tests.git_env import scrub_host_git_state
+from tests.git_env import isolated_git_env
+
+
+@pytest.fixture(autouse=True)
+def _no_inherited_git_env(monkeypatch):
+    """Keep fixture git commands isolated from hook execution state (#3179)."""
+    from tests.git_env import GIT_EXECUTION_VARS
+
+    for var in GIT_EXECUTION_VARS:
+        monkeypatch.delenv(var, raising=False)
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WRAPPER = REPO_ROOT / "scripts" / "git-commit-with-precommit.sh"
+
+
+def _isolated_env() -> dict[str, str]:
+    """Isolate fixture repos from hook execution state and host config (#3179)."""
+    return isolated_git_env(GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_SYSTEM="/dev/null")
 
 
 def _git(
@@ -33,7 +48,7 @@ def _git(
     # real repo's index: the `commit` fails outright under the hook, and the
     # adds write the FIXTURE's paths there. See tests/git_env.py.
     if env is None:
-        env = scrub_host_git_state(os.environ.copy())
+        env = _isolated_env()
     return subprocess.run(
         ["git", *args],
         cwd=cwd,
@@ -52,11 +67,7 @@ def _make_repo(tmp: Path) -> dict[str, str]:
     _git(tmp, "config", "commit.gpgsign", "false").check_returncode()
     # Empty initial commit so HEAD exists and POST_HEAD comparison works.
     _git(tmp, "commit", "-q", "--allow-empty", "-m", "initial").check_returncode()
-    env = os.environ.copy()
-    # Don't let the host user's global pre-commit/hooks config leak in.
-    env["GIT_CONFIG_GLOBAL"] = "/dev/null"
-    scrub_host_git_state(env)
-    return env
+    return _isolated_env()
 
 
 def _install_reformatter_hook(shim_dir: Path) -> None:
@@ -263,9 +274,7 @@ def test_wrapper_preserves_unstaged_hunks(repo: tuple[Path, dict[str, str]]) -> 
 
 def test_wrapper_outside_git_repo(tmp_path: Path) -> None:
     """Invocation outside a git repo gives a clean exit-1 instead of git's raw usage."""
-    env = os.environ.copy()
-    env["GIT_CONFIG_GLOBAL"] = "/dev/null"
-    scrub_host_git_state(env)
+    env = _isolated_env()
     bare = tmp_path / "not-a-repo"
     bare.mkdir()
     result = subprocess.run(

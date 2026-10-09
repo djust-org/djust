@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Test Git fixtures no longer inherit repository execution variables from Git hooks (#3179).** Fixture helpers isolate their environment, Git-spawning test modules strip `GIT_EXECUTION_VARS`, and a root fixture covers library code that runs Git in-process. Static and behavioural guards prevent fixture identity and signing settings from leaking into the real repository's `.git/config`.
+
 ## [1.0.9] - 2026-10-03
 
 A 1.0 patch release that includes security fixes; upgrading from 1.0.8 is recommended. The 1.0 line is no longer maintained, so moving to 1.2 or later is advised.
