@@ -197,9 +197,77 @@ fn raw_tag(html: &str, start: usize) -> Option<RawTag> {
         attrs.entry(attr).or_insert(attr_start..i);
     }
 }
+fn authority_value<'a>(html: &'a str, raw: &RawTag, name: &str) -> Option<&'a str> {
+    let range = raw.attrs.get(name)?;
+    let attr = &html[range.clone()];
+    let end = attr
+        .find(|c: char| c.is_ascii_whitespace() || c == '=')
+        .unwrap_or(attr.len());
+    if !attr[..end].eq_ignore_ascii_case(name) {
+        return None;
+    }
+    let rest = attr[end..].trim_start_matches(|c: char| c.is_ascii_whitespace());
+    let Some(value) = rest.strip_prefix('=') else {
+        return Some("");
+    };
+    let value = value.trim_start_matches(|c: char| c.is_ascii_whitespace());
+    if value.starts_with(['\'', '"']) {
+        Some(&value[1..value.len() - 1])
+    } else {
+        Some(value)
+    }
+}
+fn authority_matches(
+    html: &str,
+    raw: &RawTag,
+    tag: &html5ever::tokenizer::Tag,
+    name: &str,
+) -> bool {
+    let authored = authority_value(html, raw, name);
+    tag.attrs
+        .iter()
+        .find(|a| a.name.ns.is_empty() && (&*a.name.local) == name)
+        .is_some_and(|a| authored == Some(a.value.as_ref()))
+}
+
+/// Keep only candidate start-tag bytes for subsequent normalization. This is
+/// a performance projection, never a grant: all returned bytes were authored.
+pub fn authority_spans(html: &str, spans: &[(usize, usize)]) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    let mut previous = 0;
+    for (start, _) in html.match_indices('<') {
+        if start < previous {
+            continue;
+        }
+        if let Some(raw) = raw_tag(html, start) {
+            previous = raw.end;
+            if raw.attrs.contains_key("dj-view") && raw.attrs.contains_key("dj-lazy") {
+                ranges.push((start, raw.end));
+            }
+        }
+    }
+    let mut result = Vec::new();
+    let mut index = 0;
+    for (start, end) in ranges {
+        while index < spans.len() && spans[index].1 <= start {
+            index += 1;
+        }
+        for &(a, b) in &spans[index..] {
+            if a >= end {
+                break;
+            }
+            if a.max(start) < b.min(end) {
+                result.push((a.max(start), b.min(end)));
+            }
+        }
+    }
+    result
+}
+
 fn covered(range: &Range<usize>, spans: &[(usize, usize)]) -> bool {
     let mut cursor = range.start;
-    for &(start, end) in spans {
+    let first = spans.partition_point(|&(_, end)| end <= cursor);
+    for &(start, end) in &spans[first..] {
         if end <= cursor {
             continue;
         }
@@ -216,6 +284,7 @@ fn covered(range: &Range<usize>, spans: &[(usize, usize)]) -> bool {
 struct LocatedTree<'a> {
     tree: TreeBuilder<Handle, AuthoredDom>,
     cursor: Cell<usize>,
+    tag_start: Cell<usize>,
     candidates: HashMap<usize, RawTag>,
     spans: &'a [(usize, usize)],
     html: &'a str,
@@ -228,15 +297,18 @@ impl TokenSink for LocatedTree<'_> {
                 if let Some(raw) = self.candidates.get(&self.cursor.get()) {
                     let view = raw.attrs.get("dj-view");
                     let lazy = raw.attrs.get("dj-lazy");
-                    if raw.valid
+                    if view.is_some()
+                        && lazy.is_some()
+                        && raw.start == self.tag_start.get()
+                        && raw.valid
                         && self.html[raw.name.start + 1..raw.name.end]
                             .eq_ignore_ascii_case(tag.name.as_ref())
                         && covered(&raw.name, self.spans)
                         && covered(&(raw.end - 1..raw.end), self.spans)
                         && view.is_some_and(|r| covered(r, self.spans))
                         && lazy.is_some_and(|r| covered(r, self.spans))
-                        && tag.attrs.iter().any(|a| (&*a.name.local) == "dj-view")
-                        && tag.attrs.iter().any(|a| (&*a.name.local) == "dj-lazy")
+                        && authority_matches(self.html, raw, tag, "dj-view")
+                        && authority_matches(self.html, raw, tag, "dj-lazy")
                     {
                         tag.attrs.push(Attribute {
                             name: QualName::new(
@@ -298,18 +370,34 @@ pub fn lazy_elements(html: &str, spans: &[(usize, usize)]) -> Vec<LazyElement> {
     let sink = LocatedTree {
         tree: TreeBuilder::new(AuthoredDom::default(), Default::default()),
         cursor: Cell::new(0),
+        tag_start: Cell::new(usize::MAX),
         candidates,
         spans,
         html,
     };
     let tokenizer = Tokenizer::new(sink, Default::default());
     let input = BufferQueue::default();
-    // Feeding one Unicode scalar at a time makes the current token's end a
-    // precise UTF-8 output position, independent of the parser's line counter.
-    // This work runs only for provenance-bearing lazy pages.
-    for (i, c) in html.char_indices() {
-        tokenizer.sink.cursor.set(i + c.len_utf8());
-        input.push_back(StrTendril::from(c.to_string()));
+    // Feed at lexical delimiter boundaries, retaining exact offsets at every
+    // possible tag emission. Runs without `<` or `>` cannot finish a tag, so
+    // allocating a tendril for every Unicode scalar is unnecessary.
+    let mut previous = 0;
+    for (i, delimiter) in html.match_indices(['<', '>']) {
+        if previous < i {
+            tokenizer.sink.cursor.set(i);
+            input.push_back(StrTendril::from(&html[previous..i]));
+            let _ = tokenizer.feed(&input);
+        }
+        if delimiter == "<" {
+            tokenizer.sink.tag_start.set(i);
+        }
+        tokenizer.sink.cursor.set(i + 1);
+        input.push_back(StrTendril::from(delimiter));
+        let _ = tokenizer.feed(&input);
+        previous = i + 1;
+    }
+    if previous < html.len() {
+        tokenizer.sink.cursor.set(html.len());
+        input.push_back(StrTendril::from(&html[previous..]));
         let _ = tokenizer.feed(&input);
     }
     tokenizer.end();
@@ -325,15 +413,27 @@ pub fn lazy_elements(html: &str, spans: &[(usize, usize)]) -> Vec<LazyElement> {
             let lazy = attrs
                 .iter()
                 .find(|a| a.name.ns.is_empty() && (&*a.name.local) == "dj-lazy");
-            if let (Some(source), Some(view), Some(lazy)) = (source, view, lazy) {
+            if let (Some(source), Some(view), Some(_lazy)) = (source, view, lazy) {
                 if let Some((start, end)) = source.value.split_once(':') {
                     if let (Ok(start), Ok(end)) = (start.parse(), end.parse()) {
                         if !view.value.is_empty() {
                             result.push(LazyElement {
                                 start,
                                 end,
-                                view_path: view.value.to_string(),
-                                trigger: lazy.value.to_string(),
+                                view_path: tokenizer
+                                    .sink
+                                    .candidates
+                                    .get(&end)
+                                    .and_then(|raw| authority_value(html, raw, "dj-view"))
+                                    .unwrap_or("")
+                                    .to_owned(),
+                                trigger: tokenizer
+                                    .sink
+                                    .candidates
+                                    .get(&end)
+                                    .and_then(|raw| authority_value(html, raw, "dj-lazy"))
+                                    .unwrap_or("")
+                                    .to_owned(),
                             });
                         }
                     }

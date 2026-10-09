@@ -78,7 +78,7 @@ def main():
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]
         env = dict(os.environ, PYTHONPATH=str(ROOT / "python") + os.pathsep + str(root))
-        log_path = ROOT / "context/terminal/browser-server-3252.log"
+        log_path = root / "browser-server-3252.log"
         with log_path.open("w") as log:
             server = subprocess.Popen(
                 [

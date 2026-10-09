@@ -282,6 +282,29 @@ def authored_lazy_elements(
     """Final HTML5 elements backed by authored UTF-8 render intervals."""
     ...
 
+def normalize_provenance_whitespace(
+    html: str, spans: List[Tuple[int, int]], origins: List[Tuple[int, int, int, str]]
+) -> Tuple[str, List[Tuple[int, int]], List[Tuple[int, int, int, str]]]:
+    """Collapse whitespace runs to one space, remapping authored intervals."""
+    ...
+
+def collapse_provenance_whitespace(
+    html: str,
+    spans: List[Tuple[int, int]],
+    origins: List[Tuple[int, int, int, str]],
+    block_tags: List[str],
+) -> Tuple[str, List[Tuple[int, int]], List[Tuple[int, int, int, str]]]:
+    """Drop inter-tag whitespace, remapping authored intervals."""
+    ...
+
+def template_needs_provenance(source: str, dirs: List[str]) -> bool:
+    """Whether a template tree contains an authored lazy container."""
+    ...
+
+def lazy_authority_spans(html: str, spans: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
+    """Authored intervals that carry a live lazy container's authority bytes."""
+    ...
+
 def diff_html(old_html: str, new_html: str) -> str:
     """
     Compute diff between two HTML strings.
@@ -1448,6 +1471,10 @@ __all__ = [
     "collapse_inter_tag_whitespace",
     "inter_tag_whitespace_edits",
     "authored_lazy_elements",
+    "normalize_provenance_whitespace",
+    "collapse_provenance_whitespace",
+    "lazy_authority_spans",
+    "template_needs_provenance",
     "resolve_template_inheritance",
     # Serialization
     "fast_json_dumps",

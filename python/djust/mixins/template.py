@@ -177,6 +177,9 @@ def _scan_html_tag(html: str, start: int) -> "tuple[int, list[tuple[int, int, in
     Spans are (name start, name end, value start, attribute end).
     An end offset of -1 means EOF discarded the unfinished tag.
     """
+    # Inspection owns no emission ranges. Scan plain bytes/characters rather
+    # than allocating provenance-bearing slices for every ordinary attribute.
+    html = str(html)
     n = len(html)
     i = start + 1
     if i < n and html[i] == "/":
@@ -228,6 +231,7 @@ def _mask_for_root_search(html: str) -> str:
     candidates. The original offsets remain suitable for template splicing.
     Root precedence and embedded ownership are decided by the caller.
     """
+    html = str(html)  # Read-only scanner; returned coordinates address the original result.
     out = list(html)
     n = len(html)
     i = html.find("<")
@@ -426,7 +430,7 @@ def _root_tag_name(html: str, match: "re.Match[str]") -> str:
 
     Read from the ORIGINAL string by position (the match ran over a
     length-preserving masked copy, whose group text must not be used)."""
-    return html[match.start(1) : match.end(1)].lower()
+    return str(html)[match.start(1) : match.end(1)].lower()
 
 
 def _find_root_close(html: str, match: "re.Match[str]") -> "tuple[int, int] | tuple[None, None]":
@@ -856,7 +860,15 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         a marker-less DOM) and every subsequent event fell back to
         ``html_recovery``.
         """
-        from .._render_provenance import sub, collapse
+        from .._render_provenance import sub, collapse, RenderedHTML
+
+        if isinstance(html, RenderedHTML):
+            from .._rust import lazy_authority_spans
+
+            spans = tuple(lazy_authority_spans(html, list(html.spans)))
+            if not spans:
+                return RenderedHTML(self._strip_comments_and_whitespace(str(html)))
+            html = RenderedHTML(html, spans, html.held, html.origins)
 
         preserved_blocks: list[str] = []
 
@@ -1731,7 +1743,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             has_view = False
             _, attrs = _scan_html_tag(html, start)
             for begin, name_end, _value_start, end in attrs:
-                kind = html[begin:name_end].lower()
+                kind = str.__getitem__(html, slice(begin, name_end)).lower()
                 if kind == "dj-view":
                     has_view = True
                 elif kind == "dj-root" and root_attr_end is None:

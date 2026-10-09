@@ -17,6 +17,7 @@ pub mod actors;
 // Fast model serialization for N+1 query prevention
 pub mod model_serializer;
 
+mod provenance_edits;
 use actors::{ActorSupervisor, SessionActorHandle};
 use dashmap::DashMap;
 use djust_core::html_whitespace::is_html_whitespace_only;
@@ -126,7 +127,14 @@ fn guard_panic<T>(entry: &'static str, f: impl FnOnce() -> PyResult<T>) -> PyRes
 
 /// Global template cache - parse once, reuse for all sessions
 /// Using Arc<Template> for cheap cloning across threads
-type CachedTemplate = (Arc<Template>, u64);
+#[derive(Clone)]
+struct LazyDependency {
+    operand: String,
+    origin: Option<String>,
+    bindings: Vec<(String, String)>,
+    only: bool,
+}
+type CachedTemplate = (Arc<Template>, u64, bool, Vec<LazyDependency>);
 static TEMPLATE_CACHE: Lazy<DashMap<(u64, String), CachedTemplate>> = Lazy::new(DashMap::new);
 /// Global supervisor for managing actor lifecycle
 /// Created once with 1-hour TTL
@@ -728,10 +736,27 @@ impl RustLiveViewBackend {
 
     /// Result-bound UTF-8 authored spans; no reset/take state (#3252).
     fn render_with_provenance(&mut self) -> PyResult<(String, Vec<(usize, usize)>)> {
-        self.render_result(true)
+        self.render_result(true).map(|r| (r.0, r.1))
     }
 
-    fn render_result(&mut self, track_provenance: bool) -> PyResult<(String, Vec<(usize, usize)>)> {
+    /// Automatic compiled-tree planning plus stable authored node addresses.
+    fn render_lazy_html(&mut self) -> PyResult<djust_core::context::AuthoredOutput> {
+        let context = Context::from_shared(self.state.clone());
+        let track = needs_lazy_tree(
+            &self.template_source,
+            &self.template_dirs,
+            &context,
+            0,
+            None,
+            false,
+        )?;
+        self.render_result(track)
+    }
+
+    fn render_result(
+        &mut self,
+        track_provenance: bool,
+    ) -> PyResult<djust_core::context::AuthoredOutput> {
         guard_panic("render", move || {
             // Invalidate partial render cache — render() bypasses the diff pipeline
             // so the cache would be stale for the next render_with_diff() call.
@@ -777,10 +802,11 @@ impl RustLiveViewBackend {
             if track_provenance {
                 let result = template_arc.render_with_provenance(&context, &loader)?;
                 let spans = result.authored.iter().map(|r| (r.start, r.end)).collect();
-                Ok((result.html, spans))
+                Ok((result.html, spans, result.origins))
             } else {
                 Ok((
                     template_arc.render_with_loader(&context, &loader)?,
+                    Vec::new(),
                     Vec::new(),
                 ))
             }
@@ -2637,6 +2663,222 @@ fn compile_template(
 /// `unregister_custom_filter` — exactly the class the gate exists to prevent,
 /// one path over (#1646). Pinned by `template_cache_insert_has_one_site` in
 /// `crates/djust_templates/tests/registry_generation_pin.rs`.
+/// File content participates in the compiled plan only while its loader
+/// identity (path, mtime and length) remains current.
+type LazySourceFile = (std::time::SystemTime, u64, Arc<str>);
+static LAZY_SOURCE_FILES: Lazy<DashMap<std::path::PathBuf, LazySourceFile>> =
+    Lazy::new(DashMap::new);
+
+fn lazy_dependencies(nodes: &[djust_templates::parser::Node], out: &mut Vec<LazyDependency>) {
+    use djust_templates::parser::Node;
+    for node in nodes {
+        match node {
+            Node::Include {
+                template,
+                origin,
+                with_vars,
+                only,
+                ..
+            } => out.push(LazyDependency {
+                operand: template.clone(),
+                origin: origin.clone(),
+                bindings: with_vars.clone(),
+                only: *only,
+            }),
+            Node::Extends(target) => out.push(LazyDependency {
+                operand: target.clone(),
+                origin: None,
+                bindings: Vec::new(),
+                only: false,
+            }),
+            _ => {}
+        }
+        for children in node.child_lists().into_iter().flatten() {
+            lazy_dependencies(children, out);
+        }
+    }
+}
+
+fn lazy_source_file(path: &std::path::Path) -> PyResult<Arc<str>> {
+    let metadata =
+        std::fs::metadata(path).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+    let modified = metadata
+        .modified()
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+    if let Some(entry) = LAZY_SOURCE_FILES.get(path) {
+        if entry.0 == modified && entry.1 == metadata.len() {
+            return Ok(entry.2.clone());
+        }
+    }
+    let source: Arc<str> = Arc::from(
+        std::fs::read_to_string(path)
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?,
+    );
+    LAZY_SOURCE_FILES.insert(path.to_owned(), (modified, metadata.len(), source.clone()));
+    Ok(source)
+}
+
+type ResolvedLazyKey = (u64, String, Vec<(usize, usize)>);
+static RESOLVED_LAZY_SYNTAX: Lazy<DashMap<ResolvedLazyKey, bool>> = Lazy::new(DashMap::new);
+
+/// Inspect the compiled, merged tree without executing its values or tags.
+/// Placeholders explicitly have no literal authority, just as at render time.
+fn resolved_lazy_syntax(nodes: &[djust_templates::parser::Node]) -> bool {
+    fn literals(
+        nodes: &[djust_templates::parser::Node],
+        html: &mut String,
+        spans: &mut Vec<(usize, usize)>,
+    ) {
+        use djust_templates::parser::Node;
+        for node in nodes {
+            if let Node::Text(text) = node {
+                let start = html.len();
+                html.push_str(text);
+                if start < html.len() {
+                    spans.push((start, html.len()));
+                }
+            } else {
+                let children = node.child_lists();
+                if children.iter().all(Option::is_none) {
+                    html.push_str("__opaque__");
+                }
+                for list in children.into_iter().flatten() {
+                    literals(list, html, spans);
+                }
+            }
+        }
+    }
+    let mut html = String::new();
+    let mut spans = Vec::new();
+    literals(nodes, &mut html, &mut spans);
+    let key = (djust_templates::registry_scope::current(), html, spans);
+    if let Some(entry) = RESOLVED_LAZY_SYNTAX.get(&key) {
+        return *entry;
+    }
+    let found = !djust_vdom::lazy_provenance::lazy_elements(&key.1, &key.2).is_empty();
+    RESOLVED_LAZY_SYNTAX.insert(key, found);
+    found
+}
+
+fn needs_lazy_tree(
+    source: &str,
+    dirs: &[std::path::PathBuf],
+    context: &Context,
+    depth: usize,
+    current_name: Option<&str>,
+    potential: bool,
+) -> PyResult<bool> {
+    if depth > 20 {
+        return Ok(false);
+    }
+    let template = cached_template(source)?;
+    let key = (
+        djust_templates::registry_scope::current(),
+        source.to_owned(),
+    );
+    let Some((mut local, mut refs)) = TEMPLATE_CACHE
+        .get(&key)
+        .map(|entry| (entry.2, entry.3.clone()))
+    else {
+        return Ok(false);
+    };
+    if template.uses_extends() {
+        // A source-only pass must defer an unresolved dynamic parent.
+        if potential
+            && refs.iter().any(|dependency| {
+                let token = &dependency.operand;
+                !(token.starts_with(['\'', '"'])
+                    && token.ends_with(['\'', '"'])
+                    && !djust_templates::filter_lexer::has_unquoted_pipe(token))
+            })
+        {
+            return Ok(true);
+        }
+        let loader = FilesystemTemplateLoader::new(dirs.to_vec());
+        let chain = djust_templates::inheritance::build_inheritance_chain_from(
+            template.authored_nodes().to_vec(),
+            &loader,
+            20,
+            current_name,
+            Some(context),
+        )?;
+        let nodes = chain.apply_block_overrides(chain.get_root_nodes());
+        local = resolved_lazy_syntax(&nodes);
+        refs.clear();
+        lazy_dependencies(&nodes, &mut refs);
+    }
+    if local {
+        return Ok(true);
+    }
+    for dependency in refs {
+        let token = &dependency.operand;
+        let literal = token.starts_with(['\'', '"'])
+            && token.ends_with(['\'', '"'])
+            && !djust_templates::filter_lexer::has_unquoted_pipe(token);
+        // Pre-render source planning cannot know a dynamic selector yet. It
+        // preserves source bytes, but only resolved render planning tracks.
+        if potential && !literal {
+            return Ok(true);
+        }
+        let value = djust_templates::renderer::resolve_template_reference(token, context)?;
+        let candidates = match value {
+            Value::String(name) | Value::SafeString(name) => vec![name],
+            Value::List(values) => values.iter().map(|v| v.to_string()).collect(),
+            _ => Vec::new(),
+        };
+        let mut child_context = if dependency.only {
+            Context::new()
+        } else {
+            context.clone()
+        };
+        for (name, expression) in dependency.bindings.iter().filter(|_| !potential) {
+            child_context.bind(
+                name.clone(),
+                djust_templates::renderer::resolve_template_reference(expression, context)?,
+                false,
+            );
+        }
+        for name in candidates {
+            if name.is_empty() {
+                continue;
+            }
+            let name = djust_templates::inheritance::construct_relative_path_allow_recursion(
+                dependency.origin.as_deref().or(current_name),
+                &name,
+                true,
+            )?;
+            let mut selected = false;
+            for dir in dirs {
+                let path = dir.join(&name);
+                if path.is_file() {
+                    let child = lazy_source_file(&path)?;
+                    if needs_lazy_tree(
+                        &child,
+                        dirs,
+                        &child_context,
+                        depth + 1,
+                        Some(&name),
+                        potential,
+                    )? {
+                        return Ok(true);
+                    }
+                    selected = true;
+                    break;
+                }
+            }
+            if selected {
+                break;
+            } // Include selection stops at the first existing target.
+        }
+    }
+    Ok(false)
+}
+
+#[pyfunction]
+fn template_needs_provenance(source: &str, dirs: Vec<std::path::PathBuf>) -> PyResult<bool> {
+    needs_lazy_tree(source, &dirs, &Context::new(), 0, None, true)
+}
+
 fn cached_template(template_source: &str) -> PyResult<Arc<Template>> {
     let generation = djust_templates::registry::registry_generation();
     let key = (
@@ -2649,7 +2891,18 @@ fn cached_template(template_source: &str) -> PyResult<Arc<Template>> {
         }
     }
     let template = Arc::new(Template::new(template_source).map_err(span_aware_pyerr)?);
-    TEMPLATE_CACHE.insert(key, (template.clone(), generation));
+    let (tokens, offsets) = djust_templates::lexer::tokenize_spanned(template_source)?;
+    let spans: Vec<_> = tokens
+        .iter()
+        .zip(offsets)
+        .filter_map(|(token, span)| {
+            matches!(token, djust_templates::lexer::Token::Text(_)).then_some(span)
+        })
+        .collect();
+    let local = !djust_vdom::lazy_provenance::lazy_elements(template_source, &spans).is_empty();
+    let mut refs = Vec::new();
+    lazy_dependencies(template.authored_nodes(), &mut refs);
+    TEMPLATE_CACHE.insert(key, (template.clone(), generation, local, refs));
     Ok(template)
 }
 
@@ -2704,6 +2957,7 @@ fn release_registry_namespace(namespace: u64) -> PyResult<()> {
     djust_templates::filter_registry::release_namespace(namespace)?;
     djust_templates::inheritance::release_registry_namespace(namespace);
     TEMPLATE_CACHE.retain(|(scope, _), _| *scope != namespace);
+    RESOLVED_LAZY_SYNTAX.retain(|(scope, _, _), _| *scope != namespace);
     Ok(())
 }
 
@@ -5544,6 +5798,16 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(diff_html, m)?)?;
     m.add_function(wrap_pyfunction!(inter_tag_whitespace_edits, m)?)?;
     m.add_function(wrap_pyfunction!(authored_lazy_elements, m)?)?;
+    m.add_function(wrap_pyfunction!(template_needs_provenance, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        provenance_edits::normalize_provenance_whitespace,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        provenance_edits::collapse_provenance_whitespace,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(provenance_edits::lazy_authority_spans, m)?)?;
     m.add_function(wrap_pyfunction!(collapse_inter_tag_whitespace, m)?)?;
     m.add_function(wrap_pyfunction!(fast_json_dumps, m)?)?;
     m.add_function(wrap_pyfunction!(resolve_template_inheritance, m)?)?;

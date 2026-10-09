@@ -598,10 +598,12 @@ pub fn render_nodes_output<L: TemplateLoader, R: RenderOutput>(
     loader: Option<&L>,
 ) -> Result<R> {
     let mut output = R::default();
-    for node in nodes {
-        output.append(&render_effectful_node_output::<L, R>(
-            node, context, loader,
-        )?);
+    for (index, node) in nodes.iter().enumerate() {
+        let mut child = render_effectful_node_output::<L, R>(node, context, loader)?;
+        if R::TRACKED && child.has_origin() {
+            child.identify(&index.to_string());
+        }
+        output.append(&child);
     }
     Ok((output).into())
 }
@@ -621,7 +623,16 @@ fn render_effectful_node_output<L: TemplateLoader, R: RenderOutput>(
     {
         let _namespace = crate::registry_scope::NamespaceGuard::enter(*registry_namespace);
         let previous = context.replace_node_identity(Some((source.as_ptr() as usize, span.0)));
-        let rendered = render_effectful_node_output::<L, R>(&nodes[0], context, loader);
+        let mut rendered = render_effectful_node_output::<L, R>(&nodes[0], context, loader);
+        if R::TRACKED {
+            if let Ok(output) = &mut rendered {
+                output.identify(&format!(
+                    "{}:{}",
+                    origin.as_deref().unwrap_or("inline"),
+                    span.0
+                ));
+            }
+        }
         context.replace_node_identity(previous);
         return rendered.map_err(|error| {
             error
@@ -2450,6 +2461,7 @@ impl djust_core::context::BlockSuperSource for DeferredBlockSuper {
                 .into_iter()
                 .map(|r| (r.start, r.end))
                 .collect(),
+            rendered.origins,
         ))
     }
 }
@@ -2520,7 +2532,13 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
 ) -> Result<R> {
     match node {
         Node::Located { .. } => render_effectful_node_output::<L, R>(node, context, loader),
-        Node::Text(text) => Ok(R::authored(text)),
+        Node::Text(text) => {
+            let mut output = R::authored(text);
+            if R::TRACKED {
+                output.loop_identity(context);
+            }
+            Ok(output)
+        }
 
         Node::Variable(var_name, filter_specs, in_attr) => {
             if R::TRACKED
@@ -2834,7 +2852,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             let markers = dj_if_markers_enabled(context);
 
             // Render the body that fires (truthy/falsy branch).
-            let body = if condition_result {
+            let mut body = if condition_result {
                 render_nodes_output::<L, R>(true_nodes, context, loader)?
             } else if false_nodes.is_empty() {
                 if *in_tag_context || !markers {
@@ -2860,6 +2878,9 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             } else {
                 render_nodes_output::<L, R>(false_nodes, context, loader)?
             };
+            if R::TRACKED && body.has_origin() {
+                body.identify(if condition_result { "then" } else { "else" });
+            }
 
             // Decide whether to wrap in `<!--dj-if id="if-N"-->` /
             // `<!--/dj-if-->` boundary markers. Wrap iff:
@@ -3864,7 +3885,17 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                             nodes
                         };
 
-                    render_nodes_output::<L, R>(&nodes, include_context, Some(loader))
+                    let mut output =
+                        render_nodes_output::<L, R>(&nodes, include_context, Some(loader))?;
+                    if R::TRACKED && output.has_origin() {
+                        output.identify(&format!(
+                            "include:{}",
+                            loader
+                                .template_origin(name)
+                                .unwrap_or_else(|| name.to_owned())
+                        ));
+                    }
+                    Ok(output)
                 };
                 if let Some(fresh) = fresh_context.as_mut() {
                     render_include(fresh)
@@ -5533,6 +5564,12 @@ fn get_value_ignoring_failures(expr: &str, context: &Context) -> Result<Value> {
 /// [`get_value_ignoring_failures`] for which callers may use it.
 fn get_value_safe_ignoring_failures(expr: &str, context: &Context) -> Result<(Value, bool)> {
     get_value_safe_inner(expr, context, true)
+}
+
+/// Resolve a template reference with the renderer's own FilterExpression rules.
+/// Used by compiled lazy-container planning; no second expression grammar.
+pub fn resolve_template_reference(expr: &str, context: &Context) -> Result<Value> {
+    get_value(expr, context)
 }
 
 fn get_value(expr: &str, context: &Context) -> Result<Value> {

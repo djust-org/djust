@@ -397,6 +397,7 @@ class RequestMixin:
         from .._child_rendering import render_view_full_template, render_view_with_diff
 
         self._prepare_child_ids()
+        self._defer_lazy_registration = True
         html = render_view_full_template(self, request, serialized_context=state_serializable)
         # ADR-036 R1: recovery targets come from what the server rendered.
         from ..validation import note_rendered_recovery_targets
@@ -504,7 +505,7 @@ class RequestMixin:
 
         from .._lazy_containers import finalize_lazy_containers
 
-        finalize_lazy_containers(self, html)
+        html = finalize_lazy_containers(self, html)
         response: HttpResponse
         if getattr(self, "streaming_render", False):
             response = self._make_streaming_response(html)
@@ -856,6 +857,7 @@ class RequestMixin:
             from .._lazy_containers import mount_http_lazy
 
             self.get_template()
+            self._defer_lazy_registration = True
             page_html = render_view_full_template(self, request)
             from .._lazy_containers import finalize_lazy_containers
 

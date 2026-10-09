@@ -155,6 +155,11 @@ impl Template {
         inheritance::validate_relative_references(&self.nodes, name)
     }
 
+    /// Compiled tree for static render planning; never rendered client HTML.
+    pub fn authored_nodes(&self) -> &[Node] {
+        &self.nodes
+    }
+
     /// Per-node dependency sets (top-level context variable names each node uses).
     pub fn node_deps(&self) -> &[HashSet<String>] {
         &self.node_deps
@@ -326,7 +331,20 @@ impl Template {
         context: &Context,
         loader: &L,
     ) -> Result<provenance::Rendered> {
-        self.render_output_named_mut(&mut context.clone(), loader, None)
+        use std::hash::{Hash, Hasher};
+        let mut output: provenance::Rendered =
+            self.render_output_named_mut(&mut context.clone(), loader, None)?;
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        self.source.hash(&mut hash);
+        provenance::RenderOutput::identify(&mut output, &format!("template{:x}", hash.finish()));
+        for node in &self.nodes {
+            if let Node::Extends(token) = node {
+                let parent = renderer::resolve_template_reference(token, context)?.to_string();
+                let origin = loader.template_origin(&parent).unwrap_or(parent);
+                provenance::RenderOutput::identify(&mut output, &format!("parent:{origin}"));
+            }
+        }
+        Ok(output)
     }
 
     pub fn render_output_named_mut<L: TemplateLoader, R: provenance::RenderOutput>(

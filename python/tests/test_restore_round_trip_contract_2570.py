@@ -309,13 +309,15 @@ def test_render_html_delegates_both_modes_to_the_synced_rust_view() -> None:
         def render(self):
             return "plain"
 
-        def render_with_provenance(self):
-            return "tracked", [(0, 7)]
+        def render_lazy_html(self):
+            return "tracked", [(0, 7)], [(0, 7, 0, "authored-node")]
 
     renderer = Renderer()
     assert render_html(renderer, "plain") == "plain"
-    tracked = render_html(renderer, "<div dj-lazy></div>")
+    assert render_html(renderer, "<div dj-lazy></div>") == "plain"
+    tracked = render_html(renderer, '<div dj-view="app.Child" dj-lazy></div>')
     assert tracked == "tracked" and tracked.spans == ((0, 7),)
+    assert tracked.origins == ((0, 7, 0, "authored-node"),)
 
 
 def test_the_mount_path_syncs_explicitly_between_init_and_its_first_render() -> None:

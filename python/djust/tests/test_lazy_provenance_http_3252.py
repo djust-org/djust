@@ -117,7 +117,7 @@ def test_real_http_middleware_signed_cookie_session_keeps_stable_addresses(setti
         )
         assert response.status_code == 200, response.content
         assert re.search(
-            r'class="count"[^>]*>' + str(expected) + "</span>", response.json()["html"]
+            r'class="count"[^>]*>' + str(expected) + "</span>", json.loads(response.content)["html"]
         )
     assert re.findall(r'data-djust-lazy-id="([^"]+)"', client.get("/lazy/").content.decode()) == ids
     other = Client(enforce_csrf_checks=True)
@@ -465,3 +465,273 @@ def test_http_registration_from_inherited_page_shell_and_included_root(tmp_path,
         response = post(session, view_id, cls=FilePage)
         assert response.status_code == 200, response.content
         assert re.search(r'class="count"[^>]*>1</span>', json.loads(response.content)["html"])
+
+
+@pytest.mark.parametrize(
+    "source,payload,count",
+    [
+        (
+            '<!-- usage: <div dj-view="' + MOD + '.Child" dj-lazy data-q="{{ q|safe }}"> -->',
+            "--><div dj-view=" + MOD + '.Evil dj-lazy z=a"b c=x',
+            0,
+        ),
+        (
+            "<script>var t = '<div dj-view=\""
+            + MOD
+            + '.Child" dj-lazy data-q="{{ q|safe }}"></div>\';</script>',
+            "</script><div dj-view=" + MOD + '.Evil dj-lazy z=a"b c=x',
+            0,
+        ),
+        (
+            TAG + '<!-- <div dj-view="' + MOD + '.Child" dj-lazy data-q="{{ q|safe }}"> -->',
+            "--><div dj-view=" + MOD + '.Child dj-lazy z=a"b c=x',
+            1,
+        ),
+        (
+            '<!-- <div dj-view="' + MOD + '.Child" dj-lazy data-q="{{ q|safe }}"> -->',
+            "--><div dj-view=" + MOD + '.Child dj-lazy=hover z=a"b c=x',
+            0,
+        ),
+        (
+            "<p title='<div dj-view=\"" + MOD + '.Child" dj-lazy data-q="{{ q|safe }}">\'></p>',
+            "'><div dj-view=" + MOD + '.Evil dj-lazy z=a"b c=x',
+            0,
+        ),
+    ],
+)
+def test_probe4_tokens_cannot_borrow_another_tag_authored_ranges(source, payload, count):
+    html, spans, found = render(source, {"q": payload})
+    assert len(found) == count, (html, spans, found)
+    assert all(path == MOD + ".Child" and trigger == "" for _, _, path, trigger in found)
+
+
+class Evil(Child):
+    mounts = 0
+
+
+@pytest.mark.django_db
+def test_http_probe4_mount_is_refused():
+    class ForgedPage(Page):
+        template = (
+            "<div dj-root><script>var t = '<div dj-view=\""
+            + MOD
+            + '.Child" dj-lazy data-q="{{ q|safe }}"></div>\';</script></div>'
+        )
+
+        def mount(self, request, **kwargs):
+            self.q = "</script><div dj-view=" + MOD + '.Evil dj-lazy z=a"b c=x'
+
+    session = SessionStore()
+    session.create()
+    Evil.mounts = 0
+    assert get_ids(session, ForgedPage) == []
+    for address in ("lazy_000000000000", MOD + ".Evil"):
+        assert post(session, address, "djust_lazy_mount", ForgedPage).status_code == 400
+    assert Evil.mounts == 0
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("tag", [TAG, TAG.replace(" dj-view", ' class="{{ extra }}" dj-view')])
+def test_conditional_container_identity_keeps_the_remaining_child_state(tag):
+    class ConditionalPage(Page):
+        template = "<div dj-root>{% if first %}" + tag + "{% endif %}" + tag + "</div>"
+
+        def get_context_data(self, **kwargs):
+            context = super().get_context_data(**kwargs)
+            context["first"] = self.request.session.get("show_first", True)
+            return context
+
+    session = SessionStore()
+    session.create()
+    ids = get_ids(session, ConditionalPage)
+    assert len(ids) == 2
+    for _ in range(5):
+        assert post(session, ids[0], cls=ConditionalPage).status_code == 200
+    assert post(session, ids[1], cls=ConditionalPage).status_code == 200
+    session["show_first"] = False
+    session.save()
+    assert get_ids(session, ConditionalPage) == [ids[1]]
+    response = post(session, ids[1], cls=ConditionalPage)
+    assert response.status_code == 200
+    assert re.search(r'class="count"[^>]*>2</span>', json.loads(response.content)["html"])
+    assert post(session, ids[0], cls=ConditionalPage).status_code == 400
+
+
+@pytest.mark.django_db
+def test_html5_survival_runs_once_per_http_render(monkeypatch):
+    from djust import _rust
+
+    original = _rust.authored_lazy_elements
+    calls = []
+
+    def counted(*args):
+        calls.append(args[0])
+        return original(*args)
+
+    monkeypatch.setattr(_rust, "authored_lazy_elements", counted)
+    session = SessionStore()
+    session.create()
+    ids = get_ids(session)
+    assert len(calls) == 1
+    assert post(session, ids[0], "djust_lazy_mount").status_code == 200
+    assert len(calls) == 2
+
+
+@pytest.mark.django_db
+def test_wrapper_pages_do_not_emit_unmountable_lazy_ids(tmp_path, settings):
+    settings.TEMPLATES = [
+        {
+            "BACKEND": "django.template.backends.django.DjangoTemplates",
+            "DIRS": [str(tmp_path)],
+            "APP_DIRS": True,
+        }
+    ]
+    (tmp_path / "wrapper3252.html").write_text(
+        "<html><body>{{ liveview_content|safe }}</body></html>"
+    )
+
+    class WrappedPage(Page):
+        wrapper_template = "wrapper3252.html"
+
+    session = SessionStore()
+    session.create()
+    assert get_ids(session, WrappedPage) == []
+    assert post(session, "lazy_000000000000", "djust_lazy_mount", WrappedPage).status_code == 400
+
+
+def test_compiled_template_tree_gates_tracking(tmp_path):
+    from djust._render_provenance import _needs_provenance
+
+    dirs = (str(tmp_path),)
+    (tmp_path / "plain.html").write_text("<p>This includes prose that extends an idea.</p>")
+    (tmp_path / "lazy.html").write_text(TAG)
+    (tmp_path / "base.html").write_text("<main>{% block body %}{% endblock %}</main>")
+    assert not _needs_provenance("<p>include extends dj-lazy</p>", dirs)
+    assert not _needs_provenance('{% include "plain.html" %}', dirs)
+    assert not _needs_provenance(
+        '{% extends "base.html" %}{% block body %}ordinary{% endblock %}', dirs
+    )
+    assert _needs_provenance('{% include "lazy.html" %}', dirs)
+    (tmp_path / "base.html").write_text(TAG + "{% block body %}{% endblock %}")
+    assert _needs_provenance(
+        '{% extends "base.html" %}{% block body %}ordinary{% endblock %}', dirs
+    )
+    rust = RustLiveView("{% include selected %}", list(dirs))
+    rust.update_state({"selected": "plain.html"})
+    assert rust.render_lazy_html()[1:] == ([], [])
+    rust.update_state({"selected": "lazy.html"})
+    html, spans, origins = rust.render_lazy_html()
+    assert spans and origins and len(authored_lazy_elements(html, spans)) == 1
+
+
+@pytest.mark.parametrize(
+    "source,state,expected",
+    [
+        ('{% include chosen|default:"lazy.html" %}', {}, 1),
+        ("{% include chosen %}", {"chosen": ["missing.html", "lazy.html"]}, 1),
+        ("{% include chosen %}", {"chosen": ["plain.html", "lazy.html"]}, 0),
+        ('{% include "selector.html" with target="lazy.html" only %}', {}, 1),
+        ('{% extends "overridden.html" %}{% block body %}ordinary{% endblock %}', {}, 0),
+    ],
+)
+def test_resolved_template_plan_uses_selection_bindings_and_overrides(
+    tmp_path, source, state, expected
+):
+    (tmp_path / "lazy.html").write_text(TAG)
+    (tmp_path / "plain.html").write_text("ordinary")
+    (tmp_path / "selector.html").write_text("{% include target %}")
+    (tmp_path / "overridden.html").write_text(
+        "<main>{% block body %}" + TAG + "{% endblock %}</main>"
+    )
+    rust = RustLiveView(source, [str(tmp_path)])
+    rust.update_state(state)
+    html, spans, origins = rust.render_lazy_html()
+    assert len(authored_lazy_elements(html, spans)) == expected
+    if not expected:
+        assert spans == origins == []
+
+
+def test_utf8_slicing_and_batched_composition_keep_original_node_offsets():
+    from djust._render_provenance import RenderedHTML, join
+
+    html = RenderedHTML("é🙂<div>", ((0, 11),), origins=((0, 11, 10, "node"),))
+    part = html[1:]
+    assert part.byte_length == 9
+    assert part.spans == ((0, 9),)
+    assert part.origins == ((0, 9, 12, "node"),)
+    combined = join(("π", part, "!"))
+    assert combined.spans == ((2, 11),)
+    assert combined.origins == ((2, 11, 12, "node"),)
+    assert combined.byte_length == len(str(combined).encode())
+    assert combined.char_offset(6) == 2
+
+
+@pytest.mark.django_db
+def test_old_occurrence_address_is_refused():
+    from djust.mixins.sticky import _child_identity
+
+    session = SessionStore()
+    session.create()
+    ids = get_ids(session)
+    old = "lazy_" + _child_identity(
+        MOD + ".Child",
+        {
+            "page": MOD + ".Page",
+            "path": "/lazy/",
+            "session": session["_djust_lazy_binding"],
+            "user": "None",
+            "child_tenant": "",
+            "repeat": 1,
+        },
+    )
+    assert old not in ids
+    assert post(session, old, "djust_lazy_mount").status_code == 400
+
+
+@pytest.mark.parametrize(
+    "middle",
+    [
+        "<table>\n<tr><td>é 🙂</td>\n<td>  text  </td></tr>\n</table>",
+        '<script>const s = "<!-- literal -->";\n// keep newline\nlet x = 1;</script>',
+        "<style>/* <!-- literal --> */\np { white-space: pre; }</style>",
+        "<pre>é\n  🙂</pre>\n<code> x  y </code>\n<textarea>a\n b</textarea>",
+        "<!-- removed --><b>é</b> \n <i>🙂</i>",
+    ],
+)
+def test_tracked_normalization_is_byte_identical_and_keeps_real_container_authority(middle):
+    from djust._render_provenance import RenderedHTML
+
+    html, spans, _ = render(TAG + middle + TAG)
+    page = Page()
+    plain = page._strip_comments_and_whitespace(html)
+    tracked = page._strip_comments_and_whitespace(RenderedHTML(html, tuple(spans)))
+    assert tracked == plain
+    assert len(authored_lazy_elements(tracked, list(tracked.spans))) == 2
+
+
+@pytest.mark.django_db
+def test_conditional_loop_container_identity_uses_original_loop_index_path():
+    class ConditionalLoopPage(Page):
+        template = (
+            "<div dj-root>{% for n in numbers %}{% if n %}" + TAG + "{% endif %}{% endfor %}</div>"
+        )
+
+        def get_context_data(self, **kwargs):
+            context = super().get_context_data(**kwargs)
+            context["numbers"] = self.request.session.get("numbers", [1, 1, 1])
+            return context
+
+    session = SessionStore()
+    session.create()
+    ids = get_ids(session, ConditionalLoopPage)
+    assert len(ids) == 3
+    for _ in range(4):
+        assert post(session, ids[0], cls=ConditionalLoopPage).status_code == 200
+    assert post(session, ids[1], cls=ConditionalLoopPage).status_code == 200
+    session["numbers"] = [0, 1, 1]
+    session.save()
+    assert get_ids(session, ConditionalLoopPage) == ids[1:]
+    response = post(session, ids[1], cls=ConditionalLoopPage)
+    assert response.status_code == 200
+    assert re.search(r'class="count"[^>]*>2</span>', json.loads(response.content)["html"])
+    assert post(session, ids[0], cls=ConditionalLoopPage).status_code == 400

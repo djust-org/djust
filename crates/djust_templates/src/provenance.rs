@@ -9,6 +9,11 @@ pub trait RenderOutput: Default + From<String> + Deref<Target = str> + std::fmt:
     fn from_authored_output(output: djust_core::context::AuthoredOutput) -> Self;
     fn append(&mut self, child: &Self);
     fn push_str(&mut self, text: &str);
+    fn has_origin(&self) -> bool {
+        false
+    }
+    fn identify(&mut self, _identity: &str) {}
+    fn loop_identity(&mut self, _context: &djust_core::Context) {}
 }
 impl RenderOutput for String {
     const TRACKED: bool = false;
@@ -33,12 +38,14 @@ impl RenderOutput for String {
 pub struct Rendered {
     pub html: String,
     pub authored: Vec<Range<usize>>,
+    pub origins: Vec<(usize, usize, usize, String)>,
 }
 impl From<String> for Rendered {
     fn from(html: String) -> Self {
         Self {
             html,
             authored: Vec::new(),
+            origins: Vec::new(),
         }
     }
 }
@@ -59,6 +66,11 @@ impl RenderOutput for Rendered {
     fn authored(text: &str) -> Self {
         Self {
             html: text.to_owned(),
+            origins: if text.to_ascii_lowercase().contains("dj-view") {
+                vec![(0, text.len(), 0, String::new())]
+            } else {
+                Vec::new()
+            },
             authored: if text.is_empty() {
                 Vec::new()
             } else {
@@ -70,6 +82,7 @@ impl RenderOutput for Rendered {
         Self {
             html: output.0,
             authored: output.1.into_iter().map(|(a, b)| a..b).collect(),
+            origins: output.2,
         }
     }
     fn append(&mut self, child: &Self) {
@@ -80,10 +93,34 @@ impl RenderOutput for Rendered {
                 .iter()
                 .map(|r| r.start + offset..r.end + offset),
         );
+        self.origins.extend(
+            child
+                .origins
+                .iter()
+                .map(|(a, b, c, id)| (a + offset, b + offset, *c, id.clone())),
+        );
         self.html.push_str(&child.html);
     }
     fn push_str(&mut self, text: &str) {
         self.html.push_str(text);
+    }
+    fn has_origin(&self) -> bool {
+        !self.origins.is_empty()
+    }
+    fn identify(&mut self, identity: &str) {
+        for (_, _, _, id) in &mut self.origins {
+            *id = format!("{identity}/{id}");
+        }
+    }
+    fn loop_identity(&mut self, context: &djust_core::Context) {
+        if self.origins.is_empty() {
+            return;
+        }
+        self.identify(&format!(
+            "loop{}:include{}",
+            context.dj_if_loop_path(),
+            context.dj_if_include_path()
+        ));
     }
 }
 

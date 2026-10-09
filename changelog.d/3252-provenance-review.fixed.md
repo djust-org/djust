@@ -1,0 +1,1 @@
+- Bind lazy-view authority to the exact authored start tag and attribute bytes; preserve conditional child identity, keep ordinary pages on plain rendering, use linear tracked normalization, and validate final HTTP pages once. Wrapper-template pages no longer issue unusable lazy addresses; browser smoke logs use temporary storage.

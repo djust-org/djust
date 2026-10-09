@@ -6,7 +6,6 @@ The client sends a keyed address, never a class or a state payload.
 
 from __future__ import annotations
 
-from collections import Counter
 from dataclasses import dataclass
 from typing import Any
 
@@ -34,7 +33,13 @@ class LazyContainer:
 def register_lazy_containers(parent: Any, request: Any, html: str) -> str:
     """Authorize surviving authored containers without mounting/rendering them."""
     parent.__dict__["_http_lazy_containers"] = {}
-    if not isinstance(html, RenderedHTML) or request is None or not uses_legacy_exposure(parent):
+    if (
+        getattr(parent, "_defer_lazy_registration", False)
+        or getattr(parent, "wrapper_template", None)
+        or not isinstance(html, RenderedHTML)
+        or request is None
+        or not uses_legacy_exposure(parent)
+    ):
         return html
     from ._rust import authored_lazy_elements
     from .templatetags.live_tags import resolve_live_view_class
@@ -58,8 +63,8 @@ def register_lazy_containers(parent: Any, request: Any, html: str) -> str:
         request.session["_djust_lazy_binding"] = binding
     user_id = str(getattr(getattr(request, "user", None), "pk", None))
     page_class = getattr(type(parent), "__module__", "<unknown>") + "." + type(parent).__qualname__
-    repeats: Counter[str] = Counter()
     inserts = []
+    encoded = html.encode()
     for start, end, view_path, _trigger in elements:
         try:
             cls = resolve_live_view_class(view_path)
@@ -77,7 +82,11 @@ def register_lazy_containers(parent: Any, request: Any, html: str) -> str:
                 continue
         except (TemplateSyntaxError, PermissionDenied, Http404):
             continue
-        repeats[view_path] += 1
+        origin = html.authored_identity(start, end)
+        if origin is None:
+            # Compatibility for direct callers supplying only authored spans.
+            # HTTP renderer results always supply an authored node address.
+            origin = (start, "direct")
         identity = _child_identity(
             view_path,
             {
@@ -86,7 +95,7 @@ def register_lazy_containers(parent: Any, request: Any, html: str) -> str:
                 "session": binding,
                 "user": user_id,
                 "child_tenant": child_tenant,
-                "repeat": repeats[view_path],
+                "authored_node": origin,
             },
         )
         view_id = "lazy_" + identity
@@ -99,7 +108,7 @@ def register_lazy_containers(parent: Any, request: Any, html: str) -> str:
         # shadow this registration's keyed address.
         import re
 
-        tag = html.encode()[start:end].decode()
+        tag = encoded[start:end].decode()
         name = re.match(r"<[a-zA-Z][^ \t\r\n\f/>]*", tag)
         if name is None:
             continue
@@ -116,9 +125,16 @@ def register_lazy_containers(parent: Any, request: Any, html: str) -> str:
         )
     # Bytes are inserted by exact offsets after the final HTML5 check, never
     # by searching for a matching class/tag or counting rendered markup.
-    for offset, markup in reversed(inserts):
-        pos = len(html.encode()[:offset].decode())
-        html = html[:pos] + markup + html[pos:]
+    from ._render_provenance import join
+
+    parts, cursor = [], 0
+    for offset, markup in inserts:
+        pos = html.char_offset(offset)
+        parts.extend((html[cursor:pos], markup))
+        cursor = pos
+    parts.append(html[cursor:])
+    html = join(parts)
+    parent.__dict__["_http_lazy_validated_html"] = html
     return html
 
 
@@ -188,14 +204,17 @@ def save_http_lazy(parent: Any, request: Any, view_id: str, child: Any) -> None:
     refresh_other_views_state(request.session, entry.state_key)
 
 
-def finalize_lazy_containers(parent: Any, html: str) -> None:
+def finalize_lazy_containers(parent: Any, html: str) -> str:
     """Drop registrations whose authority did not survive the final page edits."""
+    if getattr(parent, "_defer_lazy_registration", False):
+        parent.__dict__["_defer_lazy_registration"] = False
+        return register_lazy_containers(parent, parent.request, html)
     registry = getattr(parent, "_http_lazy_containers", {})
-    if not registry:
-        return
+    if not registry or html is getattr(parent, "_http_lazy_validated_html", None):
+        return html
     if not isinstance(html, RenderedHTML):
         registry.clear()
-        return
+        return html
     import re
     from ._rust import authored_lazy_elements
 
@@ -208,3 +227,4 @@ def finalize_lazy_containers(parent: Any, html: str) -> None:
             retained.add(match.group(1))
     for view_id in set(registry) - retained:
         del registry[view_id]
+    return html

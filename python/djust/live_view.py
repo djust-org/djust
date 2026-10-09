@@ -1016,6 +1016,9 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         #   persisted across reconnects). Examples: self._action_state
         #   (PR #1324), self._<user_attr>.
         # Any new framework slot must be assigned BEFORE this line.
+        self._defer_lazy_registration = False
+        self._http_lazy_containers = {}
+        self._http_lazy_validated_html = None
         self._framework_attrs: frozenset = frozenset(self.__dict__.keys())
 
         # v0.8.0 — @action server-action state. Initialized AFTER
