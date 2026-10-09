@@ -1,0 +1,586 @@
+renderer.rs
+let text = output.to_string();
+Ok(context.record_provenance_flatten(output.into_authored_output(), text))
+R::context_literal(effect.html)
+effect.html.into()
+render_nodes_with_loader_mut(nodes, &mut context.clone(), loader)
+Value::Missing | Value::None => "n".to_string(),
+return "#nan".to_string();
+return "#0".to_string();
+value.to_string()
+filters::html_escape(&value.to_string())
+let content = render_nodes_with_loader_mut(children, context, loader)?;
+let content = render_nodes_with_loader_mut(children, context, loader)?;
+| Value::DictView { .. } => serde_json::to_string(v).unwrap_or_else(|_| v.to_string()),
+_ => v.to_string(),
+Err(_) => TagArg::plain(arg.to_string()),
+return TagArg::plain(arg.to_string());
+Err(_) => TagArg::plain(arg.to_string()),
+Err(_) => TagArg::plain(arg.to_string()),
+return arg.to_string();
+return arg.to_string();
+None => arg.to_string(),
+None => arg.to_string(),
+Value::Bool(b) => if *b { "true" } else { "false" }.to_string(),
+serde_json::to_string(&e.items).unwrap_or_else(|_| v.to_string())
+return serde_json::to_string(literal).unwrap_or_else(|_| arg.to_string());
+None => arg.to_string(),
+Some(spelled) => spelled.to_string(),
+djust_core::locale::localize_number_unlocalized(&value.to_string(), false)
+djust_core::locale::localize_number(&value.to_string())
+_ => value.to_string(),
+"Template loader not configured".to_string(),
+fn render_block_super(&self, ctx: &Context) -> Result<String> {
+Ok(rendered.into_authored_output())
+map.insert("block".to_string(), lazy_block);
+.into());
+djust_core::context::flatten_authored_output(output, text),
+text.into()
+Ok((text).into())
+Ok((filters::html_escape(&text)).into())
+R::context_neutral("<!--dj-if-->".to_string())
+Value::List(s.chars().map(|c| Value::String(c.to_string())).collect()),
+loop_dict.insert("parentloop".into(), parentloop);
+let parent_if_loop_path = ctx.dj_if_loop_path().to_string();
+loop_dict.insert("counter0".into(), Value::Integer(counter as i64));
+loop_dict.insert("counter".into(), Value::Integer(counter as i64 + 1));
+"revcounter".into(),
+"revcounter0".into(),
+loop_dict.insert("first".into(), Value::Bool(counter == 0));
+"last".into(),
+ctx.set("forloop".to_string(), Value::Object(loop_dict.clone()));
+.flatten();
+cache.insert(hash, html.to_string())
+item_html.to_string(),
+"No template names provided".to_string()
+let parent_include_path = context.dj_if_include_path().to_string();
+Ok((String::new()).into())
+ctx_value.to_string()
+ctx_value.to_string()
+.map(|v| v.to_string())
+.into())
+None => Ok((String::new()).into()),
+"djust_audio requires AudioMixin on the view".to_string(),
+let escaped = filters::html_escape(&manifest.to_string());
+Ok((format!("{DJUST_AUDIO_OPEN}{escaped}{DJUST_AUDIO_CLOSE}")).into())
+.map(|v| v.to_string())
+.unwrap_or_else(|| "/static/".to_string());
+operand[1..operand.len() - 1].to_string()
+v => v.to_string(),
+Ok((format!("{static_url}{path}")).into())
+.to_string(),
+Node::Comment => Ok((String::new()).into()),
+Node::Load(_) => Ok((String::new()).into()), // No-op at render time; preserved for reconstruction
+.into())
+return Ok((String::new()).into());
+let text = value.map(|v| v.to_string()).unwrap_or_default();
+text.into()
+Ok((output.to_string()).into())
+let text = SPACELESS_RE.replace_all(content.trim(), "><").to_string();
+Ok(content.flatten(text))
+ctx.bind("var".to_string(), Value::String(body.to_string()), true);
+value.to_string()
+Ok(body.flatten(text))
+text.into()
+R::context_literal(effect.html)
+effect.html.into()
+None => Ok((String::new()).into()),
+Ok((String::new()).into())
+"block".to_string(),
+scoped.mark_safe("block.super".to_string());
+(body.to_string(), Some(body))
+Ok((String::new()).into())
+Ok((django_date_format(&now, format)).into())
+Ok((html).into())
+Ok((String::new()).into())
+Ok((html).into())
+Ok((html).into())
+label: label.to_string(),
+value: value.to_string(),
+id: tab_id.to_string(),
+label: label.to_string(),
+content: content.to_string(),
+return Ok(ctx_value.to_string());
+return Ok(ctx_value.to_string());
+.replace(&format!("\\{quote}"), &quote.to_string())
+.replace(&format!("\\{quote}"), &quote.to_string())
+raw_arg[1..raw_arg.len() - 1].to_string()
+raw_arg.to_string()
+let text = val.to_string();
+return Ok("0".to_string());
+Some(if text == "-0" { "0".to_string() } else { text })
+context.set("p".to_string(), Value::Integer(5));
+value: "p".into(),
+max_value: "10".into(),
+max_width: "100".into(),
+asvar: Some("w".into()),
+value: "p".into(),
+max_value: "10".into(),
+max_width: "100".into(),
+value: "p".into(),
+max_value: "10".into(),
+max_width: "100".into(),
+args: vec!["p".into()],
+value: "p".into(),
+max_value: "10".into(),
+max_width: "100".into(),
+asvar: Some("w".into()),
+args: vec!["p".into()],
+asvar: Some("v".into()),
+context.set("p".to_string(), Value::String("<b>".to_string()));
+args: vec!["p".into(), "'F'".into()],
+asvar: Some("v".into()),
+args: vec!["p".into(), "'F'".into()],
+'d' => result.push_str(&dt.format("%d").to_string()), // 01-31
+'j' => result.push_str(&dt.format("%-d").to_string()), // 1-31
+'D' => result.push_str(&dt.format("%a").to_string()), // Mon
+'l' => result.push_str(&dt.format("%A").to_string()), // Monday
+'m' => result.push_str(&dt.format("%m").to_string()), // 01-12
+'n' => result.push_str(&dt.format("%-m").to_string()), // 1-12
+'M' => result.push_str(&dt.format("%b").to_string()), // Jan
+'F' => result.push_str(&dt.format("%B").to_string()), // January
+'Y' => result.push_str(&dt.format("%Y").to_string()), // 2024
+'y' => result.push_str(&dt.format("%y").to_string()), // 24
+'H' => result.push_str(&dt.format("%H").to_string()), // 00-23
+'i' => result.push_str(&dt.format("%M").to_string()), // 00-59
+'s' => result.push_str(&dt.format("%S").to_string()), // 00-59
+'G' => result.push_str(&dt.format("%-H").to_string()), // 0-23
+'g' => result.push_str(&dt.format("%-I").to_string()), // 1-12
+'A' => result.push_str(&dt.format("%p").to_string()), // AM/PM
+let hour = dt.format("%-I").to_string().parse::<u32>().unwrap_or(0);
+let minute = dt.format("%M").to_string();
+let ampm = if dt.format("%P").to_string() == "am" {
+'w' => result.push_str(&dt.format("%w").to_string()), // 0 (Sun) - 6 (Sat)
+'W' => result.push_str(&dt.format("%V").to_string()), // ISO week number
+let day = dt.format("%-d").to_string().parse::<u32>().unwrap_or(0);
+let month = dt.format("%-m").to_string().parse::<u32>().unwrap_or(1);
+let year = dt.format("%Y").to_string().parse::<i32>().unwrap_or(2000);
+result.push_str(&days.to_string());
+let year = dt.format("%Y").to_string().parse::<i32>().unwrap_or(2000);
+'e' => result.push_str(&dt.format("%Z").to_string()),
+'c' => result.push_str(&dt.format("%Y-%m-%dT%H:%M:%S%:z").to_string()),
+'r' => result.push_str(&dt.format("%a, %d %b %Y %H:%M:%S %z").to_string()),
+'U' => result.push_str(&dt.timestamp().to_string()),
+'N' => result.push_str(&dt.format("%b.").to_string()), // Month abbrev AP style
+template: "\"boom.html\"".to_string(),
+Err(DjangoRustError::TemplateError("exit blew up".to_string()))
+context.set("lang".to_string(), Value::String("fr".to_string()));
+context.set("nothing".to_string(), Value::None);
+Some("de".to_string())
+Some("de".to_string())
+Some("fr".to_string())
+let nodes = vec![Node::Text("Hello".to_string())];
+let nodes = vec![Node::Variable("name".to_string(), vec![], false)];
+context.set("name".to_string(), Value::String("World".to_string()));
+"name".to_string(),
+Value::String("it's \"q\" <b> a\\b\n".to_string()),
+context.set("show".to_string(), Value::Bool(true));
+"items".to_string(),
+Value::String("a".to_string()),
+Value::String("b".to_string()),
+Value::String("c".to_string()),
+"items".to_string(),
+Value::String("a".to_string()),
+Value::String("b".to_string()),
+Value::String("c".to_string()),
+"numbers".to_string(),
+"items".to_string(),
+Value::String("x".to_string()),
+Value::String("y".to_string()),
+Value::String("z".to_string()),
+"items".to_string(),
+Value::String("a".to_string()),
+Value::String("b".to_string()),
+context.set("items".to_string(), Value::List(vec![]));
+context.set("properties".to_string(), Value::List(vec![]));
+"djust_audio_manifest".to_string(),
+Value::String("{\"a\":\"<x>&'\"}".to_string()),
+assert!(err.to_string().contains("AudioMixin"), "{err}");
+context.set("djust_audio_manifest".to_string(), Value::None);
+assert!(err.to_string().contains("AudioMixin"), "{err}");
+"csrf_token".to_string(),
+Value::String("test-csrf-token-123".to_string()),
+"STATIC_URL".to_string(),
+Value::String("/static/".to_string()),
+"STATIC_URL".to_string(),
+Value::String("https://cdn.example.com/static/".to_string()),
+"message".to_string(),
+Value::String("Hello World".to_string()),
+context.set("x".to_string(), Value::String("foo".to_string()));
+context.set("y".to_string(), Value::String("bar".to_string()));
+context.set("name".to_string(), Value::String("outer".to_string()));
+context.set("other".to_string(), Value::String("inner".to_string()));
+context.set("a".to_string(), Value::Bool(true));
+context.set("b".to_string(), Value::Bool(true));
+context.set("b".to_string(), Value::Bool(false));
+context.set("a".to_string(), Value::Bool(false));
+context.set("b".to_string(), Value::Bool(true));
+context.set("b".to_string(), Value::Bool(false));
+context.set("a".to_string(), Value::List(vec![]));
+context.set("b".to_string(), Value::String(String::new()));
+context.set("a".to_string(), Value::List(vec![Value::Integer(1)]));
+context.set("a".to_string(), Value::Bool(false));
+context.set("b".to_string(), Value::Bool(true));
+context.set("c".to_string(), Value::Bool(false));
+context.set("a".to_string(), Value::Bool(true));
+context.set("b".to_string(), Value::Bool(false));
+context.set("a".to_string(), Value::Bool(true));
+context.set("b".to_string(), Value::Bool(true));
+context.set("c".to_string(), Value::Bool(true));
+context.set("b".to_string(), Value::Bool(false));
+context.set("a".to_string(), Value::Bool(true));
+context.set("b".to_string(), Value::Bool(false));
+context.set("b".to_string(), Value::Bool(true));
+context.set("a".to_string(), Value::Bool(false));
+context.set("b".to_string(), Value::Bool(false));
+context.set("item".to_string(), Value::String("b".to_string()));
+"items".to_string(),
+Value::String("a".to_string()),
+Value::String("b".to_string()),
+Value::String("c".to_string()),
+context.set("item".to_string(), Value::String("z".to_string()));
+context.set("sub".to_string(), Value::String("world".to_string()));
+context.set("text".to_string(), Value::String("hello world".to_string()));
+context.set("sub".to_string(), Value::String("xyz".to_string()));
+map.insert("2".into(), Value::Bool(true));
+map.insert("5".into(), Value::String("hello".to_string()));
+context.set("mydict".to_string(), Value::Object(map));
+context.set("key".to_string(), Value::String("2".to_string()));
+context.set("key".to_string(), Value::String("99".to_string()));
+context.set("key".to_string(), Value::Integer(5));
+context.set("mydict".to_string(), Value::Object(int_keyed));
+context.set("key".to_string(), Value::Integer(5));
+context.set("key".to_string(), Value::String("5".to_string()));
+map.insert("42".into(), Value::Bool(true));
+context.set("mydict".to_string(), Value::Object(map));
+context.set("val".to_string(), Value::Integer(42));
+context.set("val".to_string(), Value::Integer(99));
+"content".to_string(),
+Value::String("<script>alert(\"xss\")</script>".to_string()),
+"content".to_string(),
+Value::String("<b>bold</b>".to_string()),
+"content".to_string(),
+Value::String("<b>\"hi\"</b>".to_string()),
+context.set("name".to_string(), Value::String("World".to_string()));
+context.set("show".to_string(), Value::Bool(false));
+context.set("show".to_string(), Value::Bool(true));
+context.set("show".to_string(), Value::Bool(false));
+context.set("show".to_string(), Value::Bool(false));
+context.set("a".to_string(), Value::Bool(false));
+context.set("b".to_string(), Value::Bool(true));
+context.set("c".to_string(), Value::Bool(false));
+context.set("value".to_string(), Value::Integer(175));
+context.set("max_value".to_string(), Value::Integer(200));
+context.set("max_width".to_string(), Value::Integer(100));
+context.set("value".to_string(), Value::Integer(50));
+context.set("max_value".to_string(), Value::Integer(0));
+context.set("value".to_string(), Value::Integer(75));
+context.set("total".to_string(), Value::Integer(100));
+context.set("var2".to_string(), Value::String("hello".to_string()));
+context.set("var3".to_string(), Value::String("world".to_string()));
+"var1".to_string(),
+Value::String("<script>xss</script>".to_string()),
+"items".to_string(),
+Value::String("a".to_string()),
+Value::String("b".to_string()),
+Value::String("c".to_string()),
+"outer".to_string(),
+Value::String("a".to_string()),
+Value::String("b".to_string()),
+"inner".to_string(),
+Value::String("x".to_string()),
+Value::String("y".to_string()),
+user.insert("name".into(), Value::String("Alice".to_string()));
+context.set("user".to_string(), Value::Object(user));
+context.set("x".to_string(), Value::String("<b>hi</b>".to_string()));
+"x".to_string(),
+Value::String("Visit https://example.com".to_string()),
+context.set("x".to_string(), Value::String("<b>hi</b>".to_string()));
+context.set("x".to_string(), Value::String("<b>hi</b>".to_string()));
+context.set("active".to_string(), Value::Bool(false));
+context.set("active".to_string(), Value::Bool(true));
+context.set("show".to_string(), Value::Bool(false));
+context.set("show".to_string(), Value::Bool(false));
+context.set("show".to_string(), Value::Bool(false));
+context.set("a".to_string(), Value::Bool(false));
+context.set("b".to_string(), Value::Bool(false));
+context.set("a".to_string(), Value::Bool(false));
+context.set("b".to_string(), Value::Bool(true));
+context.set("a".to_string(), Value::Bool(false));
+context.set("b".to_string(), Value::Bool(false));
+context.set("c".to_string(), Value::Bool(false));
+Value::String("a".to_string()),
+map.insert("key".into(), Value::String("val".to_string()));
+assert_eq!(Value::Integer(42).to_string(), "42");
+assert_eq!(Value::Bool(true).to_string(), "True");
+assert_eq!(Value::String("hello".to_string()).to_string(), "hello");
+"items".to_string(),
+obj.insert("key".into(), Value::String("val".to_string()));
+ctx.set("obj".to_string(), Value::Object(obj));
+ctx.set("count".to_string(), Value::Integer(42));
+ctx.set("name".to_string(), Value::String("hello".to_string()));
+Value::Decimal("1.50".to_string()),
+Value::BigInt("123456789012345678901".to_string()),
+Value::String("ab".to_string()),
+type_name: "datetime.datetime".to_string(),
+display: "2020-01-01 03:04:05".to_string(),
+json: "2020-01-01T03:04:05".to_string(),
+repr: "datetime.datetime(2020, 1, 1, 3, 4, 5)".to_string(),
+type_name: "set".to_string(),
+display: "set()".to_string(),
+json: "set()".to_string(),
+repr: "set()".to_string(),
+type_name: "set".to_string(),
+display: "{'a'}".to_string(),
+json: "{'a'}".to_string(),
+repr: "{'a'}".to_string(),
+items: Some(vec![Value::String("a".to_string())]),
+type_name: "FalsyIterable".to_string(),
+display: "FalsyIterable()".to_string(),
+json: "FalsyIterable()".to_string(),
+repr: "FalsyIterable()".to_string(),
+items: Some(vec![Value::String("x".to_string())]),
+type_name: "LenZero".to_string(),
+display: "<LenZero object>".to_string(),
+json: "<LenZero object>".to_string(),
+repr: "<LenZero object>".to_string(),
+ctx.set("p".to_string(), value.clone());
+var_names: vec!["x".to_string()],
+iterable: "p".to_string(),
+nodes: vec![Node::Text("[item]".to_string())],
+empty_nodes: vec![Node::Text("[empty]".to_string())],
+map.insert("key".into(), Value::String("val".to_string()));
+assert_eq!(value_to_arg_string(&Value::String("hi".to_string())), "hi");
+let s = Value::String("<b>".to_string());
+Value::List(vec![Value::String("<b>".to_string())]),
+ctx.set("marked".to_string(), Value::String("<b>".to_string()));
+ctx.mark_safe("marked".to_string());
+ctx.set("marked".to_string(), Value::String("<b>".to_string()));
+ctx.mark_safe("marked".to_string());
+value_channel_arg_string(&Value::String("ab".to_string())),
+value_channel_arg_string(&Value::String("a\"b\\c".to_string())),
+value_channel_arg_string(&Value::Decimal("1.5".to_string())),
+value_channel_arg_string(&Value::BigInt("123456789012345678901".to_string())),
+"items".to_string(),
+Value::String("a".to_string()),
+Value::String("b".to_string()),
+Value::String("c".to_string()),
+assert_eq!(result.to_string(), "3");
+context.set("name".to_string(), Value::String("hello".to_string()));
+assert_eq!(result.to_string(), "HELLO");
+context.set("count".to_string(), Value::Integer(42));
+assert_eq!(result.to_string(), "42");
+context.set("True".to_string(), Value::String("not a bool".to_string()));
+assert_eq!(val.to_string(), "not a bool");
+context.set(k.to_string(), v);
+&Value::String("a".to_string()),
+&Value::String("a".to_string())
+templates.insert((*name).to_string(), nodes);
+"theme_panel".to_string(),
+Value::String("<div class=\"panel\">x</div>".to_string()),
+context.mark_safe("theme_panel".to_string());
+let loader = MapLoader::new(&[("_partial.html", "[{{ theme_panel }}]")]);
+let tokens = tokenize("{% include \"_partial.html\" %}").unwrap();
+"theme_panel".to_string(),
+Value::String("<div class=\"panel\">x</div>".to_string()),
+context.mark_safe("theme_panel".to_string());
+let loader = MapLoader::new(&[("_partial.html", "[{{ nav_items }}]")]);
+let tokens = tokenize("{% include \"_partial.html\" %}").unwrap();
+"nav_items".to_string(),
+Value::String("home,about".to_string()),
+("_start.html", "{% include \"_sidebar.html\" %}"),
+("_sidebar.html", "<aside>{{ theme_panel }}</aside>"),
+let tokens = tokenize("{% include \"_start.html\" %}").unwrap();
+"theme_panel".to_string(),
+Value::String("<b>P</b>".to_string()),
+context.mark_safe("theme_panel".to_string());
+&Value::String("5".to_string()),
+assert!(bool_as_int(&Value::String("1".to_string())).is_none());
+assert!(!values_equal(&t, &Value::String("1".to_string())));
+assert!(!values_equal(&Value::String("True".to_string()), &t));
+try_compare(&Value::Bool(true), &Value::String("1".to_string())),
+a.insert("a".into(), Value::Integer(1));
+a.insert("b".into(), Value::Integer(2));
+b.insert("b".into(), Value::Integer(2));
+b.insert("a".into(), Value::Integer(1));
+c.insert("a".into(), Value::Integer(1));
+&l(vec![l(vec![]), Value::String("a".into()), d]),
+try_compare(&Value::String("a".into()), &Value::Integer(1)),
+try_compare(&Value::String("b".into()), &Value::String("a".into())),
+ctx.set("p".to_string(), Value::String("a.css".into()));
+ctx.set("p".to_string(), Value::String("a.css".into()));
+ctx.set("STATIC_URL".to_string(), Value::String("/s/".into()));
+ctx.set("p".to_string(), Value::String("a.css".into()));
+context.rs
+fn render_block_super(&self, ctx: &Context) -> crate::Result<String>;
+self.render_block_super(ctx)
+pub fn flatten_authored_output(output: AuthoredOutput, text: String) -> AuthoredOutput {
+_ => Err(pyo3::exceptions::PyKeyError::new_err(key.to_string())),
+let path = path.into();
+let namespace = namespace.into();
+let path = path.into();
+self.string_if_invalid = value.into();
+state.insert(key, value.to_string());
+pub fn record_provenance_flatten(&self, output: AuthoredOutput, text: String) -> String {
+let output = flatten_authored_output(output, text);
+Ok(Some(self.record_provenance_flatten(output, text)))
+source.render_block_super(self).map(Some)
+type_name: "LazyBlock".to_string(),
+repr: LAZY_BLOCK_REPR.to_string(),
+frame.safe_keys_mut().insert(name.to_string());
+frame.unsafe_keys_mut().insert(name.to_string());
+frame.aliases_mut().insert(key.to_string(), None);
+frame.revoked_safe_subtrees_mut().insert(key.to_string());
+let mut prefixes: Vec<String> = vec![key.to_string()];
+.map(|c| Value::String(c.to_string()))
+.insert(loop_var.to_string(), None);
+self.resolve_alias(path).unwrap_or_else(|| path.to_string())
+key.to_string()
+if !guard.insert(path.to_string()) {
+ctx.bind("o".into(), Value::String("<!--".into()), true);
+clone.set("o".into(), Value::String("-->".into()));
+inner.bind("o".into(), Value::String("-->".into()), true);
+inner.bind_upward("o".into(), Value::String("x".into()), false);
+ctx.set("name".to_string(), Value::String("Django".to_string()));
+user.insert("name".into(), Value::String("John".to_string()));
+user.insert("age".into(), Value::Integer(30));
+ctx.set("user".to_string(), Value::Object(user));
+ctx.set("a".to_string(), Value::Integer(1));
+ctx.set("a".to_string(), Value::Integer(2));
+.map(|s| Value::String(s.to_string()))
+"p".to_string(),
+ctx.mark_safe("p.0".to_string());
+ctx.mark_safe("p.1".to_string());
+ctx.set("p".to_string(), Value::Tuple(strs(&["a", "b"])));
+ctx.mark_safe("p.0".to_string());
+ctx.mark_safe("p.1".to_string());
+ctx.set("p".to_string(), Value::List(strs(&["a", "b", "c"])));
+map.insert("0".into(), Value::String("<b>v</b>".to_string()));
+ctx.set("p".to_string(), Value::Object(map));
+ctx.mark_safe("p.0".to_string());
+ctx.set("p".to_string(), Value::String("<b>x</b>".to_string()));
+ctx.mark_safe("p".to_string());
+ctx.mark_safe("p.0".to_string());
+ctx.set("p".to_string(), Value::List(vec![]));
+"p".to_string(),
+Value::String("<b>a</b>".to_string()),
+ctx.mark_safe("p.0".to_string());
+ctx.mark_safe("p.1".to_string());
+ctx.mark_safe("p.1.0".to_string());
+"p".to_string(),
+ctx.mark_safe("p.0".to_string());
+ctx.set("rows".to_string(), Value::List(vec![row.clone()]));
+ctx.mark_safe("rows.0.0".to_string());
+ctx.mark_safe("rows.0.1".to_string());
+ctx.set("row".to_string(), row);
+ctx.set_loop_mapping("row".to_string(), "rows".to_string(), 0);
+"rows".to_string(),
+ctx.mark_safe("rows.0.0".to_string());
+ctx.set("row".to_string(), unmarked);
+ctx.set_loop_mapping("row".to_string(), "rows".to_string(), 1);
+map.insert("a".into(), Value::Integer(1));
+map.insert("b".into(), Value::Integer(2));
+ctx.set("d".to_string(), Value::Object(map));
+items.iter().map(|v| v.to_string()).collect::<Vec<_>>(),
+items.iter().map(|v| v.to_string()).collect::<Vec<_>>(),
+assert_eq!(pair[0].to_string(), "a");
+assert_eq!(pair[1].to_string(), "1");
+ctx.resolve(path).unwrap().unwrap().to_string(),
+map.insert("items".into(), Value::Integer(5));
+ctx.set("d".to_string(), Value::Object(map));
+assert_eq!(ctx.resolve("d.items").unwrap().unwrap().to_string(), "5");
+ctx.set("s".to_string(), Value::String("x".to_string()));
+ctx.set("l".to_string(), Value::List(vec![Value::Integer(1)]));
+inner.insert("x".into(), Value::Integer(9));
+outer.insert("inner".into(), Value::Object(inner));
+ctx.set("d".to_string(), Value::Object(outer));
+items.iter().map(|v| v.to_string()).collect::<Vec<_>>(),
+ctx.set("p".to_string(), Value::String("<b>x</b>".into()));
+ctx.mark_safe("p".to_string());
+ctx.mark_safe("p.a".to_string());
+ctx.mark_safe("q".to_string());
+ctx.bind("x".to_string(), Value::String("<b>".into()), true);
+ctx.bind("p".to_string(), Value::String("<img>".into()), false);
+ctx.bind("p".to_string(), Value::String("<img>".into()), false);
+ctx.bind("p".to_string(), Value::String("<img>".into()), false);
+ctx.bind("p".to_string(), Value::String("<b>ok</b>".into()), true);
+(Value::String("<b>0</b>".into()), true),
+(Value::String("<i>1</i>".into()), false),
+(Value::String("<u>2</u>".into()), true),
+a.bind("p".to_string(), value.clone(), *safe);
+b.set("p".to_string(), value.clone());
+map.insert("rows".to_string(), Value::List(rows));
+map.insert("title".to_string(), Value::String("t".to_string()));
+map.insert("rows".to_string(), Value::List(vec![Value::Integer(1)]));
+map.insert("n".to_string(), Value::Integer(1));
+context.set_at(0, "n".to_string(), Value::Integer(2));
+original.set("inner".to_string(), Value::Integer(1));
+original.set("innermost".to_string(), Value::Integer(2));
+original.set("title".to_string(), Value::String("changed".to_string()));
+original.set("added".to_string(), Value::Integer(7));
+copy.set("title".to_string(), Value::String("changed".to_string()));
+ctx.set("forloop".to_string(), Value::String("outer".to_string()));
+inner.set("row".to_string(), Value::Integer(i));
+inner.set("forloop".to_string(), Value::Integer(100 + i));
+ctx.set("a".to_string(), Value::List(vec![Value::Tuple(vec![])]));
+ctx.mark_safe("a.0.1".to_string());
+ctx.set("title".to_string(), Value::String("shadowed".to_string()));
+ctx.set_alias("r".to_string(), "rows".to_string());
+ctx.bind("bound".to_string(), Value::Integer(1), false);
+original.mark_safe("inner".to_string());
+original.set_alias("q".to_string(), "rows.1".to_string());
+original.mark_safe("title".to_string()); // title: unsafe -> safe
+original.set_alias("z".to_string(), "rows.2".to_string());
+copy.bind("rows".to_string(), Value::Integer(0), false);
+ctx.mark_safe("row".to_string()); // a marked OUTER `row` the loop shadows
+inner.set("row".to_string(), Value::Integer(i));
+ctx.mark_safe("inner".to_string()); // frame 1 has a grant of its own
+ctx.bind_upward("title".to_string(), Value::Integer(1), false);
+ctx.bind_upward("rows".to_string(), Value::Integer(0), false);
+ctx.mark_safe("p".to_string());
+ctx.mark_safe("pp".to_string());
+ctx.mark_safe("p.a".to_string());
+fn render_block_super(&self, _ctx: &Context) -> crate::Result<String> {
+provenance.rs
+text.into()
+text.into()
+text.into()
+text.into()
+pub fn into_authored_output(self) -> djust_core::context::AuthoredOutput {
+self.html,
+let mut masked = vec![b' '; self.html.len()];
+masked[span.clone()].copy_from_slice(&self.html.as_bytes()[span.clone()]);
+&self.html
+f.write_str(&self.html)
+Self::from_authored_output(djust_core::context::flatten_authored_output(
+self.into_authored_output(),
+let offset = self.html.len();
+self.html.push_str(&child.html);
+self.html.push_str(text);
+ctx.set("flag".into(), Value::Bool(true));
+"xs".into(),
+ctx.set("extra".into(), Value::String("Δ".into()));
+let mut mixed = Rendered::context_literal("é".into());
+assert_eq!(mixed.flatten(replacement.into()).authority_cutoff, Some(0));
+let mut literal = Rendered::context_literal("é".into());
+literal.append(&Rendered::context_neutral("<!--dj-if-->".into()));
+assert_eq!(literal.flatten(replacement.into()).authority_cutoff, None);
+.flatten(replacement.into())
+Rendered::context_uncertain("".into())
+.flatten(replacement.into())
+".into()",
+".to_string()",
+".html",
+".flatten(",
+"into_authored_output(",
+"flatten_authored_output(",
+"render_nodes_with_loader_mut(",
+"render_block_super(",
+"record_provenance_flatten(",
+assert_eq!(r.literals, vec![0..r.html.len()]);
+assert!(live.html.starts_with("<!---->"));
+ctx.set("flag".into(), Value::Bool(true));
+let text: String = r.authored.iter().map(|s| &r.html[s.clone()]).collect();
+assert!(r.html.is_char_boundary(span.start) && r.html.is_char_boundary(span.end));
+for children in node.child_lists_mut().into_iter().flatten() {
+for children in node.child_lists_mut().into_iter().flatten() {

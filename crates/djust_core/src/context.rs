@@ -585,6 +585,9 @@ pub struct Context {
     /// the resolver holds `&Context` — hence a shareable handle rather than
     /// a borrow. See [`BlockSuperSource`].
     block_super: Option<std::sync::Arc<dyn BlockSuperSource>>,
+    // Render-owned notification: resolver/capture APIs return Values and cannot
+    // carry intervals. Shared only by scopes/clones of this tracked render.
+    provenance_flatten: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl Default for Context {
@@ -625,6 +628,7 @@ impl Clone for Context {
             // the parent NODES, not a rendered string, so cloning it costs a
             // refcount.
             block_super: self.block_super.clone(),
+            provenance_flatten: self.provenance_flatten.clone(),
         }
     }
 }
@@ -667,6 +671,18 @@ pub type AuthoredOutput = (
     Vec<(usize, usize)>, // Masked renderer-owned markers.
     Option<usize>,       // First position after which lazy authority fails closed.
 );
+
+/// The single fail-closed rule for rendered content becoming opaque. Markers
+/// are renderer-owned neutral bytes, not values. Never clear an inner cutoff,
+/// even if the transform removes all bytes. Byte equality is irrelevant here:
+/// callers preserving boundaries do not flatten and must bypass this helper.
+pub fn flatten_authored_output(output: AuthoredOutput, text: String) -> AuthoredOutput {
+    let literal = output.3.iter().map(|(a, b)| b - a).sum::<usize>();
+    let neutral = output.4.iter().map(|(a, b)| b - a).sum::<usize>();
+    let mixed = literal > 0 && literal + neutral < output.0.len();
+    let cutoff = (mixed || output.5.is_some()).then_some(0);
+    (text, Vec::new(), Vec::new(), Vec::new(), Vec::new(), cutoff)
+}
 
 /// The `block` a PYTHON-BRIDGED tag receives while a `{{ block.super }}` is
 /// armed (#2918).
@@ -1081,6 +1097,7 @@ impl Context {
             loop_scope_counter: std::sync::Arc::default(),
             string_if_invalid: String::new(),
             block_super: None,
+            provenance_flatten: None,
         }
     }
 
@@ -1135,6 +1152,7 @@ impl Context {
             loop_scope_counter: std::sync::Arc::default(),
             string_if_invalid: String::new(),
             block_super: None,
+            provenance_flatten: None,
         }
     }
 
@@ -1573,6 +1591,33 @@ impl Context {
             .collect()
     }
 
+    /// Begin a tracked render's value/capture loss notifications.
+    pub fn enable_provenance_flatten_tracking(&mut self) {
+        if self.provenance_flatten.is_none() {
+            self.provenance_flatten = Some(std::sync::Arc::default());
+        }
+    }
+
+    pub fn provenance_flatten_tracking(&self) -> bool {
+        self.provenance_flatten.is_some()
+    }
+
+    pub fn record_provenance_flatten(&self, output: AuthoredOutput, text: String) -> String {
+        let output = flatten_authored_output(output, text);
+        if output.5.is_some() {
+            if let Some(pending) = &self.provenance_flatten {
+                pending.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        output.0
+    }
+
+    pub fn take_provenance_flatten(&self) -> bool {
+        self.provenance_flatten
+            .as_ref()
+            .is_some_and(|pending| pending.swap(false, std::sync::atomic::Ordering::Relaxed))
+    }
+
     /// Arm the DEFERRED `{{ block.super }}` for this scope (#2710).
     ///
     /// Called by the renderer's `Node::BlockSuperScope` arm on the scoped
@@ -1605,7 +1650,15 @@ impl Context {
     /// reads `super`, and every read calls it again (no memo, #2918).
     pub fn render_armed_block_super(&self) -> crate::Result<Option<String>> {
         match self.block_super.clone() {
-            Some(source) => source.render_block_super(self).map(Some),
+            Some(source) => {
+                if self.provenance_flatten_tracking() {
+                    let output = source.render_block_super_authored(self)?;
+                    let text = output.0.clone();
+                    Ok(Some(self.record_provenance_flatten(output, text)))
+                } else {
+                    source.render_block_super(self).map(Some)
+                }
+            }
             None => Ok(None),
         }
     }
@@ -2312,10 +2365,11 @@ impl Context {
         // `SafeString`, because Django `mark_safe`s the result: it is
         // rendered template output, already escaped by whatever produced it,
         // and escaping it again would double-escape every parent block.
-        if key == "block.super" {
-            if let Some(source) = self.block_super.clone() {
-                return Ok(Some(Value::SafeString(source.render_block_super(self)?)));
-            }
+        if key == "block.super" && self.block_super.is_some() {
+            // All Value/bridge captures share the same flatten chokepoint.
+            return self
+                .render_armed_block_super()
+                .map(|text| text.map(Value::SafeString));
         }
         // Django's THREE template builtins, tried LAST (#2347).
         //

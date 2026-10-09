@@ -399,3 +399,167 @@ def test_changed_literal_only_super_keeps_following_authority(tmp_path):
     html, spans = rust.render_with_provenance()
     assert html.startswith("y")
     assert len(authored_lazy_elements(html, spans)) == 1
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("q", ["-->", "x"])
+@pytest.mark.parametrize(
+    "flt",
+    [
+        "truncatechars:200",
+        "truncatewords:50",
+        "default:q",
+        "default_if_none:q",
+        "safe|truncatechars:200",
+        "ljust:n",
+        "round4_identity",
+    ],
+)
+def test_http_any_flattened_mixed_super_fails_closed(tmp_path, settings, q, flt):
+    if flt == "round4_identity":
+        from djust.template_filters import register_django_filter
+
+        def identity(value):
+            return value
+
+        register_django_filter(flt, identity)
+    settings.TEMPLATES = [
+        {
+            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "DIRS": [str(tmp_path)],
+            "APP_DIRS": True,
+        }
+    ]
+    (tmp_path / "parent.html").write_text("{% block body %}<!--y{{ q|safe }}{% endblock %}")
+    (tmp_path / "child.html").write_text(
+        '{% extends "parent.html" %}{% block body %}{{ block.super|'
+        + flt
+        + " }}"
+        + HIDDEN
+        + "-->{% endblock %}"
+    )
+    ids, statuses, mounts = run(
+        "<div dj-root>" + TAG + '{% include "child.html" %}</div>', {"q": q, "n": 1}
+    )
+    assert len(ids) == 1
+    assert statuses == [200]
+    assert mounts == 0
+
+
+MIXED_WRAPPERS = [
+    '{% spaceless %}{% include "mixed.html" %}{% endspaceless %}',
+    '{% filter lower %}{% include "mixed.html" %}{% endfilter %}',
+    '{% filter upper|lower %}{% include "mixed.html" %}{% endfilter %}',
+    "{% spaceless %}{{ block.super }}{% endspaceless %}",
+    "{% filter lower %}{{ block.super }}{% endfilter %}",
+    "{% with s=block.super %}{{ s }}{% endwith %}",
+    "{% with s=block.super|truncatechars:200 %}{% with t=s %}{{ t }}{% endwith %}{% endwith %}",
+    '{% include "bound.html" with s=block.super %}',
+    "{% firstof block.super as s %}{{ s }}",
+    "{% cycle block.super as s silent %}{{ s }}",
+    '{% filter lower %}{% spaceless %}{% include "mixed.html" %}{% endspaceless %}{% endfilter %}',
+    '{% spaceless %}{% filter lower %}{% include "mixed.html" %}{% endfilter %}{% endspaceless %}',
+]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("q", ["-->", "x"])
+@pytest.mark.parametrize("wrapper", MIXED_WRAPPERS)
+def test_http_mixed_capture_wrappers_fail_closed(tmp_path, settings, q, wrapper):
+    settings.TEMPLATES = [
+        {
+            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "DIRS": [str(tmp_path)],
+            "APP_DIRS": True,
+        }
+    ]
+    (tmp_path / "mixed.html").write_text("<!--y{{ q|safe }}")
+    (tmp_path / "parent.html").write_text("{% block body %}<!--y{{ q|safe }}{% endblock %}")
+    (tmp_path / "bound.html").write_text("{{ s }}")
+    (tmp_path / "child.html").write_text(
+        '{% extends "parent.html" %}{% block body %}' + wrapper + HIDDEN + "-->{% endblock %}"
+    )
+    ids, statuses, mounts = run(
+        "<div dj-root>" + TAG + '{% include "child.html" %}</div>', {"q": q}
+    )
+    assert len(ids) == 1
+    assert statuses == [200]
+    assert mounts == 0
+
+
+@pytest.mark.parametrize("wrapper", MIXED_WRAPPERS)
+@pytest.mark.parametrize(
+    "parent,q,expected",
+    [
+        ("é{{ q|safe }}", "v", 1),  # No inert context: provenance loss itself is the cutoff.
+        ("literal", "v", 2),
+        ("{{ q|safe }}", "v", 2),
+        ("{{ q|safe }}", "", 2),
+    ],
+)
+def test_flatten_rule_depends_on_byte_sources_not_markup(tmp_path, wrapper, parent, q, expected):
+    (tmp_path / "mixed.html").write_text(parent)
+    (tmp_path / "parent.html").write_text("{% block body %}" + parent + "{% endblock %}")
+    (tmp_path / "bound.html").write_text("{{ s }}")
+    (tmp_path / "child.html").write_text(
+        '{% extends "parent.html" %}{% block body %}' + wrapper + "{% endblock %}"
+    )
+    rust = RustLiveView("é" + TAG + '{% include "child.html" %}' + TAG, [str(tmp_path)])
+    rust.update_state({"q": q})
+    html, spans = rust.render_with_provenance()
+    assert len(authored_lazy_elements(html, spans)) == expected
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("empty", [False, True])
+def test_custom_body_captures_preserve_cutoff(tmp_path, lazy, empty):
+    from djust._rust import register_block_tag_handler, unregister_block_tag_handler
+
+    class Capture:
+        LAZY_BODY = lazy
+
+        def render(self, args, content, context):
+            return "" if empty else content
+
+        def before_body(self, args, context):
+            return None, None
+
+        def after_body(self, args, content, context, state):
+            return "" if empty else content
+
+    register_block_tag_handler("round4_capture", "endround4_capture", Capture())
+    try:
+        (tmp_path / "mixed.html").write_text("é{{ q|safe }}")
+        rust = RustLiveView(
+            TAG + '{% round4_capture %}{% include "mixed.html" %}{% endround4_capture %}' + TAG,
+            [str(tmp_path)],
+        )
+        rust.update_state({"q": "v"})
+        html, spans = rust.render_with_provenance()
+        assert len(authored_lazy_elements(html, spans)) == 1
+    finally:
+        unregister_block_tag_handler("round4_capture")
+
+
+@pytest.mark.parametrize(
+    "wrapper",
+    [
+        "{% spaceless %}{{ block.super }}{% endspaceless %}",
+        '{% filter cut:"y" %}{{ block.super }}{% endfilter %}',
+        "{% with s=block.super %}{{ s }}{% endwith %}",
+    ],
+)
+def test_wrapping_already_uncertain_output_never_clears_cutoff(tmp_path, wrapper):
+    (tmp_path / "parent.html").write_text("{% block body %}Y{{ q|safe }}{% endblock %}")
+    (tmp_path / "child.html").write_text(
+        '{% extends "parent.html" %}{% block body %}{{ block.super|lower }}{% endblock %}'
+    )
+    (tmp_path / "grandchild.html").write_text(
+        '{% extends "child.html" %}{% block body %}' + wrapper + "{% endblock %}"
+    )
+    rust = RustLiveView(
+        "é" + TAG + '{% include "grandchild.html" %}<!-- -->' + TAG, [str(tmp_path)]
+    )
+    rust.update_state({"q": "v"})
+    html, spans = rust.render_with_provenance()
+    assert len(authored_lazy_elements(html, spans)) == 1

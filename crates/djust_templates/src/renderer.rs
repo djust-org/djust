@@ -572,7 +572,13 @@ pub fn render_nodes_with_loader_mut<L: TemplateLoader>(
     context: &mut Context,
     loader: Option<&L>,
 ) -> Result<String> {
-    render_nodes_output::<L, String>(nodes, context, loader)
+    if context.provenance_flatten_tracking() {
+        let output = render_nodes_output::<L, crate::provenance::Rendered>(nodes, context, loader)?;
+        let text = output.to_string();
+        Ok(context.record_provenance_flatten(output.into_authored_output(), text))
+    } else {
+        render_nodes_output::<L, String>(nodes, context, loader)
+    }
 }
 
 pub fn render_node_with_loader_mut<L: TemplateLoader>(
@@ -597,12 +603,15 @@ pub fn render_nodes_output<L: TemplateLoader, R: RenderOutput>(
     context: &mut Context,
     loader: Option<&L>,
 ) -> Result<R> {
+    if R::TRACKED {
+        context.enable_provenance_flatten_tracking();
+    }
     let mut output = R::default();
     for node in nodes {
         let child = render_effectful_node_output::<L, R>(node, context, loader)?;
         output.append(&child);
     }
-    Ok((output).into())
+    Ok(output)
 }
 
 fn render_effectful_node_output<L: TemplateLoader, R: RenderOutput>(
@@ -651,7 +660,7 @@ fn render_effectful_node_output<L: TemplateLoader, R: RenderOutput>(
                 .with_template_source(source, origin.as_deref().unwrap_or("<unknown source>"))
         });
     }
-    match sibling_updates(node, context, loader)? {
+    let result = match sibling_updates(node, context, loader)? {
         Some(effect) => {
             for binding in effect.bindings {
                 let name = binding.name.clone();
@@ -671,6 +680,14 @@ fn render_effectful_node_output<L: TemplateLoader, R: RenderOutput>(
             })
         }
         None => render_node_output::<L, R>(node, context, loader),
+    };
+    if R::TRACKED && context.take_provenance_flatten() {
+        result.map(|mut output| {
+            output.cut_off();
+            output
+        })
+    } else {
+        result
     }
 }
 
@@ -2542,26 +2559,7 @@ impl djust_core::context::BlockSuperSource for DeferredBlockSuper {
         ctx: &Context,
     ) -> Result<djust_core::context::AuthoredOutput> {
         let rendered = self.render_output::<crate::provenance::Rendered>(ctx)?;
-        Ok((
-            rendered.html,
-            rendered
-                .authored
-                .into_iter()
-                .map(|r| (r.start, r.end))
-                .collect(),
-            rendered.origins,
-            rendered
-                .literals
-                .into_iter()
-                .map(|r| (r.start, r.end))
-                .collect(),
-            rendered
-                .neutral
-                .into_iter()
-                .map(|r| (r.start, r.end))
-                .collect(),
-            rendered.authority_cutoff,
-        ))
+        Ok(rendered.into_authored_output())
     }
 }
 
@@ -2853,24 +2851,17 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             // become one apparently balanced opaque operation (#3442).
             if R::TRACKED {
                 if let Some(mut output) = super_context {
-                    if (!super_literal || output.5.is_some()) && output.0 != text {
-                        // Transforming a mixed parent loses its literal/value
-                        // boundaries. Record the position in the result so even
-                        // containers outside this include/block fail closed.
-                        return Ok(R::context_uncertain(text));
-                    }
-                    if (!literal_output || output.5.is_some())
-                        && filters_are_literal(filter_specs, context)
-                        && output.0 == text
-                    {
+                    if filters_are_literal(filter_specs, context) && output.0 == text {
                         output.1.clear();
                         output.2.clear();
                         return Ok(R::from_authored_output(output));
                     }
-                    if output.5.is_some() {
-                        // An opaque outer filter cannot clear an inner cutoff.
-                        return Ok(R::context_uncertain(text));
+                    if literal_output && output.5.is_none() {
+                        return Ok(R::context_literal(text));
                     }
+                    return Ok(R::from_authored_output(
+                        djust_core::context::flatten_authored_output(output, text),
+                    ));
                 }
             }
             Ok(if literal_output {
@@ -3093,7 +3084,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                 }
             }
 
-            Ok((body).into())
+            Ok(body)
         }
 
         Node::For {
@@ -3751,7 +3742,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                             ctx.clear_loop_mapping(var_name);
                         }
 
-                        Ok((output).into())
+                        Ok(output)
                     })
                 }
                 // Django REFUSES a non-iterable operand, and this arm used to
@@ -4116,7 +4107,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             }
 
             output.push_str("</div>");
-            Ok((output).into())
+            Ok(output)
         }
 
         #[cfg(feature = "liveview")]
@@ -4304,7 +4295,8 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             // {% spaceless %}...{% endspaceless %} → remove whitespace between HTML tags
             let content = render_nodes_output::<L, R>(nodes, context, loader)?;
             // Remove whitespace between > and <
-            Ok((SPACELESS_RE.replace_all(content.trim(), "><").to_string()).into())
+            let text = SPACELESS_RE.replace_all(content.trim(), "><").to_string();
+            Ok(content.flatten(text))
         }
 
         Node::Filter { filters, nodes } => {
@@ -4344,12 +4336,12 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             // output is therefore exactly the chain's output.
             let expr = format!("var|{}", format_filter_chain(filters));
             let (value, _runtime_safe) = get_value_safe(&expr, &ctx)?;
-            Ok((if matches!(value, Value::Missing) {
+            let text = if matches!(value, Value::Missing) {
                 String::new()
             } else {
                 value.to_string()
-            })
-            .into())
+            };
+            Ok(body.flatten(text))
         }
 
         Node::Cycle {
@@ -4472,7 +4464,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
 
             if context.ifchanged_step_in_template(id, origin.as_deref(), &compare_to) {
                 match rendered {
-                    Some(body) => Ok((body).into()),
+                    Some(body) => Ok(body),
                     None => render_nodes_output::<L, R>(nodes, context, loader),
                 }
             } else if else_nodes.is_empty() {

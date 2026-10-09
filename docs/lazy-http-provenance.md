@@ -59,7 +59,8 @@ Values, custom-tag return values, expression literals, filters, escaping,
 spaceless transforms and captured/reinjected `|safe` HTML grant no authored
 intervals. A filter also drops
 intervals when its output is byte-identical. Unfiltered `block.super` is direct
-renderer composition; filtered or captured `block.super` is a value.
+renderer composition; filtered or captured `block.super` drops start-tag authority; flattening mixed
+literal/value content also records the cutoff described below.
 
 Python page assembly carries the sideband in `RenderedHTML`. Slices clip and
 shift UTF-8 intervals; concatenation shifts them; replacements invalidate the
@@ -88,12 +89,24 @@ and its filters meet the same rule. Built-in filters meeting that rule that
 leave a mixed parent output byte-identical retain its literal/opaque context
 boundaries, while dropping all start-tag authority. This prevents a filtered
 parent from coalescing a literal opener and a value closer into one balanced run.
-When a filter changes the bytes of a mixed parent, its literal/value boundaries
-are lost. The render records that position and fails closed for every following
-lazy container, including those outside the include or inherited block. A later
-literal closer cannot restore authority in that render. Byte-identical filters
-keep the behaviour above. Other filtered parent output and captured/reinjected
-output remain opaque.
+Whenever rendered content carrying authored-literal provenance and non-literal
+value bytes is flattened to plain/opaque output, the renderer records a
+fail-closed cutoff at that output position. No lazy container after that
+position in the complete render is authoritative, even after a literal closer.
+This is independent of byte equality, filter name, and literal versus value
+arguments. It applies to filtered `block.super` when boundaries cannot be
+preserved, `{% filter %}`, `{% spaceless %}`, `with`/include bindings and other
+value captures of `block.super`, custom block-body captures, and all of those
+wrappers around includes or inherited output. An inner cutoff survives outer
+transforms and captures, including transforms returning empty text.
+
+Only-literal or only-value content does not acquire a cutoff from flattening.
+Byte-identical literal-derived filters of `block.super` preserve its context
+boundaries (but drop start-tag authority) and therefore do not flatten it.
+Literal-only byte-identical filters keep following-container authority.
+Renderer-owned neutral marker bytes do not count as values. These rules concern
+rendered content with provenance; ordinary view values and expression operands
+have no authored-render sideband, as described below.
 
 Liveness is computed on authored text (template literals and literal expression
 output) in the rendered branch. Non-literal output, including view-context data,

@@ -17,6 +17,12 @@ pub trait RenderOutput: Default + From<String> + Deref<Target = str> + std::fmt:
     fn context_uncertain(text: String) -> Self {
         text.into()
     }
+    /// Drop boundaries through the shared fail-closed rule, after a transform.
+    fn flatten(self, text: String) -> Self {
+        text.into()
+    }
+    /// Attach a resolver/capture loss at this node's output position.
+    fn cut_off(&mut self) {}
     fn from_authored_output(output: djust_core::context::AuthoredOutput) -> Self;
     fn append(&mut self, child: &Self);
     fn push_str(&mut self, text: &str);
@@ -61,6 +67,22 @@ pub struct Rendered {
     pub authority_cutoff: Option<usize>,
 }
 impl Rendered {
+    pub fn into_authored_output(self) -> djust_core::context::AuthoredOutput {
+        (
+            self.html,
+            self.authored
+                .into_iter()
+                .map(|r| (r.start, r.end))
+                .collect(),
+            self.origins,
+            self.literals
+                .into_iter()
+                .map(|r| (r.start, r.end))
+                .collect(),
+            self.neutral.into_iter().map(|r| (r.start, r.end)).collect(),
+            self.authority_cutoff,
+        )
+    }
     /// Recheck source liveness on the branch that actually rendered. Literal
     /// expression bytes participate, but other values cannot close that context.
     /// Non-literal values are blank for this authored-text computation.
@@ -210,6 +232,15 @@ impl RenderOutput for Rendered {
             authority_cutoff: output.5,
         }
     }
+    fn flatten(self, text: String) -> Self {
+        Self::from_authored_output(djust_core::context::flatten_authored_output(
+            self.into_authored_output(),
+            text,
+        ))
+    }
+    fn cut_off(&mut self) {
+        self.authority_cutoff = Some(0);
+    }
     fn context_uncertain(text: String) -> Self {
         let mut result = Self::from(text);
         result.authority_cutoff = Some(0);
@@ -285,6 +316,77 @@ mod tests {
             .render_with_provenance(&ctx, &NoOpTemplateLoader)
             .unwrap()
     }
+    #[test]
+    fn flatten_rule_is_independent_of_transform_and_preserves_inner_cutoffs() {
+        for replacement in ["évalue", "changed", ""] {
+            let mut mixed = Rendered::context_literal("é".into());
+            mixed.append(&Rendered::from("value".to_owned()));
+            assert_eq!(mixed.flatten(replacement.into()).authority_cutoff, Some(0));
+            let mut literal = Rendered::context_literal("é".into());
+            literal.append(&Rendered::context_neutral("<!--dj-if-->".into()));
+            assert_eq!(literal.flatten(replacement.into()).authority_cutoff, None);
+            assert_eq!(
+                Rendered::from("value".to_owned())
+                    .flatten(replacement.into())
+                    .authority_cutoff,
+                None
+            );
+            assert_eq!(
+                Rendered::context_uncertain("".into())
+                    .flatten(replacement.into())
+                    .authority_cutoff,
+                Some(0)
+            );
+        }
+    }
+
+    #[test]
+    fn provenance_flatten_site_inventory() {
+        // Grep-style review gate for *all* conversions, not a list of filters.
+        // New conversions must be classified and routed through the shared
+        // helper before updating this inventory. Includes plain helper paths
+        // used by custom body captures and the Context Value/bridge resolver.
+        let mut inventory = String::new();
+        for (name, source) in [
+            ("renderer.rs", include_str!("renderer.rs")),
+            (
+                "context.rs",
+                include_str!("../../djust_core/src/context.rs"),
+            ),
+            ("provenance.rs", include_str!("provenance.rs")),
+        ] {
+            inventory.push_str(name);
+            inventory.push('\n');
+            // Include helpers added after test modules; pin test conversions too.
+            for line in source.lines() {
+                let line = line.trim();
+                if !line.starts_with("//")
+                    && [
+                        ".into()",
+                        ".to_string()",
+                        ".html",
+                        ".flatten(",
+                        "into_authored_output(",
+                        "flatten_authored_output(",
+                        "render_nodes_with_loader_mut(",
+                        "render_block_super(",
+                        "record_provenance_flatten(",
+                    ]
+                    .iter()
+                    .any(|needle| line.contains(needle))
+                {
+                    inventory.push_str(line);
+                    inventory.push('\n');
+                }
+            }
+        }
+        assert_eq!(
+            inventory,
+            include_str!("../tests/fixtures/provenance_flatten_sites.txt"),
+            "Review new flatten/conversion sites for mixed provenance before updating the pin"
+        );
+    }
+
     #[test]
     fn expression_context_never_grants_start_tag_authority() {
         let r = render("{{ \"<div dj-view='app.Child' dj-lazy></div>\"|safe }}");
