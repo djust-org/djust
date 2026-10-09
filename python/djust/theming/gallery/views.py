@@ -21,6 +21,8 @@ from django.http import (
 from django.template.loader import render_to_string
 from django.views.decorators.clickjacking import xframe_options_sameorigin
 
+from djust.security import escape_json_for_script
+
 from .context import build_gallery_context, serialize_all_design_systems, serialize_all_presets
 from djust.theming.theme_packs import DESIGN_SYSTEMS
 from djust.theming.presets import list_presets
@@ -121,9 +123,12 @@ def editor_view(request: HttpRequest) -> HttpResponse:
     ctx["request"] = request
     ctx.update(_template_sample_data())
 
-    # Serialize all presets and design systems for JS initialization
-    ctx["preset_data_json"] = json.dumps(serialize_all_presets())
-    ctx["design_systems_json"] = json.dumps(serialize_all_design_systems())
+    # Serialize all presets and design systems for JS initialization. The
+    # template drops these into an inline <script> via |safe, and json.dumps
+    # leaves <, > and & raw, so a registered value containing "</script>" would
+    # close the element; escape_json_for_script makes them \uXXXX escapes.
+    ctx["preset_data_json"] = escape_json_for_script(json.dumps(serialize_all_presets()))
+    ctx["design_systems_json"] = escape_json_for_script(json.dumps(serialize_all_design_systems()))
     ctx["design_systems"] = DESIGN_SYSTEMS
 
     html = render_to_string(
