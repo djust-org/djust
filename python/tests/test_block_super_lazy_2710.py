@@ -389,8 +389,12 @@ class TestTheDeferralHasOneStatementPerBoundary:
         # through `LazyBlock`, #2918).
         # The default authored-output adapter delegates to the ordinary trait
         # method for external sources that do not supply provenance (#3252).
-        assert source.count("render_block_super(") == 4
-        assert source.count("source.render_block_super_authored(self)") == 1
+        # Since #3430 the armed read (`render_armed_block_super`) goes through
+        # the authored variant too, so a filtered or captured `block.super`
+        # carries its provenance to the mixed-output cutoff: plain readers are
+        # the declaration, the adapter and `resolve`'s untracked branch.
+        assert source.count("render_block_super(") == 3
+        assert source.count("source.render_block_super_authored(self)") == 2
 
 
 class TestTheSourceIsDeferredRatherThanPreRendered:
