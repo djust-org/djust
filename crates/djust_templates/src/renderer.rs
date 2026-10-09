@@ -5987,6 +5987,10 @@ fn get_value_safe_inner(
         // `split_pipes`'s FIRST part and so contains no pipe.
         let (mut value, mut runtime_safe) =
             get_value_safe_inner(var_name, context, ignore_failures)?;
+        // See the Variable arm: item-level safety, seeded from the context
+        // (#2283, #2287) — the third of the three sites, kept in step with the
+        // other two by construction (#1646).
+        let mut items_safe = context.items_are_safe(var_name);
         let input_literals = context.take_provenance_flatten();
         let capture = if input_literals.is_empty() {
             context.captured_literals(var_name)
@@ -5998,7 +6002,7 @@ fn get_value_safe_inner(
                 Value::String(literal),
                 filters::InputSafety {
                     container: runtime_safe,
-                    items: context.items_are_safe(var_name),
+                    items: items_safe,
                 },
             )
         });
@@ -6039,11 +6043,6 @@ fn get_value_safe_inner(
                 return Ok((Value::String(marker), false));
             }
         }
-        // See the Variable arm: item-level safety, seeded from the context
-        // (#2283, #2287) — the third of the three sites, kept in step with the
-        // other two by construction (#1646).
-        let mut items_safe = context.items_are_safe(var_name);
-
         // Parse and apply filters (handles chained filters too)
         for filter_part in &pipe_parts[1..] {
             let filter_part = filter_part.trim();

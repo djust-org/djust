@@ -538,12 +538,52 @@ class TestTheProducerEnumerationIsComplete:
         question rather than three (#1646).
         """
         src = self.RENDERER.read_text()
-        assert src.count("items: items_safe,") == 3, (
+        assert src.count("items: items_safe,") == 6, (
             "an InputSafety literal writes `items` from something other than "
             "the threaded `items_safe` local — the enumeration below no "
             "longer covers every producer"
         )
-        assert src.count("filters::InputSafety {") == 3
+        assert src.count("filters::InputSafety {") == 6
+        # #3430 adds one literal-only replay seed per existing renderer arm.
+        # They hold a String (never a mixed sequence), read the SAME local as
+        # the ordinary call, and introduce no new source of item safety.
+        seeds = re.findall(
+            r"(?:let mut literal_value = .*?\.map\(\|literal\| \{)(.*?)\n\s*\}\);",
+            src,
+            re.S,
+        )
+        assert len(seeds) == 3
+        for seed in seeds:
+            assert "Value::String(literal)" in seed
+            assert "container: runtime_safe," in seed
+            assert "items: items_safe," in seed
+
+    def test_literal_replay_folds_use_the_enumerated_functions(self) -> None:
+        src = (self.RENDERER.parent / "filters.rs").read_text()
+        helper = src.split("pub(crate) fn apply_filter_with_literal(", 1)[1].split("\n}\n", 1)[0]
+        assert "let input_safe = literal_safety.container;" in helper
+        assert "crate::renderer::filter_output_is_safe(filter_name, safe, input_safe)" in helper
+        assert "literal_safety.items = crate::renderer::filter_output_items_are_safe(" in helper
+        assert "filter_name,\n            literal_safety.items,\n            input_safe," in helper
+        writes = [
+            line.strip()
+            for line in src.splitlines()
+            if re.search(r"literal_safety\.(?:container|items)\s*=", line)
+        ]
+        assert writes == [
+            "literal_safety.container =",
+            "literal_safety.items = crate::renderer::filter_output_items_are_safe(",
+        ]
+
+    def test_shared_dispatcher_only_preserves_item_safety(self) -> None:
+        src = (self.RENDERER.parent / "filters.rs").read_text()
+        production = src.split("#[cfg(test)]", 1)[0]
+        assert production.count("InputSafety {") == 2  # type declaration + dispatcher
+        # The dispatcher adjusts container safety for encoded string conversion,
+        # but its item channel must only forward the enumerated input grant.
+        literals = re.findall(r"(?:let \w+ = )InputSafety \{(.*?)\n    \};", production, re.S)
+        assert len(literals) == 1
+        assert "items: input_safety.items," in literals[0]
 
     def test_items_safe_is_assigned_from_exactly_two_functions(self) -> None:
         """The seed and the fold. A third assignment is a new producer."""

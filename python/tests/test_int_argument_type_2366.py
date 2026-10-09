@@ -303,9 +303,17 @@ class TestEveryRendererCallSiteResolvesItsArgument:
         # opening line. It reported "n calls: 2", the `>= 2` floor passed, and
         # a gate-off mutation of the middle site changed nothing. A pin whose
         # own scan can miss a site is not a pin (#1859).
-        opens = [i for i, ln in enumerate(lines) if "apply_filter_full_safe(" in ln]
+        # #3430's helper resolves arguments once for the output and replay.
+        # Count both APIs so neither a helper nor a direct caller can silently
+        # bypass this context guarantee.
+        opens = [
+            i
+            for i, ln in enumerate(lines)
+            if "filters::apply_filter_full_safe(" in ln
+            or "filters::apply_filter_with_literal(" in ln
+        ]
         assert len(opens) == 3, (
-            f"found {len(opens)} apply_filter_full_safe call sites in renderer.rs, "
+            f"found {len(opens)} safety-aware filter call sites in renderer.rs, "
             "expected 3 — if a site was added or removed, decide its context "
             "argument explicitly and update this count"
         )
@@ -324,6 +332,26 @@ class TestEveryRendererCallSiteResolvesItsArgument:
                 "answers false and a bare `None` argument stops raising. Either "
                 "pass a context, or restore the spelling fallback deleted in #2366."
             )
+
+    def test_helper_preserves_the_resolved_argument_type_and_context(self) -> None:
+        from pathlib import Path
+
+        src = (
+            Path(__file__).resolve().parents[2]
+            / "crates"
+            / "djust_templates"
+            / "src"
+            / "filters.rs"
+        ).read_text()
+        wrapper = src.split("pub fn apply_filter_full_safe(", 1)[1].split("\n}\n", 1)[0]
+        assert "arg,\n        context,\n        arg_was_quoted," in wrapper
+        helper = src.split("pub(crate) fn apply_filter_with_literal(", 1)[1].split("\n}\n", 1)[0]
+        assert helper.count("ctx.resolve(a)?") == 1
+        assert "int_is_type_error: int_arg_is_type_error(resolved_type.as_ref())" in helper
+        assert helper.count("resolved_type.as_ref(),\n") == 2
+        assert helper.count("builtin_arg,\n") == 2
+        assert helper.count("arg_type,\n") == 2
+        assert helper.count("context,\n") == 2
 
 
 class TestAnAcceptedArgumentStillWorks:
