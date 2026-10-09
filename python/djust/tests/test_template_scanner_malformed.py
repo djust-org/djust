@@ -43,16 +43,35 @@ def test_parser_failure_is_a_nonfatal_scan_gap(monkeypatch, error, method):
     assert not scan.gaps[0].recovery_safe
 
 
+def _marked_sections_raise(monkeypatch):
+    """Make html.parser raise on `<![` the way CPython <= 3.12.9 does.
+
+    Newer patch releases (3.12.15 in CI) accept `<![\ue000CDATA[`, so the
+    tests force the old failure to exercise the scanners' recovery path on
+    every interpreter.
+    """
+    from _markupbase import ParserBase
+
+    def fail(self, i, report=1):
+        raise AssertionError("expected name token")
+
+    monkeypatch.setattr(ParserBase, "parse_marked_section", fail)
+
+
 @pytest.mark.parametrize("malformed", ["<![\ue000CDATA[ >", "<!x"])
-def test_page_shell_scanner_does_not_abort(malformed):
+def test_page_shell_scanner_does_not_abort(monkeypatch, malformed):
     from djust._page_shell import shell_fingerprint
+
+    _marked_sections_raise(monkeypatch)
 
     source = malformed + "<div dj-root></div>"
     assert shell_fingerprint(source) is None
 
 
-def test_child_slot_scanner_discards_partial_ownership_graph():
+def test_child_slot_scanner_discards_partial_ownership_graph(monkeypatch):
     from djust._child_rendering import _Render
+
+    _marked_sections_raise(monkeypatch)
 
     render = _Render(object(), whole_page=True, owner_wrapper=False)
     render.candidates["child"] = object()
