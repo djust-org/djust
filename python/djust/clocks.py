@@ -136,6 +136,8 @@ _pool = None
 _pool_lock = threading.Lock()
 _registry_lock = threading.RLock()
 _registry = {}
+# Wall-clock budget for all retirement waits in one ensure call.
+_STOP_WAIT_SECONDS = 1.0
 
 
 def _worker_pool() -> _Pool:
@@ -256,6 +258,8 @@ class RoomClock:
         self._executor = executor
         self._history = OrderedDict()
         self._last_limit_log = -math.inf
+        self._presence_retries: set[tuple[Future, str]] = set()
+        self._retry_tasks: set[asyncio.Task[bool]] = set()
 
     @staticmethod
     def _validate_interval(seconds: float) -> None:
@@ -277,7 +281,7 @@ class RoomClock:
         return async_to_sync(self.aensure)(view, key, presence_key=presence_key)
 
     async def aensure(self, view: Any, key: str, *, presence_key: str | None = None) -> bool:
-        """Start idempotently, or refuse a limit; return whether running."""
+        """Start idempotently; return False at capacity or after a 1s stop wait."""
         if _disabled.get():
             return False
         loop = asyncio.get_running_loop()
@@ -296,6 +300,7 @@ class RoomClock:
         if tenant is not None and not scope.startswith(f"tenant:{tenant_id}:"):
             raise ValueError("resolved clock tenants require TenantMixin scoping")
         now = self._time.now()
+        retirement_budget = _STOP_WAIT_SECONDS
         while True:
             result = self._ensure_on_loop(
                 loop, view, key, scope, tenant, tenant_id, now, presence_key
@@ -309,8 +314,68 @@ class RoomClock:
                 result = result.done
             elif not isinstance(result, Future):
                 return result
-            await asyncio.shield(asyncio.wrap_future(result))
+            # A worker cannot be cancelled safely. Bound the join instead,
+            # retaining ownership until it finishes; never overlap its writes.
+            if retirement_budget <= 0:
+                if presence_key is not None:
+                    self._retry_presence(loop, result, view, key, presence_key)
+                return False
+            wait_started = loop.time()
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(asyncio.wrap_future(result)), retirement_budget
+                )
+            except asyncio.TimeoutError:
+                if presence_key is not None:
+                    self._retry_presence(loop, result, view, key, presence_key)
+                return False
+            retirement_budget -= loop.time() - wait_started
             now = self._time.now()
+
+    def _retry_presence(
+        self, loop: asyncio.AbstractEventLoop, done: Future, view: Any, key: str, presence_key: str
+    ) -> None:
+        """Retry once retirement releases ownership, if the room still has members."""
+        token = (done, presence_key)
+        with _registry_lock:
+            if token in self._presence_retries:
+                return
+            self._presence_retries.add(token)
+        logger.debug("Presence clock retry scheduled after retirement")
+
+        async def retry() -> bool:
+            if not PresenceManager.presence_count(presence_key):
+                return False
+            return await self.aensure(view, key, presence_key=presence_key)
+
+        def observed(task: asyncio.Task[bool]) -> None:
+            with _registry_lock:
+                self._retry_tasks.discard(task)
+            exc = None if task.cancelled() else task.exception()
+            if exc is not None:
+                from ._exposure_diagnostics import log_failure_for
+
+                log_failure_for(
+                    logger, (view,), exc, "Presence clock ensure failed", traceback=True
+                )
+
+        def start() -> None:
+            with _registry_lock:
+                self._presence_retries.discard(token)
+                task = loop.create_task(retry())
+                self._retry_tasks.add(task)
+            task.add_done_callback(observed)
+
+        def retired(_: Future) -> None:
+            try:
+                loop.call_soon_threadsafe(start)
+            except RuntimeError:
+                # The originating serving loop shut down; it cannot own a replacement.
+                with _registry_lock:
+                    self._presence_retries.discard(token)
+                logger.debug("Presence clock retry skipped: serving loop closed")
+
+        done.add_done_callback(retired)
 
     def _ensure_on_loop(self, loop, view, key, scope, tenant, tenant_id, now, presence_key):
         with _registry_lock:
