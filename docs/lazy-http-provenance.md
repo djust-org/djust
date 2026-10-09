@@ -95,11 +95,12 @@ explicit allow-list, distinct from evaluation of fully literal expressions:
 
 - `lower`, `upper`, `title`, `capfirst`: Unicode text casing, with no locale lookup
   or truthiness-based fallback output.
-- `cut`, `slice`: text removal or character slicing using a literal-derived
-  argument; no value-selected fallback bytes.
+- `cut`: text removal using a literal-derived argument, applied separately
+  between U+FFFD separators so replay cannot delete or match across a value
+  placeholder. Authored U+FFFD is also preserved conservatively in this replay.
 - `escape`, `force_escape`: HTML escaping, using the same input safety and
   autoescape policy as the page filter call.
-- `striptags`, `linebreaksbr`: tag removal and newline-to-`<br>` conversion;
+- `linebreaksbr`: newline-to-`<br>` conversion;
   `linebreaksbr` uses the same input safety and autoescape policy as the page.
 - The `spaceless` wrapper: trim and remove inter-tag whitespace in both runs.
 
@@ -109,7 +110,7 @@ exactly the page output's final escaping decision (including attribute escaping)
 No fallback, truthiness, numeric, time, random or locale/i18n-dependent filters are
 replayed: in particular `default`, `default_if_none`, `yesno`, `length`,
 `length_is`, `pluralize`, `add`, `date` and `time` are excluded. Unlisted transforms,
-including Python filters, retain literal context only if
+including `slice`, `striptags` and Python filters, retain literal context only if
 their page output is byte-identical. A byte-changing unlisted transform over a run
 containing authored bytes fails closed: its unknown literal context makes the
 following containers non-authoritative. A permanent cutoff travels with the
@@ -121,10 +122,14 @@ closed for the complete render, as do unknown byte changes from custom block tag
 
 During a tracked render, the renderer also composes a literal-only rendering of
 exactly the selected branch and loop iterations. Authored literal bytes and
-literal-derived expression output are kept. Non-literal value bytes and
-renderer-owned markers contribute the empty string (not same-length spaces).
+literal-derived expression output are kept. Every non-literal value occurrence contributes a single U+FFFD replacement
+character, even when its page output is empty. Opaque tag results also use
+this placeholder, including empty results from non-emitting tags such as
+`load`, template comments, `resetcycle` and assignments. Renderer-owned neutral markers
+contribute the empty string. U+FFFD occupies three UTF-8 bytes; offset mappings
+use byte lengths.
 Flattened captures contribute their transformed literal-only content with values
-empty; flattening never grants authority.
+replaced by U+FFFD; flattening never grants authority.
 Each authored container's opening byte maps to its offset in that rendering.
 
 When authored lazy containers exist, html5ever parses the complete literal-only
@@ -155,14 +160,18 @@ have no authored-render sideband, as described below.
 Liveness is computed on authored text (template literals and literal expression
 output) in the rendered branch. Non-literal output, including view-context data,
 framework tags and HTML-producing filters applied to values, is replaced by
-the empty string. Such output does not break authority for following containers merely because it contains `<`, `>`, quotes or `--`.
+a single U+FFFD character per occurrence. Such output does not break authority for following containers merely because it contains `<`, `>`, quotes or `--`.
 
 A container whose hiding context is produced by a non-literal value (view-context
-data) is not modelled by this liveness computation. Empty values can join remaining
-literal bytes into a hiding context; that context is parsed normally. Authors
+data) is not modelled by this liveness computation. The replacement character prevents authored bytes across a value from joining
+into an opener, closer or tag absent from the page. A value rendered empty can
+therefore cause a false negative: an actual closer remains split in the
+literal-only tree. Empty opaque tag results can cause the same refusal when
+a tag occurs between the authored pieces of a closer. This conservative refusal
+is intentional. Authors
 must not hide lazy containers with values. For example, a value emitting `<!--` followed by a value emitting `-->`, or
-`<{{ tag }}>` with `tag="script"`, or a split end tag such as
-`</textarea{{ v }}>` (also `</script{{ v }}>`) with `v=" "`, can leave a following
+`<{{ tag }}>` with `tag="script"`, or a split opener such as
+`<!-{{ d }}-` with `d="-"`, can leave a following
 authored container registered when it survives in the final page. An expression such as
 `{{ "<!--"|add:value|safe }}` is also opaque because its filter argument is a
 value, even though its input is quoted literal text; a value can close that
@@ -175,7 +184,7 @@ liveness, even if that value makes the container visible in the final page.
 Literal context and opaque runs compose across includes, inheritance and loop
 iterations. This check is applied once to the complete render. An authored
 closer in a skipped branch cannot make a following container authoritative;
-except for the value-assembled split end tags described above, a value cannot
+a value cannot
 supply the closer for an inert context opened by literal text or literal-derived
 expression output. Only containers live in both the
 literal-only and final-page trees keep start-tag authority and origin addresses.
@@ -256,7 +265,8 @@ Unauthored whitespace immediately after a valueless `dj-lazy` belongs to its
 selected attribute range and fails closed. Prefer a fully literal attribute,
 or an explicit quoted trigger, and keep interpolations outside authority bytes.
 
-The M1 split-closer cases (`</textarea{{ v }}>` and `</script{{ v }}>` with
-`v=" "`) remain outside this model. N4, a byte-identical custom filter over a
-closer split across literal and value bytes (for example `-{{ v }}->`), is likewise
-not modelled; blanking the value can assemble a closer absent from the real input.
+M1 split end tags (`</textarea{{ v }}>`, `</script{{ v }}>`) and split comment
+closers (`--{{ v }}>`), including byte-identical custom-filter captures (N4),
+remain split by U+FFFD in the literal-only tree. They cannot restore authority
+for containers hidden by an authored opener. Value-generated hiding contexts
+remain outside the model as described above.

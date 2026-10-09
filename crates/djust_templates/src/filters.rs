@@ -941,7 +941,7 @@ pub(crate) fn apply_filter_with_literal(
     };
 
     if let Some((literal_value, literal_safety)) = literal {
-        let (next, safe) = apply_resolved_filter(
+        let (mut next, safe) = apply_resolved_filter(
             filter_name,
             literal_value,
             arg,
@@ -953,6 +953,20 @@ pub(crate) fn apply_filter_with_literal(
             builtin_arg,
             arg_type,
         )?;
+        if filter_name == "cut" {
+            // U+FFFD separates opaque occurrences. Never remove a separator or
+            // match across it: replay must not join authored bytes that the
+            // page's non-literal value keeps apart. Authored U+FFFD is likewise
+            // preserved conservatively in this projection only.
+            next = Value::String(
+                literal_value
+                    .to_string()
+                    .split('\u{fffd}')
+                    .map(|run| run.replace(builtin_arg.unwrap_or(""), ""))
+                    .collect::<Vec<_>>()
+                    .join("\u{fffd}"),
+            );
+        }
         let input_safe = literal_safety.container;
         literal_safety.container =
             crate::renderer::filter_output_is_safe(filter_name, safe, input_safe);

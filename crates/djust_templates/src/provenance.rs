@@ -82,7 +82,7 @@ pub struct Rendered {
 }
 impl Default for Rendered {
     fn default() -> Self {
-        Self::from(String::new())
+        Self::captured(String::new(), Some(String::new()))
     }
 }
 impl Rendered {
@@ -103,7 +103,7 @@ impl Rendered {
     }
     /// Recheck source liveness on the branch that actually rendered. Literal
     /// expression bytes participate, but other values cannot close that context.
-    /// Non-literal values are blank for this authored-text computation.
+    /// Each non-literal occurrence contributes U+FFFD so literals cannot join.
     /// Do this once on the complete result, never on incomplete include/block
     /// fragments. The ordinary final-HTML survival check remains necessary.
     pub fn retain_live_authority(&mut self) {
@@ -169,7 +169,7 @@ impl From<String> for Rendered {
             html,
             authored: Vec::new(),
             origins: Vec::new(),
-            literal_only: Some(String::new()),
+            literal_only: Some("\u{fffd}".to_owned()),
             literal_offsets: Vec::new(),
         }
     }
@@ -215,6 +215,9 @@ impl RenderOutput for Rendered {
         let mut result = Self::captured(text, literal.html);
         result.literal_blocked = literal.blocked;
         result
+    }
+    fn context_neutral(text: String) -> Self {
+        Self::captured(text, Some(String::new()))
     }
     fn context_literal(text: String) -> Self {
         let mut result = Self::from(text);
@@ -263,7 +266,7 @@ impl RenderOutput for Rendered {
         ))
     }
     fn flattened_literals(&mut self, literals: Vec<LiteralOutput>) {
-        // Resolver notifications belong to this node. Values are blank; a
+        // Resolver notifications belong to this node. A
         // flattened capture supplies its original authored bytes instead.
         for literal in literals {
             self.append(&Self::captured_projection(String::new(), literal));
@@ -302,7 +305,7 @@ impl RenderOutput for Rendered {
         self.html.push_str(&child.html);
     }
     fn push_str(&mut self, text: &str) {
-        self.html.push_str(text);
+        self.append(&Self::from(text.to_owned()));
     }
     fn has_origin(&self) -> bool {
         !self.origins.is_empty()
@@ -339,6 +342,26 @@ mod tests {
             .unwrap()
     }
     #[test]
+    fn opaque_occurrences_keep_utf8_projection_offsets() {
+        let mut output = Rendered::default();
+        output.append(&Rendered::from("é😀".to_owned()));
+        output.append(&Rendered::from(String::new()));
+        output.append(&Rendered::authored("<div dj-view=\"app.C\" dj-lazy></div>"));
+        assert_eq!(output.literal_offsets, vec![(6, 6)]);
+        assert_eq!(
+            output.literal_only.as_deref(),
+            Some("\u{fffd}\u{fffd}<div dj-view=\"app.C\" dj-lazy></div>")
+        );
+        assert_eq!(Rendered::default().literal_only.as_deref(), Some(""));
+        assert_eq!(
+            Rendered::context_neutral("<!--dj-if-->".into())
+                .literal_only
+                .as_deref(),
+            Some("")
+        );
+    }
+
+    #[test]
     fn unreplayable_flatten_fails_closed_on_byte_changes() {
         for replacement in ["<script></script>", "changed", ""] {
             let mut output = Rendered::authored("<script>");
@@ -347,7 +370,7 @@ mod tests {
             assert_eq!(
                 flattened.literal_only.as_deref(),
                 if replacement == "<script></script>" {
-                    Some("<script>")
+                    Some("<script>\u{fffd}")
                 } else {
                     None
                 }
@@ -522,6 +545,7 @@ mod tests {
                     ctx.set(format!("value{i}"), Value::String(value.into()));
                     source.push_str(&format!("{{{{ value{i}|safe }}}}"));
                     final_html.push_str(value);
+                    literal.push('\u{fffd}');
                 } else if i % 3 == 1 {
                     // Select a template literal expression on the rendered branch.
                     ctx.set("flag".into(), Value::Bool(true));
@@ -608,15 +632,15 @@ mod tests {
             ctx.set("truthy".into(), Value::String("</script>".into()));
             let (body, expected_literal) = match trial % 5 {
                 0 => (format!("{before}{{% with s=block.super %}}{{{{ empty }}}}{between}{{{{ s }}}}{TAG}{after}{{% endwith %}}"),
-                    format!("{before}{between}{parent}{TAG}{after}")),
+                    format!("{before}\u{fffd}{between}{parent}{TAG}{after}")),
                 1 => (format!("{before}{{% with s=block.super %}}{{% with t=s %}}{between}{{{{ t }}}}{{{{ t }}}}{TAG}{after}{{% endwith %}}{{% endwith %}}"),
                     format!("{before}{between}{parent}{parent}{TAG}{after}")),
                 2 => (format!("{before}{{% firstof block.super as s %}}{between}{{{{ s }}}}{TAG}{after}"),
                     format!("{before}{between}{parent}{TAG}{after}")),
                 3 => (format!("{before}{{{{ truthy|default:block.super|safe }}}}{between}{TAG}{after}"),
-                    format!("{before}{between}{TAG}{after}")),
+                    format!("{before}\u{fffd}{between}{TAG}{after}")),
                 _ => (format!("{before}{{% include block.super %}}{between}{after}"),
-                    format!("{before}{TAG}{between}{TAG}{after}")),
+                    format!("{before}\u{fffd}{TAG}{between}{TAG}{after}")),
             };
             // Include selector uses rendered parent bytes as a filename, but its
             // bytes do not contribute to the included output's literal context.

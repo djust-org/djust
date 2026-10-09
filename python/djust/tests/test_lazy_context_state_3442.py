@@ -97,11 +97,11 @@ def test_real_demo_registers_all_five_containers():
     ],
 )
 def test_m1_boundary_assembled_context_documented_behaviour(source, state):
-    # Empty values can join authored bytes into a comment; parse the joined text.
+    # U+FFFD prevents a value from assembling an opener in the literal-only tree.
     rust = RustLiveView(source + TAG + "-->", [])
     rust.update_state(state)
     html, spans = rust.render_with_provenance()
-    assert len(authored_lazy_elements(html, spans)) == (0 if "<!-" in source else 1)
+    assert len(authored_lazy_elements(html, spans)) == 1
 
 
 C = TAG
@@ -174,7 +174,7 @@ def test_review_corpus_authored_liveness(tmp_path, label):
     )
     html, spans = rust.render_with_provenance()
     # docs/lazy-http-provenance.md: value-derived filters, translations and
-    # environment tags are opaque; empty values join the remaining literal bytes.
+    # environment tags are opaque; placeholders keep remaining literal bytes apart.
     expected = (
         1
         if label
@@ -183,6 +183,7 @@ def test_review_corpus_authored_liveness(tmp_path, label):
             "lorem",
             "join chars",
             "straddle tag2",
+            "straddle comment",
             "default literal",
             "now",
             "trans",
@@ -221,12 +222,13 @@ def test_http_review_corpus_authored_liveness(tmp_path, settings, label):
         {"q": "-->", "qs": ["-->"], "t": "script", "c": "/script", "d": "-", "e": "-"},
     )
     # docs/lazy-http-provenance.md: value-derived filters, translations and
-    # environment tags are opaque; empty values join the remaining literal bytes.
+    # environment tags are opaque; placeholders keep remaining literal bytes apart.
     control = label in {
         "safe entity",
         "lorem",
         "join chars",
         "straddle tag2",
+        "straddle comment",
         "default literal",
         "now",
         "trans",
@@ -265,11 +267,11 @@ def test_framework_output_is_nonempty_and_preserves_authority(prefix, emitted):
     ],
 )
 def test_m1_value_exit_documented_behaviour(before, value, after):
-    # docs/lazy-http-provenance.md: value-generated context changes are blank.
+    # docs/lazy-http-provenance.md: value-generated context changes contribute U+FFFD.
     rust = RustLiveView(TAG + before + "{{ q|safe }}" + after + TAG, [])
     rust.update_state({"q": value})
     html, spans = rust.render_with_provenance()
-    # The authored quote remains open when the value is blank; script's
+    # The authored quote remains open with a value placeholder; script's
     # double-escaped final context also fails E. Other cases survive both.
     expected = 1 if before in {"<p title='", "<script><!--"} else 2
     assert len(authored_lazy_elements(html, spans)) == expected
@@ -294,7 +296,7 @@ def test_m1_separate_values_documented_behaviour():
 
 
 def test_m1_value_annotation_encoding_documented_behaviour():
-    # docs/lazy-http-provenance.md: value-generated context changes are blank.
+    # docs/lazy-http-provenance.md: value-generated context changes contribute U+FFFD.
     rust = RustLiveView(
         '<math><annotation-xml encoding="{{ q }}">' + TAG + "</annotation-xml></math>" + TAG, []
     )
@@ -797,7 +799,7 @@ def test_round6_cache_untracked_fill(mode, body, expected):
     getattr(rust, mode)()
     cached = cache.get(make_template_fragment_key("round6"))
     assert isinstance(cached, _CachedProvenanceFragment)
-    assert cached.literal_only == body.replace("{{ w }}", "")
+    assert cached.literal_only == body.replace("{{ w }}", "\ufffd")
     for _ in range(2):
         html, spans = rust.render_with_provenance()
         assert len(authored_lazy_elements(html, spans)) == expected
@@ -813,7 +815,7 @@ def test_round6_cache_literal_bytes_are_local_to_body():
     rust.update_state({"w": "v", "q": "-->"})
     html, spans = rust.render_with_provenance()
     assert len(authored_lazy_elements(html, spans)) == 1
-    assert cache.get(make_template_fragment_key("round6_local")).literal_only == "<nav></nav>"
+    assert cache.get(make_template_fragment_key("round6_local")).literal_only == "<nav>\ufffd</nav>"
     # The same cached body can be used outside the caller's open comment.
     rust = RustLiveView(body + TAG, [])
     html, spans = rust.render_with_provenance()
@@ -1187,6 +1189,102 @@ def test_uncertain_transform_permanently_refuses_following_containers(
         ids, statuses, mounts = run(
             "<div dj-root>" + TAG + '{% include "child.html" %}</div>',
             {"flag": True, "empty": ""},
+        )
+        assert len(ids) == 1
+        assert statuses == [200]
+        assert mounts == 0
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("v", ["y", " ", "", "é😀"])
+@pytest.mark.parametrize(
+    "opener,split,closer",
+    [
+        ("<!--", "--{{ v }}>", "-->"),
+        ("<textarea>", "</textarea{{ v }}>", "</textarea>"),
+        ("<script>", "</script{{ v }}>", "</script>"),
+    ],
+)
+def test_value_split_closers_do_not_join_http(v, opener, split, closer):
+    ids, statuses, mounts = run(
+        "<div dj-root>" + TAG + opener + split + "{{ q|safe }}" + HIDDEN + "</div>",
+        {"v": v, "q": closer},
+    )
+    assert len(ids) == 1
+    assert statuses == [200]
+    assert mounts == 0
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "body",
+    [
+        '<!--{% filter slice:":3" %}{{ v }}-->{% endfilter %}',
+        "<!--{% filter striptags %}{{ sv|safe }}-->{% endfilter %}",
+    ],
+)
+def test_position_and_tag_sensitive_filters_fail_closed_http(body):
+    ids, statuses, mounts = run(
+        "<div dj-root>" + TAG + body + "{{ q|safe }}" + HIDDEN + "</div>",
+        {"v": "abc", "sv": "<x", "q": "-->"},
+    )
+    assert len(ids) == 1
+    assert statuses == [200]
+    assert mounts == 0
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "body",
+    [
+        '<div class="{{ v }}" data-x="{{ v }}" style="color:{{ v }}"></div>',
+        '<a href="{{ v }}">{{ v }}</a>',
+        "{{ v }}{{ empty }}",
+        "<div class={{ v }}></div>",
+    ],
+)
+def test_containers_after_ordinary_interpolations_http(body):
+    ids, statuses, mounts = run(
+        "<div dj-root>" + TAG + body + HIDDEN + "</div>",
+        {"v": "é😀", "empty": ""},
+    )
+    assert len(ids) == 2
+    assert statuses == [200, 200]
+    assert mounts == 1
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("arg", ["�", "--�>"])
+def test_cut_replay_cannot_erase_value_separator_http(arg):
+    body = '<!--{% filter cut:"' + arg + '" %}--{{ v }}>{% endfilter %}'
+    ids, statuses, mounts = run(
+        "<div dj-root>" + TAG + body + "{{ q|safe }}" + HIDDEN + "</div>",
+        {"v": "y", "q": "-->"},
+    )
+    assert len(ids) == 1
+    assert statuses == [200]
+    assert mounts == 0
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("v", ["y", " "])
+@pytest.mark.parametrize("cached", [False, True])
+def test_byte_identical_custom_capture_keeps_split_closer_http(v, cached):
+    from django.core.cache import cache
+    from djust.template_filters import register_django_filter
+
+    def identity(value):
+        return value
+
+    register_django_filter("split_identity_3442", identity)
+    cache.clear()
+    body = "{% filter split_identity_3442 %}-{{ v }}->{% endfilter %}"
+    if cached:
+        body = "{% load cache %}{% cache 60 split_identity %}" + body + "{% endcache %}"
+    for _ in range(2):
+        ids, statuses, mounts = run(
+            "<div dj-root>" + TAG + "<!--" + body + "{{ q|safe }}" + HIDDEN + "</div>",
+            {"v": v, "q": "-->"},
         )
         assert len(ids) == 1
         assert statuses == [200]

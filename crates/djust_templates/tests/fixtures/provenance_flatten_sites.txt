@@ -1076,6 +1076,7 @@ assert_eq!(TagArg::plain("x".to_string()).text, "x");
 context.rs
 fn render_block_super(&self, ctx: &Context) -> crate::Result<String>;
 self.render_block_super(ctx).map(|html| {
+html: Some("\u{fffd}".to_owned()),
 pub fn flatten_authored_output(output: AuthoredOutput, text: String) -> AuthoredOutput {
 let literal = if output.0 == text {
 output.3.html
@@ -1244,14 +1245,13 @@ fn into_authored_output(self) -> djust_core::context::AuthoredOutput {
 output.0
 pub literal_only: Option<String>,
 pub literal_offsets: Vec<(usize, usize)>,
-Self::from(String::new())
 pub fn into_authored_output(self) -> djust_core::context::AuthoredOutput {
 self.html,
 html: self.literal_only,
 openings: self.literal_offsets,
 .literal_only
 self.literal_offsets.iter().copied().collect();
-literal_only: Some(String::new()),
+literal_only: Some("\u{fffd}".to_owned()),
 literal_offsets: Vec::new(),
 &self.html
 f.write_str(&self.html)
@@ -1278,12 +1278,19 @@ if let (Some(output), Some(literal)) = (&mut self.literal_only, &child.literal_o
 self.literal_offsets.extend(
 .literal_offsets
 self.html.push_str(&child.html);
-self.html.push_str(text);
+self.append(&Self::from(text.to_owned()));
 *id = format!("{identity}/{id}");
 self.identify(&format!("loop{}", context.dj_if_loop_path()));
 ctx.set("flag".into(), Value::Bool(true));
 "xs".into(),
 ctx.set("extra".into(), Value::String("Δ".into()));
+output.append(&Rendered::from("é😀".to_owned()));
+output.append(&Rendered::from(String::new()));
+assert_eq!(output.literal_offsets, vec![(6, 6)]);
+output.literal_only.as_deref(),
+assert_eq!(Rendered::default().literal_only.as_deref(), Some(""));
+Rendered::context_neutral("<!--dj-if-->".into())
+.literal_only
 output.append(&Rendered::from("</script>".to_owned()));
 let flattened = output.flatten(replacement.into());
 flattened.literal_only.as_deref(),
@@ -1315,15 +1322,15 @@ ctx.set("q".into(), Value::String(value.into()));
 ctx.set("empty".into(), Value::String(String::new()));
 ctx.set("truthy".into(), Value::String("</script>".into()));
 0 => (format!("{before}{{% with s=block.super %}}{{{{ empty }}}}{between}{{{{ s }}}}{TAG}{after}{{% endwith %}}"),
-format!("{before}{between}{parent}{TAG}{after}")),
+format!("{before}\u{fffd}{between}{parent}{TAG}{after}")),
 1 => (format!("{before}{{% with s=block.super %}}{{% with t=s %}}{between}{{{{ t }}}}{{{{ t }}}}{TAG}{after}{{% endwith %}}{{% endwith %}}"),
 format!("{before}{between}{parent}{parent}{TAG}{after}")),
 2 => (format!("{before}{{% firstof block.super as s %}}{between}{{{{ s }}}}{TAG}{after}"),
 format!("{before}{between}{parent}{TAG}{after}")),
 3 => (format!("{before}{{{{ truthy|default:block.super|safe }}}}{between}{TAG}{after}"),
-format!("{before}{between}{TAG}{after}")),
+format!("{before}\u{fffd}{between}{TAG}{after}")),
 _ => (format!("{before}{{% include block.super %}}{between}{after}"),
-format!("{before}{TAG}{between}{TAG}{after}")),
+format!("{before}\u{fffd}{TAG}{between}{TAG}{after}")),
 "leaf".to_owned()
 format!("{parent}{{{{ q|safe }}}}")
 ctx.set("filename".into(), Value::String("leaf".into()));

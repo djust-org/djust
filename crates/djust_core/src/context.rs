@@ -663,7 +663,7 @@ pub trait BlockSuperSource: std::fmt::Debug + Send + Sync {
                 Vec::new(),
                 LiteralOutput {
                     blocked: false,
-                    html: Some(String::new()),
+                    html: Some("\u{fffd}".to_owned()),
                     openings: Vec::new(),
                 },
             )

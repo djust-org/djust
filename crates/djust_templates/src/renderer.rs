@@ -931,10 +931,8 @@ fn replayable_filter(name: &str, arg: Option<&str>, context: &Context) -> bool {
             | "title"
             | "capfirst"
             | "cut"
-            | "slice"
             | "escape"
             | "force_escape"
-            | "striptags"
             | "linebreaksbr"
     ) && arg.is_none_or(|arg| expression_is_literal(arg, context))
 }
@@ -7330,10 +7328,8 @@ mod tests {
             "title",
             "capfirst",
             "cut",
-            "slice",
             "escape",
             "force_escape",
-            "striptags",
             "linebreaksbr",
         ] {
             assert!(replayable_filter(name, None, &context), "{name}");
@@ -7344,6 +7340,8 @@ mod tests {
             );
         }
         for name in [
+            "slice",
+            "striptags",
             "default",
             "default_if_none",
             "yesno",
