@@ -1,48 +1,57 @@
-"""Keep fixture repos out of the HOST repository's git state.
+"""Environment for a test fixture that runs `git` in a temporary repository.
 
-Fixtures in this suite create throwaway git repos and shell out to `git`
-(`add`, `commit`, `checkout`) inside them. Copying the process environment is
-the obvious thing to do there — and it silently carries the host repo's git
-state along with it:
+A fixture that shells out to `git` must never inherit git's own execution
+variables. Under a git hook (`pre-push`, `pre-commit`, …) git exports
+``GIT_DIR`` and ``GIT_INDEX_FILE`` pointing at the REAL repository, so a
+fixture's ``git init`` in a temp directory silently re-initialises the real
+repo — rewriting its shared config (this is where a stray ``core.bare = true``
+comes from) — and the fixture's ``git add`` / ``git commit`` write into the
+real index, which then shows thousands of staged deletions (#2608).
 
-    GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_OBJECT_DIRECTORY,
-    GIT_ALTERNATE_OBJECT_DIRECTORIES, GIT_COMMON_DIR
+Reproduced::
 
-`pre-commit` exports `GIT_INDEX_FILE` — the index it stashes your working tree
-into — to every hook it runs. A fixture that inherits it does not operate on
-its own throwaway repo; it operates on the REAL repository's index. Observed
-on the pre-push hook (djust 1.1 line, 2026-09-15):
+    $ cd "$(mktemp -d)" && GIT_DIR=/path/to/repo/.git git init -q -b main
+    warning: re-init: ignored --initial-branch=main
 
-* `test_run_with_venv_python.py`'s fixture ran `git add -A` against the leaked
-  index, writing the FIXTURE's paths into the real index. pre-commit's
-  stash/restore then left the fixture's one-line `# djust package stub` in
-  `python/djust/__init__.py` in the working tree, so the next import in that
-  same pytest run failed with `cannot import name 'LiveView' from 'djust'` —
-  which the pre-push hook correctly refused to attribute, blocking the push
-  for a reason nothing in the failure text named.
-* The same leak had already detached the index wholesale (every real path
-  staged as deleted), and made another fixture's `git commit` fail with a
-  non-zero exit only under pre-commit.
-
-Scrub the family before handing an environment to a fixture's git.
+So: strip every ``GIT_*`` execution variable, keep the caller's overrides.
 """
 
 from __future__ import annotations
 
-from typing import Dict
+import os
 
-HOST_GIT_STATE_VARS = (
+#: Variables git exports to hooks (and that a user may set) which redirect a
+#: subsequent `git` invocation away from its own working directory.
+GIT_EXECUTION_VARS = (
     "GIT_DIR",
-    "GIT_WORK_TREE",
     "GIT_INDEX_FILE",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
     "GIT_OBJECT_DIRECTORY",
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    "GIT_COMMON_DIR",
+    "GIT_PREFIX",
+    "GIT_INDEX_VERSION",
+    "GIT_NAMESPACE",
 )
 
 
-def scrub_host_git_state(env: Dict[str, str]) -> Dict[str, str]:
-    """Remove the host repo's git-state variables from ``env``, in place."""
-    for name in HOST_GIT_STATE_VARS:
+def isolated_git_env(**overrides: str) -> dict[str, str]:
+    """`os.environ` with every git execution variable removed.
+
+    `overrides` are applied last, so a caller can still pin identity or config
+    variables (``GIT_AUTHOR_NAME``, ``GIT_CONFIG_GLOBAL``, …).
+    """
+    env = {k: v for k, v in os.environ.items() if k not in GIT_EXECUTION_VARS}
+    env.update(overrides)
+    return env
+
+
+# Compatibility for 1.1 fixtures that still scrub an existing mapping in place.
+HOST_GIT_STATE_VARS = GIT_EXECUTION_VARS
+
+
+def scrub_host_git_state(env: dict[str, str]) -> dict[str, str]:
+    """Remove git execution variables from ``env`` in place."""
+    for name in GIT_EXECUTION_VARS:
         env.pop(name, None)
     return env

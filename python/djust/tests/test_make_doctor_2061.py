@@ -42,6 +42,16 @@ import pytest
 
 from tests.git_env import scrub_host_git_state
 
+
+@pytest.fixture(autouse=True)
+def _no_inherited_git_env(monkeypatch):
+    """Keep git commands aimed at fixture repositories under hooks (#3179)."""
+    from tests.git_env import GIT_EXECUTION_VARS
+
+    for var in GIT_EXECUTION_VARS:
+        monkeypatch.delenv(var, raising=False)
+
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DOCTOR_SCRIPT = REPO_ROOT / "scripts" / "doctor.sh"
 

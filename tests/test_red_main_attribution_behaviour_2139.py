@@ -32,6 +32,16 @@ import pytest
 
 from tests.git_env import scrub_host_git_state
 
+
+@pytest.fixture(autouse=True)
+def _no_inherited_git_env(monkeypatch):
+    """Keep git commands aimed at fixture repositories under hooks (#3179)."""
+    from tests.git_env import GIT_EXECUTION_VARS
+
+    for var in GIT_EXECUTION_VARS:
+        monkeypatch.delenv(var, raising=False)
+
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/pre-push-pytest.sh"
 
@@ -407,10 +417,24 @@ def test_the_venv_wrapper_resolves_from_inside_a_linked_worktree(tmp_path):
     #
     # The fixture rewrites that very line, so it cannot see this. Assert the
     # mechanism directly instead.
+    # Use a throwaway main repo: never register test worktrees in the checkout's
+    # shared .git directory (which may live outside this worktree).
+    main = tmp_path / "main"
+    main.mkdir()
+    _git(main, "init", "-q", "-b", "main")
+    _git(main, "config", "user.name", "Test")
+    _git(main, "config", "user.email", "test@example.com")
+    _git(main, "config", "commit.gpgsign", "false")
+    scripts = main / "scripts"
+    scripts.mkdir()
+    shutil.copy2(ROOT / "scripts/run-with-venv-python.sh", scripts)
+    _git(main, "add", "scripts")
+    _git(main, "commit", "-q", "-m", "fixture")
+    (main / ".venv").symlink_to(ROOT / ".venv", target_is_directory=True)
     wt = tmp_path / "wt"
     subprocess.run(
         ["git", "worktree", "add", "--detach", str(wt), "HEAD"],
-        cwd=ROOT,
+        cwd=main,
         capture_output=True,
         check=True,
     )
@@ -427,7 +451,7 @@ def test_the_venv_wrapper_resolves_from_inside_a_linked_worktree(tmp_path):
         )
     finally:
         subprocess.run(
-            ["git", "worktree", "remove", "--force", str(wt)], cwd=ROOT, capture_output=True
+            ["git", "worktree", "remove", "--force", str(wt)], cwd=main, capture_output=True
         )
 
 
