@@ -1989,3 +1989,11 @@ class LiveViewSmokeTest:
                 f"Handler exceptions from fuzz input ({len(failures)}):\n"
                 + "\n".join(f"  - {e}" for e in failures)
             )
+
+
+# These helpers allocate no pool or registry resources unless a test opts in.
+from ._clock_testing import (  # noqa: E402, F401
+    ManualClock,
+    DeterministicClockExecutor,
+    clocks_disabled,
+)

@@ -139,6 +139,8 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         "_async_work_generation",
         "view_is_async",
         "tick_interval",
+        "room_clock",
+        "_room_clock_scope",
         "login_required",
         "login_url",
         "permission_required",

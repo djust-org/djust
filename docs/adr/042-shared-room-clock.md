@@ -1,6 +1,7 @@
 # ADR-042: A shared room clock
 
-**Status**: Proposed
+**Status**: Partially Accepted — process-local Phases 1–3; Phase 4 deferred
+**Target version**: v1.3.x experimental (unreleased); distributed ownership deferred
 **Date**: 2026-10-04
 **Deciders**: Project maintainers
 **Related**:
@@ -10,9 +11,11 @@
 - `docs/website/guides/scaling.md` (its "Option A" routes rooms to one process, its "Option B" shares state through Redis) and `docs/website/guides/scaling-across-cores.md` ("More than one event loop per process")
 - ADR-041: the format and release-plan convention this ADR follows
 
-**No code in this ADR exists in any release.** Every snippet is an illustrative
-sketch of a proposed shape. Nothing here changes `tick_interval` or
-`handle_tick`. The design alternatives below are called **Shapes** so they are
+**Owner approved Phases 1–3 on 2026-10-08.** The original design sketches
+below remain historical context; the implemented API is documented in
+[the clock reference](../website/api-reference/clocks.md). This is an
+unreleased implementation, not a claim of a shipped release. Nothing here
+changes `tick_interval` or `handle_tick`. The design alternatives below are called **Shapes** so they are
 not confused with the scaling guide's Option A and Option B.
 
 ---
@@ -334,7 +337,7 @@ ownership.
 | Effort | high | medium | low-medium | low |
 | Verdict | **reject** | **recommend** | reject as the engine; revisit as sugar | reject as the whole answer |
 
-## Decision (PROPOSED: the maintainer decides)
+## Decision (accepted for process-local Phases 1–3)
 
 ### 1. Build Shape 2, and keep its step a function of a key
 
@@ -976,71 +979,151 @@ release, token monotonicity) against a real Redis when one is available.
 - **Pins, not promises.** Source-text pins for the one-task-per-key rule and the
   server-only `ensure` use the real code path, not a re-implemented condition.
 
-## Open questions
+## Decided for phases 1-3
 
-Each is for the maintainer. None is decided here.
+Owner approval: 2026-10-08. Defaults follow this ADR; Phases 1–3 are opt-in
+and additive. These decisions supersede the earlier "proposed" wording and
+historical illustrative snippets. No Phase 4 code is included.
 
-1. **Loop ownership.** The session loop (proposed for Phase 1, `ensure` valid
-   only on a serving loop) or a dedicated clock thread and loop (valid from any
-   thread, isolates jitter, needs a loop-safe layer or a hop). Also whether
-   `ensure` from a non-serving context should raise (proposed) or start a
-   dedicated loop lazily.
-2. **Interface and stability.** A function-of-a-key engine with a later
-   declarative attribute (proposed), the attribute alone, or the engine alone;
-   the names `djust.clocks`, `RoomClock`, `Publish`, `Stop`, `ClockTick`; and
-   whether `djust.clocks` is public from the first release or marked experimental
-   in `api-stability.md` for one minor.
-3. **Delivery contract.** Is "step runs once per slot or is skipped and counted;
-   the doorbell is beat-invariant, ordered, bounded and coalesced when identical;
-   state comes from the app's snapshot; a trailing doorbell heals a lost last
-   one" the guarantee to document? Or should the framework change the deferred
-   queue to coalesce by `(group, handler)` for flagged events, so a doorbell can
-   carry `seq`?
-4. **Default late-beat policy.** `skip` or bounded `catch_up`, and the default
-   `max_catch_up`.
-5. **Determinism.** Is `seq`, `run_id` and `dt` all the framework offers, or
-   should it offer a per-run seed so replays and tests are reproducible?
-6. **Liveness defaults.** The `alive` cadence (proposed 1 s), the default
-   `idle_stop`, and whether an unreadable `alive` stops the clock (proposed, as
-   Snake does), and whether `Stop` and an idle stop flush the trailing doorbell
-   at once (proposed) or wait out its delay.
-7. **Async steps and the pool.** Whether `async def` steps are in Phase 1, and
-   the pool's relationship to `LIVEVIEW_CONFIG["worker_threads"]` (a separate
-   framework pool is proposed) and to free-threaded and GIL builds.
-8. **Limits and breaker policy.** Approval of the proposed defaults (256 clocks,
-   64 per tenant, 0.02 s floor, 10 pool threads, 10 errors then backoff to 30 s),
-   whether a clock that fails forever ever stops (after how long), and whether a
-   stuck sync step should stop the clock.
-9. **Multi-process scope.** Is Phase 4 in scope at all? If yes, which ownership
-   model is supported: rooms routed to one pod (scaling guide, Option A, which
-   has a routing gap today), state externalised to Redis or the database (a
-   per-beat round trip), or a room-actor protocol; who enforces the fencing token
-   (a framework helper or the app); and whether `RoomClock` should warn or refuse
-   with several pods and in-memory rooms.
-10. **Owner loss, Redis loss and timing.** On owner death, does the room resume
-    from a snapshot or restart empty? When Redis is unreachable, do clocks stop
-    (fail stopped, proposed) or continue on the last owner? Which lease source
-    (Redis, Postgres advisory lock, Kubernetes Lease) and which TTL, given the
-    trade between takeover time and flapping.
-11. **Tenant scoping of clock keys and publish scopes** must be specified and
-    tested (requirement above). Open: the exact helper wiring in the API (sketched
-    with `clock.scope(view, key)`), and whether `clock.scope` is the only way to
-    name a scope that a clock publishes to.
-12. **Pause.** Does pausing live in the framework clock (membership and liveness
-    continue, no step) or stay in app state (Snake's flag, with the clock still
-    ticking to reap rooms)?
-13. **Observability and nudges.** Where `stats()` surfaces (observability views,
-    `djust_audit`, the debug panel), and whether a system check should suggest a
-    clock to a view that sets `push_scope` or `presence_key` with a sub-second
-    `tick_interval`.
-14. **Release train.** Land Phases 1 and 2 in 1.3.x (opt-in, additive) or wait
-    for the next minor.
-15. **Tenant context for steps.** The engine sets the captured tenant as the
-    current tenant inside the clock's context (proposed), or steps must filter by
-    `tick.scope` explicitly and see no ambient tenant.
-16. **Logging for ownerless steps.** Value-free by default, with a
-    `log_details=True` opt-in per clock (proposed); whether the opt-in should
-    exist at all.
-17. **Serving-loop detection.** A djust registry of loops that consumers register
-    (proposed), asgiref's private main-loop state, or accepting any running loop
-    and documenting the risk.
+1. **Q1 — Loop ownership:** the first ensuring session's registered serving
+   loop owns the task. Foreign threads/loops signal it with
+   `call_soon_threadsafe`; no dedicated clock thread. This needs no new
+   transport infrastructure and follows the multi-loop contract. A stopped
+   owner loop permits restart, unless an uncancellable sync call is still
+   writing; single-flight takes precedence until that call returns.
+2. **Q2 — Interface and stability:** function-of-key `djust.clocks` first:
+   `RoomClock`, `ClockTick`, `Publish`, `Stop`, then the Phase 2 optional
+   `PresenceMixin.room_clock` attribute and Phase 3 `SharedPoll`. Experimental
+   for at least one minor; no decorator or change to per-session ticks.
+3. **Q3 — Delivery:** best-effort beat-invariant scoped doorbells, through the
+   existing ordered/bounded/identical-coalesced push path. State stays in the
+   app snapshot; no changing sequence fields in payloads. Trailing resend is
+   one second by default; this preserves the current deferred-queue contract.
+4. **Q4 — Late beats:** default skip; optional catch-up capped at three. Fixed
+   monotonic grid, dropped slots counted, never an unbounded burst.
+5. **Q5 — Determinism:** `seq`, `run_id`, `dt`, skipped/scheduled/start times;
+   no framework RNG seed. `fence=None` is the deferred ownership seam.
+6. **Q6 — Lifecycle:** alive/count cadence one second, idle stop five seconds
+   (the sketch's concrete default), false/None/error counts as not alive.
+   Without alive use ensure heartbeats and choose a longer idle margin.
+   Graceful last leave uses presence's existing count read to begin idle time
+   immediately, without adding a poll. Stop/idle flush a pending trailing
+   doorbell; cancellation does not. Start and restore ensure every connection,
+   including silent second tabs. Stops and joins share the registry lock;
+   joins during committed stop finalization wait and start a fresh run.
+7. **Q7 — Async/pool:** sync steps/alive/on_stop use a separate lazy
+   process-wide pool; async callbacks run on the owning loop. Database
+   connections are cleaned around pool calls. Ten threads by default,
+   configurable as `LIVEVIEW_CONFIG["clock_workers"]`, independent of session
+   `worker_threads`. Sync timeout reports stuck and waits; async timeout
+   cancels. Both timeout/scheduling waits use the injected time source.
+8. **Q8 — Limits/breaker:** 256 live keys, 64 per tenant, 0.02-second floor,
+   ten errors before exponential backoff capped at thirty seconds. One
+   namespace may occupy at most three quarters of the pool; eligible calls
+   dispatch in due-time order. Refuse excess keys and rate-limit capacity
+   logging. No automatic stop for persistent errors or stuck sync steps:
+   stopping cannot reclaim their threads, and errors must not kill the clock.
+9. **Q9 — Multi-process scope:** Phase 4 explicitly deferred. Room routing to
+   one process remains the supported model for in-memory state. Redis
+   transport alone is not ownership. Do not add a startup heuristic that
+   implies it can detect multi-worker/pod topology.
+10. **Q10 — Owner/Redis loss:** all distributed lease, fencing, TTL and
+    authoritative-state recovery choices deferred with Phase 4. Locally a
+    stopped owner loop can restart on ensure with a fresh run ID; snapshots
+    remain application-owned. A process restart loses process-local poll data.
+11. **Q11 — Tenant wiring:** `clock.scope(view, raw_key)` applies
+    `tenant_scoped_presence_key` to `name:percent_encoded_raw_key`; this is the registry and
+    publish scope. Name is an ASCII slug, preventing namespace ambiguity.
+    Raw-key delimiters are percent-encoded: the existing literal tenant
+    prefix otherwise permits ambiguous combinations of colon-bearing tenant
+    IDs and room keys. The tenant prefix itself stays identical to presence.
+    The Phase 2 binding removes the presence key's existing own-tenant prefix
+    before passing it as a raw key and polls the original recorded presence
+    key. It adds its subscription while preserving existing push scopes,
+    rather than overwriting the app's subscriptions. Two tenants with the same
+    raw room have separate tasks, state lookups and publishes. A resolved
+    tenant without TenantMixin scoping fails closed.
+12. **Q12 — Pause:** framework pause suppresses only steps; membership and
+    idle stop continue. Resume does not catch up intentionally paused time.
+    `set_interval` applies on the next slot without a new run ID.
+13. **Q13 — Stats/nudges:** expose the proposed `stats()` fields on the clock,
+    with bounded recent stop history. No observability-view/debug-panel/audit
+    wiring or subsecond tick nudge: the ADR proposes these only as possible
+    follow-ons, gives no default integration, and existing ticks stay unchanged.
+14. **Q14 — Release:** additive, opt-in 1.3.x; experimental for at least one
+    minor, as the owner ruled. No claim that this uncommitted work has shipped.
+15. **Q15 — Tenant context:** capture only the configuring view's resolved
+    tenant; bind it for step and alive in the fresh context and worker copies.
+    No request/user/origin/diagnostic context is inherited. State still uses
+    `tick.scope` explicitly.
+16. **Q16 — Logging:** value-free failure records include clock name,
+    operation and exception type, with no exception text/traceback even in
+    DEBUG. `log_details=True` opts in. Start/stop logs use engine-authored
+    messages; application stop reasons are available only in stats/on_stop.
+17. **Q17 — Serving-loop detection:** a locked weak registry, registered on
+    consumer connect. No asgiref private state or temporary-loop acceptance.
+    Registration allocates no clocks/pool/polls; non-opted-in views pay only
+    this small registration and an optional-attribute check in presence.
+
+### Implementation choices within the accepted contract
+
+- One scheduler task per key, behind an owner-loop seam. A timer wheel remains
+  an internal optimization, not a distributed ownership mechanism. Benchmark
+  evidence is non-gating and must not be mistaken for CI acceptance.
+- Recent stopped stats and idle poll results are bounded by `max_clocks`;
+  active poll results are retained. Versions increase while a result is retained.
+- Testing helpers live behind `djust.testing`: manual time, deterministic
+  inline executor, context-local no-op ensure for synchronous mounts.
+- Snake migration and its original-loop benchmark require its separate
+  repository and are not performed in this worktree. This does not widen the
+  accepted implementation into another repository.
+
+## Open questions — deferred Phase 4 only
+
+The distributed portions of Q9/Q10 remain undecided: ownership source, atomic
+lease/fence acquisition and renewal, durable fencing enforcement, lease TTL and
+margin, fail-stopped behavior under Redis loss, room state recovery, and any
+room-actor protocol. Resolve those in a separate owner decision before Phase 4.
+
+## Local non-gating benchmark report (2026-10-09)
+
+Apple Silicon macOS, CPython 3.12.9, one serving loop, 256 rooms at 10 Hz,
+no publish/render and no application I/O. About 1.05 seconds per sample;
+process CPU includes setup and coarse async alive checks. These short local
+samples are not load-test capacity claims or performance gates.
+
+| Harness | Beats | Process CPU | CPU per beat | Scheduler sleep calls |
+| --- | --- | --- | --- | --- |
+| Full engine, async no-op | 2,560 | 0.091 s | 35.5 µs | 3,072 |
+| Full engine, sync no-op/shared pool | 2,560 | 0.201 s | 78.4 µs | 3,025 |
+| Scheduling-only task-per-key model | 2,560 | 0.011 s | excluded | 2,560 |
+| Scheduling-only timer-wheel model | 2,560 | 0.00085 s | excluded | 10 |
+
+With a real 200 ms sync step in the pool, 130 loop-lag samples had p95
+0.63 ms and maximum 0.69 ms. The model comparison intentionally excludes
+worker dispatch, context binding, stats and ownership; it demonstrates the
+wake-up saving rather than claiming a production wheel would achieve those
+CPU numbers. Choose one task per key for this initial experimental engine:
+measured total overhead is bounded at this scale, and the owner/lifecycle
+seams stay simple. A wheel is a justified future optimization. No comparison
+against Snake's own implementation was possible within this worktree boundary.
+
+
+### Round-1 implementation clarifications (PR #3425)
+
+- Q6: Any explicit stop or step-returned `Stop` commits under the registry lock.
+  Ensure after that commitment waits for retirement and starts a fresh run;
+  it never reports success for the retiring run. An uncommitted idle stop can
+  still be revived by a join.
+- Q8: The 64-key sub-cap applies only to resolved tenants. Untenanted rooms
+  use the definition's global 256-key cap. Capacity warnings are limited to
+  one per second per definition, including churn across successful starts.
+- Timing: Like intentional pause, breaker backoff suppresses schedule slots
+  without counting them as overload or adding them to `tick.dt`. The next
+  eligible slot stays on the fixed-rate grid; actual lateness after that slot
+  still follows A4's skip/catch-up arithmetic. This clarifies the original
+  `dt` decision for error backoff rather than advancing room time by the retry
+  delay.
+- Publish payload factories and their defensive copy run once per run in a
+  worker outside the process registry lock. The run is reserved before this
+  work, so concurrent ensures share its preparation and cannot double-start.
