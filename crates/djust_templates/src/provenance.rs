@@ -6,6 +6,13 @@ use std::ops::{Deref, Range};
 pub trait RenderOutput: Default + From<String> + Deref<Target = str> + std::fmt::Display {
     const TRACKED: bool;
     fn authored(text: &str) -> Self;
+    /// Literal-derived expression bytes affect context, but never grant authority.
+    fn context_literal(text: String) -> Self {
+        text.into()
+    }
+    fn context_neutral(text: String) -> Self {
+        text.into()
+    }
     fn from_authored_output(output: djust_core::context::AuthoredOutput) -> Self;
     fn append(&mut self, child: &Self);
     fn push_str(&mut self, text: &str);
@@ -44,10 +51,13 @@ pub struct Rendered {
     pub origins: Vec<(usize, usize, usize, String)>,
     /// All emitted literal bytes, including context-opening markup with no authority.
     pub literals: Vec<Range<usize>>,
+    /// Renderer-owned markers remain masked, and cannot end a trusted context run.
+    pub neutral: Vec<Range<usize>>,
 }
 impl Rendered {
-    /// Recheck source liveness on the branch that actually rendered. Values
-    /// occupy opaque whitespace, so they cannot close an authored inert context.
+    /// Recheck source liveness on the branch that actually rendered. Literal
+    /// expression bytes participate, but other values cannot close that context.
+    /// A context-changing value invalidates all following candidates in this render.
     /// Do this once on the complete result, never on incomplete include/block
     /// fragments. The ordinary final-HTML survival check remains necessary.
     pub fn retain_live_authority(&mut self) {
@@ -57,6 +67,22 @@ impl Rendered {
         let mut masked = vec![b' '; self.html.len()];
         for span in &self.literals {
             masked[span.clone()].copy_from_slice(&self.html.as_bytes()[span.clone()]);
+        }
+        // Nonliteral gaps are opaque. A gap capable of changing tokenization
+        // ends the trusted context run; no later literal can prove where the
+        // final parser resumed. Inspect emitted bytes, after escaping/filters.
+        let mut cursor = 0;
+        let mut broken_at = self.html.len();
+        let mut trusted: Vec<_> = self.literals.iter().chain(&self.neutral).collect();
+        trusted.sort_unstable_by_key(|r| r.start);
+        let end = self.html.len()..self.html.len();
+        for span in trusted.into_iter().chain(std::iter::once(&end)) {
+            let gap = &self.html[cursor..span.start];
+            if gap.contains(['<', '>', '\'', '"']) || gap.contains("--") {
+                broken_at = cursor;
+                break;
+            }
+            cursor = span.end;
         }
         // Literal spans contain whole UTF-8 scalars; opaque gaps are ASCII.
         let masked = String::from_utf8(masked).unwrap_or_default();
@@ -68,7 +94,7 @@ impl Rendered {
         let rejected: std::collections::HashSet<_> = self
             .origins
             .iter()
-            .filter(|(a, _, offset, _)| *offset == 0 && !starts.contains(a))
+            .filter(|(a, _, offset, _)| *offset == 0 && (*a >= broken_at || !starts.contains(a)))
             .map(|(a, _, _, _)| *a)
             .collect();
         if rejected.is_empty() {
@@ -107,6 +133,7 @@ impl From<String> for Rendered {
             authored: Vec::new(),
             origins: Vec::new(),
             literals: Vec::new(),
+            neutral: Vec::new(),
         }
     }
 }
@@ -127,6 +154,7 @@ impl RenderOutput for Rendered {
     fn authored(text: &str) -> Self {
         Self {
             html: text.to_owned(),
+            neutral: Vec::new(),
             literals: if text.is_empty() {
                 Vec::new()
             } else {
@@ -143,6 +171,22 @@ impl RenderOutput for Rendered {
                 vec![0..text.len()]
             },
         }
+    }
+    fn context_neutral(text: String) -> Self {
+        let len = text.len();
+        let mut result = Self::from(text);
+        if len != 0 {
+            result.neutral.push(0..len);
+        }
+        result
+    }
+    fn context_literal(text: String) -> Self {
+        let len = text.len();
+        let mut result = Self::from(text);
+        if len != 0 {
+            result.literals.push(0..len);
+        }
+        result
     }
     fn source_text(text: &str, source: &SourceText) -> Self {
         let mut result = Self::authored(text);
@@ -166,10 +210,17 @@ impl RenderOutput for Rendered {
             authored: output.1.into_iter().map(|(a, b)| a..b).collect(),
             origins: output.2,
             literals: output.3.into_iter().map(|(a, b)| a..b).collect(),
+            neutral: output.4.into_iter().map(|(a, b)| a..b).collect(),
         }
     }
     fn append(&mut self, child: &Self) {
         let offset = self.html.len();
+        self.neutral.extend(
+            child
+                .neutral
+                .iter()
+                .map(|r| r.start + offset..r.end + offset),
+        );
         self.literals.extend(
             child
                 .literals
@@ -227,6 +278,39 @@ mod tests {
             .render_with_provenance(&ctx, &NoOpTemplateLoader)
             .unwrap()
     }
+    #[test]
+    fn expression_context_never_grants_start_tag_authority() {
+        let r = render("{{ \"<div dj-view='app.Child' dj-lazy></div>\"|safe }}");
+        assert_eq!(r.literals, vec![0..r.html.len()]);
+        assert!(r.authored.is_empty());
+        assert!(r.origins.is_empty());
+    }
+
+    #[test]
+    fn literal_binding_closer_and_shadowing_affect_liveness() {
+        let live = render("{{ \"<!--\" }}{% with o=\"-->\" %}{{ o|lower }}{% endwith %}<div dj-view='app.Child' dj-lazy></div>");
+        #[cfg(feature = "liveview")]
+        assert_eq!(live.origins.len(), 1);
+        assert!(live.html.starts_with("<!---->"));
+        let inert = render("{{ \"<!--\" }}{% with o=\"x\" %}{% with o=extra %}{{ o|safe }}{% endwith %}{% endwith %}<div dj-view='app.Child' dj-lazy></div>-->");
+        assert!(inert.origins.is_empty());
+    }
+
+    #[test]
+    fn conditional_markers_are_masked_without_breaking_context() {
+        let mut ctx = Context::new();
+        ctx.set("flag".into(), Value::Bool(true));
+        let r = Template::new("{% if flag %}<div dj-view='app.Child' dj-lazy></div>{% endif %}<div dj-view='app.Child' dj-lazy></div>")
+            .unwrap().render_with_provenance(&ctx, &NoOpTemplateLoader).unwrap();
+        #[cfg(feature = "liveview")]
+        {
+            assert_eq!(r.origins.len(), 2);
+            assert!(!r.neutral.is_empty());
+        }
+        #[cfg(not(feature = "liveview"))]
+        assert!(r.neutral.is_empty());
+    }
+
     #[test]
     fn utf8_conditional_loop_composition() {
         let r = render("é{% if flag %}{% for x in xs %}<div dj-view=\"app.Child\" class=\"{{ extra }}\" dj-lazy></div>{% endfor %}{% endif %}");

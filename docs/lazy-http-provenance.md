@@ -55,8 +55,9 @@ compose their own results. There is no ambient provenance collector, reset/take
 API, or thread-local record. Nested render calls cannot grant authority to an
 outer render's value output.
 
-Values, custom-tag return values, filters, escaping, spaceless transforms and
-captured/reinjected `|safe` HTML grant no authored intervals. A filter also drops
+Values, custom-tag return values, expression literals, filters, escaping,
+spaceless transforms and captured/reinjected `|safe` HTML grant no authored
+intervals. A filter also drops
 intervals when its output is byte-identical. Unfiltered `block.super` is direct
 renderer composition; filtered or captured `block.super` is a value.
 
@@ -69,14 +70,35 @@ reinserting it, including via a wrapper-template value, drops that authority.
 
 At compile time, each container must be live in its own authored template
 context, with template expressions masked. The complete tracked Rust render
-then checks liveness again using only the literal bytes emitted by the selected
-branches and loop iterations; value output is replaced by opaque whitespace
-at the same byte offsets. Literal context is carried across includes,
-inheritance and unfiltered `block.super`. This check is applied to the complete
-render, rather than isolated fragments. An authored closer in a skipped branch
-cannot make a following container authoritative, and a value such as `-->`,
-`</script>`, `</textarea>`, `</template>` or `'>` cannot supply that closer.
-Only containers live in both checks keep start-tag authority and origin addresses.
+then checks liveness again using the literal bytes emitted by the selected
+branches and loop iterations. Its context includes quoted variable expressions,
+the selected literal operand of `cycle`/`firstof` (including named bindings),
+and literal `with`/include bindings and aliases. Literal-derived expression
+output
+participates after escaping and built-in filters whose input and arguments
+are literal-derived. Custom filters and the environment-dependent built-ins
+`date`, `time`, `timesince`, `timeuntil`, `floatformat`, `filesizeformat`,
+`yesno`, `truncatechars`, `truncatechars_html`, `truncatewords` and
+`truncatewords_html` remain opaque, as do translated `_()` expressions. These
+context bytes never grant start-tag authority.
+Unfiltered `block.super` composes its literal context; filtered `block.super`
+participates as literal-derived only when the entire parent output is literal
+and its filters meet the same rule. Captured/reinjected output remains opaque.
+
+Other output is replaced by whitespace at the same byte offsets. If any such
+emitted run contains `<`, `>`, `--`, a single quote or a double quote, authority
+is removed from every container starting after that run in the complete render.
+This deliberately fails closed even if a later literal closer would appear to
+restore context. Escaped entities and values without those bytes preserve the
+trusted run. Renderer-owned conditional markers remain masked and do not break
+it; they cannot act as authored closers.
+
+Literal context and opaque runs compose across includes, inheritance and loop
+iterations. This check is applied once to the complete render. An authored
+closer in a skipped branch cannot make a following container authoritative;
+a value cannot supply the closer for an inert context opened by literal text
+or literal-derived expression output. Only containers live in both the
+compile-time and rendered checks keep start-tag authority and origin addresses.
 The compile-time check remains conservative: a container rejected there does
 not gain authority just because a particular rendered branch would be live.
 
@@ -100,7 +122,8 @@ The final HTML5 check runs only for tracked output with lazy markup.
 ## Verification
 
 The contract matrix is in
-`python/djust/tests/test_lazy_provenance_http_3252.py`; HTTP client routing is in
+`python/djust/tests/test_lazy_provenance_http_3252.py` and
+`python/djust/tests/test_lazy_expression_literals_3430.py`; HTTP client routing is in
 `tests/js/view_slots_3252.test.js`. The self-contained real-browser regression is
 `tests/playwright/test_lazy_attribute_http_3252.py`:
 

@@ -158,9 +158,9 @@ def render(source, state=None, dirs=None):
     [
         (TAG, {}, 1),
         (TAG.replace("dj-view", "DJ-VIEW").replace("dj-lazy", "DJ-LAZY"), {}, 1),
-        ("{{ forged|safe }}" + TAG, {"forged": TAG}, 1),
+        ("{{ forged|safe }}" + TAG, {"forged": TAG}, 0),
         (TAG + "{{ forged|safe }}", {"forged": TAG}, 1),
-        (TAG + "{{ forged|safe }}" + TAG, {"forged": TAG}, 2),
+        (TAG + "{{ forged|safe }}" + TAG, {"forged": TAG}, 1),
         ("{{ forged|safe }}", {"forged": TAG}, 0),
         ("{% autoescape off %}{{ forged }}{% endautoescape %}", {"forged": TAG}, 0),
         ("<!--" + TAG + "-->", {}, 0),
@@ -405,13 +405,14 @@ def test_nested_renderer_callback_cannot_grant_its_output_authority():
     register_tag_handler("lazy_nested_3252", Nested())
     try:
         result = render(TAG + "{% lazy_nested_3252 %}" + TAG)
-        assert len(result[2]) == 2
+        assert len(result[2]) == 1  # Custom output breaks the following context run.
     finally:
         unregister_tag_handler("lazy_nested_3252")
 
 
 @pytest.mark.django_db
-def test_rendered_page_loop_keys_and_safe_forgery_counts():
+@pytest.mark.parametrize("forged,count", [(TAG, 0), ("plain é", 3)])
+def test_rendered_page_loop_keys_and_safe_forgery_counts(forged, count):
     class LoopPage(Page):
         template = (
             "<div dj-root>{{ forged|safe }}{% for n in numbers %}"
@@ -420,13 +421,13 @@ def test_rendered_page_loop_keys_and_safe_forgery_counts():
         )
 
         def mount(self, request, **kwargs):
-            self.forged = TAG
+            self.forged = forged
             self.numbers = [1, 2, 3]
 
     session = SessionStore()
     session.create()
     ids = get_ids(session, LoopPage)
-    assert len(ids) == 3 and len(set(ids)) == 3
+    assert len(ids) == count and len(set(ids)) == count
     assert get_ids(session, LoopPage) == ids
 
 

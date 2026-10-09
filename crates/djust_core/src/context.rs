@@ -215,6 +215,8 @@ pub type SharedValues = std::sync::Arc<AHashMap<String, Value>>;
 /// One lexical binding scope, including the provenance of its values.
 #[derive(Clone, Debug, Default)]
 struct ScopeFrame {
+    /// Template-literal bindings, independent of HTML safety or registration authority.
+    literal_keys: std::sync::Arc<AHashSet<String>>,
     /// COPY-ON-WRITE, and that is a performance contract, not a style choice
     /// (#2732).
     ///
@@ -650,7 +652,7 @@ pub trait BlockSuperSource: std::fmt::Debug + Send + Sync {
     /// The default for external sources is untrusted String output.
     fn render_block_super_authored(&self, ctx: &Context) -> crate::Result<AuthoredOutput> {
         self.render_block_super(ctx)
-            .map(|html| (html, Vec::new(), Vec::new(), Vec::new()))
+            .map(|html| (html, Vec::new(), Vec::new(), Vec::new(), Vec::new()))
     }
 }
 
@@ -662,6 +664,7 @@ pub type AuthoredOutput = (
     Vec<(usize, usize)>,
     Vec<(usize, usize, usize, String)>,
     Vec<(usize, usize)>, // Rendered literal context, separate from authority.
+    Vec<(usize, usize)>, // Masked renderer-owned markers.
 );
 
 /// The `block` a PYTHON-BRIDGED tag receives while a `{{ block.super }}` is
@@ -2061,7 +2064,26 @@ impl Context {
         self.set_at(self.stack.len() - 1, key, value);
     }
 
+    /// Record the byte source of the nearest binding, without granting HTML authority.
+    pub fn mark_template_literal(&mut self, name: &str) {
+        if let Some(frame) = self.stack.iter_mut().rev().find(|f| f.contains_key(name)) {
+            std::sync::Arc::make_mut(&mut frame.literal_keys).insert(name.to_owned());
+        }
+    }
+
+    /// Shadowing values never inherit a template literal's byte-source metadata.
+    pub fn is_template_literal(&self, name: &str) -> bool {
+        self.stack
+            .iter()
+            .rev()
+            .find(|f| f.contains_key(name))
+            .is_some_and(|f| f.literal_keys.contains(name))
+    }
+
     fn set_at(&mut self, index: usize, key: String, value: Value) {
+        if !self.stack[index].literal_keys.is_empty() {
+            std::sync::Arc::make_mut(&mut self.stack[index].literal_keys).remove(&key);
+        }
         if self
             .raw_py_objects
             .as_ref()
@@ -3403,6 +3425,25 @@ fn warn_once_on_orm_autocall(py: Python<'_>, obj: &pyo3::Bound<'_, pyo3::PyAny>,
 mod tests {
     use super::*;
     use indexmap::IndexMap;
+
+    #[test]
+    fn template_literal_bindings_are_scoped_and_copy_on_write() {
+        let mut ctx = Context::new();
+        ctx.bind("o".into(), Value::String("<!--".into()), true);
+        ctx.mark_template_literal("o");
+        let mut clone = ctx.clone();
+        clone.set("o".into(), Value::String("-->".into()));
+        assert!(!clone.is_template_literal("o"));
+        assert!(ctx.is_template_literal("o"));
+        ctx.with_scope(|inner| {
+            inner.bind("o".into(), Value::String("-->".into()), true);
+            assert!(!inner.is_template_literal("o"));
+            inner.mark_template_literal("o");
+            inner.bind_upward("o".into(), Value::String("x".into()), false);
+            assert!(!inner.is_template_literal("o"));
+        });
+        assert!(ctx.is_template_literal("o"));
+    }
 
     /// #2689 / #2529 — the include path is interpolated RAW into a marker
     /// comment, so its grammar is a refusal, not an escape.

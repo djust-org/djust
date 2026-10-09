@@ -654,13 +654,21 @@ fn render_effectful_node_output<L: TemplateLoader, R: RenderOutput>(
     match sibling_updates(node, context, loader)? {
         Some(effect) => {
             for binding in effect.bindings {
+                let name = binding.name.clone();
                 if binding.upward {
                     context.bind_upward(binding.name, binding.value, binding.safe);
                 } else {
                     context.bind(binding.name, binding.value, binding.safe);
                 }
+                if R::TRACKED && binding.literal {
+                    context.mark_template_literal(&name);
+                }
             }
-            Ok((effect.html).into())
+            Ok(if effect.literal {
+                R::context_literal(effect.html)
+            } else {
+                effect.html.into()
+            })
         }
         None => render_node_output::<L, R>(node, context, loader),
     }
@@ -716,7 +724,11 @@ fn sibling_updates<L: TemplateLoader>(
         // to hand its bindings to.
         Node::CustomTag { name, args } if crate::registry::tag_handler_returns_bindings(name) => {
             let (html, bindings) = call_custom_tag(name, args, context)?;
-            Ok(Some(SiblingEffect { html, bindings }))
+            Ok(Some(SiblingEffect {
+                html,
+                bindings,
+                literal: false,
+            }))
         }
         Node::BlockCustomTag {
             name,
@@ -724,14 +736,22 @@ fn sibling_updates<L: TemplateLoader>(
             children,
         } if crate::registry::block_handler_returns_bindings(name) => {
             let (html, bindings) = call_block_custom_tag(name, args, children, context, loader)?;
-            Ok(Some(SiblingEffect { html, bindings }))
+            Ok(Some(SiblingEffect {
+                html,
+                bindings,
+                literal: false,
+            }))
         }
         Node::RawBlockCustomTag { name, args, body } => {
             // Every raw-block handler declares RETURNS_BINDINGS by
             // construction (the kind exists for the #2547 bridge), so there
             // is no non-bindings twin to shadow this arm (#2129).
             let (html, bindings) = call_raw_block_tag(name, args, body, context)?;
-            Ok(Some(SiblingEffect { html, bindings }))
+            Ok(Some(SiblingEffect {
+                html,
+                bindings,
+                literal: false,
+            }))
         }
         Node::AssignTag { name, args } => {
             // Resolve variable references in args, mirroring only the JSON
@@ -761,6 +781,7 @@ fn sibling_updates<L: TemplateLoader>(
                 updates
                     .into_iter()
                     .map(|(name, value)| SiblingBinding {
+                        literal: false,
                         upward: false,
                         name,
                         value,
@@ -780,6 +801,7 @@ fn sibling_updates<L: TemplateLoader>(
             max_width,
             asvar: Some(name),
         } => Ok(Some(SiblingEffect::silent(vec![SiblingBinding {
+            literal: false,
             upward: false,
             name: name.clone(),
             value: Value::String(width_ratio(value, max_value, max_width, context)?),
@@ -791,9 +813,11 @@ fn sibling_updates<L: TemplateLoader>(
             args,
             asvar: Some(name),
         } => {
-            let value = first_of(args, context)?.unwrap_or_else(|| Value::String(String::new()));
+            let (value, literal) = first_of(args, context)?;
+            let value = value.unwrap_or_else(|| Value::String(String::new()));
             let safe = value.is_safe_string();
             Ok(Some(SiblingEffect::silent(vec![SiblingBinding {
+                literal,
                 upward: false,
                 name: name.clone(),
                 value,
@@ -814,7 +838,7 @@ fn sibling_updates<L: TemplateLoader>(
             id,
             ..
         } => {
-            let (value, runtime_safe) = cycle_step(values, id, context)?;
+            let (value, runtime_safe, literal) = cycle_step(values, id, context)?;
             let html = if *silent {
                 String::new()
             } else {
@@ -828,7 +852,9 @@ fn sibling_updates<L: TemplateLoader>(
             };
             Ok(Some(SiblingEffect {
                 html,
+                literal,
                 bindings: vec![SiblingBinding {
+                    literal,
                     upward: true,
                     name: name.clone(),
                     value: bound,
@@ -840,6 +866,51 @@ fn sibling_updates<L: TemplateLoader>(
     }
 }
 
+// These built-ins can read locale, time, translations or formatting policy.
+// Custom filters can return arbitrary bytes. Both remain nonliteral.
+fn literal_filter(name: &str) -> bool {
+    crate::filter_arity::builtin_arity(name).is_some()
+        && !matches!(
+            name,
+            "date"
+                | "time"
+                | "timesince"
+                | "timeuntil"
+                | "floatformat"
+                | "filesizeformat"
+                | "yesno"
+                | "truncatechars"
+                | "truncatechars_html"
+                | "truncatewords"
+                | "truncatewords_html"
+        )
+}
+
+fn filters_are_literal(specs: &[(String, Option<String>)], context: &Context) -> bool {
+    specs.iter().all(|(name, arg)| {
+        literal_filter(name)
+            && arg
+                .as_ref()
+                .is_none_or(|arg| expression_is_literal(arg, context))
+    })
+}
+
+fn expression_is_literal(expr: &str, context: &Context) -> bool {
+    let parts = crate::filter_lexer::split_pipes(expr);
+    let head = parts[0].trim();
+    // Tag operands consult the value stack before their literal recognizer.
+    // Classify the actual source, including unusually named shadowing keys.
+    (if context.get(head).is_some() {
+        context.is_template_literal(head)
+    } else {
+        !head.starts_with("_(") && django_literal(head).is_some()
+    }) && parts[1..].iter().all(|spec| {
+        crate::filter_lexer::split_filter_spec(spec, expr).is_ok_and(|(name, arg)| {
+            literal_filter(name) && arg.is_none_or(|arg| expression_is_literal(arg, context))
+        })
+    })
+}
+
 /// Advance a `{% cycle %}` node's per-render iterator ONCE and resolve the
 /// value it lands on (#2556) — Django's `next(cycle_iter).resolve(context)`.
 ///
@@ -849,12 +920,14 @@ fn sibling_updates<L: TemplateLoader>(
 /// (Django compiles each operand with `compile_filter` and a missing
 /// variable is `string_if_invalid`, not an error), and the runtime-safe
 /// flag rides along for the emit (#1672).
-fn cycle_step(values: &[String], id: &str, context: &Context) -> Result<(Value, bool)> {
+fn cycle_step(values: &[String], id: &str, context: &Context) -> Result<(Value, bool, bool)> {
     if values.is_empty() {
-        return Ok((Value::Missing, false));
+        return Ok((Value::Missing, false, true));
     }
     let idx = context.cycle_advance(id) % values.len();
-    get_value_safe_ignoring_failures(values[idx].trim(), context)
+    let expr = values[idx].trim();
+    let (value, safe) = get_value_safe_ignoring_failures(expr, context)?;
+    Ok((value, safe, expression_is_literal(expr, context)))
 }
 
 /// Resolve an `{% extends %}` filter expression against the render context.
@@ -1083,6 +1156,7 @@ fn cycle_emit(value: &Value, runtime_safe: bool, autoescape: bool) -> String {
 
 /// One name a context-mutating node binds for the siblings that follow it.
 struct SiblingBinding {
+    literal: bool,
     upward: bool,
     name: String,
     value: Value,
@@ -1093,6 +1167,7 @@ struct SiblingBinding {
 /// What a sibling-aware node contributes: the HTML it emits and the names it
 /// binds for the siblings that follow it (#2547).
 struct SiblingEffect {
+    literal: bool,
     html: String,
     bindings: Vec<SiblingBinding>,
 }
@@ -1102,6 +1177,7 @@ impl SiblingEffect {
     fn silent(bindings: Vec<SiblingBinding>) -> Self {
         Self {
             html: String::new(),
+            literal: false,
             bindings,
         }
     }
@@ -1501,6 +1577,7 @@ fn render_timezone_scope<L: TemplateLoader, R: RenderOutput>(
 /// A registry [`crate::registry::HandlerBinding`] as a [`SiblingBinding`].
 fn sibling_binding(binding: crate::registry::HandlerBinding) -> SiblingBinding {
     SiblingBinding {
+        literal: false,
         upward: false,
         name: binding.name,
         value: binding.value,
@@ -2478,6 +2555,11 @@ impl djust_core::context::BlockSuperSource for DeferredBlockSuper {
                 .into_iter()
                 .map(|r| (r.start, r.end))
                 .collect(),
+            rendered
+                .neutral
+                .into_iter()
+                .map(|r| (r.start, r.end))
+                .collect(),
         ))
     }
 }
@@ -2557,13 +2639,16 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
         }
 
         Node::Variable(var_name, filter_specs, in_attr) => {
-            if R::TRACKED
-                && var_name == "block.super"
-                && filter_specs.is_empty()
-                && context.get(var_name).is_none()
-            {
+            let mut super_value = None;
+            let mut super_literal = false;
+            if R::TRACKED && var_name == "block.super" && context.get(var_name).is_none() {
                 if let Some(output) = context.render_armed_block_super_authored()? {
-                    return Ok(R::from_authored_output(output));
+                    if filter_specs.is_empty() {
+                        return Ok(R::from_authored_output(output));
+                    }
+                    super_literal =
+                        output.3.iter().map(|(a, b)| b - a).sum::<usize>() == output.0.len();
+                    super_value = Some(Value::SafeString(output.0));
                 }
             }
 
@@ -2594,7 +2679,10 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             let was_literal = literal.is_some();
             let mut value = match literal {
                 Some((value, _)) => value,
-                None => context.resolve(var_name)?.unwrap_or(Value::Missing),
+                None => match super_value {
+                    Some(value) => value,
+                    None => context.resolve(var_name)?.unwrap_or(Value::Missing),
+                },
             };
 
             // Django's `string_if_invalid` (#2517). A NON-empty setting is
@@ -2744,18 +2832,23 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             // in HERE and nowhere upstream — `runtime_safe` is exactly what it
             // was, so the flag never becomes a grant a later filter could read.
             let is_safe = runtime_safe || value.string_conversion_is_safe();
-            if is_safe || !context.autoescape() {
-                Ok((text).into())
+            let text = if is_safe || !context.autoescape() {
+                text
             } else if *in_attr {
-                // Attribute-context escape: handles `"` → `&quot;`
-                // and `'` → `&#x27;` in addition to the base
-                // `&`/`<`/`>` escapes, so quoted attribute values
-                // like `<a href="{{ url }}">` never break when the
-                // value itself contains a quote.
-                Ok((filters::html_escape_attr(&text)).into())
+                filters::html_escape_attr(&text)
             } else {
-                Ok((filters::html_escape(&text)).into())
-            }
+                filters::html_escape(&text)
+            };
+            let literal_output = R::TRACKED
+                && ((was_literal && !var_name.starts_with("_("))
+                    || super_literal
+                    || context.is_template_literal(var_name))
+                && filters_are_literal(filter_specs, context);
+            Ok(if literal_output {
+                R::context_literal(text)
+            } else {
+                text.into()
+            })
         }
 
         Node::InlineIf {
@@ -2885,7 +2978,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                     // Element-bearing branches drop into the dj-if pair
                     // path below, which serves the same sibling-stability
                     // role (closing tag adjacent to opening).
-                    R::from("<!--dj-if-->".to_string())
+                    R::context_neutral("<!--dj-if-->".to_string())
                 } else {
                     // Element-bearing if with no else and false condition:
                     // emit empty body inside the wrapping pair below.
@@ -2962,11 +3055,11 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                     // segments, so the two concatenate unambiguously.
                     let include_path = context.dj_if_include_path();
                     let loop_path = context.dj_if_loop_path();
-                    let mut wrapped = R::from(format!(
+                    let mut wrapped = R::context_neutral(format!(
                         "<!--dj-if id=\"{id}{namespace}{include_path}{loop_path}\"-->"
                     ));
                     wrapped.append(&body);
-                    wrapped.push_str("<!--/dj-if-->");
+                    wrapped.append(&R::context_neutral("<!--/dj-if-->".to_owned()));
                     return Ok(wrapped);
                 }
             }
@@ -3862,7 +3955,12 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                 let mut pending = Vec::new();
                 for (key, expression) in with_vars {
                     let (value, safe) = get_value_safe(expression, context)?;
-                    bindings.push((key.clone(), value, safe));
+                    bindings.push((
+                        key.clone(),
+                        value,
+                        safe,
+                        R::TRACKED && expression_is_literal(expression, context),
+                    ));
                     if let Some(path) = bare_dotted_path(expression) {
                         pending.push((key.clone(), context.alias_path(path)));
                     }
@@ -3875,8 +3973,11 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                 let render_include = |include_context: &mut Context| {
                     include_context.enter_include_instance(shared, identity);
                     include_context.begin_template_render();
-                    for (name, value, safe) in bindings {
-                        include_context.bind(name, value, safe);
+                    for (name, value, safe, literal) in bindings {
+                        include_context.bind(name.clone(), value, safe);
+                        if literal {
+                            include_context.mark_template_literal(&name);
+                        }
                     }
                     register_binding_aliases(include_context, pending, &bound);
                     if let Some(object) = &object {
@@ -4070,15 +4171,23 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             let mut pending = Vec::new();
             for (name, expression) in assignments {
                 let (value, safe) = get_value_safe(expression, context)?;
-                bindings.push((name.clone(), value, safe));
+                bindings.push((
+                    name.clone(),
+                    value,
+                    safe,
+                    R::TRACKED && expression_is_literal(expression, context),
+                ));
                 if let Some(path) = bare_dotted_path(expression) {
                     pending.push((name.clone(), context.alias_path(path)));
                 }
             }
             let bound: Vec<&str> = assignments.iter().map(|(name, _)| name.as_str()).collect();
             context.with_scope(|inner| {
-                for (name, value, safe) in bindings {
-                    inner.bind(name, value, safe);
+                for (name, value, safe, literal) in bindings {
+                    inner.bind(name.clone(), value, safe);
+                    if literal {
+                        inner.mark_template_literal(&name);
+                    }
                 }
                 register_binding_aliases(inner, pending, &bound);
                 render_nodes_output::<L, R>(nodes, inner, loader)
@@ -4123,10 +4232,13 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             if asvar.is_some() {
                 return Ok((String::new()).into());
             }
-            Ok((first_of(args, context)?
-                .map(|value| value.to_string())
-                .unwrap_or_default())
-            .into())
+            let (value, literal) = first_of(args, context)?;
+            let text = value.map(|v| v.to_string()).unwrap_or_default();
+            Ok(if literal {
+                R::context_literal(text)
+            } else {
+                text.into()
+            })
         }
 
         Node::TemplateTag(name) => {
@@ -4222,8 +4334,13 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             // update (`sibling_updates`), which is where its single advance
             // and its binding live; this arm is only ever reached for a
             // cycle that binds nothing.
-            let (value, runtime_safe) = cycle_step(values, id, context)?;
-            Ok((cycle_emit(&value, runtime_safe, context.autoescape())).into())
+            let (value, runtime_safe, literal) = cycle_step(values, id, context)?;
+            let text = cycle_emit(&value, runtime_safe, context.autoescape());
+            Ok(if literal {
+                R::context_literal(text)
+            } else {
+                text.into()
+            })
         }
 
         Node::Cycle { name: Some(_), .. } => {
@@ -4231,7 +4348,11 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             // `sibling_updates` first); a direct caller gets the same bytes
             // as the loop would have emitted, with the same single advance.
             match sibling_updates(node, context, loader)? {
-                Some(effect) => Ok((effect.html).into()),
+                Some(effect) => Ok(if effect.literal {
+                    R::context_literal(effect.html)
+                } else {
+                    effect.html.into()
+                }),
                 None => Ok((String::new()).into()),
             }
         }
@@ -6444,27 +6565,30 @@ fn try_compare(a: &Value, b: &Value) -> Option<i32> {
 /// at runtime (e.g. `{% firstof a|md %}`) must NOT be re-escaped, matching the
 /// `Variable` / `InlineIf` arms (#1660). `runtime_safe` is true ONLY when the
 /// LAST filter produced a genuine `SafeString` → fail-safe.
-fn first_of(args: &[String], context: &Context) -> Result<Option<Value>> {
+fn first_of(args: &[String], context: &Context) -> Result<(Option<Value>, bool)> {
     for arg in args {
         let (val, runtime_safe) = get_value_safe_ignoring_failures(arg.trim(), context)?;
         if val.is_truthy() {
             let safe = runtime_safe || val.string_conversion_is_safe();
             let text = val.to_string();
-            return Ok(Some(if context.autoescape() {
-                Value::SafeString(if safe {
-                    text
+            return Ok((
+                Some(if context.autoescape() {
+                    Value::SafeString(if safe {
+                        text
+                    } else {
+                        filters::html_escape(&text)
+                    })
+                } else if safe {
+                    Value::SafeString(text)
                 } else {
-                    filters::html_escape(&text)
-                })
-            } else if safe {
-                Value::SafeString(text)
-            } else {
-                Value::String(text)
-            }));
+                    Value::String(text)
+                }),
+                expression_is_literal(arg.trim(), context),
+            ));
         }
     }
     // Django binds the initial plain empty string when no operand is truthy.
-    Ok(None)
+    Ok((None, true))
 }
 
 /// `{% widthratio %}`'s value, arm for arm with Django's `WidthRatioNode`.
