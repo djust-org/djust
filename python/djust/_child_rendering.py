@@ -136,17 +136,22 @@ class _Render:
             owner_wrapper=self.owner_wrapper,
             root_attribute="dj-root",
         )
-        parser.feed(html)
-        parser.close()
-        if self.whole_page and not parser.root_found:
-            parser = _Slots(
-                candidates=set(self.candidates),
-                whole_page=True,
-                owner_wrapper=self.owner_wrapper,
-                root_attribute="dj-view",
-            )
+        try:
             parser.feed(html)
             parser.close()
+            if self.whole_page and not parser.root_found:
+                parser = _Slots(
+                    candidates=set(self.candidates),
+                    whole_page=True,
+                    owner_wrapper=self.owner_wrapper,
+                    root_attribute="dj-view",
+                )
+                parser.feed(html)
+                parser.close()
+        except (AssertionError, ValueError):
+            # No complete ownership graph: do not retain partially seen slots.
+            self.regions = {}
+            return
         self.regions = {
             slot: (self.candidates[slot], region)
             for slot, region in parser.slots.items()

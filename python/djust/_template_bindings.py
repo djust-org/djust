@@ -974,8 +974,14 @@ def scan_tokens(source: str, label: str, file: str, reason: str) -> TemplateScan
 def _scan_flat(flat: _Flat, label: str, file: str) -> TemplateScan:
     text = "".join(flat.text)
     parser = _Markup(text)
-    parser.feed(text)
-    parser.close()
+    parse_error = None
+    try:
+        parser.feed(text)
+        parser.close()
+    except (AssertionError, ValueError) as exc:
+        # HTMLParser rejects malformed declarations/marked sections. Keep the
+        # bindings already seen, but the remaining event graph is unknown.
+        parse_error = type(exc).__name__
 
     offsets = [segment[0] for segment in flat.segments]
 
@@ -985,6 +991,10 @@ def _scan_flat(flat: _Flat, label: str, file: str) -> TemplateScan:
             return file, 0
         start, origin, line = flat.segments[index]
         return origin, line + text.count("\n", start, offset)
+
+    if parse_error is not None:
+        origin, line = locate(parser._offset())
+        flat.gaps.append(Gap(origin, line, "could not scan malformed HTML (%s)" % parse_error))
 
     live_roots = {id(e) for e in parser.elements if e.has("dj-root") or e.has("dj-view")}
     opaque = {id(e) for e in parser.opaque_content}
