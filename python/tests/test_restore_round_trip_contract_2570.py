@@ -284,8 +284,8 @@ def test_the_sync_skip_flag_is_only_set_by_the_sync_itself() -> None:
 @pytest.mark.parametrize(
     "entry, render_call",
     [
-        ("render", "self._rust_view.render()"),
-        ("_render_full_template_inner", "self._rust_view.render()"),
+        ("render", "render_html(self._rust_view,"),
+        ("_render_full_template_inner", "render_html(self._rust_view,"),
         ("render_with_diff", "renderer.render_with_diff("),
     ],
 )
@@ -299,6 +299,23 @@ def test_every_render_entry_syncs_between_init_and_render(entry: str, render_cal
     sync = src.index("self._sync_state_to_rust(")
     render = src.index(render_call)
     assert init < sync < render, f"{entry}: init={init} sync={sync} render={render}"
+
+
+def test_render_html_delegates_both_modes_to_the_synced_rust_view() -> None:
+    """#3252's wrapper renders the supplied view; it never loads a clone."""
+    from djust._render_provenance import render_html
+
+    class Renderer:
+        def render(self):
+            return "plain"
+
+        def render_with_provenance(self):
+            return "tracked", [(0, 7)]
+
+    renderer = Renderer()
+    assert render_html(renderer, "plain") == "plain"
+    tracked = render_html(renderer, "<div dj-lazy></div>")
+    assert tracked == "tracked" and tracked.spans == ((0, 7),)
 
 
 def test_the_mount_path_syncs_explicitly_between_init_and_its_first_render() -> None:

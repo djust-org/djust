@@ -829,6 +829,9 @@ class TestTheTimeTravelRoundTrip:
 #: side has no counterpart for `time_travel.py`, and `mixins/rust_bridge.py`
 #: (which #2252 named as a read site) has no restore path at all.
 EXPECTED_DECODE_SITES = {
+    # #3252: restore the lazy child's server-held public/private session state,
+    # tagged at save_http_lazy's encoder-less JSON boundary.
+    ("_lazy_containers.py", "mount_http_lazy"),
     ("live_view.py", "_restore_private_state"),
     ("mixins/components.py", "_restore_component_state"),
     ("mixins/request.py", "post"),

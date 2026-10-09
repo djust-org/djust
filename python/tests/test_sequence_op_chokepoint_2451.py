@@ -633,12 +633,35 @@ class TestOneChokepointAnswersWhichExceptionPythonRaises:
         assert self.callers(filters_src, "python_type_name") == {"detail"}
         assert self.callers(renderer_src, "python_type_name") == {
             "python_type_name_for_iteration",
-            "render_node_with_loader_mut",
+            "render_node_output",
         }
         assert "fn python_type_name(" not in renderer_src, (
             "renderer.rs defines its own type-name function again — that is the "
             "four-arm copy #2451 retired (#1646)"
         )
+        # #3252: String and provenance output share the generic node body.
+        # Pin both routes so moving a refusal into a separate tracked renderer
+        # cannot silently bypass the shared Python type-name chokepoint.
+        assert "render_node_output::<L, String>(node, context, loader)" in renderer_src
+        assert "None => render_node_output::<L, R>(node, context, loader)" in renderer_src
+
+    @pytest.mark.parametrize("entry", ["render", "render_with_provenance"])
+    @pytest.mark.parametrize(
+        "source,value,message",
+        [
+            ("{% for x in p %}{{ x }}{% endfor %}", 5, "'int' object is not iterable"),
+            ("{% include p %}", 5, "'int' object is not iterable"),
+            ("{% include p %}", [5], "not 'int'"),
+        ],
+    )
+    def test_plain_and_provenance_refusals_share_python_type_names(
+        self, entry, source, value, message, tmp_path
+    ) -> None:
+        view = _rust.RustLiveView(source, [str(tmp_path)])
+        view.update_state({"p": value})
+        with pytest.raises((TypeError, RuntimeError)) as exc:
+            getattr(view, entry)()
+        assert message in str(exc.value)
 
     def test_the_constructor_is_reached_from_every_arm_that_can_refuse(self) -> None:
         """The COUNT, so an arm that grows a bespoke `Err` is visible.

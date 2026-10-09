@@ -57,7 +57,7 @@ def register_lazy_containers(parent: Any, request: Any, html: str) -> str:
         binding = token_hex(16)
         request.session["_djust_lazy_binding"] = binding
     user_id = str(getattr(getattr(request, "user", None), "pk", None))
-    page_class = type(parent).__module__ + "." + type(parent).__qualname__
+    page_class = getattr(type(parent), "__module__", "<unknown>") + "." + type(parent).__qualname__
     repeats: Counter[str] = Counter()
     inserts = []
     for start, end, view_path, _trigger in elements:

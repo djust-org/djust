@@ -19,6 +19,50 @@ MOD = __name__
 TAG = '<div dj-view="' + MOD + '.Child" dj-lazy></div>'
 
 
+def test_moduleless_parent_registers_without_crashing():
+    from djust._lazy_containers import register_lazy_containers
+    from djust._render_provenance import RenderedHTML
+
+    # Match #2488's names-only eval namespace: type() cannot copy __name__.
+    cls = eval('type("Moduleless", (), {"exposure_policy": "legacy"})', {})  # noqa: S307
+    assert not hasattr(cls, "__module__")
+    parent = cls()
+    html, spans, _ = render(TAG)
+    registered = register_lazy_containers(
+        parent, request("get", {}), RenderedHTML(html, tuple(spans))
+    )
+    assert len(parent._http_lazy_containers) == 1
+    assert 'data-djust-lazy-id="lazy_' in registered
+
+
+@pytest.mark.django_db
+def test_lazy_child_decimal_public_and_private_state_survives_session_json():
+    from decimal import Decimal
+
+    from djust._lazy_containers import LazyContainer, mount_http_lazy, save_http_lazy
+
+    session = SessionStore()
+    session.create()
+    parent = Page()
+    registry = {"lazy_decimal": LazyContainer(Child, "liveview_decimal", "")}
+    parent._http_lazy_containers = registry
+    req = request("get", session)
+    child = mount_http_lazy(parent, req, "lazy_decimal")
+    exact = Decimal("12345678901234567890.123456789")
+    child.count = {"nested": [exact]}
+    child._private_count = exact
+    save_http_lazy(parent, req, "lazy_decimal", child)
+    session.save()  # Django's encoder-less JSON boundary, then a fresh read.
+    fresh_parent = Page()
+    fresh_parent._http_lazy_containers = registry
+    restored = mount_http_lazy(
+        fresh_parent, request("get", SessionStore(session.session_key)), "lazy_decimal"
+    )
+    assert restored.count == {"nested": [exact]}
+    assert isinstance(restored.count["nested"][0], Decimal)
+    assert restored._private_count == exact and isinstance(restored._private_count, Decimal)
+
+
 class Child(LiveView):
     exposure_policy = "legacy"
     template = '<div><span class="count">{{ count }}</span><button dj-click="inc">+</button></div>'
