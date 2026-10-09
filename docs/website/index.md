@@ -42,6 +42,7 @@ How to build specific features.
 | **[Streaming Markdown (`{% djust_markdown %}`)](guides/streaming-markdown.md)** | Server-side safe Markdown rendering for streaming LLM output — no client library, no flicker, XSS-safe (v0.7.0) |
 | **[Virtual Lists (`dj-virtual`)](guides/virtual-lists.md)** | Render 1000s of items with only the visible window in the DOM (fixed + variable height) |
 | **[Flash Messages](guides/flash-messages.md)**         | Transient notifications with `put_flash` (Phoenix-style)  |
+| **[Shared Room Clocks](guides/shared-room-clock.md)** | Experimental process-local steps/polls shared by tenant and room |
 | **[Presence](guides/presence.md)**                     | Track online users, live cursors, typing indicators       |
 | **[Uploads](guides/uploads.md)**                       | Chunked binary file uploads via WebSocket                 |
 | **[Paste Events](guides/dj-paste.md)**                 | `dj-paste` — structured clipboard payloads + upload routing |

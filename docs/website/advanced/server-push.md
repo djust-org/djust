@@ -246,3 +246,11 @@ Class attribute. Set to an integer (milliseconds) to enable periodic ticking.
 ### `LiveView.handle_tick()`
 
 Override to update state on each tick. Called every `tick_interval` ms.
+
+## Shared clocks
+
+For one step per room rather than one tick per session, use the experimental
+[shared room clock](../guides/shared-room-clock.md). It is process-local, tenant-scoped and
+presence-bound, with a separate shared worker pool. Across event loops use
+`MultiLoopInMemoryChannelLayer`; across processes route rooms to one owner.
+Redis transport alone does not provide clock ownership.

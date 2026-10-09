@@ -2493,6 +2493,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         await self.accept()
 
+        from ._clock_loops import register_serving_loop
+
+        register_serving_loop()
+
         # Generate session ID
         import uuid
 

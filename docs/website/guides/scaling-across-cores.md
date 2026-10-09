@@ -338,3 +338,11 @@ The timings come from a shared 12-core machine: load average 5–24 for the firs
 For more cores than one process can use, or more than one host, run several processes or pods with Redis between them. That is covered in [Scaling djust](scaling.md): the settings every process needs ([Option B](scaling.md#option-b-redis-between-processes), including shared sessions and the channel layer's `socket_timeout`), measured capacity per pod, failover and rolling deploys, and room-affine routing as an alternative ([Option A](scaling.md#option-a-route-each-room-to-one-process-not-built)).
 
 The two approaches combine: several free-threaded processes, each using several cores, with Redis between them.
+
+## Shared clocks
+
+For one step per room rather than one tick per session, use the experimental
+[shared room clock](shared-room-clock.md). It is process-local, tenant-scoped and
+presence-bound, with a separate shared worker pool. Across event loops use
+`MultiLoopInMemoryChannelLayer`; across processes route rooms to one owner.
+Redis transport alone does not provide clock ownership.

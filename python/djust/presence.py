@@ -275,6 +275,7 @@ class PresenceMixin:
     refused with a ``TypeError`` when it is defined (#3109).
     """
 
+    room_clock: Any = None  # Opt-in ADR-042 presence-bound process clock
     presence_key: Optional[str] = None
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
@@ -550,6 +551,7 @@ class PresenceMixin:
         self._presence_connection_id = connection_id
 
         self._presence_tracked = True
+        self._ensure_room_clock(presence_key)
 
         # #1611 — refresh online_count after the backend join so this user's
         # own join is included.
@@ -605,6 +607,7 @@ class PresenceMixin:
             PresenceManager.join_connection(presence_key, user_id, connection_id, meta)
             self._presence_connection_id = connection_id
             self._presence_scope_key = presence_key
+            self._ensure_room_clock(presence_key)
             # #1611 / #1614 — also refresh local count and broadcast so the
             # reconnected session has online_count set for its first
             # post-restore patch, and peer sessions learn the user came back.
@@ -617,6 +620,35 @@ class PresenceMixin:
                 user_id,
                 exc,
             )
+
+    def _ensure_room_clock(self, presence_key: str) -> None:
+        """Bind every tracked/restored connection, including silent second tabs.
+
+        Use the actual recorded presence key for liveness. Namespace the clock
+        key separately and let its tenant helper add the canonical prefix.
+        """
+        clock = self.room_clock
+        if clock is None:
+            return
+        key = presence_key
+        tenant = getattr(self, "_tenant", None)
+        if tenant is not None:
+            prefix = f"tenant:{tenant.id}:"
+            if key.startswith(prefix):
+                key = key[len(prefix) :]
+        from .push import view_push_scopes, MAX_PUSH_SCOPES
+
+        scope = clock.scope(self, key)
+        scopes = set(view_push_scopes(self))
+        previous = getattr(self, "_room_clock_scope", None)
+        if previous is not None:
+            scopes.discard(previous)
+        scopes.add(scope)
+        if len(scopes) > MAX_PUSH_SCOPES:
+            raise ValueError("room_clock needs one available push scope")
+        self.push_scope = scope if len(scopes) == 1 else sorted(scopes)
+        self._room_clock_scope = scope
+        clock.ensure(self, key, presence_key=presence_key)
 
     def untrack_presence(self) -> None:
         """Stop tracking this view's presence.
@@ -662,6 +694,8 @@ class PresenceMixin:
         # #1611 / #1614 — refresh local count (now excludes the leaving user
         # unless another tab keeps them present) and broadcast to peer sessions.
         self._refresh_online_count()
+        if self.room_clock is not None and getattr(self, "online_count", None) == 0:
+            self.room_clock._presence_empty(self._room_clock_scope)
         self._broadcast_presence_change()
 
     def _on_presence_user_left(self, presence_key: str, user_id: str) -> None:

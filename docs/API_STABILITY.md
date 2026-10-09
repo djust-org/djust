@@ -372,3 +372,13 @@ internally) and uses only the public mixins re-exported from the top-level
   policy document.
 - [System Checks Reference](system-checks.md) — all `djust_check` check IDs,
   including the template-syntax deprecation checks T001 and T014.
+
+## Experimental shared clocks (1.3.x)
+
+`djust.clocks` (`RoomClock`, `ClockTick`, `Publish`, `Stop`, `SharedPoll`),
+`PresenceMixin.room_clock`, the `clock_workers` pool setting, and the clock
+helpers in `djust.testing` are opt-in and **experimental for at least one minor
+release**. They are an explicit exception to the stable 1.x surface while the
+API is evaluated. Existing per-session ticks and push/presence behavior retain
+their stability commitments. Phases 1–3 are process-local; distributed ownership
+is deferred.

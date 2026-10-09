@@ -115,3 +115,13 @@ today: **T001** (`@click` / `@input` → `dj-click` / `dj-input`) and **T014**
 
 - [`docs/API_STABILITY.md`](https://github.com/djust-org/djust/blob/main/docs/API_STABILITY.md) — the full policy reference.
 - [System Checks Reference](https://github.com/djust-org/djust/blob/main/docs/system-checks.md) — all `djust_check` IDs.
+
+## Experimental shared clocks (1.3.x)
+
+`djust.clocks` (`RoomClock`, `ClockTick`, `Publish`, `Stop`, `SharedPoll`),
+`PresenceMixin.room_clock`, the `clock_workers` pool setting, and the clock
+helpers in `djust.testing` are opt-in and **experimental for at least one minor
+release**. They are an explicit exception to the stable 1.x surface while the
+API is evaluated. Existing per-session ticks and push/presence behavior retain
+their stability commitments. Phases 1–3 are process-local; distributed ownership
+is deferred.
