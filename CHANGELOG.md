@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Theming URLs use a shared script-scheme denylist (backported from #3400, #3407, #3420).** Data-derived URLs in navigation, sidebar sections, breadcrumbs, pagination, avatars and auth/error/empty-state pages are neutralised to `"#"` for `javascript:`, `vbscript:` and `data:` schemes, including whitespace and control-character obfuscation. Avatar image sources retain `data:image/*`; links do not. Other schemes, including `sms:`, `geo:` and app deep links, remain unchanged. Developer-supplied button `href=` and `href`/`src`/`action`/`formaction` attributes passed to button, input, select and progress tags raise `ValueError`. Dictionary and object items in iterable collections are checked without mutating caller-owned items; pagination checks every formatted page, first, last, previous and next URL. Regression tests: `python/djust/tests/test_theming_url_scheme_guard.py`.
 ### Fixed
 
 - **Test Git fixtures no longer inherit repository execution variables from Git hooks (#3179).** Fixture helpers isolate their environment, Git-spawning test modules strip `GIT_EXECUTION_VARS`, and a root fixture covers library code that runs Git in-process. Static and behavioural guards prevent fixture identity and signing settings from leaking into the real repository's `.git/config`.
