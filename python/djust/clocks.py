@@ -182,6 +182,8 @@ class _Run:
     resumed_at: float | None = None
     stopping: bool = False
     done: Future = field(default_factory=Future)
+    ready: Future = field(default_factory=Future)
+    payload_factory: Any = None
 
     def living(self) -> bool:
         # A closed loop cannot cancel a worker thread. Do not overlap that work
@@ -253,7 +255,7 @@ class RoomClock:
         self._time = time_source or _Time()
         self._executor = executor
         self._history = OrderedDict()
-        self._limit_logged = False
+        self._last_limit_log = -math.inf
 
     @staticmethod
     def _validate_interval(seconds: float) -> None:
@@ -298,7 +300,14 @@ class RoomClock:
             result = self._ensure_on_loop(
                 loop, view, key, scope, tenant, tenant_id, now, presence_key
             )
-            if not isinstance(result, Future):
+            if isinstance(result, _Run):
+                if result.payload_factory is not None:
+                    await asyncio.shield(asyncio.wrap_future(result.ready))
+                with _registry_lock:
+                    if not result.stopping and result.stop_reason is None and result.living():
+                        return True
+                result = result.done
+            elif not isinstance(result, Future):
                 return result
             await asyncio.shield(asyncio.wrap_future(result))
             now = self._time.now()
@@ -309,7 +318,7 @@ class RoomClock:
             if existing is not None and existing.living():
                 if existing.clock is not self:
                     raise ValueError("a different RoomClock already owns this name and scope")
-                if existing.stopping:
+                if existing.stopping or existing.stop_reason not in (None, "idle"):
                     return existing.done
                 existing.requested = now
                 if presence_key is not None:
@@ -318,32 +327,35 @@ class RoomClock:
                 # stop is committed; after removal it starts a fresh run.
                 if existing.stop_reason == "idle":
                     existing.stop_reason = None
-                return True
+                return existing
             runs = [r for (name, _), r in _registry.items() if name == self.name and r.living()]
-            if (
-                len(runs) >= self.max_clocks
-                or sum(r.tenant_id == tenant_id for r in runs) >= self.max_clocks_per_tenant
+            if len(runs) >= self.max_clocks or (
+                tenant_id is not None
+                and sum(r.tenant_id == tenant_id for r in runs) >= self.max_clocks_per_tenant
             ):
-                if not self._limit_logged:
+                if now - self._last_limit_log >= 1:
                     logger.warning("Clock %s capacity reached", self.name)
-                    self._limit_logged = True
+                    self._last_limit_log = now
                 return False
-            self._limit_logged = False
             alive = self.alive
             if presence_key is not None:
 
                 def alive(_: str) -> int:
                     return PresenceManager.presence_count(presence_key)
 
-            payload = (
-                self.publish.payload(key) if self.publish and self.publish.payload else {"key": key}
+            run = _Run(
+                self,
+                key,
+                scope,
+                tenant,
+                tenant_id,
+                now,
+                now,
+                self.interval,
+                {},
+                alive,
+                payload_factory=self.publish.payload if self.publish else None,
             )
-            if not isinstance(payload, dict):
-                raise ValueError("Publish.payload must return a dict")
-            from copy import deepcopy
-
-            payload = deepcopy(payload)
-            run = _Run(self, key, scope, tenant, tenant_id, now, now, self.interval, payload, alive)
             _registry[(self.name, scope)] = run
             coro = self._run(run)
             try:
@@ -354,7 +366,7 @@ class RoomClock:
                 raise
             run.task.add_done_callback(lambda task: self._task_finished(run, task))
             logger.info("Clock %s started", self.name)
-        return True
+        return run
 
     def _retire(self, run: _Run) -> None:
         with _registry_lock:
@@ -366,6 +378,8 @@ class RoomClock:
             self._history.move_to_end(run.scope)
             while len(self._history) > self.max_clocks:
                 self._history.popitem(last=False)
+            if not run.ready.done():
+                run.ready.set_result(None)
             run.done.set_result(None)
 
     def _task_finished(self, run: _Run, task: asyncio.Task) -> None:
@@ -404,7 +418,7 @@ class RoomClock:
 
     def stop(self, scope: str, reason: str = "requested") -> bool:
         """Request graceful stop from any thread; an in-flight step finishes."""
-        return self._change(scope, stop_reason=reason)
+        return self._change(scope, stop_reason=reason, stopping=True)
 
     def _presence_empty(self, scope: str) -> None:
         # Presence already counted this leave. Record its timestamp without an
@@ -577,6 +591,27 @@ class RoomClock:
             with diagnostic_scope(), tenant_context(run.tenant):
                 if not self.log_details:
                     _details_allowed.set(False)
+                if run.payload_factory is not None:
+                    # Reserve the run under the lock, then invoke application
+                    # code and copy its result in the worker, exactly once.
+                    factory = run.payload_factory
+
+                    def prepare(key):
+                        from copy import deepcopy
+
+                        payload = factory(key)
+                        if not isinstance(payload, dict):
+                            raise ValueError("Publish.payload must return a dict")
+                        return deepcopy(payload)
+
+                    try:
+                        run.payload = await self._call(run, prepare, run.key)
+                    except Exception as exc:
+                        run.ready.set_exception(exc)
+                        raise
+                else:
+                    run.payload = {"key": run.key}
+                run.ready.set_result(None)
                 while True:
                     now = self._time.now()
                     if now >= check_at:
@@ -614,8 +649,15 @@ class RoomClock:
                         # deferred until callbacks finish; ensure then starts a
                         # new run rather than reviving one already stopping.
                         with _registry_lock:
-                            if run.stop_reason == "idle" and run.requested > (
-                                run.inactive if run.inactive is not None else now - self.idle_stop
+                            if (
+                                not run.stopping
+                                and run.stop_reason == "idle"
+                                and run.requested
+                                > (
+                                    run.inactive
+                                    if run.inactive is not None
+                                    else now - self.idle_stop
+                                )
                             ):
                                 run.stop_reason = None
                             else:
@@ -663,7 +705,9 @@ class RoomClock:
                                     run.errors = 0
                                     backoff_until = self._time.now()
                                     if isinstance(result, Stop):
-                                        run.stop_reason = result.reason
+                                        with _registry_lock:
+                                            run.stop_reason = result.reason
+                                            run.stopping = True
                                         break
                                     if result:
                                         await self._send(run)
@@ -685,16 +729,24 @@ class RoomClock:
                                             ),
                                         )
                                         backoff_until = self._time.now() + delay
+                                        # Breaker-suppressed slots are intentional,
+                                        # not overload or elapsed simulation time.
+                                        suppressed = max(
+                                            0,
+                                            math.ceil((backoff_until - next_at) / interval - 1e-9),
+                                        )
+                                        next_at += max(due, suppressed) * interval
+                                        due = 0
                                         break
                                 finally:
                                     run.last_duration = self._time.now() - start
                                     run.max_duration = max(run.max_duration, run.last_duration)
                                     if run.last_duration > interval:
                                         run.overruns += 1
-                                if run.stop_reason:
+                                if run.stop_reason is not None:
                                     break
                             next_at += due * interval
-                    if run.stop_reason:
+                    if run.stop_reason is not None:
                         with _registry_lock:
                             run.stopping = True
                         break

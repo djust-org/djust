@@ -1107,3 +1107,23 @@ CPU numbers. Choose one task per key for this initial experimental engine:
 measured total overhead is bounded at this scale, and the owner/lifecycle
 seams stay simple. A wheel is a justified future optimization. No comparison
 against Snake's own implementation was possible within this worktree boundary.
+
+
+### Round-1 implementation clarifications (PR #3425)
+
+- Q6: Any explicit stop or step-returned `Stop` commits under the registry lock.
+  Ensure after that commitment waits for retirement and starts a fresh run;
+  it never reports success for the retiring run. An uncommitted idle stop can
+  still be revived by a join.
+- Q8: The 64-key sub-cap applies only to resolved tenants. Untenanted rooms
+  use the definition's global 256-key cap. Capacity warnings are limited to
+  one per second per definition, including churn across successful starts.
+- Timing: Like intentional pause, breaker backoff suppresses schedule slots
+  without counting them as overload or adding them to `tick.dt`. The next
+  eligible slot stays on the fixed-rate grid; actual lateness after that slot
+  still follows A4's skip/catch-up arithmetic. This clarifies the original
+  `dt` decision for error backoff rather than advancing room time by the retry
+  delay.
+- Publish payload factories and their defensive copy run once per run in a
+  worker outside the process registry lock. The run is reserved before this
+  work, so concurrent ensures share its preparation and cannot double-start.

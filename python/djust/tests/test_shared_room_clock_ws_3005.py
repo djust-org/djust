@@ -389,3 +389,64 @@ async def test_shared_poll_viewers_fetch_once_and_late_join_reads_latest_snapsho
             assert len(FETCHES) == 3  # two a fetches and one b fetch, not six
         finally:
             await close_all(sockets)
+
+
+class AsyncJoinView(RoomView):
+    def mount(self, request, **kwargs):
+        self.room = "async"
+        self.refreshes = 0
+        self.joins = 0
+
+    @event_handler()
+    async def join(self, **kwargs):
+        self.track_presence({})
+
+    def handle_presence_join(self, presence):
+        self.joins += 1
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_async_handler_tracks_and_broadcasts_presence_with_clock():
+    sockets = []
+    with override_settings(**SETTINGS):
+        try:
+            peer, peer_consumer = await mount(view_class=AsyncJoinView)
+            sockets.append(peer)
+            await peer.send_json_to({"type": "event", "event": "join", "params": {}})
+            assert (await peer.receive_json_from(timeout=3))["type"] == "patch"
+            joining, consumer = await mount(view_class=AsyncJoinView)
+            sockets.append(joining)
+            await joining.send_json_to({"type": "event", "event": "join", "params": {}})
+            frame = await joining.receive_json_from(timeout=3)
+            assert frame["type"] == "patch", frame
+            await wait_until(
+                lambda: getattr(peer_consumer.view_instance, "online_count", 0) == 2,
+                what="join broadcast reaches peer",
+            )
+            instance = consumer.view_instance
+            assert instance.joins == 1
+            assert instance.online_count == 2
+            await TIME.settle()
+            assert CLOCK.running(instance._room_clock_scope)
+        finally:
+            await close_all(sockets)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_untrack_after_clock_scope_validation_failure():
+    sockets = []
+    with override_settings(**SETTINGS):
+        try:
+            socket, consumer = await mount(view_class=AsyncJoinView)
+            sockets.append(socket)
+            instance = consumer.view_instance
+            instance.room = "x" * 513
+            with pytest.raises(ValueError, match="clock key"):
+                instance.track_presence({})
+            assert instance._presence_tracked
+            instance.untrack_presence()
+            assert not instance._presence_tracked
+        finally:
+            await close_all(sockets)

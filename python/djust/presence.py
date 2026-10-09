@@ -65,6 +65,7 @@ import logging
 import threading
 import time
 import uuid
+import asyncio
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
@@ -78,6 +79,9 @@ if TYPE_CHECKING:
     from .backends.base import PresenceBackend
 
 logger = logging.getLogger(__name__)
+
+# Clock ensures scheduled from track_presence on a running loop (see below).
+_PENDING_CLOCK_ENSURES: "set[asyncio.Task[Any]]" = set()
 
 # Cache keys
 PRESENCE_KEY_PREFIX = "djust_presence"
@@ -390,6 +394,20 @@ class PresenceMixin:
         the ``_VIEW_PATH_RE`` check), or any other transient backend error
         never breaks ``track_presence`` / ``untrack_presence`` (#1614).
         """
+        import asyncio
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
+            from asgiref.sync import sync_to_async
+
+            # The sync push API bridges group_send back to this serving loop.
+            # Execute that bridge in a worker when track runs in an async event.
+            loop.create_task(sync_to_async(self._broadcast_presence_change)())
+            return
+
         view_path = f"{self.__class__.__module__}.{self.__class__.__name__}"
         try:
             if self._presence_broadcast_is_scoped():
@@ -648,7 +666,34 @@ class PresenceMixin:
             raise ValueError("room_clock needs one available push scope")
         self.push_scope = scope if len(scopes) == 1 else sorted(scopes)
         self._room_clock_scope = scope
-        clock.ensure(self, key, presence_key=presence_key)
+        import asyncio
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            clock.ensure(self, key, presence_key=presence_key)
+        else:
+            # track_presence is synchronous even in async event handlers. Keep
+            # the join/count/broadcast path synchronous and observe failures.
+            task = loop.create_task(clock.aensure(self, key, presence_key=presence_key))
+            # The loop keeps only a weak reference to a task; hold it until done.
+            _PENDING_CLOCK_ENSURES.add(task)
+
+            def ensured(task: "asyncio.Task[Any]") -> None:
+                _PENDING_CLOCK_ENSURES.discard(task)
+                exc = None if task.cancelled() else task.exception()
+                if exc is not None:
+                    from ._exposure_diagnostics import log_failure_for
+
+                    log_failure_for(
+                        logger,
+                        (self,),
+                        exc,
+                        "Presence clock ensure failed",
+                        traceback=True,
+                    )
+
+            task.add_done_callback(ensured)
 
     def untrack_presence(self) -> None:
         """Stop tracking this view's presence.
@@ -694,8 +739,13 @@ class PresenceMixin:
         # #1611 / #1614 — refresh local count (now excludes the leaving user
         # unless another tab keeps them present) and broadcast to peer sessions.
         self._refresh_online_count()
-        if self.room_clock is not None and getattr(self, "online_count", None) == 0:
-            self.room_clock._presence_empty(self._room_clock_scope)
+        scope = getattr(self, "_room_clock_scope", None)
+        if (
+            self.room_clock is not None
+            and scope is not None
+            and getattr(self, "online_count", None) == 0
+        ):
+            self.room_clock._presence_empty(scope)
         self._broadcast_presence_change()
 
     def _on_presence_user_left(self, presence_key: str, user_id: str) -> None:

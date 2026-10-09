@@ -787,7 +787,8 @@ async def test_cancellation_during_stop_callback_releases_waiting_join():
     assert not _registry
 
 
-def test_stopped_owner_loop_is_replaced_and_old_cleanup_cannot_remove_new_run():
+@pytest.mark.asyncio
+async def test_stopped_owner_loop_is_replaced_and_old_cleanup_cannot_remove_new_run():
     loop = asyncio.new_event_loop()
     c = RoomClock(name="deadloop", interval=10, step=lambda _: None, alive=lambda _: True)
 
@@ -795,7 +796,7 @@ def test_stopped_owner_loop_is_replaced_and_old_cleanup_cannot_remove_new_run():
         register_serving_loop()
         await c.aensure(view(), "room")
 
-    loop.run_until_complete(start())
+    await asyncio.to_thread(loop.run_until_complete, start())
     old = _registry[("deadloop", "deadloop:room")]
     old_id = old.run_id
     if old.in_flight is not None:
@@ -820,7 +821,7 @@ def test_stopped_owner_loop_is_replaced_and_old_cleanup_cannot_remove_new_run():
         await new.task
 
     try:
-        asyncio.run(restart())
+        await restart()
     finally:
         loop.close()
 
@@ -925,3 +926,162 @@ async def test_worker_failure_racing_cancellation_is_consumed_and_value_free(cap
     assert "private worker state" not in caplog.text
     assert any("ValueError" in record.message for record in caplog.records)
     assert all(record.exc_info is None for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_untenanted_rooms_use_global_cap():
+    register_serving_loop()
+    time = ManualClock()
+    c = clock(time, lambda _: None)
+    try:
+        for number in range(70):
+            assert await c.aensure(view(), str(number))
+        assert len(_registry) == 70
+    finally:
+        await cleanup(c, time)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reason", ["requested", "idle", ""])
+async def test_stop_then_immediate_ensure_restarts(reason):
+    register_serving_loop()
+    time = ManualClock()
+    c = clock(time, lambda _: None)
+    try:
+        await c.aensure(view(), "room")
+        old = _registry[("test", "test:room")]
+        c.stop("test:room", reason)
+        assert await c.aensure(view(), "room")
+        await time.settle()
+        assert c.running("test:room")
+        assert _registry[("test", "test:room")].run_id != old.run_id
+    finally:
+        await cleanup(c, time)
+
+
+@pytest.mark.asyncio
+async def test_capacity_warning_is_time_limited_across_churn(caplog):
+    register_serving_loop()
+    time = ManualClock()
+    c = clock(time, lambda _: None, max_clocks=1)
+    try:
+        for _ in range(4):
+            assert await c.aensure(view(), "room")
+            assert not await c.aensure(view(), "excess")
+            await cleanup(c, time)
+        assert sum("capacity reached" in r.message for r in caplog.records) == 1
+        await time.advance(1)
+        assert await c.aensure(view(), "room")
+        assert not await c.aensure(view(), "excess")
+        assert sum("capacity reached" in r.message for r in caplog.records) == 2
+    finally:
+        await cleanup(c, time)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", ["skip", "catch_up"])
+async def test_breaker_suppression_is_not_overload_or_simulation_time(policy, caplog):
+    register_serving_loop()
+    time, ticks = ManualClock(), []
+
+    def step(tick):
+        ticks.append(tick)
+        if len(ticks) == 1:
+            raise ValueError("fail")
+
+    c = clock(time, step, on_overrun=policy, max_consecutive_errors=1)
+    try:
+        await c.aensure(view(), "room")
+        await time.settle()
+        await time.advance(0.1)
+        await time.advance(0.2)
+        assert len(ticks) == 2
+        assert ticks[-1].dt == pytest.approx(0.1)
+        assert ticks[-1].skipped == 0
+        assert c.stats()["test:room"]["overruns"] == 0
+        assert "missed beats" not in caplog.text
+    finally:
+        await cleanup(c, time)
+
+
+@pytest.mark.asyncio
+async def test_payload_factory_is_single_flight_off_loop_and_registry_lock():
+    register_serving_loop()
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+    loop_thread = threading.get_ident()
+
+    def payload(key):
+        assert threading.get_ident() != loop_thread
+        assert not _registry_lock._is_owned()
+        calls.append(key)
+        entered.set()
+        assert release.wait(5)
+        return {"key": key}
+
+    c = RoomClock(
+        name="payload",
+        interval=10,
+        step=lambda _: None,
+        publish=Publish("app.Room", "handle_refresh", payload),
+    )
+    tasks = [asyncio.create_task(c.aensure(view(), "room")) for _ in range(2)]
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        # Both the serving loop and a foreign registry reader remain usable.
+        assert await asyncio.to_thread(c.running, "payload:room")
+        assert calls == ["room"]
+        release.set()
+        assert await asyncio.gather(*tasks) == [True, True]
+    finally:
+        release.set()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        c.stop("payload:room")
+        if _registry:
+            await _registry[("payload", "payload:room")].task
+
+
+@pytest.mark.asyncio
+async def test_step_stop_commits_before_foreign_loop_ensure():
+    register_serving_loop()
+    time = ManualClock()
+    checked = threading.Event()
+    results = []
+    c = clock(time, lambda _: Stop("end"))
+    original_call = c._call
+
+    async def call(run, fn, arg, **kwargs):
+        if fn is c.step:
+            # Return Stop without yielding, then the engine must commit it
+            # before _send yields to a foreign serving loop.
+            return Stop("end")
+        return await original_call(run, fn, arg, **kwargs)
+
+    async def send(run):
+        def foreign():
+            async def ensure():
+                register_serving_loop()
+                task = asyncio.create_task(c.aensure(view(), "room"))
+                await asyncio.sleep(0)
+                results.append(task.done())
+                checked.set()
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+            asyncio.run(ensure())
+
+        await asyncio.to_thread(foreign)
+
+    # Force a trailing send exactly in the window after the Stop result.
+    c._call = call
+    c._send = send
+    try:
+        await c.aensure(view(), "room")
+        await time.settle()
+        _registry[("test", "test:room")].trailing_at = 10
+        await time.advance(0.1)
+        assert await asyncio.to_thread(checked.wait, 5)
+        assert results == [False]  # joining waits for retirement, never reports success
+        await time.settle()
+    finally:
+        await cleanup(c, time)

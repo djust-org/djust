@@ -31,7 +31,7 @@ characters. All intervals are seconds. The constructor creates no tasks or pool.
 | `on_overrun` | `"skip"` | Skip missed slots or bounded `"catch_up"`. |
 | `max_catch_up` | `3` | Maximum catch-up steps per dispatch. |
 | `max_clocks` | `256` | Maximum live keys per definition, across loops. |
-| `max_clocks_per_tenant` | `64` | Tenant sub-cap (untenant views share one bucket). |
+| `max_clocks_per_tenant` | `64` | Sub-cap for resolved tenants only; untenanted rooms use `max_clocks`. |
 | `max_consecutive_errors` | `10` | Threshold for exponential retry backoff. |
 | `max_backoff` | `30.0` | Maximum retry delay; success resets it. |
 | `step_timeout` | `None` | Async cancellation; sync timeout reports stuck and waits. |
@@ -49,12 +49,17 @@ quarters of those threads; other eligible due calls can proceed.
 | --- | --- |
 | `scope(view, key)` | Canonical namespace and percent-encoded raw key, plus the resolved view's presence tenant prefix. Use this exact string for push subscriptions and state keys. |
 | `ensure(view, key)` | Sync bridge for authorized WebSocket lifecycle code; returns `True` if running, `False` at capacity or when disabled in tests. |
-| `await aensure(view, key)` | Async equivalent; refuses an unregistered/non-serving loop. |
+| `await aensure(view, key)` | Async equivalent; refuses an unregistered/non-serving loop. A join during a requested or step-returned stop waits for retirement and starts a fresh run. |
 | `running(scope)` | Whether the scoped run is active, including an unfinished sync step. |
 | `stop(scope, reason="requested")` | Graceful stop request, safe from a foreign thread/loop; returns whether a live run was found. |
 | `pause(scope)`, `resume(scope)` | Suppress/resume steps while keeping membership checks; return whether a live run was found. |
 | `set_interval(scope, seconds)` | Apply a valid interval on the next slot; return whether a live run was found. |
 | `stats()` | Mapping of scopes to live stats and bounded recent stopped records. |
+
+`room_clock` is a reserved LiveView configuration attribute, excluded from
+serialized state and template context on every LiveView. On `PresenceMixin`,
+set it to a `RoomClock` (or `None`) to opt into automatic tracking/restoration
+binding; use another attribute name for application state.
 
 `PresenceMixin.room_clock` binds tracking and restoration automatically. Its
 raw key is the formatted presence key without the tenant prefix. Existing push
@@ -76,7 +81,7 @@ clock logs. Cancellation is recorded as `"cancelled"` and sends no trailing push
 
 `Publish(view_path, handler, payload=None)` sends through `apush_to_view` with
 the engine's scoped key. The optional payload factory receives the raw key and
-is called once per run. Its default is `{"key": key}`. It must return a dict
+is called once per run in a worker, outside the registry lock. Its default is `{"key": key}`. It must return a dict
 whose contents remain beat-invariant. There is no state or sequence in the
 engine-generated doorbell. Returning a truthy step result publishes; a falsy
 result is quiet.

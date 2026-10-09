@@ -92,6 +92,9 @@ expiry. Reconnect reads the current snapshot rather than replaying missed beats.
 Without the optional `room_clock` attribute, call `clock.ensure(self, key)` from
 authorized WebSocket mount/event/tick code. Assign `self.push_scope` to
 `clock.scope(self, key)` first. Async code calls `await clock.aensure(self, key)`.
+Presence tracking also works in async handlers; its synchronous binding schedules
+`aensure` on the serving loop and observes failures. Explicit stop-then-ensure
+waits for the old run to retire before starting a new run.
 `ensure` refuses plain management-command/Celery threads and unregistered loops;
 `async_to_sync` there would create a temporary loop that immediately dies.
 
@@ -128,19 +131,24 @@ and idle/graceful stop flush a pending resend immediately; cancellation does not
 Step errors are value-free in logs by default, including in Django DEBUG.
 `log_details=True` opts into exception text and traceback. After ten consecutive
 errors, retries back off exponentially up to thirty seconds; a successful step
-resets the breaker. A failing clock does not terminate automatically.
+resets the breaker. Breaker-suppressed slots are intentional pauses: they do not
+count as missed beats or contribute to the next step's `dt`. A failing clock
+does not terminate automatically.
 `clock.stats()` reports steps, skipped beats, overruns, last/max duration, run
 age, sequence, run ID, stuck status, consecutive errors and stop reason. Recent
 stopped records are bounded by `max_clocks`; expose these only to authorized
 operators, because scope keys and application stop reasons can be sensitive.
 
-Defaults cap each clock definition at 256 live keys and 64 per tenant, refuse
+Defaults cap each clock definition at 256 live keys and 64 per resolved tenant.
+Untenanted rooms use the global 256-key limit. Clocks refuse
 rather than queue excess keys, and reject intervals below 0.02 seconds. A lazy
 process-wide ten-thread pool is separate from session `worker_threads`.
 `LIVEVIEW_CONFIG["clock_workers"]` changes its size (integer at least two,
 chosen before its first use). Each clock definition can occupy at most three
 quarters of the pool, with due-time ordering among eligible pending calls.
-A hung sync step retains its thread and scope until it returns.
+A hung sync step retains its thread and scope until it returns. Allow a graceful
+shutdown grace period longer than your sync callbacks: loop shutdown waits for
+in-flight sync work, and a callback that never returns can block interpreter exit.
 
 ## Variable rate, pause and shared polling
 
