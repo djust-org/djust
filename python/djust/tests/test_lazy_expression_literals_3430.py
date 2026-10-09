@@ -39,12 +39,13 @@ def test_expression_opener_cannot_be_closed_by_value(opener, q):
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("opener", OPENERS)
-def test_http_expression_opener_never_mounts_hidden_child(opener):
+@pytest.mark.parametrize("q", ["-->", "x"])
+def test_http_expression_opener_never_mounts_hidden_child(opener, q):
     class ExpressionPage(Page):
         template = "<div dj-root>" + TAG + opener + "{{ q|safe }}" + HIDDEN + "--></div>"
 
         def mount(self, request, **kwargs):
-            self.q = "-->"
+            self.q = q
 
     session = SessionStore()
     session.create()
@@ -74,15 +75,21 @@ def test_literal_closer_restores_live_context(closer):
     assert len(authored_lazy_elements(html, spans)) == 2
 
 
-@pytest.mark.parametrize("value", ["<", ">", "--", '"', "'", "<!--", "</script>"])
-def test_context_changing_values_break_following_authority(value):
+@pytest.mark.parametrize(
+    "value,expected", [("<", 2), ("<!--", 1), ("<script>", 1), ('<p title="', 1), ("<template>", 1)]
+)
+def test_value_output_is_blank_for_liveness_but_final_survival_required(value, expected):
+    # docs/lazy-http-provenance.md: values do not break following authority.
+    # E still rejects actual final-page comments, attributes and inert content.
     rust = RustLiveView(TAG + "{{ q|safe }}" + TAG, [])
     rust.update_state({"q": value})
     html, spans = rust.render_with_provenance()
-    assert len(authored_lazy_elements(html, spans)) == 1
+    assert len(authored_lazy_elements(html, spans)) == expected
 
 
-@pytest.mark.parametrize("value", ["hello", "é Δ", "-", "&lt;", "42", ""])
+@pytest.mark.parametrize(
+    "value", ["hello", "é Δ", "-", "&lt;", "42", "", ">", "--", '"', "'", "</script>"]
+)
 def test_plain_values_preserve_following_authority(value):
     rust = RustLiveView(TAG + "{{ q }}" + TAG, [])
     rust.update_state({"q": value})
@@ -109,8 +116,10 @@ def test_block_super_literal_context(tmp_path, filter_suffix):
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("value,expected", [("hello é", 2), ("--", 1), ('"', 1), ("<b></b>", 1)])
-def test_http_value_context_break_and_plain_control(value, expected):
+@pytest.mark.parametrize(
+    "value,expected", [("hello é", 2), ("--", 2), ('"', 2), ("<b></b>", 2), ("<!--", 1)]
+)
+def test_http_value_output_and_final_survival(value, expected):
     class ValuePage(Page):
         template = "<div dj-root>" + TAG + "{{ q|safe }}" + HIDDEN + "</div>"
 
@@ -217,16 +226,16 @@ def test_literal_binding_shadowed_by_value_cannot_supply_closer():
     assert len(authored_lazy_elements(html, spans)) == 1
 
 
-def test_context_break_composes_across_include_and_loop(tmp_path):
+def test_final_survival_rejects_value_hidden_include_and_loop(tmp_path):
     (tmp_path / "gap.html").write_text("{{ q|safe }}")
     source = TAG + '{% for x in xs %}{% include "gap.html" %}' + TAG + "{% endfor %}" + TAG
     rust = RustLiveView(source, [str(tmp_path)])
-    rust.update_state({"q": "--", "xs": [1, 2]})
+    rust.update_state({"q": "<!--", "xs": [1, 2]})
     html, spans = rust.render_with_provenance()
     assert len(authored_lazy_elements(html, spans)) == 1
 
 
-@pytest.mark.parametrize("value,expected", [("-->", 1), ("x", 2)])
+@pytest.mark.parametrize("value,expected", [("<!--", 1), ("x", 2)])
 def test_filter_with_value_argument_is_opaque(value, expected):
     rust = RustLiveView(TAG + '{{ ""|default:q|safe }}' + TAG, [])
     rust.update_state({"q": value})
@@ -259,8 +268,37 @@ def test_include_literal_binding_can_supply_closer(tmp_path, only):
     assert len(authored_lazy_elements(html, spans)) == 2
 
 
-def test_split_nonliteral_dash_runs_break_authority():
+def test_split_nonliteral_dash_runs_preserve_data_context():
     rust = RustLiveView(TAG + "{{ a|safe }}{{ b|safe }}" + TAG, [])
     rust.update_state({"a": "-", "b": "-"})
     html, spans = rust.render_with_provenance()
-    assert len(authored_lazy_elements(html, spans)) == 1
+    assert len(authored_lazy_elements(html, spans)) == 2
+
+
+@pytest.mark.parametrize("opener", OPENERS)
+@pytest.mark.parametrize("q", ["-->", "x"])
+def test_standalone_literal_revival_registers_zero(opener, q):
+    rust = RustLiveView(opener + "{{ q|safe }}" + HIDDEN + "-->", [])
+    rust.update_state({"q": q})
+    html, spans = rust.render_with_provenance()
+    assert authored_lazy_elements(html, spans) == []
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("opener", OPENERS)
+@pytest.mark.parametrize("q", ["-->", "x"])
+def test_http_standalone_literal_revival_registers_zero_and_never_mounts(opener, q):
+    class ExpressionPage(Page):
+        template = "<div dj-root>" + opener + "{{ q|safe }}" + HIDDEN + "--></div>"
+
+        def mount(self, request, **kwargs):
+            self.q = q
+
+    session = SessionStore()
+    session.create()
+    Hidden.mounts = 0
+    assert get_ids(session, ExpressionPage) == []
+    assert (
+        post(session, "lazy_hidden_forged", "djust_lazy_mount", ExpressionPage).status_code == 400
+    )
+    assert Hidden.mounts == 0

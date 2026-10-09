@@ -158,9 +158,9 @@ def render(source, state=None, dirs=None):
     [
         (TAG, {}, 1),
         (TAG.replace("dj-view", "DJ-VIEW").replace("dj-lazy", "DJ-LAZY"), {}, 1),
-        ("{{ forged|safe }}" + TAG, {"forged": TAG}, 0),
+        ("{{ forged|safe }}" + TAG, {"forged": TAG}, 1),
         (TAG + "{{ forged|safe }}", {"forged": TAG}, 1),
-        (TAG + "{{ forged|safe }}" + TAG, {"forged": TAG}, 1),
+        (TAG + "{{ forged|safe }}" + TAG, {"forged": TAG}, 2),
         ("{{ forged|safe }}", {"forged": TAG}, 0),
         ("{% autoescape off %}{{ forged }}{% endautoescape %}", {"forged": TAG}, 0),
         ("<!--" + TAG + "-->", {}, 0),
@@ -405,13 +405,13 @@ def test_nested_renderer_callback_cannot_grant_its_output_authority():
     register_tag_handler("lazy_nested_3252", Nested())
     try:
         result = render(TAG + "{% lazy_nested_3252 %}" + TAG)
-        assert len(result[2]) == 1  # Custom output breaks the following context run.
+        assert len(result[2]) == 2  # Balanced custom output grants no authority of its own.
     finally:
         unregister_tag_handler("lazy_nested_3252")
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("forged,count", [(TAG, 0), ("plain é", 3)])
+@pytest.mark.parametrize("forged,count", [(TAG, 3), ("plain é", 3)])
 def test_rendered_page_loop_keys_and_safe_forgery_counts(forged, count):
     class LoopPage(Page):
         template = (

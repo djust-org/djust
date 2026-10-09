@@ -74,24 +74,38 @@ then checks liveness again using the literal bytes emitted by the selected
 branches and loop iterations. Its context includes quoted variable expressions,
 the selected literal operand of `cycle`/`firstof` (including named bindings),
 and literal `with`/include bindings and aliases. Literal-derived expression
-output
-participates after escaping and built-in filters whose input and arguments
+output participates after escaping and built-in filters whose input and arguments
 are literal-derived. Custom filters and the environment-dependent built-ins
 `date`, `time`, `timesince`, `timeuntil`, `floatformat`, `filesizeformat`,
 `yesno`, `truncatechars`, `truncatechars_html`, `truncatewords` and
-`truncatewords_html` remain opaque, as do translated `_()` expressions. These
+`truncatewords_html` remain opaque, as do translated `_()` expressions and environment-dependent
+tag output such as `now` and `trans`. A value-derived filter chain remains
+opaque even if a filter selects a literal fallback argument. These
 context bytes never grant start-tag authority.
 Unfiltered `block.super` composes its literal context; filtered `block.super`
 participates as literal-derived only when the entire parent output is literal
-and its filters meet the same rule. Captured/reinjected output remains opaque.
+and its filters meet the same rule. Built-in filters meeting that rule that
+leave a mixed parent output byte-identical retain its literal/opaque context
+boundaries, while dropping all start-tag authority. This prevents a filtered
+parent from coalescing a literal opener and a value closer into one balanced run.
+Other filtered parent output and captured/reinjected output remain opaque.
 
-Other output is replaced by whitespace at the same byte offsets. If any such
-emitted run contains `<`, `>`, `--`, a single quote or a double quote, authority
-is removed from every container starting after that run in the complete render.
-This deliberately fails closed even if a later literal closer would appear to
-restore context. Escaped entities and values without those bytes preserve the
-trusted run. Renderer-owned conditional markers remain masked and do not break
-it; they cannot act as authored closers.
+Liveness is computed on authored text (template literals and literal expression
+output) in the rendered branch. Non-literal output, including view-context data,
+framework tags and HTML-producing filters applied to values, is replaced by
+whitespace at the same byte offsets. Such output does not break authority for
+following containers merely because it contains `<`, `>`, quotes or `--`.
+
+A container whose hiding context is produced by a non-literal value (view-context
+data), or assembled across literal/value boundaries, is not modelled by this
+liveness computation. Authors must not hide lazy containers with values. For
+example, a value emitting `<!--` followed by a value emitting `-->`, or
+`<{{ tag }}>` with `tag="script"`, can leave a following authored container
+registered when it survives in the final page. The final-page (E) survival check
+still rejects containers that are actually hidden in the final HTML; it does not
+track their earlier value-generated hiding context. Conversely, a literal
+`{{ "<!--" }}` cannot be closed by a non-literal value for authored-text
+liveness, even if that value makes the container visible in the final page.
 
 Literal context and opaque runs compose across includes, inheritance and loop
 iterations. This check is applied once to the complete render. An authored
@@ -123,7 +137,8 @@ The final HTML5 check runs only for tracked output with lazy markup.
 
 The contract matrix is in
 `python/djust/tests/test_lazy_provenance_http_3252.py` and
-`python/djust/tests/test_lazy_expression_literals_3430.py`; HTTP client routing is in
+`python/djust/tests/test_lazy_expression_literals_3430.py` and
+`python/djust/tests/test_lazy_context_state_3442.py`; HTTP client routing is in
 `tests/js/view_slots_3252.test.js`. The self-contained real-browser regression is
 `tests/playwright/test_lazy_attribute_http_3252.py`:
 

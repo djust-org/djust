@@ -2641,6 +2641,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
         Node::Variable(var_name, filter_specs, in_attr) => {
             let mut super_value = None;
             let mut super_literal = false;
+            let mut super_context = None;
             if R::TRACKED && var_name == "block.super" && context.get(var_name).is_none() {
                 if let Some(output) = context.render_armed_block_super_authored()? {
                     if filter_specs.is_empty() {
@@ -2648,7 +2649,8 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                     }
                     super_literal =
                         output.3.iter().map(|(a, b)| b - a).sum::<usize>() == output.0.len();
-                    super_value = Some(Value::SafeString(output.0));
+                    super_value = Some(Value::SafeString(output.0.clone()));
+                    super_context = Some(output);
                 }
             }
 
@@ -2844,6 +2846,19 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                     || super_literal
                     || context.is_template_literal(var_name))
                 && filters_are_literal(filter_specs, context);
+            // Built-in, byte-preserving filters still drop ALL authority, but
+            // must not erase the parent's literal/opaque context boundaries.
+            // Otherwise a literal opener and value closer in block.super
+            // become one apparently balanced opaque operation (#3442).
+            if R::TRACKED && !literal_output && filters_are_literal(filter_specs, context) {
+                if let Some(mut output) = super_context {
+                    if output.0 == text {
+                        output.1.clear();
+                        output.2.clear();
+                        return Ok(R::from_authored_output(output));
+                    }
+                }
+            }
             Ok(if literal_output {
                 R::context_literal(text)
             } else {

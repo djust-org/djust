@@ -57,7 +57,7 @@ pub struct Rendered {
 impl Rendered {
     /// Recheck source liveness on the branch that actually rendered. Literal
     /// expression bytes participate, but other values cannot close that context.
-    /// A context-changing value invalidates all following candidates in this render.
+    /// Non-literal values are blank for this authored-text computation.
     /// Do this once on the complete result, never on incomplete include/block
     /// fragments. The ordinary final-HTML survival check remains necessary.
     pub fn retain_live_authority(&mut self) {
@@ -67,22 +67,6 @@ impl Rendered {
         let mut masked = vec![b' '; self.html.len()];
         for span in &self.literals {
             masked[span.clone()].copy_from_slice(&self.html.as_bytes()[span.clone()]);
-        }
-        // Nonliteral gaps are opaque. A gap capable of changing tokenization
-        // ends the trusted context run; no later literal can prove where the
-        // final parser resumed. Inspect emitted bytes, after escaping/filters.
-        let mut cursor = 0;
-        let mut broken_at = self.html.len();
-        let mut trusted: Vec<_> = self.literals.iter().chain(&self.neutral).collect();
-        trusted.sort_unstable_by_key(|r| r.start);
-        let end = self.html.len()..self.html.len();
-        for span in trusted.into_iter().chain(std::iter::once(&end)) {
-            let gap = &self.html[cursor..span.start];
-            if gap.contains(['<', '>', '\'', '"']) || gap.contains("--") {
-                broken_at = cursor;
-                break;
-            }
-            cursor = span.end;
         }
         // Literal spans contain whole UTF-8 scalars; opaque gaps are ASCII.
         let masked = String::from_utf8(masked).unwrap_or_default();
@@ -94,7 +78,7 @@ impl Rendered {
         let rejected: std::collections::HashSet<_> = self
             .origins
             .iter()
-            .filter(|(a, _, offset, _)| *offset == 0 && (*a >= broken_at || !starts.contains(a)))
+            .filter(|(a, _, offset, _)| *offset == 0 && !starts.contains(a))
             .map(|(a, _, _, _)| *a)
             .collect();
         if rejected.is_empty() {
