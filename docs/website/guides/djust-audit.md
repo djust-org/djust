@@ -245,6 +245,10 @@ than missed findings for a linter that runs on every push.
 the offending line. Bare `# djust: noqa` suppresses every `djust.X`
 finding on the line. Templates use `{# djust: noqa X006 #}`.
 
+Finding paths are resolved with `realpath`. When the scan root is symlinked,
+output uses its resolved path (for example, `/tmp` becomes `/private/tmp`
+on macOS).
+
 **Dependencies**: zero new runtime deps. The scanner uses the
 stdlib `ast` module for Python and a handful of regular
 expressions for templates.
@@ -277,7 +281,7 @@ same-line suppression examples.
 |------|---------|----------|
 | X101 | A `<table>` containing a template loop, `dj-stream`, or `dj-update="append"` / `"prepend"`. | `data_table`, `data_grid` for editable cells, `infinite_scroll` for growing lists. |
 | X102 | A `<select dj-change>` with generated options or more than 10 `<option>` elements. | `combobox` or `rich_select` with `searchable=True`. |
-| X103 | An overlay class such as `modal`, `drawer`, or `sheet`, or an inline fixed-position full-screen overlay. | `sheet` for side panels, `modal` for dialogs. |
+| X103 | An overlay class such as `modal`, `drawer`, or `sheet`, or an inline fixed-position full-screen overlay / full-height drawer with overlay markers (see [X103](error-codes.md#x103-hand-built-overlay-panel--use-the-sheet-or-modal-component)). | `sheet` for side panels, `modal` for dialogs. |
 | X104 | A `<p>`, `<div>`, or `<span>` with template-switched classes and message-like expressions. | `server_toast_container`, `toast_container`, or `page_alert`. |
 | X105 | Literal hex or color-function values in linked application CSS declarations outside recognized theme-token definitions. | Theme tokens such as `hsl(var(--foreground))` and `hsl(var(--card))`, or a theme preset. |
 

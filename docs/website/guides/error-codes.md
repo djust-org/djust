@@ -2660,12 +2660,18 @@ CSS suppressions use `/* djust: noqa X105 */` on the declaration's starting
 line. Bare `{# djust: noqa #}` or `/* djust: noqa */` suppresses all applicable
 rules on that line; a comma-separated code list suppresses selected rules.
 
+**Differences from ADR-043 wording**: Bare `.panel` is not flagged because it
+is too common as a card class. X104 matches `<p>`, `<div>`, and `<span>`.
+X105 reports one finding per stylesheet and does not detect named colors.
+
 ### X101: Hand-built `<table>` renders a loop — use the data_table component
 
 **Severity**: Warning
 
 **What causes it**: A `<table>` contains a Django `for` loop, `dj-stream`,
 or `dj-update="append"` / `dj-update="prepend"` before its closing tag.
+The outer table region ends at the first `</table>`, so a loop after an
+inner table is missed.
 
 **What you see**: `WARN [djust.X101]` at the table's opening tag, suggesting
 `data_table` (sorting, paging, selection, search), `data_grid` for editable
@@ -2747,7 +2753,16 @@ Alternatively use
 `offcanvas`, `slide-over`, `side-panel`, `sheet`, or `dialog`. Alternatively,
 its inline style has `position: fixed` and full-screen geometry: `inset: 0`,
 all four edges set to zero, or `width: 100vw` plus `height: 100vh`.
-Fixed positioning alone does not trigger this style heuristic.
+A fixed full-height panel (`top: 0` plus `bottom: 0`, or `height: 100vh`
+/ `height: 100%`) also triggers when it is inside a `{% if %}…{% endif %}`
+block, has `role="dialog"` or an `aria-modal` attribute, or has a
+`dj-click` / `dj-click-away` close handler. Those attributes on a backdrop
+sibling also count: a backdrop has class `backdrop`, `overlay`,
+`modal-backdrop`, or `modal-overlay`, or fixed full-screen inline geometry
+as above. Handler attributes are treated as close markers without inspecting
+the handler implementation. Unconditional full-height sidebars with none of
+these markers are not flagged. Fixed positioning alone does not trigger
+this style heuristic.
 
 **What you see**: `WARN [djust.X103]` at the opening tag, suggesting `sheet`
 for a side panel or `modal` for a dialog.
