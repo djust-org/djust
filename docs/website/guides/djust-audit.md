@@ -347,7 +347,7 @@ If the writer creates `.djust/`, it also creates `.djust/.gitignore`
 containing `*`. An existing `.djust/` directory and its ignore configuration
 are left as they are; add an ignore entry yourself if needed. A symlink or
 non-directory at `.djust` is rejected, and the summary is replaced atomically
-with mode `0644`.
+with owner-only mode `0600` (also used for a newly created `.gitignore`).
 
 #### Security of the tool itself
 
