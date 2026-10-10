@@ -8,11 +8,13 @@ import json
 import os
 import re
 import tempfile
+import stat
+from bisect import bisect_left, bisect_right
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import PurePath
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple, Union
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Set, Tuple, Union
 
 from djust.audit_ast import ASTAuditReport, ASTFinding, _template_suppressed
 
@@ -51,8 +53,8 @@ _LIVE_MARKER_RE = re.compile(
 )
 _TEMPLATE_NAME_RE = re.compile(r"""\btemplate_name\s*(?::[^=\n]+)?=\s*["']([^"'\n]+\.html)["']""")
 _TEMPLATE_REF_RE = re.compile(r"""\{%\s*(?:extends|include)\s+["']([^"']+)["']""")
-_OPEN_TAG_RE = re.compile(r"""<([a-zA-Z][\w-]*)((?:[^<>"']|"[^"]*"|'[^']*')*)>""")
-_TEMPLATE_EXPR_RE = re.compile(r"\{%.*?%\}|\{\{.*?\}\}", re.S)
+_TAG_START_RE = re.compile(r"<([a-zA-Z][\w-]*+)(?=[\s/>])")
+_TEMPLATE_EXPR_RE = re.compile(r"\{%[^%]*+%\}|\{\{[^{}]*+\}\}", re.S)
 _CLASS_RE = re.compile(r"""\bclass\s*=\s*("([^"]*)"|'([^']*)')""", re.I)
 _STYLE_RE = re.compile(r"""\bstyle\s*=\s*("([^"]*)"|'([^']*)')""", re.I)
 _FOR_RE = re.compile(r"\{%\s*for\b")
@@ -65,23 +67,34 @@ _X103_OVERLAY_CLASSES = {
     "offcanvas",
     "slide-over",
     "side-panel",
-    "overlay",
+    "sheet",
+    "dialog",
 }
-_MESSAGEISH_RE = re.compile(
-    r"\b\w*(?:message|msg|flash|notice|notification|error|success|alert|feedback|toast)\w*\b", re.I
-)
-_SWITCH_RE = re.compile(r"\{%\s*(?:if|elif)\s+([^%]+)%\}|\{\{\s*([^}|]+)")
-_BODY_EXPR_RE = re.compile(r"\{\{\s*([^}|]+)")
+_IDENTIFIER_RE = re.compile(r"[a-zA-Z_][a-zA-Z0-9_]*+")
+_MESSAGE_WORDS = {
+    "message",
+    "messages",
+    "msg",
+    "flash",
+    "notice",
+    "notification",
+    "notifications",
+    "alert",
+    "feedback",
+    "toast",
+}
+_SWITCH_RE = re.compile(r"\{%\s*(?:if|elif)\s+([^%]+)%\}|\{\{\s*([^{}|]+)")
+_BODY_EXPR_RE = re.compile(r"\{\{\s*([^{}|]+)")
 _STATE_RE = re.compile(
     r"\b(?:error|success|danger|warning|info|ok|fail(?:ed|ure)?|invalid|valid)\b", re.I
 )
 _STATIC_LINK_RE = re.compile(
-    r"""<link\b[^>]*?\bhref\s*=\s*["']\{%\s*static\s+["']([^"']+\.css)["']\s*%\}["']""", re.I
+    r"""\bhref\s*+=\s*+["']\{%\s*+static\s++["']([^"'{}]+\.css)["']\s*+%\}["']""", re.I
 )
 _CSS_SUPPRESSION_RE = re.compile(
-    r"/\*\s*djust\s*:\s*noqa(?:\s*[:\s]\s*([A-Za-z0-9, ]+))?\s*\*/", re.I
+    r"/\*\s*+djust\s*+:\s*+noqa(?:(?:\s++:?\s*+|:\s*+)([A-Za-z0-9, ]++))?\s*+\*/", re.I
 )
-_CSS_DECL_RE = re.compile(r"(--[\w-]+|[a-zA-Z-]+)\s*:\s*([^;{}]+)")
+_CSS_DECL_RE = re.compile(r"\s*+(--[\w-]++|[a-zA-Z-]++)\s*+:\s*+([^;{}]++)")
 _COLOR_HEX_RE = re.compile(r"#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})\b")
 _COLOR_FUNC_RE = re.compile(r"\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\(([^()]*)\)", re.I)
 _DERIVED_TEXT_TOKENS = {
@@ -127,33 +140,86 @@ def collect_liveview_template_names(source: str) -> Set[str]:
     return set(_TEMPLATE_NAME_RE.findall(source))
 
 
-def _blank(match: re.Match) -> str:
-    return re.sub(r"[^\n]", " ", match.group())
+def _mask_delimited(source: str, opener: re.Pattern, closers: Mapping[str, str]) -> str:
+    parts = []
+    cursor = 0
+    while match := opener.search(source, cursor):
+        parts.append(source[cursor : match.start()])
+        closer = closers[match.lastgroup]
+        end = source.find(closer, match.end())
+        end = len(source) if end < 0 else end + len(closer)
+        parts.append(re.sub(r"[^\n]", " ", source[match.start() : end]))
+        cursor = end
+    parts.append(source[cursor:])
+    return "".join(parts)
 
 
 def _mask_comments(source: str) -> str:
-    return re.sub(
-        r"\{#.*?#\}|\{%\s*comment\b[^%]*%\}[\s\S]*?\{%\s*endcomment\s*%\}|<!--[\s\S]*?-->",
-        _blank,
-        source,
-    )
+    # Block comments close at an endcomment directive, rather than any %}.
+    opener = re.compile(r"(?P<html><!--)|(?P<short>\{#)|(?P<block>\{%\s*+comment\b[^%]*+%\})")
+    endcomment = re.compile(r"\{%\s*+endcomment\s*+%\}")
+    parts = []
+    cursor = 0
+    while match := opener.search(source, cursor):
+        parts.append(source[cursor : match.start()])
+        if match.lastgroup == "block":
+            closing = endcomment.search(source, match.end())
+            end = closing.end() if closing else len(source)
+        else:
+            closer = "-->" if match.lastgroup == "html" else "#}"
+            end = source.find(closer, match.end())
+            end = len(source) if end < 0 else end + len(closer)
+        parts.append(re.sub(r"[^\n]", " ", source[match.start() : end]))
+        cursor = end
+    parts.append(source[cursor:])
+    return "".join(parts)
 
 
 def _mask_css_comments(source: str) -> str:
-    return re.sub(r"/\*[\s\S]*?\*/", _blank, source)
+    return _mask_delimited(source, re.compile(r"(?P<css>/\*)"), {"css": "*/"})
 
 
-def _line_col(source: str, offset: int) -> Tuple[int, int]:
-    return source.count("\n", 0, offset) + 1, offset - (source.rfind("\n", 0, offset) + 1)
+def _line_starts(source: str) -> List[int]:
+    return [0] + [m.end() for m in re.finditer("\n", source)]
 
 
-def _iter_open_tags(source: str):
-    return _OPEN_TAG_RE.finditer(source)
+def _line_col(starts: Sequence[int], offset: int) -> Tuple[int, int]:
+    index = bisect_right(starts, offset) - 1
+    return index + 1, offset - starts[index]
 
 
-def _region(source: str, tag: str, start: int) -> str:
-    end = source.lower().find("</" + tag.lower(), start)
-    return source[start:] if end < 0 else source[start:end]
+def _iter_open_tags(source: str) -> Iterator[Tuple[int, str, str]]:
+    """Tokenize tags in one forward pass, including quoted > characters."""
+    cursor = 0
+    while match := _TAG_START_RE.search(source, cursor):
+        start = match.start()
+        pos = match.end()
+        quote = None
+        while pos < len(source):
+            char = source[pos]
+            if quote:
+                if char == quote:
+                    quote = None
+            elif char in "\"'":
+                quote = char
+            elif char == "<":
+                break
+            elif char == ">":
+                yield start, match.group(1).lower(), source[match.end() : pos]
+                pos += 1
+                break
+            pos += 1
+        cursor = pos
+
+
+def _region(closings: Mapping[str, Sequence[int]], tag: str, start: int, length: int) -> int:
+    offsets = closings.get(tag, ())
+    index = bisect_left(offsets, start)
+    return offsets[index] if index < len(offsets) else length
+
+
+def _in_region(offsets: Sequence[int], start: int, end: int) -> int:
+    return bisect_left(offsets, end) - bisect_left(offsets, start)
 
 
 def _template_index(paths: Sequence[str]) -> Dict[str, Set[str]]:
@@ -183,22 +249,15 @@ def _live_closure(sources: Mapping[str, str], names: Set[str]) -> Set[str]:
     return live
 
 
-def _check_x101(tag: str, attrs: str, region: str) -> Optional[str]:
-    if tag == "table" and (
-        _FOR_RE.search(region)
-        or re.search(r"\bdj-stream\b", region)
-        or re.search(r"dj-update\s*=\s*[\"'](?:append|prepend)[\"']", region)
-    ):
-        return _X101_DETAILS
-    return None
+def _check_x101(tag: str, has_rows: bool) -> Optional[str]:
+    return _X101_DETAILS if tag == "table" and has_rows else None
 
 
-def _check_x102(tag: str, attrs: str, region: str) -> Optional[str]:
+def _check_x102(tag: str, attrs: str, generated: bool, count: int) -> Optional[str]:
     if tag != "select" or not re.search(r"\bdj-change\b", attrs):
         return None
-    if _FOR_RE.search(region):
+    if generated:
         return "options generated by {% for %}; " + _X102_DETAILS
-    count = len(re.findall(r"<option\b", region, re.I))
     if count > X102_OPTION_THRESHOLD:
         return f"{count} options; " + _X102_DETAILS
     return None
@@ -208,7 +267,7 @@ def _attr_value(match: re.Match) -> str:
     return match.group(2) if match.group(2) is not None else match.group(3)
 
 
-def _check_x103(tag: str, attrs: str, region: str) -> Optional[str]:
+def _check_x103(tag: str, attrs: str) -> Optional[str]:
     classes = _CLASS_RE.search(attrs)
     if classes:
         for token in _TEMPLATE_EXPR_RE.sub(" ", _attr_value(classes)).split():
@@ -221,24 +280,39 @@ def _check_x103(tag: str, attrs: str, region: str) -> Optional[str]:
         def zero(prop: str) -> bool:
             return bool(re.search(r"(?:^|;)" + prop + r":0(?:px|rem|em|%)?(?:;|$|!)", value))
 
-        if "position:fixed" in value and (zero("inset") or (zero("top") and zero("bottom"))):
-            return "position: fixed full-height style; " + _X103_DETAILS
+        full_edges = all(zero(prop) for prop in ("top", "bottom", "left", "right"))
+        full_size = all(
+            re.search(r"(?:^|;)" + prop + ":100" + unit + r"(?:;|$|!)", value)
+            for prop, unit in (("width", "vw"), ("height", "vh"))
+        )
+        if re.search(r"(?:^|;)position:fixed(?:;|$|!)", value) and (
+            zero("inset") or full_edges or full_size
+        ):
+            return "position: fixed full-screen style; " + _X103_DETAILS
     return None
 
 
-def _check_x104(tag: str, attrs: str, region: str) -> Optional[str]:
+def _messageish(expression: str) -> bool:
+    for match in _IDENTIFIER_RE.finditer(expression):
+        name = match.group().lower()
+        if _MESSAGE_WORDS.intersection(name.split("_")) or "_status_text_" in "_" + name + "_":
+            return True
+    return False
+
+
+def _check_x104(tag: str, attrs: str, body_message: bool) -> Optional[str]:
     if tag not in {"p", "div", "span"}:
         return None
     classes = _CLASS_RE.search(attrs)
     if not classes:
         return None
     value = _attr_value(classes)
-    if not any(_MESSAGEISH_RE.search(m.group(1) or m.group(2)) for m in _SWITCH_RE.finditer(value)):
+    switches = [m.group(1) or m.group(2) for m in _SWITCH_RE.finditer(value)]
+    if not switches:
         return None
-    body = region[region.find(">") + 1 :]
-    if _STATE_RE.search(_TEMPLATE_EXPR_RE.sub(" ", value)) or any(
-        _MESSAGEISH_RE.search(m.group(1)) for m in _BODY_EXPR_RE.finditer(body)
-    ):
+    if not any(_messageish(expr) for expr in switches) and not body_message:
+        return None
+    if _STATE_RE.search(_TEMPLATE_EXPR_RE.sub(" ", value)) or body_message:
         return _X104_DETAILS
     return None
 
@@ -246,7 +320,7 @@ def _check_x104(tag: str, attrs: str, region: str) -> Optional[str]:
 def _resolve_static(
     rel: str, static_dirs: Sequence[Union[str, Tuple[str, str]]], static_roots: Sequence[str]
 ) -> Set[str]:
-    if os.path.isabs(rel) or ".." in rel.split("/") or rel.endswith(".min.css"):
+    if "\\" in rel or os.path.isabs(rel) or ".." in rel.split("/") or rel.endswith(".min.css"):
         return set()
     paths: Set[str] = set()
     for entry in [*static_roots, *static_dirs]:
@@ -256,7 +330,10 @@ def _resolve_static(
             if not name.startswith(str(prefix) + "/"):
                 continue
             name = name[len(str(prefix)) + 1 :]
+        base = os.path.realpath(base)
         path = os.path.realpath(os.path.join(base, *name.split("/")))
+        if os.path.commonpath([path, base]) != base:
+            continue
         if any(
             part in {"site-packages", "dist-packages", "node_modules"}
             for part in PurePath(path).parts
@@ -275,8 +352,10 @@ def _find_linked_stylesheets(
 ) -> Set[str]:
     paths: Set[str] = set()
     for path in live:
-        for rel in _STATIC_LINK_RE.findall(sources[path]):
-            paths.update(_resolve_static(rel, static_dirs, static_roots))
+        for _, tag, attrs in _iter_open_tags(sources[path]):
+            if tag == "link":
+                for rel in _STATIC_LINK_RE.findall(attrs):
+                    paths.update(_resolve_static(rel, static_dirs, static_roots))
     return paths
 
 
@@ -299,28 +378,68 @@ def _theme_token_names() -> Set[str]:
     )
 
 
+def _css_declarations(source: str) -> Iterator[Tuple[int, str, str, str]]:
+    """Match declarations only in blocks, never selector preludes."""
+    start = 0
+    depth = 0
+    for delimiter in re.finditer(r"[{};]", source):
+        char = delimiter.group()
+        if char != "{" and depth:
+            segment = source[start : delimiter.start()]
+            match = _CSS_DECL_RE.fullmatch(segment)
+            if match:
+                offset = start + len(segment) - len(segment.lstrip())
+                yield offset, *match.groups(), segment.strip()
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth = max(0, depth - 1)
+        start = delimiter.end()
+
+
+def _normalise_css_value(value: str) -> str:
+    # Drop entire var/url subtrees, including arbitrarily nested fallbacks,
+    # without repeatedly substituting innermost parentheses.
+    parts = []
+    cursor = 0
+    depth = 0
+    for match in re.finditer(r"\b(?:var|url)\(|[()]", value, re.I):
+        token = match.group().lower()
+        if depth:
+            depth += -1 if token == ")" else 1
+            if depth == 0:
+                cursor = match.end()
+        elif token in {"var(", "url("}:
+            parts.append(value[cursor : match.start()])
+            parts.append("__TOKEN__" if token == "var(" else "")
+            depth = 1
+    if not depth:
+        parts.append(value[cursor:])
+    return "".join(parts)
+
+
+def _safe_declaration(decl: str) -> str:
+    return re.sub(r"[\x00-\x1f\x7f-\x9f]", "?", decl[:120])
+
+
 def _scan_stylesheet(path: str, source: str) -> List[ASTFinding]:
     masked = _mask_css_comments(source)
     lines = source.splitlines()
+    starts = _line_starts(masked)
+    suppressed = {i + 1 for i, line in enumerate(lines) if _css_suppressed(line, "X105")}
     offenders: List[Tuple[int, str]] = []
-    for match in _CSS_DECL_RE.finditer(masked):
-        prop, value = match.groups()
+    for offset, prop, value, declaration in _css_declarations(masked):
         if prop.startswith("--") and prop[2:] in _theme_token_names():
             continue
-        while True:
-            normalised = re.sub(r"var\([^()]*\)", "__TOKEN__", value)
-            if normalised == value:
-                break
-            value = normalised
-        value = re.sub(r"url\([^)]*\)", "", value, flags=re.I)
+        value = _normalise_css_value(value)
         if not (
             _COLOR_HEX_RE.search(value)
             or any("__TOKEN__" not in m.group(1) for m in _COLOR_FUNC_RE.finditer(value))
         ):
             continue
-        lineno, _ = _line_col(masked, match.start())
-        if not _css_suppressed(lines[lineno - 1], "X105"):
-            offenders.append((lineno, match.group().strip()))
+        lineno, _ = _line_col(starts, offset)
+        if lineno not in suppressed:
+            offenders.append((lineno, _safe_declaration(declaration)))
     if not offenders:
         return []
     lineno, decl = offenders[0]
@@ -356,22 +475,56 @@ def scan_ui(
     for path in live:
         result.templates[path] = True
         source = sources[path]
+        lower = source.lower()
+        starts = _line_starts(source)
+        closings: Dict[str, List[int]] = {}
+        for match in re.finditer(r"</([a-zA-Z][\w-]*+)\b", lower):
+            closings.setdefault(match.group(1), []).append(match.start())
+        loops = [m.start() for m in _FOR_RE.finditer(source)]
+        rows = [
+            m.start()
+            for m in re.finditer(
+                r"\{%\s*+for\b|\bdj-stream\b|dj-update\s*+=\s*+[\"'](?:append|prepend)[\"']", source
+            )
+        ]
+        options = [m.start() for m in re.finditer(r"<option\b", lower)]
+        messages = [m.start() for m in _BODY_EXPR_RE.finditer(source) if _messageish(m.group(1))]
         original_lines = html_sources[path].splitlines()
-        for match in _iter_open_tags(source):
-            tag, attrs = match.groups()
-            region = _region(source, tag, match.start())
-            lineno, col = _line_col(source, match.start())
-            for code, check in (
-                ("X101", _check_x101),
-                ("X102", _check_x102),
-                ("X103", _check_x103),
-                ("X104", _check_x104),
-            ):
-                details = check(tag.lower(), attrs, region)
-                if details and not _template_suppressed(original_lines[lineno - 1], code):
+        suppressed = {
+            code: {
+                i + 1 for i, line in enumerate(original_lines) if _template_suppressed(line, code)
+            }
+            for code in X1XX_CODES[:4]
+        }
+        for offset, tag, attrs in _iter_open_tags(source):
+            end = _region(closings, tag, offset, len(source))
+            lineno, col = _line_col(starts, offset)
+            checks = (
+                ("X101", _check_x101(tag, bool(_in_region(rows, offset, end)))),
+                (
+                    "X102",
+                    _check_x102(
+                        tag,
+                        attrs,
+                        bool(_in_region(loops, offset, end)),
+                        _in_region(options, offset, end),
+                    ),
+                ),
+                ("X103", _check_x103(tag, attrs)),
+                (
+                    "X104",
+                    _check_x104(
+                        tag,
+                        attrs,
+                        bool(_in_region(messages, offset + len(tag) + len(attrs) + 2, end)),
+                    ),
+                ),
+            )
+            for code, details in checks:
+                if details and lineno not in suppressed[code]:
                     result.findings.append(ASTFinding.make(code, path, lineno, col, details))
     for path in sorted(_find_linked_stylesheets(sources, live, static_dirs, static_roots)):
-        rel = os.path.relpath(path, os.path.abspath(root))
+        rel = os.path.relpath(path, os.path.realpath(root))
         if any(rel == e or rel.startswith(e + os.sep) for e in exclude):
             continue
         try:
@@ -391,15 +544,18 @@ def build_ui_summary(report: ASTAuditReport, root: str) -> Dict[str, Any]:
     """Build the versioned, mtime-based summary consumed by discovery checks."""
     from djust import __version__
 
-    root = os.path.abspath(root)
-    counts = Counter(f.code for f in report.findings if f.code in X1XX_CODES)
+    root = os.path.realpath(root)
+    counts: Counter = Counter()
+    per_path: Dict[str, Counter] = {}
+    for finding in report.findings:
+        if finding.code in X1XX_CODES:
+            counts[finding.code] += 1
+            per_path.setdefault(finding.path, Counter())[finding.code] += 1
 
     def records(paths: Sequence[str], templates: bool = False) -> Dict[str, Any]:
         result = {}
         for path in sorted(paths):
-            findings = Counter(
-                f.code for f in report.findings if f.path == path and f.code in X1XX_CODES
-            )
+            findings = per_path.get(path, Counter())
             item = {"mtime": os.stat(path).st_mtime, "findings": dict(findings)}
             if templates:
                 item["live"] = report.ui_templates[path]
@@ -422,20 +578,30 @@ def build_ui_summary(report: ASTAuditReport, root: str) -> Dict[str, Any]:
 
 def write_ui_summary(report: ASTAuditReport, root: str) -> Tuple[Optional[str], Optional[str]]:
     """Atomically write the cache, returning write errors as data."""
-    path = os.path.join(os.path.abspath(root), UI_SUMMARY_RELPATH)
+    path = os.path.join(os.path.realpath(root), UI_SUMMARY_RELPATH)
     dirpath = os.path.dirname(path)
     temp_path = None
     try:
         payload = build_ui_summary(report, root)
-        os.makedirs(dirpath, exist_ok=True)
-        ignore = os.path.join(dirpath, ".gitignore")
-        if not os.path.exists(ignore):
-            with open(ignore, "w", encoding="utf-8") as fh:
+        created = False
+        try:
+            os.mkdir(dirpath)
+            created = True
+        except FileExistsError:
+            pass
+        mode = os.lstat(dirpath).st_mode
+        if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
+            return None, "cache directory is not a real directory"
+        if created:
+            ignore = os.path.join(dirpath, ".gitignore")
+            fd = os.open(ignore, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write("*\n")
         fd, temp_path = tempfile.mkstemp(dir=dirpath, prefix=".audit-ui.", suffix=".tmp")
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(payload, fh, sort_keys=True, indent=2)
             fh.write("\n")
+        os.chmod(temp_path, 0o644)
         os.replace(temp_path, path)
         return path, None
     except (OSError, ValueError, TypeError) as exc:

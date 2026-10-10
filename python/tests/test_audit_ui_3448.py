@@ -7,6 +7,7 @@ from io import StringIO
 
 import pytest
 from django.core.management import call_command
+from django.core.exceptions import ImproperlyConfigured
 
 from djust.audit_ast import AST_FINDING_CODES, run_ast_audit
 
@@ -62,7 +63,7 @@ class TestLiveTemplateDetection:
         _tree(
             tmp_path,
             {
-                "views.py": 'class LedgerView(LiveView):\n    template_name: str = "page.html"',
+                "views.py": 'class InvoiceListView(LiveView):\n    template_name: str = "page.html"',
                 "app/templates/page.html": LOOP_TABLE,
             },
         )
@@ -163,7 +164,8 @@ class TestX103Overlay:
     def test_fixed_full_height_inline_style_triggers(self, tmp_path):
         assert _codes(
             _live(
-                tmp_path, '<aside style="position: fixed; top: 0px; bottom: 0 !important"></aside>'
+                tmp_path,
+                '<aside style="position: fixed; top: 0px; bottom: 0 !important; left: 0; right: 0"></aside>',
             )
         ) == ["X103"]
 
@@ -405,7 +407,7 @@ class TestUISummaryCache:
         def deny(*args, **kwargs):
             raise PermissionError(13, "Permission denied")
 
-        monkeypatch.setattr(audit_ui.os, "makedirs", deny)
+        monkeypatch.setattr(audit_ui.os, "mkdir", deny)
         assert audit_ui.write_ui_summary(report, str(tmp_path)) == (None, "Permission denied")
 
     def test_json_output_reports_ui_cache_path(self, tmp_path):
@@ -430,9 +432,9 @@ class TestCombinedTrees:
         _tree(
             tmp_path,
             {
-                "views.py": 'class LedgerView(LiveView):\n    template_name = "ledger/list.html"',
+                "views.py": 'class InvoiceListView(LiveView):\n    template_name = "invoices/list.html"',
                 "app/templates/base.html": '<link href="{% static \'css/app.css\' %}">\n<div class="drawer"></div>',
-                "app/templates/ledger/list.html": '{% extends "base.html" %}\n'
+                "app/templates/invoices/list.html": '{% extends "base.html" %}\n'
                 + LOOP_TABLE
                 + '\n<select dj-change="pick">{% for a in accounts %}<option>{{ a }}</option>{% endfor %}</select>\n<p class="{% if error %}msg-error{% else %}msg-success{% endif %}">{{ message }}</p>',
                 "app/static/css/app.css": "body { color: #333; background: rgb(250,250,250); }\n.ok { color: hsl(var(--success)); }",
@@ -528,3 +530,294 @@ class TestDiscoveryBoundaries:
         assert [f["code"] for f in payload["findings"]] == ["X105"]
         cache = json.loads((tmp_path / CACHE).read_text())
         assert cache["stylesheets"]["assets/app.css"]["findings"] == {"X105": 1}
+
+
+class TestReviewRegressions:
+    @pytest.mark.parametrize(
+        "source",
+        [
+            '<div class="form-group {% if field.errors %}has-error{% endif %}">{{ field }}</div>',
+            '<p class="{% if form.errors %}text-danger{% endif %}">{{ form.non_field_errors }}</p>',
+        ],
+    )
+    def test_form_validation_is_not_status_message(self, tmp_path, source):
+        assert _codes(_live(tmp_path, source)) == []
+
+    @pytest.mark.parametrize("variable", ["message", "msg", "flash", "notice", "status_text"])
+    def test_message_names_still_trigger(self, tmp_path, variable):
+        assert _codes(
+            _live(
+                tmp_path,
+                '<p class="{% if '
+                + variable
+                + ' %}text-success{% endif %}">{{ '
+                + variable
+                + " }}</p>",
+            )
+        ) == ["X104"]
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            '<div class="overlay">caption</div>',
+            '<nav style="position:fixed;top:0;bottom:0;left:0;width:240px">nav</nav>',
+        ],
+    )
+    def test_overlay_caption_and_sidebar_are_not_modal(self, tmp_path, source):
+        assert _codes(_live(tmp_path, source)) == []
+
+    @pytest.mark.parametrize(
+        "style",
+        [
+            "position:fixed;top:0;bottom:0;left:0;right:0",
+            "position:fixed;width:100vw;height:100vh",
+        ],
+    )
+    def test_full_screen_fixed_overlay_triggers(self, tmp_path, style):
+        assert _codes(_live(tmp_path, '<div style="' + style + '"></div>')) == ["X103"]
+
+    def test_selector_is_not_css_declaration(self, tmp_path):
+        assert _codes(_css(tmp_path, "a:hover, #bad { color: var(--foreground); }")) == []
+        assert _codes(_css(tmp_path, "a:hover, #bad { color: #fff; }")) == ["X105"]
+
+    def test_stylesheet_symlink_outside_static_base_skipped(self, tmp_path):
+        _tree(tmp_path, {"outside.css": "a { color: #fff; }", "app/static/keep.txt": ""})
+        (tmp_path / "app/static/app.css").symlink_to(tmp_path / "outside.css")
+        report = _live(tmp_path, "<link href=\"{% static 'app.css' %}\">")
+        assert not report.ui_stylesheets
+        assert _codes(report) == []
+
+    def test_stylesheet_symlink_inside_static_base_allowed(self, tmp_path):
+        _tree(tmp_path, {"app/static/real.css": "a { color: #fff; }"})
+        (tmp_path / "app/static/app.css").symlink_to(tmp_path / "app/static/real.css")
+        assert _codes(_live(tmp_path, "<link href=\"{% static 'app.css' %}\">")) == ["X105"]
+
+    def test_symlink_scan_root_exclusion_and_cache_keys(self, tmp_path):
+        root = tmp_path / "project"
+        _css(root, "a { color: #fff; }")
+        link = tmp_path / "project-link"
+        link.symlink_to(root, target_is_directory=True)
+        assert _codes(_run(link, exclude=["app/static"])) == []
+        _command(link)
+        cache = json.loads((root / CACHE).read_text())
+        assert cache["root"] == str(root.resolve())
+        assert list(cache["templates"]) == ["app/templates/page.html"]
+        assert list(cache["stylesheets"]) == ["app/static/css/app.css"]
+
+    @pytest.mark.parametrize("kind", ["symlink", "dangling", "file"])
+    def test_cache_directory_must_be_real_directory(self, tmp_path, kind):
+        target = tmp_path / "outside"
+        if kind == "symlink":
+            target.mkdir()
+        cache_dir = tmp_path / ".djust"
+        if kind == "file":
+            cache_dir.write_text("keep")
+        else:
+            cache_dir.symlink_to(target, target_is_directory=True)
+        output = _command(tmp_path)
+        assert "UI summary not written:" in output
+        assert not (target / "audit-ui.json").exists()
+        assert not (target / ".gitignore").exists()
+        if kind == "dangling":
+            assert not target.exists()
+
+    def test_existing_cache_directory_does_not_get_gitignore(self, tmp_path):
+        (tmp_path / ".djust").mkdir()
+        _command(tmp_path)
+        assert not (tmp_path / ".djust/.gitignore").exists()
+        assert (tmp_path / CACHE).exists()
+
+    def test_dangling_gitignore_symlink_is_not_followed(self, tmp_path):
+        (tmp_path / ".djust").mkdir()
+        target = tmp_path / "must-not-create"
+        (tmp_path / ".djust/.gitignore").symlink_to(target)
+        _command(tmp_path)
+        assert not target.exists()
+        assert (tmp_path / ".djust/.gitignore").is_symlink()
+
+    def test_new_cache_gitignore_uses_exclusive_nofollow(self, tmp_path, monkeypatch):
+        from djust import audit_ui
+
+        real_open = audit_ui.os.open
+        flags_seen = []
+
+        def track(path, flags, *args, **kwargs):
+            if str(path).endswith(".gitignore"):
+                flags_seen.append(flags)
+            return real_open(path, flags, *args, **kwargs)
+
+        monkeypatch.setattr(audit_ui.os, "open", track)
+        _command(tmp_path)
+        assert len(flags_seen) == 1
+        assert flags_seen[0] & audit_ui.os.O_CREAT
+        assert flags_seen[0] & audit_ui.os.O_EXCL
+        assert flags_seen[0] & audit_ui.os.O_NOFOLLOW
+
+    def test_cache_json_symlink_replaced_and_mode_is_readable(self, tmp_path):
+        (tmp_path / ".djust").mkdir()
+        target = tmp_path / "keep.json"
+        target.write_text("keep")
+        (tmp_path / CACHE).symlink_to(target)
+        _command(tmp_path)
+        assert target.read_text() == "keep"
+        assert not (tmp_path / CACHE).is_symlink()
+        assert (tmp_path / CACHE).stat().st_mode & 0o777 == 0o644
+
+    def test_css_detail_is_terminal_safe_and_bounded(self, tmp_path):
+        _css(tmp_path, "a { color: \x1b[2J\x1b[31m\x00\x7f\x85" + " " * 300 + "#abcdef; }")
+        output = _command(tmp_path)
+        assert "X105" in output
+        assert not any(ord(c) < 32 and c not in "\n\t" or 127 <= ord(c) <= 159 for c in output)
+        detail = next(line for line in output.splitlines() if "first `" in line)
+        assert len(detail.split("first `", 1)[1].split("`", 1)[0]) <= 120
+
+    def test_ui_crash_warns_without_exception_paths(self, tmp_path, monkeypatch):
+        from djust import audit_ui
+
+        def crash(*args, **kwargs):
+            raise RuntimeError("secret/path\nsecret")
+
+        monkeypatch.setattr(audit_ui, "scan_ui", crash)
+        output = _command(tmp_path)
+        assert any("WARNING: UI rules failed" in line for line in output.splitlines())
+        assert "secret" not in output
+        assert not (tmp_path / CACHE).exists()
+
+    @pytest.mark.parametrize("error", [ImproperlyConfigured, TypeError, ValueError])
+    def test_invalid_static_settings_warn(self, tmp_path, monkeypatch, error):
+        from djust.management.commands import djust_audit
+
+        class BadSettings:
+            configured = True
+
+            @property
+            def STATICFILES_DIRS(self):
+                raise error("secret/path\nsecret")
+
+        monkeypatch.setattr("django.conf.settings", BadSettings())
+        from io import StringIO
+
+        out = StringIO()
+        err = StringIO()
+        command = djust_audit.Command(stdout=out, stderr=err)
+        command._run_ast_audit({"ast_path": str(tmp_path)})
+        assert "WARNING: STATICFILES_DIRS" in out.getvalue() + err.getvalue()
+        assert "secret" not in out.getvalue() + err.getvalue()
+
+    def test_unexpected_static_settings_error_propagates(self, monkeypatch):
+        from djust.management.commands.djust_audit import Command
+
+        class BadSettings:
+            configured = True
+
+            @property
+            def STATICFILES_DIRS(self):
+                raise RuntimeError("unexpected")
+
+        monkeypatch.setattr("django.conf.settings", BadSettings())
+        with pytest.raises(RuntimeError, match="unexpected"):
+            Command()._static_dirs_from_settings()
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "div",
+        "html-comment",
+        "django-comment",
+        "css-comment",
+        "css-letters",
+        "link",
+        "table",
+        "css-normal",
+        "unclosed-tables",
+        "css-letters-block",
+        "css-noqa",
+        "html-noqa",
+        "unclosed-expressions",
+    ],
+)
+def test_adversarial_scan_completes_under_two_seconds(case):
+    import time
+    from djust.audit_ui import scan_ui, _scan_stylesheet
+
+    size = 524288 if case == "table" else 1048576
+    units = {
+        "div": "<div>",
+        "html-comment": "<!-- ",
+        "django-comment": "{% comment %}",
+        "css-comment": "/* ",
+        "css-letters": "a",
+        "link": "<link href=",
+        "table": '<tr><td class="cell">{{ r }}</td></tr>\n',
+        "css-normal": ".btn{color:#fff;background-color:#123456;}\n",
+        "unclosed-tables": "<table>",
+        "css-letters-block": "a",
+        "css-noqa": " ",
+        "html-noqa": " ",
+        "unclosed-expressions": "{{",
+    }
+    prefix = {
+        "table": "<table>{% for r in rows %}",
+        "css-letters-block": "a{",
+        "css-noqa": "/* djust: noqa",
+        "html-noqa": "{# djust: noqa",
+    }.get(case, "")
+    suffix = {"table": "{% endfor %}</table>", "css-letters-block": "}"}.get(case, "")
+    remaining = size - len(prefix) - len(suffix)
+    unit = units[case]
+    source = prefix + unit * (remaining // len(unit)) + " " * (remaining % len(unit)) + suffix
+    start = time.perf_counter()
+    if case.startswith("css-"):
+        findings = _scan_stylesheet("app.css", source)
+    else:
+        findings = scan_ui(".", {"app/templates/page.html": source}, {"page.html"}).findings
+    elapsed = time.perf_counter() - start
+    assert elapsed < 2, (case, elapsed)
+    if case == "table":
+        assert [f.code for f in findings] == ["X101"]
+    elif case == "css-normal":
+        assert [f.code for f in findings] == ["X105"]
+    else:
+        assert not findings
+
+
+def test_pretty_finding_detail_sanitizes_controls():
+    from djust.audit_ast import ASTFinding
+
+    finding = ASTFinding.make("X101", "page.html", 1, details="bad\x1b[2J\n\x7f\x85detail")
+    line = finding.format_line()
+    assert not any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in line)
+    assert finding.to_dict()["details"] == "bad\x1b[2J\n\x7f\x85detail"
+
+
+def test_new_cache_directory_gitignore_symlink_race_is_not_followed(tmp_path, monkeypatch):
+    from djust import audit_ui
+
+    target = tmp_path / "must-not-create"
+    original_mkdir = audit_ui.os.mkdir
+
+    def create_with_symlink(path, *args, **kwargs):
+        original_mkdir(path, *args, **kwargs)
+        if str(path).endswith(".djust"):
+            (tmp_path / ".djust/.gitignore").symlink_to(target)
+
+    monkeypatch.setattr(audit_ui.os, "mkdir", create_with_symlink)
+    output = _command(tmp_path)
+    assert "UI summary not written:" in output
+    assert not target.exists()
+    assert (tmp_path / ".djust/.gitignore").is_symlink()
+
+
+def test_static_settings_warning_preserves_json_output(tmp_path, monkeypatch):
+    from djust.management.commands.djust_audit import Command
+
+    class BadSettings:
+        configured = True
+        STATICFILES_DIRS = 42
+
+    monkeypatch.setattr("django.conf.settings", BadSettings())
+    out, err = StringIO(), StringIO()
+    Command(stdout=out, stderr=err)._run_ast_audit({"ast_path": str(tmp_path), "json_output": True})
+    assert json.loads(out.getvalue())["mode"] == "ast"
+    assert "WARNING: STATICFILES_DIRS" in err.getvalue()

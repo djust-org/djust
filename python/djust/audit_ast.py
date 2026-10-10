@@ -141,7 +141,8 @@ class ASTFinding:
         )
         line = f"{prefix} [djust.{self.code}] {self.path}:{self.lineno}:{self.col} {self.message}"
         if self.details:
-            line += f" ({self.details})"
+            details = re.sub(r"[\x00-\x1f\x7f-\x9f]", "?", self.details)
+            line += f" ({details})"
         return line
 
     def to_dict(self) -> Dict[str, Any]:
@@ -991,7 +992,7 @@ def _check_idor_shape_needs_object_permission(ctx: _FileContext) -> None:
 _SAFE_FILTER_RE = re.compile(r"\{\{\s*([a-zA-Z_][\w\.]*)\s*\|\s*safe\b")
 _AUTOESCAPE_OFF_RE = re.compile(r"\{%\s*autoescape\s+off\s*%\}")
 _SAFE_SUPPRESSION_RE = re.compile(
-    r"\{#\s*djust\s*:\s*noqa(?:\s*[:\s]\s*([A-Za-z0-9, ]+))?\s*#\}",
+    r"\{#\s*+djust\s*+:\s*+noqa(?:(?:\s++:?\s*+|:\s*+)([A-Za-z0-9, ]++))?\s*+#\}",
     re.IGNORECASE,
 )
 
@@ -1138,7 +1139,7 @@ def run_ast_audit(
     exclude_normalised: List[str] = []
     if exclude:
         exclude_normalised = [os.path.normpath(e) for e in exclude]
-    root_abs = os.path.abspath(root)
+    root_abs = os.path.realpath(root)
     for path in _iter_project_files(
         root_abs, include_templates=include_templates, static_roots_out=static_roots
     ):

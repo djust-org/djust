@@ -551,16 +551,19 @@ class Command(BaseCommand):
 
         return None
 
-    @staticmethod
-    def _static_dirs_from_settings() -> list:
+    def _static_dirs_from_settings(self) -> list:
         """Read configured static directories without requiring Django setup."""
         from django.conf import settings
+        from django.core.exceptions import ImproperlyConfigured
 
         try:
             if not settings.configured:
                 return []
             return list(getattr(settings, "STATICFILES_DIRS", []))
-        except Exception:
+        except (ImproperlyConfigured, TypeError, ValueError):
+            self.stderr.write(
+                "WARNING: STATICFILES_DIRS could not be read; configured stylesheets skipped."
+            )
             return []
 
     def _run_ast_audit(self, options: dict[str, Any]) -> None:
@@ -617,6 +620,12 @@ class Command(BaseCommand):
         self.stdout.write(self.style.MIGRATE_HEADING(line))
         self.stdout.write(f"  Root:    {root}")
         self.stdout.write(f"  Files:   {report.files_scanned} scanned")
+        for _, reason in report.files_skipped:
+            if reason.startswith("UI rules failed:"):
+                self.stdout.write(
+                    self.style.WARNING("  WARNING: UI rules failed; UI scan incomplete.")
+                )
+                break
         if report.ui_ran:
             self.stdout.write(
                 f"  UI rules: {sum(report.ui_templates.values())} live template(s), "
