@@ -100,6 +100,8 @@ How to build specific features.
 | **[Service Worker](guides/service-worker.md)**            | Instant page shell + WebSocket reconnection bridge |
 | **[Vendoring third-party JS](guides/vendored-assets.md)** | Declare bundled JS/CSS with `djust_assets.json`, render it with Subresource Integrity |
 | **[Scanning a djust app](guides/scanning.md)**            | Publish a CycloneDX SBOM and scan it with Trivy, Syft, grype and OSV-Scanner |
+| **[djust Audit](guides/djust-audit.md)** | Security scans, UI rules (X101–X105), and CI audit flags |
+| **[AST UI Rules](guides/error-codes.md#ast-ui-rules-x1xx)** | Component and theme suggestions with fixes and suppression |
 | **[Error Codes](guides/error-codes.md)**                  | Complete error code reference with fixes           |
 | **[Error Overlay (Dev Mode)](guides/error-overlay.md)**   | In-browser Python traceback panel, Next.js-style   |
 | **[Type-Safe Template Validation](guides/typecheck.md)**  | `manage.py djust_typecheck` — catch template typos before prod |

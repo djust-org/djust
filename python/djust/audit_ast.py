@@ -7,7 +7,7 @@ vulnerabilities or as near-misses in a downstream consumer's application. Each
 checker is intentionally narrow — false positives are worse than false
 negatives for a linter that runs on every push.
 
-Findings use stable codes ``djust.X001``–``djust.X099``. (The ``X``
+Security findings use stable codes ``djust.X001``–``djust.X099``. (The ``X``
 prefix is separate from the ``P0xx`` permissions-document codes from
 #657 — ``X`` stands for "e**X**amine", the anti-pattern scanner.)
 
@@ -35,8 +35,18 @@ prefix is separate from the ``P0xx`` permissions-document codes from
   scan of ``.html`` files that flags ``{{ var|safe }}`` and
   ``{% autoescape off %}`` blocks for human review.
 
+Codes ``djust.X101``–``djust.X199`` are **UI rules** (ADR-043 §D2,
+implemented in :mod:`djust.audit_ui`): X101 hand-built ``<table>`` over a loop,
+X102 native ``<select dj-change>`` over a long or generated option list,
+X103 hand-built overlay, X104 class-switched status message, X105 app stylesheet
+colours outside theme tokens. They scan LiveView templates (and the templates
+they extend or include) and the stylesheets those link; all are warnings and
+each names the djust component tag to use.
+
 Suppression: add ``# djust: noqa XNNN`` on the offending line (or bare
 ``# djust: noqa`` to suppress any djust.X finding on that line).
+Templates use ``{# djust: noqa X101 #}``; stylesheets use
+``/* djust: noqa X105 */``.
 
 Integration: ``djust_audit --ast`` turns the scanner on; findings share
 the same ``--strict`` exit-code semantics as ``--permissions`` and
@@ -49,6 +59,7 @@ See issue #660.
 from __future__ import annotations
 
 import ast
+import functools
 import logging
 import os
 import re
@@ -77,6 +88,17 @@ AST_FINDING_CODES: Dict[str, Tuple[str, str]] = {
     "X008": (
         "warning",
         "Detail view matches IDOR shape — missing object-permission lifecycle override",
+    ),
+    "X101": ("warning", "Hand-built <table> renders a loop — use the data_table component"),
+    "X102": (
+        "warning",
+        "Native <select dj-change> over a long or generated option list — use combobox",
+    ),
+    "X103": ("warning", "Hand-built overlay panel — use the sheet or modal component"),
+    "X104": ("warning", "Status message styled by switching classes — use toasts or page_alert"),
+    "X105": (
+        "warning",
+        "App stylesheet sets colors outside djust theme tokens — use theme tokens or a preset",
     ),
 }
 
@@ -120,7 +142,8 @@ class ASTFinding:
         )
         line = f"{prefix} [djust.{self.code}] {self.path}:{self.lineno}:{self.col} {self.message}"
         if self.details:
-            line += f" ({self.details})"
+            details = re.sub(r"[\x00-\x1f\x7f-\x9f]", "?", self.details)
+            line += f" ({details})"
         return line
 
     def to_dict(self) -> Dict[str, Any]:
@@ -142,6 +165,9 @@ class ASTAuditReport:
     findings: List[ASTFinding] = field(default_factory=list)
     files_scanned: int = 0
     files_skipped: List[Tuple[str, str]] = field(default_factory=list)
+    ui_ran: bool = False
+    ui_templates: Dict[str, bool] = field(default_factory=dict)
+    ui_stylesheets: List[str] = field(default_factory=list)
 
     @property
     def errors(self) -> List[ASTFinding]:
@@ -166,6 +192,12 @@ class ASTAuditReport:
                 "info": len(self.infos),
             },
             "findings": [f.to_dict() for f in self.findings],
+            "ui": {
+                "ran": self.ui_ran,
+                "templates_scanned": len(self.ui_templates),
+                "live_templates": sum(self.ui_templates.values()),
+                "stylesheets_scanned": len(self.ui_stylesheets),
+            },
         }
 
 
@@ -960,30 +992,39 @@ def _check_idor_shape_needs_object_permission(ctx: _FileContext) -> None:
 
 _SAFE_FILTER_RE = re.compile(r"\{\{\s*([a-zA-Z_][\w\.]*)\s*\|\s*safe\b")
 _AUTOESCAPE_OFF_RE = re.compile(r"\{%\s*autoescape\s+off\s*%\}")
-_SAFE_SUPPRESSION_RE = re.compile(
-    r"\{#\s*djust\s*:\s*noqa(?:\s*[:\s]\s*([A-Za-z0-9, ]+))?\s*#\}",
-    re.IGNORECASE,
-)
 
 
-def _template_suppressed(line: str, code: str) -> bool:
-    match = _SAFE_SUPPRESSION_RE.search(line)
+@functools.lru_cache(maxsize=8)
+def _comment_suppression_re(opener: str, closer: str) -> re.Pattern:
+    return re.compile(
+        re.escape(opener)
+        + r"\s*+djust\s*+:\s*+noqa(?:(?:\s++:?\s*+|:\s*+)([A-Za-z0-9, ]++))?\s*+"
+        + re.escape(closer),
+        re.IGNORECASE,
+    )
+
+
+def _comment_suppressed(line: str, code: str, opener: str, closer: str) -> bool:
+    """Apply same-line djust noqa syntax for the given comment delimiters."""
+    match = _comment_suppression_re(opener, closer).search(line)
     if not match:
         return False
     codes = match.group(1)
-    if not codes:
-        return True
-    wanted = {c.strip().upper() for c in codes.split(",") if c.strip()}
-    return code.upper() in wanted
+    return not codes or code.upper() in {c.strip().upper() for c in codes.split(",") if c.strip()}
 
 
-def _scan_template_file(path: str) -> List[ASTFinding]:
+def _template_suppressed(line: str, code: str) -> bool:
+    return _comment_suppressed(line, code, "{#", "#}")
+
+
+def _scan_template_file(path: str, source: Optional[str] = None) -> List[ASTFinding]:
     findings: List[ASTFinding] = []
-    try:
-        with open(path, "r", encoding="utf-8", errors="replace") as fh:
-            source = fh.read()
-    except OSError:
-        return findings
+    if source is None:
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                source = fh.read()
+        except OSError:
+            return findings
     for lineno, line in enumerate(source.splitlines(), start=1):
         for match in _SAFE_FILTER_RE.finditer(line):
             if _template_suppressed(line, "X006"):
@@ -1072,9 +1113,13 @@ def scan_python_source(path: str, source: Optional[str] = None) -> List[ASTFindi
 def _iter_project_files(
     root: str,
     include_templates: bool = True,
+    *,
+    static_roots_out: Optional[List[str]] = None,
 ) -> Iterable[str]:
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS and not d.startswith(".")]
+        if static_roots_out is not None and os.path.basename(dirpath) == "static":
+            static_roots_out.append(dirpath)
         for name in filenames:
             if name.endswith(".py"):
                 yield os.path.join(dirpath, name)
@@ -1086,30 +1131,62 @@ def run_ast_audit(
     root: str = ".",
     include_templates: bool = True,
     exclude: Optional[Sequence[str]] = None,
+    include_ui: bool = True,
+    static_dirs: Optional[Sequence[Any]] = None,
 ) -> ASTAuditReport:
     """Walk ``root`` and run every checker on every eligible file.
 
     ``exclude`` is a sequence of path prefixes (relative or absolute) to
     omit from the scan — used by the CLI ``--exclude`` flag and by tests.
     """
+    from djust import audit_ui
+
     report = ASTAuditReport()
+    html_sources: Dict[str, str] = {}
+    template_names: Set[str] = set()
+    static_roots: List[str] = []
     exclude_normalised: List[str] = []
     if exclude:
         exclude_normalised = [os.path.normpath(e) for e in exclude]
-    root_abs = os.path.abspath(root)
-    for path in _iter_project_files(root_abs, include_templates=include_templates):
+    root_abs = os.path.realpath(root)
+    for path in _iter_project_files(
+        root_abs, include_templates=include_templates, static_roots_out=static_roots
+    ):
         rel = os.path.relpath(path, root_abs)
         if any(rel == e or rel.startswith(e + os.sep) for e in exclude_normalised):
             continue
         report.files_scanned += 1
         try:
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                source = fh.read()
             if path.endswith(".py"):
-                report.findings.extend(scan_python_source(path))
+                report.findings.extend(scan_python_source(path, source))
+                if include_templates and include_ui:
+                    template_names.update(audit_ui.collect_liveview_template_names(source))
             else:
-                report.findings.extend(_scan_template_file(path))
+                html_sources[path] = source
+                report.findings.extend(_scan_template_file(path, source))
         except Exception as exc:  # pragma: no cover — defensive
             logger.warning("Scanner failed on %s: %s", path, exc)
             report.files_skipped.append((path, str(exc)))
+    if include_templates and include_ui:
+        try:
+            res = audit_ui.scan_ui(
+                root_abs,
+                html_sources,
+                template_names,
+                static_dirs=static_dirs or (),
+                static_roots=static_roots,
+                exclude=exclude_normalised,
+            )
+            report.findings.extend(res.findings)
+            report.files_skipped.extend(res.skipped)
+            report.ui_ran = True
+            report.ui_templates = res.templates
+            report.ui_stylesheets = res.stylesheets
+            report.files_scanned += len(res.stylesheets)
+        except Exception as exc:  # pragma: no cover — defensive
+            report.files_skipped.append((root_abs, "UI rules failed: " + type(exc).__name__))
     # Sort for stable output
     report.findings.sort(key=lambda f: (f.path, f.lineno, f.code))
     return report

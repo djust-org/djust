@@ -26,7 +26,8 @@ It runs as a Django management command and operates in six modes:
 5. **`--ast` mode** — walk your Python source and templates looking for
    five security anti-patterns (IDOR, unauthenticated mutation, SQL
    string formatting, open redirects, unsafe `mark_safe`/`|safe`). Emits
-   stable [X0xx codes](error-codes.md#ast-anti-pattern-scanner-findings-x0xx).
+   stable [X0xx codes](error-codes.md#ast-anti-pattern-scanner-findings-x0xx)
+   and includes [X1xx UI rules](error-codes.md#ast-ui-rules-x1xx) by default.
 6. **`--a11y` mode** — scan templates for accessibility problems
    (Y001–Y004). Every finding is a warning: the scan never fails in
    normal mode, and fails under `--strict` when any finding exists.
@@ -104,10 +105,12 @@ python manage.py djust_audit --ast --ast-no-templates
 | `--header 'Name: Value'` | repeatable | Extra HTTP header for `--live` requests (e.g. staging basic auth). |
 | `--no-websocket-probe` | switch | Skip the CSWSH handshake check. |
 | `--skip-path-probes` | switch | Skip `/.git/`, `/.env`, `/__debug__/` probes (for WAF-protected environments). |
-| `--ast` | switch | Run the AST anti-pattern scanner (#660). |
+| `--ast` | switch | Run the X001–X008 security scanner and X101–X105 UI rules. |
 | `--ast-path <path>` | str | Root directory for `--ast` (default: current working directory). |
 | `--ast-exclude <path> [...]` | list | Path prefixes (relative to `--ast-path`) to skip during `--ast` scanning. |
-| `--ast-no-templates` | switch | Skip `.html` template files in `--ast` mode (Python only). |
+| `--ast-no-templates` | switch | Skip `.html` templates and all UI rules in `--ast` mode (Python only); no UI cache write. |
+| `--ast-no-ui` | switch | Skip X1xx UI rules, retaining the X0xx security scan; no UI cache write. |
+| `--ast-no-ui-cache` | switch | Run the scan without writing `.djust/audit-ui.json`. |
 | `--a11y` | switch | Run the accessibility (Y001–Y004) template audit. |
 
 ## Modes explained
@@ -242,6 +245,10 @@ than missed findings for a linter that runs on every push.
 the offending line. Bare `# djust: noqa` suppresses every `djust.X`
 finding on the line. Templates use `{# djust: noqa X006 #}`.
 
+Finding paths are resolved with `realpath`. When the scan root is symlinked,
+output uses its resolved path (for example, `/tmp` becomes `/private/tmp`
+on macOS).
+
 **Dependencies**: zero new runtime deps. The scanner uses the
 stdlib `ast` module for Python and a handful of regular
 expressions for templates.
@@ -262,6 +269,85 @@ expressions for templates.
 
 These are intentional scope limits; the goal is a 2-second CI check
 that catches the common mistakes, not a full data-flow analyser.
+
+#### UI rules (X1xx)
+
+`--ast` also runs five UI heuristics by default. These are suggestions to
+reuse components and theme tokens; every X1xx finding is a **warning**.
+See [AST UI Rules](error-codes.md#ast-ui-rules-x1xx) for triggers, fixes and
+same-line suppression examples.
+
+| Code | Detects | Suggests |
+|------|---------|----------|
+| X101 | A `<table>` containing a template loop, `dj-stream`, or `dj-update="append"` / `"prepend"`. | `data_table`, `data_grid` for editable cells, `infinite_scroll` for growing lists. |
+| X102 | A `<select dj-change>` with generated options or more than 10 `<option>` elements. | `combobox` or `rich_select` with `searchable=True`. |
+| X103 | An overlay class such as `modal`, `drawer`, or `sheet`, or an inline fixed-position full-screen overlay / full-height drawer with overlay markers (see [X103](error-codes.md#x103-hand-built-overlay-panel--use-the-sheet-or-modal-component)). | `sheet` for side panels, `modal` for dialogs. |
+| X104 | A `<p>`, `<div>`, or `<span>` with template-switched classes and message-like expressions. | `server_toast_container`, `toast_container`, or `page_alert`. |
+| X105 | Literal hex or color-function values in linked application CSS declarations outside recognized theme-token definitions. | Theme tokens such as `hsl(var(--foreground))` and `hsl(var(--card))`, or a theme preset. |
+
+The UI scan starts with `.html` files containing a `dj-*` attribute or
+loading `live_tags`, plus literal `template_name = "…html"` assignments in
+Python sources mentioning `LiveView` or `LiveComponent`. It follows literal
+`extends` and `include` references to form the live template closure.
+Dynamic template names and references are not resolved. HTML and Django
+comments are masked before UI detection.
+
+Only CSS referenced by a live template's `<link href="{% static '…css' %}">`
+is scanned. Resolution uses discovered application `static/` directories and
+configured `STATICFILES_DIRS` (including prefixed entries). Resolved CSS paths
+must stay within their static directory, including through symlinks.
+Absolute paths, traversal, `.min.css`, and paths in `site-packages`,
+`dist-packages`, or `node_modules` are skipped. The scan honors
+`--ast-exclude`; UI templates and stylesheets larger than 1 MiB are skipped.
+X105 parses declarations inside blocks, so selectors such as `#abc` do not
+count as colors. It ignores CSS comments, `url(...)`, `var(...)` (including
+fallbacks), and definitions of recognized theme tokens. It emits one finding
+per stylesheet, summarizing unsuppressed literals. It does not flag named
+colors or inspect every stylesheet in the project.
+
+Suppress a template finding with `{# djust: noqa X101 #}` (substitute the
+rule code) on the same line as the offending opening HTML tag. CSS uses
+`/* djust: noqa X105 */` on the declaration's starting line. Bare `noqa`
+suppresses all applicable rules on that line.
+
+**CI behavior change**: existing `djust_audit --ast --strict` jobs now fail
+when X1xx warnings are found. Fix the findings or add specific `noqa`
+comments; use `--ast-no-ui` to retain the previous security-only scan.
+`--ast-no-ui-cache` disables only cache writing, so warnings still gate CI.
+
+#### UI summary cache
+
+After a completed UI scan, the command atomically writes
+`.djust/audit-ui.json` beneath `--ast-path` (or the current directory).
+This is a summary of the current scan; it does not avoid rescanning files.
+It is written even with no UI findings, and before the command applies
+`--strict` exit semantics. Individual skipped files do not prevent a summary
+write; the report's `files_skipped` remains the place to check incomplete
+coverage.
+
+The JSON schema currently has:
+
+- `version: 1`, `generator: "djust_audit --ast"`, `djust_version`,
+  `generated_at` (UTC), and `root` (the resolved absolute scan root).
+- `rules` (X101–X105), `counts` (a count for each code), and `total`.
+- `templates`: relative POSIX paths mapped to `mtime`, `findings` (per-code
+  counts), and `live` (whether the template belongs to the live closure).
+  This includes scanned non-live HTML templates with `live: false`.
+- `stylesheets`: relative POSIX paths mapped to `mtime` and `findings`.
+  A configured static directory outside the scan root can produce `../` paths.
+
+Writing is skipped with `--ast-no-ui-cache`, `--ast-no-ui`, or
+`--ast-no-templates`, and if the UI pass fails before completing. These flags
+do not delete an existing summary. Cache-write failures are reported without
+changing the audit's exit code. Pretty output shows the summary path or
+failure reason; JSON output includes `ui_cache` and `ui_cache_error` (null
+when absent), alongside the `ui` scan counters.
+
+If the writer creates `.djust/`, it also creates `.djust/.gitignore`
+containing `*`. An existing `.djust/` directory and its ignore configuration
+are left as they are; add an ignore entry yourself if needed. A symlink or
+non-directory at `.djust` is rejected, and the summary is replaced atomically
+with owner-only mode `0600` (also used for a newly created `.gitignore`).
 
 #### Security of the tool itself
 
@@ -301,7 +387,7 @@ jobs:
             --permissions permissions.yaml \
             --strict --json > permissions-report.json
 
-      # Anti-pattern scan — X0xx
+      # Anti-pattern scan — X0xx security + X1xx UI
       - name: AST anti-pattern scan
         run: |
           python manage.py djust_audit \
@@ -337,6 +423,8 @@ jobs:
 | 2 | Invalid input — missing permissions file, bad YAML, bad `--header` format. |
 
 Default mode and `--permissions` exit non-zero only under `--strict`: without it, even error-severity permissions deviations exit 0. `--live` and `--ast` exit 1 on any error-severity finding even without `--strict`. `--a11y` exits 1 only under `--strict`.
+
+X1xx UI findings are warnings: they fail `--ast` only under `--strict`.
 
 ## See also
 
